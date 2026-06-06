@@ -212,10 +212,12 @@ create index if not exists idx_wo_property on work_orders(property_id);
 
 -- backfill the comm_events fk now that work_orders exists
 do $$ begin
-  alter table comm_events
-    add constraint fk_comm_wo foreign key (work_order_id)
-    references work_orders(id) on delete set null;
-exception when duplicate_object then null; end $$;
+  if not exists (select 1 from pg_constraint where conname = 'fk_comm_wo') then
+    alter table comm_events
+      add constraint fk_comm_wo foreign key (work_order_id)
+      references work_orders(id) on delete set null;
+  end if;
+end $$;
 
 -- ── TURNOVER ──────────────────────────────────────────────────────────
 create table if not exists turnovers (
@@ -245,10 +247,12 @@ create table if not exists vendors (
   created_at    timestamptz not null default now()
 );
 do $$ begin
-  alter table work_orders
-    add constraint fk_wo_vendor foreign key (vendor_id)
-    references vendors(id) on delete set null;
-exception when duplicate_object then null; end $$;
+  if not exists (select 1 from pg_constraint where conname = 'fk_wo_vendor') then
+    alter table work_orders
+      add constraint fk_wo_vendor foreign key (vendor_id)
+      references vendors(id) on delete set null;
+  end if;
+end $$;
 
 -- ── BID ───────────────────────────────────────────────────────────────
 create table if not exists bids (
@@ -352,10 +356,12 @@ create index if not exists idx_obl_due on obligations(due_at);
 
 -- backfill the documents fk now that obligations exists
 do $$ begin
-  alter table documents
-    add constraint fk_doc_obligation foreign key (satisfies_obligation_id)
-    references obligations(id) on delete set null;
-exception when duplicate_object then null; end $$;
+  if not exists (select 1 from pg_constraint where conname = 'fk_doc_obligation') then
+    alter table documents
+      add constraint fk_doc_obligation foreign key (satisfies_obligation_id)
+      references obligations(id) on delete set null;
+  end if;
+end $$;
 
 -- ════════════════════════════════════════════════════════════════════
 --  PROPERTY CONTROLS — first-class. Turns "PM software" into "control system".
@@ -396,9 +402,11 @@ begin
 end; $$ language plpgsql;
 
 do $$ begin
-  create trigger trg_unit_space after insert on units
-    for each row execute function ensure_unit_space();
-exception when duplicate_object then null; end $$;
+  if not exists (select 1 from pg_trigger where tgname = 'trg_unit_space') then
+    create trigger trg_unit_space after insert on units
+      for each row execute function ensure_unit_space();
+  end if;
+end $$;
 
 
 -- ════════════════════════════════════════════════════════════════════
@@ -472,6 +480,10 @@ create index if not exists idx_ingest_cand_status on ingest_candidates(decision_
 -- (property_id, unit_number) is caught by the database, not silently doubled.
 -- Named exactly as it exists in production: uq_unit_per_property.
 do $$ begin
-  alter table units
-    add constraint uq_unit_per_property unique (property_id, unit_number);
-exception when duplicate_object then null; end $$;
+  if not exists (
+    select 1 from pg_constraint where conname = 'uq_unit_per_property'
+  ) then
+    alter table units
+      add constraint uq_unit_per_property unique (property_id, unit_number);
+  end if;
+end $$;
