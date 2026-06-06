@@ -1478,6 +1478,319 @@ app.delete("/leases/:id/tenants", async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});// ════════════════════════════════════════════════════════════════════
+//  MAINTENANCE — the three-layer category engine + work orders + supplies
+//
+//  Core idea (from the spec): capture operating context at the moment work
+//  happens, so accounting never reconstructs it later. The tech taps a simple
+//  field category; the server derives the operating (PM) and GL (accounting)
+//  categories using CONTEXT. Same field action maps differently by context:
+//    paint + occupied  → repair/maintenance
+//    paint + vacant    → turn cost
+//    paint + damage    → tenant billback
+//    paint + renovation→ capex
+//
+//  "Simple at the edge, precise at the center."
+//
+//  Requires maintenance_schema.sql.
+//  Paste into server.js before the AI INGESTION banner.
+// ════════════════════════════════════════════════════════════════════
+
+// Layer 1 field categories the tech can pick (what they SEE).
+const FIELD_CATEGORIES = [
+  "plumbing", "electrical", "hvac", "appliance", "paint", "drywall",
+  "cleaning", "pest", "lock", "landscaping", "elevator", "amenity",
+  "turn", "supplies", "vendor_needed", "other",
+];
+
+// ── THE MAPPING ENGINE ──────────────────────────────────────────────
+// Given a field category + context, derive operating (Layer 2) and GL
+// (Layer 3). This is the precise center. It is intentionally rule-based and
+// readable — the spec says start as rules, refine with real overrides later.
+function deriveCategories({ field_category, unit_state, cause, is_capex, billback }) {
+  const fc = field_category || "other";
+  const state = unit_state || "occupied";       // default: occupied
+  const damaged = cause === "tenant_damage";
+
+  // ---- Layer 2: operating category (what the PM sees) ----
+  let operating;
+  if (is_capex) operating = "capital";
+  else if (fc === "turn" || state === "vacant") operating = "turn";
+  else if (state === "renovation") operating = "capital";
+  else if (damaged) operating = "tenant_damage";
+  else if (fc === "vendor_needed") operating = "vendor_quote";
+  else if (fc === "supplies") operating = "supply_request";
+  else if (fc === "amenity") operating = "common_area";
+  else operating = "resident_repair";
+
+  // ---- Layer 3: GL / T12 category (what accounting sees) ----
+  // Capex and billback override the trade-specific GL.
+  let gl;
+  if (is_capex || state === "renovation") {
+    gl = "capex";
+  } else if (billback || damaged) {
+    gl = "tenant_billback";
+  } else if (operating === "turn") {
+    // turn-specific GL by trade
+    const turnMap = { paint: "turn_painting", cleaning: "turn_cleaning", drywall: "turn_painting" };
+    gl = turnMap[fc] || "turn_make_ready";
+  } else {
+    // normal repair GL by trade
+    const tradeMap = {
+      plumbing: "plumbing_repairs", electrical: "electrical_repairs", hvac: "hvac_repairs",
+      appliance: "appliance_repair", paint: "repairs_maintenance", drywall: "repairs_maintenance",
+      cleaning: "cleaning", pest: "pest_control", lock: "repairs_maintenance",
+      landscaping: "landscaping", elevator: "building_systems", amenity: "common_area_maintenance",
+      supplies: "maintenance_supplies", other: "repairs_maintenance",
+    };
+    gl = tradeMap[fc] || "repairs_maintenance";
+  }
+
+  return { operating_category: operating, gl_category: gl };
+}
+
+// Expose the mapping so the UI can preview categories before saving.
+// GET /maintenance/preview-category?field_category=paint&unit_state=vacant&cause=normal_wear
+app.get("/maintenance/preview-category", (req, res) => {
+  const { field_category, unit_state, cause, is_capex, billback } = req.query;
+  if (!field_category) return res.status(400).json({ error: "field_category is required" });
+  res.json(deriveCategories({
+    field_category, unit_state, cause,
+    is_capex: is_capex === "true", billback: billback === "true",
+  }));
+});
+
+// ── create a work order WITH categories derived at capture ──
+// Body: { property_id, unit_id?, person_id?, title, description,
+//         field_category, unit_state?, cause?, is_emergency?, is_capex?,
+//         billback?, est_cost?, source? }
+app.post("/work-orders", async (req, res) => {
+  const b = req.body || {};
+  if (!b.property_id) return res.status(400).json({ error: "property_id is required" });
+  if (!b.field_category) return res.status(400).json({ error: "field_category is required (what the tech taps)" });
+  if (!FIELD_CATEGORIES.includes(b.field_category)) {
+    return res.status(400).json({ error: `field_category must be one of: ${FIELD_CATEGORIES.join(", ")}` });
+  }
+  try {
+    const prop = await pool.query("select id from properties where id=$1", [b.property_id]);
+    if (prop.rows.length === 0) return res.status(404).json({ error: "property not found" });
+
+    // Derive the operating + GL categories NOW, while context is fresh.
+    const derived = deriveCategories(b);
+
+    const r = await pool.query(
+      `insert into work_orders
+         (property_id, unit_id, person_id, title, issue_type, description, status, source,
+          field_category, operating_category, gl_category,
+          unit_state, cause, is_emergency, is_capex, billback, est_cost)
+       values ($1,$2,$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+       returning *`,
+      [b.property_id, b.unit_id ?? null, b.person_id ?? null,
+       b.title ?? null, b.field_category, b.description ?? null, b.source ?? "staff",
+       b.field_category, derived.operating_category, derived.gl_category,
+       b.unit_state ?? "occupied", b.cause ?? "normal_wear",
+       b.is_emergency === true, b.is_capex === true, b.billback === true, b.est_cost ?? null]
+    );
+    const wo = r.rows[0];
+
+    // Record the work order as an event (operating reality → the ledger of events).
+    await pool.query(
+      `insert into events (property_id, unit_id, person_id, type, note)
+       values ($1,$2,$3,'work_order_opened',$4)`,
+      [wo.property_id, wo.unit_id, wo.person_id,
+       `WO ${wo.id}: ${b.field_category} (${derived.operating_category} / ${derived.gl_category})`]
+    );
+
+    // Emergency → spawn an immediate maintenance obligation (the engine, reused).
+    let obligation = null;
+    if (b.is_emergency === true) {
+      const ob = await pool.query(
+        `insert into obligations
+           (property_id, unit_id, related_id, related_type, module, type, label,
+            owner_type, assigned_role, escalates_to_role, status, priority, severity, required_inputs)
+         values ($1,$2,$3,'work_order','maintenance','emergency_response',$4,
+                 'human','maintenance','property_manager','open','high','emergency','{on_site_response}')
+         returning *`,
+        [wo.property_id, wo.unit_id, wo.id, `EMERGENCY: ${b.title || b.field_category}`]
+      );
+      obligation = ob.rows[0];
+    }
+
+    res.status(201).json({ work_order: wo, emergency_obligation: obligation });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── list work orders (the maintenance + management dashboards read this) ──
+// ?status=open  ?operating_category=turn  ?is_emergency=true  ?property_id=
+app.get("/work-orders", async (req, res) => {
+  const { status, operating_category, is_emergency, property_id, needs_pm_review } = req.query;
+  try {
+    const where = [], vals = [];
+    if (status)             { vals.push(status);             where.push(`status = $${vals.length}`); }
+    if (operating_category) { vals.push(operating_category); where.push(`operating_category = $${vals.length}`); }
+    if (property_id)        { vals.push(property_id);        where.push(`property_id = $${vals.length}`); }
+    if (is_emergency === "true")    where.push(`is_emergency = true`);
+    if (needs_pm_review === "true") where.push(`needs_pm_review = true`);
+    const sql = "select * from work_orders" +
+      (where.length ? " where " + where.join(" and ") : "") +
+      " order by is_emergency desc, created_at desc";
+    const r = await pool.query(sql, vals);
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── CLOSE OUT a work order (the "is this 100% done?" decision tree) ──
+// Body: { done: true,  completion_note?, completion_photo? }
+//   OR  { done: false, reason, ...optional }
+//
+// done=true  → status complete (or needs_pm_review if no proof on a type that
+//              requires it — kept simple: photo OR note required to close clean).
+// done=false → status stays open, a follow-up OBLIGATION is spawned based on the
+//              reason (continuity engine: the chain cannot break). Reason routes:
+//   need_part / part_ordered → supply follow-up; need_vendor → vendor quote;
+//   need_approval → PM; no_access / tenant_not_home → reschedule; etc.
+const NOT_DONE_REASONS = [
+  "need_part", "part_ordered", "need_vendor", "need_approval", "no_access",
+  "tenant_not_home", "could_not_find_issue", "duplicate", "need_second_visit",
+  "partially_completed", "unsafe_condition", "tenant_caused_damage", "manager_review",
+];
+
+app.patch("/work-orders/:id/closeout", async (req, res) => {
+  const b = req.body || {};
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const wr = await client.query("select * from work_orders where id=$1 for update", [req.params.id]);
+    if (wr.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "work order not found" }); }
+    const wo = wr.rows[0];
+
+    if (b.done === true) {
+      // Proof gate: need a note OR photo to close clean; else flag for PM review.
+      const hasProof = !!(b.completion_note || b.completion_photo);
+      const status = "complete";
+      const needsReview = !hasProof;
+      const r = await client.query(
+        `update work_orders
+           set status=$1, completion_note=$2, completion_photo=$3,
+               needs_pm_review=$4, updated_at=now()
+         where id=$5 returning *`,
+        [status, b.completion_note ?? null, b.completion_photo ?? null, needsReview, req.params.id]
+      );
+      await client.query(
+        `insert into events (property_id, unit_id, type, note)
+         values ($1,$2,'work_order_completed',$3)`,
+        [wo.property_id, wo.unit_id, `WO ${wo.id} completed${needsReview ? " (NO PROOF — flagged for PM review)" : ""}`]
+      );
+      await client.query("commit");
+      return res.json({ work_order: r.rows[0], needs_pm_review: needsReview });
+    }
+
+    // done === false → reason required, spawn the right follow-up obligation.
+    if (!b.reason || !NOT_DONE_REASONS.includes(b.reason)) {
+      await client.query("rollback");
+      return res.status(400).json({ error: `reason required, one of: ${NOT_DONE_REASONS.join(", ")}` });
+    }
+
+    // Route the reason → obligation type + owner + required proof.
+    const routes = {
+      need_part:        { type: "supply_follow_up", role: "maintenance", inputs: "{part_ordered}" },
+      part_ordered:     { type: "await_part",       role: "maintenance", inputs: "{part_received,reschedule}" },
+      need_vendor:      { type: "vendor_quote",     role: "property_manager", inputs: "{quote_requested}" },
+      need_approval:    { type: "pm_approval",      role: "property_manager", inputs: "{approval_decision}" },
+      no_access:        { type: "reschedule",       role: "maintenance", inputs: "{rescheduled}" },
+      tenant_not_home:  { type: "reschedule",       role: "maintenance", inputs: "{rescheduled}" },
+      need_second_visit:{ type: "reschedule",       role: "maintenance", inputs: "{second_visit_done}" },
+      unsafe_condition: { type: "escalation",       role: "property_manager", inputs: "{pm_reviewed}" },
+      tenant_caused_damage: { type: "billback_review", role: "property_manager", inputs: "{billback_decision}" },
+      manager_review:   { type: "pm_review",        role: "property_manager", inputs: "{pm_reviewed}" },
+      could_not_find_issue: { type: "pm_review",    role: "property_manager", inputs: "{pm_reviewed}" },
+      duplicate:        { type: "pm_review",        role: "property_manager", inputs: "{pm_confirmed_duplicate}" },
+      partially_completed: { type: "second_visit",  role: "maintenance", inputs: "{remaining_work_done}" },
+    };
+    const route = routes[b.reason];
+
+    const ob = await client.query(
+      `insert into obligations
+         (property_id, unit_id, related_id, related_type, module, type, label,
+          owner_type, assigned_role, escalates_to_role, status, priority, required_inputs)
+       values ($1,$2,$3,'work_order','maintenance',$4,$5,
+               'human',$6::role_name,'property_manager','open','normal',$7::text[])
+       returning *`,
+      [wo.property_id, wo.unit_id, wo.id, route.type,
+       `WO follow-up (${b.reason}): ${wo.title || wo.field_category}`,
+       route.role, route.inputs]
+    );
+
+    // The WO itself stays open with the reason recorded; chain preserved.
+    await client.query(
+      `update work_orders set completion_note=$1, updated_at=now() where id=$2`,
+      [`NOT DONE: ${b.reason}${b.note ? " — " + b.note : ""}`, req.params.id]
+    );
+    await client.query(
+      `insert into events (property_id, unit_id, type, note)
+       values ($1,$2,'work_order_not_done',$3)`,
+      [wo.property_id, wo.unit_id, `WO ${wo.id} not done: ${b.reason} → follow-up obligation spawned`]
+    );
+
+    await client.query("commit");
+    res.json({ work_order_status: "open", reason: b.reason, follow_up_obligation: ob.rows[0] });
+  } catch (e) {
+    await client.query("rollback");
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ── SUPPLY REQUEST — category born at request time ──
+// Body: { property_id, unit_id?, work_order_id?, requested_by, item, quantity?,
+//         reason?, field_category?, unit_state?, cause?, est_cost? }
+app.post("/supply-requests", async (req, res) => {
+  const b = req.body || {};
+  if (!b.property_id || !b.item) return res.status(400).json({ error: "property_id and item are required" });
+  try {
+    const derived = deriveCategories({
+      field_category: b.field_category || "supplies",
+      unit_state: b.unit_state, cause: b.cause,
+      is_capex: b.is_capex === true, billback: b.billback === true,
+    });
+    const r = await pool.query(
+      `insert into supply_requests
+         (property_id, unit_id, work_order_id, requested_by, item, quantity, reason,
+          field_category, operating_category, gl_category, est_cost, status)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'requested')
+       returning *`,
+      [b.property_id, b.unit_id ?? null, b.work_order_id ?? null, b.requested_by ?? null,
+       b.item, b.quantity ?? null, b.reason ?? null,
+       b.field_category || "supplies", derived.operating_category, derived.gl_category, b.est_cost ?? null]
+    );
+    res.status(201).json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── approve / order / deny a supply request (PM gate) ──
+// Body: { status: "approved"|"ordered"|"received"|"denied", approved_by? }
+app.patch("/supply-requests/:id/status", async (req, res) => {
+  const { status, approved_by } = req.body || {};
+  const allowed = ["approved", "ordered", "received", "denied"];
+  if (!allowed.includes(status)) return res.status(400).json({ error: `status must be one of: ${allowed.join(", ")}` });
+  try {
+    const r = await pool.query(
+      `update supply_requests set status=$1, approved_by=coalesce($2, approved_by), updated_at=now()
+       where id=$3 returning *`,
+      [status, approved_by ?? null, req.params.id]
+    );
+    if (r.rows.length === 0) return res.status(404).json({ error: "supply request not found" });
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 // ════════════════════════════════════════════════════════════════════
 //  AI INGESTION — staged + auditable. The trust layer made honest.
