@@ -366,7 +366,7 @@ app.patch("/persons/:id", async (req, res) => {
 //     obligation — "a tour exists and someone must own it"
 //
 //  Paste this block into server.js AFTER the Persons endpoints and BEFORE
-//  the "AI INGESTION" section. Uses the same `pool` and conventions.
+//  the "" section. Uses the same `pool` and conventions.
 // ════════════════════════════════════════════════════════════════════
 
 // How long a tour obligation sits before it's considered stale. Operator
@@ -432,19 +432,20 @@ app.post("/events", async (req, res) => {
     // ── THE ENGINE LINK ──────────────────────────────────────────────
     // tour_booked is the first event that spawns a human obligation.
     let obligation = null;
-    if (type === "tour_booked") {
+if (type === "tour_booked") {
       const dueAt = new Date(Date.now() + TOUR_STALE_DAYS * 24 * 60 * 60 * 1000);
       const ob = await client.query(
         `insert into obligations
            (property_id, person_id, unit_id,
             source_event_id, module, type, label,
             owner_type, assigned_role, escalates_to_role,
-            status, due_at)
+            status, due_at, required_inputs)
          values ($1,$2,$3,$4,'leasing','tour',$5,
-                 'human','leasing_agent','leasing_agent','open',$6)
+                 'human','leasing_agent','leasing_agent','open',$6,$7)
          returning *`,
         [resolvedProperty, person_id ?? null, unit_id ?? null,
-         event.id, "Tour booked — needs an agent to own it", dueAt]
+         event.id, "Tour booked — needs an agent to own it", dueAt,
+         '{tour_feedback}']
       );
       obligation = ob.rows[0];
     }
@@ -612,6 +613,140 @@ app.get("/users", async (_req, res) => {
   try {
     const r = await pool.query("select * from users order by created_at desc");
     res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});// ════════════════════════════════════════════════════════════════════
+//  CLOSING THE LOOP — PROOF → COMPLETED RECORD
+//
+//  An obligation carries `required_inputs` (a text[]). While that array is
+//  non-empty, something is still owed and the obligation CANNOT be closed.
+//  This is the proof gate — the back half of the core loop:
+//    Event → Obligation → Required Input → Clock → Escalation → PROOF → RECORD
+//
+//  Two actions:
+//   • /satisfy — record the proof for ONE required input and remove it from
+//     the list. The proof is captured as a real EVENT, so it's durable and
+//     (for tour feedback) becomes the material the AI follow-up reads later.
+//   • /complete — close the obligation, but ONLY if nothing is still owed.
+//     If required_inputs is non-empty, it's refused with what's missing.
+//
+//  Paste this block into server.js AFTER the claim endpoint and BEFORE the
+//  "AI INGESTION" section (or anywhere among the obligation endpoints).
+// ════════════════════════════════════════════════════════════════════
+
+// ── SATISFY a required input (record proof, check it off) ──
+// Body: { input, proof?, satisfied_by? }
+//   input        — which required input this satisfies (e.g. "tour_feedback")
+//   proof        — the actual proof. For tour_feedback this is the structured
+//                  feedback object/text (objections, move-in date, where else
+//                  touring, decision timeline, red flags). Stored on the event.
+//   satisfied_by — optional user id who provided it.
+// The input must currently be in the obligation's required_inputs, or it's a
+// no-op error (you can't satisfy something that wasn't owed).
+app.patch("/obligations/:id/satisfy", async (req, res) => {
+  const { input, proof, satisfied_by } = req.body || {};
+  if (!input) return res.status(400).json({ error: "input is required (which required input this satisfies)" });
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+
+    const o = await client.query("select * from obligations where id=$1 for update", [req.params.id]);
+    if (o.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "obligation not found" }); }
+    const obligation = o.rows[0];
+
+    const outstanding = obligation.required_inputs || [];
+    if (!outstanding.includes(input)) {
+      await client.query("rollback");
+      return res.status(409).json({
+        error: `"${input}" is not an outstanding required input on this obligation`,
+        required_inputs: outstanding,
+      });
+    }
+
+    // Record the proof as a durable event. The note carries a compact summary;
+    // the full proof (if an object) is JSON-stringified into the note so it's
+    // not lost. This event is what the AI follow-up will read for tour feedback.
+    const proofText = (proof == null) ? ""
+      : (typeof proof === "string" ? proof : JSON.stringify(proof));
+    await client.query(
+      `insert into events (property_id, person_id, unit_id, type, note)
+       values ($1,$2,$3,$4,$5)`,
+      [obligation.property_id, obligation.person_id, obligation.unit_id,
+       `input_satisfied:${input}`,
+       proofText ? `${input} provided: ${proofText}` : `${input} provided`]
+    );
+
+    // Remove the satisfied input from the array.
+    const remaining = outstanding.filter(i => i !== input);
+    const upd = await client.query(
+      `update obligations
+         set required_inputs = $1,
+             updated_at = now()
+       where id = $2
+       returning *`,
+      [remaining, req.params.id]
+    );
+
+    await client.query("commit");
+    res.json({
+      ...upd.rows[0],
+      satisfied_input: input,
+      can_complete: remaining.length === 0,   // hint for the UI
+    });
+  } catch (e) {
+    await client.query("rollback");
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ── COMPLETE an obligation (the proof gate) ──
+// Body: { completed_by? }
+// Refuses with 409 if any required_inputs remain — naming what's still owed.
+// On success: status='complete', completed_at=now(). The Completed Record.
+app.patch("/obligations/:id/complete", async (req, res) => {
+  const { completed_by } = req.body || {};
+  try {
+    const o = await pool.query("select * from obligations where id=$1", [req.params.id]);
+    if (o.rows.length === 0) return res.status(404).json({ error: "obligation not found" });
+    const obligation = o.rows[0];
+
+    if (obligation.status === "complete") {
+      return res.status(409).json({ error: "obligation is already complete" });
+    }
+
+    const outstanding = obligation.required_inputs || [];
+    if (outstanding.length > 0) {
+      // THE GATE. Can't close while proof is owed.
+      return res.status(409).json({
+        error: "cannot complete — required inputs are still outstanding",
+        outstanding_inputs: outstanding,
+        hint: "satisfy each required input first (PATCH /obligations/:id/satisfy)",
+      });
+    }
+
+    const r = await pool.query(
+      `update obligations
+         set status = 'complete',
+             completed_at = now(),
+             updated_at = now()
+       where id = $1
+       returning *`,
+      [req.params.id]
+    );
+
+    // Record the completion as an event too — the loop closes in the ledger.
+    await pool.query(
+      `insert into events (property_id, person_id, unit_id, type, note)
+       values ($1,$2,$3,'obligation_completed',$4)`,
+      [obligation.property_id, obligation.person_id, obligation.unit_id,
+       `${obligation.type} obligation completed${completed_by ? " by " + completed_by : ""}`]
+    );
+
+    res.json(r.rows[0]);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
