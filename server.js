@@ -323,7 +323,7 @@ app.patch("/persons/:id", async (req, res) => {
          name              = coalesce($1, name),
          email             = coalesce($2, email),
          phone             = coalesce($3, phone),
-         source            = coalesce($4, source),
+         source            = coalesce($4::role_name, source),
          interested_unit_id= coalesce($5, interested_unit_id),
          lifecycle_status  = coalesce($6, lifecycle_status),
          leasing_stage     = coalesce($7, leasing_stage),
@@ -598,7 +598,7 @@ app.post("/users", async (req, res) => {
   try {
     const r = await pool.query(
       `insert into users (name, email, phone, role)
-       values ($1,$2,$3, coalesce($4,'property_manager')) returning *`,
+       values ($1,$2,$3, coalesce($4::role_name,'property_manager')) returning *`,
       [name, email ?? null, phone ?? null, role ?? null]
     );
     res.status(201).json(r.rows[0]);
