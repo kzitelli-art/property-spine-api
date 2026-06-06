@@ -4,6 +4,7 @@
   "description": "Property Spine backend — API server v1",
   "main": "server.js",
   "scripts": {
+    "prestart": "node migrations/migrate.js",
     "start": "node server.js"
   },
   "dependencies": {
