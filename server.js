@@ -349,6 +349,272 @@ app.patch("/persons/:id", async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});// ════════════════════════════════════════════════════════════════════
+//  EVENTS + THE OBLIGATION ENGINE (first real link)
+//
+//  This is the load-bearing claim of the whole product: an obligation is
+//  ONLY ever born from an event, server-side, in one atomic transaction.
+//  There is deliberately NO "create obligation directly" endpoint — that
+//  would let the front-end fake the engine. The only path to a tour
+//  obligation is: a `tour_booked` event is written → the server spawns the
+//  obligation in the SAME transaction. Event and obligation commit together
+//  or not at all.
+//
+//  The agent-invisible / management-visible split holds here:
+//   • an `inquiry` event spawns NO human obligation (AI-owned, pre-tour)
+//   • a `tour_booked` event is the FIRST thing that creates a human
+//     obligation — "a tour exists and someone must own it"
+//
+//  Paste this block into server.js AFTER the Persons endpoints and BEFORE
+//  the "AI INGESTION" section. Uses the same `pool` and conventions.
+// ════════════════════════════════════════════════════════════════════
+
+// How long a tour obligation sits before it's considered stale. Operator
+// rule: 60 days, or immediately if the lead says they're out. At staleness
+// the AI surfaces a "kill this lead?" prompt — but only the leasing agent
+// can actually kill it. This is just the clock; the prompt/kill is later.
+const TOUR_STALE_DAYS = 60;
+
+// Resolve which property a person belongs to (from their earliest event that
+// names one — normally the inquiry). Lets obligations/events carry property
+// for management's by-property funnel slicing, even when the caller didn't
+// pass it. Returns null if none found.
+async function propertyForPerson(client, personId) {
+  if (!personId) return null;
+  const r = await client.query(
+    `select property_id from events
+      where person_id=$1 and property_id is not null
+      order by occurred_at asc limit 1`,
+    [personId]
+  );
+  return r.rows[0]?.property_id ?? null;
+}
+
+// ── write an event (the trigger surface for the engine) ──
+// Any event type is allowed (events are a durable ledger of what happened).
+// Most types just record. `tour_booked` ALSO spawns a tour obligation, in
+// the same transaction. Body: { type, person_id?, property_id?, unit_id?, note? }
+app.post("/events", async (req, res) => {
+  const { type, person_id, property_id, unit_id, note } = req.body || {};
+  if (!type) return res.status(400).json({ error: "type is required" });
+
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+
+    // Validate any referenced rows up front, with clear errors.
+    if (person_id) {
+      const p = await client.query("select id from persons where id=$1", [person_id]);
+      if (p.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "person not found" }); }
+    }
+    if (property_id) {
+      const p = await client.query("select id from properties where id=$1", [property_id]);
+      if (p.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "property not found" }); }
+    }
+    if (unit_id) {
+      const u = await client.query("select id from units where id=$1", [unit_id]);
+      if (u.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "unit not found" }); }
+    }
+
+    // If no property was passed but we have a person, resolve it (keeps the
+    // funnel sliceable by property — fixes the gap where lifecycle events had
+    // a null property_id).
+    const resolvedProperty = property_id ?? await propertyForPerson(client, person_id);
+
+    // Write the event itself.
+    const ev = await client.query(
+      `insert into events (property_id, person_id, unit_id, type, note)
+       values ($1,$2,$3,$4,$5) returning *`,
+      [resolvedProperty, person_id ?? null, unit_id ?? null, type, note ?? null]
+    );
+    const event = ev.rows[0];
+
+    // ── THE ENGINE LINK ──────────────────────────────────────────────
+    // tour_booked is the first event that spawns a human obligation.
+    let obligation = null;
+    if (type === "tour_booked") {
+      const dueAt = new Date(Date.now() + TOUR_STALE_DAYS * 24 * 60 * 60 * 1000);
+      const ob = await client.query(
+        `insert into obligations
+           (property_id, person_id, unit_id,
+            source_event_id, module, type, label,
+            owner_type, assigned_role, escalates_to_role,
+            status, due_at)
+         values ($1,$2,$3,$4,'leasing','tour',$5,
+                 'human','leasing_agent','leasing_agent','open',$6)
+         returning *`,
+        [resolvedProperty, person_id ?? null, unit_id ?? null,
+         event.id, "Tour booked — needs an agent to own it", dueAt]
+      );
+      obligation = ob.rows[0];
+    }
+
+    await client.query("commit");
+    res.status(201).json({ event, obligation });   // obligation is null for non-tour events
+  } catch (e) {
+    await client.query("rollback");
+    res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ── list events (optionally filtered) ──
+// ?person_id=<uuid>  ?property_id=<uuid>  ?type=tour_booked
+app.get("/events", async (req, res) => {
+  const { person_id, property_id, type } = req.query;
+  try {
+    const where = [];
+    const vals = [];
+    if (person_id)   { vals.push(person_id);   where.push(`person_id = $${vals.length}`); }
+    if (property_id) { vals.push(property_id); where.push(`property_id = $${vals.length}`); }
+    if (type)        { vals.push(type);        where.push(`type = $${vals.length}`); }
+    const sql = "select * from events" +
+      (where.length ? " where " + where.join(" and ") : "") +
+      " order by occurred_at desc";
+    const r = await pool.query(sql, vals);
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════
+//  OBLIGATIONS — read + claim. (No create-directly endpoint, on purpose.)
+// ════════════════════════════════════════════════════════════════════
+
+// ── list obligations (the role dashboards read this) ──
+// ?assigned_role=leasing_agent  → the leasing pool
+// ?status=open                  → unclaimed/active filter
+// ?assigned_user_id=<uuid>      → "my obligations"
+// ?unclaimed=true               → open AND nobody assigned yet (the claim pool)
+// ?property_id=<uuid>
+app.get("/obligations", async (req, res) => {
+  const { assigned_role, status, assigned_user_id, property_id, unclaimed } = req.query;
+  try {
+    const where = [];
+    const vals = [];
+    if (assigned_role)    { vals.push(assigned_role);    where.push(`assigned_role = $${vals.length}`); }
+    if (status)           { vals.push(status);           where.push(`status = $${vals.length}`); }
+    if (assigned_user_id) { vals.push(assigned_user_id); where.push(`assigned_user_id = $${vals.length}`); }
+    if (property_id)      { vals.push(property_id);      where.push(`property_id = $${vals.length}`); }
+    if (unclaimed === "true") { where.push(`assigned_user_id is null and status = 'open'`); }
+    const sql = "select * from obligations" +
+      (where.length ? " where " + where.join(" and ") : "") +
+      " order by due_at asc nulls last, created_at desc";
+    const r = await pool.query(sql, vals);
+
+    // Add a read-time `is_overdue` flag — the clock is read-time logic, no jobs.
+    const now = Date.now();
+    const rows = r.rows.map(o => ({
+      ...o,
+      is_overdue: o.due_at ? (new Date(o.due_at).getTime() < now) : false,
+    }));
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── read one obligation (with the event that caused it — proves causality) ──
+app.get("/obligations/:id", async (req, res) => {
+  try {
+    const o = await pool.query("select * from obligations where id=$1", [req.params.id]);
+    if (o.rows.length === 0) return res.status(404).json({ error: "not found" });
+    const obligation = o.rows[0];
+    let source_event = null;
+    if (obligation.source_event_id) {
+      const e = await pool.query("select * from events where id=$1", [obligation.source_event_id]);
+      source_event = e.rows[0] ?? null;
+    }
+    const now = Date.now();
+    res.json({
+      ...obligation,
+      is_overdue: obligation.due_at ? (new Date(obligation.due_at).getTime() < now) : false,
+      source_event,   // the "this is why this obligation exists" link
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── CLAIM an obligation ──
+// The simplified claim mechanic: claiming IS just the first update to the
+// already-existing obligation. Stamps assigned_user_id and flips open →
+// in_progress. An agent claims it for themselves; a manager can claim it
+// for someone by passing a different user_id. Default behavior is "claim".
+//
+// Body: { user_id }   — the user taking ownership (required)
+// Guards: the obligation must exist, the user must exist, and it must not
+// already be claimed by someone else (re-claiming the same person is a no-op;
+// a manager reassigning is a separate explicit action, kept simple for now).
+app.patch("/obligations/:id/claim", async (req, res) => {
+  const { user_id } = req.body || {};
+  if (!user_id) return res.status(400).json({ error: "user_id is required (who is claiming it)" });
+  try {
+    const o = await pool.query("select * from obligations where id=$1", [req.params.id]);
+    if (o.rows.length === 0) return res.status(404).json({ error: "obligation not found" });
+    const obligation = o.rows[0];
+
+    const u = await pool.query("select id, name from users where id=$1", [user_id]);
+    if (u.rows.length === 0) return res.status(404).json({ error: "user not found" });
+
+    // Already claimed by someone else → conflict (don't silently steal it).
+    if (obligation.assigned_user_id && obligation.assigned_user_id !== user_id) {
+      return res.status(409).json({
+        error: "already claimed by another user",
+        assigned_user_id: obligation.assigned_user_id,
+      });
+    }
+
+    const r = await pool.query(
+      `update obligations
+         set assigned_user_id = $1,
+             status = case when status = 'open' then 'in_progress' else status end,
+             updated_at = now()
+       where id = $2
+       returning *`,
+      [user_id, req.params.id]
+    );
+    res.json(r.rows[0]);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════
+//  USERS (minimal) — needed so obligations can belong to real people.
+//  Not auth. Just create/list the staff who own obligations (e.g. Katie).
+//  role must be one of the role_name enum values.
+// ════════════════════════════════════════════════════════════════════
+const ROLE_NAMES = ["owner","asset_manager","property_manager","leasing_agent","maintenance","accountant","ai","system"];
+
+app.post("/users", async (req, res) => {
+  const { name, email, phone, role } = req.body || {};
+  if (!name) return res.status(400).json({ error: "name is required" });
+  if (role && !ROLE_NAMES.includes(role)) {
+    return res.status(400).json({ error: `role must be one of: ${ROLE_NAMES.join(", ")}` });
+  }
+  try {
+    const r = await pool.query(
+      `insert into users (name, email, phone, role)
+       values ($1,$2,$3, coalesce($4,'property_manager')) returning *`,
+      [name, email ?? null, phone ?? null, role ?? null]
+    );
+    res.status(201).json(r.rows[0]);
+  } catch (e) {
+    if (e.code === "23505") return res.status(409).json({ error: "a user with that email already exists" });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/users", async (_req, res) => {
+  try {
+    const r = await pool.query("select * from users order by created_at desc");
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 // ════════════════════════════════════════════════════════════════════
 //  AI INGESTION — staged + auditable. The trust layer made honest.
