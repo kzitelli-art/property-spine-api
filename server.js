@@ -139,7 +139,217 @@ app.get("/properties/:propertyId/units", async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+// ════════════════════════════════════════════════════════════════════
+//  PERSONS — the durable human record.
+//  A person is created the moment they first make contact (an inquiry) and
+//  is NEVER replaced. Their lifecycle_status moves lead → applicant →
+//  tenant → past; the row persists through all of it. This is what lets
+//  management see the WHOLE funnel — including the inquiry leads that never
+//  toured — which is the raw material for marketing-spend decisions.
+//
+//  Two things this block deliberately does, beyond plain CRUD:
+//   1. Validates lifecycle transitions (you can't skip lead→past by typo).
+//   2. Writes a real EVENT on every status change, so time-to-stage and
+//      funnel conversion are computable later from the event log. The
+//      engine's rule — "events are real" — holds even in the pre-tour,
+//      agent-invisible phase.
+//
+//  Paste this block into server.js AFTER the units endpoints and BEFORE
+//  the "AI INGESTION" section. It uses the same `pool`, same conventions.
+// ════════════════════════════════════════════════════════════════════
 
+// The allowed lifecycle states, in order. Index position lets us reason
+// about "forward" vs "backward" moves without hardcoding pairs.
+const LIFECYCLE = ["lead", "applicant", "tenant", "past"];
+
+// Which transitions are legal. Forward-by-one is the normal path. We also
+// allow a few real-world moves that aren't strictly +1:
+//   • any → past  (a person can drop out / move out from any stage)
+//   • tenant → past and applicant → past are the common ones
+// We do NOT allow skipping forward (lead → tenant) — that hides the funnel.
+// Going backward (tenant → lead) is blocked: it would corrupt analytics and
+// usually means a data error, not a real event.
+function transitionAllowed(from, to) {
+  if (from === to) return true;                 // no-op update is fine
+  if (to === "past") return true;               // anyone can exit to past
+  const fi = LIFECYCLE.indexOf(from);
+  const ti = LIFECYCLE.indexOf(to);
+  if (fi === -1 || ti === -1) return false;     // unknown status
+  return ti === fi + 1;                          // only forward by exactly one
+}
+
+// ── create a person (this is what an inquiry creates) ──
+// property_id and source are the analytics-critical fields. `source` is the
+// marketing channel (zillow, apartments.com, walk_in, referral, ...) — the
+// field the PM/leasing manager reads to decide where the dollars go.
+// lifecycle_status defaults to 'lead'; you normally don't pass it on create.
+app.post("/persons", async (req, res) => {
+  const {
+    name, email, phone, source,
+    property_id, interested_unit_id,
+    lifecycle_status,            // optional; defaults to 'lead' in the DB
+  } = req.body || {};
+
+  // A lead with no way to reach them and no name is just noise. Require at
+  // least one identifying/contact field so the record is actually useful.
+  if (!name && !email && !phone) {
+    return res.status(400).json({ error: "a person needs at least one of: name, email, phone" });
+  }
+
+  // If a status was passed on create, it must be a real one.
+  if (lifecycle_status && !LIFECYCLE.includes(lifecycle_status)) {
+    return res.status(400).json({ error: `lifecycle_status must be one of: ${LIFECYCLE.join(", ")}` });
+  }
+
+  try {
+    // If a property was named, confirm it exists (clear error beats a vague FK error).
+    if (property_id) {
+      const prop = await pool.query("select id from properties where id=$1", [property_id]);
+      if (prop.rows.length === 0) return res.status(404).json({ error: "property not found" });
+    }
+    // Same for an interested unit, if supplied.
+    if (interested_unit_id) {
+      const u = await pool.query("select id from units where id=$1", [interested_unit_id]);
+      if (u.rows.length === 0) return res.status(404).json({ error: "interested_unit_id not found" });
+    }
+
+    const r = await pool.query(
+      `insert into persons
+         (name, email, phone, source, lifecycle_status, leasing_stage, interested_unit_id)
+       values ($1,$2,$3,$4, coalesce($5,'lead'), coalesce($5,'lead'), $6)
+       returning *`,
+      [name ?? null, email ?? null, phone ?? null, source ?? null,
+       lifecycle_status ?? null, interested_unit_id ?? null]
+    );
+    const person = r.rows[0];
+
+    // Write the inquiry as a real EVENT. This is agent-invisible (it spawns
+    // no human obligation) but management-visible: it's the first datapoint
+    // in this person's funnel and the anchor for "time to first response".
+    await pool.query(
+      `insert into events (property_id, person_id, unit_id, type, note)
+       values ($1,$2,$3,'inquiry',$4)`,
+      [property_id ?? null, person.id, interested_unit_id ?? null,
+       source ? `inquiry via ${source}` : "inquiry"]
+    );
+
+    res.status(201).json(person);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── list persons (with light filtering for the management views) ──
+// Optional query params, all filters are additive:
+//   ?lifecycle_status=lead     → just leads (the agent's world starts later)
+//   ?source=zillow             → conversion-by-source analysis
+//   ?property_id=<uuid>        → scope to one property
+// Newest first, so a review screen shows fresh inquiries on top.
+app.get("/persons", async (req, res) => {
+  const { lifecycle_status, source, property_id } = req.query;
+  try {
+    const where = [];
+    const vals = [];
+    if (lifecycle_status) { vals.push(lifecycle_status); where.push(`lifecycle_status = $${vals.length}`); }
+    if (source)           { vals.push(source);           where.push(`source = $${vals.length}`); }
+    if (property_id)      { vals.push(property_id);      where.push(`id in (select person_id from events where property_id = $${vals.length})`); }
+    const sql =
+      "select * from persons" +
+      (where.length ? " where " + where.join(" and ") : "") +
+      " order by created_at desc";
+    const r = await pool.query(sql, vals);
+    res.json(r.rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── read one person (with their event history — the funnel trail) ──
+app.get("/persons/:id", async (req, res) => {
+  try {
+    const p = await pool.query("select * from persons where id=$1", [req.params.id]);
+    if (p.rows.length === 0) return res.status(404).json({ error: "not found" });
+    const events = await pool.query(
+      "select * from events where person_id=$1 order by occurred_at",
+      [req.params.id]
+    );
+    res.json({ ...p.rows[0], events: events.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── update a person ──
+// Durable record: this NEVER deletes and recreates. It edits in place.
+// Editable fields: contact info, source, interested unit, and — carefully —
+// lifecycle_status, which must pass transitionAllowed(). A legal status
+// change writes a real EVENT (e.g. lead→applicant) so the funnel is measurable.
+app.patch("/persons/:id", async (req, res) => {
+  const {
+    name, email, phone, source,
+    interested_unit_id, lifecycle_status, leasing_stage,
+  } = req.body || {};
+
+  try {
+    const cur = await pool.query("select * from persons where id=$1", [req.params.id]);
+    if (cur.rows.length === 0) return res.status(404).json({ error: "not found" });
+    const person = cur.rows[0];
+
+    // Validate a lifecycle change before touching anything.
+    let statusChanged = false;
+    if (lifecycle_status !== undefined && lifecycle_status !== person.lifecycle_status) {
+      if (!LIFECYCLE.includes(lifecycle_status)) {
+        return res.status(400).json({ error: `lifecycle_status must be one of: ${LIFECYCLE.join(", ")}` });
+      }
+      if (!transitionAllowed(person.lifecycle_status, lifecycle_status)) {
+        return res.status(409).json({
+          error: `illegal transition ${person.lifecycle_status} → ${lifecycle_status}. ` +
+                 `Allowed: forward one step (${LIFECYCLE.join(" → ")}), or any → past.`,
+        });
+      }
+      statusChanged = true;
+    }
+
+    // If an interested unit is being set, confirm it exists.
+    if (interested_unit_id) {
+      const u = await pool.query("select id from units where id=$1", [interested_unit_id]);
+      if (u.rows.length === 0) return res.status(404).json({ error: "interested_unit_id not found" });
+    }
+
+    // Build a partial update — only the fields actually supplied change.
+    // `coalesce(new, old)` keeps existing values when a field is omitted.
+    const r = await pool.query(
+      `update persons set
+         name              = coalesce($1, name),
+         email             = coalesce($2, email),
+         phone             = coalesce($3, phone),
+         source            = coalesce($4, source),
+         interested_unit_id= coalesce($5, interested_unit_id),
+         lifecycle_status  = coalesce($6, lifecycle_status),
+         leasing_stage     = coalesce($7, leasing_stage),
+         updated_at        = now()
+       where id=$8
+       returning *`,
+      [name ?? null, email ?? null, phone ?? null, source ?? null,
+       interested_unit_id ?? null, lifecycle_status ?? null, leasing_stage ?? null,
+       req.params.id]
+    );
+    const updated = r.rows[0];
+
+    // A status change is a real event in this person's funnel. Record it.
+    if (statusChanged) {
+      await pool.query(
+        `insert into events (person_id, type, note)
+         values ($1,'lifecycle_change',$2)`,
+        [updated.id, `${person.lifecycle_status} → ${updated.lifecycle_status}`]
+      );
+    }
+
+    res.json(updated);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 // ════════════════════════════════════════════════════════════════════
 //  AI INGESTION — staged + auditable. The trust layer made honest.
 //  Paste a messy rent roll → the AI extracts rows → NOTHING writes straight
