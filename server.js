@@ -1839,6 +1839,58 @@ function batchAddresses(addresses, perBatch = 10) {
   return batches;
 }
 
+// ── extraction_result: the normalized, read-only middle layer ─────────
+// The stable contract between raw model output and the candidate workflow.
+//
+//   model_raw_output        = raw model transcript (audit/debug)
+//   extraction_result       = normalized read-only extraction  ← THIS
+//   ready_for_promotion / needs_review = candidate workflow
+//   canonical units/leases  = created only on promote
+//
+// It is built from the SAME parsed model output already in hand — no extra
+// model call, no DB write, no candidate touched. It CREATES nothing, maps
+// nothing into the database, and does NOT pull forward the promote/mapping
+// build. One consistent shape for single property AND deal/portfolio:
+//   single  → properties:[ one ], deal:null
+//   deal    → properties:[ many ], deal:{…}
+// The scorer and (later) the review UI read THIS, never the raw transcript.
+//
+// Field names mirror what the brain emits TODAY (omit-when-null sparse rows);
+// per-unit always carries unit_number + prov. Richer flags from the roadmap
+// contract (is_future, is_phantom_bed, charges[]) slot in for free once the
+// brain emits them — everything is omit-when-null, so absence breaks nothing.
+function buildExtractionResult(parsed, isDeal, subjectProperties) {
+  const cleanUnits = (arr) => (Array.isArray(arr) ? arr : []).map(u => {
+    // pass through only real values; drop internal staging tags
+    const { _property_address, ...rest } = u || {};
+    return rest;
+  });
+  const properties = isDeal
+    ? (Array.isArray(subjectProperties) ? subjectProperties : []).map(sp => ({
+        address: sp.address ?? sp.name ?? null,
+        prov: sp.prov ?? "assumed",
+        units: cleanUnits(sp.units),
+      }))
+    : [{
+        address: parsed.property?.address ?? null,
+        prov: parsed.property ? "confirmed" : "assumed",
+        units: cleanUnits(parsed.units),
+      }];
+  return {
+    scope: isDeal ? "deal_portfolio" : "single_property",
+    document_type: parsed.document_type ?? "unknown",
+    detected_system: parsed.detected_system ?? "unknown",
+    level_reached: parsed.level_reached ?? "none",
+    snapshot_date: parsed.snapshot_date ?? null,
+    deal: isDeal ? (parsed.deal ?? null) : null,
+    properties,
+    unit_mix: Array.isArray(parsed.unit_mix) ? parsed.unit_mix : [],
+    comps_seen: isDeal ? (Number.isFinite(parsed.comps_seen) ? parsed.comps_seen : 0) : null,
+    missing: Array.isArray(parsed.missing) ? parsed.missing : [],
+    unclear: Array.isArray(parsed.unclear) ? parsed.unclear : [],
+  };
+}
+
 // ── SHARED COLLAPSE PIPELINE ──────────────────────────────────────────
 // Preserves the proven staged flow. The levelled extraction is returned in
 // full; the unit slice persists into ingest_candidates exactly as before.
@@ -1975,12 +2027,14 @@ async function runIngest(propertyId, sourceText, kind) {
     subject_property_count: isDeal ? subjectProperties.length : null,
     subject_properties: isDeal ? subjectProperties : null,  // full graph (units nested)
     comps_seen: isDeal ? compsSeen : null,
+    // ── the normalized read-only contract layer (single + deal share one shape) ──
+    extraction_result: buildExtractionResult(parsed, isDeal, subjectProperties),
     candidate_count: candidates.length,
     ready_for_promotion: candidates.filter(c => c.decision_status === "ready_for_promotion"),
     needs_review: candidates.filter(c => c.decision_status === "pending"),
     missing,
     unclear,
-    note: "Subject assets only. Comps are recognized and dropped — never staged. Nothing written to units yet. AI-confident rows are 'ready_for_promotion'; a human approves (POST /ingest/:runId/approve), then POST /ingest/:runId/promote creates units.",
+    note: "Subject assets only. Comps are recognized and dropped — never staged. Nothing written to units yet. AI-confident rows are 'ready_for_promotion'; a human approves (POST /ingest/:runId/approve), then POST /ingest/:runId/promote creates units. extraction_result is the normalized read-only view — it persists nothing.",
   };
 }
 
@@ -2201,6 +2255,16 @@ async function runIngestPlanned(propertyId, sourceText, kind) {
     subject_property_count: subjectProperties.length,
     subject_properties: subjectProperties,
     comps_seen: compsSeen,
+    // ── normalized read-only contract layer — same shape as the one-pass path.
+    //    Sourced from the planner's own subjectProperties graph (units nested)
+    //    plus the plan's doc-level facts. Read-only; persists nothing. ──
+    extraction_result: buildExtractionResult(
+      { document_type: plan.document_type, detected_system: plan.detected_system,
+        level_reached: levelReached, snapshot_date: plan.snapshot_date || null,
+        deal: plan.deal || null, comps_seen: compsSeen,
+        unit_mix: [], missing: [], unclear: allUnclear },
+      isDeal, subjectProperties
+    ),
     candidate_count: candidates.length,
     ready_for_promotion: candidates.filter(c => c.decision_status === "ready_for_promotion"),
     needs_review: candidates.filter(c => c.decision_status === "pending"),
