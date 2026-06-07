@@ -1595,7 +1595,7 @@ ${text}
 async function runIngest(propertyId, sourceText, kind) {
   const ai = await anthropic.messages.create({
     model: INGEST_MODEL,
-    max_tokens: 8000,                       // real rolls have 100+ units
+    max_tokens: 16000,                       // real rolls have 100+ units
     messages: [{ role: "user", content: ingestPrompt(sourceText) }],
   });
 
