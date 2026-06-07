@@ -1521,6 +1521,33 @@ app.delete("/leases/:id/tenants", async (req, res) => {
 //  their own tables is a later migration once the shape is proven in use.
 // ════════════════════════════════════════════════════════════════════
 
+// ════════════════════════════════════════════════════════════════════
+//  INGEST v2 — THE COLLAPSE ENGINE
+//
+//  Replaces the narrow units-only ingest prompt with a LEVELS-AWARE engine.
+//  The job is not "parse a rent roll." It is: take messy real-estate material
+//  (rent roll, offering memo, broker package, unit mix, pasted text, Excel,
+//  CSV, PDF, Word) and collapse it to the deepest reliable structure the
+//  document supports — never all-or-nothing.
+//
+//  Extraction hierarchy (extract to the deepest level the doc supports):
+//    L1 Property shell  — name, address, asset type, total units
+//    L2 Unit mix        — types, bed/bath, counts by type, market rents
+//    L3 Unit schedule   — unit-by-unit rows, status, rents
+//    L4 Lease detail    — tenant, dates, in-place rent, deposits, concessions
+//    L5 Exceptions      — vacant, down, employee, model, MTM, eviction, offline
+//
+//  A thin OM that only discloses "24 units: 12 1BR / 12 2BR" is a SUCCESS at
+//  L2 — not a failure. The engine reports the level reached and what's missing.
+//
+//  This UPGRADES the brain and widens the accepted file types. It preserves
+//  the proven staged flow (run -> candidates -> approve -> promote) and the
+//  ingest_candidates columns unchanged: the unit-level slice still persists
+//  exactly as before, so promote/approve keep working. The richer levelled
+//  extraction is returned in the API response now; persisting L1/L2/L4/L5 to
+//  their own tables is a later migration once the shape is proven in use.
+// ════════════════════════════════════════════════════════════════════
+
 const INGEST_MODEL = process.env.INGEST_MODEL || "claude-sonnet-4-6";
 
 // ── THE COLLAPSE PROMPT ───────────────────────────────────────────────
@@ -1538,11 +1565,16 @@ Report the deepest level you reliably reached in "level_reached".
 
 DETECT THE SOURCE SYSTEM FIRST, then apply its column map. Known systems and their telltales:
 - AppFolio: title "Rent Roll"; a dedicated "Status" COLUMN with values like "Current" / "Vacant-Unrented"; columns Unit, Tenant, Status, Rent (single rent, no market/actual split), Deposit, "Lease From", "Lease To"; footer like "107 Units 95.3% Occupied". No resident IDs, no SqFt, no charge columns. By-bed units written as "101 - 1".
+- Entrata (PeakMade and other Entrata-based managers): report template label "AME - Budgeted Rent (ACCT)" at top of every page; footer "Rent Roll 3.7 generated <timestamp> MDT and data as of <timestamp> MDT"; section labels "Unit Details" then "Future Resident Details" then "Average Charges by Unit Type Summary"; plain-English unit types ("Studio","1x1","2x2"); NO resident ID codes (names only, "Last, First"). Columns: "Bldg-Unit" (unit, no leading zeros e.g. "101"), "Unit Type", "SQFT", "Unit Status" (dedicated column), "Resident" (name or "-- Vacant --"), "Budgeted Rent", "Scheduled Charges", "Balance" (negatives in parens), "Deposit Held", "Move-In", "Lease Start", "Lease End", "Expected Move-Out". ENTRATA RENT MAPPING: "Budgeted Rent" -> market_rent (pro-forma/market); "Scheduled Charges" -> actual_rent (what's actually billed in place). "Unit Status" vocabulary maps: "Occupied No Notice"->active; "Notice Rented"/"Notice Unrented"->active (on notice, still occupied); "Vacant Rented Ready"/"Vacant Rented"->vacant (pre-leased, note it); "Vacant Unrented Ready"->vacant; "-- Vacant --"->vacant. ENTRATA PARSING WARNING: resident names and statuses WRAP across 2-3 physical text lines, and vacant units show "-- Vacant --" in the Resident column — do NOT treat a wrapped continuation line as a separate unit; associate wrapped text with the unit row it belongs to.
 - Yardi Breeze: header "Property = <name>"; "As Of =" + "Month ="; columns Unit, "Unit SqFt", "Tenant Name", "Actual Rent", "Actual Rent per Sqft", "Tenant Deposit", "Other Deposit", "Misc" (single ancillary bucket, not itemized), "Misc per Sqft", "Move In", "Lease Expiration", "Move Out", "Balance". Status via SECTION HEADERS ("Current/Notice/Vacant Tenants" vs "Future Tenants/Applicants"). The "per Sqft" analytic columns are the giveaway.
 - Yardi Voyager (by-unit): header "<name> (1325)"; resident IDs like "t0002191"; unit-type codes like "ut000011"; columns Unit, "Unit Type", "Unit Sq Ft", "Resident" (ID), "Name", "Market Rent", "Actual Rent", "Resident Deposit", "Other", "Move In", "Lease Expiration", "Move Out", "Balance". Status via section headers ("Current/Notice/Vacant Residents" vs "Future Residents/Applicants"); footer "Summary Groups" with "% Unit Occupancy".
 - Yardi Voyager (by-room/bed, student housing): header "(crm…)" + a "Summarize By = Room|Bed" line; student IDs like "s0003894"; columns Unit, "Room", "Bed", "Unit/Room Type" (e.g. STU00011), "Resident" (name + s# or VACANT), "Sq Ft", "Market Rent", "Actual Rent", deposits, "Move In", "Lease From", "Lease To", "Move Out", "Balance"; footer "Summary Groups" with "# Of Beds" / "% Bed Occupancy".
 - Seller/handoff roll: title often "Rent Roll Analysis"; columns "Tenant Name", "Unit", "Unit Type" (floorplan like "2BR/2BA"), "Rent", "Security Deposit", "Move In/Out", "Lease Start/End"; names as "Last, First". This is what a SELLER hands over at acquisition — a distinct shape.
 Put your best guess in detected_system; if none match, "unknown" and read it generically.
+
+CHARGE CODES & CREDITS: some systems (Entrata especially) itemize ancillary charges and CREDITS in a summary block — e.g. "Admin Fees", "Amenity Premium", "Application Fee", "Late Charges", and credits like "Employee Unit Rent Credit" or "Model" shown as NEGATIVE. When a unit's rent figure is a net of such codes, the base residential rent is what matters for actual_rent — do not let a credit line (employee/model) read as the unit's market rent; flag those units' status accordingly (employee/model) and note it.
+
+PROPERTY IDENTITY: the ADDRESS is the stable identity of a property — NOT its name. The same building is often renamed over time (e.g. "SOLO on Chestnut" -> "Uno on Chestnut") and its system database code changes. Always capture the address in property.address; treat the marketing name as a label that can change.
 
 NORMALIZE across formats:
 - Many docs have multiple rent columns ("Pre-Lease Rent" vs "In-Place Rent", "Market Rent" vs "Actual Rent"). Map the CURRENT contract/in-place rent to actual_rent, and the asking/market/pre-lease rent to market_rent. If only one rent exists and the doc is a rent roll, it's actual_rent; if it's an OM, it's market_rent (asking).
@@ -1564,24 +1596,25 @@ HARD RULES:
 - If you cannot tell whether a row is a unit, do NOT invent it — raw line into "unclear".
 - If the document has NO reliable property/unit signal at all, say so: set level_reached to "none" and explain in "missing".
 
-Return ONLY valid JSON, no prose, no markdown fences, in this exact shape:
+OUTPUT SIZE — CRITICAL FOR LARGE ROLLS: Keep the JSON as SMALL as possible. OMIT any field whose value is null, empty, or unknown — do NOT write it out. Only include fields you actually found a value for. The ONLY always-required field per unit is "unit_number"; include "prov" too, and any of the other fields ONLY when they have a real value. This keeps a 100+ unit roll inside one response. The server fills any omitted field with null after parsing, so leaving a field out is exactly equivalent to null — but far smaller.
+
+Return ONLY valid JSON, no prose, no markdown fences. Use this shape, but OMIT every field that would be null/empty (the example shows all possible fields; a real unit includes only the ones with values):
 {
   "document_type": "rent_roll | offering_memo | unit_mix | broker_package | pm_report | unknown",
-  "detected_system": "appfolio | yardi_breeze | yardi_voyager | broker_om | student_schedule | unknown",
+  "detected_system": "appfolio | yardi_breeze | yardi_voyager | entrata | broker_om | student_schedule | seller_handoff | unknown",
   "level_reached": "L1 | L2 | L3 | L4 | L5 | none",
-  "snapshot_date": "YYYY-MM-DD or null",
-  "property": { "name": null, "address": null, "asset_type": null, "total_units": null },
-  "unit_mix": [ { "unit_type": "", "bedrooms": null, "bathrooms": null, "count": null, "market_rent": null } ],
+  "snapshot_date": "YYYY-MM-DD (omit if none)",
+  "property": { "name": "...", "address": "...", "asset_type": "...", "total_units": 0 },
+  "unit_mix": [ { "unit_type": "", "bedrooms": 0, "bathrooms": 0, "count": 0, "market_rent": 0 } ],
   "units": [
-    { "unit_number": "", "room": null, "bed": null, "address": null, "bedrooms": null, "bathrooms": null, "square_feet": null,
-      "status": "active|vacant|down|employee|model|mtm|eviction|future|non_revenue|unknown",
-      "market_rent": null, "actual_rent": null, "lease_start": null, "lease_end": null,
-      "tenant_name": null, "resident_code": null, "deposit": null, "balance": null,
-      "prov": "confirmed|assumed", "note": "" }
+    { "unit_number": "REQUIRED", "status": "active|vacant|down|employee|model|mtm|eviction|future|non_revenue|unknown",
+      "prov": "confirmed|assumed",
+      "...include ONLY fields with real values from this set": "room, bed, address, bedrooms, bathrooms, square_feet, market_rent, actual_rent, lease_start, lease_end, tenant_name, resident_code, deposit, balance, note" }
   ],
   "missing": [ "what a buyer/operator would still need that this doc didn't provide" ],
   "unclear": [ "raw lines seen but not placed" ]
 }
+Example of ONE slim unit (note: no null fields written): {"unit_number":"102","status":"active","prov":"confirmed","square_feet":1200,"actual_rent":1450,"lease_end":"2022-07-29","tenant_name":"Ryan McDonald","deposit":1900,"balance":1600,"note":"Misc: 150"}
 
 Source material:
 """
@@ -1595,7 +1628,7 @@ ${text}
 async function runIngest(propertyId, sourceText, kind) {
   const ai = await anthropic.messages.create({
     model: INGEST_MODEL,
-    max_tokens: 16000,                       // real rolls have 100+ units
+    max_tokens: 16000,                      // headroom; slim output keeps 100+ unit rolls well under this
     messages: [{ role: "user", content: ingestPrompt(sourceText) }],
   });
 
@@ -1737,6 +1770,7 @@ app.post("/properties/:propertyId/ingest-file", upload.single("file"), async (re
     res.status(500).json({ error: e.message });
   }
 });
+
 
 // ── read a run's candidates back (for the review screen) ──
 app.get("/ingest/:runId", async (req, res) => {
