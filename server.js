@@ -1816,7 +1816,10 @@ async function fileToText(file) {
 
   // PDF (text-based; scanned/handwritten OCR is a later layer)
   if (name.endsWith(".pdf")) {
-    const pdfParse = require("pdf-parse");
+    // Import the inner library directly. The package's index.js runs a debug
+    // block on require that reads a sample file off disk — absent on Render,
+    // it throws and 500s the request. The lib module skips that block.
+    const pdfParse = require("pdf-parse/lib/pdf-parse.js");
     const data = await pdfParse(buf);
     return data.text || "";
   }
