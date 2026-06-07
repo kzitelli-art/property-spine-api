@@ -66,7 +66,10 @@ module.exports = function maintenance(deps) {
     return new Date(Date.now() + mins * 60 * 1000);
   };
   const urgencyToPriority = (urgency) =>
-    urgency === "immediate" ? "critical" : urgency === "same_day" ? "high" : "high";
+    // obligations.priority allows only low|normal|high (ck_obl_priority).
+    // All emergency tiers are high priority; the finer urgency (immediate vs
+    // same_day) lives on the work order + event and drives due_at below.
+    "high";
 
   // ════════════════════════════════════════════════════════════════
   //  THE CATEGORY ENGINE  (field + context → operating → gl)
@@ -252,7 +255,7 @@ module.exports = function maintenance(deps) {
           status: "open",
           due_at: dueAt,
           priority,
-          severity: "high",
+          severity: "emergency",
           required_inputs: ["closeout_proof"],
         });
       }
