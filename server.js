@@ -1494,50 +1494,108 @@ app.delete("/leases/:id/tenants", async (req, res) => {
 //  Model id lives in the INGEST_MODEL env var (set in Render) so the working
 //  string is config, not code — change it without a redeploy of logic.
 // ════════════════════════════════════════════════════════════════════
-const INGEST_MODEL = process.env.INGEST_MODEL || "claude-sonnet-4-5";
+// ════════════════════════════════════════════════════════════════════
+//  INGEST v2 — THE COLLAPSE ENGINE
+//
+//  Replaces the narrow units-only ingest prompt with a LEVELS-AWARE engine.
+//  The job is not "parse a rent roll." It is: take messy real-estate material
+//  (rent roll, offering memo, broker package, unit mix, pasted text, Excel,
+//  CSV, PDF, Word) and collapse it to the deepest reliable structure the
+//  document supports — never all-or-nothing.
+//
+//  Extraction hierarchy (extract to the deepest level the doc supports):
+//    L1 Property shell  — name, address, asset type, total units
+//    L2 Unit mix        — types, bed/bath, counts by type, market rents
+//    L3 Unit schedule   — unit-by-unit rows, status, rents
+//    L4 Lease detail    — tenant, dates, in-place rent, deposits, concessions
+//    L5 Exceptions      — vacant, down, employee, model, MTM, eviction, offline
+//
+//  A thin OM that only discloses "24 units: 12 1BR / 12 2BR" is a SUCCESS at
+//  L2 — not a failure. The engine reports the level reached and what's missing.
+//
+//  This UPGRADES the brain and widens the accepted file types. It preserves
+//  the proven staged flow (run -> candidates -> approve -> promote) and the
+//  ingest_candidates columns unchanged: the unit-level slice still persists
+//  exactly as before, so promote/approve keep working. The richer levelled
+//  extraction is returned in the API response now; persisting L1/L2/L4/L5 to
+//  their own tables is a later migration once the shape is proven in use.
+// ════════════════════════════════════════════════════════════════════
 
-// ── the prompt. Handles both pasted lines AND flattened spreadsheet rows ──
-// (Yardi/AppFolio exports have section dividers like "Unit Type: Studio",
-//  multi-column rows, status + resident columns. The model is told to read
-//  bedrooms from the unit-type section when the row itself doesn't say.)
+const INGEST_MODEL = process.env.INGEST_MODEL || "claude-sonnet-4-6";
+
+// ── THE COLLAPSE PROMPT ───────────────────────────────────────────────
 function ingestPrompt(text) {
-  return `You are reading a property rent roll. It may be pasted text OR rows flattened from a spreadsheet export (Yardi/AppFolio style). Extract the residential units into JSON.
+  return `You are the extraction engine for a property-management platform. You read ONE piece of real-estate material and COLLAPSE it to the clean structure underneath. The source may be a rent roll, an offering memorandum, a broker package, a property-management report, a unit-mix table, or pasted text — flattened from Excel/CSV/PDF/Word or pasted by hand. Formats vary wildly (AppFolio, Yardi Breeze, Yardi Voyager, broker OMs, student-housing schedules). Read it the way an experienced operator would.
 
-For each unit return:
-- unit_number (string, required) — the Bldg-Unit or unit id
-- bedrooms (number or null) — if the row sits under a section like "Unit Type: Studio" use 0; "1x1" = 1; "2x2" = 2; "3x2"/"3 Bed" = 3; if truly unknown, null
-- market_rent (number or null) — the Market Rent column if present, else the scheduled/actual rent
-- prov: "confirmed" or "assumed" (see the rule below — be precise about this)
-- note: short reason only if prov is "assumed" or unclear (else "")
+YOUR FIRST OBLIGATION IS NOT PERFECTION — it is to find the highest-confidence useful truth in the document, at whatever depth it supports. Never fail just because the document is incomplete. Extract to the DEEPEST reliable level:
+  L1 Property shell: property name, address, asset type, total unit count.
+  L2 Unit mix: unit types, bed/bath counts, count of each type, market/asking rents if present.
+  L3 Unit schedule: unit-by-unit rows — unit number, floorplan, status, rent.
+  L4 Lease detail: tenant name, lease start/end, in-place rent, deposit, concessions, prelease/renewal status.
+  L5 Exceptions: vacant, down/offline, employee, model, month-to-month, eviction, non-revenue, unknown.
 
-How to set prov — this matters:
-- "confirmed" = the row is clear and the values are read directly, INCLUDING bedrooms taken from a clear "Unit Type:" section header. In a grouped rent roll, the section header IS the source of truth for bedrooms — reading "101 is a studio" because it sits under "Unit Type: Studio" is a direct read, NOT a guess. A normal unit with a clear number, a section-header bedroom count, and a rent column is CONFIRMED.
-- "assumed" = reserve this for genuine ambiguity, e.g.: bedrooms truly unknown (no section header), no rent figure anywhere, a non-residential or model/placeholder unit (resident like "Model"), a unit number that doesn't cleanly parse, or conflicting values.
-- Do NOT mark a unit "assumed" merely because bedrooms came from the section header. That is the expected, reliable case.
+Report the deepest level you reliably reached in "level_reached".
 
-Rules:
-- Only include actual residential units. Ignore titles, column headers, "Unit Type:" divider lines, subtotals, totals (any line containing "Total"), parameter/metadata rows, and blank lines.
-- Parking spots, storage, retail, and amenity lines are NOT residential units — put their raw line in "unclear".
-- If you cannot tell whether a row is a unit, do NOT invent it — put the raw line in "unclear".
-- Never guess a unit_number. No clear unit number → "unclear".
+DETECT THE SOURCE SYSTEM FIRST, then apply its column map. Known systems and their telltales:
+- AppFolio: title "Rent Roll"; a dedicated "Status" COLUMN with values like "Current" / "Vacant-Unrented"; columns Unit, Tenant, Status, Rent (single rent, no market/actual split), Deposit, "Lease From", "Lease To"; footer like "107 Units 95.3% Occupied". No resident IDs, no SqFt, no charge columns. By-bed units written as "101 - 1".
+- Yardi Breeze: header "Property = <name>"; "As Of =" + "Month ="; columns Unit, "Unit SqFt", "Tenant Name", "Actual Rent", "Actual Rent per Sqft", "Tenant Deposit", "Other Deposit", "Misc" (single ancillary bucket, not itemized), "Misc per Sqft", "Move In", "Lease Expiration", "Move Out", "Balance". Status via SECTION HEADERS ("Current/Notice/Vacant Tenants" vs "Future Tenants/Applicants"). The "per Sqft" analytic columns are the giveaway.
+- Yardi Voyager (by-unit): header "<name> (1325)"; resident IDs like "t0002191"; unit-type codes like "ut000011"; columns Unit, "Unit Type", "Unit Sq Ft", "Resident" (ID), "Name", "Market Rent", "Actual Rent", "Resident Deposit", "Other", "Move In", "Lease Expiration", "Move Out", "Balance". Status via section headers ("Current/Notice/Vacant Residents" vs "Future Residents/Applicants"); footer "Summary Groups" with "% Unit Occupancy".
+- Yardi Voyager (by-room/bed, student housing): header "(crm…)" + a "Summarize By = Room|Bed" line; student IDs like "s0003894"; columns Unit, "Room", "Bed", "Unit/Room Type" (e.g. STU00011), "Resident" (name + s# or VACANT), "Sq Ft", "Market Rent", "Actual Rent", deposits, "Move In", "Lease From", "Lease To", "Move Out", "Balance"; footer "Summary Groups" with "# Of Beds" / "% Bed Occupancy".
+- Seller/handoff roll: title often "Rent Roll Analysis"; columns "Tenant Name", "Unit", "Unit Type" (floorplan like "2BR/2BA"), "Rent", "Security Deposit", "Move In/Out", "Lease Start/End"; names as "Last, First". This is what a SELLER hands over at acquisition — a distinct shape.
+Put your best guess in detected_system; if none match, "unknown" and read it generically.
 
-Return ONLY valid JSON, no prose, in this exact shape:
-{"units":[{"unit_number":"","bedrooms":null,"market_rent":null,"prov":"confirmed","note":""}],"unclear":["raw line that couldn't be parsed"]}
+NORMALIZE across formats:
+- Many docs have multiple rent columns ("Pre-Lease Rent" vs "In-Place Rent", "Market Rent" vs "Actual Rent"). Map the CURRENT contract/in-place rent to actual_rent, and the asking/market/pre-lease rent to market_rent. If only one rent exists and the doc is a rent roll, it's actual_rent; if it's an OM, it's market_rent (asking).
+- STATUS lives in different places by system — derive it from EITHER a "Status" column (AppFolio: "Current"->active, "Vacant-Unrented"->vacant) OR the SECTION HEADER a row sits under (Yardi: rows under "Current/Notice/Vacant …" are active unless the name is VACANT; rows under "Future …/Applicants" -> status "future"). Normalize to: active | vacant | down | employee | model | mtm | eviction | future | non_revenue | unknown. Also map "Occupied"->active, "Available"->vacant, "Down"->down, "Employee"->employee, "Model"->model, "MTM"/"Month to Month"->mtm.
+- Unit numbers are STRINGS — preserve exactly, including leading zeros ("0101") and alphanumerics ("1F","2R","BR","1325-101").
+- ROOM/BED is first-class for student / by-the-bed housing. When the roll has Room and/or Bed columns (or beds leased individually), capture room and bed per row. The bed — not the unit — is the leasable atom; one lease can be one bed.
+- PHANTOM ROWS: either Yardi config emits a second row at "0.00" Actual Rent when one resident holds a whole unit (the extra room/bed rows). Do NOT count a 0.00-rent phantom row as a separate lease or as a vacant bed — attribute it to the same resident/lease.
+- DO NOT trust filenames or folder names for the reporting period. Take snapshot_date ONLY from the in-file date line ("As Of =", "As of:", "As of"). If there is no in-file date, snapshot_date is null — never infer it from context.
+- Itemized charges (parking, pet, insurance) captured separately when present. Breeze lumps ancillary into one "Misc" column — capture it as a single misc charge, not as rent. AppFolio has none. Never fold ancillary into rent.
 
-Rent roll:
+PROVENANCE — every extracted unit carries prov:
+- "confirmed" = read directly from a clear row/section (a bedroom count from a clear "Unit Type" header IS a direct read, not a guess).
+- "assumed" = genuine ambiguity: bedrooms with no source, no rent anywhere, a value inferred from an OM's marketing claim, a non-residential/placeholder line, an unparseable unit number, or conflicting values. An offering memo's rents are asking CLAIMS => assumed.
+
+HARD RULES:
+- NEVER invent a value. No support => null. A wrong confident value is worse than an honest blank. This is the most important rule.
+- Only residential units. Ignore titles, column headers, divider lines, subtotals, any line containing "Total", metadata rows, blanks.
+- Parking/storage/retail/amenity lines are NOT units — put their raw line in "unclear".
+- If you cannot tell whether a row is a unit, do NOT invent it — raw line into "unclear".
+- If the document has NO reliable property/unit signal at all, say so: set level_reached to "none" and explain in "missing".
+
+Return ONLY valid JSON, no prose, no markdown fences, in this exact shape:
+{
+  "document_type": "rent_roll | offering_memo | unit_mix | broker_package | pm_report | unknown",
+  "detected_system": "appfolio | yardi_breeze | yardi_voyager | broker_om | student_schedule | unknown",
+  "level_reached": "L1 | L2 | L3 | L4 | L5 | none",
+  "snapshot_date": "YYYY-MM-DD or null",
+  "property": { "name": null, "address": null, "asset_type": null, "total_units": null },
+  "unit_mix": [ { "unit_type": "", "bedrooms": null, "bathrooms": null, "count": null, "market_rent": null } ],
+  "units": [
+    { "unit_number": "", "room": null, "bed": null, "address": null, "bedrooms": null, "bathrooms": null, "square_feet": null,
+      "status": "active|vacant|down|employee|model|mtm|eviction|future|non_revenue|unknown",
+      "market_rent": null, "actual_rent": null, "lease_start": null, "lease_end": null,
+      "tenant_name": null, "resident_code": null, "deposit": null, "balance": null,
+      "prov": "confirmed|assumed", "note": "" }
+  ],
+  "missing": [ "what a buyer/operator would still need that this doc didn't provide" ],
+  "unclear": [ "raw lines seen but not placed" ]
+}
+
+Source material:
 """
 ${text}
 """`;
 }
 
-// ── SHARED INGEST PIPELINE ────────────────────────────────────────────
-// Both the text endpoint and the file endpoint call this. The trust logic
-// (model call → parse → persist run → stage candidates) lives ONCE, here,
-// so file upload inherits the exact same staging/provenance behavior.
+// ── SHARED COLLAPSE PIPELINE ──────────────────────────────────────────
+// Preserves the proven staged flow. The levelled extraction is returned in
+// full; the unit slice persists into ingest_candidates exactly as before.
 async function runIngest(propertyId, sourceText, kind) {
   const ai = await anthropic.messages.create({
     model: INGEST_MODEL,
-    max_tokens: 8000,                       // bigger: real rolls have 100+ units
+    max_tokens: 8000,                       // real rolls have 100+ units
     messages: [{ role: "user", content: ingestPrompt(sourceText) }],
   });
 
@@ -1547,8 +1605,10 @@ async function runIngest(propertyId, sourceText, kind) {
   try { parsed = JSON.parse(raw); }
   catch { const err = new Error("AI returned unparseable output"); err.raw = rawOutput; err.unparseable = true; throw err; }
 
-  const units = Array.isArray(parsed.units) ? parsed.units : [];
+  const units   = Array.isArray(parsed.units) ? parsed.units : [];
+  const unitMix = Array.isArray(parsed.unit_mix) ? parsed.unit_mix : [];
   const unclear = Array.isArray(parsed.unclear) ? parsed.unclear : [];
+  const missing = Array.isArray(parsed.missing) ? parsed.missing : [];
 
   // Persist the run — verbatim input, raw model output, model id (provenance anchor).
   const runRes = await pool.query(
@@ -1559,31 +1619,84 @@ async function runIngest(propertyId, sourceText, kind) {
   );
   const run = runRes.rows[0];
 
-  // Stage every row as a candidate. NOTHING promoted here.
+  // Stage every unit as a candidate — SAME columns, SAME decision semantics.
+  // market_rent persisted = actual_rent if present, else market_rent (so a
+  // rent roll keeps in-place rent and an OM keeps asking rent — one column,
+  // correct value). The richer fields ride along in model_raw_output for now.
   const candidates = [];
   for (const u of units) {
     const hasNumber = !!u.unit_number;
     const prov = (u.prov === "confirmed" && hasNumber) ? "confirmed" : "assumed";
     const decision = (prov === "confirmed") ? "ready_for_promotion" : "pending";
     const note = !hasNumber ? "no unit number" : (u.note || null);
+    const rentToStore = (u.actual_rent != null) ? u.actual_rent : (u.market_rent ?? null);
     const c = await pool.query(
       `insert into ingest_candidates
          (run_id, property_id, unit_number, bedrooms, market_rent, prov, ai_note, decision_status)
        values ($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
       [run.id, propertyId, hasNumber ? String(u.unit_number) : null,
-       u.bedrooms ?? null, u.market_rent ?? null, prov, note, decision]
+       u.bedrooms ?? null, rentToStore, prov, note, decision]
     );
     candidates.push(c.rows[0]);
   }
 
   return {
     run_id: run.id,
+    document_type: parsed.document_type || "unknown",
+    detected_system: parsed.detected_system || "unknown",
+    level_reached: parsed.level_reached || "none",
+    snapshot_date: parsed.snapshot_date || null,
+    property: parsed.property || null,       // L1 shell (returned, not yet persisted)
+    unit_mix: unitMix,                        // L2 (returned, not yet persisted)
     candidate_count: candidates.length,
     ready_for_promotion: candidates.filter(c => c.decision_status === "ready_for_promotion"),
     needs_review: candidates.filter(c => c.decision_status === "pending"),
+    missing,                                  // what the doc did NOT provide
     unclear,
-    note: "Nothing was written to units. AI-confident rows are 'ready_for_promotion' — a human must approve (POST /ingest/:runId/approve), then POST /ingest/:runId/promote to create units.",
+    note: "Collapsed to the deepest reliable level. Nothing written to units yet. AI-confident rows are 'ready_for_promotion'; a human approves (POST /ingest/:runId/approve), then POST /ingest/:runId/promote creates units.",
   };
+}
+
+// ── FILE → TEXT: read any supported file type into plain text ─────────
+// Excel/CSV via SheetJS, PDF via pdf-parse, Word via mammoth, plain text as-is.
+// All flow into the SAME runIngest pipeline — turning a file into text is the
+// only thing that differs by type.
+async function fileToText(file) {
+  const name = (file.originalname || "").toLowerCase();
+  const buf = file.buffer;
+
+  // Excel / CSV
+  if (name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".csv")) {
+    const wb = XLSX.read(buf, { type: "buffer", cellDates: true });
+    let flat = "";
+    for (const sheetName of wb.SheetNames) {
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, blankrows: false, raw: false });
+      flat += `### SHEET: ${sheetName}\n`;
+      for (const row of rows) {
+        const line = (row || []).map(c => (c == null ? "" : String(c))).join("\t").trim();
+        if (line) flat += line + "\n";
+      }
+      flat += "\n";
+    }
+    return flat;
+  }
+
+  // PDF (text-based; scanned/handwritten OCR is a later layer)
+  if (name.endsWith(".pdf")) {
+    const pdfParse = require("pdf-parse");
+    const data = await pdfParse(buf);
+    return data.text || "";
+  }
+
+  // Word
+  if (name.endsWith(".docx") || name.endsWith(".doc")) {
+    const mammoth = require("mammoth");
+    const result = await mammoth.extractRawText({ buffer: buf });
+    return result.value || "";
+  }
+
+  // Plain text / unknown — try utf-8
+  return buf.toString("utf8");
 }
 
 // ── ingest from pasted TEXT ──
@@ -1601,36 +1714,23 @@ app.post("/properties/:propertyId/ingest", async (req, res) => {
   }
 });
 
-// ── ingest from an uploaded FILE (.xlsx / .xls / .csv) ──
-// The server reads the spreadsheet, flattens every sheet to plain rows, and
-// feeds that text through the SAME pipeline. Same staging, same provenance,
-// same promote step — the only new thing is turning a file into text first.
+// ── ingest from an uploaded FILE (.xlsx/.xls/.csv/.pdf/.docx/.doc/.txt) ──
+// The server reads any supported type to text, then runs the SAME pipeline.
 app.post("/properties/:propertyId/ingest-file", upload.single("file"), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "no file uploaded (field name must be 'file')" });
   try {
     const prop = await pool.query("select id from properties where id=$1", [req.params.propertyId]);
     if (prop.rows.length === 0) return res.status(404).json({ error: "property not found" });
 
-    // Parse the workbook from the uploaded bytes. Flatten each sheet to TSV-ish
-    // text so the model sees rows the way a human reading the file would.
-    let wb;
-    try { wb = XLSX.read(req.file.buffer, { type: "buffer", cellDates: true }); }
-    catch { return res.status(400).json({ error: "could not read file — is it a valid .xlsx/.xls/.csv?" }); }
+    let text;
+    try { text = await fileToText(req.file); }
+    catch { return res.status(400).json({ error: "could not read file — supported: .xlsx .xls .csv .pdf .docx .doc .txt" }); }
 
-    let flat = "";
-    for (const sheetName of wb.SheetNames) {
-      const rows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1, blankrows: false, raw: false });
-      flat += `### SHEET: ${sheetName}\n`;
-      for (const row of rows) {
-        const line = (row || []).map(c => (c == null ? "" : String(c))).join("\t").trim();
-        if (line) flat += line + "\n";
-      }
-      flat += "\n";
+    if (!text || !text.trim()) {
+      return res.status(400).json({ error: "file parsed but contained no readable text. If it is a scanned/photo PDF, OCR isn't supported yet — paste the table or upload an Excel/CSV." });
     }
 
-    if (!flat.trim()) return res.status(400).json({ error: "file parsed but contained no rows" });
-
-    const result = await runIngest(req.params.propertyId, flat, "rent_roll_file");
+    const result = await runIngest(req.params.propertyId, text, "rent_roll_file");
     res.json({ ...result, source_filename: req.file.originalname });
   } catch (e) {
     if (e.unparseable) return res.status(502).json({ error: e.message, raw: e.raw });
