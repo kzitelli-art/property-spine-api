@@ -1579,7 +1579,9 @@ PROPERTY IDENTITY: the ADDRESS is the stable identity of a property — NOT its 
 
 NORMALIZE across formats:
 - Many docs have multiple rent columns ("Pre-Lease Rent" vs "In-Place Rent", "Market Rent" vs "Actual Rent"). Map the CURRENT contract/in-place rent to actual_rent, and the asking/market/pre-lease rent to market_rent. If only one rent exists and the doc is a rent roll, it's actual_rent; if it's an OM, it's market_rent (asking).
-- STATUS lives in different places by system — derive it from EITHER a "Status" column (AppFolio: "Current"->active, "Vacant-Unrented"->vacant) OR the SECTION HEADER a row sits under (Yardi: rows under "Current/Notice/Vacant …" are active unless the name is VACANT; rows under "Future …/Applicants" -> status "future"). Normalize to: active | vacant | down | employee | model | mtm | eviction | future | non_revenue | unknown. Also map "Occupied"->active, "Available"->vacant, "Down"->down, "Employee"->employee, "Model"->model, "MTM"/"Month to Month"->mtm.
+- STATUS lives in different places by system — derive it from EITHER a "Status" column (AppFolio: "Current"->active, "Vacant-Unrented"->vacant) OR the SECTION HEADER a row sits under (Yardi: rows under "Current/Notice/Vacant …" are active unless the name is VACANT). Normalize to: active | vacant | down | employee | model | mtm | eviction | non_revenue | unknown. Also map "Occupied"->active, "Available"->vacant, "Down"->down, "Employee"->employee, "Model"->model, "MTM"/"Month to Month"->mtm.
+- FORWARD-LOOKING UNITS — THE REVENUE-SPINE RULE. The rent roll is not a flat snapshot; it carries what is true TODAY plus what is already SCHEDULED. A single unit can hold more than one true fact: it can be VACANT today yet have a future resident pre-leased into it; it can be OCCUPIED today yet on notice with a move-out scheduled. NEVER collapse a future fact into the current status, and NEVER overwrite the current row with the future one. The SAME unit number can appear twice in a file — once under "Current/Notice/Vacant" and again under "Future Residents/Applicants" (or Entrata's "Future Resident Details"). When that happens, emit the unit ONCE: its top-level status/rent/tenant = the CURRENT-section fact (e.g. vacant), and attach the future-section fact to a "future_events" array on that unit. Do not emit "future" as a status. A row that appears ONLY under a future/applicants section (no current-section counterpart) is a future_event on its unit with current status vacant.
+  future_events[] entries look like: { "type": "scheduled_move_in" | "scheduled_move_out" | "renewal" | "rent_change", "tenant_name": "...", "rent": 0, "lease_start": "YYYY-MM-DD", "lease_end": "YYYY-MM-DD" } — include ONLY the fields each event actually has.
 - Unit numbers are STRINGS — preserve exactly, including leading zeros ("0101") and alphanumerics ("1F","2R","BR","1325-101").
 - ROOM/BED is first-class for student / by-the-bed housing. When the roll has Room and/or Bed columns (or beds leased individually), capture room and bed per row. The bed — not the unit — is the leasable atom; one lease can be one bed.
 - PHANTOM ROWS: either Yardi config emits a second row at "0.00" Actual Rent when one resident holds a whole unit (the extra room/bed rows). Do NOT count a 0.00-rent phantom row as a separate lease or as a vacant bed — attribute it to the same resident/lease.
@@ -1625,9 +1627,10 @@ Return ONLY valid JSON, no prose, no markdown fences. OMIT every field that woul
   "property": { "name": "...", "address": "...", "asset_type": "...", "total_units": 0 },
   "unit_mix": [ { "unit_type": "", "bedrooms": 0, "bathrooms": 0, "count": 0, "market_rent": 0 } ],
   "units": [
-    { "unit_number": "REQUIRED", "status": "active|vacant|down|employee|model|mtm|eviction|future|non_revenue|unknown",
+    { "unit_number": "REQUIRED", "status": "active|vacant|down|employee|model|mtm|eviction|non_revenue|unknown",
       "prov": "confirmed|assumed",
-      "...include ONLY fields with real values from this set": "room, bed, address, bedrooms, bathrooms, square_feet, market_rent, actual_rent, lease_start, lease_end, tenant_name, resident_code, deposit, balance, note" }
+      "...include ONLY fields with real values from this set": "room, bed, address, bedrooms, bathrooms, square_feet, market_rent, actual_rent, lease_start, lease_end, tenant_name, resident_code, deposit, balance, note",
+      "future_events": "OMIT unless the unit has a scheduled future move-in/out/renewal; array of { type, tenant_name, rent, lease_start, lease_end }" }
   ],
   "missing": [ "what a buyer/operator would still need that this doc didn't provide" ],
   "unclear": [ "raw lines seen but not placed" ]
@@ -1660,7 +1663,8 @@ Return ONLY valid JSON, no prose, no markdown fences. OMIT every field that woul
         { "unit_number": "REQUIRED (e.g. 'A','1A')",
           "status": "active|vacant|...",
           "prov": "confirmed|assumed",
-          "...include ONLY fields with real values": "bedrooms, bathrooms, room, bed, square_feet, market_rent, actual_rent, lease_start, lease_end, tenant_name, deposit, balance, note" }
+          "...include ONLY fields with real values": "bedrooms, bathrooms, room, bed, square_feet, market_rent, actual_rent, lease_start, lease_end, tenant_name, deposit, balance, note",
+          "future_events": "OMIT unless scheduled; array of { type, tenant_name, rent, lease_start, lease_end }" }
       ]
     }
   ],
@@ -1762,7 +1766,8 @@ RULES:
 - For each address above, find its units in the rent roll / unit schedule and extract them at the deepest reliable level (unit number, status, beds, baths, sqft, rents, lease dates, tenant).
 - A unit number like "A", "1F", "Unit 2" is unique only WITHIN its property — keep each unit under its address.
 - In-place/current rent → actual_rent; asking/market/pre-lease rent → market_rent. Vacant units have no actual_rent.
-- Status vocabulary → active | vacant | down | employee | model | mtm | future | non_revenue | unknown. "Occupied"→active, "Available"/"Vacant"→vacant, "Down"→down, "Employee"→employee.
+- Status vocabulary → active | vacant | down | employee | model | mtm | non_revenue | unknown. "Occupied"→active, "Available"/"Vacant"→vacant, "Down"→down, "Employee"→employee.
+- FORWARD-LOOKING UNITS: a unit can be vacant/occupied TODAY and also have a SCHEDULED future move-in, move-out, or renewal. Do NOT collapse a future fact into status and do NOT emit "future" as a status. If the same unit appears under both a current section and a "Future Residents/Applicants" section, emit it ONCE with the CURRENT fact as its status/rent/tenant and attach the future fact to a "future_events" array. A unit appearing only in a future section is vacant now with a future_event.
 - NEVER invent a value. No support → omit the field. Do NOT extract any address that is not in the list above. Do NOT extract comp/market/survey rows.
 - Unit numbers are STRINGS — preserve exactly (leading zeros, "1F", "BR").
 
@@ -1774,7 +1779,8 @@ OUTPUT — keep it SMALL, omit null/empty fields. Return ONLY valid JSON, no pro
       "prov": "confirmed|assumed",
       "units": [
         { "unit_number": "REQUIRED", "status": "...", "prov": "confirmed|assumed",
-          "...only fields with real values": "bedrooms, bathrooms, square_feet, market_rent, actual_rent, lease_start, lease_end, tenant_name, deposit, balance, note" }
+          "...only fields with real values": "bedrooms, bathrooms, square_feet, market_rent, actual_rent, lease_start, lease_end, tenant_name, deposit, balance, note",
+          "future_events": "OMIT unless scheduled; array of { type, tenant_name, rent, lease_start, lease_end }" }
       ]
     }
   ],
