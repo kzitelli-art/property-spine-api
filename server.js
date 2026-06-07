@@ -1596,12 +1596,29 @@ HARD RULES:
 - If you cannot tell whether a row is a unit, do NOT invent it — raw line into "unclear".
 - If the document has NO reliable property/unit signal at all, say so: set level_reached to "none" and explain in "missing".
 
+TOP OF THE STRUCTURE IS NOT ALWAYS ONE PROPERTY. A single file can describe a DEAL / PORTFOLIO — one transaction covering MANY separate properties (separate street addresses). An offering memorandum (OM) for a portfolio is the prime example. The real hierarchy is: file -> deal/portfolio -> properties -> units. Decide first which case you are in:
+  • SINGLE PROPERTY: one building / one address (a normal rent roll, a single-asset OM). Emit the flat "property" + "units" shape (the classic shape, unchanged).
+  • DEAL / PORTFOLIO: a named offering covering multiple addresses (e.g. "Philadelphia Family Housing Portfolio — 83 units, 284 beds, 28 properties"). Emit the "deal" shape: a deal shell plus a "subject_properties" array, with each property's units nested UNDER it.
+
+SUBJECT vs COMP — THE MOST IMPORTANT ROUTING DECISION IN AN OM. An OM contains the asset being SOLD (the SUBJECT) and also reference material that must NEVER be treated as part of the asset:
+  • SUBJECT properties/units: the actual real estate being offered for sale. In a portfolio OM these are listed in the "portfolio overview", the "portfolio rent roll", the "unit mix", and the per-address tax/financial tables. These are the ONLY things that matter for this workflow.
+  • COMPS and other NOISE: "Sale comparables" / "sale comps", "Lease comparables" / "lease comps", market-survey tables, surrounding-area statistics, broker contact pages, lender names, maps, photos, market commentary, university/enrollment data. These are OTHER people's buildings or context — shown only for pricing/market color. A sale comp like "2233 N 20th Street, 38 units" is NOT a subject property and its 38 units are NOT subject units.
+
+ROUTING RULE FOR THIS WORKFLOW: capture SUBJECT properties and SUBJECT units ONLY. You MUST still RECOGNIZE a comp well enough to KNOW it is a comp (so it is not mistaken for a subject) — but once recognized, DROP it. Do NOT list comp properties, comp units, broker/lender/market addresses, or market tables in the output. Do NOT spend effort itemizing sale comps or lease comps. The cost of a comp leaking in as a subject is severe (a stranger's building becomes a fake property); the cost of omitting a comp is zero for this workflow. When in genuine doubt whether an address is subject or comp, prefer to EXCLUDE it and note the ambiguity in "missing".
+  Telltales that an address is a SUBJECT: it appears in the portfolio overview / portfolio rent roll / unit-mix / per-address tax table; it is inside the offering's own address list; the doc's unit and bed totals are built from it.
+  Telltales that an address is a COMP / NOISE: it sits under a heading containing "comparable", "comp", "sale comp", "lease comp", "market", "survey"; it has a Sale Price / Price-Per-Unit / Cap Rate / "leased at sale" / "Seller / Buyer" line; it is a named complex used for rent comparison; it is a broker office or lender address.
+
+DEAL-LEVEL FINANCIAL TABLES: a portfolio OM carries deal-wide financial tables — a tax/assessment table (per-address assessed values + tax bills), a stabilized income & expense (I&E / NOI) summary, an offering price. These belong to the DEAL, not to any one unit. Identify them and place them in "deal.financial_tables" by name with their headline figures. Do NOT force their numbers into units. If a per-address figure (e.g. a tax bill) can be matched to a subject property, you may note it on that property; otherwise keep it at deal level.
+
 OUTPUT SIZE — CRITICAL FOR LARGE ROLLS: Keep the JSON as SMALL as possible. OMIT any field whose value is null, empty, or unknown — do NOT write it out. Only include fields you actually found a value for. The ONLY always-required field per unit is "unit_number"; include "prov" too, and any of the other fields ONLY when they have a real value. This keeps a 100+ unit roll inside one response. The server fills any omitted field with null after parsing, so leaving a field out is exactly equivalent to null — but far smaller.
 
-Return ONLY valid JSON, no prose, no markdown fences. Use this shape, but OMIT every field that would be null/empty (the example shows all possible fields; a real unit includes only the ones with values):
+Return ONLY valid JSON, no prose, no markdown fences. OMIT every field that would be null/empty. There are TWO top-level shapes; choose ONE:
+
+(A) SINGLE PROPERTY — the classic shape (use for a normal rent roll or single-asset doc):
 {
   "document_type": "rent_roll | offering_memo | unit_mix | broker_package | pm_report | unknown",
   "detected_system": "appfolio | yardi_breeze | yardi_voyager | entrata | broker_om | student_schedule | seller_handoff | unknown",
+  "scope": "single_property",
   "level_reached": "L1 | L2 | L3 | L4 | L5 | none",
   "snapshot_date": "YYYY-MM-DD (omit if none)",
   "property": { "name": "...", "address": "...", "asset_type": "...", "total_units": 0 },
@@ -1614,7 +1631,44 @@ Return ONLY valid JSON, no prose, no markdown fences. Use this shape, but OMIT e
   "missing": [ "what a buyer/operator would still need that this doc didn't provide" ],
   "unclear": [ "raw lines seen but not placed" ]
 }
-Example of ONE slim unit (note: no null fields written): {"unit_number":"102","status":"active","prov":"confirmed","square_feet":1200,"actual_rent":1450,"lease_end":"2022-07-29","tenant_name":"Ryan McDonald","deposit":1900,"balance":1600,"note":"Misc: 150"}
+
+(B) DEAL / PORTFOLIO — use when ONE transaction covers MANY addresses. SUBJECT properties only; comps DROPPED:
+{
+  "document_type": "offering_memo | broker_package | ...",
+  "detected_system": "broker_om | ...",
+  "scope": "deal_portfolio",
+  "level_reached": "L1 | L2 | L3 | L4 | L5",
+  "snapshot_date": "YYYY-MM-DD (omit if none — e.g. the rent roll 'As of' date)",
+  "deal": {
+    "name": "The Philadelphia Family Housing Portfolio",
+    "broker": "Avison Young (omit if none)",
+    "location": "Philadelphia, PA",
+    "asset_type": "student / affordable / multifamily ...",
+    "stated_totals": { "properties": 28, "units": 83, "beds": 284, "occupancy": "57.8%", "in_place_avg_rent": 1696 },
+    "financial_tables": [
+      { "name": "tax_underwriting", "note": "per-address assessed values + tax bills", "total_prior_assessed": 17745300, "total_new_assessed": 14927500, "total_tax_bill": 208955.15 },
+      { "name": "stabilized_ie", "gross_potential_rent": 2133405, "noi": 1111653 }
+    ]
+  },
+  "subject_properties": [
+    {
+      "address": "1711 W Montgomery Avenue",   // ADDRESS is identity; REQUIRED per property
+      "prov": "confirmed|assumed",
+      "...optional property fields with real values": "name, total_units, total_beds, tax_bill, assessed_value, note",
+      "units": [
+        { "unit_number": "REQUIRED (e.g. 'A','1A')",
+          "status": "active|vacant|...",
+          "prov": "confirmed|assumed",
+          "...include ONLY fields with real values": "bedrooms, bathrooms, room, bed, square_feet, market_rent, actual_rent, lease_start, lease_end, tenant_name, deposit, balance, note" }
+      ]
+    }
+  ],
+  "comps_seen": 0,    // COUNT of comp properties you recognized and DROPPED (do NOT list them) — proves you saw and excluded them
+  "missing": [ "subject-level info a buyer would still need" ],
+  "unclear": [ "raw lines you could not confidently route to a subject property" ]
+}
+RULES FOR SHAPE (B): every subject property MUST have an "address" (identity). Each unit is nested UNDER its property, so a unit number like "A" is unique within its property. In a rent roll, in-place rent -> actual_rent and the asking/market-rate column -> market_rent. Report ONLY subject properties in "subject_properties". Comps are NEVER listed — only COUNTED in "comps_seen". Set "level_reached" to the deepest level reached for the subject (a full per-unit subject rent roll is L4).
+Example of ONE slim subject unit: {"unit_number":"A","status":"active","prov":"confirmed","bedrooms":4,"bathrooms":4,"actual_rent":1950,"market_rent":2461,"note":"In-place per bed $488"}
 
 Source material:
 """
@@ -1638,30 +1692,57 @@ async function runIngest(propertyId, sourceText, kind) {
   try { parsed = JSON.parse(raw); }
   catch { const err = new Error("AI returned unparseable output"); err.raw = rawOutput; err.unparseable = true; throw err; }
 
-  const units   = Array.isArray(parsed.units) ? parsed.units : [];
-  const unitMix = Array.isArray(parsed.unit_mix) ? parsed.unit_mix : [];
   const unclear = Array.isArray(parsed.unclear) ? parsed.unclear : [];
   const missing = Array.isArray(parsed.missing) ? parsed.missing : [];
 
+  // ── Decide the shape. A deal/portfolio nests units under subject_properties;
+  //    a single property returns a flat units[]. We FLATTEN subject units into
+  //    the SAME candidate pipeline so approve/promote is unchanged — but we
+  //    stamp each candidate with its property address so a unit number like "A"
+  //    stays traceable to its building. COMPS are never here: the brain dropped
+  //    them upstream and only COUNTED them in comps_seen.
+  const isDeal = parsed.scope === "deal_portfolio" || Array.isArray(parsed.subject_properties);
+  const subjectProperties = Array.isArray(parsed.subject_properties) ? parsed.subject_properties : [];
+
+  // stagingUnits = the flat list that becomes candidates. Each carries an
+  // optional _property_address (deal case) for the candidate note.
+  let stagingUnits = [];
+  if (isDeal) {
+    for (const sp of subjectProperties) {
+      const addr = sp.address || sp.name || null;
+      const us = Array.isArray(sp.units) ? sp.units : [];
+      for (const u of us) stagingUnits.push({ ...u, _property_address: addr });
+    }
+  } else {
+    stagingUnits = Array.isArray(parsed.units) ? parsed.units : [];
+  }
+
+  const unitMix = Array.isArray(parsed.unit_mix) ? parsed.unit_mix : [];
+
   // Persist the run — verbatim input, raw model output, model id (provenance anchor).
+  // candidate_count counts the SUBJECT units staged (comps excluded by design).
   const runRes = await pool.query(
     `insert into ingest_runs
        (property_id, kind, source_text, model_id, model_raw_output, candidate_count, unclear)
      values ($1,$2,$3,$4,$5,$6,$7) returning *`,
-    [propertyId, kind, sourceText, INGEST_MODEL, rawOutput, units.length, unclear]
+    [propertyId, kind, sourceText, INGEST_MODEL, rawOutput, stagingUnits.length, unclear]
   );
   const run = runRes.rows[0];
 
-  // Stage every unit as a candidate — SAME columns, SAME decision semantics.
-  // market_rent persisted = actual_rent if present, else market_rent (so a
-  // rent roll keeps in-place rent and an OM keeps asking rent — one column,
-  // correct value). The richer fields ride along in model_raw_output for now.
+  // Stage every SUBJECT unit as a candidate — SAME columns, SAME decision semantics.
+  // market_rent persisted = actual_rent if present, else market_rent (so a rent
+  // roll keeps in-place rent and an OM keeps asking rent — one column, correct
+  // value). In a deal, the property address is prepended to the note so the
+  // reviewer can see which building each "A"/"1A" belongs to. The richer graph
+  // rides along in model_raw_output until a later migration gives it tables.
   const candidates = [];
-  for (const u of units) {
+  for (const u of stagingUnits) {
     const hasNumber = !!u.unit_number;
     const prov = (u.prov === "confirmed" && hasNumber) ? "confirmed" : "assumed";
     const decision = (prov === "confirmed") ? "ready_for_promotion" : "pending";
-    const note = !hasNumber ? "no unit number" : (u.note || null);
+    const addrTag = u._property_address ? `[${u._property_address}] ` : "";
+    const baseNote = !hasNumber ? "no unit number" : (u.note || null);
+    const note = (addrTag && baseNote) ? addrTag + baseNote : (addrTag ? addrTag.trim() : baseNote);
     const rentToStore = (u.actual_rent != null) ? u.actual_rent : (u.market_rent ?? null);
     const c = await pool.query(
       `insert into ingest_candidates
@@ -1673,20 +1754,39 @@ async function runIngest(propertyId, sourceText, kind) {
     candidates.push(c.rows[0]);
   }
 
+  // ── One clean human-facing summary line, scope-aware. ──
+  const compsSeen = Number.isFinite(parsed.comps_seen) ? parsed.comps_seen : 0;
+  let summary;
+  if (isDeal) {
+    const propWord = subjectProperties.length === 1 ? "subject property" : "subject properties";
+    summary = `I found one portfolio with ${subjectProperties.length} ${propWord} and ${candidates.length} subject units. These are the only items staged for review.`
+      + (compsSeen ? ` (${compsSeen} comparable propertie${compsSeen === 1 ? "" : "s"} were recognized and ignored.)` : "");
+  } else {
+    summary = `Single property. ${candidates.length} unit${candidates.length === 1 ? "" : "s"} staged for review.`;
+  }
+
   return {
     run_id: run.id,
     document_type: parsed.document_type || "unknown",
     detected_system: parsed.detected_system || "unknown",
+    scope: isDeal ? "deal_portfolio" : "single_property",
     level_reached: parsed.level_reached || "none",
     snapshot_date: parsed.snapshot_date || null,
-    property: parsed.property || null,       // L1 shell (returned, not yet persisted)
-    unit_mix: unitMix,                        // L2 (returned, not yet persisted)
+    summary,
+    // single-property fields (null in a deal)
+    property: isDeal ? null : (parsed.property || null),
+    unit_mix: unitMix,
+    // deal fields (null in a single property) — returned now, persisted later
+    deal: isDeal ? (parsed.deal || null) : null,
+    subject_property_count: isDeal ? subjectProperties.length : null,
+    subject_properties: isDeal ? subjectProperties : null,  // full graph (units nested)
+    comps_seen: isDeal ? compsSeen : null,
     candidate_count: candidates.length,
     ready_for_promotion: candidates.filter(c => c.decision_status === "ready_for_promotion"),
     needs_review: candidates.filter(c => c.decision_status === "pending"),
-    missing,                                  // what the doc did NOT provide
+    missing,
     unclear,
-    note: "Collapsed to the deepest reliable level. Nothing written to units yet. AI-confident rows are 'ready_for_promotion'; a human approves (POST /ingest/:runId/approve), then POST /ingest/:runId/promote creates units.",
+    note: "Subject assets only. Comps are recognized and dropped — never staged. Nothing written to units yet. AI-confident rows are 'ready_for_promotion'; a human approves (POST /ingest/:runId/approve), then POST /ingest/:runId/promote creates units.",
   };
 }
 
