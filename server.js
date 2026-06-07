@@ -13,8 +13,9 @@ const Anthropic = require("@anthropic-ai/sdk");
 const multer = require("multer");          // handles file uploads (rent roll .xlsx/.csv)
 const XLSX = require("xlsx");              // parses the spreadsheet to rows
 
-// uploads held in memory (small files); 5mb cap so a huge file can't choke us
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+// uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
+// runaway file still can't choke the box. Oversize returns a clean 413 below.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
 // The AI client. ANTHROPIC_API_KEY is set as an environment variable in
 // Render — never hardcoded. This is the "rent the model" piece: the model
@@ -1852,7 +1853,20 @@ app.post("/properties/:propertyId/ingest", async (req, res) => {
 
 // ── ingest from an uploaded FILE (.xlsx/.xls/.csv/.pdf/.docx/.doc/.txt) ──
 // The server reads any supported type to text, then runs the SAME pipeline.
-app.post("/properties/:propertyId/ingest-file", upload.single("file"), async (req, res) => {
+// Multer runs first; we wrap it so an oversize file returns a clean 413 JSON
+// instead of crashing the request with a 500 HTML page.
+const uploadSingle = upload.single("file");
+app.post("/properties/:propertyId/ingest-file", (req, res, next) => {
+  uploadSingle(req, res, (err) => {
+    if (err) {
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({ error: "file too large — max 25 MB. If it's a big image-heavy PDF, the text-only content is what we need; try exporting/printing it to a smaller PDF, or paste the table text." });
+      }
+      return res.status(400).json({ error: "upload failed: " + err.message });
+    }
+    next();
+  });
+}, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: "no file uploaded (field name must be 'file')" });
   try {
     const prop = await pool.query("select id from properties where id=$1", [req.params.propertyId]);
