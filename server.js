@@ -1677,21 +1677,214 @@ ${text}
 """`;
 }
 
+// ══════════════════════════════════════════════════════════════════════
+//  THE PLANNER — plan → targeted extract → merge/reconcile
+//
+//  The durable path for documents too large for one pass. The architecture,
+//  per design: a real-estate document must be UNDERSTOOD before it is
+//  extracted. Blind chunking would solve the token problem while creating a
+//  worse one — a comp section, a market table, and a subject rent roll all
+//  contain addresses, unit counts, and rents; without document-level context
+//  a chunk of comps looks just like a chunk of subjects, and the system would
+//  promote a stranger's building as a real property.
+//
+//  So we do NOT split blindly. We:
+//    1. PLAN — one small pass reads the whole doc and returns a compact MAP:
+//       scope, deal name, stated totals, and the SUBJECT property groups with
+//       their verbatim addresses. No unit detail. Tiny even for 200+ units.
+//    2. EXTRACT — one pass per batch of subject addresses, each carrying the
+//       plan so it knows "these are subjects, everything else here is context."
+//       Output per call stays small because each returns only its batch.
+//    3. RECONCILE — merge server-side by deal+address+unit, then check the
+//       extracted counts against the plan's stated totals. Discrepancies go to
+//       review; nothing is silently "fixed", nothing auto-creates, comps never
+//       enter the candidate pipeline.
+// ══════════════════════════════════════════════════════════════════════
+
+// ── PHASE 1 PROMPT: the document plan (compact map, NO unit detail) ──────
+function planPrompt(text) {
+  return `You are the planning stage of a real-estate document pipeline. Read the WHOLE document and produce a COMPACT MAP of what it is and where the SUBJECT real estate lives — NOT the unit-level data. A later stage extracts the units; your job is to tell it what matters, what is subject, and what is noise.
+
+CRITICAL DISTINCTION — SUBJECT vs NOISE. A document (especially an offering memorandum) mixes the asset being SOLD (the SUBJECT) with reference material that must NEVER be treated as the asset:
+  • SUBJECT: the actual properties offered for sale — listed in the portfolio overview, rent roll, unit-mix, per-address tax table.
+  • NOISE: "sale comparables", "lease comparables", "market rent survey", competitive-property tables, broker/lender contacts, university/market commentary, maps, photos. These contain addresses and rents too, but they are OTHER people's buildings or context.
+A comp like "2233 N 20th Street, 38 units" is NOISE, not a subject. Identify it well enough to EXCLUDE it.
+
+You MUST list every SUBJECT property address verbatim, because the next stage extracts units only for the addresses you name here. If you miss a subject address, its units are lost. If you wrongly include a comp address, a stranger's building gets promoted. Be exact.
+
+Keep the output SMALL. Do NOT output units, rents, or per-unit rows. Output ONLY the map.
+
+Return ONLY valid JSON, no prose, no fences:
+{
+  "document_type": "offering_memo | rent_roll | broker_package | unit_mix | pm_report | unknown",
+  "detected_system": "broker_om | appfolio | yardi_breeze | yardi_voyager | entrata | student_schedule | seller_handoff | unknown",
+  "scope": "single_property | deal_portfolio",
+  "deal": {
+    "name": "portfolio/deal name (omit if single property)",
+    "broker": "omit if none",
+    "location": "city, state",
+    "asset_type": "student | affordable | multifamily | ...",
+    "stated_totals": { "properties": 0, "units": 0, "beds": 0, "offering_price": 0, "noi": 0 }
+  },
+  "subject_addresses": [ "1414 Diamond Street", "1418 Diamond Street", "..." ],
+  "financial_tables_present": [ "tax_summary", "pro_forma_noi", "stabilized_ie", "..." ],
+  "comp_sections_present": [ "sale_comparables", "lease_comparables", "market_rent_survey" ],
+  "comps_seen": 0,
+  "notes": [ "anything the extractor should know — e.g. 'rent schedule spans pages 16-21', 'units labeled like 1F/1R/2F'" ]
+}
+For a SINGLE property, set scope "single_property", omit "deal", and put the one address in subject_addresses.
+"subject_addresses" must contain ONLY subject properties. "comps_seen" is the COUNT of comp/competitive properties you saw and excluded.
+
+Document:
+"""
+${text}
+"""`;
+}
+
+// ── PHASE 2 PROMPT: targeted extraction for ONE batch of subject addresses ─
+// The plan travels with the call so the model keeps document-level context:
+// it knows these addresses are SUBJECTS and that other addresses in the same
+// text are comps/noise to ignore.
+function extractGroupPrompt(text, plan, addresses) {
+  const dealName = (plan.deal && plan.deal.name) || "(single property)";
+  return `You are the extraction stage of a real-estate document pipeline. A planning stage has already mapped this document. Your job: extract FULL per-unit detail for ONLY the SUBJECT addresses listed below, using the whole document for context but ignoring everything that is not one of these addresses.
+
+DOCUMENT CONTEXT (from the planner — trust it):
+  Deal: ${dealName}
+  Document type: ${plan.document_type || "unknown"}
+  Detected system: ${plan.detected_system || "unknown"}
+  This document also contains comp/market/broker material — that is NOISE. Do NOT extract it.
+
+EXTRACT UNITS ONLY FOR THESE SUBJECT ADDRESSES (extract every one that appears in the text):
+${addresses.map(a => "  • " + a).join("\n")}
+
+RULES:
+- For each address above, find its units in the rent roll / unit schedule and extract them at the deepest reliable level (unit number, status, beds, baths, sqft, rents, lease dates, tenant).
+- A unit number like "A", "1F", "Unit 2" is unique only WITHIN its property — keep each unit under its address.
+- In-place/current rent → actual_rent; asking/market/pre-lease rent → market_rent. Vacant units have no actual_rent.
+- Status vocabulary → active | vacant | down | employee | model | mtm | future | non_revenue | unknown. "Occupied"→active, "Available"/"Vacant"→vacant, "Down"→down, "Employee"→employee.
+- NEVER invent a value. No support → omit the field. Do NOT extract any address that is not in the list above. Do NOT extract comp/market/survey rows.
+- Unit numbers are STRINGS — preserve exactly (leading zeros, "1F", "BR").
+
+OUTPUT — keep it SMALL, omit null/empty fields. Return ONLY valid JSON, no prose, no fences:
+{
+  "properties": [
+    {
+      "address": "exact subject address from the list",
+      "prov": "confirmed|assumed",
+      "units": [
+        { "unit_number": "REQUIRED", "status": "...", "prov": "confirmed|assumed",
+          "...only fields with real values": "bedrooms, bathrooms, square_feet, market_rent, actual_rent, lease_start, lease_end, tenant_name, deposit, balance, note" }
+      ]
+    }
+  ],
+  "unclear": [ "rows you could not confidently place under one of the listed addresses" ]
+}
+
+Document:
+"""
+${text}
+"""`;
+}
+
+// ── normalization for merge keys ──────────────────────────────────────
+// Addresses must match across the plan and the extraction passes even with
+// cosmetic differences ("1414 Diamond Street" vs "1414 W Diamond St"). We
+// normalize conservatively: lowercase, collapse whitespace, strip common
+// suffixes/directionals to a canonical core. This is for KEY MATCHING only —
+// the display address is always the verbatim one from extraction.
+function normalizeAddress(addr) {
+  if (!addr) return "";
+  let s = String(addr).toLowerCase().trim();
+  s = s.replace(/[.,]/g, " ").replace(/\s+/g, " ").trim();
+  // directional + street-type canonicalization
+  const repl = [
+    [/\bnorth\b/g, "n"], [/\bsouth\b/g, "s"], [/\beast\b/g, "e"], [/\bwest\b/g, "w"],
+    [/\bstreet\b/g, "st"], [/\bavenue\b/g, "ave"], [/\bav\b/g, "ave"],
+    [/\bplace\b/g, "pl"], [/\bdrive\b/g, "dr"], [/\bboulevard\b/g, "blvd"],
+    [/\broad\b/g, "rd"], [/\bcourt\b/g, "ct"], [/\blane\b/g, "ln"],
+  ];
+  for (const [re, to] of repl) s = s.replace(re, to);
+  return s.replace(/\s+/g, " ").trim();
+}
+
+// LOOSE address key — the fallback when exact normalized keys miss. A document
+// can name the same building two ways across sections: the overview says
+// "1414 Diamond Street", the rent schedule says "1414 W Diamond St". Exact
+// normalization can canonicalize a directional that's PRESENT in both, but it
+// can't add a "W" one source omits — so those keys won't match and the
+// property looks empty. This key strips directionals and street-types entirely,
+// keeping just the house number + the alphabetic street core, so
+// "1414 diamond" == "1414 w diamond". Used ONLY as a fallback after an exact
+// miss, to avoid collapsing genuinely-different addresses.
+function looseAddressKey(addr) {
+  if (!addr) return "";
+  let s = normalizeAddress(addr);
+  // drop leading-or-trailing directionals and common street types
+  s = s.replace(/\b(n|s|e|w|ne|nw|se|sw)\b/g, " ");
+  s = s.replace(/\b(st|ave|pl|dr|blvd|rd|ct|ln|ter|way|cir|pkwy)\b/g, " ");
+  // keep house number + remaining word stems
+  s = s.replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  return s;
+}
+
+// Batch the subject addresses so each extraction call's OUTPUT stays well under
+// the token ceiling. Student OMs run ~8 units/property; ~10 properties/batch
+// keeps a batch around 80 units of detail — comfortably one-pass sized.
+function batchAddresses(addresses, perBatch = 10) {
+  const batches = [];
+  for (let i = 0; i < addresses.length; i += perBatch) {
+    batches.push(addresses.slice(i, i + perBatch));
+  }
+  return batches;
+}
+
 // ── SHARED COLLAPSE PIPELINE ──────────────────────────────────────────
 // Preserves the proven staged flow. The levelled extraction is returned in
 // full; the unit slice persists into ingest_candidates exactly as before.
 async function runIngest(propertyId, sourceText, kind) {
+  // Output ceiling. The 16k we shipped with was a conservative floor, not the
+  // model's real limit — Sonnet can return far more. We push it to a high
+  // practical ceiling so large OMs (150+ units, full L4 detail) clear in one
+  // pass. MAX_INGEST_TOKENS lets us tune on Render without a code change.
+  // This is the BRIDGE: one-pass handles most docs; the planner (plan ->
+  // targeted extract -> reconcile) is the durable path for anything bigger.
+  const MAX_OUTPUT_TOKENS = parseInt(process.env.MAX_INGEST_TOKENS, 10) || 64000;
   const ai = await anthropic.messages.create({
     model: INGEST_MODEL,
-    max_tokens: 16000,                      // headroom; slim output keeps 100+ unit rolls well under this
+    max_tokens: MAX_OUTPUT_TOKENS,
     messages: [{ role: "user", content: ingestPrompt(sourceText) }],
   });
 
   const rawOutput = (ai.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
+
+  // TRUNCATION DETECTION — the honest failure. If the model hit the output
+  // ceiling, stop_reason is "max_tokens" and the JSON is cut off mid-token.
+  // Rather than a cryptic parse error, say plainly that the document outgrew
+  // one-pass extraction and needs the planner. This is what makes the bridge
+  // a bridge and not a trap: the system KNOWS when it has outgrown one pass.
+  if (ai.stop_reason === "max_tokens") {
+    const err = new Error(
+      "This document is too large for single-pass extraction — the response hit the output ceiling and was cut off. " +
+      "It needs the document-planning pipeline (plan → targeted subject extraction → reconcile), which isn't built yet. " +
+      "Smaller files and most single/medium portfolios still ingest in one pass."
+    );
+    err.raw = rawOutput;
+    err.truncated = true;
+    throw err;
+  }
+
   let raw = rawOutput.replace(/^```json\s*/i, "").replace(/```$/i, "").trim();
   let parsed;
   try { parsed = JSON.parse(raw); }
-  catch { const err = new Error("AI returned unparseable output"); err.raw = rawOutput; err.unparseable = true; throw err; }
+  catch {
+    // A parse failure with no max_tokens stop is a genuinely malformed
+    // response, not a size problem — keep it distinct from truncation.
+    const err = new Error("AI returned unparseable output (not a size limit — the response was malformed).");
+    err.raw = rawOutput;
+    err.unparseable = true;
+    throw err;
+  }
 
   const unclear = Array.isArray(parsed.unclear) ? parsed.unclear : [];
   const missing = Array.isArray(parsed.missing) ? parsed.missing : [];
@@ -1791,6 +1984,253 @@ async function runIngest(propertyId, sourceText, kind) {
   };
 }
 
+// ══════════════════════════════════════════════════════════════════════
+//  PLANNER ORCHESTRATION — plan → targeted extract → merge/reconcile
+//
+//  Used when one-pass truncates (or when forced). Same staged output contract
+//  as runIngest so the review/approve/promote flow downstream is unchanged.
+//  Output-only: nothing auto-writes to units; comps never become candidates;
+//  reconciliation surfaces discrepancies for review rather than fixing them.
+// ══════════════════════════════════════════════════════════════════════
+
+// small helper: call the model, strip fences, parse, with truncation awareness
+async function callModelJSON(prompt, maxTokens, label) {
+  const ai = await anthropic.messages.create({
+    model: INGEST_MODEL,
+    max_tokens: maxTokens,
+    messages: [{ role: "user", content: prompt }],
+  });
+  const rawOutput = (ai.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
+  if (ai.stop_reason === "max_tokens") {
+    const hint = label === "Extract"
+      ? " A single extraction batch was too large — lower PLAN_PER_BATCH (env var) so fewer properties are extracted per pass."
+      : "";
+    const err = new Error(`${label} stage hit the output ceiling — batch too large.${hint}`);
+    err.raw = rawOutput; err.truncated = true; err.stage = label;
+    throw err;
+  }
+  const cleaned = rawOutput.replace(/^```json\s*/i, "").replace(/```$/i, "").trim();
+  try { return { parsed: JSON.parse(cleaned), raw: rawOutput }; }
+  catch {
+    const err = new Error(`${label} stage returned unparseable JSON.`);
+    err.raw = rawOutput; err.unparseable = true; err.stage = label;
+    throw err;
+  }
+}
+
+async function runIngestPlanned(propertyId, sourceText, kind) {
+  const PLAN_TOKENS    = parseInt(process.env.PLAN_TOKENS, 10)    || 8000;   // the map is small
+  const EXTRACT_TOKENS = parseInt(process.env.EXTRACT_TOKENS, 10) || 32000;  // one batch of units
+  const PER_BATCH      = parseInt(process.env.PLAN_PER_BATCH, 10) || 10;     // subject addresses per extract call
+
+  // ── PHASE 1: PLAN ──
+  const { parsed: plan, raw: planRaw } = await callModelJSON(planPrompt(sourceText), PLAN_TOKENS, "Plan");
+  const subjectAddresses = Array.isArray(plan.subject_addresses) ? plan.subject_addresses.filter(Boolean) : [];
+  const isDeal = plan.scope === "deal_portfolio" || subjectAddresses.length > 1;
+
+  if (subjectAddresses.length === 0) {
+    const err = new Error("Planner found no subject addresses in this document.");
+    err.raw = planRaw; err.unparseable = true; throw err;
+  }
+
+  // ── PHASE 2: TARGETED EXTRACTION, batch by batch ──
+  const batches = batchAddresses(subjectAddresses, PER_BATCH);
+  const extractedByAddr = new Map();   // exact normalized key -> { address, prov, units }
+  const extractedByLoose = new Map();  // loose key -> same object (directional-tolerant fallback)
+  const extractRawOutputs = [];
+  const allUnclear = [];
+
+  for (const batch of batches) {
+    const { parsed: ex, raw } = await callModelJSON(extractGroupPrompt(sourceText, plan, batch), EXTRACT_TOKENS, "Extract");
+    extractRawOutputs.push(raw);
+    if (Array.isArray(ex.unclear)) allUnclear.push(...ex.unclear);
+    const props = Array.isArray(ex.properties) ? ex.properties : [];
+    for (const p of props) {
+      if (!p.address) continue;
+      const key = normalizeAddress(p.address);
+      const loose = looseAddressKey(p.address);
+      const units = Array.isArray(p.units) ? p.units : [];
+      if (extractedByAddr.has(key)) {
+        // merge: same property surfaced in two batches (shouldn't happen, but safe)
+        const existing = extractedByAddr.get(key);
+        const seen = new Set(existing.units.map(u => String(u.unit_number)));
+        for (const u of units) if (!seen.has(String(u.unit_number))) existing.units.push(u);
+      } else {
+        const rec = { address: p.address, prov: p.prov || "confirmed", units };
+        extractedByAddr.set(key, rec);
+        if (loose && !extractedByLoose.has(loose)) extractedByLoose.set(loose, rec);
+      }
+    }
+  }
+
+  // ── Build the subject_properties graph (same shape runIngest returns) ──
+  // Match each planned subject to its extracted units: try the EXACT normalized
+  // key first; on a miss, fall back to the directional-tolerant LOOSE key so a
+  // "1414 Diamond Street" plan still finds "1414 W Diamond St" units. Only when
+  // both miss is the property truly empty (and reconciliation will flag it).
+  const subjectProperties = [];
+  const matchedKeys = new Set();
+  for (const addr of subjectAddresses) {
+    const key = normalizeAddress(addr);
+    const loose = looseAddressKey(addr);
+    let hit = extractedByAddr.get(key);
+    let how = hit ? "exact" : null;
+    if (!hit && extractedByLoose.has(loose)) { hit = extractedByLoose.get(loose); how = "loose"; }
+    if (hit) {
+      matchedKeys.add(normalizeAddress(hit.address));
+      // keep the PLANNED address as display identity (page-7 overview spelling),
+      // but note when units were matched by the looser key for transparency.
+      subjectProperties.push({
+        address: addr,
+        prov: hit.prov,
+        units: hit.units,
+        ...(how === "loose" ? { _matched_via: `loose key (extracted as "${hit.address}")` } : {}),
+      });
+    } else {
+      subjectProperties.push({ address: addr, prov: "assumed", units: [], _note: "planned subject but no units extracted" });
+    }
+  }
+
+  // Any extracted property that never matched a planned subject — surface it,
+  // don't silently drop it. Could be a spelling the planner didn't list, or a
+  // comp the extractor shouldn't have returned. Either way it's a review signal.
+  const orphanExtracted = [];
+  for (const [key, rec] of extractedByAddr.entries()) {
+    if (!matchedKeys.has(key)) orphanExtracted.push(rec.address);
+  }
+
+  // ── Flatten subject units into staging (identical semantics to runIngest) ──
+  const stagingUnits = [];
+  for (const sp of subjectProperties) {
+    for (const u of (sp.units || [])) stagingUnits.push({ ...u, _property_address: sp.address });
+  }
+
+  // ── PHASE 3: RECONCILE against the plan's stated totals ──
+  const stated = (plan.deal && plan.deal.stated_totals) || {};
+  const extractedPropCount = subjectProperties.filter(p => (p.units || []).length > 0).length;
+  const plannedPropCount = subjectAddresses.length;
+  const extractedUnitCount = stagingUnits.length;
+  const emptyProps = subjectProperties.filter(p => (p.units || []).length === 0).map(p => p.address);
+
+  const reconciliation = {
+    planned_subject_properties: plannedPropCount,
+    extracted_properties_with_units: extractedPropCount,
+    extracted_units: extractedUnitCount,
+    stated_properties: stated.properties ?? null,
+    stated_units: stated.units ?? null,
+    stated_beds: stated.beds ?? null,
+    orphan_extracted_properties: orphanExtracted,
+    flags: [],
+  };
+  if (stated.properties != null && stated.properties !== plannedPropCount)
+    reconciliation.flags.push(`Stated ${stated.properties} properties but planner mapped ${plannedPropCount} subject addresses.`);
+  if (stated.units != null && stated.units !== extractedUnitCount)
+    reconciliation.flags.push(`Stated ${stated.units} units but extracted ${extractedUnitCount}.`);
+  if (emptyProps.length)
+    reconciliation.flags.push(`${emptyProps.length} planned propert${emptyProps.length === 1 ? "y" : "ies"} returned no units: ${emptyProps.slice(0, 8).join(", ")}${emptyProps.length > 8 ? "…" : ""}.`);
+  if (orphanExtracted.length)
+    reconciliation.flags.push(`${orphanExtracted.length} extracted propert${orphanExtracted.length === 1 ? "y" : "ies"} did not match any planned subject: ${orphanExtracted.slice(0, 8).join(", ")}${orphanExtracted.length > 8 ? "…" : ""}.`);
+
+  // ── Persist the run. We write the SAME kind value the one-pass path uses
+  //    (known-good against the live table) rather than a new "_planned" variant
+  //    that could trip a CHECK/enum constraint the repo can't see. The planned/
+  //    multi-pass fact is recorded inside model_raw_output (mode:"planned"),
+  //    which is free-form text — so the distinction is preserved without
+  //    risking the insert. plan + all extract passes are stored for full
+  //    provenance of a multi-call ingest. ──
+  const combinedRaw = JSON.stringify({ mode: "planned", plan: planRaw, extracts: extractRawOutputs }, null, 0);
+  const runRes = await pool.query(
+    `insert into ingest_runs
+       (property_id, kind, source_text, model_id, model_raw_output, candidate_count, unclear)
+     values ($1,$2,$3,$4,$5,$6,$7) returning *`,
+    [propertyId, kind, sourceText, INGEST_MODEL, combinedRaw, stagingUnits.length, allUnclear]
+  );
+  const run = runRes.rows[0];
+
+  // ── Stage subject units as candidates — SAME columns/semantics as runIngest ──
+  const candidates = [];
+  for (const u of stagingUnits) {
+    const hasNumber = !!u.unit_number;
+    const prov = (u.prov === "confirmed" && hasNumber) ? "confirmed" : "assumed";
+    const decision = (prov === "confirmed") ? "ready_for_promotion" : "pending";
+    const addrTag = u._property_address ? `[${u._property_address}] ` : "";
+    const baseNote = !hasNumber ? "no unit number" : (u.note || null);
+    const note = (addrTag && baseNote) ? addrTag + baseNote : (addrTag ? addrTag.trim() : baseNote);
+    const rentToStore = (u.actual_rent != null) ? u.actual_rent : (u.market_rent ?? null);
+    const c = await pool.query(
+      `insert into ingest_candidates
+         (run_id, property_id, unit_number, bedrooms, market_rent, prov, ai_note, decision_status)
+       values ($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
+      [run.id, propertyId, hasNumber ? String(u.unit_number) : null,
+       u.bedrooms ?? null, rentToStore, prov, note, decision]
+    );
+    candidates.push(c.rows[0]);
+  }
+
+  const compsSeen = Number.isFinite(plan.comps_seen) ? plan.comps_seen : 0;
+  const propWord = subjectProperties.length === 1 ? "subject property" : "subject properties";
+  let summary = `Planned ingest: ${subjectProperties.length} ${propWord}, ${candidates.length} subject units staged across ${batches.length} extraction pass${batches.length === 1 ? "" : "es"}.`;
+  if (compsSeen) summary += ` (${compsSeen} comparable propert${compsSeen === 1 ? "y" : "ies"} recognized and ignored.)`;
+  if (reconciliation.flags.length) summary += ` ${reconciliation.flags.length} reconciliation flag${reconciliation.flags.length === 1 ? "" : "s"} for review.`;
+
+  // ── INFER the real level reached — do NOT claim L4 unless lease-level detail
+  //    was actually extracted. L4 = per-unit lease/tenant detail present;
+  //    L3 = per-unit rows with attributes but no lease detail; L2 = unit counts
+  //    only (none here, since we extract rows); L1 = addresses but no units.
+  //    Overstating the level overstates confidence the data doesn't support.
+  const hasLeaseDetail = stagingUnits.some(u =>
+    u.tenant_name || u.lease_start || u.lease_end || u.deposit != null || u.balance != null);
+  const hasUnitDetail = stagingUnits.some(u =>
+    u.bedrooms != null || u.bathrooms != null || u.square_feet != null ||
+    u.market_rent != null || u.actual_rent != null);
+  const levelReached =
+    stagingUnits.length === 0 ? "L1" :
+    hasLeaseDetail ? "L4" :
+    hasUnitDetail ? "L3" : "L2";
+
+  return {
+    run_id: run.id,
+    mode: "planned",
+    document_type: plan.document_type || "unknown",
+    detected_system: plan.detected_system || "unknown",
+    scope: isDeal ? "deal_portfolio" : "single_property",
+    level_reached: levelReached,
+    summary,
+    property: isDeal ? null : (subjectProperties[0] || null),
+    deal: isDeal ? (plan.deal || null) : null,
+    subject_property_count: subjectProperties.length,
+    subject_properties: subjectProperties,
+    comps_seen: compsSeen,
+    candidate_count: candidates.length,
+    ready_for_promotion: candidates.filter(c => c.decision_status === "ready_for_promotion"),
+    needs_review: candidates.filter(c => c.decision_status === "pending"),
+    reconciliation,
+    unclear: allUnclear,
+    note: "Planned (multi-pass) ingest. Plan → targeted subject extraction → merge/reconcile. Subject assets only; comps never staged; nothing written to units yet. Reconciliation flags are for human review — they do not auto-resolve. NOTE: portfolio (multi-property) promotion is currently BLOCKED — staging and review work, but /promote refuses portfolios until per-subject-property mapping exists. Single-property runs promote normally.",
+  };
+}
+
+// ── ROUTER: one-pass first; fall through to the planner on truncation ──
+// This is the hybrid. Small/medium docs ride the proven single-pass path.
+// When a doc is too large and one-pass truncates, we automatically switch to
+// plan → targeted extract → reconcile instead of failing. The user drops one
+// file; the system decides how to handle it. INGEST_FORCE_PLANNER=1 forces the
+// planner for testing.
+async function runIngestAuto(propertyId, sourceText, kind) {
+  if (process.env.INGEST_FORCE_PLANNER === "1") {
+    return await runIngestPlanned(propertyId, sourceText, kind);
+  }
+  try {
+    return await runIngest(propertyId, sourceText, kind);
+  } catch (e) {
+    if (e.truncated) {
+      // one-pass outgrew the ceiling → durable path
+      return await runIngestPlanned(propertyId, sourceText, kind);
+    }
+    throw e;
+  }
+}
+
 // ── FILE → TEXT: read any supported file type into plain text ─────────
 // Excel/CSV via SheetJS, PDF via pdf-parse, Word via mammoth, plain text as-is.
 // All flow into the SAME runIngest pipeline — turning a file into text is the
@@ -1843,9 +2283,10 @@ app.post("/properties/:propertyId/ingest", async (req, res) => {
   try {
     const prop = await pool.query("select id from properties where id=$1", [req.params.propertyId]);
     if (prop.rows.length === 0) return res.status(404).json({ error: "property not found" });
-    const result = await runIngest(req.params.propertyId, rent_roll_text, "rent_roll");
+    const result = await runIngestAuto(req.params.propertyId, rent_roll_text, "rent_roll");
     res.json(result);
   } catch (e) {
+    if (e.truncated) return res.status(413).json({ error: e.message, truncated: true });
     if (e.unparseable) return res.status(502).json({ error: e.message, raw: e.raw });
     res.status(500).json({ error: e.message });
   }
@@ -1880,9 +2321,10 @@ app.post("/properties/:propertyId/ingest-file", (req, res, next) => {
       return res.status(400).json({ error: "file parsed but contained no readable text. If it is a scanned/photo PDF, OCR isn't supported yet — paste the table or upload an Excel/CSV." });
     }
 
-    const result = await runIngest(req.params.propertyId, text, "rent_roll_file");
+    const result = await runIngestAuto(req.params.propertyId, text, "rent_roll_file");
     res.json({ ...result, source_filename: req.file.originalname });
   } catch (e) {
+    if (e.truncated) return res.status(413).json({ error: e.message, truncated: true });
     if (e.unparseable) return res.status(502).json({ error: e.message, raw: e.raw });
     res.status(500).json({ error: e.message });
   }
@@ -1915,7 +2357,7 @@ app.get("/ingest/:runId", async (req, res) => {
 app.post("/ingest/:runId/promote", async (req, res) => {
   const { promoted_by } = req.body || {};  // optional user id; nullable for now
   try {
-    const run = await pool.query("select id, property_id from ingest_runs where id=$1", [req.params.runId]);
+    const run = await pool.query("select id, property_id, model_raw_output from ingest_runs where id=$1", [req.params.runId]);
     if (run.rows.length === 0) return res.status(404).json({ error: "run not found" });
     const propertyId = run.rows[0].property_id;
 
@@ -1923,6 +2365,51 @@ app.post("/ingest/:runId/promote", async (req, res) => {
       "select * from ingest_candidates where run_id=$1 and decision_status='approved'",
       [req.params.runId]
     );
+
+    // ── PORTFOLIO PROMOTION GUARDRAIL (precise, fail-closed) ───────────
+    // Promotion inserts every unit under the ONE propertyId from the run (see
+    // the units insert below). Correct for a single property; for a portfolio
+    // it would collapse many subject buildings into one property record. Until
+    // per-subject-property mapping exists (address as a first-class candidate
+    // column + per-property promote), we block the UNSAFE condition only:
+    // candidates that belong to more than one subject property.
+    //
+    // We do NOT block merely because the planner was used. We block on the real
+    // signal — the count of DISTINCT "[address]" tags across approved
+    // candidates — and we FAIL CLOSED:
+    //   • exactly 1 distinct address  → safe, allow (all units = one property)
+    //   • more than 1 distinct address → block (would collapse properties)
+    //   • a planned run where we CANNOT confirm exactly one address → block
+    //     (ambiguous; we won't promote what we can't prove is single-property)
+    // A non-planned single-property run (one-pass, no tags) is unaffected.
+    const rawOut = run.rows[0].model_raw_output || "";
+    const isPlannedRun = /^\s*\{\s*"mode"\s*:\s*"planned"/.test(rawOut);
+    const distinctAddrTags = new Set(
+      approved.rows
+        .map(c => (c.ai_note || "").match(/^\[([^\]]+)\]/))
+        .filter(Boolean)
+        .map(m => m[1].trim())
+    );
+    const addrCount = distinctAddrTags.size;
+
+    // block if: more than one address, OR a planned run we can't confirm as
+    // exactly-one-address (addrCount !== 1 means 0 = can't tell, or >1 = multi).
+    const blockMultiAddress = addrCount > 1;
+    const blockAmbiguousPlanned = isPlannedRun && addrCount !== 1;
+    if (blockMultiAddress || blockAmbiguousPlanned) {
+      return res.status(409).json({
+        error: "Portfolio promotion is blocked until subject-property mapping is implemented. This run has units tied to multiple subject addresses, and promoting now would collapse them into one property.",
+        detail: {
+          distinct_subject_addresses: addrCount,
+          planned_run: isPlannedRun,
+          approved_candidates: approved.rows.length,
+          reason: blockMultiAddress ? "multiple_subject_addresses" : "planned_run_address_count_unconfirmed",
+        },
+        what_you_can_do: "Staging and review work normally — candidates are saved and readable. Single-property runs still promote. Portfolio promotion will be enabled once each subject address maps to its own property.",
+        blocked: true,
+      });
+    }
+    // ───────────────────────────────────────────────────────────────────
 
     const promoted = [];
     const skipped = [];
