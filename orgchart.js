@@ -30,7 +30,10 @@ const ROLE_DEFAULTS = {
 // pick first defined of a list; lets caller override role defaults
 const pick = (override, fallback) => (override === undefined ? fallback : override);
 
-function register(app, { pool }) {
+function orgchart({ pool }) {
+  const express = require('express');
+  const app = express.Router();
+
 
   // ---- POST /properties/:id/assignments ---------------------------
   // Assign a person to a property in a role. Ranges optional → role defaults.
@@ -266,6 +269,11 @@ function register(app, { pool }) {
       return res.status(500).json({ error: 'internal error' });
     }
   });
+
+  return app;
 }
 
-module.exports = { register, ROLES, SCOPES, ROLE_DEFAULTS };
+module.exports = orgchart;
+module.exports.ROLES = ROLES;
+module.exports.SCOPES = SCOPES;
+module.exports.ROLE_DEFAULTS = ROLE_DEFAULTS;
