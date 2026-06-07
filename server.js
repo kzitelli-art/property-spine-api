@@ -13,6 +13,7 @@ const Anthropic = require("@anthropic-ai/sdk");
 const multer = require("multer");          // handles file uploads (rent roll .xlsx/.csv)
 const XLSX = require("xlsx");              // parses the spreadsheet to rows
 const maintenanceModule = require("./maintenance");  // isolated maintenance routes
+const downUnitsModule = require("./down_units");      // isolated down-units routes
 
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
 // runaway file still can't choke the box. Oversize returns a clean 413 below.
@@ -2615,6 +2616,9 @@ app.post("/ingest/:runId/approve", async (req, res) => {
 
 // ── MAINTENANCE MODULE (isolated; injected pool + shared obligation path) ──
 app.use("/", maintenanceModule({ pool, spawnObligationFromEvent }));
+
+// ── DOWN UNITS MODULE (isolated; same injection pattern) ──
+app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
