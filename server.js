@@ -17,6 +17,7 @@ const downUnitsModule = require("./down_units");      // isolated down-units rou
 const orgchartModule = require("./orgchart");
 const moneyModule = require("./money");
 const turnoversModule = require("./turnovers");
+const moveinModule = require("./movein");
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
 // runaway file still can't choke the box. Oversize returns a clean 413 below.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -68,7 +69,11 @@ async function spawnObligationFromEvent(client, spec) {
     source_event_id = null, module, type, label,
     owner_type = "human", assigned_role = null, escalates_to_role = null,
     status = "open", due_at = null,
-    priority = null, severity = null,
+    // priority/severity are NOT NULL in the DB with CHECK vocabularies:
+    //   priority: low|normal|high   severity: low|normal|high|emergency
+    // Default to 'normal' (valid) so NO caller can trip the not-null constraint.
+    // Callers override when the work is genuinely low/high/emergency.
+    priority = "normal", severity = "normal",
     required_inputs = [],
     // related_id / related_type link an obligation to the DOMAIN OBJECT it's
     // about (turnover, work order, lease). Both nullable columns. Additive:
@@ -2672,6 +2677,7 @@ app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));
 app.use("/", moneyModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", orgchartModule({ pool }));
 app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
+app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
