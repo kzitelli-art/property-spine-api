@@ -635,6 +635,240 @@ function money({ pool, spawnObligationFromEvent, satisfyObligation, completeObli
     }
   });
 
+  // ---- GET /properties/:id/report-read?month=YYYY-MM --------------
+  // MONEY REPORT READ v1 — read-only. Mutates NOTHING.
+  //
+  // Rolls ONLY report_ready money events into report totals, grouped by the
+  // category_report_map (migration 008). The report SHAPE is data, not code.
+  //
+  // HONEST SCOPE (locked): money_events only. money_events is money-OUT plus
+  // any billback events; rental income lives in the revenue tables and is NOT
+  // read here. So Income is empty except billbacks, and this is NOT the final
+  // monthly P&L. The gap is made visible, never hidden.
+  //
+  // Rules enforced:
+  //   1. Only status='report_ready' events hit report totals.
+  //   2. Unverified / verified (not-ready) money is EXCLUDED, shown separately.
+  //   3. Capex sits BELOW NOI in its own section (never depresses NOI).
+  //   4. Unmapped confirmed_categories are surfaced separately, never guessed.
+  //   5. NOI and Net Income are COMPUTED, not stored.
+  app.get('/properties/:id/report-read', async (req, res) => {
+    const property_id = req.params.id;
+    const month = req.query.month;
+
+    // month must be YYYY-MM
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({ error: "month query param required as YYYY-MM (e.g. 2026-02)" });
+    }
+    const monthStart = `${month}-01`;
+
+    try {
+      const prop = await pool.query('SELECT id, name FROM properties WHERE id = $1', [property_id]);
+      if (prop.rowCount === 0) return res.status(404).json({ error: 'property not found' });
+
+      // The economic date is occurred_on; fall back to created_at when null.
+      // Month window: [monthStart, monthStart + 1 month).
+      const dateExpr = 'COALESCE(m.occurred_on, m.created_at::date)';
+      const monthFilter = `${dateExpr} >= $2::date AND ${dateExpr} < ($2::date + interval '1 month')`;
+
+      // 1) report_ready events in-month, joined to the mapping table.
+      const ready = await pool.query(
+        `SELECT m.id, m.amount, m.confirmed_category,
+                cm.report_section, cm.report_line, cm.sort_order
+           FROM money_events m
+           LEFT JOIN category_report_map cm
+             ON cm.confirmed_category = m.confirmed_category
+          WHERE m.property_id = $1
+            AND m.status = 'report_ready'
+            AND ${monthFilter}`,
+        [property_id, monthStart]
+      );
+
+      // 2) excluded (not-ready) money in-month — quarantined, shown separately.
+      const excluded = await pool.query(
+        `SELECT m.status, COUNT(*)::int AS count, COALESCE(SUM(m.amount),0)::numeric AS total
+           FROM money_events m
+          WHERE m.property_id = $1
+            AND m.status IN ('unverified','verified')
+            AND ${monthFilter}
+          GROUP BY m.status`,
+        [property_id, monthStart]
+      );
+
+      // 3) open money-obligations count (proof/approval still owed, any month).
+      const openObl = await pool.query(
+        `SELECT COUNT(*)::int AS n
+           FROM obligations
+          WHERE property_id = $1 AND module = 'money' AND status = 'open'`,
+        [property_id]
+      );
+
+      // ---- the Tower T12 report SKELETON (section + line order) -------
+      // Lines render even at $0 so the report shape is honest and the gaps
+      // (categories that don't exist yet, rent income that lives elsewhere)
+      // are VISIBLE, not hidden. Seeded mapping rows land their totals onto
+      // matching {section,line}; everything else stays $0.
+      const SKELETON = [
+        { section: 'Income', sort: 10, lines: [
+          { line: 'Residential Rent', note: 'lives in revenue tables — not read in v1' },
+          { line: 'Other Income' },
+          { line: 'Billbacks / Utility Income' },
+        ]},
+        { section: 'Operating Expenses', sort: 20, lines: [
+          { line: 'Payroll' },
+          { line: 'Taxes & Insurance' },
+          { line: 'Utilities' },
+          { line: 'Repair & Maintenance' },
+          { line: 'Building Services / Contracted Services' },
+          { line: 'Administration & General' },
+          { line: 'Advertising & Marketing' },
+        ]},
+        { section: 'Capital Expenditures', sort: 60, lines: [
+          { line: 'CapEx' },
+        ]},
+        { section: 'Debt Service / Interest', sort: 70, lines: [
+          { line: 'Debt Service / Interest' },
+        ]},
+        { section: 'Depreciation / Amortization', sort: 80, lines: [
+          { line: 'Depreciation / Amortization' },
+        ]},
+      ];
+
+      // ---- fold the report_ready rows into section/line totals ----
+      const num = (x) => Number(x) || 0;
+      // lineAmounts: "section\u0000line" -> summed amount
+      const lineAmounts = {};
+      const categoryTotals = {};      // confirmed_category -> amount (underlying truth)
+      const unmappedMap = {};         // confirmed_category -> {amount, count}
+      let reportReadyCount = 0;
+
+      const lineKey = (sec, line) => `${sec}\u0000${line}`;
+
+      for (const r of ready.rows) {
+        reportReadyCount += 1;
+        const amt = num(r.amount);
+        const cat = r.confirmed_category || '(null category)';
+        categoryTotals[cat] = (categoryTotals[cat] || 0) + amt;
+
+        if (!r.report_section) {
+          // report_ready but no mapping row → needs review. Never guess.
+          if (!unmappedMap[cat]) unmappedMap[cat] = { confirmed_category: cat, amount: 0, count: 0 };
+          unmappedMap[cat].amount += amt;
+          unmappedMap[cat].count += 1;
+          continue;
+        }
+        lineAmounts[lineKey(r.report_section, r.report_line)] =
+          (lineAmounts[lineKey(r.report_section, r.report_line)] || 0) + amt;
+      }
+
+      // shape the skeleton, dropping mapped totals onto matching lines.
+      // A mapped {section,line} that isn't in the skeleton is still shown
+      // (appended) so nothing seeded ever silently vanishes.
+      const seenLineKeys = new Set();
+      const sectionsOut = SKELETON.map(s => {
+        const lines = s.lines.map(l => {
+          const k = lineKey(s.section, l.line);
+          seenLineKeys.add(k);
+          const out = { report_line: l.line, amount: lineAmounts[k] || 0 };
+          if (l.note) out.note = l.note;
+          return out;
+        });
+        const total = lines.reduce((sum, l) => sum + l.amount, 0);
+        return { section: s.section, sort: s.sort, total, lines };
+      });
+      // append any mapped line that wasn't in the skeleton (mapping/skeleton drift guard)
+      for (const k of Object.keys(lineAmounts)) {
+        if (seenLineKeys.has(k)) continue;
+        const [sec, line] = k.split('\u0000');
+        let target = sectionsOut.find(s => s.section === sec);
+        if (!target) { target = { section: sec, sort: 999, total: 0, lines: [] }; sectionsOut.push(target); }
+        target.lines.push({ report_line: line, amount: lineAmounts[k], note: 'mapped but not in v1 skeleton' });
+        target.total += lineAmounts[k];
+      }
+      sectionsOut.sort((a, b) => a.sort - b.sort);
+      sectionsOut.forEach(s => delete s.sort);
+
+      const sectionTotal = (name) => {
+        const s = sectionsOut.find(x => x.section === name);
+        return s ? s.total : 0;
+      };
+
+      // ---- computed P&L spine (v1: most of this is $0 by design) ----
+      // money_events carries expenses + billbacks. Income = billbacks only here.
+      const income      = sectionTotal('Income');
+      const opex        = sectionTotal('Operating Expenses');
+      const debtService = sectionTotal('Debt Service / Interest');   // empty in v1
+      const da          = sectionTotal('Depreciation / Amortization'); // empty in v1
+      const capex       = sectionTotal('Capital Expenditures');       // below NOI
+      const noi         = income - opex;
+      const netIncome   = noi - debtService - da;
+
+      // ---- excluded / unmapped surfaces ----
+      const excludedByStatus = {};
+      let excludedTotal = 0, excludedCount = 0;
+      for (const r of excluded.rows) {
+        excludedByStatus[r.status] = { count: r.count, total: num(r.total) };
+        excludedTotal += num(r.total);
+        excludedCount += r.count;
+      }
+      const unmappedCategories = Object.values(unmappedMap);
+
+      // ---- status of the read ----
+      // blocked  : nothing report_ready to read this month
+      // needs_mapping: report_ready money exists but some categories are unmapped
+      // ready    : everything report_ready is mapped
+      let status;
+      if (reportReadyCount === 0) status = 'blocked';
+      else if (unmappedCategories.length > 0) status = 'needs_mapping';
+      else status = 'ready';
+
+      return res.json({
+        report: 'Money Report Read v1',
+        disclaimer: 'NOT the final full monthly P&L. Rental income is not included — it lives in the revenue tables, which v1 does not read.',
+        income_scope: 'money_events_only',
+        excluded_sources: ['revenue_tables_not_included_v1'],
+
+        property_id,
+        property_name: prop.rows[0].name,
+        month,
+        status,
+
+        // computed P&L spine (sections that have no money_events show $0 by design)
+        spine: {
+          income,
+          operating_expenses: opex,
+          noi,                       // computed: income - operating_expenses
+          capital_expenditures: capex, // BELOW NOI, its own section
+          debt_service_interest: debtService,
+          depreciation_amortization: da,
+          net_income: netIncome,     // computed: noi - debt_service - d&a
+        },
+
+        // the report shaped by the mapping table (data-driven, sorted)
+        sections: sectionsOut,
+
+        // underlying category truth (the input the mapping folded)
+        category_totals: categoryTotals,
+
+        // never hidden, never guessed:
+        unmapped_categories: unmappedCategories,
+        excluded: {
+          total: excludedTotal,
+          count: excludedCount,
+          by_status: excludedByStatus,   // { unverified: {...}, verified: {...} }
+          note: 'Not report_ready — quarantined out of all totals above.',
+        },
+
+        // operational signals
+        report_ready_event_count: reportReadyCount,
+        open_money_obligations: openObl.rows[0].n,
+      });
+    } catch (e) {
+      console.error('report-read error', e);
+      return res.status(500).json({ error: 'internal error' });
+    }
+  });
+
   return app;
 }
 
