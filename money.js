@@ -869,6 +869,62 @@ function money({ pool, spawnObligationFromEvent, satisfyObligation, completeObli
     }
   });
 
+  // ---- DELETE /money-events/:id/test-cleanup ----------------------
+  // TEST-ONLY teardown. Deletes a money event AND its spawned obligation,
+  // but ONLY if the event's vendor starts with 'TEST '. This guard makes it
+  // impossible to delete real money even if called with a real id — a real
+  // event won't match the vendor prefix and the call refuses.
+  //
+  // Removes: the obligation (if any), then the money_event. Leaves the
+  // durable events (money_out_logged / money_approved) in the history — they
+  // are an append-only audit trail and carry no money totals.
+  app.delete('/money-events/:id/test-cleanup', async (req, res) => {
+    const id = req.params.id;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const cur = await client.query(
+        'SELECT id, vendor, obligation_id FROM money_events WHERE id = $1 FOR UPDATE',
+        [id]
+      );
+      if (cur.rowCount === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'money event not found' }); }
+      const ev = cur.rows[0];
+      if (!ev.vendor || !String(ev.vendor).startsWith('TEST ')) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ error: 'refusing — not a TEST event', vendor: ev.vendor,
+          note: 'test-cleanup only deletes events whose vendor starts with "TEST ".' });
+      }
+      if (ev.obligation_id) {
+        // Null the money_event's FK to the obligation first so the delete order
+        // can't trip the money_events→obligations reference.
+        await client.query('UPDATE money_events SET obligation_id = NULL WHERE id = $1', [id]);
+        // Delete known obligation child rows BEFORE the parent so a FK can't
+        // block it. We check existence via information_schema first, because a
+        // failed DELETE on a non-existent table would poison the transaction.
+        const candidates = ['obligation_inputs', 'obligation_proofs', 'obligation_events'];
+        const existing = await client.query(
+          `SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = ANY($1)`,
+          [candidates]
+        );
+        for (const row of existing.rows) {
+          await client.query(`DELETE FROM ${row.table_name} WHERE obligation_id = $1`, [ev.obligation_id]);
+        }
+        await client.query('DELETE FROM obligations WHERE id = $1', [ev.obligation_id]);
+      }
+      await client.query('DELETE FROM money_events WHERE id = $1', [id]);
+      await client.query('COMMIT');
+      return res.json({ deleted: id, obligation_deleted: ev.obligation_id || null,
+        note: 'TEST event and its obligation removed. Audit events left in history.' });
+    } catch (e) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+      console.error('test-cleanup error', e);
+      return res.status(500).json({ error: 'internal error' });
+    } finally {
+      client.release();
+    }
+  });
+
   return app;
 }
 
