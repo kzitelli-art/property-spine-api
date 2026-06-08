@@ -201,6 +201,43 @@ async function completeObligation(client, { obligation_id, completed_by = null }
   return r.rows[0];
 }
 
+// Reassign an OPEN obligation to a different role — the staged-approval hop.
+// Used by money.js to advance an approval chain (e.g. property_manager →
+// accountant): the obligation stays open, but the role that owes it changes.
+// Takes an open transaction `client`, throws the same typed errors as the
+// other helpers, and writes a durable event so the hop is auditable. Only
+// touches columns the existing helpers already write — assigned_role,
+// escalates_to_role, updated_at — so it invents nothing the schema lacks.
+//    NOT_FOUND        — no such obligation
+//    ALREADY_COMPLETE — refuses to reassign one that's already complete
+async function reassignObligation(client, { obligation_id, assigned_role, escalates_to_role = null, reason = null }) {
+  if (!assigned_role) throw obligationError("BAD_INPUT", "assigned_role is required (the role to reassign to)");
+
+  const o = await client.query("select * from obligations where id=$1 for update", [obligation_id]);
+  if (o.rows.length === 0) throw obligationError("NOT_FOUND", "obligation not found");
+  const obligation = o.rows[0];
+
+  if (obligation.status === "complete") {
+    throw obligationError("ALREADY_COMPLETE", "cannot reassign — obligation is already complete");
+  }
+
+  const r = await client.query(
+    `update obligations
+        set assigned_role = $1, escalates_to_role = $2, updated_at = now()
+      where id = $3 returning *`,
+    [assigned_role, escalates_to_role, obligation_id]
+  );
+
+  await client.query(
+    `insert into events (property_id, person_id, unit_id, type, note)
+     values ($1,$2,$3,'obligation_reassigned',$4)`,
+    [obligation.property_id, obligation.person_id, obligation.unit_id,
+     `${obligation.type} obligation reassigned from ${obligation.assigned_role || "none"} to ${assigned_role}${reason ? " (" + reason + ")" : ""}`]
+  );
+
+  return r.rows[0];
+}
+
 // ── health: confirms server is up AND can reach the database ──
 app.get("/health", async (_req, res) => {
   try {
@@ -2674,7 +2711,7 @@ app.use("/", maintenanceModule({ pool, spawnObligationFromEvent }));
 app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));
 
 // ── ORG CHART MODULE (isolated; same injection pattern) ──
-app.use("/", moneyModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
+app.use("/", moneyModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, reassignObligation }));
 app.use("/", orgchartModule({ pool }));
 app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
