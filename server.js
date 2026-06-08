@@ -16,6 +16,7 @@ const maintenanceModule = require("./maintenance");  // isolated maintenance rou
 const downUnitsModule = require("./down_units");      // isolated down-units routes
 const orgchartModule = require("./orgchart");
 const moneyModule = require("./money");
+const turnoversModule = require("./turnovers");
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
 // runaway file still can't choke the box. Oversize returns a clean 413 below.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -2663,6 +2664,7 @@ app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));
 // ── ORG CHART MODULE (isolated; same injection pattern) ──
 app.use("/", moneyModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", orgchartModule({ pool }));
+app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
