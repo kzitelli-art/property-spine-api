@@ -443,7 +443,9 @@ function money({ pool, spawnObligationFromEvent, satisfyObligation, completeObli
     } catch (e) {
       try { await client.query('ROLLBACK'); } catch (_) {}
       console.error('confirm error', e);
-      return res.status(500).json({ error: 'internal error' });
+      // TEMP DIAGNOSTIC — expose the real error so we can see what's failing.
+      // Revert to { error: 'internal error' } once the cause is found.
+      return res.status(500).json({ error: 'internal error', _debug: e.message, _code: e.code, _detail: e.detail });
     } finally {
       client.release();
     }
