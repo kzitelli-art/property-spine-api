@@ -54,22 +54,62 @@ function money({ pool, spawnObligationFromEvent }) {
   // Rule (v1): if we know who spent it AND they have an active
   // assignment at this property, route to them (they classify their
   // own). Otherwise route to the property's accountable owner.
+  //
+  // Returns the full routing picture the obligation engine needs:
+  //   { assignment_id, assigned_role, escalates_to_role }
+  // The obligation engine assigns by ROLE string (like leasing uses
+  // "leasing_agent"), so we resolve the assignment's role here. The
+  // org chart's escalates_to_assignment_id points at ANOTHER assignment,
+  // so we resolve THAT assignment's role for escalates_to_role.
   async function routeAssignment(client, property_id, spent_by_person_id) {
+    let chosen = null;
+
     if (spent_by_person_id) {
       const own = await client.query(
-        `SELECT id FROM assignments
+        `SELECT id, role, escalates_to_assignment_id FROM assignments
           WHERE property_id = $1 AND person_id = $2 AND is_active = TRUE
           ORDER BY created_at LIMIT 1`,
         [property_id, spent_by_person_id]
       );
-      if (own.rowCount > 0) return own.rows[0].id;
+      if (own.rowCount > 0) chosen = own.rows[0];
     }
+
     // fall back to the property's accountable owner (never ownerless)
-    const prop = await client.query(
-      'SELECT accountable_assignment_id FROM properties WHERE id = $1',
-      [property_id]
-    );
-    return prop.rows[0] ? prop.rows[0].accountable_assignment_id : null;
+    if (!chosen) {
+      const prop = await client.query(
+        'SELECT accountable_assignment_id FROM properties WHERE id = $1',
+        [property_id]
+      );
+      const accId = prop.rows[0] ? prop.rows[0].accountable_assignment_id : null;
+      if (accId) {
+        const acc = await client.query(
+          'SELECT id, role, escalates_to_assignment_id FROM assignments WHERE id = $1 AND is_active = TRUE',
+          [accId]
+        );
+        if (acc.rowCount > 0) chosen = acc.rows[0];
+      }
+    }
+
+    if (!chosen) {
+      return { assignment_id: null, assigned_role: null, escalates_to_role: null };
+    }
+
+    // resolve escalation: the org chart points at an assignment; the
+    // obligation engine wants the role. null escalation = top of chain.
+    let escalates_to_role = null;
+    if (chosen.escalates_to_assignment_id) {
+      const esc = await client.query(
+        'SELECT role FROM assignments WHERE id = $1',
+        [chosen.escalates_to_assignment_id]
+      );
+      if (esc.rowCount > 0) escalates_to_role = esc.rows[0].role;
+    }
+
+    return {
+      assignment_id: chosen.id,
+      assigned_role: chosen.role,
+      escalates_to_role,
+    };
   }
 
   // ---- POST /money-events -----------------------------------------
@@ -95,9 +135,10 @@ function money({ pool, spawnObligationFromEvent }) {
       const prop = await client.query('SELECT id FROM properties WHERE id = $1', [property_id]);
       if (prop.rowCount === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'property not found' }); }
 
-      const assignmentId = await routeAssignment(client, property_id, spent_by_person_id);
+      // who owns this spend's classification (role + escalation, from the org chart)
+      const route = await routeAssignment(client, property_id, spent_by_person_id);
 
-      // insert the raw money event — unverified, unclassified
+      // 1) insert the raw money event — unverified, unclassified
       const ins = await client.query(
         `INSERT INTO money_events
            (property_id, unit_id, amount, vendor, spent_by_person_id, occurred_on,
@@ -105,45 +146,59 @@ function money({ pool, spawnObligationFromEvent }) {
          VALUES ($1,$2,$3,$4,$5,$6,'manual','unverified',$7,$8)
          RETURNING *`,
         [property_id, unit_id, amt, vendor, spent_by_person_id, occurred_on,
-         assignmentId, JSON.stringify({ source: 'manual_entry' })]
+         route.assignment_id, JSON.stringify({ source: 'manual_entry' })]
       );
       const ev = ins.rows[0];
 
-      // COMMIT the money event FIRST. The capture must always persist,
-      // even if the obligation spawn later fails. Nothing about the
-      // obligation may be allowed to roll back the money event.
+      // 2) write the SOURCE EVENT — the obligation must be born from an
+      //    event (spine rule), exactly like tour_booked and collections.
+      const srcEv = await client.query(
+        `INSERT INTO events (property_id, unit_id, type, note)
+         VALUES ($1,$2,'money_out_logged',$3) RETURNING *`,
+        [property_id, unit_id,
+         `$${amt.toFixed(2)} money-out${vendor ? ' — ' + vendor : ''} (money_event ${ev.id})`]
+      );
+      const sourceEvent = srcEv.rows[0];
+
+      // 3) spawn the classification obligation through the SHARED engine —
+      //    same path as leasing/maintenance, inside this same transaction.
+      //    Only spawn if it's routed AND the engine is present.
+      let obligation = null;
+      if (route.assignment_id && typeof spawnObligationFromEvent === 'function') {
+        obligation = await spawnObligationFromEvent(client, {
+          property_id,
+          unit_id: unit_id ?? null,
+          source_event_id: sourceEvent.id,
+          module: 'money',
+          type: 'classification',
+          label: `Explain a $${amt.toFixed(2)} expense${vendor ? ' — ' + vendor : ''}`,
+          owner_type: 'human',
+          assigned_role: route.assigned_role,
+          escalates_to_role: route.escalates_to_role,
+          status: 'open',
+          required_inputs: ['what_for', 'confirmed_category'],
+        });
+        // 4) link the obligation back onto the money event
+        await client.query(
+          'UPDATE money_events SET obligation_id = $1 WHERE id = $2',
+          [obligation.id, ev.id]
+        );
+        ev.obligation_id = obligation.id;
+      }
+
+      // 5) commit everything together — money event, source event, and
+      //    obligation are one atomic unit. No half-states.
       await client.query('COMMIT');
 
-      // spawn the classification obligation OUTSIDE the committed txn,
-      // best-effort. A failure here logs and is reported, but the money
-      // event is already saved.
-      let obligationId = null;
-      if (typeof spawnObligationFromEvent === 'function') {
-        try {
-          const obl = await spawnObligationFromEvent(pool, {
-            type: 'money_event_classification',
-            property_id,
-            assignment_id: assignmentId,
-            required_inputs: ['what_for', 'confirmed_category'],
-            ref: { money_event_id: ev.id },
-            note: `Explain a $${amt.toFixed(2)} expense${vendor ? ' — ' + vendor : ''}`,
-          });
-          obligationId = obl && (obl.id || obl);
-          if (obligationId) {
-            await pool.query('UPDATE money_events SET obligation_id = $1 WHERE id = $2', [obligationId, ev.id]);
-          }
-        } catch (e) {
-          // engine signature may differ; don't fail the capture over it.
-          console.warn('spawnObligationFromEvent skipped:', e.message);
-        }
-      }
       return res.status(201).json({
         ...ev,
-        obligation_id: obligationId,
-        routed_to_assignment: assignmentId,
-        note: assignmentId
-          ? 'Captured as UNVERIFIED. Classification obligation routed via org chart.'
-          : 'Captured as UNVERIFIED, but this property has NO accountable owner — classification is unrouted. Set an accountable owner.',
+        obligation_id: obligation ? obligation.id : null,
+        source_event_id: sourceEvent.id,
+        routed_to_assignment: route.assignment_id,
+        assigned_role: route.assigned_role,
+        note: route.assignment_id
+          ? 'Captured as UNVERIFIED. Classification obligation spawned via the shared engine and routed by org chart role.'
+          : 'Captured as UNVERIFIED, but this property has NO accountable owner — no obligation spawned. Set an accountable owner so money classification gets routed.',
       });
     } catch (e) {
       try { await client.query('ROLLBACK'); } catch (_) {}
