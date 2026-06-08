@@ -109,11 +109,18 @@ function money({ pool, spawnObligationFromEvent }) {
       );
       const ev = ins.rows[0];
 
-      // spawn the classification obligation on the existing engine, if available
+      // COMMIT the money event FIRST. The capture must always persist,
+      // even if the obligation spawn later fails. Nothing about the
+      // obligation may be allowed to roll back the money event.
+      await client.query('COMMIT');
+
+      // spawn the classification obligation OUTSIDE the committed txn,
+      // best-effort. A failure here logs and is reported, but the money
+      // event is already saved.
       let obligationId = null;
       if (typeof spawnObligationFromEvent === 'function') {
         try {
-          const obl = await spawnObligationFromEvent(client, {
+          const obl = await spawnObligationFromEvent(pool, {
             type: 'money_event_classification',
             property_id,
             assignment_id: assignmentId,
@@ -123,15 +130,13 @@ function money({ pool, spawnObligationFromEvent }) {
           });
           obligationId = obl && (obl.id || obl);
           if (obligationId) {
-            await client.query('UPDATE money_events SET obligation_id = $1 WHERE id = $2', [obligationId, ev.id]);
+            await pool.query('UPDATE money_events SET obligation_id = $1 WHERE id = $2', [obligationId, ev.id]);
           }
         } catch (e) {
           // engine signature may differ; don't fail the capture over it.
           console.warn('spawnObligationFromEvent skipped:', e.message);
         }
       }
-
-      await client.query('COMMIT');
       return res.status(201).json({
         ...ev,
         obligation_id: obligationId,
@@ -141,7 +146,7 @@ function money({ pool, spawnObligationFromEvent }) {
           : 'Captured as UNVERIFIED, but this property has NO accountable owner — classification is unrouted. Set an accountable owner.',
       });
     } catch (e) {
-      await client.query('ROLLBACK');
+      try { await client.query('ROLLBACK'); } catch (_) {}
       console.error('POST money-event error', e);
       return res.status(500).json({ error: 'internal error' });
     } finally {
