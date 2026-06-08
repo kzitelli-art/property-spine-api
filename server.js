@@ -70,6 +70,11 @@ async function spawnObligationFromEvent(client, spec) {
     status = "open", due_at = null,
     priority = null, severity = null,
     required_inputs = [],
+    // related_id / related_type link an obligation to the DOMAIN OBJECT it's
+    // about (turnover, work order, lease). Both nullable columns. Additive:
+    // callers that don't pass them get null (prior behavior); callers that do
+    // (turnover, down_units) can now find their obligation by the link.
+    related_id = null, related_type = null,
   } = spec;
 
   // Postgres text[] literal, e.g. {tour_feedback} or {closeout_proof}
@@ -80,13 +85,15 @@ async function spawnObligationFromEvent(client, spec) {
        (property_id, person_id, unit_id,
         source_event_id, module, type, label,
         owner_type, assigned_role, escalates_to_role,
-        status, due_at, priority, severity, required_inputs)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        status, due_at, priority, severity, required_inputs,
+        related_id, related_type)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
      returning *`,
     [property_id, person_id, unit_id,
      source_event_id, module, type, label,
      owner_type, assigned_role, escalates_to_role,
-     status, due_at, priority, severity, inputsLiteral]
+     status, due_at, priority, severity, inputsLiteral,
+     related_id, related_type]
   );
   return r.rows[0];
 }
