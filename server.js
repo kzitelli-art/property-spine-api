@@ -18,6 +18,7 @@ const orgchartModule = require("./orgchart");
 const moneyModule = require("./money");
 const turnoversModule = require("./turnovers");
 const moveinModule = require("./movein");
+const onboardingModule = require("./onboarding");   // isolated onboarding (takeover) routes
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
 // runaway file still can't choke the box. Oversize returns a clean 413 below.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -2715,6 +2716,7 @@ app.use("/", moneyModule({ pool, spawnObligationFromEvent, satisfyObligation, co
 app.use("/", orgchartModule({ pool }));
 app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
+app.use("/", onboardingModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
