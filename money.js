@@ -46,7 +46,7 @@ function proposeCategory({ what_for, unitOccupied }) {
   return 'uncategorized';
 }
 
-function money({ pool, spawnObligationFromEvent }) {
+function money({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }) {
   const express = require('express');
   const app = express.Router();
 
@@ -213,7 +213,9 @@ function money({ pool, spawnObligationFromEvent }) {
 
   // ---- POST /money-events/:id/classify ----------------------------
   // The person answers the plain questions. System PROPOSES a category.
-  // This does NOT verify — it just records the answers + proposal.
+  // This does NOT verify. It DOES satisfy the obligation's `what_for`
+  // required input — through the SHARED satisfyObligation helper, so money
+  // closes obligations the same way every other module does.
   app.post('/money-events/:id/classify', async (req, res) => {
     const id = req.params.id;
     const { what_for, completion = null, receipt_note = null, unit_occupied = null } = req.body || {};
@@ -227,40 +229,82 @@ function money({ pool, spawnObligationFromEvent }) {
 
     const proposed = proposeCategory({ what_for, unitOccupied: unit_occupied });
 
+    const client = await pool.connect();
     try {
-      const upd = await pool.query(
+      await client.query('BEGIN');
+
+      const upd = await client.query(
         `UPDATE money_events
             SET what_for = $1, completion = $2, receipt_note = $3, proposed_category = $4
           WHERE id = $5
           RETURNING *`,
         [what_for, completion, receipt_note, proposed, id]
       );
-      if (upd.rowCount === 0) return res.status(404).json({ error: 'money event not found' });
+      if (upd.rowCount === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'money event not found' }); }
+      const ev = upd.rows[0];
+
+      // Satisfy the obligation's `what_for` input through the shared helper.
+      // Best-effort and idempotent: if there's no obligation (unrouted money),
+      // or the input was already satisfied on a prior classify, that's fine —
+      // the money record still updated. Only a real failure rolls back.
+      let obligationNote = null;
+      if (ev.obligation_id && typeof satisfyObligation === 'function') {
+        try {
+          await satisfyObligation(client, {
+            obligation_id: ev.obligation_id,
+            input: 'what_for',
+            proof: { what_for, completion, proposed_category: proposed },
+          });
+          obligationNote = 'Obligation input "what_for" satisfied.';
+        } catch (e) {
+          if (e.code === 'NOT_OUTSTANDING') {
+            obligationNote = 'Obligation input "what_for" was already satisfied.';
+          } else {
+            throw e; // real problem — fail the transaction
+          }
+        }
+      }
+
+      await client.query('COMMIT');
       return res.json({
-        ...upd.rows[0],
+        ...ev,
         note: `Proposed accounting category: "${proposed}". A human must CONFIRM before this becomes verified truth.`,
+        obligation_note: obligationNote,
       });
     } catch (e) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
       console.error('classify error', e);
       return res.status(500).json({ error: 'internal error' });
+    } finally {
+      client.release();
     }
   });
 
   // ---- POST /money-events/:id/confirm -----------------------------
-  // A human confirms (or overrides) the category. THIS is what flips
-  // the event to 'verified'. Nothing else can.
+  // A human confirms (or overrides) the category. THIS flips the event to
+  // 'verified'. It ALSO satisfies the obligation's `confirmed_category` input
+  // and COMPLETES the obligation — both through the SHARED helpers, in one
+  // transaction with the verify. The money loop closes into a Completed Record.
   app.post('/money-events/:id/confirm', async (req, res) => {
     const id = req.params.id;
     const { confirmed_by_person_id, confirmed_category = null } = req.body || {};
     if (!confirmed_by_person_id) {
       return res.status(400).json({ error: 'confirmed_by_person_id required — a human must confirm' });
     }
+
+    const client = await pool.connect();
     try {
-      const cur = await pool.query('SELECT proposed_category, what_for FROM money_events WHERE id = $1', [id]);
-      if (cur.rowCount === 0) return res.status(404).json({ error: 'money event not found' });
+      await client.query('BEGIN');
+
+      const cur = await client.query(
+        'SELECT proposed_category, what_for, obligation_id FROM money_events WHERE id = $1 FOR UPDATE',
+        [id]
+      );
+      if (cur.rowCount === 0) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'money event not found' }); }
 
       // can't confirm what hasn't been classified — soft proof gate
       if (!cur.rows[0].what_for) {
+        await client.query('ROLLBACK');
         return res.status(409).json({
           error: 'cannot confirm before classification',
           outstanding: ['what_for'],
@@ -270,8 +314,10 @@ function money({ pool, spawnObligationFromEvent }) {
 
       // human can override the proposal; otherwise the proposal stands
       const finalCat = confirmed_category || cur.rows[0].proposed_category;
+      const obligationId = cur.rows[0].obligation_id;
+      const whatFor = cur.rows[0].what_for;
 
-      const upd = await pool.query(
+      const upd = await client.query(
         `UPDATE money_events
             SET confirmed_category = $1,
                 status = 'verified',
@@ -281,13 +327,67 @@ function money({ pool, spawnObligationFromEvent }) {
           RETURNING *`,
         [finalCat, confirmed_by_person_id, id]
       );
+
+      // Close the obligation through the shared helpers. Confirm is SELF-
+      // SUFFICIENT: it satisfies BOTH required inputs (what_for and
+      // confirmed_category) before completing, so the obligation closes
+      // correctly even if classify's satisfy never landed (e.g. classify run
+      // before this code shipped, or money column set but obligation input
+      // never ticked). Each satisfy is idempotent — NOT_OUTSTANDING just means
+      // it was already done. Only after both are satisfied do we complete; an
+      // INPUTS_OUTSTANDING at that point is a real anomaly, so we surface it.
+      let obligationNote = null;
+      if (obligationId && typeof satisfyObligation === 'function' && typeof completeObligation === 'function') {
+        // 1) ensure what_for is satisfied (idempotent)
+        try {
+          await satisfyObligation(client, {
+            obligation_id: obligationId,
+            input: 'what_for',
+            proof: { what_for: whatFor },
+          });
+        } catch (e) {
+          if (e.code !== 'NOT_OUTSTANDING') throw e;
+        }
+        // 2) satisfy confirmed_category (idempotent)
+        try {
+          await satisfyObligation(client, {
+            obligation_id: obligationId,
+            input: 'confirmed_category',
+            proof: { confirmed_category: finalCat, confirmed_by_person_id },
+          });
+        } catch (e) {
+          if (e.code !== 'NOT_OUTSTANDING') throw e;
+        }
+        // 3) complete — both inputs now satisfied, so this should succeed
+        try {
+          await completeObligation(client, { obligation_id: obligationId, completed_by: confirmed_by_person_id });
+          obligationNote = 'Obligation completed — money classification loop closed.';
+        } catch (e) {
+          if (e.code === 'ALREADY_COMPLETE') {
+            obligationNote = 'Obligation was already complete.';
+          } else if (e.code === 'INPUTS_OUTSTANDING') {
+            // We satisfied both known inputs — if something is STILL outstanding,
+            // the obligation carries an input money doesn't know about. Surface
+            // it rather than silently leaving money verified with an open loop.
+            obligationNote = `Money verified, but the obligation has unexpected outstanding inputs: ${(e.outstanding_inputs || []).join(', ')}. Left open for review.`;
+          } else {
+            throw e;
+          }
+        }
+      }
+
+      await client.query('COMMIT');
       return res.json({
         ...upd.rows[0],
         note: 'Verified. This event is now accounting truth and may appear in clean/reported views.',
+        obligation_note: obligationNote,
       });
     } catch (e) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
       console.error('confirm error', e);
       return res.status(500).json({ error: 'internal error' });
+    } finally {
+      client.release();
     }
   });
 
