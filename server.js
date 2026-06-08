@@ -15,6 +15,7 @@ const XLSX = require("xlsx");              // parses the spreadsheet to rows
 const maintenanceModule = require("./maintenance");  // isolated maintenance routes
 const downUnitsModule = require("./down_units");      // isolated down-units routes
 const orgchartModule = require("./orgchart");
+const moneyModule = require("./money");
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
 // runaway file still can't choke the box. Oversize returns a clean 413 below.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -2621,6 +2622,7 @@ app.use("/", maintenanceModule({ pool, spawnObligationFromEvent }));
 app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));
 
 // ── ORG CHART MODULE (isolated; same injection pattern) ──
+app.use("/", moneyModule({ pool, spawnObligationFromEvent }));
 app.use("/", orgchartModule({ pool }));
 
 const port = process.env.PORT || 3000;
