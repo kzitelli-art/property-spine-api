@@ -176,6 +176,8 @@ function money({ pool, spawnObligationFromEvent }) {
           assigned_role: route.assigned_role,
           escalates_to_role: route.escalates_to_role,
           status: 'open',
+          priority: 'high',
+          severity: 'high',
           required_inputs: ['what_for', 'confirmed_category'],
         });
         // 4) link the obligation back onto the money event
