@@ -2811,19 +2811,21 @@ app.post("/ingest/:runId/approve", async (req, res) => {
 
 // ── MAINTENANCE MODULE (isolated; injected pool + shared obligation path) ──
 app.use("/", maintenanceModule({ pool, spawnObligationFromEvent }));
-
 // ── DOWN UNITS MODULE (isolated; same injection pattern) ──
 app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));
-
 // ── ORG CHART MODULE (isolated; same injection pattern) ──
 app.use("/", moneyModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, reassignObligation }));
 app.use("/", orgchartModule({ pool }));
 app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", onboardingModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
+// ── ONBOARDING FUNNEL (revenue/roles/NOI-goal; honest mode; only needs pool) ──
+app.use("/api", onboardingFunnel({ pool }));
 app.use("/", registryInstance);
 // owner-facing aggregate views (cards + attention queue). Only needs pool.
 app.use("/", ownerModule({ pool }));
-
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
+
+
+
