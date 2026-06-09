@@ -20,6 +20,7 @@ const turnoversModule = require("./turnovers");
 const moveinModule = require("./movein");
 const onboardingModule = require("./onboarding");   // isolated onboarding (takeover) routes
 const registryModule = require("./registry");        // property alias registry (canonical key / bridge step zero)
+const registryInstance = registryModule({ pool });    // single shared instance: mounted below AND used by ingest for identity resolution
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
 // runaway file still can't choke the box. Oversize returns a clean 413 below.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -2154,6 +2155,53 @@ async function runIngest(propertyId, sourceText, kind) {
     summary = `Single property. ${candidates.length} unit${candidates.length === 1 ? "" : "s"} staged for review.`;
   }
 
+  // ── IDENTITY: resolve each property string against the registry ──────
+  // Option 1 product behavior: upload → resolve → attach if resolved, flag if
+  // ambiguous, auto-register as unresolved if unknown. NEVER guesses. Uses the
+  // ONE shared identity path (registryInstance.resolveOrRegister). Read-time,
+  // additive: this does not change what gets staged, only reports identity.
+  let registryResults = [];
+  try {
+    const addrs = isDeal
+      ? subjectProperties.map(sp => sp.address).filter(Boolean)
+      : [parsed.property && parsed.property.address].filter(Boolean);
+    for (const address of addrs) {
+      const rr = await registryInstance.resolveOrRegister(pool, {
+        source: kind === "rent_roll" ? "rent_roll" : "other",
+        value: address, alias_type: "address_string",
+      });
+      registryResults.push(rr);
+    }
+  } catch (e) {
+    registryResults = [{ status: "error", error: e.message }];
+  }
+
+  // ── #4: reconcile the ROUTE property against what the FILE actually says ──
+  // The upload came in under /properties/:propertyId/ingest — a property the
+  // USER picked. The registry resolves what's IN THE FILE. If they disagree,
+  // the response must SAY SO. The route property does NOT silently win — that
+  // would recreate the lie that the user already knew the right property.
+  let routeIdentityCheck = { route_property_id: propertyId, status: "unknown" };
+  try {
+    const resolvedIds = registryResults.filter(r => r.status === "resolved").map(r => r.property_id);
+    if (registryResults.some(r => r.status === "ambiguous")) {
+      routeIdentityCheck = { route_property_id: propertyId, status: "ambiguous_in_file",
+        note: "The file's property is ambiguous in the registry. Route property is NOT confirmed as correct — resolve the alias before trusting attachment." };
+    } else if (resolvedIds.length === 0) {
+      routeIdentityCheck = { route_property_id: propertyId, status: "no_resolved_identity",
+        note: "Nothing in the file resolved to a canonical property. Route property is the user's assertion only — unconfirmed by the file." };
+    } else if (resolvedIds.every(id => id === propertyId)) {
+      routeIdentityCheck = { route_property_id: propertyId, status: "match",
+        note: "The file's resolved property matches the route property. Confirmed." };
+    } else {
+      routeIdentityCheck = { route_property_id: propertyId, status: "CONFLICT",
+        resolved_in_file: [...new Set(resolvedIds)],
+        note: "WARNING: the file resolves to a DIFFERENT property than the route. The route property is NOT applied as truth. A human must reconcile — this is exactly the identity lie the registry exists to prevent." };
+    }
+  } catch (e) {
+    routeIdentityCheck = { route_property_id: propertyId, status: "error", error: e.message };
+  }
+
   return {
     run_id: run.id,
     document_type: parsed.document_type || "unknown",
@@ -2177,6 +2225,8 @@ async function runIngest(propertyId, sourceText, kind) {
     needs_review: candidates.filter(c => c.decision_status === "pending"),
     missing,
     unclear,
+    registry: registryResults,  // identity resolution per subject property (resolved | ambiguous | registered_unresolved | skipped)
+    registry_route_check: routeIdentityCheck,  // #4: does the file agree with the route property? match | CONFLICT | ambiguous_in_file | no_resolved_identity
     note: "Subject assets only. Comps are recognized and dropped — never staged. Nothing written to units yet. AI-confident rows are 'ready_for_promotion'; a human approves (POST /ingest/:runId/approve), then POST /ingest/:runId/promote creates units. extraction_result is the normalized read-only view — it persists nothing.",
   };
 }
@@ -2385,6 +2435,43 @@ async function runIngestPlanned(propertyId, sourceText, kind) {
     hasLeaseDetail ? "L4" :
     hasUnitDetail ? "L3" : "L2";
 
+  // ── IDENTITY: resolve each subject property against the registry ─────
+  // Same shared path as runIngest. Planned ingest is always the deal/multi
+  // shape, so resolve every subject address. Never guesses; flags ambiguous.
+  let registryResults = [];
+  try {
+    for (const address of subjectProperties.map(sp => sp.address).filter(Boolean)) {
+      const rr = await registryInstance.resolveOrRegister(pool, {
+        source: kind === "rent_roll" ? "rent_roll" : "other",
+        value: address, alias_type: "address_string",
+      });
+      registryResults.push(rr);
+    }
+  } catch (e) {
+    registryResults = [{ status: "error", error: e.message }];
+  }
+
+  // ── #4: reconcile ROUTE property vs what the FILE says (same as runIngest) ──
+  let routeIdentityCheck = { route_property_id: propertyId, status: "unknown" };
+  try {
+    const resolvedIds = registryResults.filter(r => r.status === "resolved").map(r => r.property_id);
+    if (registryResults.some(r => r.status === "ambiguous")) {
+      routeIdentityCheck = { route_property_id: propertyId, status: "ambiguous_in_file",
+        note: "The file's property is ambiguous in the registry. Route property NOT confirmed." };
+    } else if (resolvedIds.length === 0) {
+      routeIdentityCheck = { route_property_id: propertyId, status: "no_resolved_identity",
+        note: "Nothing in the file resolved to a canonical property. Route property is the user's assertion only." };
+    } else if (resolvedIds.every(id => id === propertyId)) {
+      routeIdentityCheck = { route_property_id: propertyId, status: "match", note: "File resolved property matches the route property." };
+    } else {
+      routeIdentityCheck = { route_property_id: propertyId, status: "CONFLICT",
+        resolved_in_file: [...new Set(resolvedIds)],
+        note: "WARNING: file resolves to a DIFFERENT property than the route. Route property NOT applied as truth; human must reconcile." };
+    }
+  } catch (e) {
+    routeIdentityCheck = { route_property_id: propertyId, status: "error", error: e.message };
+  }
+
   return {
     run_id: run.id,
     mode: "planned",
@@ -2414,6 +2501,8 @@ async function runIngestPlanned(propertyId, sourceText, kind) {
     reconciliation,
     unclear: allUnclear,
     note: "Planned (multi-pass) ingest. Plan → targeted subject extraction → merge/reconcile. Subject assets only; comps never staged; nothing written to units yet. Reconciliation flags are for human review — they do not auto-resolve. NOTE: portfolio (multi-property) promotion is currently BLOCKED — staging and review work, but /promote refuses portfolios until per-subject-property mapping exists. Single-property runs promote normally.",
+    registry: registryResults,  // identity resolution per subject property (resolved | ambiguous | registered_unresolved | skipped)
+    registry_route_check: routeIdentityCheck,  // #4: file-vs-route identity reconciliation
   };
 }
 
@@ -2718,7 +2807,7 @@ app.use("/", orgchartModule({ pool }));
 app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", onboardingModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
-app.use("/", registryModule({ pool }));
+app.use("/", registryInstance);
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
