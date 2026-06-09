@@ -20,7 +20,6 @@ const turnoversModule = require("./turnovers");
 const moveinModule = require("./movein");
 const onboardingModule = require("./onboarding");   // isolated onboarding (takeover) routes
 const registryModule = require("./registry");        // property alias registry (canonical key / bridge step zero)
-const registryInstance = registryModule({ pool });    // single shared instance: mounted below AND used by ingest for identity resolution
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
 // runaway file still can't choke the box. Oversize returns a clean 413 below.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -53,6 +52,10 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
+
+// single shared registry instance — created AFTER pool exists; mounted below
+// AND used by ingest for identity resolution (the ONE identity path).
+const registryInstance = registryModule({ pool });
 
 // ════════════════════════════════════════════════════════════════════
 //  SHARED CORE SERVICE — spawnObligationFromEvent
