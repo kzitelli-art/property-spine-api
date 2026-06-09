@@ -40,54 +40,56 @@ module.exports = function identify(deps) {
   //    Returns { address, name, basis } or null.
   function scanForIdentity(text) {
     if (!text) return null;
-    const head = String(text).split(/\r?\n/).slice(0, 25); // header lives up top
-    const clean = head.map(l => l.trim()).filter(Boolean);
+    // Identity lives in the TOP of the file, never in a data row. We look only
+    // at the first 8 non-empty lines and only accept UNMISTAKABLE header shapes.
+    // Anything ambiguous returns null -> the caller uses the model. We would
+    // rather be slow than confidently wrong (the 00 MODEL lesson).
+    const lines = String(text).split(/\r?\n/).map(l => l.trim()).filter(Boolean).slice(0, 8);
 
-    // 1) "Property = <x>" (Yardi Breeze style)
-    for (const line of clean) {
-      const m = line.match(/^property\s*[:=]\s*(.+)$/i);
+    for (const line of lines) {
+      // A data row has many tab-separated cells. A header property-line does not.
+      // If a line has 3+ tabs, it's a row of unit data — never an identity line.
+      const tabCells = line.split(/\t/).filter(c => c.trim()).length;
+      if (tabCells >= 3) continue;
+
+      // Shape 1 — "Property = <x>" / "Property: <x>" (Yardi Breeze).
+      let m = line.match(/^property\s*[:=]\s*(.+)$/i);
       if (m && m[1].trim().length >= 3) {
         const val = m[1].trim();
-        return { address: addressForm(val), name: val, basis: "scan:property_label" };
+        return { address: null, name: val, label: val, basis: "scan:property_label" };
+      }
+
+      // Shape 2 — "<code> - <Name> (<code>)"  e.g. "4233 - SOLO on Chestnut (4233)".
+      //   The defining header shape in these Yardi rolls. Capture the NAME core
+      //   and the code; we resolve on the cleaned label. Must have the " - " and
+      //   the trailing "(...)" to qualify — a data row won't.
+      m = line.match(/^([\w.-]{1,12})\s+[-–]\s+(.+?)\s*\(([^)]+)\)\s*$/);
+      if (m) {
+        const name = m[2].trim();
+        if (name.length >= 3 && !/\b(rent roll|total|summary|page)\b/i.test(name)) {
+          return { address: null, name: name, code: m[1].trim(), label: line.trim(), basis: "scan:code_name_code" };
+        }
+      }
+
+      // Shape 3 — "<Name> (<code>)"  e.g. "Tower Place (tower)".
+      m = line.match(/^([A-Za-z][A-Za-z0-9.\-' ]{2,40})\s*\(([^)]+)\)\s*$/);
+      if (m && !/\b(rent roll|total|summary|page|as of)\b/i.test(m[1])) {
+        return { address: null, name: m[1].trim(), code: m[2].trim(), label: line.trim(), basis: "scan:name_code" };
+      }
+
+      // Shape 4 — a clean street address ON ITS OWN LINE (no tabs, starts with a
+      //   street number, looks like an address). A data row was already excluded
+      //   by the tab check, so this only matches a real address header line.
+      if (tabCells === 0) {
+        m = line.match(/^(\d{2,6}\s+[NSEW]?\.?\s*[A-Za-z][A-Za-z0-9.\-' ]{2,40})$/);
+        if (m && !/\bMODEL|VACANT|DOWN\b/i.test(m[1])) {
+          return { address: m[1].trim(), name: null, label: m[1].trim(), basis: "scan:street_line" };
+        }
       }
     }
-
-    // 2) A line with a street-number + word, e.g. "4233 Chestnut", "1325 N 15th".
-    //    Skip lines that are clearly boilerplate (dates, "as of", totals).
-    for (const line of clean) {
-      if (/\b(rent roll|as of|month|year|page|total|summary|prepared|confidential)\b/i.test(line)) continue;
-      if (/\d{1,2}\/\d{1,2}\/\d{2,4}/.test(line)) continue;
-      // strip a leading system code like "4233 - " then re-find the address core
-      const street = line.match(/(\d{2,6}\s+[A-Za-z][A-Za-z0-9.\- ]{2,40})/);
-      if (street) {
-        return { address: addressForm(street[1]), name: line, basis: "scan:street_line" };
-      }
-    }
-
-    // 3) "<Name> (<code>)" line, e.g. "Tower Place (tower)" — a name, no street.
-    //    We can resolve on it (it may be a known alias) but it is NOT an address;
-    //    flag basis so the caller knows identity is name-only (weaker).
-    for (const line of clean) {
-      const m = line.match(/^([A-Za-z][A-Za-z0-9.\- ]{2,40})\s*\(([^)]+)\)\s*$/);
-      if (m && !/\b(rent roll|summary|total|page)\b/i.test(m[1])) {
-        return { address: null, name: m[1].trim(), code: m[2].trim(), basis: "scan:name_code" };
-      }
-    }
-
-    return null;
+    return null; // nothing unmistakable -> model fallback
   }
 
-  // Normalize a raw header value toward the ADDRESS form. Conservative:
-  // strips a leading "<code> - " prefix and a trailing "(<code>)" suffix,
-  // leaving the human address/name core. (Full canonicalization to a street
-  // address is the model's job on fallback; here we just clean the obvious.)
-  function addressForm(raw) {
-    if (!raw) return null;
-    let s = String(raw).trim();
-    s = s.replace(/^\s*[\w.-]{1,12}\s*[-–]\s*/, "");  // leading "4233 - "
-    s = s.replace(/\s*\([^)]*\)\s*$/, "");            // trailing "(4233)"
-    return s.trim();
-  }
 
   // ── MODEL FALLBACK. Only when the scan can't find an address. Tiny prompt,
   //    tiny output — this is NOT the extraction engine, just identity.
@@ -115,7 +117,7 @@ module.exports = function identify(deps) {
 
   // ── Build the user-facing answer from a resolve result + the identity. ──
   function shapeAnswer(identity, resolved) {
-    const display = identity.address || identity.name || identity.input || "(unreadable)";
+    const display = identity.address || identity.label || identity.name || identity.input || "(unreadable)";
     if (resolved.status === "resolved") {
       return {
         result: "matched",
@@ -149,18 +151,17 @@ module.exports = function identify(deps) {
     }
     let identity = scanForIdentity(text);
     let usedModel = false;
-    // fall back to the model only when scan found nothing OR found a name with no address
-    if (!identity || (!identity.address && !identity.name)) {
+    // Scan only fires on unmistakable header shapes. If it found nothing, the
+    // model reads the header for identity. We do NOT fire the model when the scan
+    // already succeeded — that keeps the standard rolls fast (no confident garbage,
+    // no needless model call). The model returns {address, name}.
+    if (!identity) {
       identity = await modelForIdentity(text);
       usedModel = true;
-    } else if (!identity.address && identity.name && identity.basis !== "scan:name_code") {
-      // scan got a partial; let the model try for an address too (cheap)
-      const m = await modelForIdentity(text);
-      if (m.address) { identity = { ...identity, address: m.address, basis: identity.basis + "+model_addr" }; usedModel = true; }
     }
 
-    // resolve on the ADDRESS if we have one (stable identity), else the NAME.
-    const resolveValue = identity.address || identity.name;
+    // Resolve on the ADDRESS if we have one (stable identity), else the NAME/label.
+    const resolveValue = identity.address || identity.label || identity.name;
     if (!resolveValue) {
       return { result: "unreadable", message: "Could not read a property name or address from this file.",
                identity, used_model: usedModel };
