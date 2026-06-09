@@ -8,22 +8,19 @@
 //  POPULATE only earned facts, mark everything else visibly pending. No fake
 //  numbers — ever. Backend vocab stays out of the surface; details under keys.
 //
-//  Capabilities:
-//    - Revenue: real claimed/supported/held-out from ingest_candidates, driven
-//      by prov ('confirmed' = supported; all other provenance = held out).
-//      VERIFIED on live data: claimed≈10,085 / supported 6,935 / held 3,150.
-//    - Roles: property-scoped assignments first, users.role fallback, source disclosed.
-//    - NOI Goal: target persists when property_noi_goals exists (migration 012);
-//      current NOI + gap stay null until the expense (money) layer is live.
-//    - Schema-safe: information_schema detection so column/table drift can't crash.
+//  REVENUE GATE (corrected): supported revenue = PROMOTED rent only
+//  (promoted_unit_id is not null). A clean parse (prov='confirmed') or an
+//  approval (decision_status='approved') is NOT supported revenue — both are
+//  still candidates. Parsed-but-unpromoted rent is held-out / untied exposure.
+//  Anchor reason: promoted_unit_id is the only state that means a real unit
+//  exists (the /ingest/:runId/promote step created it). Duplicate promotion is
+//  already blocked at the DB by the units unique constraint; the read-side
+//  dedupe here is secondary belt-and-suspenders.
 //
-//  Mount in server.js (near the other mounts, ~line 2826):
+//  Mount in server.js (near the other mounts, ~line 2824):
 //    const onboardingFunnel = require("./onboarding_funnel");
 //    app.use("/api", onboardingFunnel({ pool }));
 //  Needs only { pool }.
-//
-//  Migration (apply before relying on persistence): 012_property_noi_goals.sql
-//  (property_id uuid + FK to properties ON DELETE CASCADE).
 // ════════════════════════════════════════════════════════════════════
 
 module.exports = function onboardingFunnel(deps) {
@@ -71,12 +68,12 @@ module.exports = function onboardingFunnel(deps) {
   }
 
   // ── STEP 1: Revenue exposure from live ingest candidates ──
-  // claimed   = all candidate rents
-  // supported = confirmed provenance
-  // held_out  = assumed provenance / unproven exposure
+  // SUPPORTED  = promoted rows (promoted_unit_id is not null) — a real unit exists.
+  // HELD_OUT   = everything else (parsed, confirmed, approved — all still untied).
+  // A clean parse is necessary but NOT sufficient. Promotion is the proof anchor.
   async function computeRevenue(propertyId) {
     const rows = (await pool.query(
-      `select market_rent, prov, decision_status
+      `select market_rent, prov, decision_status, promoted_unit_id
          from ingest_candidates
         where property_id = $1`,
       [propertyId]
@@ -87,8 +84,10 @@ module.exports = function onboardingFunnel(deps) {
     let heldOut = 0;
     let units = 0;
     let supportedUnits = 0;
-    let assumedUnits = 0;
+    let heldOutUnits = 0;
+    let duplicate_promoted_blocked = 0;
 
+    const seenPromotedUnits = new Set();
     const by_provenance = {};
     const by_decision_status = {};
 
@@ -96,18 +95,30 @@ module.exports = function onboardingFunnel(deps) {
       const rent = Number(r.market_rent) || 0;
       const prov = r.prov || "unknown";
       const status = r.decision_status || "unknown";
+      const isPromoted = r.promoted_unit_id !== null && r.promoted_unit_id !== undefined;
 
       units += 1;
       claimed += rent;
       by_provenance[prov] = (by_provenance[prov] || 0) + rent;
       by_decision_status[status] = (by_decision_status[status] || 0) + rent;
 
-      if (prov === "confirmed") {
-        supported += rent;
-        supportedUnits += 1;
+      if (isPromoted) {
+        // Secondary read-side dedupe: the units unique constraint already
+        // prevents two units for one number, but guard the sum anyway.
+        const key = String(r.promoted_unit_id);
+        if (seenPromotedUnits.has(key)) {
+          duplicate_promoted_blocked += 1;
+          heldOut += rent;
+          heldOutUnits += 1;
+        } else {
+          seenPromotedUnits.add(key);
+          supported += rent;
+          supportedUnits += 1;
+        }
       } else {
+        // Parsed but not promoted = untied exposure. Confirmed parse is NOT enough.
         heldOut += rent;
-        assumedUnits += 1;
+        heldOutUnits += 1;
       }
     }
 
@@ -119,15 +130,18 @@ module.exports = function onboardingFunnel(deps) {
       support_rate: claimed > 0 ? Math.round((supported / claimed) * 100) : 0,
       units,
       supported_units: supportedUnits,
-      held_out_units: assumedUnits,
+      held_out_units: heldOutUnits,
+      promoted_units: seenPromotedUnits.size,
+      duplicate_promoted_blocked,
       avg_rent_per_unit: units > 0 ? money(claimed / units) : null,
       by_provenance: Object.fromEntries(Object.entries(by_provenance).map(([k, v]) => [k, money(v)])),
       by_decision_status: Object.fromEntries(Object.entries(by_decision_status).map(([k, v]) => [k, money(v)])),
       source: "ingest_candidates",
-      support_rule: "prov='confirmed' is supported; all other provenance is held out.",
+      support_rule: "supported = promoted (promoted_unit_id not null). Clean parse (prov='confirmed') and approval (decision_status='approved') are still candidates — held-out / untied exposure until promoted.",
       limitations: [
         "Tenant, occupancy status, and lease-date issue flags are not available until rent-roll line fields are promoted onto units.",
-        "decision_status is shown as workflow context only; it is not used as proof of support.",
+        "prov and decision_status are shown as workflow context only; neither is used as proof of support. Only promotion is.",
+        "Duplicate promoted rows for the same unit are blocked from supported and counted in duplicate_promoted_blocked.",
       ],
     };
   }
