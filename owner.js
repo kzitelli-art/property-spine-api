@@ -37,7 +37,7 @@ module.exports = function owner(deps) {
 
       // units pending (candidates not yet promoted/rejected) per property
       const pendCounts = (await pool.query(
-        `select property_id, count(*)::int as n from ingest_candidates
+        `select property_id, count(distinct unit_number)::int as n from ingest_candidates
           where decision_status = any($1) group by property_id`, [PENDING_STATES]
       )).rows.reduce((m, r) => (m[r.property_id] = r.n, m), {});
 
@@ -119,7 +119,7 @@ module.exports = function owner(deps) {
 
       // 2) Pending units — read from an upload, waiting to be added.
       const pending = (await pool.query(
-        `select c.property_id, p.name, count(*)::int as n,
+        `select c.property_id, p.name, count(distinct c.unit_number)::int as n,
                 max(c.created_at) as last_seen
            from ingest_candidates c
            join properties p on p.id = c.property_id
@@ -141,6 +141,215 @@ module.exports = function owner(deps) {
       res.json({ items });
     } catch (e) {
       console.error("owner/attention error", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════════
+  //  CLEANUP — remove TEST/scratch properties that pollute the owner view.
+  //  PREVIEW-FIRST and HARD-GUARDED. Two protections, both required:
+  //   1. A NEVER-DELETE whitelist of the real property ids (belt).
+  //   2. A name-pattern match for known test/scratch prefixes (suspenders).
+  //  A property is deletable ONLY if it matches a test pattern AND is not in
+  //  the whitelist. `GET` (or no confirm) returns a PREVIEW — what WOULD be
+  //  deleted. Deletion happens ONLY on POST with { "confirm": "DELETE" }.
+  //  Cascade handles child rows (units/candidates/runs) automatically.
+  // ════════════════════════════════════════════════════════════════════
+  const NEVER_DELETE = [
+    "260b6bac-4738-47c4-b86d-511b726adc48", // 4125 Chestnut
+    "9e2bb96e-08e2-41db-81c2-91055ceb50a3", // 4233 Chestnut
+    "971c51ab-be96-4e5f-81df-0e59804c879b", // The Felix
+  ];
+  // Name patterns that mark a row as test/scratch. Anchored to how these were
+  // actually named (prefixes + embedded timestamps). Real properties never match.
+  const TEST_PATTERNS = [
+    "TEST %", "TEST—%", "TEST %", "DIAG %", "SCORER SCRATCH%",
+    "OM Test%", "Money Test%", "Movein Test%", "Turn Test%", "Close Test%",
+    "%Test 17%",     // unix-ms timestamped test rows
+    "%2026-06-0%",   // ISO-timestamped scratch rows
+  ];
+
+  async function findDeletable(client) {
+    // Match any test pattern, exclude the whitelist by id. Parameterized.
+    const r = await client.query(
+      `select id, name, address from properties
+        where id <> all($1::uuid[])
+          and (` + TEST_PATTERNS.map((_, i) => `name ilike $${i + 2}`).join(" or ") + `)
+        order by name`,
+      [NEVER_DELETE, ...TEST_PATTERNS]
+    );
+    return r.rows;
+  }
+
+  // PREVIEW — safe, read-only. Shows what cleanup WOULD remove.
+  router.get("/owner/cleanup-preview", async (_req, res) => {
+    try {
+      const rows = await findDeletable(pool);
+      res.json({
+        would_delete_count: rows.length,
+        protected_ids: NEVER_DELETE,
+        would_delete: rows.map(r => ({ property_id: r.id, name: r.name, address: r.address })),
+        note: "Preview only. Nothing deleted. To delete, POST /owner/cleanup with { \"confirm\": \"DELETE\" }.",
+      });
+    } catch (e) {
+      console.error("cleanup-preview error", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // DELETE — only with explicit confirm. Cascade removes child rows.
+  router.post("/owner/cleanup", async (req, res) => {
+    try {
+      const confirm = req.body && req.body.confirm;
+      const rows = await findDeletable(pool);
+      if (confirm !== "DELETE") {
+        return res.status(400).json({
+          error: "confirmation required",
+          would_delete_count: rows.length,
+          would_delete: rows.map(r => ({ property_id: r.id, name: r.name })),
+          note: "No rows deleted. Re-POST with body { \"confirm\": \"DELETE\" } to proceed.",
+        });
+      }
+      const ids = rows.map(r => r.id);
+      if (ids.length === 0) return res.json({ deleted_count: 0, note: "Nothing matched — already clean." });
+      const del = await pool.query(
+        "delete from properties where id = any($1::uuid[]) returning id, name", [ids]
+      );
+      res.json({
+        deleted_count: del.rows.length,
+        deleted: del.rows.map(r => ({ property_id: r.id, name: r.name })),
+        protected_ids: NEVER_DELETE,
+        note: "Test properties removed (child units/candidates/runs cascaded). Real properties untouched.",
+      });
+    } catch (e) {
+      console.error("cleanup error", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════════
+  //  ALIAS CLEANUP — clear junk/test unresolved aliases from the queue.
+  //  Same preview-first, confirm-required pattern. Only touches UNRESOLVED
+  //  aliases (confidence='unresolved', property_id IS NULL) — a resolved alias
+  //  links a real property and is never deletable here. Deletes by explicit
+  //  alias_id list OR by a test-pattern match, never blindly.
+  // ════════════════════════════════════════════════════════════════════
+  const JUNK_ALIAS_PATTERNS = [
+    "%UNKNOWN%",     // e.g. "380010-UNKNOWN" — placeholder, not a real string
+    "%TEST%", "%DIAG%", "%SCRATCH%",
+  ];
+
+  async function findJunkAliases(client) {
+    const r = await client.query(
+      `select id, alias_value, source_system from property_aliases
+        where confidence = 'unresolved' and property_id is null
+          and (` + JUNK_ALIAS_PATTERNS.map((_, i) => `alias_value ilike $${i + 1}`).join(" or ") + `)
+        order by updated_at desc`,
+      [...JUNK_ALIAS_PATTERNS]
+    );
+    return r.rows;
+  }
+
+  // PREVIEW — read-only.
+  router.get("/owner/alias-cleanup-preview", async (_req, res) => {
+    try {
+      const rows = await findJunkAliases(pool);
+      res.json({
+        would_delete_count: rows.length,
+        would_delete: rows.map(r => ({ alias_id: r.id, alias_value: r.alias_value, source_system: r.source_system })),
+        note: "Preview only. Only UNRESOLVED, unlinked aliases matching junk patterns. To delete, POST /owner/alias-cleanup with { \"confirm\": \"DELETE\" }.",
+      });
+    } catch (e) {
+      console.error("alias-cleanup-preview error", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // DELETE — confirm required. Optionally pass { alias_ids: [...] } to target
+  // specific ones; otherwise deletes all junk-pattern unresolved aliases.
+  router.post("/owner/alias-cleanup", async (req, res) => {
+    try {
+      const { confirm, alias_ids } = req.body || {};
+      let rows;
+      if (Array.isArray(alias_ids) && alias_ids.length) {
+        // explicit list — still guard to unresolved+unlinked only
+        rows = (await pool.query(
+          `select id, alias_value from property_aliases
+            where id = any($1::uuid[]) and confidence = 'unresolved' and property_id is null`,
+          [alias_ids]
+        )).rows;
+      } else {
+        rows = await findJunkAliases(pool);
+      }
+      if (confirm !== "DELETE") {
+        return res.status(400).json({ error: "confirmation required",
+          would_delete_count: rows.length,
+          would_delete: rows.map(r => ({ alias_id: r.id, alias_value: r.alias_value })),
+          note: "No aliases deleted. Re-POST with { \"confirm\": \"DELETE\" }." });
+      }
+      const ids = rows.map(r => r.id);
+      if (ids.length === 0) return res.json({ deleted_count: 0, note: "Nothing matched — queue already clean." });
+      const del = await pool.query(
+        "delete from property_aliases where id = any($1::uuid[]) returning id, alias_value", [ids]
+      );
+      res.json({ deleted_count: del.rows.length,
+        deleted: del.rows.map(r => ({ alias_id: r.id, alias_value: r.alias_value })),
+        note: "Junk unresolved aliases removed. Resolved/linked aliases untouched." });
+    } catch (e) {
+      console.error("alias-cleanup error", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════════
+  //  SET PROPERTY IDENTITY — give a real property its address + canonical key
+  //  so it reads "Recognized" instead of "Needs confirmation". Takes the
+  //  address as INPUT — never invents one (no support => no write). Use for
+  //  The Felix: POST /owner/properties/:id/identity
+  //    { "address": "<real street address>", "canonical_key": "FELIX" }
+  //  Also registers the address as a resolved alias so future uploads match.
+  // ════════════════════════════════════════════════════════════════════
+  router.post("/owner/properties/:id/identity", async (req, res) => {
+    try {
+      const { address, canonical_key } = req.body || {};
+      if (!address && !canonical_key) {
+        return res.status(400).json({ error: "provide at least one of: address, canonical_key. Nothing is invented." });
+      }
+      const p = (await pool.query("select id, name from properties where id=$1", [req.params.id])).rows[0];
+      if (!p) return res.status(404).json({ error: "property not found" });
+
+      // set address and/or canonical_key (only what was provided)
+      const sets = [], vals = []; let n = 1;
+      if (address)        { sets.push(`address=$${n++}`); vals.push(String(address).trim()); }
+      if (canonical_key)  { sets.push(`canonical_key=$${n++}`); vals.push(String(canonical_key).trim()); }
+      vals.push(req.params.id);
+      let updated;
+      try {
+        updated = (await pool.query(
+          `update properties set ${sets.join(", ")}, updated_at=now() where id=$${n} returning id, name, address, canonical_key`,
+          vals
+        )).rows[0];
+      } catch (e) {
+        if (e.code === "23505") return res.status(409).json({ error: "that canonical_key is already used by another property" });
+        throw e;
+      }
+
+      // register the address as a RESOLVED alias so future uploads resolve here
+      let alias = null;
+      if (address) {
+        alias = (await pool.query(
+          `insert into property_aliases (property_id, source_system, alias_type, alias_value, confidence, note)
+           values ($1, 'rent_roll', 'address_string', $2, 'resolved', 'set via owner identity fix')
+           on conflict (source_system, alias_value) do update
+             set property_id=excluded.property_id, confidence='resolved', updated_at=now()
+           returning id`, [req.params.id, String(address).trim()]
+        )).rows[0];
+      }
+      res.json({ status: "identity_set", property: updated,
+        alias_registered: alias ? alias.id : null,
+        note: "Property identity set. It will now read Recognized, and future uploads of this address resolve to it." });
+    } catch (e) {
+      console.error("set-identity error", e);
       res.status(500).json({ error: e.message });
     }
   });
