@@ -466,17 +466,45 @@ module.exports = function onboarding(deps) {
       const totalConfirmed = claims.reduce((s, c) => s + (c.confirmed_amount == null ? 0 : Number(c.confirmed_amount)), 0);
       const byStatus = claims.reduce((m, c) => { m[c.status] = (m[c.status] || 0) + 1; return m; }, {});
 
+      // ── THE BOARD RULE (reusable across every rung) ──────────────────
+      // The gate is GROSS unproven exposure, never net. Net hides problems:
+      // offsetting errors cancel to ~0 while the property is still a mess —
+      // the exact anti-Mark failure. Two honest buckets, different actions:
+      //   known_error_exposure = tied-but-mismatched (discrepancy): sum |variance|.
+      //     "we checked and found an error."
+      //   untied_exposure      = not yet reconciled (claimed|reconciling):
+      //     full claimed amount. "we have NOT proven this." (the Mark risk —
+      //     things sitting mid-funnel pretending to be done are NOT neutral.)
+      // deferred = owner-approved exit, left the funnel, NOT exposure.
+      let known_error_exposure = 0, untied_exposure = 0, confirmed_clean = 0;
+      for (const c of claims) {
+        const claimed = Number(c.claimed_amount);
+        const conf = c.confirmed_amount == null ? null : Number(c.confirmed_amount);
+        if (c.status === "confirmed") confirmed_clean += claimed;
+        else if (c.status === "discrepancy") known_error_exposure += Math.abs(claimed - (conf == null ? 0 : conf));
+        else if (c.status === "deferred") { /* exited, not exposure */ }
+        else untied_exposure += Math.abs(claimed); // claimed | reconciling = unproven
+      }
+      const gross_unproven_exposure = known_error_exposure + untied_exposure;
+
       res.json({
         run: runQ.rows[0],
         funnel: {
           total_claims: claims.length,
           by_status: byStatus,
+          // HEADLINE — the truth signal. Clean ONLY when actually proven.
+          gross_unproven_exposure,
+          fully_clean: gross_unproven_exposure === 0,
+          // the two buckets, because they demand different action
+          known_error_exposure,   // checked, found wrong
+          untied_exposure,        // not yet proven (the Mark risk)
+          confirmed_clean,
+          discrepancies: claims.filter(c => c.status === "discrepancy").length,
+          unreconciled_count: claims.filter(c => !["confirmed", "deferred"].includes(c.status)).length,
+          // SECONDARY CONTEXT ONLY — never the gate. Reads ~0 on offsetting errors.
           total_claimed: totalClaimed,
           total_confirmed: totalConfirmed,
-          // THE SPREAD: claimed (assumed, top) vs confirmed (proven, bottom).
-          // The whole point — what the prior owner said vs what tied to cash.
-          unproven_amount: totalClaimed - totalConfirmed,
-          discrepancies: claims.filter(c => c.status === "discrepancy").length,
+          net_spread: totalClaimed - totalConfirmed,
         },
         claims: claims.map(c => ({
           id: c.id, unit_id: c.unit_id, tenant_name: c.tenant_name,
@@ -488,7 +516,7 @@ module.exports = function onboarding(deps) {
           obligation_status: c.obligation_status,
           obligation_outstanding: c.obligation_outstanding || [],
         })),
-        note: "Funnel view. total_claimed is what the prior owner SAID; total_confirmed is what tied to cash. unproven_amount is the spread — the lie, if there is one.",
+        note: "Funnel view. HEADLINE is gross_unproven_exposure (known errors + not-yet-proven), the truth signal — clean only when actually proven, never when problems cancel. net_spread is secondary context and can mislead on offsetting errors.",
       });
     } catch (e) {
       console.error("deposits board error", e);
