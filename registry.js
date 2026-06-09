@@ -319,8 +319,41 @@ module.exports = function registry(deps) {
     }
   });
 
+  // ── READ-ONLY twin of resolveOrRegister. Same SELECT, same norm, but it
+  //    NEVER writes. The fast identity front-door pass uses this so a glance
+  //    at a file does not mutate the registry. Registration happens only when
+  //    the user confirms (router.confirmRegister below). Returns:
+  //      { status:'resolved',  property_id, canonical_key, property_name }
+  //      { status:'ambiguous', candidates:[...] }
+  //      { status:'unknown',   would_register: <bool from looksLikePropertyString> }
+  //      { status:'skipped',   reason }
+  async function resolveOnly(client, { value }) {
+    if (!value || !String(value).trim()) return { status: "skipped", reason: "empty_value" };
+    const v = norm(value);
+    const r = await client.query(
+      `select pa.property_id, p.canonical_key, p.name as property_name
+         from property_aliases pa
+         left join properties p on p.id = pa.property_id
+        where lower(btrim(pa.alias_value)) = $1`,
+      [v]
+    );
+    const props = [...new Set(r.rows.filter(x => x.property_id).map(x => x.property_id))];
+    if (props.length === 1) {
+      const hit = r.rows.find(x => x.property_id);
+      return { status: "resolved", property_id: hit.property_id, canonical_key: hit.canonical_key, property_name: hit.property_name, input: value };
+    }
+    if (props.length > 1) {
+      return { status: "ambiguous", input: value,
+        candidates: r.rows.filter(x => x.property_id).map(x => ({ property_id: x.property_id, canonical_key: x.canonical_key, property_name: x.property_name })) };
+    }
+    // unknown — report whether a confirm WOULD be allowed to register it,
+    // but do not write anything now.
+    return { status: "unknown", input: value, would_register: looksLikePropertyString(value) };
+  }
+
   // expose the shared resolver so ingest (and future bridges) use the ONE
   // identity path rather than reimplementing matching.
   router.resolveOrRegister = resolveOrRegister;
+  router.resolveOnly = resolveOnly;
   return router;
 };
