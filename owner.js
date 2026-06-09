@@ -360,7 +360,12 @@ module.exports = function owner(deps) {
         throw e;
       }
 
-      // register the address as a RESOLVED alias so future uploads resolve here
+      // register the address as a RESOLVED alias so future uploads resolve here.
+      // SAFETY FLAG (#6): this upsert BLINDLY reassigns the alias to this property
+      // (do update set property_id = excluded.property_id). That's fine for an
+      // INTERNAL repair endpoint. If this ever becomes FRONT-END accessible, it
+      // needs the same alias-hijack guard create-from-upload has — refuse to steal
+      // a string already resolved to a DIFFERENT property; return a conflict instead.
       let alias = null;
       if (address) {
         alias = (await pool.query(
@@ -377,6 +382,435 @@ module.exports = function owner(deps) {
     } catch (e) {
       console.error("set-identity error", e);
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════════
+  //  OWNER DASHBOARD  —  GET /owner/dashboard
+  //
+  //  The asset-truth board. NOT a glossy summary — it tells the truth about
+  //  what the system can and cannot prove. The rule:
+  //    KNOWN            → show the number
+  //    UNKNOWN          → render null (front end shows "—")
+  //    IMPORTANT UNKNOWN→ emit an OWNER OBLIGATION (what must happen to earn it)
+  //
+  //  This composes the SAME source facts /owner/properties and /owner/attention
+  //  already read — it does not invent a second source of truth. It answers the
+  //  owner's four questions: am I okay? what changed? where am I exposed? what
+  //  decision do you need from me?
+  //
+  //  HONEST MODE (today's live schema):
+  //   - occupancy: promoted units carry NO status column yet → not provable.
+  //     Candidates carry status but a candidate is unconfirmed → not "occupancy."
+  //     So occupancy is null + an obligation wherever it matters. (When promoted
+  //     units gain a status column — see SCHEMA-GAP follow-up — wire it here.)
+  //   - NOI: the money/report layer is not live → null + obligation.
+  //   - value: needs confirmed NOI + cap rate → null + obligation.
+  //  No fake numbers. A "—" the system can defend beats a number it can't.
+  // ════════════════════════════════════════════════════════════════════
+  router.get("/owner/dashboard", async (_req, res) => {
+    try {
+      // ---- source facts (same reads the cards/queue use) ----
+      const props = (await pool.query(
+        "select id, name, address, canonical_key from properties order by name nulls last, created_at"
+      )).rows;
+
+      const unitCounts = (await pool.query(
+        "select property_id, count(*)::int as n from units group by property_id"
+      )).rows.reduce((m, r) => (m[r.property_id] = r.n, m), {});
+
+      const pendCounts = (await pool.query(
+        `select property_id, count(distinct unit_number)::int as n from ingest_candidates
+          where decision_status = any($1) group by property_id`, [PENDING_STATES]
+      )).rows.reduce((m, r) => (m[r.property_id] = r.n, m), {});
+
+      const runCounts = (await pool.query(
+        "select property_id, count(*)::int as n from ingest_runs group by property_id"
+      )).rows.reduce((m, r) => (m[r.property_id] = r.n, m), {});
+
+      const resolvedAlias = (await pool.query(
+        "select distinct property_id from property_aliases where confidence = 'resolved' and property_id is not null"
+      )).rows.reduce((s, r) => (s.add(r.property_id), s), new Set());
+
+      const unresolved = (await pool.query(
+        `select id, alias_value from property_aliases
+          where confidence = 'unresolved' and property_id is null
+          order by updated_at desc limit 50`
+      )).rows;
+
+      // ---- per-asset truth: actionable obligations vs proof-missing facts ----
+      // Two DIFFERENT things, never conflated:
+      //   NEEDS YOU      = a real decision the owner can make RIGHT NOW (a flow
+      //                    exists: confirm identity, confirm units). Goes in the queue.
+      //   PROOF MISSING  = the system can't prove a metric yet and there is NO
+      //                    owner action to fix it (no money layer, no cap-rate flow,
+      //                    no promoted status). Stated as consequence, NEVER a task.
+      const assets = [];
+      const attention = [];      // NEEDS YOU — real owner decisions only
+      const proof_missing = [];  // PROOF MISSING — honest unavailability, no button
+
+      let provableUnits = 0;
+      let anyOccupancyProvable = false;
+
+      for (const p of props) {
+        const units_found = unitCounts[p.id] || 0;
+        const units_pending = pendCounts[p.id] || 0;
+        const files_uploaded = runCounts[p.id] || 0;
+        const recognized = resolvedAlias.has(p.id) || !!p.canonical_key;
+
+        // ── OCCUPANCY (honest) ──
+        // Provable only from a confirmed status on promoted units — which doesn't
+        // exist yet. Pending units ARE an owner decision (confirm them) → that's
+        // the actionable path; the occupancy number itself stays proof-missing.
+        let occupancy = null;
+        // (FUTURE: when units.occupancy_status exists, compute here + set
+        //  anyOccupancyProvable = true; provableUnits += ...)
+
+        // ── ACTIONABLE owner obligations (a real flow exists NOW) ──
+        const obligations = [];
+
+        // identity — actionable (confirm-link / create-from-upload exist)
+        if (!recognized && files_uploaded > 0) {
+          obligations.push({
+            kind: "confirm_identity",
+            issue: "Confirm which property this is.",
+            why: `${p.name || "This property"} isn't recognized yet, so nothing about it can be trusted.`,
+            owner: "Owner",
+          });
+        }
+        // pending units — actionable (promote/confirm flow exists)
+        if (units_pending > 0) {
+          obligations.push({
+            kind: "confirm_units",
+            issue: `Confirm ${units_pending} unit${units_pending === 1 ? "" : "s"} before occupancy is trusted.`,
+            why: `${p.name || "This property"}'s occupancy can't be trusted until these are confirmed.`,
+            owner: "Owner",
+          });
+        }
+        // nothing on file — actionable (upload flow exists)
+        if (files_uploaded === 0) {
+          obligations.push({
+            kind: "upload_rent_roll",
+            issue: "Add a rent roll to get started.",
+            why: `${p.name || "This property"} has no data yet.`,
+            owner: "Owner",
+          });
+        }
+
+        // ── PROOF-MISSING facts (no owner action exists — do NOT make a task) ──
+        const missing = [];
+        // occupancy unavailable (units not promoted with status). Only worth saying
+        // when there's no louder pending-units obligation already covering it.
+        if (!anyOccupancyProvable && units_pending === 0 && files_uploaded > 0) {
+          missing.push({ metric: "occupancy", note: "Occupancy cannot be shown yet — unit status isn't confirmed." });
+        }
+        // NOI — money layer not connected. Always missing today.
+        missing.push({ metric: "noi", note: "NOI cannot be shown yet — no operating statement connected." });
+        // value — depends on NOI + a cap-rate assumption flow that doesn't exist.
+        missing.push({ metric: "value", note: "Value cannot be calculated yet — needs NOI and a cap-rate assumption." });
+
+        const noi = null;
+        const value = null;
+
+        // the asset's surface issue = its top ACTIONABLE obligation. If none, say
+        // "No owner action" — NOT "nothing needs you" (proof gaps may still exist,
+        // shown in proof_missing; we don't claim completeness). Unrecognized with
+        // no decision yet stays "—".
+        const top = obligations[0] || null;
+        const noActionIssue = recognized ? "No owner action." : "—";
+
+        assets.push({
+          property_id: p.id,
+          name: p.name || "Untitled property",
+          address: p.address || null,
+          occupancy, noi, value,                 // null → UI renders —
+          issue: top ? top.issue : noActionIssue,
+          action: top
+            ? { label: ownerActionLabel(top.kind), kind: top.kind }
+            : { label: "Open", kind: "open_property" },
+          _details: {
+            canonical_key: p.canonical_key || null,
+            recognized, units_found, units_pending, files_uploaded,
+            obligations,        // actionable only
+            proof_missing: missing,
+          },
+        });
+
+        // queue gets ONLY the asset's top real decision
+        if (top) {
+          attention.push({
+            id: "att_asset_" + p.id,
+            property_id: p.id,
+            property_name: p.name || "Untitled property",
+            headline: ownerHeadline(top.kind),
+            detail: top.why,
+            priority: top.kind === "confirm_identity" ? "high" : "normal",
+            action: { label: ownerActionLabel(top.kind), kind: top.kind },
+            _details: { source: "asset_obligation", obligation: top },
+          });
+        }
+
+        // proof-missing rolls up per asset (consequence, not task)
+        for (const mfact of missing) {
+          proof_missing.push({
+            property_id: p.id,
+            property_name: p.name || "Untitled property",
+            metric: mfact.metric,
+            note: mfact.note,
+          });
+        }
+      }
+
+      // unresolved-alias items (a file that looks like a property we don't know).
+      // These are owner identity decisions — same as /owner/attention #1.
+      for (const a of unresolved) {
+        attention.push({
+          id: "att_alias_" + a.id,
+          property_id: null,
+          property_name: null,
+          headline: "Confirm a property",
+          detail: `A file looks like "${a.alias_value}", but it isn't linked to a property yet.`,
+          priority: "high",
+          action: { label: "Confirm", kind: "confirm_identity" },
+          _details: { source: "unresolved_alias", alias_id: a.id, alias_value: a.alias_value },
+        });
+      }
+
+      // v1: high priority first, then the rest, stable within group.
+      // FUTURE (#4 ranking): current_truth / queue order should rank by BUSINESS
+      //   CONSEQUENCE (identity unconfirmed > roll unconfirmed > major proof gap >
+      //   approval due), not array order. This sort is the v1 stand-in.
+      // FUTURE (#5 dedupe): an unresolved alias and an unrecognized property can be
+      //   the SAME real decision ("confirm this property"). v1 may show both; the
+      //   owner experience wants ONE identity decision per property. Dedupe by
+      //   business consequence, not one item per alias row. Acceptable for v1.
+      attention.sort((a, b) => (a.priority === "high" ? 0 : 1) - (b.priority === "high" ? 0 : 1));
+
+      // ---- PORTFOLIO METRICS (honest) ----
+      // Null until the proof layer earns it. The note says WHY — truth, not apology.
+      const needs_you = attention.length;
+      const metrics = {
+        occupancy: {
+          value: anyOccupancyProvable ? `${Math.round(provableUnits)}%` : null,
+          note: anyOccupancyProvable ? "From confirmed units" : "Not shown yet — unit status isn't confirmed",
+        },
+        noi: { value: null, note: "Not shown yet — no operating statement connected" },
+        value: { value: null, note: "Not shown yet — needs NOI and a cap-rate assumption" },
+        needs_you: { value: needs_you, note: "Real owner decisions" },
+      };
+
+      // ---- CURRENT TRUTH (one sentence) ----
+      const current_truth = needs_you > 0
+        ? {
+            headline: `Needs ${needs_you} decision${needs_you === 1 ? "" : "s"}`,
+            detail: attention[0] ? attention[0].detail : "",
+            primary_action: {
+              label: "Resolve first issue",
+              kind: "review_attention",
+              target_id: attention[0] ? attention[0].id : null,
+            },
+          }
+        : {
+            headline: "Nothing needs you right now",
+            detail: "No open owner decisions across the portfolio.",
+            primary_action: null,
+          };
+
+      // Section order: Current truth → Metrics → Assets → Needs You → Proof Missing.
+      res.json({ current_truth, metrics, assets, attention, proof_missing });
+    } catch (e) {
+      console.error("owner/dashboard error", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // owner-facing labels (no backend vocab leaks)
+  function ownerActionLabel(kind) {
+    return {
+      confirm_identity: "Confirm",
+      confirm_units: "Confirm units",
+      upload_rent_roll: "Upload",
+      open_property: "Open",
+    }[kind] || "Review";
+  }
+  function ownerHeadline(kind) {
+    return {
+      confirm_identity: "Confirm property match",
+      confirm_units: "Confirm units",
+      upload_rent_roll: "Add a rent roll",
+    }[kind] || "Review";
+  }
+
+
+  //
+  //  The "New property" path of the add-asset flow, in ONE call. The owner
+  //  uploaded a file, identify returned new_property, the owner said "yes,
+  //  create it." This does — atomically — what /properties + /identity +
+  //  confirm-link did separately, so the new property is recognized on its
+  //  NEXT upload instead of fragmenting into a second unknown.
+  //
+  //  Body: { name, address?, found_as?, resolve_value?, canonical_key?, source? }
+  //    - name        required (the only hard requirement, matches POST /properties)
+  //    - resolve_value || found_as  → the RESOLVED alias the matcher keys on.
+  //      Registered so the next upload of this string resolves here. (Decision:
+  //      resolve_value first — it's the exact string identify resolved on; found_as
+  //      is the owner-facing label and can differ on labeled rolls.)
+  //    - canonical_key  explicit wins; else DERIVED from address when confident
+  //      (address-anchored, e.g. "4233 Chestnut Street" -> "4233-CHESTNUT"). Never
+  //      invented from a name — a bad key pollutes the uniqueness anchor permanently.
+  //
+  //  One transaction. 23505 on canonical_key -> 409 ("may already exist") so the
+  //  front end can offer the owner the link-existing path instead.
+  // ════════════════════════════════════════════════════════════════════
+
+  // Derive an address-anchored canonical key, ONLY when the address is
+  // unmistakably "<number> <street...>". Conservative on purpose: returns null
+  // rather than guess. Mirrors the real keys already in the system (4233-CHESTNUT).
+  function deriveCanonicalKey(address) {
+    if (!address) return null;
+    const a = String(address).trim();
+    // RULE 4: a unit-bearing string is NOT a property-level address. If it names
+    // a unit/apt/suite/ste or carries a "#", refuse to derive — a key built from
+    // one unit pollutes the property's identity anchor. Owner can set it explicitly.
+    if (/\b(unit|apt|apartment|suite|ste|fl|floor|rm|room)\b|#/i.test(a)) return null;
+    // must start with a street number and have at least one street word after it
+    const m = a.match(/^(\d{1,6})\s+(.+)$/);
+    if (!m) return null;
+    const number = m[1];
+    // street remainder: drop unit/suite tails and trailing city/state/zip noise by
+    // taking the words up to the first comma, then the street NAME word(s) only.
+    let street = m[2].split(",")[0].trim();
+    // strip common directionals at the very start (N, S, E, W, NE, ...) — keep the
+    // street NAME, which is the discriminating token (CHESTNUT, WALNUT, 15TH).
+    const tokens = street.split(/\s+/).filter(Boolean);
+    // drop a leading directional token if present
+    if (tokens.length > 1 && /^[NSEW]{1,2}\.?$/i.test(tokens[0])) tokens.shift();
+    // drop a trailing street-type token (Street/St/Ave/Avenue/Blvd/Rd/...) — the
+    // NAME is what anchors identity; the type is noise that varies by source.
+    const STYPE = /^(st|street|ave|avenue|blvd|boulevard|rd|road|dr|drive|ln|lane|ct|court|pl|place|ter|terrace|way|pkwy|parkway)\.?$/i;
+    while (tokens.length > 1 && STYPE.test(tokens[tokens.length - 1])) tokens.pop();
+    const nameCore = tokens.join("-");
+    if (!nameCore) return null;
+    // shape: NUMBER-STREETNAME, uppercased, only [A-Z0-9-]
+    const key = `${number}-${nameCore}`.toUpperCase().replace(/[^A-Z0-9-]/g, "");
+    return key.length >= 3 ? key : null;
+  }
+
+  router.post("/owner/properties/create-from-upload", async (req, res) => {
+    const { name, address, found_as, resolve_value, canonical_key, source } = req.body || {};
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: "name is required" });
+    }
+    // the string the registry matcher will key on next time — resolve_value first.
+    const aliasValue = (resolve_value && String(resolve_value).trim())
+      || (found_as && String(found_as).trim())
+      || null;
+    // explicit key wins; otherwise derive from address (conservative, may be null).
+    const key = (canonical_key && String(canonical_key).trim())
+      || deriveCanonicalKey(address);
+
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+
+      // 1. create the property (canonical_key set inline if we have one)
+      let prop;
+      try {
+        prop = (await client.query(
+          `insert into properties (name, address, canonical_key)
+           values ($1, $2, $3) returning id, name, address, canonical_key`,
+          [String(name).trim(), address ? String(address).trim() : null, key || null]
+        )).rows[0];
+      } catch (e) {
+        await client.query("rollback");
+        if (e.code === "23505") {
+          // canonical_key collision — the property may already exist. Do NOT create
+          // a duplicate; hand the front end the link-existing path.
+          return res.status(409).json({
+            status: "exists_maybe",
+            error: "A property with this identity may already exist.",
+            canonical_key: key,
+            note: "Offer the owner the link-to-existing path instead of creating a duplicate.",
+          });
+        }
+        throw e;
+      }
+
+      // 2. register the RESOLVED alias so the next upload of this string resolves
+      //    here. RULE 2: never HIJACK a string already resolved to a DIFFERENT
+      //    property — that would re-point another building's identity at this one.
+      //    Check first, inside the txn; on conflict, refuse the whole create and
+      //    surface it (the front end offers link-existing, not a silent steal).
+      let alias = null;
+      if (aliasValue) {
+        // NORMALIZATION NOTE (follow-up): this SQL `lower(btrim())` is the exact
+        // equivalent of the registry's norm() = String(s).trim().toLowerCase(),
+        // so create-from-upload and identify agree on "same string" TODAY. They
+        // are two copies, though — if norm() ever changes (e.g. strips punctuation)
+        // they drift. Proper fix: export norm() from registry and reuse it here.
+        // Not done now (owner module doesn't receive registryInstance); flagged.
+        const existing = (await client.query(
+          `select id, property_id from property_aliases
+            where lower(btrim(alias_value)) = lower(btrim($1))
+              and confidence = 'resolved'
+              and property_id is not null
+            limit 1`,
+          [aliasValue]
+        )).rows[0];
+        if (existing && existing.property_id !== prop.id) {
+          await client.query("rollback");
+          return res.status(409).json({
+            status: "alias_conflict",
+            error: "That file identity is already linked to a different property.",
+            existing_property_id: existing.property_id,
+            alias_value: aliasValue,
+            note: "Do not create a duplicate. Offer the owner the existing property, or a corrected identity.",
+          });
+        }
+        // safe: either unused, or already pointing here. Upsert to resolved.
+        alias = (await client.query(
+          `insert into property_aliases (property_id, source_system, alias_type, alias_value, confidence, note)
+           values ($1, $2, 'address_string', $3, 'resolved', 'created via owner create-from-upload')
+           on conflict (source_system, alias_value) do update
+             set property_id = excluded.property_id, confidence = 'resolved', updated_at = now()
+           returning id`,
+          [prop.id, source || "rent_roll", aliasValue]
+        )).rows[0];
+      }
+
+      await client.query("commit");
+
+      // 3. return the SAME owner-facing card shape /owner/properties uses, so the
+      //    front end can drop it straight into the grid. A brand-new property has
+      //    no units/runs yet; recognized = it has a resolved alias or canonical_key.
+      const recognized = !!alias || !!prop.canonical_key;
+      res.status(201).json({
+        status: "created",
+        property: {
+          property_id: prop.id,
+          name: prop.name || "Untitled property",
+          address: prop.address || null,
+          identity: recognized ? "Recognized" : "New",
+          files_uploaded: 0,
+          units_found: 0,
+          units_pending: 0,
+          open_questions: 0,
+          next_action: "Upload a rent roll to populate this property.",
+          _details: {
+            canonical_key: prop.canonical_key || null,
+            recognized_by_alias: !!alias,
+            alias_id: alias ? alias.id : null,
+            alias_value: aliasValue,
+            canonical_key_source: canonical_key ? "explicit" : (key ? "derived" : "none"),
+          },
+        },
+      });
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      console.error("create-from-upload error", e);
+      res.status(500).json({ error: e.message });
+    } finally {
+      client.release();
     }
   });
 
