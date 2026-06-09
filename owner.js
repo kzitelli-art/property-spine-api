@@ -197,12 +197,16 @@ module.exports = function owner(deps) {
     }
   });
 
-  // DELETE — only with explicit confirm. Cascade removes child rows.
+  // DELETE — only with explicit confirm. Deletes non-cascading child rows
+  // first (assignments, money_events, onboarding chain), then the property
+  // (which cascades units/candidates/leases/events). All in ONE transaction.
   router.post("/owner/cleanup", async (req, res) => {
+    const client = await pool.connect();
     try {
       const confirm = req.body && req.body.confirm;
-      const rows = await findDeletable(pool);
+      const rows = await findDeletable(client);
       if (confirm !== "DELETE") {
+        client.release();
         return res.status(400).json({
           error: "confirmation required",
           would_delete_count: rows.length,
@@ -211,17 +215,35 @@ module.exports = function owner(deps) {
         });
       }
       const ids = rows.map(r => r.id);
-      if (ids.length === 0) return res.json({ deleted_count: 0, note: "Nothing matched — already clean." });
-      const del = await pool.query(
-        "delete from properties where id = any($1::uuid[]) returning id, name", [ids]
-      );
+      if (ids.length === 0) { client.release(); return res.json({ deleted_count: 0, note: "Nothing matched — already clean." }); }
+
+      await client.query("begin");
+      // 1. onboarding claim children (reference onboarding_runs, no cascade)
+      await client.query(
+        `delete from deposit_claims where onboarding_run_id in
+           (select id from onboarding_runs where property_id = any($1::uuid[]))`, [ids]);
+      await client.query(
+        `delete from ledger_claims where onboarding_run_id in
+           (select id from onboarding_runs where property_id = any($1::uuid[]))`, [ids]);
+      // 2. direct property references that do NOT cascade
+      await client.query("delete from onboarding_runs where property_id = any($1::uuid[])", [ids]);
+      await client.query("delete from money_events   where property_id = any($1::uuid[])", [ids]);
+      await client.query("delete from assignments    where property_id = any($1::uuid[])", [ids]);
+      // 3. the property itself — cascades units, candidates, leases, events, etc.
+      const del = await client.query(
+        "delete from properties where id = any($1::uuid[]) returning id, name", [ids]);
+      await client.query("commit");
+      client.release();
+
       res.json({
         deleted_count: del.rows.length,
         deleted: del.rows.map(r => ({ property_id: r.id, name: r.name })),
         protected_ids: NEVER_DELETE,
-        note: "Test properties removed (child units/candidates/runs cascaded). Real properties untouched.",
+        note: "Test properties removed (non-cascading children cleared first, rest cascaded). Real properties untouched.",
       });
     } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      client.release();
       console.error("cleanup error", e);
       res.status(500).json({ error: e.message });
     }
