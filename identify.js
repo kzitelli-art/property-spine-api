@@ -117,37 +117,82 @@ module.exports = function identify(deps) {
 
   // ── Build the user-facing answer from a resolve result + the identity. ──
   function shapeAnswer(identity, resolved) {
-    const display = identity.address || identity.label || identity.name || identity.input || "(unreadable)";
+    // Owner-facing display: prefer the disambiguated label, then address, then name.
+    const found_as = identity.label || identity.address || identity.name || identity.input || null;
+    const display = identity.address || identity.label || identity.name || identity.input || "this property";
+
     if (resolved.status === "resolved") {
       return {
-        result: "matched",
-        message: `Matched to ${resolved.property_name || resolved.canonical_key || display}.`,
-        property_id: resolved.property_id,
-        canonical_key: resolved.canonical_key,
-        resolved_on: identity.address || identity.name,
+        status: "matched",
+        headline: `Matched to ${resolved.property_name || display}.`,
+        question: "Is this correct?",
+        found_as,
+        property: {
+          property_id: resolved.property_id,
+          name: resolved.property_name || null,
+          address: null,           // address filled by the card endpoint; identity pass may not have it
+        },
+        possible_matches: [],
+        _details: {
+          registry_status: "resolved",
+          canonical_key: resolved.canonical_key || null,
+          resolve_value: identity.input || found_as,
+        },
       };
     }
+
     if (resolved.status === "ambiguous") {
       return {
-        result: "ambiguous",
-        message: `"${display}" could be more than one property. Please confirm which.`,
-        candidates: resolved.candidates,
-        resolved_on: identity.address || identity.name,
+        status: "possible_matches",
+        headline: `${display} could match more than one property.`,
+        question: "Which one is it?",
+        found_as,
+        property: null,
+        possible_matches: (resolved.candidates || []).map(c => ({
+          property_id: c.property_id, name: c.property_name || null, address: null,
+        })),
+        _details: {
+          registry_status: "ambiguous",
+          candidates: resolved.candidates || [],
+          resolve_value: identity.input || found_as,
+        },
       };
     }
-    // unknown
+
+    if (resolved.status === "unknown") {
+      return {
+        status: "new_property",
+        headline: `I found ${display}.`,
+        question: "Is this a property you already have, or a new one?",
+        found_as,
+        property: null,
+        possible_matches: [],
+        _details: {
+          registry_status: "unknown",
+          would_register: resolved.would_register === true,
+          resolve_value: identity.input || found_as,
+        },
+      };
+    }
+
+    // skipped / empty / anything else
     return {
-      result: "unknown",
-      message: `I found ${display}. Is this a property you already have, or a new one?`,
-      would_register: resolved.would_register === true,
-      resolved_on: identity.address || identity.name,
+      status: "unreadable",
+      headline: "Couldn't read a property from this file.",
+      question: "Try a different file, or tell me the property.",
+      found_as,
+      property: null,
+      possible_matches: [],
+      _details: { registry_status: resolved.status || "unknown", reason: resolved.reason || null },
     };
   }
 
   // ── core: text -> identity -> read-only resolve -> answer ──
   async function identifyFromText(text) {
     if (!text || !text.trim()) {
-      return { result: "no_text", message: "The file had no readable text to identify a property from." };
+      return { status: "unreadable", headline: "The file had no readable text.",
+question: "Try a different file.", found_as: null, property: null,
+        possible_matches: [], _details: { registry_status: "no_text" } };
     }
     let identity = scanForIdentity(text);
     let usedModel = false;
@@ -163,12 +208,15 @@ module.exports = function identify(deps) {
     // Resolve on the ADDRESS if we have one (stable identity), else the NAME/label.
     const resolveValue = identity.address || identity.label || identity.name;
     if (!resolveValue) {
-      return { result: "unreadable", message: "Could not read a property name or address from this file.",
-               identity, used_model: usedModel };
+      return { status: "unreadable", headline: "Could not read a property from this file.",
+        question: "Try a different file, or tell me the property.", found_as: null, property: null,
+        possible_matches: [], _details: { registry_status: "unreadable", identity, used_model: usedModel } };
     }
     const resolved = await registryInstance.resolveOnly(pool, { value: resolveValue });
     const answer = shapeAnswer({ ...identity, input: resolveValue }, resolved);
-    return { ...answer, identity, used_model: usedModel, resolve_value: resolveValue };
+    answer._details = { ...(answer._details || {}),
+      identity, used_model: usedModel, scan_basis: identity.basis || null, resolve_value: resolveValue };
+    return answer;
   }
 
   // ════════════════════════════════════════════════════════════════════
@@ -205,7 +253,7 @@ module.exports = function identify(deps) {
         catch { return res.status(400).json({ error: "could not read file — supported: .xlsx .xls .csv .pdf .docx .doc .txt" }); }
         const out = await identifyFromText(text);
         attachRouteCheck(out, (req.body && req.body.route_property_id) || null);
-        out.source_filename = req.file.originalname;
+        out.file_name = req.file.originalname;
         res.json(out);
       } catch (e) {
         console.error("identify-file error", e);
@@ -217,16 +265,18 @@ module.exports = function identify(deps) {
   // Optional: if a property context was already chosen, note whether the file agrees.
   function attachRouteCheck(out, routeId) {
     if (!routeId) return;
-    if (out.result === "matched") {
-      out.route_check = out.property_id === routeId
+    out._details = out._details || {};
+    if (out.status === "matched") {
+      out._details.route_check = out.property && out.property.property_id === routeId
         ? { status: "match", note: "File identity matches the route property." }
-        : { status: "CONFLICT", route_property_id: routeId, resolved_property_id: out.property_id,
-            note: "The file resolves to a DIFFERENT property than the route. Route is NOT applied as truth — a human must reconcile." };
-    } else if (out.result === "ambiguous") {
-      out.route_check = { status: "ambiguous_in_file", route_property_id: routeId,
-        note: "File identity is ambiguous; route property is not confirmed." };
+        : { status: "CONFLICT", route_property_id: routeId,
+            resolved_property_id: out.property && out.property.property_id,
+            note: "The file resolves to a DIFFERENT property than the route. Route is NOT applied as truth." };
+    } else if (out.status === "possible_matches") {
+      out._details.route_check = { status: "ambiguous_in_file", route_property_id: routeId,
+        note: "File identity is ambiguous; route property not confirmed." };
     } else {
-      out.route_check = { status: "no_resolved_identity", route_property_id: routeId,
+      out._details.route_check = { status: "no_resolved_identity", route_property_id: routeId,
         note: "Nothing in the file resolved to a known property; route is the user's assertion only." };
     }
   }
@@ -253,8 +303,12 @@ module.exports = function identify(deps) {
          returning id, property_id, confidence`,
         [property_id, source || "rent_roll", String(alias_value).trim()]
       );
-      res.json({ result: "linked", property: p.rows[0], alias: ins.rows[0],
-        message: `Linked "${alias_value}" to ${p.rows[0].name || p.rows[0].canonical_key}. Future uploads will resolve automatically.` });
+      res.json({
+        status: "linked",
+        confirmation: `Linked this file to ${p.rows[0].name || p.rows[0].canonical_key}. Future uploads recognize it automatically.`,
+        property: { property_id: p.rows[0].id, name: p.rows[0].name || null, address: null },
+        _details: { alias_id: ins.rows[0].id, confidence: ins.rows[0].confidence, canonical_key: p.rows[0].canonical_key || null },
+      });
     } catch (e) {
       console.error("confirm-link error", e);
       res.status(500).json({ error: e.message });
