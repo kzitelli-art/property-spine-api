@@ -2825,5 +2825,7 @@ app.use("/api", onboardingFunnel({ pool }));
 app.use("/", registryInstance);
 // owner-facing aggregate views (cards + attention queue). Only needs pool.
 app.use("/", ownerModule({ pool }));
+const publicReview = require("./public_review");
+   app.use("/", publicReview({ pool, anthropic, INGEST_MODEL, fileToText, ingestPrompt, upload }));
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
