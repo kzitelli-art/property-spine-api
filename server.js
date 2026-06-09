@@ -21,6 +21,7 @@ const moveinModule = require("./movein");
 const onboardingModule = require("./onboarding");   // isolated onboarding (takeover) routes
 const registryModule = require("./registry");        // property alias registry (canonical key / bridge step zero)
 const identifyModule = require("./identify");        // property-agnostic front door: fast identity-first pass (read-only) + confirm-write
+const ownerModule = require("./owner");              // owner-facing aggregate endpoints (property cards + needs-attention queue)
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
 // runaway file still can't choke the box. Oversize returns a clean 413 below.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -2821,6 +2822,8 @@ app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation
 app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", onboardingModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", registryInstance);
+// owner-facing aggregate views (cards + attention queue). Only needs pool.
+app.use("/", ownerModule({ pool }));
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
