@@ -218,6 +218,10 @@ module.exports = function owner(deps) {
       if (ids.length === 0) { client.release(); return res.json({ deleted_count: 0, note: "Nothing matched — already clean." }); }
 
       await client.query("begin");
+      // 0. break the circular ref: properties.accountable_assignment_id -> assignments(id).
+      //    Null it on the test properties so their assignments can be deleted.
+      await client.query(
+        "update properties set accountable_assignment_id = null where id = any($1::uuid[])", [ids]);
       // 1. onboarding claim children (reference onboarding_runs, no cascade)
       await client.query(
         `delete from deposit_claims where onboarding_run_id in
