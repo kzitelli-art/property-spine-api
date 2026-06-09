@@ -230,9 +230,13 @@ module.exports = function owner(deps) {
         `delete from ledger_claims where onboarding_run_id in
            (select id from onboarding_runs where property_id = any($1::uuid[]))`, [ids]);
       // 2. direct property references that do NOT cascade
-      await client.query("delete from onboarding_runs where property_id = any($1::uuid[])", [ids]);
-      await client.query("delete from money_events   where property_id = any($1::uuid[])", [ids]);
-      await client.query("delete from assignments    where property_id = any($1::uuid[])", [ids]);
+      await client.query("delete from onboarding_runs   where property_id = any($1::uuid[])", [ids]);
+      await client.query("delete from money_events      where property_id = any($1::uuid[])", [ids]);
+      await client.query("delete from assignments       where property_id = any($1::uuid[])", [ids]);
+      // property_aliases FK has no cascade (property_aliases_property_id_fkey) — a
+      // property created via create-from-upload owns a resolved alias, so this must
+      // be cleared before the property delete or it errors. (Found by the test run.)
+      await client.query("delete from property_aliases  where property_id = any($1::uuid[])", [ids]);
       // 3. the property itself — cascades units, candidates, leases, events, etc.
       const del = await client.query(
         "delete from properties where id = any($1::uuid[]) returning id, name", [ids]);
