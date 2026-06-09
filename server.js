@@ -19,6 +19,7 @@ const moneyModule = require("./money");
 const turnoversModule = require("./turnovers");
 const moveinModule = require("./movein");
 const onboardingModule = require("./onboarding");   // isolated onboarding (takeover) routes
+const onboardingFunnel = require("./onboarding_funnel"); // six-step NOI-goal onboarding funnel (revenue/roles/noi-goal; honest mode)
 const registryModule = require("./registry");        // property alias registry (canonical key / bridge step zero)
 const identifyModule = require("./identify");        // property-agnostic front door: fast identity-first pass (read-only) + confirm-write
 const ownerModule = require("./owner");              // owner-facing aggregate endpoints (property cards + needs-attention queue)
@@ -2826,6 +2827,3 @@ app.use("/", registryInstance);
 app.use("/", ownerModule({ pool }));
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
-
-
-
