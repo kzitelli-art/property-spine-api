@@ -20,6 +20,7 @@ const turnoversModule = require("./turnovers");
 const moveinModule = require("./movein");
 const onboardingModule = require("./onboarding");   // isolated onboarding (takeover) routes
 const registryModule = require("./registry");        // property alias registry (canonical key / bridge step zero)
+const identifyModule = require("./identify");        // property-agnostic front door: fast identity-first pass (read-only) + confirm-write
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
 // runaway file still can't choke the box. Oversize returns a clean 413 below.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -2574,6 +2575,15 @@ async function fileToText(file) {
   // Plain text / unknown — try utf-8
   return buf.toString("utf8");
 }
+
+// ── FRONT DOOR: fast identity-first pass (read-only) + confirm-write. ──
+// Mounted HERE (not up top) because it needs fileToText + INGEST_MODEL, which
+// are declared above this line. Reuses registryInstance.resolveOnly — the ONE
+// identity path — so the glance never reimplements matching and never writes.
+const identifyInstance = identifyModule({
+  pool, anthropic, registryInstance, INGEST_MODEL, fileToText, upload,
+});
+app.use("/", identifyInstance);
 
 // ── ingest from pasted TEXT ──
 app.post("/properties/:propertyId/ingest", async (req, res) => {
