@@ -24,6 +24,7 @@ const registryModule = require("./registry");        // property alias registry 
 const identifyModule = require("./identify");        // property-agnostic front door: fast identity-first pass (read-only) + confirm-write
 const ownerModule = require("./owner");              // owner-facing aggregate endpoints (property cards + needs-attention queue)
 const bankIntakeModule = require("./bankintake");   // bank intake: onboarding/training pass (012)
+const exposureModule = require("./exposure");
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
 // runaway file still can't choke the box. Oversize returns a clean 413 below.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -2826,6 +2827,7 @@ app.use("/", onboardingModule({ pool, spawnObligationFromEvent, satisfyObligatio
 app.use("/api", onboardingFunnel({ pool }));
 app.use("/", registryInstance);
 app.use("/", bankIntakeModule({ pool }));
+app.use("/", exposureModule({ pool }));
 // owner-facing aggregate views (cards + attention queue). Only needs pool.
 app.use("/", ownerModule({ pool }));
 const publicReview = require("./public_review");
