@@ -2828,5 +2828,9 @@ app.use("/", registryInstance);
 app.use("/", ownerModule({ pool }));
 const publicReview = require("./public_review");
    app.use("/", publicReview({ pool, anthropic, INGEST_MODEL, fileToText, ingestPrompt, upload }));
+// ── INTAKE (Door 2: text/email/web field-event capture; claims only — routing
+//    to real records happens through the existing module endpoints) ──
+const intakeModule = require("./intake");
+app.use("/", intakeModule({ pool, anthropic, INGEST_MODEL, registryInstance, upload }));
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
