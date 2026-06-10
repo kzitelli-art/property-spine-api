@@ -2834,5 +2834,8 @@ const publicReview = require("./public_review");
 //    to real records happens through the existing module endpoints) ──
 const intakeModule = require("./intake");
 app.use("/", intakeModule({ pool, anthropic, INGEST_MODEL, registryInstance, upload }));
+const dealIntakeModule = require("./dealintake");
+app.use("/", dealIntakeModule({ pool, anthropic, INGEST_MODEL, registryInstance, fileToText, runIngestAuto, upload }));
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
