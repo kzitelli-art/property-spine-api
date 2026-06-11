@@ -182,22 +182,34 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
       const accts = await accountIds(propertyId);
       if (accts.length === 0) return res.status(404).json({ error: "no bank accounts registered for this property" });
 
+      // category resolution is layered: property rule beats global default.
+      // The board's ready/queue split uses the RESOLVED category, so a
+      // property rule can pull a vendor INTO ready_to_bridge (or change
+      // the proposal) for this property only.
       const ready = (await pool.query(
-        `select v.id as vendor_id, v.canonical_name, v.default_category,
+        `select v.id as vendor_id, v.canonical_name,
+                coalesce(vpc.default_category, v.default_category) as effective_category,
+                (vpc.default_category is not null) as has_property_rule,
                 count(*)::int as txns, coalesce(sum(abs(t.amount)),0)::numeric(14,2) as gross
-           from bank_transactions t join vendors v on v.id = t.vendor_id
+           from bank_transactions t
+           join vendors v on v.id = t.vendor_id
+           left join vendor_property_categories vpc
+             on vpc.vendor_id = v.id and vpc.property_id = $2
           where t.bank_account_id = any($1) and ${ELIGIBLE}
-            and v.default_category is not null
-          group by v.id, v.canonical_name, v.default_category
-          order by gross desc`, [accts])).rows;
+            and coalesce(vpc.default_category, v.default_category) is not null
+          group by v.id, v.canonical_name, vpc.default_category, v.default_category
+          order by gross desc`, [accts, propertyId])).rows;
 
       const queue = (await pool.query(
         `select t.id as bank_transaction_id, t.txn_date, t.description,
                 t.amount, v.id as vendor_id, v.canonical_name
-           from bank_transactions t join vendors v on v.id = t.vendor_id
+           from bank_transactions t
+           join vendors v on v.id = t.vendor_id
+           left join vendor_property_categories vpc
+             on vpc.vendor_id = v.id and vpc.property_id = $2
           where t.bank_account_id = any($1) and ${ELIGIBLE}
-            and v.default_category is null
-          order by abs(t.amount) desc`, [accts])).rows;
+            and coalesce(vpc.default_category, v.default_category) is null
+          order by abs(t.amount) desc`, [accts, propertyId])).rows;
 
       const exceptions = (await pool.query(
         `select t.exception_reason, count(*)::int as txns,
@@ -227,7 +239,9 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
         property_id: propertyId,
         ready_to_bridge: ready.map(r => ({
           vendor_id: r.vendor_id, vendor: r.canonical_name,
-          proposed_category: r.default_category, txns: r.txns, gross: Number(r.gross),
+          proposed_category: r.effective_category,
+          rule_source: r.has_property_rule ? "property" : "global",
+          txns: r.txns, gross: Number(r.gross),
           confirm_via: `POST /bank/properties/${propertyId}/bridge-vendor { vendor_id, confirmed_by_person_id }`,
         })),
         human_queue: queue.map(q => ({
@@ -242,7 +256,8 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
           credits_not_bridged: { txns: credits.txns, gross: Number(credits.gross),
             note: "deposits/credits are out of scope this rung — money.js is money-OUT only" },
           still_claimed: { txns: claimed.txns, gross: Number(claimed.gross),
-            note: "no vendor proof yet — previous rung's exposure, not bridgeable" },
+            note: "no vendor proof yet — previous rung's exposure, not bridgeable",
+            detail_via: `GET /bank/properties/${propertyId}/claimed-items` },
         },
         bridged_so_far: { txns: bridged.txns, gross: Number(bridged.gross) },
         note: "Proposals only. Nothing becomes a money_event without a human confirm.",
@@ -284,6 +299,95 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
   });
 
   // ──────────────────────────────────────────────────────────────────
+  // POST /bank/properties/:id/vendors/:vendorId/category   (migration 019)
+  // TEACH a vendor its category FOR ONE PROPERTY ONLY — the override
+  // that beats the global default at this asset and nowhere else.
+  // Body: { default_category }  — pass null to clear (global resumes).
+  // Teaching changes PROPOSALS only; it never creates money.
+  // ──────────────────────────────────────────────────────────────────
+  router.post("/bank/properties/:id/vendors/:vendorId/category", async (req, res) => {
+    const propertyId = req.params.id;
+    const vendorId = req.params.vendorId;
+    const { default_category } = req.body || {};
+    try {
+      const prop = await pool.query("select id from properties where id = $1", [propertyId]);
+      if (prop.rowCount === 0) return res.status(404).json({ error: "property not found" });
+      const v = await pool.query(
+        "select id, canonical_name, default_category from vendors where id = $1", [vendorId]);
+      if (v.rowCount === 0) return res.status(404).json({ error: "vendor not found" });
+      const vendor = v.rows[0];
+
+      // null clears the rule — the global default resumes, explicitly
+      if (default_category === null || default_category === undefined) {
+        const del = await pool.query(
+          `delete from vendor_property_categories
+            where vendor_id = $1 and property_id = $2 returning default_category`,
+          [vendorId, propertyId]);
+        return res.json({
+          vendor: vendor.canonical_name,
+          property_id: propertyId,
+          cleared: del.rowCount > 0 ? del.rows[0].default_category : null,
+          now_effective: vendor.default_category || null,
+          note: del.rowCount > 0
+            ? "Property rule cleared — the global default (if any) resumes for this property."
+            : "No property rule existed — nothing to clear.",
+        });
+      }
+
+      const allowed = await validCategories();
+      if (!allowed.includes(default_category)) {
+        return res.status(400).json({ error: "default_category must be a mapped report category (or null to clear)", allowed });
+      }
+      const up = await pool.query(
+        `insert into vendor_property_categories (vendor_id, property_id, default_category)
+         values ($1, $2, $3)
+         on conflict (vendor_id, property_id)
+         do update set default_category = excluded.default_category, updated_at = now()
+         returning *`, [vendorId, propertyId, default_category]);
+      return res.json({
+        rule: up.rows[0],
+        vendor: vendor.canonical_name,
+        global_default: vendor.default_category || null,
+        note: "Property rule set. Teaching only — board proposals for THIS property use this; other properties keep the global default. No money was created.",
+      });
+    } catch (e) {
+      console.error("property-vendor-category error", e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // GET /bank/properties/:id/vendor-category-rules
+  // READ-ONLY. Every property rule at this asset, beside the global
+  // default it overrides — so divergence is visible, never silent.
+  // ──────────────────────────────────────────────────────────────────
+  router.get("/bank/properties/:id/vendor-category-rules", async (req, res) => {
+    try {
+      const rows = (await pool.query(
+        `select vpc.vendor_id, v.canonical_name, vpc.default_category as property_category,
+                v.default_category as global_default, vpc.updated_at
+           from vendor_property_categories vpc
+           join vendors v on v.id = vpc.vendor_id
+          where vpc.property_id = $1
+          order by v.canonical_name`, [req.params.id])).rows;
+      return res.json({
+        property_id: req.params.id,
+        count: rows.length,
+        rules: rows.map(r => ({
+          vendor_id: r.vendor_id, vendor: r.canonical_name,
+          property_category: r.property_category,
+          global_default: r.global_default,
+          diverges: r.global_default !== null && r.global_default !== r.property_category,
+          updated_at: r.updated_at,
+        })),
+      });
+    } catch (e) {
+      console.error("vendor-category-rules error", e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────────
   // POST /bank/properties/:id/bridge-vendor
   // PER-VENDOR BATCH CONFIRM — the receipt reads like the October
   // hand-proof: "all PECO → utilities, confirmed." One transaction wraps
@@ -314,12 +418,19 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
       if (v.rowCount === 0) { await client.query("rollback"); return res.status(404).json({ error: "vendor not found" }); }
       const vendor = v.rows[0];
 
-      const cat = confirmed_category || vendor.default_category;
+      // resolution: explicit (the human) > property rule > global default
+      const pr = await client.query(
+        `select default_category from vendor_property_categories
+          where vendor_id = $1 and property_id = $2`, [vendor_id, propertyId]);
+      const propertyRule = pr.rowCount > 0 ? pr.rows[0].default_category : null;
+      const cat = confirmed_category || propertyRule || vendor.default_category;
+      const category_source = confirmed_category ? "explicit"
+                            : propertyRule ? "property_rule" : "global_default";
       if (!cat) {
         await client.query("rollback");
         return res.status(409).json({
-          error: "no category to confirm — vendor has no default_category and none was passed",
-          hint: `teach it (POST /bank/vendors/${vendor_id}/default-category) or handle lines one-by-one (bridge-one)`,
+          error: "no category to confirm — no property rule, no global default, and none was passed",
+          hint: `teach it globally (POST /bank/vendors/${vendor_id}/default-category), for this property only (POST /bank/properties/${propertyId}/vendors/${vendor_id}/category), or handle lines one-by-one (bridge-one)`,
         });
       }
       const allowed = await validCategories(client);
@@ -358,6 +469,7 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
         receipt: `all ${vendor.canonical_name} → ${cat}, confirmed`,
         vendor: vendor.canonical_name,
         confirmed_category: cat,
+        category_source,
         confirmed_by_person_id,
         bridged: ids.length,
         gross: Number(gross.toFixed(2)),
@@ -741,6 +853,108 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
       return res.json({ scanned: claimed.length, identified, outcomes });
     } catch (e) {
       console.error("reidentify error", e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // GET /bank/properties/:id/claimed-items   (NEW — open issue #5)
+  // READ-ONLY. The claimed pile, LINE BY LINE, each carrying WHY it is
+  // stuck. The categorization-board shows the claimed aggregate; this is
+  // the detail underneath it. Exists because of the "that's everything"
+  // trap: an empty review queue read as done while real dollars sat
+  // invisible in claimed.
+  //
+  // IDENTIFY IS NOT COMMIT: this route runs the SAME alias matching as
+  // reidentify (same normDesc, same includes(), same one-vendor rule)
+  // but writes NOTHING. It only reports what reidentify WOULD do.
+  //
+  // Stuck reasons (each names the action that unsticks it):
+  //   check_awaiting_register_join — payee lives on the check, not the
+  //     statement description; needs the check-register join.
+  //   alias_now_matches — registry learned this vendor AFTER staging;
+  //     POST /reidentify will pick it up.
+  //   ambiguous_aliases — multiple vendors match; human resolution, never
+  //     a guess.
+  //   no_alias_match — nobody knows this payee yet; teach a vendor alias,
+  //     then reidentify.
+  // ──────────────────────────────────────────────────────────────────
+  router.get("/bank/properties/:id/claimed-items", async (req, res) => {
+    const propertyId = req.params.id;
+    try {
+      const accts = await accountIds(propertyId);
+      if (accts.length === 0) return res.status(404).json({ error: "no bank accounts registered for this property" });
+
+      const rows = (await pool.query(
+        `select t.id as bank_transaction_id, t.txn_date, t.description,
+                t.amount, t.txn_type, t.source_document
+           from bank_transactions t
+          where t.bank_account_id = any($1) and t.status = 'claimed'
+            and t.money_event_id is null
+          order by abs(t.amount) desc`, [accts])).rows;
+
+      // alias table read ONCE — same source reidentify uses
+      const aliasRows = (await pool.query(
+        `select va.alias_value, va.vendor_id, v.canonical_name
+           from vendor_aliases va join vendors v on v.id = va.vendor_id
+          where va.source_system = 'bank_description'`)).rows;
+
+      const items = rows.map(t => {
+        const isCredit = Number(t.amount) > 0;
+        let stuck_reason, unstick_via, would_match = null;
+        if (t.txn_type === "check" || t.txn_type === "check_return") {
+          stuck_reason = "check_awaiting_register_join";
+          unstick_via = "check-register join (payee lives on the check, not the statement)";
+        } else {
+          const d = normDesc(t.description);
+          const hits = aliasRows.filter(a => d.includes(a.alias_value));
+          const vendorIds = [...new Set(hits.map(h => h.vendor_id))];
+          if (vendorIds.length === 1) {
+            stuck_reason = "alias_now_matches";
+            would_match = hits.find(h => h.vendor_id === vendorIds[0]).canonical_name;
+            unstick_via = `POST /bank/properties/${propertyId}/reidentify`;
+          } else if (vendorIds.length > 1) {
+            stuck_reason = "ambiguous_aliases";
+            would_match = [...new Set(hits.map(h => h.canonical_name))].join(" | ");
+            unstick_via = "human resolution — multiple vendors match, never a guess";
+          } else {
+            stuck_reason = "no_alias_match";
+            unstick_via = "teach a vendor alias (bank_description), then reidentify";
+          }
+        }
+        return {
+          bank_transaction_id: t.bank_transaction_id,
+          txn_date: t.txn_date,
+          description: t.description,
+          amount: Number(t.amount),
+          txn_type: t.txn_type,
+          is_credit: isCredit,
+          source_document: t.source_document || null,
+          stuck_reason,
+          would_match,
+          unstick_via,
+        };
+      });
+
+      const by_reason = {};
+      for (const it of items) {
+        if (!by_reason[it.stuck_reason]) by_reason[it.stuck_reason] = { txns: 0, gross: 0 };
+        by_reason[it.stuck_reason].txns += 1;
+        by_reason[it.stuck_reason].gross = Number((by_reason[it.stuck_reason].gross + Math.abs(it.amount)).toFixed(2));
+      }
+
+      return res.json({
+        property_id: propertyId,
+        claimed: {
+          txns: items.length,
+          gross: Number(items.reduce((s, t) => s + Math.abs(t.amount), 0).toFixed(2)),
+        },
+        by_reason,
+        items,
+        note: "READ-ONLY — identify is not commit; nothing here mutates. An empty review queue is NOT done while this pile is non-zero.",
+      });
+    } catch (e) {
+      console.error("claimed-items error", e);
       return res.status(500).json({ error: e.message });
     }
   });
