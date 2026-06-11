@@ -61,6 +61,20 @@ const NON_PROPERTY_PATTERNS = [
   "APPLE COM BILL", "DISNEY", "PARAMOUNT", "PELOTON",
 ];
 
+// ── payment-return detection (the Virtus rule, Jun 11 2026) ──────────
+// An ELECTRONIC debit whose descriptor carries the word RETURN is, until a
+// human proves otherwise, a PAYMENT CLAWBACK — revenue moving backward, not
+// an expense. Proven on real data: six "External Withdrawal VIRTUSMANAGEMENT
+// - Return ..." lines decomposed to the cent into Yardi RC tenant-return
+// entries; the alias match had identified the PROCESSOR as the counterparty.
+// Deliberately narrow: the literal word RETURN, electronic debits only.
+// Checks have their own path (check_return / bounce pair — later slice).
+function isPaymentReturn(normedDesc, txn_type, amount) {
+  return txn_type !== "check" && txn_type !== "check_return"
+      && Number(amount) < 0
+      && /\bRETURN\b/.test(normedDesc);
+}
+
 module.exports = function bankIntakeModule({ pool }) {
   const router = express.Router();
 
@@ -260,6 +274,9 @@ module.exports = function bankIntakeModule({ pool }) {
         // exception flags that apply regardless of identification
         if (NON_PROPERTY_PATTERNS.some(p => d.includes(p))) exception = "possible_non_property_spend";
         if (t.txn_type === "check_return" || d.includes("REJECTED")) exception = "rejected_check";
+        // payment_return wins precedence: a clawback is never an expense,
+        // whatever else the descriptor looks like
+        if (isPaymentReturn(d, t.txn_type, t.amount)) exception = "payment_return";
 
         const ins = await pool.query(
           `insert into bank_transactions
@@ -493,6 +510,65 @@ module.exports = function bankIntakeModule({ pool }) {
           `select alias_value, note from vendor_aliases
             where vendor_id is null and source_system='bank_description'
             order by created_at desc limit 25`)).rows,
+      });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // POST /bank/accounts/:id/flag-returns
+  // Backfill for lines staged BEFORE the payment_return class existed
+  // (the six live Virtus lines). Scans non-bridged ELECTRONIC debits;
+  // any line matching the return pattern gets exception_reason =
+  // 'payment_return'. Lines already carrying a DIFFERENT exception are
+  // reported, never silently overridden — the human resolves those.
+  // Idempotent: a second run flags nothing new.
+  // ──────────────────────────────────────────────────────────────────
+  router.post("/bank/accounts/:id/flag-returns", async (req, res) => {
+    try {
+      const acct = (await pool.query("select * from bank_accounts where id=$1", [req.params.id])).rows[0];
+      if (!acct) return res.status(404).json({ error: "bank account not found" });
+
+      const candidates = (await pool.query(
+        `select id, txn_date, description, amount, exception_reason
+           from bank_transactions
+          where bank_account_id = $1
+            and money_event_id is null
+            and txn_type not in ('check','check_return')
+            and amount < 0
+          order by txn_date`, [req.params.id])).rows;
+
+      const flagged = [], conflicting = [];
+      let alreadyFlagged = 0;
+      for (const c of candidates) {
+        if (!/\bRETURN\b/.test(norm(c.description))) continue;
+        if (c.exception_reason === "payment_return") { alreadyFlagged++; continue; }
+        if (c.exception_reason) {
+          conflicting.push({
+            bank_transaction_id: c.id, txn_date: c.txn_date,
+            description: String(c.description).slice(0, 80), amount: c.amount,
+            existing_exception: c.exception_reason,
+            note: "matches return pattern but already carries a different flag — not overridden, resolve by hand",
+          });
+          continue;
+        }
+        await pool.query(
+          `update bank_transactions set exception_reason='payment_return' where id=$1`, [c.id]);
+        flagged.push({
+          bank_transaction_id: c.id, txn_date: c.txn_date,
+          description: String(c.description).slice(0, 80), amount: c.amount,
+        });
+      }
+
+      return res.json({
+        account: acct.account_label,
+        flagged_count: flagged.length,
+        flagged_gross: Number(flagged.reduce((s, f) => s + Math.abs(Number(f.amount)), 0).toFixed(2)),
+        flagged,
+        already_flagged: alreadyFlagged,
+        conflicting_exceptions: conflicting,
+        note: "payment_return lines leave the expense queues entirely; bridging them is refused by design. Pairing with Yardi RC entries is the next slice.",
       });
     } catch (e) {
       return res.status(500).json({ error: e.message });
