@@ -27,6 +27,7 @@ const bankIntakeModule = require("./bankintake");   // bank intake: onboarding/t
 const exposureModule = require("./exposure");
 const bankBridgeModule = require('./bankbridge');
 const compareModule = require("./compare");   // report comparison layer (the hook)
+const explainModule = require("./explain");
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
 // runaway file still can't choke the box. Oversize returns a clean 413 below.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -2832,6 +2833,7 @@ app.use("/", bankIntakeModule({ pool }));
 app.use('/', bankBridgeModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", exposureModule({ pool }));
 app.use("/", compareModule({ pool }));
+app.use("/", explainModule({ pool }));
 // owner-facing aggregate views (cards + attention queue). Only needs pool.
 app.use("/", ownerModule({ pool }));
 const publicReview = require("./public_review");
