@@ -243,7 +243,21 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
            from bank_transactions t
           where t.bank_account_id = any($1) and t.status = 'identified'
             and t.money_event_id is null and t.exception_reason is not null
+            and t.exception_reason <> 'payment_return'
           group by t.exception_reason order by gross desc`, [accts])).rows;
+
+      // payment returns are FINDINGS with their own home — any status,
+      // since a return may sit claimed (no alias) or identified (processor
+      // matched). One home, never double-counted in exception_rows.
+      const returns = (await pool.query(
+        `select t.id as bank_transaction_id, t.txn_date, t.description,
+                t.amount, t.status, v.canonical_name as vendor
+           from bank_transactions t
+           left join vendors v on v.id = t.vendor_id
+          where t.bank_account_id = any($1)
+            and t.exception_reason = 'payment_return'
+            and t.money_event_id is null
+          order by t.txn_date`, [accts])).rows;
 
       const credits = (await pool.query(
         `select count(*)::int as txns, coalesce(sum(abs(amount)),0)::numeric(14,2) as gross
@@ -282,6 +296,19 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
           confirm_via: `POST /bank/transactions/${q.bank_transaction_id}/bridge-one { confirmed_by_person_id, confirmed_category }`,
         })),
         human_queue_gross: Number(queue.reduce((s, q) => s + Math.abs(Number(q.amount)), 0).toFixed(2)),
+        payment_returns: {
+          txns: returns.length,
+          gross: Number(returns.reduce((s, r) => s + Math.abs(Number(r.amount)), 0).toFixed(2)),
+          lines: returns.map(r => ({
+            bank_transaction_id: r.bank_transaction_id,
+            txn_date: r.txn_date,
+            description: r.description,
+            amount: r.amount,
+            status: r.status,
+            vendor: r.vendor || null,
+          })),
+          note: "FINDINGS, not work items. Tenant payment clawbacks — revenue moving backward. bridge-one and bridge-split refuse these by design (409, no acknowledgement override). Next slice pairs each with its Yardi RC entries.",
+        },
         excluded_visible: {
           exception_rows: exceptions.map(e => ({ ...e, gross: Number(e.gross) })),
           credits_not_bridged: { txns: credits.txns, gross: Number(credits.gross),
@@ -623,6 +650,13 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
           note: "splitting a settlement batch into its constituent payments is a later rung",
         });
       }
+      if (txn.exception_reason === "payment_return") {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "payment_return is blocked — this debit is a tenant payment clawback (revenue moving backward), not an expense; no category can make it one, and no acknowledgement overrides this",
+          note: "the Virtus rule: the descriptor names the PROCESSOR, not the counterparty. Pairing returns with their Yardi RC entries is the next slice of this rung.",
+        });
+      }
       if (txn.exception_reason && !acknowledge_exception) {
         await client.query("rollback");
         return res.status(409).json({
@@ -711,6 +745,13 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
       if (Number(txn.amount) >= 0) {
         await client.query("rollback");
         return res.status(409).json({ error: "credit/deposit — out of scope; money.js is money-OUT only", amount: txn.amount });
+      }
+      if (txn.exception_reason === "payment_return") {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "payment_return is blocked from splitting — a return decomposes into tenant RC entries (revenue side), never into expense categories",
+          note: "RC pairing is the next slice of the payment_return rung; until then this line is correctly stuck",
+        });
       }
       if (txn.exception_reason && !acknowledge_exception) {
         await client.query("rollback");
