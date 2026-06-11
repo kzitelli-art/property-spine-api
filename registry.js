@@ -173,6 +173,79 @@ module.exports = function registry(deps) {
   }
 
   // ══════════════════════════════════════════════════════════════════
+  //  SUGGEST — GET /registry/suggest?value=
+  //
+  //  The answer to "why does the name have to match exactly?" — it
+  //  doesn't, but a MISSPELLING MUST NEVER SILENTLY LAND on the wrong
+  //  property (SOLO on Chestnut taught that). So: this route is READ-
+  //  ONLY and PROPOSE-ONLY. It ranks near matches across property
+  //  names, addresses, canonical keys, and every taught alias, shows
+  //  WHY each matched, and a human taps once to link (POST
+  //  /registry/aliases) — the system never picks for you.
+  //  Scoring is deterministic and explainable: shared street number is
+  //  the strongest signal (address is identity), then word overlap.
+  // ══════════════════════════════════════════════════════════════════
+  const STOP = new Set(["the","on","at","st","street","ave","avenue","rd","road","blvd","apartments","apts","llc","lp","philadelphia","pa","north","south","east","west","n","s","e","w"]);
+  const toks = (s) => norm(s).replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(t => t && !STOP.has(t));
+  function simScore(input, candidate) {
+    const a = toks(input), b = toks(candidate);
+    if (!a.length || !b.length) return 0;
+    const aNum = a.find(t => /^\d+$/.test(t)), bNum = b.find(t => /^\d+$/.test(t));
+    let score = 0;
+    if (aNum && bNum && aNum === bNum) score += 0.5;            // street number = identity anchor
+    else if (aNum && bNum && aNum !== bNum) score -= 0.4;        // conflicting numbers = almost certainly different
+    const bSet = new Set(b);
+    let shared = 0;
+    for (const t of new Set(a)) {
+      if (bSet.has(t)) { shared++; continue; }
+      // small typo tolerance: one candidate token starts with / contains it (greenry≈greenery)
+      if (t.length >= 4 && b.some(x => x.startsWith(t.slice(0, 4)) || t.startsWith(x.slice(0, 4)))) shared += 0.6;
+    }
+    score += 0.5 * (shared / Math.max(new Set(a).size, 1));
+    return Math.max(0, Math.min(1, score));
+  }
+
+  router.get("/registry/suggest", async (req, res) => {
+    const { value } = req.query;
+    if (!value || !String(value).trim()) return res.status(400).json({ error: "value is required" });
+    try {
+      const props = (await pool.query(
+        "select id, name, address, canonical_key from properties")).rows;
+      const aliases = (await pool.query(
+        "select property_id, alias_value from property_aliases where property_id is not null")).rows;
+      const byProp = {};
+      for (const p of props) {
+        const fields = [["name", p.name], ["address", p.address], ["canonical_key", p.canonical_key]];
+        for (const [label, text] of fields) {
+          if (!text) continue;
+          const s = simScore(value, text);
+          if (!byProp[p.id] || s > byProp[p.id].score)
+            byProp[p.id] = { property_id: p.id, property_name: p.name, address: p.address, canonical_key: p.canonical_key, score: s, matched_on: `${label}: "${text}"` };
+        }
+      }
+      for (const a of aliases) {
+        const s = simScore(value, a.alias_value);
+        const p = props.find(x => x.id === a.property_id);
+        if (p && (!byProp[p.id] || s > byProp[p.id].score))
+          byProp[p.id] = { property_id: p.id, property_name: p.name, address: p.address, canonical_key: p.canonical_key, score: s, matched_on: `alias: "${a.alias_value}"` };
+      }
+      const ranked = Object.values(byProp)
+        .filter(x => x.score >= 0.3)
+        .sort((x, y) => y.score - x.score)
+        .slice(0, 5)
+        .map(x => ({ ...x, score: Number(x.score.toFixed(2)) }));
+      res.json({
+        input: value,
+        suggestions: ranked,
+        note: "READ-ONLY, PROPOSE-ONLY. Nothing is linked until a human confirms (POST /registry/aliases with property_id). A misspelling gets suggestions, never a silent match.",
+      });
+    } catch (e) {
+      console.error("suggest error", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
   //  SET CANONICAL KEY  —  POST /registry/properties/:id/canonical-key
   //  Body: { canonical_key }   e.g. "4233-CHESTNUT" (address-anchored, not name)
   // ══════════════════════════════════════════════════════════════════
