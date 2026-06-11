@@ -201,6 +201,30 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
           group by v.id, v.canonical_name, vpc.default_category, v.default_category
           order by gross desc`, [accts, propertyId])).rows;
 
+      // line items for ready vendors — the UI needs rows, not just counts.
+      // Same eligibility as the aggregate above, attached per vendor below.
+      const readyLines = ready.length === 0 ? [] : (await pool.query(
+        `select t.id as bank_transaction_id, t.vendor_id, t.txn_date,
+                t.description, t.amount, t.exception_reason
+           from bank_transactions t
+           join vendors v on v.id = t.vendor_id
+           left join vendor_property_categories vpc
+             on vpc.vendor_id = v.id and vpc.property_id = $2
+          where t.bank_account_id = any($1) and ${ELIGIBLE}
+            and v.multi_nature = false
+            and coalesce(vpc.default_category, v.default_category) is not null
+          order by t.txn_date`, [accts, propertyId])).rows;
+      const linesByVendor = {};
+      for (const l of readyLines) {
+        (linesByVendor[l.vendor_id] = linesByVendor[l.vendor_id] || []).push({
+          bank_transaction_id: l.bank_transaction_id,
+          txn_date: l.txn_date,
+          description: l.description,
+          amount: l.amount,
+          exception_reason: l.exception_reason || null,
+        });
+      }
+
       const queue = (await pool.query(
         `select t.id as bank_transaction_id, t.txn_date, t.description,
                 t.amount, v.id as vendor_id, v.canonical_name, v.multi_nature
@@ -244,6 +268,7 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
           proposed_category: r.effective_category,
           rule_source: r.has_property_rule ? "property" : "global",
           txns: r.txns, gross: Number(r.gross),
+          transactions: linesByVendor[r.vendor_id] || [],
           confirm_via: `POST /bank/properties/${propertyId}/bridge-vendor { vendor_id, confirmed_by_person_id }`,
         })),
         human_queue: queue.map(q => ({
