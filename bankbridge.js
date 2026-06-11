@@ -698,5 +698,52 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
     }
   });
 
+  // ──────────────────────────────────────────────────────────────────
+  // POST /bank/properties/:id/reidentify
+  // Re-runs stage-time alias matching on CLAIMED, non-check, unbridged
+  // lines. Exists because vendor seeding teaches the registry but never
+  // rewrites history — this is the explicit, logged retro pass. Same
+  // norm(), same includes() logic, same one-vendor-only rule as intake.
+  // ──────────────────────────────────────────────────────────────────
+  const normDesc = (s) => String(s || "").toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+  router.post("/bank/properties/:id/reidentify", async (req, res) => {
+    try {
+      const accts = await accountIds(req.params.id);
+      if (accts.length === 0) return res.status(404).json({ error: "no bank accounts registered for this property" });
+      const aliasRows = (await pool.query(
+        `select va.alias_value, va.vendor_id, v.vendor_type
+           from vendor_aliases va join vendors v on v.id = va.vendor_id
+          where va.source_system = 'bank_description'`)).rows;
+      const claimed = (await pool.query(
+        `select id, description, amount from bank_transactions
+          where bank_account_id = any($1) and status = 'claimed'
+            and money_event_id is null and txn_type not in ('check','check_return')`,
+        [accts])).rows;
+      let identified = 0; const outcomes = [];
+      for (const t of claimed) {
+        const d = normDesc(t.description);
+        const hits = aliasRows.filter(a => d.includes(a.alias_value));
+        const vendorIds = [...new Set(hits.map(h => h.vendor_id))];
+        if (vendorIds.length === 1) {
+          const vt = hits.find(h => h.vendor_id === vendorIds[0]).vendor_type;
+          const except = vt === "owner_affiliate" ? "affiliate_transfer"
+                       : (vt === "management" && Number(t.amount) < 0 && d.includes("SETTLEMENT")) ? "composite_batch" : null;
+          await pool.query(
+            `update bank_transactions
+                set status='identified', vendor_id=$2, identification_source='bank_description',
+                    exception_reason = coalesce($3, exception_reason)
+              where id=$1`, [t.id, vendorIds[0], except]);
+          identified++; outcomes.push({ id: t.id, description: t.description, outcome: "identified" });
+        } else if (vendorIds.length > 1) {
+          outcomes.push({ id: t.id, description: t.description, outcome: "ambiguous", vendors: vendorIds.length });
+        }
+      }
+      return res.json({ scanned: claimed.length, identified, outcomes });
+    } catch (e) {
+      console.error("reidentify error", e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
   return router;
 };
