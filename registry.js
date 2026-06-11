@@ -66,6 +66,32 @@ module.exports = function registry(deps) {
   // trim + lowercase. Resolution is case/whitespace-insensitive.
   const norm = (s) => (s == null ? "" : String(s).trim().toLowerCase());
 
+  // ── PROPERTY FALLBACK (the Jun 10 registry-gap fix) ────────────────
+  // A clean address string ("4233 Chestnut") resolved UNKNOWN even though
+  // the property was live, because matching only ever looked at TAUGHT
+  // aliases. Fallback: if no alias matches, compare the normalized input
+  // against the properties table itself — canonical_key (separators
+  // normalized) and address ONLY. NEVER name: name is not identity
+  // (SOLO→Uno proved it). Exact normalized equality only — no fuzzy
+  // matching, because a silent wrong match is the exact failure this
+  // registry exists to kill. Multiple hits → ambiguous, never a guess.
+  const keyNorm = (s) => norm(s).replace(/[-_]+/g, " ").replace(/\s+/g, " ");
+  async function propertyFallback(client, value) {
+    const v = keyNorm(value);
+    if (!v) return null;
+    const r = await client.query(
+      `select id as property_id, canonical_key, name as property_name
+         from properties
+        where regexp_replace(lower(btrim(coalesce(canonical_key,''))), '[-_]+', ' ', 'g') = $1
+           or regexp_replace(lower(btrim(coalesce(address,''))), '[-_]+', ' ', 'g') = $1`,
+      [v]
+    );
+    if (r.rows.length === 1) return { status: "resolved", via: "property_fallback", ...r.rows[0], input: value };
+    if (r.rows.length > 1) return { status: "ambiguous", via: "property_fallback", input: value,
+      candidates: r.rows.map(x => ({ property_id: x.property_id, canonical_key: x.canonical_key, property_name: x.property_name })) };
+    return null;
+  }
+
   // ══════════════════════════════════════════════════════════════════
   //  SHARED HELPER — resolveOrRegister(client, { source, value, alias_type })
   //
@@ -101,6 +127,27 @@ module.exports = function registry(deps) {
       // the collision case — flag it, do NOT guess (the anti-Mark rule on identity)
       return { status: "ambiguous", input: value,
         candidates: r.rows.filter(x => x.property_id).map(x => ({ property_id: x.property_id, canonical_key: x.canonical_key, property_name: x.property_name })) };
+    }
+
+    // FALLBACK before auto-registering: maybe no alias was ever taught,
+    // but the string IS a live property's canonical key or address.
+    const fb = await propertyFallback(client, value);
+    if (fb) {
+      if (fb.status === "resolved") {
+        // committing path may learn: record the observed string as a
+        // proposed alias so the NEXT resolve is a direct alias hit.
+        await client.query(
+          `insert into property_aliases (property_id, source_system, alias_type, alias_value, confidence, note)
+           values ($1, $2, $3, $4, 'proposed', 'learned via property fallback (matched canonical_key/address)')
+           on conflict (source_system, alias_value) do update
+             set property_id = excluded.property_id, updated_at = now()`,
+          [fb.property_id,
+           SOURCES.includes(source) ? source : "other",
+           TYPES.includes(alias_type) ? alias_type : "address_string",
+           String(value).trim()]
+        );
+      }
+      return fb;
     }
 
     // unknown OR known-but-unresolved → register from the file as unresolved.
@@ -232,6 +279,24 @@ module.exports = function registry(deps) {
       );
 
       if (r.rows.length === 0) {
+        // FALLBACK (Jun 10 gap): no alias taught, but the string may BE a
+        // live property's canonical key or address. Same shared helper as
+        // resolveOnly / resolveOrRegister — one identity path. Read-only here.
+        const fb = await propertyFallback(pool, value);
+        if (fb && fb.status === "resolved") {
+          return res.json({
+            resolved: true,
+            property_id: fb.property_id,
+            canonical_key: fb.canonical_key,
+            property_name: fb.property_name,
+            matched_via: { fallback: "property_fallback", note: "matched the property's own canonical_key/address — no alias was taught. Teach the alias to make this a first-class match." },
+          });
+        }
+        if (fb && fb.status === "ambiguous") {
+          return res.json({ resolved: false, reason: "ambiguous", input: { source: source || null, value },
+            candidates: fb.candidates,
+            note: "This string matches MORE THAN ONE property's canonical_key/address. NOT guessed — needs a human call." });
+        }
         return res.json({ resolved: false, reason: "no_alias", input: { source: source || null, value },
           note: "No alias matches. Register it via POST /registry/aliases (with property_id to resolve, or without to queue for a human)." });
       }
@@ -346,6 +411,11 @@ module.exports = function registry(deps) {
       return { status: "ambiguous", input: value,
         candidates: r.rows.filter(x => x.property_id).map(x => ({ property_id: x.property_id, canonical_key: x.canonical_key, property_name: x.property_name })) };
     }
+    // FALLBACK (read-only): no alias taught, but the string may BE a live
+    // property's canonical key or address. Looks, never writes.
+    const fb = await propertyFallback(client, value);
+    if (fb) return fb;
+
     // unknown — report whether a confirm WOULD be allowed to register it,
     // but do not write anything now.
     return { status: "unknown", input: value, would_register: looksLikePropertyString(value) };
