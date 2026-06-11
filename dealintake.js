@@ -410,6 +410,99 @@ module.exports = function dealIntake(deps) {
   });
 
   // ══════════════════════════════════════════════════════════════════
+  //  RE-RESOLVE — POST /deal-intakes/:id/reresolve
+  //  After a human links an alias or creates a property, the file rows
+  //  still hold their old identity snapshot. This re-runs the SAME
+  //  read-only resolver on every file's identity label and updates the
+  //  rows — the only way the board's identity status changes is the
+  //  registry's answer changing.
+  // ══════════════════════════════════════════════════════════════════
+  router.post("/deal-intakes/:id/reresolve", async (req, res) => {
+    try {
+      const files = (await pool.query(
+        "select id, identity_label from deal_intake_files where intake_id=$1 and identity_label is not null",
+        [req.params.id])).rows;
+      let changed = 0;
+      const results = [];
+      for (const f of files) {
+        const r = await registryInstance.resolveOnly(pool, { value: f.identity_label });
+        const status = r.status === "skipped" ? "no_identity_found" : r.status;
+        const upd = await pool.query(
+          `update deal_intake_files
+              set registry_status=$1, registry_property_id=$2
+            where id=$3 and (registry_status is distinct from $1 or registry_property_id is distinct from $2)
+            returning id`,
+          [status, r.property_id || null, f.id]);
+        if (upd.rowCount) changed++;
+        results.push({ file_id: f.id, label: f.identity_label, status, property_id: r.property_id || null });
+      }
+      res.json({ rechecked: files.length, changed, results });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  //  CREATE PROPERTY FROM DEAL — POST /deal-intakes/:id/create-property
+  //  Body: { name, address }
+  //  The "link or create" dead end, ended: a deliberate human action
+  //  that creates the property, teaches every identity label observed
+  //  in this deal's files as a resolved alias, and re-resolves the
+  //  files. Never automatic — the human clicked Create.
+  // ══════════════════════════════════════════════════════════════════
+  router.post("/deal-intakes/:id/create-property", async (req, res) => {
+    const { name, address } = req.body || {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: "name required" });
+    if (!address || !String(address).trim()) return res.status(400).json({ error: "address required — address is identity; a property without one can't be resolved against" });
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const intake = await client.query("select id from deal_intakes where id=$1", [req.params.id]);
+      if (intake.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "intake not found" }); }
+      const prop = await client.query(
+        "insert into properties (name, address) values ($1,$2) returning id, name, address",
+        [String(name).trim(), String(address).trim()]);
+      const pid = prop.rows[0].id;
+      // teach every observed identity label from this deal as a resolved alias
+      const labels = (await client.query(
+        "select distinct identity_label from deal_intake_files where intake_id=$1 and identity_label is not null",
+        [req.params.id])).rows;
+      for (const l of labels) {
+        await client.query(
+          `insert into property_aliases (property_id, source_system, alias_type, alias_value, confidence, note)
+           values ($1,'other','address_string',$2,'resolved','taught at property creation from deal intake')
+           on conflict (source_system, alias_value) do update
+             set property_id = excluded.property_id, confidence='resolved', updated_at=now()`,
+          [pid, String(l.identity_label).trim()]);
+      }
+      await client.query(
+        "update deal_intake_files set registry_status='resolved', registry_property_id=$1 where intake_id=$2 and identity_label is not null",
+        [pid, req.params.id]);
+      await client.query("commit");
+      res.status(201).json({
+        receipt: `property created: ${prop.rows[0].name} (${prop.rows[0].address})`,
+        property_id: pid,
+        aliases_taught: labels.length,
+        note: "every identity label seen in this deal now resolves to the new property",
+      });
+    } catch (e) {
+      try { await client.query("rollback"); } catch (_) {}
+      res.status(500).json({ error: e.message });
+    } finally { client.release(); }
+  });
+
+  // rename a deal — POST /deal-intakes/:id/name { deal_name }
+  router.post("/deal-intakes/:id/name", async (req, res) => {
+    const { deal_name } = req.body || {};
+    if (!deal_name || !String(deal_name).trim()) return res.status(400).json({ error: "deal_name required" });
+    try {
+      const r = await pool.query(
+        "update deal_intakes set deal_name=$1, updated_at=now() where id=$2 returning id, deal_name",
+        [String(deal_name).trim(), req.params.id]);
+      if (r.rows.length === 0) return res.status(404).json({ error: "intake not found" });
+      res.json(r.rows[0]);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
   //  THE FUNNEL BOARD — GET /deal-funnel  (migration 024)
   //
   //  Every deal on one board: what arrived, what's missing, whether the
