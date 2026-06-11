@@ -43,6 +43,21 @@ Smallest slice: property_vendor_rules (property_id, vendor_id,
 default_category, default_subcategory, treatment) with vendors.default_category
 as fallback. The learning prompt writes here.
 
+REFINEMENT (Kameron, Jun 10 — the Verizon insight): for some vendors the rule
+can't even live at the vendor level. Tower's six Verizon charges are six
+amounts ($944.58 / $366.32 / $244.80 / $159 / $119 / $105.11) = six services
+(elevator phone, internet, cells…) that may book to DIFFERENT categories.
+Confidence belongs at the RECURRING-CHARGE level: vendor + stable-amount
+pattern ("Verizon ~$119 monthly") is the learnable unit. Consequences:
+(a) booking rules optionally keyed to vendor + amount band + cadence;
+(b) the batch prompt ("apply to all N?") is SUPPRESSED for any vendor whose
+charges don't cluster on one amount — heterogeneous amounts = heterogeneous
+services = review each line. PECO-class (one service, one meter) batches;
+Verizon-class never does. Suggestions can grow more confident forever;
+confirmation is never removed — confidence changes the ORDERING, never the
+CLICKING. No "confirm all suggested" mega-button, ever; one click per
+vendor-service per month is the floor.
+
 ### 4. NEEDS-REVIEW AS A SERVER STATE
 Today "needs review" = the line simply stays unbridged (honest but unlabeled).
 Spec wants it as a marked state so the review queue is distinct from the
