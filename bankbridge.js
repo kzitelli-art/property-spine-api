@@ -196,19 +196,21 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
            left join vendor_property_categories vpc
              on vpc.vendor_id = v.id and vpc.property_id = $2
           where t.bank_account_id = any($1) and ${ELIGIBLE}
+            and v.multi_nature = false
             and coalesce(vpc.default_category, v.default_category) is not null
           group by v.id, v.canonical_name, vpc.default_category, v.default_category
           order by gross desc`, [accts, propertyId])).rows;
 
       const queue = (await pool.query(
         `select t.id as bank_transaction_id, t.txn_date, t.description,
-                t.amount, v.id as vendor_id, v.canonical_name
+                t.amount, v.id as vendor_id, v.canonical_name, v.multi_nature
            from bank_transactions t
            join vendors v on v.id = t.vendor_id
            left join vendor_property_categories vpc
              on vpc.vendor_id = v.id and vpc.property_id = $2
           where t.bank_account_id = any($1) and ${ELIGIBLE}
-            and coalesce(vpc.default_category, v.default_category) is null
+            and (v.multi_nature
+                 or coalesce(vpc.default_category, v.default_category) is null)
           order by abs(t.amount) desc`, [accts, propertyId])).rows;
 
       const exceptions = (await pool.query(
@@ -248,6 +250,10 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
           bank_transaction_id: q.bank_transaction_id, vendor_id: q.vendor_id,
           vendor: q.canonical_name, txn_date: q.txn_date,
           description: q.description, amount: q.amount,
+          multi_nature: q.multi_nature === true,
+          queue_reason: q.multi_nature === true
+            ? "multi-nature vendor — this vendor varies payment to payment; per-payment judgment only, batch refused by design"
+            : "no category knowledge for this vendor",
           confirm_via: `POST /bank/transactions/${q.bank_transaction_id}/bridge-one { confirmed_by_person_id, confirmed_category }`,
         })),
         human_queue_gross: Number(queue.reduce((s, q) => s + Math.abs(Number(q.amount)), 0).toFixed(2)),
@@ -357,6 +363,41 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
   });
 
   // ──────────────────────────────────────────────────────────────────
+  // POST /bank/vendors/:id/multi-nature   (migration 020)
+  // Mark a vendor as MANY THINGS WEARING ONE NAME (a management company
+  // paid for payroll, fees, and reimbursements). Effect, enforced at the
+  // handler level: never in ready_to_bridge, bridge-vendor refuses 409,
+  // bridge-one / bridge-split remain the only paths. Set by a HUMAN,
+  // explicitly — never derived from vendor_type (that would be a silent
+  // branch). Teaching only: removes a shortcut, never creates money.
+  // Body: { multi_nature: true | false }
+  // ──────────────────────────────────────────────────────────────────
+  router.post("/bank/vendors/:id/multi-nature", async (req, res) => {
+    const vendorId = req.params.id;
+    const { multi_nature } = req.body || {};
+    if (typeof multi_nature !== "boolean") {
+      return res.status(400).json({ error: "multi_nature must be true or false — explicit, never implied" });
+    }
+    try {
+      const r = await pool.query(
+        `update vendors set multi_nature = $1 where id = $2
+         returning id, canonical_name, vendor_type, default_category, multi_nature`,
+        [multi_nature, vendorId]);
+      if (r.rowCount === 0) return res.status(404).json({ error: "vendor not found" });
+      const vendor = r.rows[0];
+      return res.json({
+        vendor,
+        note: multi_nature
+          ? "Marked multi-nature. Batch confirm is now refused for this vendor at the handler level; its lines route to per-payment judgment. Any default_category is kept but dormant — it resumes if the flag is cleared."
+          : "Flag cleared. The vendor can batch again where a default or property rule exists.",
+      });
+    } catch (e) {
+      console.error("multi-nature error", e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────────
   // GET /bank/properties/:id/vendor-category-rules
   // READ-ONLY. Every property rule at this asset, beside the global
   // default it overrides — so divergence is visible, never silent.
@@ -414,9 +455,26 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
       if (prop.rowCount === 0) { await client.query("rollback"); return res.status(404).json({ error: "property not found" }); }
 
       const v = await client.query(
-        "select id, canonical_name, default_category from vendors where id = $1", [vendor_id]);
+        "select id, canonical_name, default_category, multi_nature from vendors where id = $1", [vendor_id]);
       if (v.rowCount === 0) { await client.query("rollback"); return res.status(404).json({ error: "vendor not found" }); }
       const vendor = v.rows[0];
+
+      // THE HANDLER-LEVEL BLOCK: multi-nature vendors never batch. Not a
+      // hidden button — the shortcut does not exist. (Born from the 2am
+      // incident: three wires hid inside this vendor's batch proposal.)
+      if (vendor.multi_nature === true) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "multi-nature vendor — batch confirm refused by design",
+          vendor: vendor.canonical_name,
+          note: "this vendor is many things wearing one name (payroll, fees, reimbursements); a single-category batch would launder that. Per-payment judgment only.",
+          per_payment_via: {
+            list: `GET /bank/properties/${propertyId}/vendor-transactions?vendor=${encodeURIComponent(vendor.canonical_name)}`,
+            single: "POST /bank/transactions/:id/bridge-one",
+            split: "POST /bank/transactions/:id/bridge-split",
+          },
+        });
+      }
 
       // resolution: explicit (the human) > property rule > global default
       const pr = await client.query(
