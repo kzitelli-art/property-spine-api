@@ -189,17 +189,42 @@ module.exports = function dealIntake(deps) {
   // What a complete package needs. Missing items become the front-end list.
   const REQUIRED = ["rent_roll", "t12", "insurance", "tax_bill"];
 
+  // ── shared summary computation: ONE implementation, used by the
+  //    per-deal /summary route AND the cross-deal /deal-funnel board,
+  //    so the two can never drift apart. Pure: takes file rows, returns
+  //    the derived picture. corrected type beats detected (human beats
+  //    machine); identity = best resolved file, ambiguity surfaced.
+  function summarize(files) {
+    const effType = f => f.corrected_document_type || f.detected_document_type;
+    const types = new Set(files.map(effType).filter(t => t !== "unknown"));
+    let identity = { status: "no_identity_found", property_id: null, label: null };
+    const order = { resolved: 0, ambiguous: 1, unknown: 2, no_identity_found: 3 };
+    for (const f of files) {
+      if (f.registry_status && (order[f.registry_status] ?? 9) < (order[identity.status] ?? 9)) {
+        identity = { status: f.registry_status, property_id: f.registry_property_id, label: f.identity_label };
+      }
+    }
+    const conf = scoreConfidence(types, identity.status === "resolved");
+    const found = [...types].map(t => HUMAN_LABEL[t] || t);
+    const missing = REQUIRED.filter(t => !types.has(t)).map(t => HUMAN_LABEL[t]);
+    const unknownCount = files.filter(f => effType(f) === "unknown").length;
+    const rentRollFile = files.find(f => effType(f) === "rent_roll");
+    const rent_roll_state = !rentRollFile ? "missing"
+      : rentRollFile.ingest_run_id ? "ingested" : "uploaded";
+    return { effType, types, identity, conf, found, missing, unknownCount, rentRollFile, rent_roll_state };
+  }
+
   // ════════════════════════ ROUTES ════════════════════════
 
   // start an intake
   router.post("/deal-intakes", async (req, res) => {
-    const { onboarding_type } = req.body || {};
+    const { onboarding_type, deal_name } = req.body || {};
     if (!["new_acquisition","existing_asset","management_takeover"].includes(onboarding_type))
       return res.status(400).json({ error: "onboarding_type must be new_acquisition | existing_asset | management_takeover" });
     try {
       const r = await pool.query(
-        "insert into deal_intakes (onboarding_type) values ($1) returning id, onboarding_type, status, created_at",
-        [onboarding_type]
+        "insert into deal_intakes (onboarding_type, deal_name) values ($1,$2) returning id, deal_name, onboarding_type, status, created_at",
+        [onboarding_type, deal_name && String(deal_name).trim() || null]
       );
       res.json({ intake_id: r.rows[0].id, ...r.rows[0] });
     } catch (e) { res.status(500).json({ error: e.message }); }
@@ -297,23 +322,9 @@ module.exports = function dealIntake(deps) {
         "select * from deal_intake_files where intake_id=$1 order by created_at", [req.params.id]
       )).rows;
 
-      // corrected type wins over detected (human beats machine)
-      const effType = f => f.corrected_document_type || f.detected_document_type;
-      const types = new Set(files.map(effType).filter(t => t !== "unknown"));
-
-      // identity: best resolved file wins; ambiguity is surfaced, never guessed
-      let identity = { status: "no_identity_found", property_id: null, label: null };
-      const order = { resolved: 0, ambiguous: 1, unknown: 2, no_identity_found: 3 };
-      for (const f of files) {
-        if (f.registry_status && (order[f.registry_status] ?? 9) < (order[identity.status] ?? 9)) {
-          identity = { status: f.registry_status, property_id: f.registry_property_id, label: f.identity_label };
-        }
-      }
-
-      const conf = scoreConfidence(types, identity.status === "resolved");
-      const found = [...types].map(t => HUMAN_LABEL[t] || t);
-      const missing = REQUIRED.filter(t => !types.has(t)).map(t => HUMAN_LABEL[t]);
-      const unknownCount = files.filter(f => effType(f) === "unknown").length;
+      // ONE computation, shared with the funnel board (see summarize above)
+      const s = summarize(files);
+      const { effType, identity, conf, found, missing, unknownCount } = s;
 
       const next_actions = [];
       const rentRollFile = files.find(f => effType(f) === "rent_roll");
@@ -396,6 +407,76 @@ module.exports = function dealIntake(deps) {
       if (e.unparseable) return res.status(502).json({ error: e.message, raw: e.raw });
       res.status(500).json({ error: e.message });
     }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  //  THE FUNNEL BOARD — GET /deal-funnel  (migration 024)
+  //
+  //  Every deal on one board: what arrived, what's missing, whether the
+  //  property is recognized, where the rent roll stands, and the single
+  //  next action. READ-ONLY — the board derives, it never mutates.
+  //  Honest by construction: a deal with no rent roll says MISSING in
+  //  its headline; identity ambiguity is surfaced per deal, never
+  //  resolved by guess. Uses the SAME summarize() as /summary, so the
+  //  per-deal view and the board can never tell different stories.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/deal-funnel", async (_req, res) => {
+    try {
+      const intakes = (await pool.query(
+        "select * from deal_intakes order by created_at desc limit 50")).rows;
+      const allFiles = intakes.length ? (await pool.query(
+        "select * from deal_intake_files where intake_id = any($1) order by created_at",
+        [intakes.map(i => i.id)])).rows : [];
+      const byIntake = {};
+      for (const f of allFiles) (byIntake[f.intake_id] = byIntake[f.intake_id] || []).push(f);
+
+      const deals = intakes.map(i => {
+        const files = byIntake[i.id] || [];
+        const s = summarize(files);
+        // the ONE next action — the funnel's whole point is "what now?"
+        let next;
+        if (files.length === 0) next = { action: "upload_files", note: "Nothing uploaded yet — drop the deal folder." };
+        else if (s.identity.status === "ambiguous") next = { action: "resolve_identity", note: `"${s.identity.label}" matches more than one property — needs a human call.` };
+        else if (s.rent_roll_state === "missing") next = { action: "upload_missing", note: "Upload: Rent roll (the required gate — nothing onboards without it)." };
+        else if (s.identity.status === "unknown") next = { action: "create_or_link_property", note: `"${s.identity.label}" is not a recognized property — link or create it.` };
+        else if (s.identity.status === "no_identity_found") next = { action: "identify", note: "No property string found in any file yet — upload an identity-bearing doc (rent roll, T12, OM)." };
+        else if (s.rent_roll_state === "uploaded") next = { action: "run_rentroll", file_id: s.rentRollFile.id, property_id: s.identity.property_id, note: "Rent roll + recognized property — run it through ingest." };
+        else if (s.missing.length) next = { action: "upload_missing", note: `Upload: ${s.missing.join(", ")}` };
+        else next = { action: "review_candidates", note: "Rent roll ingested — review and promote candidates." };
+
+        return {
+          intake_id: i.id,
+          deal_name: i.deal_name || "(unnamed deal)",
+          onboarding_type: i.onboarding_type,
+          created_at: i.created_at,
+          files: files.length,
+          unclassified: s.unknownCount,
+          identity: s.identity,
+          confidence: s.conf.level,
+          rent_roll: s.rent_roll_state,
+          found: s.found,
+          missing: s.missing,
+          next,
+        };
+      });
+
+      // funnel totals — counts, never a blended score
+      const stage = d =>
+        d.files === 0 ? "empty"
+        : d.rent_roll === "missing" ? "no_rent_roll"
+        : d.identity.status !== "resolved" ? "identity_open"
+        : d.rent_roll === "uploaded" ? "ready_to_ingest"
+        : "ingested";
+      const stages = {};
+      for (const d of deals) stages[stage(d)] = (stages[stage(d)] || 0) + 1;
+
+      res.json({
+        deals: deals.length,
+        stages,
+        board: deals,
+        note: "READ-ONLY. Stages are honest counts, never blended: empty → no_rent_roll → identity_open → ready_to_ingest → ingested. The rent roll is the gate; identity resolves per file through the registry, never from the deal name.",
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   // recent intakes
