@@ -671,5 +671,32 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
     }
   });
 
+  // ──────────────────────────────────────────────────────────────────
+  // GET /bank/properties/:id/vendor-transactions?vendor=<name fragment>
+  // READ-ONLY. Lists a vendor's UNBRIDGED debit transactions regardless
+  // of board bucket (human queue, batch proposal, or exception) so the
+  // per-payment flows can target them individually. Born at 2am when
+  // three wires hid inside a batch proposal the queue view couldn't see.
+  // ──────────────────────────────────────────────────────────────────
+  router.get("/bank/properties/:id/vendor-transactions", async (req, res) => {
+    const vendor = String(req.query.vendor || "").trim();
+    if (!vendor) return res.status(400).json({ error: "vendor query param required (name fragment)" });
+    try {
+      const accts = await accountIds(req.params.id);
+      if (accts.length === 0) return res.status(404).json({ error: "no bank accounts registered for this property" });
+      const rows = (await pool.query(
+        `select t.id as bank_transaction_id, t.txn_date, t.description, t.amount,
+                t.status, t.exception_reason, v.canonical_name as vendor
+           from bank_transactions t join vendors v on v.id = t.vendor_id
+          where t.bank_account_id = any($1) and t.money_event_id is null
+            and t.amount < 0 and v.canonical_name ilike '%' || $2 || '%'
+          order by t.txn_date desc`, [accts, vendor])).rows;
+      return res.json({ vendor_query: vendor, count: rows.length, transactions: rows });
+    } catch (e) {
+      console.error("vendor-transactions error", e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
   return router;
 };
