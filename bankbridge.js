@@ -249,11 +249,26 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
       // payment returns are FINDINGS with their own home — any status,
       // since a return may sit claimed (no alias) or identified (processor
       // matched). One home, never double-counted in exception_rows.
+      // Slice 2: each line carries its CONFIRMED pairing aggregate. paired
+      // means human-confirmed RC entries summing to the cent (the confirm
+      // gate guarantees the sum); anything else is UNPAIRED EXPOSURE.
       const returns = (await pool.query(
         `select t.id as bank_transaction_id, t.txn_date, t.description,
-                t.amount, t.status, v.canonical_name as vendor
+                t.amount, t.status, v.canonical_name as vendor,
+                coalesce(p.rc_count, 0)::int as rc_count,
+                coalesce(p.paired_total, 0)::numeric(14,2) as paired_total,
+                coalesce(p.repaid_count, 0)::int as repaid_count
            from bank_transactions t
            left join vendors v on v.id = t.vendor_id
+           left join (
+                select bank_transaction_id,
+                       count(*) as rc_count,
+                       sum(amount) as paired_total,
+                       count(repay_transaction_id) as repaid_count
+                  from rc_pairings
+                 where status = 'confirmed'
+                 group by bank_transaction_id
+           ) p on p.bank_transaction_id = t.id
           where t.bank_account_id = any($1)
             and t.exception_reason = 'payment_return'
             and t.money_event_id is null
@@ -296,19 +311,34 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
           confirm_via: `POST /bank/transactions/${q.bank_transaction_id}/bridge-one { confirmed_by_person_id, confirmed_category }`,
         })),
         human_queue_gross: Number(queue.reduce((s, q) => s + Math.abs(Number(q.amount)), 0).toFixed(2)),
-        payment_returns: {
-          txns: returns.length,
-          gross: Number(returns.reduce((s, r) => s + Math.abs(Number(r.amount)), 0).toFixed(2)),
-          lines: returns.map(r => ({
-            bank_transaction_id: r.bank_transaction_id,
-            txn_date: r.txn_date,
-            description: r.description,
-            amount: r.amount,
-            status: r.status,
-            vendor: r.vendor || null,
-          })),
-          note: "FINDINGS, not work items. Tenant payment clawbacks — revenue moving backward. bridge-one and bridge-split refuse these by design (409, no acknowledgement override). Next slice pairs each with its Yardi RC entries.",
-        },
+        payment_returns: (() => {
+          const paired = returns.filter(r => r.rc_count > 0);
+          const unpaired = returns.filter(r => r.rc_count === 0);
+          const grossOf = (rows) => Number(rows.reduce((s, r) => s + Math.abs(Number(r.amount)), 0).toFixed(2));
+          return {
+            txns: returns.length,
+            gross: grossOf(returns),
+            paired: { txns: paired.length, gross: grossOf(paired) },
+            unpaired_exposure: {
+              txns: unpaired.length, gross: grossOf(unpaired),
+              note: "THE HEADLINE. Returns with no confirmed RC pairing — including any orphan with no book entry anywhere (the 9/11 $100 class). Exposure until paired or resolved; it never nets, never vanishes.",
+            },
+            lines: returns.map(r => ({
+              bank_transaction_id: r.bank_transaction_id,
+              txn_date: r.txn_date,
+              description: r.description,
+              amount: r.amount,
+              status: r.status,
+              vendor: r.vendor || null,
+              paired: r.rc_count > 0,
+              rc_count: r.rc_count,
+              repaid_count: r.repaid_count,
+              pair_via: r.rc_count > 0 ? null
+                : `POST /bank/transactions/${r.bank_transaction_id}/rc-pairings { entries:[{rc_number, rc_date, tenant_code, amount}] } then /confirm`,
+            })),
+            note: "FINDINGS, not expense work items. Tenant payment clawbacks — revenue moving backward. bridge-one and bridge-split refuse these by design (409, no acknowledgement override). Pairing with Yardi RC entries is the resolution path; confirm refuses unless entries sum to the bank line to the cent.",
+          };
+        })(),
         excluded_visible: {
           exception_rows: exceptions.map(e => ({ ...e, gross: Number(e.gross) })),
           credits_not_bridged: { txns: credits.txns, gross: Number(credits.gross),
@@ -1079,6 +1109,400 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
       });
     } catch (e) {
       console.error("claimed-items error", e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════
+  //  RC PAIRINGS — payment_return rung, slice 2 (migration 022)
+  //
+  //  Revenue-side ONLY: every route here refuses any transaction not
+  //  flagged payment_return. No money_event is ever born here — a
+  //  return decomposes into tenant RC entries, never into expenses.
+  //
+  //  The flow: propose entries (replaceable draft, proves nothing) →
+  //  human confirm (HARD GATE: integer-cents sum to the bank line, a
+  //  2-of-3 batch can never read as done) → paired, leaves the board's
+  //  unpaired exposure. Unpair keeps the trail (rejected, not deleted).
+  //  link-repay attaches the re-pay credit per RC row (the t0005237
+  //  case), exact-amount-gated.
+  // ════════════════════════════════════════════════════════════════
+
+  // shared: load + validate the return line. Returns {txn} or writes the
+  // refusal and returns null. Caller owns the client/locking when needed.
+  async function loadReturnLine(client, txnId, res, { forUpdate = false } = {}) {
+    const t = await client.query(
+      `select t.*, ba.property_id
+         from bank_transactions t
+         join bank_accounts ba on ba.id = t.bank_account_id
+        where t.id = $1 ${forUpdate ? "for update of t" : ""}`, [txnId]);
+    if (t.rowCount === 0) {
+      res.status(404).json({ error: "bank transaction not found" });
+      return null;
+    }
+    const txn = t.rows[0];
+    if (txn.exception_reason !== "payment_return") {
+      res.status(409).json({
+        error: "not a payment_return line — RC pairing is revenue-side only",
+        exception_reason: txn.exception_reason || null,
+        note: "expense lines bridge through bridge-one / bridge-split; pairing exists exclusively for tenant payment clawbacks",
+      });
+      return null;
+    }
+    if (Number(txn.amount) >= 0) {
+      res.status(409).json({ error: "payment_return pairing applies to the DEBIT (the clawback); credits link via link-repay", amount: txn.amount });
+      return null;
+    }
+    return txn;
+  }
+
+  const toCents = (x) => Math.round(Number(x) * 100);
+
+  // ──────────────────────────────────────────────────────────────────
+  // GET /bank/transactions/:id/rc-pairings — READ-ONLY readout.
+  // Identify is not commit: nothing here mutates.
+  // ──────────────────────────────────────────────────────────────────
+  router.get("/bank/transactions/:id/rc-pairings", async (req, res) => {
+    try {
+      const txn = await loadReturnLine(pool, req.params.id, res);
+      if (!txn) return;
+      const rows = (await pool.query(
+        `select id, rc_number, rc_date, tenant_code, amount, status,
+                repay_transaction_id, confirmed_at, note
+           from rc_pairings where bank_transaction_id = $1
+          order by status, rc_date, rc_number`, [txn.id])).rows;
+      const live = rows.filter(r => r.status !== "rejected");
+      const liveCents = live.reduce((s, r) => s + toCents(r.amount), 0);
+      const bankCents = Math.abs(toCents(txn.amount));
+      return res.json({
+        bank_transaction_id: txn.id,
+        txn_date: txn.txn_date, description: txn.description,
+        bank_amount: (bankCents / 100).toFixed(2),
+        pairings: rows,
+        live_total: (liveCents / 100).toFixed(2),
+        gap: ((bankCents - liveCents) / 100).toFixed(2),
+        paired: live.length > 0 && live.every(r => r.status === "confirmed") && liveCents === bankCents,
+        note: "READ-ONLY. paired=true only when every live row is confirmed and the sum ties to the cent.",
+      });
+    } catch (e) {
+      console.error("rc-pairings read error", e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // POST /bank/transactions/:id/rc-pairings — PROPOSE entries.
+  // A proposal is a replaceable DRAFT: re-proposing wipes prior proposed
+  // rows and inserts fresh (idempotent re-runs, no duplicates). It
+  // proves NOTHING — the response shows the gap honestly and never
+  // auto-confirms. Refused outright once confirmed rows exist.
+  // Body: { entries: [{ rc_number, rc_date, tenant_code?, amount, note? }] }
+  // ──────────────────────────────────────────────────────────────────
+  router.post("/bank/transactions/:id/rc-pairings", async (req, res) => {
+    const { entries } = req.body || {};
+    if (!Array.isArray(entries) || entries.length < 1) {
+      return res.status(400).json({ error: "entries array of at least 1 required — [{rc_number, rc_date, tenant_code, amount}]" });
+    }
+    for (const [i, e] of entries.entries()) {
+      if (!e || !e.rc_number || !e.rc_date || !(Number(e.amount) > 0)) {
+        return res.status(400).json({ error: `entry ${i}: rc_number, rc_date, and amount > 0 are required`, got: e || null });
+      }
+    }
+    const seen = new Set();
+    for (const e of entries) {
+      if (seen.has(String(e.rc_number))) {
+        return res.status(400).json({ error: "duplicate rc_number within payload", rc_number: e.rc_number });
+      }
+      seen.add(String(e.rc_number));
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const txn = await loadReturnLine(client, req.params.id, res, { forUpdate: true });
+      if (!txn) { await client.query("rollback"); return; }
+
+      const confirmed = await client.query(
+        "select count(*)::int as n from rc_pairings where bank_transaction_id = $1 and status = 'confirmed'", [txn.id]);
+      if (confirmed.rows[0].n > 0) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "already paired — confirmed RC entries exist; unpair first to re-propose",
+          unpair_via: `POST /bank/transactions/${txn.id}/rc-pairings/unpair { confirm: "${txn.id}" }`,
+        });
+      }
+
+      // drafts are replaceable; rejected rows (history) are untouched
+      await client.query(
+        "delete from rc_pairings where bank_transaction_id = $1 and status = 'proposed'", [txn.id]);
+
+      const inserted = [];
+      for (const e of entries) {
+        const r = await client.query(
+          `insert into rc_pairings
+             (bank_transaction_id, rc_number, rc_date, tenant_code, amount, status, note)
+           values ($1,$2,$3,$4,$5,'proposed',$6)
+           returning id, rc_number, rc_date, tenant_code, amount`,
+          [txn.id, String(e.rc_number), e.rc_date, e.tenant_code || null,
+           Number(e.amount), e.note || null]);
+        inserted.push(r.rows[0]);
+      }
+
+      const bankCents = Math.abs(toCents(txn.amount));
+      const propCents = inserted.reduce((s, r) => s + toCents(r.amount), 0);
+      await client.query("commit");
+      return res.status(201).json({
+        bank_transaction_id: txn.id,
+        proposed: inserted,
+        bank_amount: (bankCents / 100).toFixed(2),
+        proposed_total: (propCents / 100).toFixed(2),
+        gap: ((bankCents - propCents) / 100).toFixed(2),
+        ready_to_confirm: propCents === bankCents,
+        note: propCents === bankCents
+          ? "sums to the cent — confirm to pair"
+          : "DOES NOT SUM — confirm will refuse (409) until the gap is zero. Honest blank beats forced fit.",
+        confirm_via: `POST /bank/transactions/${txn.id}/rc-pairings/confirm { confirmed_by_person_id }`,
+      });
+    } catch (e) {
+      try { await client.query("rollback"); } catch (_) {}
+      console.error("rc-pairings propose error", e);
+      return res.status(500).json({ error: e.message });
+    } finally {
+      client.release();
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // POST /bank/transactions/:id/rc-pairings/confirm — THE HARD GATE.
+  // The anti-Mark mechanism of this slice: proposed entries must sum to
+  // the bank line EXACTLY, compared in integer cents. A partially-paired
+  // batch (2 of 3 RCs) is refused — it can never read as done.
+  // Body: { confirmed_by_person_id }
+  // ──────────────────────────────────────────────────────────────────
+  router.post("/bank/transactions/:id/rc-pairings/confirm", async (req, res) => {
+    const { confirmed_by_person_id } = req.body || {};
+    if (!confirmed_by_person_id) {
+      return res.status(400).json({ error: "confirmed_by_person_id required — a human must confirm" });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const txn = await loadReturnLine(client, req.params.id, res, { forUpdate: true });
+      if (!txn) { await client.query("rollback"); return; }
+
+      const already = await client.query(
+        "select count(*)::int as n from rc_pairings where bank_transaction_id = $1 and status = 'confirmed'", [txn.id]);
+      if (already.rows[0].n > 0) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "already paired — confirmed entries exist; unpair first if this is wrong" });
+      }
+
+      const proposed = (await client.query(
+        `select id, rc_number, rc_date, tenant_code, amount
+           from rc_pairings
+          where bank_transaction_id = $1 and status = 'proposed'
+          for update`, [txn.id])).rows;
+      if (proposed.length === 0) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "nothing proposed — propose RC entries first",
+          propose_via: `POST /bank/transactions/${txn.id}/rc-pairings { entries:[...] }` });
+      }
+
+      const bankCents = Math.abs(toCents(txn.amount));
+      const propCents = proposed.reduce((s, r) => s + toCents(r.amount), 0);
+      if (propCents !== bankCents) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "REFUSED — proposed entries do not sum to the bank line. A partial pairing can never read as done.",
+          bank_amount: (bankCents / 100).toFixed(2),
+          proposed_total: (propCents / 100).toFixed(2),
+          gap: ((bankCents - propCents) / 100).toFixed(2),
+          note: "fix the proposal (add the missing RC, correct an amount) or leave the line as honest unpaired exposure",
+        });
+      }
+
+      await client.query(
+        `update rc_pairings
+            set status = 'confirmed', confirmed_by_person_id = $1, confirmed_at = now()
+          where bank_transaction_id = $2 and status = 'proposed'`,
+        [confirmed_by_person_id, txn.id]);
+
+      // durable trail — the pairing is an explained finding now
+      const rcList = proposed.map(p => `RC ${p.rc_number}${p.tenant_code ? ` (${p.tenant_code})` : ""} $${Number(p.amount).toFixed(2)}`).join(" + ");
+      await client.query(
+        `insert into events (property_id, type, note) values ($1,'payment_return_paired',$2)`,
+        [txn.property_id,
+         `$${(bankCents / 100).toFixed(2)} return ${txn.txn_date instanceof Date ? txn.txn_date.toISOString().slice(0,10) : txn.txn_date} paired to the cent: ${rcList} (bank_txn ${txn.id})`]);
+
+      await client.query("commit");
+      return res.status(201).json({
+        receipt: `${proposed.length} RC entr${proposed.length === 1 ? "y" : "ies"} confirmed — $${(bankCents / 100).toFixed(2)} ties to the cent`,
+        bank_transaction_id: txn.id,
+        pairings: proposed.map(p => ({ ...p, status: "confirmed" })),
+        note: "paired. This line leaves unpaired exposure on the board. No money_event was born — a return is revenue moving backward, never an expense.",
+      });
+    } catch (e) {
+      try { await client.query("rollback"); } catch (_) {}
+      console.error("rc-pairings confirm error", e);
+      return res.status(500).json({ error: e.message });
+    } finally {
+      client.release();
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // POST /bank/transactions/:id/rc-pairings/unpair — undo a confirm.
+  // Trail-preserving: rows go to 'rejected', never deleted, so the
+  // history of the first attempt survives a re-propose. Mirrors the
+  // unbridge confirm pattern: confirm must equal the bank txn id.
+  // Body: { confirm: "<bank_transaction_id>", note? }
+  // ──────────────────────────────────────────────────────────────────
+  router.post("/bank/transactions/:id/rc-pairings/unpair", async (req, res) => {
+    const { confirm, note } = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const txn = await loadReturnLine(client, req.params.id, res, { forUpdate: true });
+      if (!txn) { await client.query("rollback"); return; }
+      if (confirm !== txn.id) {
+        await client.query("rollback");
+        return res.status(403).json({ error: "confirm must equal the bank transaction id", bank_transaction_id: txn.id });
+      }
+      const upd = await client.query(
+        `update rc_pairings
+            set status = 'rejected',
+                note = case when $2::text is null then note
+                            else coalesce(note || ' | ', '') || 'unpaired: ' || $2 end
+          where bank_transaction_id = $1 and status = 'confirmed'
+          returning rc_number`, [txn.id, note || null]);
+      if (upd.rowCount === 0) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "not paired — no confirmed entries to unpair" });
+      }
+      await client.query(
+        `insert into events (property_id, type, note) values ($1,'payment_return_unpaired',$2)`,
+        [txn.property_id,
+         `pairing rejected on bank_txn ${txn.id} (${upd.rowCount} RC entr${upd.rowCount === 1 ? "y" : "ies"})${note ? ` — ${note}` : ""}`]);
+      await client.query("commit");
+      return res.json({
+        receipt: `${upd.rowCount} confirmed entr${upd.rowCount === 1 ? "y" : "ies"} → rejected (trail kept)`,
+        note: "line returns to unpaired exposure on the board; re-propose when the right entries are known",
+      });
+    } catch (e) {
+      try { await client.query("rollback"); } catch (_) {}
+      console.error("rc-pairings unpair error", e);
+      return res.status(500).json({ error: e.message });
+    } finally {
+      client.release();
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // POST /bank/rc-pairings/:id/link-repay — the return→re-pay link.
+  // The t0005237 case: $1,938.38 return on 9/05, $1,938.38 CHECKscan
+  // deposit on 9/09 — the tenant re-paid after the bounce. Per RC row,
+  // so each tenant in a batch can re-pay separately.
+  // GATES: repay must be a CREDIT, same property, and match the RC row
+  // amount to the cent. A mismatched link awaits live evidence — until
+  // then exact-or-refuse.
+  // Body: { repay_transaction_id }
+  // ──────────────────────────────────────────────────────────────────
+  router.post("/bank/rc-pairings/:id/link-repay", async (req, res) => {
+    const { repay_transaction_id } = req.body || {};
+    if (!repay_transaction_id) {
+      return res.status(400).json({ error: "repay_transaction_id required" });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const p = await client.query(
+        `select rp.*, ba.property_id
+           from rc_pairings rp
+           join bank_transactions t on t.id = rp.bank_transaction_id
+           join bank_accounts ba on ba.id = t.bank_account_id
+          where rp.id = $1 for update of rp`, [req.params.id]);
+      if (p.rowCount === 0) { await client.query("rollback"); return res.status(404).json({ error: "pairing row not found" }); }
+      const row = p.rows[0];
+      if (row.status === "rejected") {
+        await client.query("rollback");
+        return res.status(409).json({ error: "pairing row is rejected — link the live row instead" });
+      }
+      if (row.repay_transaction_id && row.repay_transaction_id !== repay_transaction_id) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "already linked to a different re-pay transaction", linked: row.repay_transaction_id });
+      }
+      if (row.repay_transaction_id === repay_transaction_id) {
+        await client.query("rollback");
+        return res.json({ receipt: "already linked — no change", repay_transaction_id });
+      }
+      const rep = await client.query(
+        `select t.id, t.amount, t.txn_date, t.description, ba.property_id
+           from bank_transactions t
+           join bank_accounts ba on ba.id = t.bank_account_id
+          where t.id = $1`, [repay_transaction_id]);
+      if (rep.rowCount === 0) { await client.query("rollback"); return res.status(404).json({ error: "repay transaction not found" }); }
+      const repay = rep.rows[0];
+      if (Number(repay.amount) <= 0) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "re-pay must be a CREDIT (money in)", amount: repay.amount });
+      }
+      if (repay.property_id !== row.property_id) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "re-pay belongs to a different property", repay_property: repay.property_id, return_property: row.property_id });
+      }
+      if (toCents(repay.amount) !== toCents(row.amount)) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "re-pay amount does not match this RC entry to the cent — exact-or-refuse until a live mismatch case teaches otherwise",
+          rc_amount: Number(row.amount).toFixed(2),
+          repay_amount: Number(repay.amount).toFixed(2),
+        });
+      }
+      await client.query(
+        "update rc_pairings set repay_transaction_id = $1 where id = $2",
+        [repay_transaction_id, row.id]);
+      await client.query("commit");
+      return res.json({
+        receipt: `re-pay linked: RC ${row.rc_number}${row.tenant_code ? ` (${row.tenant_code})` : ""} $${Number(row.amount).toFixed(2)} ↔ ${repay.txn_date instanceof Date ? repay.txn_date.toISOString().slice(0,10) : repay.txn_date} credit`,
+        note: "the return→re-pay story is now structural, not anecdotal",
+      });
+    } catch (e) {
+      try { await client.query("rollback"); } catch (_) {}
+      console.error("link-repay error", e);
+      return res.status(500).json({ error: e.message });
+    } finally {
+      client.release();
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // GET /bank/properties/:id/repay-candidates?amount=1938.38
+  // READ-ONLY finder for link-repay: credit lines of this property
+  // matching the RC amount to the cent. Identify is not commit —
+  // candidates are surfaced for a human to link, never auto-linked.
+  // ──────────────────────────────────────────────────────────────────
+  router.get("/bank/properties/:id/repay-candidates", async (req, res) => {
+    const amount = Number(req.query.amount);
+    if (!(amount > 0)) return res.status(400).json({ error: "amount query param > 0 required" });
+    try {
+      const accts = await accountIds(req.params.id);
+      if (accts.length === 0) return res.status(404).json({ error: "no bank accounts registered for this property" });
+      const rows = (await pool.query(
+        `select t.id as bank_transaction_id, t.txn_date, t.description, t.amount,
+                ba.account_label,
+                exists (select 1 from rc_pairings rp where rp.repay_transaction_id = t.id) as already_linked
+           from bank_transactions t
+           join bank_accounts ba on ba.id = t.bank_account_id
+          where t.bank_account_id = any($1) and t.amount > 0
+            and round(t.amount * 100) = round($2::numeric * 100)
+          order by t.txn_date`, [accts, amount])).rows;
+      return res.json({
+        amount: amount.toFixed(2),
+        candidates: rows,
+        note: "READ-ONLY — exact-cents credit matches. A human links via POST /bank/rc-pairings/:id/link-repay; nothing here auto-links.",
+      });
+    } catch (e) {
+      console.error("repay-candidates error", e);
       return res.status(500).json({ error: e.message });
     }
   });
