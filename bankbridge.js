@@ -44,12 +44,16 @@ const { WHAT_FOR } = require("./money"); // ONE vocabulary, not two
 // proof inputs — must mirror money.js PROOF_INPUTS exactly
 const PROOF_INPUTS = ["what_for", "confirmed_category"];
 
-// eligibility for BATCH bridging — the strictest read
+// eligibility for BATCH bridging — the strictest read.
+// parked lines are excluded everywhere ELIGIBLE applies: a human said
+// "I don't know yet" — no batch sweep or queue may pick it back up
+// until it's unparked or deliberately bridged one-by-one.
 const ELIGIBLE = `t.status = 'identified'
               and t.vendor_id is not null
               and t.amount < 0
               and t.exception_reason is null
-              and t.money_event_id is null`;
+              and t.money_event_id is null
+              and t.parked_at is null`;
 
 module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }) {
   const router = express.Router();
@@ -158,10 +162,20 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
 
     // 7) the structural guard — this line can never bridge again.
     //    (splits set the marker ONCE, after all allocations land)
+    //    Bridging also AUTO-UNPARKS: resolution is the unpark; no stale
+    //    "needs review" survives a real answer. Trail kept via events.
     if (setMarker) {
       await client.query(
-        "update bank_transactions set money_event_id = $1 where id = $2",
+        `update bank_transactions
+            set money_event_id = $1,
+                parked_at = null, parked_by_person_id = null, parked_note = null
+          where id = $2`,
         [moneyEventId, txn.id]);
+      if (txn.parked_at) {
+        await client.query(
+          `insert into events (property_id, type, note) values ($1,'txn_unparked',$2)`,
+          [property_id, `auto-unparked by bridge (resolved as ${confirmed_category}) — was parked with note: ${txn.parked_note || "(none)"} (bank_txn ${txn.id})`]);
+      }
     }
 
     return moneyEventId;
@@ -255,6 +269,7 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
       const returns = (await pool.query(
         `select t.id as bank_transaction_id, t.txn_date, t.description,
                 t.amount, t.status, v.canonical_name as vendor,
+                t.parked_at, t.parked_note,
                 coalesce(p.rc_count, 0)::int as rc_count,
                 coalesce(p.paired_total, 0)::numeric(14,2) as paired_total,
                 coalesce(p.repaid_count, 0)::int as repaid_count
@@ -273,6 +288,23 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
             and t.exception_reason = 'payment_return'
             and t.money_event_id is null
           order by t.txn_date`, [accts])).rows;
+
+      // parked lines — needs_review (migration 023). Visible as their own
+      // block. THE INVARIANT: parking moves a line out of the WORK queues
+      // only; its gross never leaves unproven exposure. Oldest first —
+      // the longer something sits parked, the louder it should read.
+      const parked = (await pool.query(
+        `select t.id as bank_transaction_id, t.txn_date, t.description,
+                t.amount, t.status, t.exception_reason,
+                t.parked_at, t.parked_note,
+                pe.name as parked_by,
+                extract(day from now() - t.parked_at)::int as days_parked
+           from bank_transactions t
+           left join persons pe on pe.id = t.parked_by_person_id
+          where t.bank_account_id = any($1)
+            and t.parked_at is not null
+            and t.money_event_id is null
+          order by t.parked_at asc`, [accts])).rows;
 
       const credits = (await pool.query(
         `select count(*)::int as txns, coalesce(sum(abs(amount)),0)::numeric(14,2) as gross
@@ -311,6 +343,19 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
           confirm_via: `POST /bank/transactions/${q.bank_transaction_id}/bridge-one { confirmed_by_person_id, confirmed_category }`,
         })),
         human_queue_gross: Number(queue.reduce((s, q) => s + Math.abs(Number(q.amount)), 0).toFixed(2)),
+        parked: {
+          txns: parked.length,
+          gross: Number(parked.reduce((s, p) => s + Math.abs(Number(p.amount)), 0).toFixed(2)),
+          lines: parked.map(p => ({
+            bank_transaction_id: p.bank_transaction_id,
+            txn_date: p.txn_date, description: p.description, amount: p.amount,
+            status: p.status, exception_reason: p.exception_reason || null,
+            parked_note: p.parked_note, parked_by: p.parked_by || null,
+            parked_at: p.parked_at, days_parked: p.days_parked,
+            unpark_via: `POST /bank/transactions/${p.bank_transaction_id}/unpark`,
+          })),
+          note: "PARKED IS NOT RESOLVED. These left the work queues because a human said 'I don't know yet' — their gross is still unproven exposure. Only proof (a bridge, a pairing) resolves; bridging auto-unparks. Oldest first: age is the heat.",
+        },
         payment_returns: (() => {
           const paired = returns.filter(r => r.rc_count > 0);
           const unpaired = returns.filter(r => r.rc_count === 0);
@@ -333,6 +378,8 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
               paired: r.rc_count > 0,
               rc_count: r.rc_count,
               repaid_count: r.repaid_count,
+              parked: r.parked_at != null,
+              parked_note: r.parked_note || null,
               pair_via: r.rc_count > 0 ? null
                 : `POST /bank/transactions/${r.bank_transaction_id}/rc-pairings { entries:[{rc_number, rc_date, tenant_code, amount}] } then /confirm`,
             })),
@@ -830,8 +877,18 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
         });
         ids.push(meId);
       }
-      // marker once, pointing at the first allocation — the group's handle
-      await client.query("update bank_transactions set money_event_id = $1 where id = $2", [ids[0], txnId]);
+      // marker once, pointing at the first allocation — the group's handle.
+      // Auto-unpark here too: a confirmed split is a resolution.
+      await client.query(
+        `update bank_transactions
+            set money_event_id = $1,
+                parked_at = null, parked_by_person_id = null, parked_note = null
+          where id = $2`, [ids[0], txnId]);
+      if (txn.parked_at) {
+        await client.query(
+          `insert into events (property_id, type, note) values ($1,'txn_unparked',$2)`,
+          [txn.property_id, `auto-unparked by split (${allocations.length} allocations) — was parked with note: ${txn.parked_note || "(none)"} (bank_txn ${txnId})`]);
+      }
 
       await client.query("commit");
       return res.status(201).json({
@@ -1109,6 +1166,149 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
       });
     } catch (e) {
       console.error("claimed-items error", e);
+      return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════
+  //  NEEDS_REVIEW — the parked state (migration 023)
+  //
+  //  "I don't know yet — park it with a note." A state, not an absence.
+  //  THE INVARIANT: parking never resolves and never reduces exposure —
+  //  it moves a line out of the WORK queues into its own visible block,
+  //  note + who + when + age attached. Bridging auto-unparks (the
+  //  resolution IS the unpark). The note is MANDATORY: parking without
+  //  a note is just hiding, and hiding is the thing this system fights.
+  // ════════════════════════════════════════════════════════════════
+
+  // ──────────────────────────────────────────────────────────────────
+  // POST /bank/transactions/:id/park
+  // Body: { parked_by_person_id, note }
+  // Allowed on ANY unbridged line (claimed, identified, exception-
+  // flagged, payment_return — the 9/11 orphan is the canonical case).
+  // Re-parking replaces the note; the events trail keeps the old one.
+  // ──────────────────────────────────────────────────────────────────
+  router.post("/bank/transactions/:id/park", async (req, res) => {
+    const { parked_by_person_id, note } = req.body || {};
+    if (!parked_by_person_id) {
+      return res.status(400).json({ error: "parked_by_person_id required — parking is a deliberate human act" });
+    }
+    if (!note || !String(note).trim()) {
+      return res.status(400).json({ error: "note required — 'park it WITH A NOTE'. What do you know, what's missing, where would the answer live?" });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const t = await client.query(
+        `select t.*, ba.property_id
+           from bank_transactions t
+           join bank_accounts ba on ba.id = t.bank_account_id
+          where t.id = $1 for update of t`, [req.params.id]);
+      if (t.rowCount === 0) { await client.query("rollback"); return res.status(404).json({ error: "bank transaction not found" }); }
+      const txn = t.rows[0];
+      if (txn.money_event_id) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "already bridged — resolved lines don't park", money_event_id: txn.money_event_id });
+      }
+      const wasParked = txn.parked_at != null;
+      await client.query(
+        `update bank_transactions
+            set parked_at = now(), parked_by_person_id = $1, parked_note = $2
+          where id = $3`,
+        [parked_by_person_id, String(note).trim(), txn.id]);
+      await client.query(
+        `insert into events (property_id, type, note) values ($1,$2,$3)`,
+        [txn.property_id,
+         wasParked ? "txn_park_note_updated" : "txn_parked",
+         wasParked
+           ? `park note replaced on ${txn.txn_date instanceof Date ? txn.txn_date.toISOString().slice(0,10) : txn.txn_date} $${Math.abs(Number(txn.amount)).toFixed(2)} — old: "${txn.parked_note}" new: "${String(note).trim()}" (bank_txn ${txn.id})`
+           : `parked: ${txn.txn_date instanceof Date ? txn.txn_date.toISOString().slice(0,10) : txn.txn_date} $${Math.abs(Number(txn.amount)).toFixed(2)} ${txn.description.slice(0,60)} — "${String(note).trim()}" (bank_txn ${txn.id})`]);
+      await client.query("commit");
+      return res.status(wasParked ? 200 : 201).json({
+        receipt: `${wasParked ? "note updated" : "parked"}: $${Math.abs(Number(txn.amount)).toFixed(2)} — "${String(note).trim()}"`,
+        note: "parked is NOT resolved — this line stays in unproven exposure and appears in the board's parked block until proof arrives. Bridging it later auto-unparks.",
+      });
+    } catch (e) {
+      try { await client.query("rollback"); } catch (_) {}
+      console.error("park error", e);
+      return res.status(500).json({ error: e.message });
+    } finally {
+      client.release();
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // POST /bank/transactions/:id/unpark — back to the queue, trail kept.
+  // No body needed: unparking just returns the line to active work.
+  // ──────────────────────────────────────────────────────────────────
+  router.post("/bank/transactions/:id/unpark", async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const t = await client.query(
+        `select t.*, ba.property_id
+           from bank_transactions t
+           join bank_accounts ba on ba.id = t.bank_account_id
+          where t.id = $1 for update of t`, [req.params.id]);
+      if (t.rowCount === 0) { await client.query("rollback"); return res.status(404).json({ error: "bank transaction not found" }); }
+      const txn = t.rows[0];
+      if (!txn.parked_at) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "not parked — nothing to unpark" });
+      }
+      await client.query(
+        `update bank_transactions
+            set parked_at = null, parked_by_person_id = null, parked_note = null
+          where id = $1`, [txn.id]);
+      await client.query(
+        `insert into events (property_id, type, note) values ($1,'txn_unparked',$2)`,
+        [txn.property_id,
+         `unparked: ${txn.txn_date instanceof Date ? txn.txn_date.toISOString().slice(0,10) : txn.txn_date} $${Math.abs(Number(txn.amount)).toFixed(2)} — was: "${txn.parked_note}" (bank_txn ${txn.id})`]);
+      await client.query("commit");
+      return res.json({
+        receipt: `unparked — back in the active queues`,
+        was_note: txn.parked_note,
+      });
+    } catch (e) {
+      try { await client.query("rollback"); } catch (_) {}
+      console.error("unpark error", e);
+      return res.status(500).json({ error: e.message });
+    } finally {
+      client.release();
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  // GET /bank/properties/:id/parked — the parked board, oldest first.
+  // READ-ONLY. This is Josephine's catch-up list, structural: every
+  // line a human looked at and couldn't close, with the note, the
+  // person, and the age. Age is the heat — nothing rots silently.
+  // ──────────────────────────────────────────────────────────────────
+  router.get("/bank/properties/:id/parked", async (req, res) => {
+    try {
+      const accts = await accountIds(req.params.id);
+      if (accts.length === 0) return res.status(404).json({ error: "no bank accounts registered for this property" });
+      const rows = (await pool.query(
+        `select t.id as bank_transaction_id, t.txn_date, t.description, t.amount,
+                t.status, t.exception_reason, t.parked_at, t.parked_note,
+                pe.name as parked_by,
+                extract(day from now() - t.parked_at)::int as days_parked
+           from bank_transactions t
+           left join persons pe on pe.id = t.parked_by_person_id
+          where t.bank_account_id = any($1)
+            and t.parked_at is not null and t.money_event_id is null
+          order by t.parked_at asc`, [accts])).rows;
+      return res.json({
+        parked: {
+          txns: rows.length,
+          gross: Number(rows.reduce((s, r) => s + Math.abs(Number(r.amount)), 0).toFixed(2)),
+        },
+        oldest_days: rows.length ? rows[0].days_parked : null,
+        items: rows,
+        note: "READ-ONLY. Parked is not resolved — every dollar here is still unproven exposure. Resolve by bridging (auto-unparks) or unpark to return it to the queue.",
+      });
+    } catch (e) {
+      console.error("parked board error", e);
       return res.status(500).json({ error: e.message });
     }
   });
