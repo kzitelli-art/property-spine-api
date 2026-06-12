@@ -183,13 +183,17 @@ async function computeRoles(pool, propertyId) {
     const hasProperty = aCols.has("property_id");
     const roleCol = aCols.has("role") ? "role" : aCols.has("assignment_role") ? "assignment_role" : aCols.has("role_key") ? "role_key" : null;
     const userCol = aCols.has("user_id") ? "user_id" : aCols.has("assignee_user_id") ? "assignee_user_id" : null;
+    // The live assignments table (orgchart) stores person_id → persons, not user_id → users.
+    const personCol = aCols.has("person_id") ? "person_id" : null;
     const nameCol = aCols.has("name") ? "name" : aCols.has("assignee_name") ? "assignee_name" : null;
-    const activeFilter = aCols.has("active") ? " and coalesce(active, true) = true" : "";
+    const activeFilter = aCols.has("active") ? " and coalesce(active, true) = true"
+      : aCols.has("is_active") ? " and coalesce(is_active, true) = true" : "";
 
     if (hasProperty && roleCol) {
       const selectParts = [
         `${roleCol} as role`,
         userCol ? `${userCol} as user_id` : `null::text as user_id`,
+        personCol ? `${personCol} as person_id` : `null::text as person_id`,
         nameCol ? `${nameCol} as assigned_name` : `null::text as assigned_name`,
       ];
 
@@ -200,11 +204,34 @@ async function computeRoles(pool, propertyId) {
         [propertyId]
       )).rows;
       assignmentSource = "assignments scoped to property";
+
+      // Resolve assigned names through persons (the table assignments actually
+      // points at). Fail-soft: if persons is missing or the lookup errors, the
+      // assignment still counts — it just stays nameless, never crashes roles.
+      const personIds = [...new Set(assignmentRows.map(r => r.person_id).filter(Boolean))];
+      if (personIds.length) {
+        try {
+          const pRows = (await pool.query(
+            `select id, name from persons where id = any($1::uuid[])`, [personIds]
+          )).rows;
+          const nameById = new Map(pRows.map(p => [String(p.id), p.name]));
+          for (const r of assignmentRows) {
+            if (r.person_id && !r.assigned_name) r.assigned_name = nameById.get(String(r.person_id)) || null;
+          }
+        } catch (e) {
+          console.error("computeRoles persons lookup:", e.message);
+        }
+      }
     }
   }
 
+  // Read-time alias: orgchart's role vocabulary says "bookkeeper"; the funnel's
+  // core role is "accounting". Same seat — map it here, touch no data.
+  const ROLE_ALIASES = { bookkeeper: "accounting" };
+
   const assignedByRole = {};
   for (const a of assignmentRows) {
+    if (a.role && ROLE_ALIASES[a.role]) a.role = ROLE_ALIASES[a.role];
     if (!a.role || assignedByRole[a.role]) continue;
     const u = a.user_id !== null && a.user_id !== undefined ? usersById.get(String(a.user_id)) : null;
     assignedByRole[a.role] = {
