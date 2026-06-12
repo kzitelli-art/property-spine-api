@@ -32,10 +32,10 @@
 
 const express = require("express");
 
-module.exports = function exposureModule({ pool }) {
-  const router = express.Router();
-
-  // run one source's queries; a missing table degrades to 'unavailable'
+// Shared single-source exposure computation — exposure route AND desk
+// endpoints both call THIS. Two computations of the headline number would
+// be the exact divergence the spine exists to prevent.
+async function computeExposure(pool, propertyId) {
   async function trySource(name, fn) {
     try {
       const r = await fn();
@@ -53,12 +53,9 @@ module.exports = function exposureModule({ pool }) {
     }
   }
 
-  router.get("/properties/:id/exposure", async (req, res) => {
-    const propertyId = req.params.id;
-    try {
-      const prop = (await pool.query(
-        "select id, name, canonical_key from properties where id=$1", [propertyId])).rows[0];
-      if (!prop) return res.status(404).json({ error: "property not found" });
+  const prop = (await pool.query(
+    "select id, name, canonical_key from properties where id=$1", [propertyId])).rows[0];
+  if (!prop) return null;
 
       // ── source: DEPOSITS (009) ──────────────────────────────────────
       const deposits = await trySource("deposits", async () => {
@@ -137,7 +134,7 @@ module.exports = function exposureModule({ pool }) {
       const total = readable.reduce((s, x) => s + (x.gross_unproven_exposure || 0), 0);
       const complete = unavailable.length === 0;
 
-      return res.json({
+  return {
         property: { id: prop.id, name: prop.name, canonical_key: prop.canonical_key },
         gross_unproven_exposure: Number(total.toFixed(2)),
         headline_note: complete
@@ -148,7 +145,17 @@ module.exports = function exposureModule({ pool }) {
         fully_clean: complete && total === 0,
         sources,
         not_yet_covered: ["cash/waterfall (future rung)", "loan reconciliation (future rung)"],
-      });
+  };
+}
+
+module.exports = function exposureModule({ pool }) {
+  const router = express.Router();
+
+  router.get("/properties/:id/exposure", async (req, res) => {
+    try {
+      const out = await computeExposure(pool, req.params.id);
+      if (!out) return res.status(404).json({ error: "property not found" });
+      return res.json(out);
     } catch (e) {
       return res.status(500).json({ error: e.message });
     }
@@ -156,3 +163,4 @@ module.exports = function exposureModule({ pool }) {
 
   return router;
 };
+module.exports.computeExposure = computeExposure;
