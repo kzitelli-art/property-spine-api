@@ -2,30 +2,38 @@
 //  TENANT LINK MODULE — tenantlink.js  (the building text line)
 //
 //  The product sentence: tenants text their building; the system turns
-//  messages into the right operating action. Link-only pilot — the
-//  browser thread is the first door; SMS becomes the second door into
-//  the SAME machinery when a vendor lands. One spine, two doors.
+//  messages into the right operating action. The browser thread was the
+//  first door; SMS (030) is the second door into the SAME machinery.
+//  One spine, two doors — both doors call runInbound(); neither owns a
+//  private copy of the classify/act logic.
 //
 //  PHASE 1 — CONNECTION (027):
 //    GET  /properties/:propertyId/tenant-communications  — connection board
 //    POST /occupants/:personId/phone                     — save/normalize phone
-//    POST /occupants/:personId/invite                    — create setup link
+//    POST /occupants/:personId/invite                    — create setup link (auto-texts it when SMS is live)
 //    GET  /t/setup/:token        — tenant-facing PAGE (served HTML)
 //    GET  /tenant/setup/:token   — setup state (JSON behind the page)
-//    POST /tenant/setup/verify   — link-only verify: typed phone must match
+//    POST /tenant/setup/request-code — text a one-time code to the phone ON FILE (030)
+//    POST /tenant/setup/verify   — OTP verify when SMS is live; link-only phone-match fallback when it isn't
 //    GET  /tenant/me             — session-scoped self view
 //
 //  PHASE 2+3 — MESSAGE LOOP (028):
-//    POST /tenant/messages                       — tenant sends a message
+//    POST /tenant/messages                       — tenant sends a message (browser door)
 //    GET  /tenant/thread                         — tenant reads the thread
 //    GET  /properties/:propertyId/inbox          — manager inbox
+//    POST /conversations/:conversationId/reply   — manager replies (texts the tenant when SMS is live)
 //    GET  /conversations/:conversationId/messages — manager reads a thread
-//    POST /conversations/:conversationId/reply   — manager replies
+//
+//  SMS DOOR (030):
+//    POST /communications/inbound-sms            — Twilio webhook (signature-gated, NOT operator-gated;
+//                                                  Twilio can't send headers — the signature IS the gate)
+//    POST /properties/:propertyId/sms-number     — operator sets the property's text line
 //
 //  THE RULE THIS RUNG ENFORCES: a message can never silently disappear.
 //  Every inbound is SAVED FIRST, then classified; classification failure
-//  degrades to needs_human, never to a lost message. The inbox shows what
-//  the system did with every single message.
+//  degrades to needs_human, never to a lost message. A failed SMS send is
+//  a RECORDED failure (sms_status + sms_error) on a message that already
+//  exists. Webhook retries can never duplicate (unique sms_sid index).
 //
 //  AI boundaries (in code, not vibes):
 //    • AI opens work orders (reversible operating objects) and they ALWAYS
@@ -36,6 +44,19 @@
 //      set needs_human — hard regex overrides run BEFORE and AFTER the AI,
 //      so the model cannot talk its way past them.
 //    • Low confidence (<0.7) or unknown → human queue, honest reply.
+//    • Emergencies keep the 911 line — the caveat reply is identical on
+//      both doors because both doors share the same reply text.
+//
+//  OTP rules (030):
+//    • The code goes ONLY to the phone already on file. A typed phone is
+//      never an identity input in OTP mode — phone on file IS identity.
+//    • Only a salted hash is stored; codes expire in 10 minutes; resends
+//      rate-limited to one per 60s; wrong codes share the existing
+//      5-strikes-revokes-the-link counter. Codes are NEVER written to the
+//      conversation thread (a secret is not a message).
+//    • If the SMS transport or the property line isn't configured, verify
+//      falls back to the original link-only phone-match — production
+//      behavior is unchanged until Twilio is actually live.
 //
 //  FLAGGED FOLLOW-UP (deliberate, not forgotten): tenant emergencies top
 //  the inbox + get the honest 911-caveat reply + open a work order, but do
@@ -47,7 +68,7 @@
 const express = require("express");
 const crypto = require("crypto");
 
-module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL }) {
+module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms }) {
   const router = express.Router();
 
   // ── OPERATOR AUTH (fail-closed) ──────────────────────────────────────
@@ -118,6 +139,34 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL }) {
     return r.rows[0] || null;
   }
 
+  // ── SMS helpers (030) ────────────────────────────────────────────────
+  const smsReady = () => !!(sms && sms.enabled());
+
+  async function propertyLine(propertyId) {
+    const r = await pool.query(`select sms_number from properties where id = $1`, [propertyId]);
+    return r.rows.length ? r.rows[0].sms_number : null;
+  }
+
+  // Send an SMS for a comm_event that ALREADY EXISTS (save-first holds:
+  // the message is real whether or not the wire cooperates), then record
+  // the wire's answer on the event. Returns the transport receipt.
+  async function smsForEvent({ eventId, to, from, body }) {
+    if (!smsReady()) return { sent: false, reason: "transport_not_configured" };
+    if (!from) return { sent: false, reason: "no_property_line" };
+    if (!to) return { sent: false, reason: "no_phone" };
+    const result = await sms.sendSms({ to, from, body });
+    try {
+      if (result.sent) {
+        await pool.query(`update comm_events set sms_sid=$1, sms_status=$2 where id=$3`,
+          [result.sid, result.status || "queued", eventId]);
+      } else {
+        await pool.query(`update comm_events set sms_status='failed', sms_error=$1 where id=$2`,
+          [result.reason + (result.error ? `: ${result.error}` : ""), eventId]);
+      }
+    } catch (e) { console.error("smsForEvent record:", e.message); }
+    return result;
+  }
+
   // ════════════════════════════════════════════════════════════════════
   //  1. MANAGER CONNECTION BOARD
   // ════════════════════════════════════════════════════════════════════
@@ -125,7 +174,7 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL }) {
     try {
       const { propertyId } = req.params;
       const propQ = await pool.query(
-        `select id, name, address, leasing_basis from properties where id = $1`,
+        `select id, name, address, leasing_basis, sms_number from properties where id = $1`,
         [propertyId]);
       if (!propQ.rows.length) {
         return res.status(404).json({ receipt: "No property with that id." });
@@ -207,7 +256,12 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL }) {
         receipt: tenants.length
           ? `${summary.connected} of ${summary.total_tenants} occupants connected at ${prop.name || prop.address}.`
           : `No occupants on active leases at ${prop.name || prop.address}.`,
-        property: { id: prop.id, name: prop.name, address: prop.address, leasing_basis: prop.leasing_basis },
+        property: {
+          id: prop.id, name: prop.name, address: prop.address,
+          leasing_basis: prop.leasing_basis,
+          sms_number: prop.sms_number,                       // 030: the property line (null = link-only)
+          sms_transport: smsReady() ? "configured" : "not_configured",
+        },
         summary, next, tenants,
       });
     } catch (e) {
@@ -244,7 +298,51 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL }) {
   });
 
   // ════════════════════════════════════════════════════════════════════
+  //  2b. SET THE PROPERTY TEXT LINE (030)
+  //  The Twilio number this property speaks from. Identity for inbound
+  //  routing: webhook "To" → exactly one property. Operator-gated.
+  // ════════════════════════════════════════════════════════════════════
+  router.post("/properties/:propertyId/sms-number", requireOperator, async (req, res) => {
+    try {
+      const { propertyId } = req.params;
+      const raw = req.body && req.body.sms_number;
+      const number = raw === null || raw === "" ? null : normalizePhone(raw);
+      if (raw && !number) {
+        return res.status(400).json({ receipt: "That doesn't look like a valid US phone number. Use 10 digits or +1 format." });
+      }
+      if (number) {
+        const clash = await pool.query(
+          `select id, name, address from properties where sms_number = $1 and id <> $2`,
+          [number, propertyId]);
+        if (clash.rows.length) {
+          return res.status(409).json({
+            receipt: `That number is already the text line for ${clash.rows[0].name || clash.rows[0].address}. One line, one property — inbound routing depends on it.`,
+          });
+        }
+      }
+      const r = await pool.query(
+        `update properties set sms_number = $1 where id = $2 returning id, name, address, sms_number`,
+        [number, propertyId]);
+      if (!r.rows.length) return res.status(404).json({ receipt: "No property with that id." });
+      const p = r.rows[0];
+      res.json({
+        receipt: number
+          ? `${p.name || p.address} text line set to ${number}. Invites, replies, and OTP codes now go out as real texts from this number.`
+          : `${p.name || p.address} text line cleared — back to link-only behavior.`,
+        property: { id: p.id, name: p.name, sms_number: p.sms_number },
+        sms_transport: smsReady() ? "configured" : "not_configured (set Twilio env vars in Render)",
+      });
+    } catch (e) {
+      console.error("sms-number:", e);
+      res.status(500).json({ receipt: "Could not set the text line.", error: e.message });
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════════
   //  3. CREATE SETUP LINK (supersedes old active links; opens the thread)
+  //  030: when the transport + property line are live, the invite text
+  //  goes out AS A REAL TEXT from the property line. When they're not,
+  //  the manager copies it from the receipt — exactly as before.
   // ════════════════════════════════════════════════════════════════════
   router.post("/occupants/:personId/invite", requireOperator, async (req, res) => {
     try {
@@ -309,10 +407,19 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL }) {
         [propertyId, personId, place.unit_id, convo.id, sms_text])).rows[0];
       await pool.query(`update conversations set last_message_at = now() where id = $1`, [convo.id]);
 
+      // 030: put it on the wire if we can. Save-first already happened —
+      // a failed send is a recorded failure, and the manager still gets
+      // the copyable text as the fallback.
+      const line = await propertyLine(propertyId);
+      const wire = await smsForEvent({ eventId: msg.id, to: person.phone, from: line, body: sms_text });
+
       res.json({
-        receipt: `Setup link created for ${firstName(person.name)} in unit ${place.unit_number}. Copy the text below and send it from your phone.`,
+        receipt: wire.sent
+          ? `Setup text sent to ${firstName(person.name)} at ${maskPhone(person.phone)} from the property line.`
+          : `Setup link created for ${firstName(person.name)} in unit ${place.unit_number}. Copy the text below and send it from your phone.${wire.reason === "send_failed" ? " (Automatic text failed — recorded on the message.)" : ""}`,
         person_id: personId, conversation_id: convo.id, invite_id: inv.id,
         link, sms_text, expires_at: inv.expires_at, first_message_id: msg.id,
+        sms_sent: !!wire.sent, sms_reason: wire.sent ? null : wire.reason,
       });
     } catch (e) {
       console.error("invite:", e);
@@ -326,7 +433,8 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL }) {
   async function loadInvite(token) {
     const r = await pool.query(
       `select i.*, per.name as person_name, per.phone as person_phone,
-              p.name as property_name, p.address as property_address
+              p.name as property_name, p.address as property_address,
+              p.sms_number as property_sms_number
          from tenant_invites i
          join persons per on per.id = i.person_id
          join properties p on p.id = i.property_id
@@ -340,6 +448,9 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL }) {
     if (inv.status === "active" && new Date(inv.expires_at) < new Date()) return "expired";
     return "valid";
   }
+  // OTP mode requires BOTH a live transport and a property line to send
+  // the code from. Anything less degrades honestly to link-only matching.
+  const otpAvailable = (inv) => smsReady() && !!inv.property_sms_number && !!inv.person_phone;
 
   router.get("/tenant/setup/:token", async (req, res) => {
     try {
@@ -354,13 +465,18 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL }) {
         });
       }
       const place = await placeOf(inv.person_id, inv.property_id);
+      const otp = otpAvailable(inv);
       res.json({
         status,
+        verify_mode: otp ? "otp" : "phone_match",
+        masked_phone: otp ? maskPhone(inv.person_phone) : null,
         property: { name: inv.property_name || inv.property_address },
         tenant: { first_name: firstName(inv.person_name), unit_number: place ? place.unit_number : null },
         message: status === "already_verified"
-          ? "You're already connected. Verify your phone again to open your thread."
-          : `Confirm your phone to connect to ${theName(inv.property_name)} tenant line.`,
+          ? (otp ? "You're already connected. Verify with a code to open your thread."
+                 : "You're already connected. Verify your phone again to open your thread.")
+          : (otp ? `We'll text a code to your phone on file to connect you to ${theName(inv.property_name)} tenant line.`
+                 : `Confirm your phone to connect to ${theName(inv.property_name)} tenant line.`),
       });
     } catch (e) {
       console.error("setup state:", e);
@@ -369,49 +485,128 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL }) {
   });
 
   // ════════════════════════════════════════════════════════════════════
-  //  5. LINK-ONLY VERIFY — typed phone must match the record
-  //     (OTP step slots in here when an SMS vendor lands.)
+  //  4b. REQUEST A ONE-TIME CODE (030)
+  //  The code goes ONLY to the phone on file — never to a typed number.
+  //  Only a salted hash is stored. 10-minute expiry, 60s resend limit.
+  //  The code is NOT written to the conversation thread: a secret is not
+  //  a message.
   // ════════════════════════════════════════════════════════════════════
-  router.post("/tenant/setup/verify", async (req, res) => {
+  const otpHash = (code, token) =>
+    crypto.createHash("sha256").update(`${code}:${token}`).digest("hex");
+
+  router.post("/tenant/setup/request-code", async (req, res) => {
     try {
       const { token } = req.body || {};
-      const typed = normalizePhone(req.body && req.body.phone);
       const inv = await loadInvite(token);
       const status = inviteState(inv);
       if (status === "invalid") return res.status(404).json({ receipt: "This link isn't recognized." });
       if (status === "expired" || status === "revoked") {
         return res.status(410).json({ receipt: "This link expired or was replaced. Ask your manager for a fresh link." });
       }
-      if (!typed) {
-        return res.status(400).json({ receipt: "That doesn't look like a valid phone number. Use 10 digits." });
+      if (!otpAvailable(inv)) {
+        return res.status(503).json({ receipt: "Text verification isn't available for this property yet — confirm your phone number instead." });
       }
-      if (typed !== inv.person_phone) {
-        const attempts = inv.failed_attempts + 1;
-        if (attempts >= 5) {
-          await pool.query(`update tenant_invites set failed_attempts=$1, status='revoked' where id=$2`,
-            [attempts, inv.id]);
-          return res.status(401).json({ receipt: "Too many attempts — this link is now locked. Ask your manager for a fresh one." });
+      if (inv.otp_sent_at && (Date.now() - new Date(inv.otp_sent_at).getTime()) < 60 * 1000) {
+        return res.status(429).json({ receipt: "A code was just sent — give it a minute, then try again." });
+      }
+
+      const code = String(crypto.randomInt(0, 1000000)).padStart(6, "0");
+      await pool.query(
+        `update tenant_invites
+            set otp_hash = $1, otp_expires_at = now() + interval '10 minutes', otp_sent_at = now()
+          where id = $2`,
+        [otpHash(code, inv.token), inv.id]);
+
+      const body = `Your ${theName(inv.property_name)} tenant line code is ${code}. It expires in 10 minutes. Never share this code.`;
+      const wire = await sms.sendSms({ to: inv.person_phone, from: inv.property_sms_number, body });
+      if (!wire.sent) {
+        // Honest failure — clear the hash so a stale code can't linger.
+        await pool.query(`update tenant_invites set otp_hash = null, otp_expires_at = null where id = $1`, [inv.id]);
+        return res.status(502).json({ receipt: "Could not send the code right now — try again in a moment." });
+      }
+      res.json({
+        receipt: `Code sent to ${maskPhone(inv.person_phone)}. It expires in 10 minutes.`,
+        masked_phone: maskPhone(inv.person_phone),
+      });
+    } catch (e) {
+      console.error("request-code:", e);
+      res.status(500).json({ receipt: "Could not send a code. Try again." });
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════════
+  //  5. VERIFY — OTP when SMS is live; link-only phone-match fallback.
+  //  Both paths share one connect step and the SAME 5-strikes lockout.
+  // ════════════════════════════════════════════════════════════════════
+  async function connectInvite(inv) {
+    await pool.query(
+      `update tenant_invites
+          set status='used', used_at = coalesce(used_at, now()),
+              otp_hash = null, otp_expires_at = null
+        where id = $1`, [inv.id]);
+    const sess = (await pool.query(
+      `insert into tenant_sessions (person_id, property_id, token, expires_at)
+       values ($1, $2, $3, now() + interval '30 days') returning token`,
+      [inv.person_id, inv.property_id, newToken()])).rows[0];
+    const place = await placeOf(inv.person_id, inv.property_id);
+    await pool.query(
+      `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification)
+       values ($1, $2, $3, $4, 'portal', 'inbound', $5, 'general')`,
+      [inv.property_id, inv.person_id, place ? place.unit_id : null, inv.conversation_id,
+       `${firstName(inv.person_name)} verified their phone and connected.`]);
+    return { sess, place };
+  }
+
+  async function strike(inv, res, message) {
+    const attempts = inv.failed_attempts + 1;
+    if (attempts >= 5) {
+      await pool.query(`update tenant_invites set failed_attempts=$1, status='revoked' where id=$2`,
+        [attempts, inv.id]);
+      return res.status(401).json({ receipt: "Too many attempts — this link is now locked. Ask your manager for a fresh one." });
+    }
+    await pool.query(`update tenant_invites set failed_attempts=$1 where id=$2`, [attempts, inv.id]);
+    return res.status(401).json({ receipt: message });
+  }
+
+  router.post("/tenant/setup/verify", async (req, res) => {
+    try {
+      const { token, code } = req.body || {};
+      const inv = await loadInvite(token);
+      const status = inviteState(inv);
+      if (status === "invalid") return res.status(404).json({ receipt: "This link isn't recognized." });
+      if (status === "expired" || status === "revoked") {
+        return res.status(410).json({ receipt: "This link expired or was replaced. Ask your manager for a fresh link." });
+      }
+
+      if (otpAvailable(inv)) {
+        // ── OTP path. A typed phone is NOT accepted as identity here. ──
+        const typedCode = String(code || "").replace(/\D/g, "");
+        if (!typedCode || typedCode.length !== 6) {
+          return res.status(400).json({ receipt: "Enter the 6-digit code we texted you." });
         }
-        await pool.query(`update tenant_invites set failed_attempts=$1 where id=$2`, [attempts, inv.id]);
-        return res.status(401).json({ receipt: "That phone does not match this invite." });
+        if (!inv.otp_hash) {
+          return res.status(409).json({ receipt: "Request a code first — tap “Text me a code.”" });
+        }
+        if (new Date(inv.otp_expires_at) < new Date()) {
+          return res.status(410).json({ receipt: "That code expired. Request a fresh one." });
+        }
+        if (otpHash(typedCode, inv.token) !== inv.otp_hash) {
+          return strike(inv, res, "That code isn't right. Check the text and try again.");
+        }
+      } else {
+        // ── Link-only fallback: typed phone must match the record. ──
+        const typed = normalizePhone(req.body && req.body.phone);
+        if (!typed) {
+          return res.status(400).json({ receipt: "That doesn't look like a valid phone number. Use 10 digits." });
+        }
+        if (typed !== inv.person_phone) {
+          return strike(inv, res, "That phone does not match this invite.");
+        }
       }
 
-      // Match — connect. Mark used (idempotent for already_verified re-entry),
-      // issue a 30-day session, log the connection on the thread.
-      await pool.query(
-        `update tenant_invites set status='used', used_at = coalesce(used_at, now()) where id = $1`,
-        [inv.id]);
-      const sess = (await pool.query(
-        `insert into tenant_sessions (person_id, property_id, token, expires_at)
-         values ($1, $2, $3, now() + interval '30 days') returning token`,
-        [inv.person_id, inv.property_id, newToken()])).rows[0];
-      const place = await placeOf(inv.person_id, inv.property_id);
-      await pool.query(
-        `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification)
-         values ($1, $2, $3, $4, 'portal', 'inbound', $5, 'general')`,
-        [inv.property_id, inv.person_id, place ? place.unit_id : null, inv.conversation_id,
-         `${firstName(inv.person_name)} verified their phone and connected.`]);
-
+      // Verified — connect. Mark used (idempotent for already_verified
+      // re-entry), issue a 30-day session, log the connection on the thread.
+      const { sess, place } = await connectInvite(inv);
       res.json({
         receipt: `${firstName(inv.person_name)} is connected to ${theName(inv.property_name)} tenant line.`,
         session: sess.token,
@@ -532,8 +727,91 @@ Rules: classification "emergency" only for active danger or major damage in prog
   }
 
   // ════════════════════════════════════════════════════════════════════
-  //  7. TENANT SENDS A MESSAGE — saved first, then classified, then acted
+  //  7. THE INBOUND CORE — runInbound(): one spine, two doors.
+  //  EVERY inbound tenant message — browser or SMS — runs through this
+  //  exact function. Save-first → classify → act → audit → reply. The
+  //  doors differ ONLY in how the reply travels back (HTTP vs SMS wire);
+  //  the objects created are identical, by construction.
   // ════════════════════════════════════════════════════════════════════
+  async function runInbound({ personId, propertyId, body, channel, smsSid }) {
+    const place = await placeOf(personId, propertyId);
+    const convo = (await pool.query(
+      `insert into conversations (property_id, person_id, unit_id, lease_id)
+       values ($1,$2,$3,$4)
+       on conflict (property_id, person_id) do update set last_message_at = now()
+       returning id`,
+      [propertyId, personId, place ? place.unit_id : null, place ? place.lease_id : null])).rows[0];
+
+    // ① SAVE FIRST. Whatever happens after this, the message exists.
+    //    (For SMS this also lands the sid — the webhook dedupe anchor.)
+    const inbound = (await pool.query(
+      `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, sms_sid)
+       values ($1,$2,$3,$4,$5,'inbound',$6,$7) returning id`,
+      [propertyId, personId, place ? place.unit_id : null, convo.id, channel, body, smsSid || null])).rows[0];
+
+    // ② Classify (fail-soft to human queue).
+    const c = await classifyMessage(body);
+
+    // ③ Act — the matrix. AI may open work orders (needs_pm_review always
+    //    true) and answer balance from the live lease. Nothing else.
+    let createdType = null, createdId = null, reply;
+    const unitLabel = place ? `Unit ${place.unit_number}` : "your unit";
+
+    if (c.classification === "emergency") {
+      const wo = (await pool.query(
+        `insert into work_orders (property_id, unit_id, person_id, title, description,
+                                  status, source, field_category, operating_category, gl_category,
+                                  needs_pm_review)
+         values ($1,$2,$3,$4,$5,'open','tenant',$6,'resident_repair',$7,true) returning id`,
+        [propertyId, place ? place.unit_id : null, personId,
+         "EMERGENCY: " + (c.suggested_title || c.field_category || "tenant report"),
+         body, c.field_category, `${c.field_category}_repairs`])).rows[0];
+      createdType = "work_order"; createdId = wo.id;
+      reply = "Emergency received — management has been notified in the system. If there is immediate danger to anyone, call 911 first.";
+    } else if (c.classification === "maintenance" && c.confidence >= 0.7 && !c.needs_human) {
+      const wo = (await pool.query(
+        `insert into work_orders (property_id, unit_id, person_id, title, description,
+                                  status, source, field_category, operating_category, gl_category,
+                                  needs_pm_review)
+         values ($1,$2,$3,$4,$5,'open','tenant',$6,'resident_repair',$7,true) returning id`,
+        [propertyId, place ? place.unit_id : null, personId,
+         c.suggested_title || `${c.field_category} request`,
+         body, c.field_category, `${c.field_category}_repairs`])).rows[0];
+      createdType = "work_order"; createdId = wo.id;
+      reply = `Got it — ${c.field_category.replace("_", "/")} request opened for ${unitLabel}. We'll keep you updated right here.`;
+    } else if (c.classification === "balance" && c.confidence >= 0.7 && !c.needs_human && place) {
+      createdType = "balance_inquiry";
+      const bal = place.balance == null ? null : Number(place.balance);
+      reply = bal == null
+        ? "Your balance isn't loaded in the system yet — your manager will confirm it here."
+        : bal <= 0
+          ? `You're all paid up — current balance $${bal.toFixed(2)}.${place.rent ? ` Rent is $${Number(place.rent).toFixed(2)}/month.` : ""}`
+          : `Your current balance is $${bal.toFixed(2)}.${place.rent ? ` Rent is $${Number(place.rent).toFixed(2)}/month.` : ""}`;
+    } else {
+      // document / lease_question / general / unknown / low confidence /
+      // sensitive — the honest human queue. No pretending.
+      c.needs_human = true;
+      reply = "Got it — your manager will follow up with you right here.";
+    }
+
+    // ④ Record what the system did ON the inbound message (the audit).
+    await pool.query(
+      `update comm_events set classification=$1, created_object_type=$2,
+              created_object_id=$3, needs_human=$4, ai_summary=$5 where id=$6`,
+      [c.classification, createdType, createdId, c.needs_human, c.summary, inbound.id]);
+
+    // ⑤ Reply on the same thread (same channel the message arrived on).
+    const out = (await pool.query(
+      `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification)
+       values ($1,$2,$3,$4,$5,'outbound',$6,'auto_reply') returning id, occurred_at`,
+      [propertyId, personId, place ? place.unit_id : null, convo.id, channel, reply])).rows[0];
+    await pool.query(`update conversations set last_message_at = now() where id = $1`, [convo.id]);
+
+    return { inbound, out, reply, c, createdType, createdId, convo, place };
+  }
+
+  // ── Browser door: thin wrapper over the shared core. Same response
+  //    shape as before, to the byte. ─────────────────────────────────────
   router.post("/tenant/messages", async (req, res) => {
     try {
       const sess = await sessionOf(req);
@@ -542,90 +820,116 @@ Rules: classification "emergency" only for active danger or major damage in prog
       if (!body) return res.status(400).json({ receipt: "Type a message first." });
       if (body.length > 4000) return res.status(400).json({ receipt: "That message is too long — keep it under 4000 characters." });
 
-      const place = await placeOf(sess.person_id, sess.property_id);
-      const convo = (await pool.query(
-        `insert into conversations (property_id, person_id, unit_id, lease_id)
-         values ($1,$2,$3,$4)
-         on conflict (property_id, person_id) do update set last_message_at = now()
-         returning id`,
-        [sess.property_id, sess.person_id, place ? place.unit_id : null, place ? place.lease_id : null])).rows[0];
-
-      // ① SAVE FIRST. Whatever happens after this, the message exists.
-      const inbound = (await pool.query(
-        `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body)
-         values ($1,$2,$3,$4,'portal','inbound',$5) returning id`,
-        [sess.property_id, sess.person_id, place ? place.unit_id : null, convo.id, body])).rows[0];
-
-      // ② Classify (fail-soft to human queue).
-      const c = await classifyMessage(body);
-
-      // ③ Act — the matrix. AI may open work orders (needs_pm_review always
-      //    true) and answer balance from the live lease. Nothing else.
-      let createdType = null, createdId = null, reply;
-      const unitLabel = place ? `Unit ${place.unit_number}` : "your unit";
-
-      if (c.classification === "emergency") {
-        const wo = (await pool.query(
-          `insert into work_orders (property_id, unit_id, person_id, title, description,
-                                    status, source, field_category, operating_category, gl_category,
-                                    needs_pm_review)
-           values ($1,$2,$3,$4,$5,'open','tenant',$6,'resident_repair',$7,true) returning id`,
-          [sess.property_id, place ? place.unit_id : null, sess.person_id,
-           "EMERGENCY: " + (c.suggested_title || c.field_category || "tenant report"),
-           body, c.field_category, `${c.field_category}_repairs`])).rows[0];
-        createdType = "work_order"; createdId = wo.id;
-        reply = "Emergency received — management has been notified in the system. If there is immediate danger to anyone, call 911 first.";
-      } else if (c.classification === "maintenance" && c.confidence >= 0.7 && !c.needs_human) {
-        const wo = (await pool.query(
-          `insert into work_orders (property_id, unit_id, person_id, title, description,
-                                    status, source, field_category, operating_category, gl_category,
-                                    needs_pm_review)
-           values ($1,$2,$3,$4,$5,'open','tenant',$6,'resident_repair',$7,true) returning id`,
-          [sess.property_id, place ? place.unit_id : null, sess.person_id,
-           c.suggested_title || `${c.field_category} request`,
-           body, c.field_category, `${c.field_category}_repairs`])).rows[0];
-        createdType = "work_order"; createdId = wo.id;
-        reply = `Got it — ${c.field_category.replace("_", "/")} request opened for ${unitLabel}. We'll keep you updated right here.`;
-      } else if (c.classification === "balance" && c.confidence >= 0.7 && !c.needs_human && place) {
-        createdType = "balance_inquiry";
-        const bal = place.balance == null ? null : Number(place.balance);
-        reply = bal == null
-          ? "Your balance isn't loaded in the system yet — your manager will confirm it here."
-          : bal <= 0
-            ? `You're all paid up — current balance $${bal.toFixed(2)}.${place.rent ? ` Rent is $${Number(place.rent).toFixed(2)}/month.` : ""}`
-            : `Your current balance is $${bal.toFixed(2)}.${place.rent ? ` Rent is $${Number(place.rent).toFixed(2)}/month.` : ""}`;
-      } else {
-        // document / lease_question / general / unknown / low confidence /
-        // sensitive — the honest human queue. No pretending.
-        c.needs_human = true;
-        reply = "Got it — your manager will follow up with you right here.";
-      }
-
-      // ④ Record what the system did ON the inbound message (the audit).
-      await pool.query(
-        `update comm_events set classification=$1, created_object_type=$2,
-                created_object_id=$3, needs_human=$4, ai_summary=$5 where id=$6`,
-        [c.classification, createdType, createdId, c.needs_human, c.summary, inbound.id]);
-
-      // ⑤ Reply on the same thread.
-      const out = (await pool.query(
-        `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification)
-         values ($1,$2,$3,$4,'portal','outbound',$5,'auto_reply') returning id, occurred_at`,
-        [sess.property_id, sess.person_id, place ? place.unit_id : null, convo.id, reply])).rows[0];
-      await pool.query(`update conversations set last_message_at = now() where id = $1`, [convo.id]);
+      const r = await runInbound({
+        personId: sess.person_id, propertyId: sess.property_id, body, channel: "portal",
+      });
 
       res.json({
-        receipt: reply,
-        message_id: inbound.id, reply_id: out.id, conversation_id: convo.id,
-        classification: c.classification, confidence: c.confidence,
-        created_object_type: createdType, created_object_id: createdId,
-        needs_human: c.needs_human,
+        receipt: r.reply,
+        message_id: r.inbound.id, reply_id: r.out.id, conversation_id: r.convo.id,
+        classification: r.c.classification, confidence: r.c.confidence,
+        created_object_type: r.createdType, created_object_id: r.createdId,
+        needs_human: r.c.needs_human,
       });
     } catch (e) {
       console.error("tenant message:", e);
       res.status(500).json({ receipt: "Your message hit an error — try sending it again." });
     }
   });
+
+  // ════════════════════════════════════════════════════════════════════
+  //  7b. SMS DOOR — the Twilio webhook (030)
+  //  NOT operator-gated (Twilio can't send our headers) — the
+  //  X-Twilio-Signature check IS the gate, and it's fail-closed.
+  //  Flow: validate → dedupe → resolve property (To) + person (From) →
+  //  shared runInbound → ack Twilio → put the reply on the wire.
+  //  Twilio sends application/x-www-form-urlencoded, so this one route
+  //  carries its own parser.
+  // ════════════════════════════════════════════════════════════════════
+  const emptyTwiml = (res) => res.type("text/xml").send("<Response></Response>");
+
+  router.post("/communications/inbound-sms",
+    express.urlencoded({ extended: false, limit: "100kb" }),
+    async (req, res) => {
+      try {
+        if (!smsReady()) {
+          console.error("inbound-sms: webhook hit but transport not configured.");
+          return res.status(503).type("text/plain").send("SMS transport not configured");
+        }
+        if (!sms.validateWebhook(req)) {
+          console.error("inbound-sms: signature validation FAILED — rejected.");
+          return res.status(403).type("text/plain").send("Invalid signature");
+        }
+
+        const { MessageSid, From, To } = req.body || {};
+        const body = String(req.body && req.body.Body || "").trim().slice(0, 4000);
+        if (!MessageSid || !From || !To) return emptyTwiml(res);
+
+        // Dedupe: Twilio retries on timeout. A sid we've already saved is
+        // already handled — ack and stop. (Unique index backs this up.)
+        const dup = await pool.query(`select id from comm_events where sms_sid = $1`, [MessageSid]);
+        if (dup.rows.length) return emptyTwiml(res);
+
+        // Resolve the property by the line that was texted.
+        const propQ = await pool.query(
+          `select id, name, address, sms_number from properties where sms_number = $1`, [To]);
+        if (!propQ.rows.length) {
+          // No property owns this number — we have nowhere on the spine to
+          // attach it. Loud log; Twilio's own logs keep the raw message.
+          console.error(`inbound-sms: no property has line ${To} — message ${MessageSid} from ${From} NOT attached.`);
+          return emptyTwiml(res);
+        }
+        const prop = propQ.rows[0];
+
+        // Resolve the person: a VERIFIED resident (used invite) on an
+        // active lease at this property with this phone.
+        const perQ = await pool.query(
+          `select distinct per.id, per.name, per.phone
+             from persons per
+             join leases l on l.lease_status = 'active' and l.property_id = $1
+                          and per.id = any(l.tenant_ids)
+             join tenant_invites ti on ti.person_id = per.id and ti.property_id = $1
+                          and ti.status = 'used'
+            where per.phone = $2`, [prop.id, From]);
+
+        if (perQ.rows.length !== 1) {
+          // Unknown or ambiguous sender. The message can never silently
+          // disappear: save it on the property, person-less, human-flagged.
+          const saved = (await pool.query(
+            `insert into comm_events (property_id, person_id, unit_id, conversation_id,
+                                      channel, direction, body, sms_sid, classification, needs_human)
+             values ($1, null, null, null, 'sms', 'inbound', $2, $3, 'unknown', true) returning id`,
+            [prop.id, body || "(empty message)", MessageSid])).rows[0];
+          emptyTwiml(res); // ack Twilio first, then reply on the wire
+          const note = perQ.rows.length === 0
+            ? `This is ${theName(prop.name)} tenant line. We couldn't match your number to a resident account — contact your property manager to get set up.`
+            : `This is ${theName(prop.name)} tenant line. Your number matches more than one account — contact your property manager so we can sort it out.`;
+          const outNote = (await pool.query(
+            `insert into comm_events (property_id, channel, direction, body, classification)
+             values ($1, 'sms', 'outbound', $2, 'auto_reply') returning id`, [prop.id, note])).rows[0];
+          await smsForEvent({ eventId: outNote.id, to: From, from: prop.sms_number, body: note });
+          console.error(`inbound-sms: ${perQ.rows.length === 0 ? "unmatched" : "AMBIGUOUS"} sender ${From} at ${prop.name || prop.address} — saved as ${saved.id}, needs_human.`);
+          return;
+        }
+        const person = perQ.rows[0];
+
+        // ONE SPINE, TWO DOORS: the exact same core the browser uses.
+        const r = await runInbound({
+          personId: person.id, propertyId: prop.id, body: body || "(empty message)",
+          channel: "sms", smsSid: MessageSid,
+        });
+
+        // Ack Twilio (empty TwiML — the reply travels by REST, not TwiML,
+        // so it carries a sid + status receipt like every other text).
+        emptyTwiml(res);
+        await smsForEvent({ eventId: r.out.id, to: person.phone, from: prop.sms_number, body: r.reply });
+      } catch (e) {
+        console.error("inbound-sms:", e);
+        // Ack anyway if we still can — a 500 makes Twilio retry, and if the
+        // save already happened the dedupe turns the retry into a no-op.
+        if (!res.headersSent) emptyTwiml(res);
+      }
+    });
 
   // ════════════════════════════════════════════════════════════════════
   //  8. TENANT READS THE THREAD
@@ -728,6 +1032,8 @@ Rules: classification "emergency" only for active danger or major damage in prog
 
   // ════════════════════════════════════════════════════════════════════
   //  10. MANAGER REPLIES — same thread, the tenant sees it
+  //  030: when the line is live and the tenant has a phone, the reply
+  //  also goes out as a real text from the property line.
   // ════════════════════════════════════════════════════════════════════
   router.post("/conversations/:conversationId/reply", requireOperator, async (req, res) => {
     try {
@@ -735,7 +1041,7 @@ Rules: classification "emergency" only for active danger or major damage in prog
       const body = (req.body && req.body.body || "").trim();
       if (!body) return res.status(400).json({ receipt: "Type a reply first." });
       const convoQ = await pool.query(
-        `select c.*, per.name as person_name, u.unit_number
+        `select c.*, per.name as person_name, per.phone as person_phone, u.unit_number
            from conversations c
            left join persons per on per.id = c.person_id
            left join units u on u.id = c.unit_id
@@ -752,9 +1058,15 @@ Rules: classification "emergency" only for active danger or major damage in prog
         `update comm_events set needs_human = false
           where conversation_id = $1 and direction = 'inbound' and needs_human = true`,
         [conversationId]);
+
+      // 030: put it on the tenant's phone if we can. Save-first held above.
+      const line = await propertyLine(convo.property_id);
+      const wire = await smsForEvent({ eventId: out.id, to: convo.person_phone, from: line, body });
+
       res.json({
-        receipt: `Message sent to ${firstName(convo.person_name)}${convo.unit_number ? ` in unit ${convo.unit_number}` : ""}.`,
+        receipt: `Message sent to ${firstName(convo.person_name)}${convo.unit_number ? ` in unit ${convo.unit_number}` : ""}${wire.sent ? " — delivered by text" : ""}.`,
         message_id: out.id,
+        sms_sent: !!wire.sent,
       });
     } catch (e) {
       console.error("reply:", e);
@@ -769,6 +1081,7 @@ Rules: classification "emergency" only for active danger or major damage in prog
   //  belongs to maintenance's closeout proof gate (PATCH /work-orders/:id/
   //  closeout); this route will not be a side door around the proof.
   //  A note ALWAYS posts to the reporting tenant's conversation.
+  //  030: the note also rides the wire when the line is live.
   // ════════════════════════════════════════════════════════════════════
   router.post("/work-orders/:workOrderId/notify-status", requireOperator, async (req, res) => {
     try {
@@ -786,7 +1099,7 @@ Rules: classification "emergency" only for active danger or major damage in prog
       }
 
       const woQ = await pool.query(
-        `select w.*, per.name as person_name, u.unit_number
+        `select w.*, per.name as person_name, per.phone as person_phone, u.unit_number
            from work_orders w
            left join persons per on per.id = w.person_id
            left join units u on u.id = w.unit_id
@@ -806,15 +1119,20 @@ Rules: classification "emergency" only for active danger or major damage in prog
       if (status && status !== wo.status) {
         await pool.query(`update work_orders set status=$1, updated_at=now() where id=$2`, [status, workOrderId]);
       }
-      await pool.query(
+      const noteEvt = (await pool.query(
         `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification)
-         values ($1,$2,$3,$4,'portal','outbound',$5,'work_order_update')`,
-        [wo.property_id, wo.person_id, wo.unit_id, convoQ.rows[0].id, note]);
+         values ($1,$2,$3,$4,'portal','outbound',$5,'work_order_update') returning id`,
+        [wo.property_id, wo.person_id, wo.unit_id, convoQ.rows[0].id, note])).rows[0];
       await pool.query(`update conversations set last_message_at = now() where id = $1`, [convoQ.rows[0].id]);
 
+      // 030: ride the wire when we can. Save-first held above.
+      const line = await propertyLine(wo.property_id);
+      const wire = await smsForEvent({ eventId: noteEvt.id, to: wo.person_phone, from: line, body: note });
+
       res.json({
-        receipt: `Work order ${status && status !== wo.status ? `marked ${status} ` : ""}and ${firstName(wo.person_name)} was notified${wo.unit_number ? ` (unit ${wo.unit_number})` : ""}.`,
+        receipt: `Work order ${status && status !== wo.status ? `marked ${status} ` : ""}and ${firstName(wo.person_name)} was notified${wo.unit_number ? ` (unit ${wo.unit_number})` : ""}${wire.sent ? " by text" : ""}.`,
         work_order: { id: workOrderId, status: status || wo.status },
+        sms_sent: !!wire.sent,
       });
     } catch (e) {
       console.error("notify-status:", e);
@@ -826,6 +1144,8 @@ Rules: classification "emergency" only for active danger or major damage in prog
   //  THE TENANT PAGE — served by the API itself (link-only pilot needs
   //  zero hosting). Brand system: Fraunces + IBM Plex on the dark palette.
   //  After connecting, the THREAD is the product; "My place" is the tab.
+  //  030: the page reads verify_mode from the setup JSON — OTP shows
+  //  "Text me a code" + a code input; phone_match keeps the original form.
   // ════════════════════════════════════════════════════════════════════
   router.get("/t/setup/:token", (req, res) => {
     const token = String(req.params.token).replace(/[^A-Za-z0-9_-]/g, "");
@@ -851,6 +1171,7 @@ input,textarea{width:100%;background:var(--bg);border:1px solid var(--line);colo
 input:focus,textarea:focus{border-color:var(--accent)}
 .btn{background:var(--accent);color:#1a1407;border:none;padding:12px 16px;border-radius:8px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer}
 .btn:disabled{opacity:.5}.btn.full{width:100%;margin-top:14px}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--ink-dim)}
 .receipt{margin-top:12px;font-size:14px;padding:11px 13px;border-radius:8px;border:1px solid var(--line);display:none}
 .receipt.ok{display:block;color:var(--confirmed);border-color:#2c4536;background:#1a2a20}
 .receipt.bad{display:block;color:var(--danger);border-color:#4a2e29;background:#241a18}
@@ -875,11 +1196,25 @@ input:focus,textarea:focus{border-color:var(--accent)}
 <div id="loading" class="card"><div class="sub">Loading…</div></div>
 
 <div id="setup" class="card hidden">
-  <h1 id="su-title" class="serif">Confirm your phone</h1>
+  <h1 id="su-title" class="serif">Connect</h1>
   <div class="sub" id="su-msg"></div>
-  <label class="lbl">Your mobile number</label>
-  <input id="su-phone" type="tel" inputmode="tel" placeholder="215-555-1212" autocomplete="tel"/>
-  <button class="btn full" id="su-go">Connect</button>
+
+  <div id="mode-phone" class="hidden">
+    <label class="lbl">Your mobile number</label>
+    <input id="su-phone" type="tel" inputmode="tel" placeholder="215-555-1212" autocomplete="tel"/>
+    <button class="btn full" id="su-go">Connect</button>
+  </div>
+
+  <div id="mode-otp" class="hidden">
+    <button class="btn full" id="otp-send">Text me a code</button>
+    <div id="otp-entry" class="hidden">
+      <label class="lbl">6-digit code</label>
+      <input id="su-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456"/>
+      <button class="btn full" id="otp-go">Connect</button>
+      <button class="btn full ghost" id="otp-resend" style="margin-top:8px">Resend code</button>
+    </div>
+  </div>
+
   <div class="receipt" id="su-receipt"></div>
 </div>
 
@@ -949,22 +1284,58 @@ async function init(){
     if(d.status==="valid"||d.status==="already_verified"){
       $("su-title").textContent = "Hi "+(d.tenant&&d.tenant.first_name||"there")+" 👋";
       $("su-msg").textContent = d.message;
+      if (d.verify_mode === "otp") {
+        $("mode-otp").classList.remove("hidden");
+        if (d.masked_phone) $("otp-send").textContent = "Text a code to "+d.masked_phone;
+      } else {
+        $("mode-phone").classList.remove("hidden");
+      }
       show("setup");
     } else { $("dead-msg").textContent = d.message||"Ask your manager for a fresh link."; show("dead"); }
   }catch(e){ $("dead-msg").textContent="Could not load this link. Check your connection."; show("dead"); }
 }
 
+async function finishConnect(d){
+  SESSION = d.session; localStorage.setItem(SKEY, SESSION);
+  const me = await fetch("/tenant/me",{headers:{"x-tenant-session":SESSION}});
+  if (me.ok) enterHome(await me.json());
+}
+
+// ── link-only fallback path ──
 $("su-go").onclick = async ()=>{
   const btn=$("su-go"); btn.disabled=true; btn.textContent="Connecting…";
   try{
     const r = await fetch("/tenant/setup/verify",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({token:TOKEN, phone:$("su-phone").value})});
     const d = await r.json();
-    if(r.ok && d.session){
-      SESSION = d.session; localStorage.setItem(SKEY, SESSION);
-      const me = await fetch("/tenant/me",{headers:{"x-tenant-session":SESSION}});
-      if (me.ok) enterHome(await me.json());
-    } else receipt("su-receipt", d.receipt||"That didn't work.", false);
+    if(r.ok && d.session) await finishConnect(d);
+    else receipt("su-receipt", d.receipt||"That didn't work.", false);
+  }catch(e){ receipt("su-receipt","Connection problem — try again.",false); }
+  btn.disabled=false; btn.textContent="Connect";
+};
+
+// ── OTP path ──
+async function sendCode(btn){
+  btn.disabled=true; const orig=btn.textContent; btn.textContent="Sending…";
+  try{
+    const r = await fetch("/tenant/setup/request-code",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({token:TOKEN})});
+    const d = await r.json();
+    if(r.ok){ $("otp-entry").classList.remove("hidden"); $("su-code").focus(); receipt("su-receipt", d.receipt, true); }
+    else receipt("su-receipt", d.receipt||"Could not send a code.", false);
+  }catch(e){ receipt("su-receipt","Connection problem — try again.",false); }
+  btn.disabled=false; btn.textContent=orig;
+}
+$("otp-send").onclick = ()=>sendCode($("otp-send"));
+$("otp-resend").onclick = ()=>sendCode($("otp-resend"));
+$("otp-go").onclick = async ()=>{
+  const btn=$("otp-go"); btn.disabled=true; btn.textContent="Connecting…";
+  try{
+    const r = await fetch("/tenant/setup/verify",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({token:TOKEN, code:$("su-code").value})});
+    const d = await r.json();
+    if(r.ok && d.session) await finishConnect(d);
+    else receipt("su-receipt", d.receipt||"That didn't work.", false);
   }catch(e){ receipt("su-receipt","Connection problem — try again.",false); }
   btn.disabled=false; btn.textContent="Connect";
 };
