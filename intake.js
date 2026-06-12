@@ -544,6 +544,7 @@ module.exports = function intake(deps) {
   </header>
   <div class="gate">
     <input type="password" id="pw" placeholder="Access password" autocomplete="off">
+    <input type="password" id="opkey" placeholder="Operator key" autocomplete="off">
     <button id="loadBtn">Load queue</button>
   </div>
   <div id="list"></div>
@@ -554,9 +555,10 @@ module.exports = function intake(deps) {
   var properties = [];
   function el(id){ return document.getElementById(id); }
   function pw(){ return el("pw").value; }
+  function opkey(){ return el("opkey").value; }
 
   function loadProperties(){
-    return fetch("/owner/properties").then(function(r){ return r.json(); })
+    return fetch("/owner/properties", { headers: { "x-operator-key": opkey() } }).then(function(r){ return r.json(); })
       .then(function(j){ properties = (j.properties || j || []); })
       .catch(function(){ properties = []; });
   }
@@ -649,7 +651,7 @@ module.exports = function intake(deps) {
         if (act === "wo") {
           fetch("/work-orders", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "x-operator-key": opkey() },
             body: JSON.stringify({
               property_id: propertyId,
               title: val("title") || "Field-captured work order",
@@ -669,7 +671,7 @@ module.exports = function intake(deps) {
           if (!(amt > 0)) { setStat("Money event needs a positive amount.", false); return; }
           fetch("/money-events", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "x-operator-key": opkey() },
             body: JSON.stringify({
               property_id: propertyId,
               amount: amt,
