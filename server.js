@@ -3065,6 +3065,7 @@ app.use("/", bankIntakeModule({ pool }));
 app.use('/', bankBridgeModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", exposureModule({ pool }));
 app.use("/", require("./board")({ pool })); // morning board: GET /properties/:id/today (read-only)
+app.use("/", require("./desks")({ pool })); // V3 three desks: operator-home + management/leasing/maintenance dashboards (read-only)
 app.use("/", compareModule({ pool }));
 app.use("/", explainModule({ pool }));
 // tenant link (text line: connection + message loop) — pool, AI for classification.
