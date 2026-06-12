@@ -19,6 +19,7 @@
 //    POST /tenant/messages                       — tenant sends a message
 //    GET  /tenant/thread                         — tenant reads the thread
 //    GET  /properties/:propertyId/inbox          — manager inbox
+//    GET  /conversations/:conversationId/messages — manager reads a thread
 //    POST /conversations/:conversationId/reply   — manager replies
 //
 //  THE RULE THIS RUNG ENFORCES: a message can never silently disappear.
@@ -677,6 +678,51 @@ Rules: classification "emergency" only for active danger or major damage in prog
     } catch (e) {
       console.error("inbox:", e);
       res.status(500).json({ receipt: "Could not load the inbox.", error: e.message });
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════════
+  //  9B. MANAGER READS A CONVERSATION — the level-3 detail view's read.
+  //  The inbox shows inbound messages; THIS shows the whole thread, both
+  //  directions, oldest-first — same field names the tenant thread and
+  //  inbox already use (one vocabulary per object, never two).
+  //  READ-ONLY: does not clear needs_human — replying does that already.
+  // ════════════════════════════════════════════════════════════════════
+  router.get("/conversations/:conversationId/messages", requireOperator, async (req, res) => {
+    try {
+      const { conversationId } = req.params;
+      const convoQ = await pool.query(
+        `select c.id, c.property_id, c.unit_id, c.status, c.last_message_at,
+                per.name as person_name, u.unit_number
+           from conversations c
+           left join persons per on per.id = c.person_id
+           left join units u on u.id = c.unit_id
+          where c.id = $1`, [conversationId]);
+      if (!convoQ.rows.length) return res.status(404).json({ receipt: "No conversation with that id." });
+      const convo = convoQ.rows[0];
+      const messages = (await pool.query(
+        `select id, direction, channel, body, classification,
+                created_object_type, created_object_id, needs_human, occurred_at
+           from comm_events
+          where conversation_id = $1
+          order by occurred_at asc, id asc
+          limit 500`, [conversationId])).rows;
+      const humanCount = messages.filter(m => m.needs_human).length;
+      res.json({
+        receipt: `Conversation with ${convo.person_name || "unknown person"}${convo.unit_number ? ` in unit ${convo.unit_number}` : ""} · ${messages.length} message${messages.length === 1 ? "" : "s"}${humanCount ? ` · ${humanCount} still need${humanCount === 1 ? "s" : ""} a human` : ""}.`,
+        conversation: {
+          id: convo.id,
+          person_name: convo.person_name,
+          unit_number: convo.unit_number,
+          property_id: convo.property_id,
+          status: convo.status,
+          last_message_at: convo.last_message_at,
+        },
+        messages,
+      });
+    } catch (e) {
+      console.error("conversation messages:", e);
+      res.status(500).json({ receipt: "Could not load the conversation.", error: e.message });
     }
   });
 
