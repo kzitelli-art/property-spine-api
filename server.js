@@ -42,17 +42,35 @@ const app = express();
 app.use(cors());            // lets the frontend (Netlify) call this API
 app.use(express.json({ limit: "1mb" }));  // body-size cap — stops oversized payloads
 
-// ── lightweight shared-key auth ──────────────────────────────────────
-// NOT full auth (that's the later raise+hire phase: real users, org scoping,
-// rate limits). This is the cheap floor: if API_KEY is set in Render, every
-// request must send it as `x-api-key`. /health stays open so uptime checks
-// work. If API_KEY is unset, the gate is open (local dev convenience).
-const API_KEY = process.env.API_KEY;
+// ── operator gate (Phase 0 auth centralization) ──────────────────────
+// ONE shared gate for the whole operator data surface. Replaces the old
+// optional API_KEY floor. Rules:
+//   • Public doors are allowlisted EXPLICITLY (they carry their own auth):
+//       /health                  — uptime checks
+//       /tenant/* and /t/*       — tenant portal (session/token auth)
+//       /public/*                — public review door (its own password)
+//       /intake/*                — field capture door incl. the Twilio
+//                                  webhook (its own INTAKE_PASSWORD)
+//   • EVERYTHING else requires OPERATOR_KEY sent as x-operator-key.
+//   • Fail closed: if OPERATOR_KEY is unset, locked routes return 503,
+//     never silently open.
+// The per-module copies of requireOperator (board/desks/tenantlink) still
+// run after this and check the SAME key — redundant but harmless; slated
+// for removal in a later cleanup, not worth a 3-file deploy today.
+const OPERATOR_KEY = process.env.OPERATOR_KEY;
+const PUBLIC_EXACT = new Set(["/health"]);
+const PUBLIC_PREFIXES = ["/tenant/", "/t/", "/public/", "/intake/", "/intake"];
 app.use((req, res, next) => {
-  if (req.path === "/health") return next();
-  if (!API_KEY) return next();  // no key configured → open (dev)
-  if (req.get("x-api-key") === API_KEY) return next();
-  return res.status(401).json({ error: "unauthorized" });
+  if (req.method === "OPTIONS") return next(); // CORS preflight carries no custom headers
+  const p = req.path;
+  if (PUBLIC_EXACT.has(p) || PUBLIC_PREFIXES.some((x) => p === x || p.startsWith(x))) return next();
+  if (!OPERATOR_KEY) {
+    return res.status(503).json({ receipt: "Operator routes are locked: set OPERATOR_KEY in Render's environment, then send it as the x-operator-key header." });
+  }
+  if (req.get("x-operator-key") !== OPERATOR_KEY) {
+    return res.status(401).json({ receipt: "Missing or wrong x-operator-key." });
+  }
+  next();
 });
 
 // The database connection. DATABASE_URL is set as an environment variable
