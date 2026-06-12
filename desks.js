@@ -31,6 +31,7 @@
 
 const express = require("express");
 const { computeExposure } = require("./exposure");
+const { computeOnboardingState } = require("./onboarding_funnel"); // onboarding bridge: shared compute, never re-derived
 
 module.exports = function desksModule({ pool }) {
   const router = express.Router();
@@ -359,14 +360,25 @@ module.exports = function desksModule({ pool }) {
     try {
       const prop = await getProperty(req.params.propertyId);
       if (!prop) return res.status(404).json({ receipt: "No property with that id." });
-      const [m, l, x] = await Promise.all([
-        buildManagement(prop.id, prop), buildLeasing(prop.id, prop), buildMaintenance(prop.id, prop)]);
+      const [m, l, x, ob] = await Promise.all([
+        buildManagement(prop.id, prop), buildLeasing(prop.id, prop), buildMaintenance(prop.id, prop),
+        computeOnboardingState(pool, prop.id).catch(e => ({ status: "unavailable", reason: e.message })),
+      ]);
 
-      const card = (d, fallback) => ({
+      // Desk ownership comes from the onboarding roles map. An unowned desk
+      // says so — routing is the thing onboarding exists to establish.
+      const ownerFor = (roleKey) => {
+        const r = ob && ob.roles_by_key && ob.roles_by_key[roleKey];
+        if (!r) return { role: roleKey, assigned_to: null, status: "unknown" };
+        return { role: r.role, assigned_to: r.assigned_to, status: r.status };
+      };
+
+      const card = (d, fallback, roleKey) => ({
         headline: Object.values(d.headline)
           .filter(h => h && h.status === "ok" && h.label).slice(0, 3)
           .map(h => h.label).join(" · ") || fallback,
         next: d.next,
+        owner: ownerFor(roleKey),
       });
       const recommended =
         (x.headline.emergencies && x.headline.emergencies.count > 0) ? "maintenance"
@@ -383,10 +395,13 @@ module.exports = function desksModule({ pool }) {
         as_of: new Date().toISOString(),
         recommended_desk: recommended,
         desks: {
-          management: card(m, "management board unreadable"),
-          leasing: card(l, "leasing pipeline not wired yet"),
-          maintenance: card(x, "maintenance board unreadable"),
+          management: card(m, "management board unreadable", "property_manager"),
+          leasing: card(l, "leasing pipeline not wired yet", "leasing"),
+          maintenance: card(x, "maintenance board unreadable", "maintenance"),
         },
+        onboarding: ob && ob.status !== "unavailable"
+          ? { complete: ob.complete, next_gap: ob.next_gap, steps: ob.steps }
+          : { status: "unavailable", reason: (ob && ob.reason) || "onboarding state unreadable" },
       });
     } catch (e) {
       console.error("operator-home:", e);
