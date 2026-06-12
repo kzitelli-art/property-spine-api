@@ -410,6 +410,69 @@ module.exports = function dealIntake(deps) {
   });
 
   // ══════════════════════════════════════════════════════════════════
+  //  DEAL ↔ PROPERTIES (migration 025) — the deal holds what you BOUGHT.
+  //  A six-building OM does not make a six-building deal: the human
+  //  picks. Mention is never membership.
+  //    POST   /deal-intakes/:id/properties   { property_id, note? }
+  //    DELETE /deal-intakes/:id/properties/:propertyId
+  //  Units/beds per property are derived from canonical units — the
+  //  promoted truth, never from marketing documents.
+  // ══════════════════════════════════════════════════════════════════
+  router.post("/deal-intakes/:id/properties", async (req, res) => {
+    const { property_id, note } = req.body || {};
+    if (!property_id) return res.status(400).json({ error: "property_id required" });
+    try {
+      const i = await pool.query("select id, deal_name from deal_intakes where id=$1", [req.params.id]);
+      if (i.rows.length === 0) return res.status(404).json({ error: "intake not found" });
+      const p = await pool.query("select id, name, address from properties where id=$1", [property_id]);
+      if (p.rows.length === 0) return res.status(404).json({ error: "property not found" });
+      await pool.query(
+        `insert into deal_intake_properties (intake_id, property_id, note)
+         values ($1,$2,$3) on conflict (intake_id, property_id) do nothing`,
+        [req.params.id, property_id, note || null]);
+      res.status(201).json({
+        receipt: `${p.rows[0].name || p.rows[0].address} is now part of deal "${i.rows[0].deal_name || req.params.id}"`,
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  router.delete("/deal-intakes/:id/properties/:propertyId", async (req, res) => {
+    try {
+      const r = await pool.query(
+        "delete from deal_intake_properties where intake_id=$1 and property_id=$2 returning id",
+        [req.params.id, req.params.propertyId]);
+      if (r.rowCount === 0) return res.status(404).json({ error: "that property is not on this deal" });
+      res.json({ receipt: "removed from the deal (the property itself is untouched)" });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // derive units/beds for a set of intakes — promoted truth only
+  async function dealPropertyLines(intakeIds) {
+    if (!intakeIds.length) return {};
+    const rows = (await pool.query(
+      `select dp.intake_id, p.id as property_id, p.name, p.address,
+              count(u.id)::int as units,
+              sum(u.bedrooms)::int as beds,
+              count(u.id) filter (where u.bedrooms is null)::int as units_missing_beds
+         from deal_intake_properties dp
+         join properties p on p.id = dp.property_id
+         left join units u on u.property_id = p.id
+        where dp.intake_id = any($1)
+        group by dp.intake_id, p.id, p.name, p.address
+        order by p.name`, [intakeIds])).rows;
+    const by = {};
+    for (const r of rows) {
+      (by[r.intake_id] = by[r.intake_id] || []).push({
+        property_id: r.property_id, name: r.name, address: r.address,
+        units: r.units,
+        beds: r.units_missing_beds > 0 ? null : r.beds,   // honest blank beats a wrong confident count
+        beds_note: r.units_missing_beds > 0 ? `${r.units_missing_beds} unit(s) missing a bed count — beds total withheld until filled` : null,
+      });
+    }
+    return by;
+  }
+
+  // ══════════════════════════════════════════════════════════════════
   //  RE-RESOLVE — POST /deal-intakes/:id/reresolve
   //  After a human links an alias or creates a property, the file rows
   //  still hold their old identity snapshot. This re-runs the SAME
@@ -522,9 +585,11 @@ module.exports = function dealIntake(deps) {
         [intakes.map(i => i.id)])).rows : [];
       const byIntake = {};
       for (const f of allFiles) (byIntake[f.intake_id] = byIntake[f.intake_id] || []).push(f);
+      const propsByIntake = await dealPropertyLines(intakes.map(i => i.id));
 
       const deals = intakes.map(i => {
         const files = byIntake[i.id] || [];
+        const dealProps = propsByIntake[i.id] || [];
         const s = summarize(files);
         // the ONE next action — the funnel's whole point is "what now?"
         let next;
@@ -542,6 +607,7 @@ module.exports = function dealIntake(deps) {
           deal_name: i.deal_name || "(unnamed deal)",
           onboarding_type: i.onboarding_type,
           created_at: i.created_at,
+          properties: dealProps,
           files: files.length,
           unclassified: s.unknownCount,
           identity: s.identity,
