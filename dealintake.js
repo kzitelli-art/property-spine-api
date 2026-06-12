@@ -397,6 +397,10 @@ module.exports = function dealIntake(deps) {
         return res.status(409).json({ error: "no stored text for this file — re-upload it." });
       const prop = await pool.query("select id from properties where id=$1", [property_id]);
       if (prop.rows.length === 0) return res.status(404).json({ error: "property not found" });
+      if (["unit","bed","unknown"].includes(req.body?.leasing_basis)) {
+        await pool.query("update properties set leasing_basis=$1 where id=$2",
+          [req.body.leasing_basis, property_id]);
+      }
 
       const result = await runIngestAuto(property_id, row.extracted_text, "deal_intake");
       const runId = result && (result.run_id || result.id) || null;
@@ -430,6 +434,12 @@ module.exports = function dealIntake(deps) {
         `insert into deal_intake_properties (intake_id, property_id, note)
          values ($1,$2,$3) on conflict (intake_id, property_id) do nothing`,
         [req.params.id, property_id, note || null]);
+      // optional: the wizard asks "by unit or by bed?" before the building is
+      // confirmed — carry the human's answer onto the property here.
+      if (["unit","bed"].includes(req.body?.leasing_basis)) {
+        await pool.query("update properties set leasing_basis=$1 where id=$2",
+          [req.body.leasing_basis, property_id]);
+      }
       res.status(201).json({
         receipt: `${p.rows[0].name || p.rows[0].address} is now part of deal "${i.rows[0].deal_name || req.params.id}"`,
       });
@@ -512,7 +522,8 @@ module.exports = function dealIntake(deps) {
   //  files. Never automatic — the human clicked Create.
   // ══════════════════════════════════════════════════════════════════
   router.post("/deal-intakes/:id/create-property", async (req, res) => {
-    const { name, address } = req.body || {};
+    const { name, address, leasing_basis } = req.body || {};
+    const basis = ["unit","bed","unknown"].includes(leasing_basis) ? leasing_basis : "unknown";
     if (!name || !String(name).trim()) return res.status(400).json({ error: "name required" });
     if (!address || !String(address).trim()) return res.status(400).json({ error: "address required — address is identity; a property without one can't be resolved against" });
     const client = await pool.connect();
@@ -521,8 +532,8 @@ module.exports = function dealIntake(deps) {
       const intake = await client.query("select id from deal_intakes where id=$1", [req.params.id]);
       if (intake.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "intake not found" }); }
       const prop = await client.query(
-        "insert into properties (name, address) values ($1,$2) returning id, name, address",
-        [String(name).trim(), String(address).trim()]);
+        "insert into properties (name, address, leasing_basis) values ($1,$2,$3) returning id, name, address, leasing_basis",
+        [String(name).trim(), String(address).trim(), basis]);
       const pid = prop.rows[0].id;
       // teach every observed identity label from this deal as a resolved alias
       const labels = (await client.query(
