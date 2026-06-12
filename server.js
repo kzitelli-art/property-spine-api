@@ -29,6 +29,7 @@ const bankBridgeModule = require('./bankbridge');
 const compareModule = require("./compare");   // report comparison layer (the hook)
 const explainModule = require("./explain");
 const tenantLinkModule = require("./tenantlink"); // tenant text line Phase 1: connection (invite link → verify → session)
+const smsTransport = require("./sms"); // SMS transport (Twilio) — fail-soft when unconfigured
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
 // runaway file still can't choke the box. Oversize returns a clean 413 below.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -3087,7 +3088,8 @@ app.use("/", require("./desks")({ pool })); // V3 three desks: operator-home + m
 app.use("/", compareModule({ pool }));
 app.use("/", explainModule({ pool }));
 // tenant link (text line: connection + message loop) — pool, AI for classification.
-app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL }));
+const sms = smsTransport(); // SMS transport (Twilio) — disabled until env vars are set; everything degrades to link-only
+app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms }));
 // owner-facing aggregate views (cards + attention queue). Only needs pool.
 app.use("/", ownerModule({ pool }));
 const publicReview = require("./public_review");
