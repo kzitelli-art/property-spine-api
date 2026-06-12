@@ -3064,10 +3064,11 @@ app.use("/", registryInstance);
 app.use("/", bankIntakeModule({ pool }));
 app.use('/', bankBridgeModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", exposureModule({ pool }));
+app.use("/", require("./board")({ pool })); // morning board: GET /properties/:id/today (read-only)
 app.use("/", compareModule({ pool }));
 app.use("/", explainModule({ pool }));
-// tenant link (Phase 1 of the building text line) — only needs pool.
-app.use("/", tenantLinkModule({ pool }));
+// tenant link (text line: connection + message loop) — pool, AI for classification.
+app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL }));
 // owner-facing aggregate views (cards + attention queue). Only needs pool.
 app.use("/", ownerModule({ pool }));
 const publicReview = require("./public_review");
