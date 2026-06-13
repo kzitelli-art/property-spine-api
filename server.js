@@ -11,6 +11,7 @@ const cors = require("cors");
 const { Pool } = require("pg");
 const Anthropic = require("@anthropic-ai/sdk");
 const multer = require("multer");          // handles file uploads (rent roll .xlsx/.csv)
+const leasingIntelModule = require("./leasingintel");
 const XLSX = require("xlsx");              // parses the spreadsheet to rows
 const maintenanceModule = require("./maintenance");  // isolated maintenance routes
 const downUnitsModule = require("./down_units");      // isolated down-units routes
@@ -3084,6 +3085,7 @@ app.use("/", bankIntakeModule({ pool }));
 app.use('/', bankBridgeModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", exposureModule({ pool }));
 app.use("/", require("./board")({ pool })); // morning board: GET /properties/:id/today (read-only)
+app.use("/", leasingIntelModule({ pool, upload }));
 app.use("/", require("./desks")({ pool })); // V3 three desks: operator-home + management/leasing/maintenance dashboards (read-only)
 app.use("/", compareModule({ pool }));
 app.use("/", explainModule({ pool }));
