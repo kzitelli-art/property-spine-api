@@ -12,6 +12,7 @@ const { Pool } = require("pg");
 const Anthropic = require("@anthropic-ai/sdk");
 const multer = require("multer");          // handles file uploads (rent roll .xlsx/.csv)
 const leasingIntelModule = require("./leasingintel");
+const applicationsModule = require("./applications");
 const XLSX = require("xlsx");              // parses the spreadsheet to rows
 const maintenanceModule = require("./maintenance");  // isolated maintenance routes
 const downUnitsModule = require("./down_units");      // isolated down-units routes
@@ -3070,6 +3071,7 @@ app.post("/ingest/:runId/approve", async (req, res) => {
 
 // ── MAINTENANCE MODULE (isolated; injected pool + shared obligation path) ──
 app.use("/", maintenanceModule({ pool, spawnObligationFromEvent }));
+app.use("/", applicationsModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 // ── DOWN UNITS MODULE (isolated; same injection pattern) ──
 app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));
 // ── ORG CHART MODULE (isolated; same injection pattern) ──
