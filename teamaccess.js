@@ -179,30 +179,77 @@ module.exports = function teamAccessModule({ pool, sms }) {
         if (inviteRow.failed_attempts >= MAX_FAILED) return res.status(423).json({ receipt: "Too many wrong codes. Ask for a new invite." });
         phone = inviteRow.phone_number;
       } else {
+        // ── RE-LOGIN for an already-onboarded staff member ──────────────
+        // No invite token: this is a returning user logging back in by phone.
+        // We reuse the SAME proven OTP machinery (don't fork it) by minting a
+        // short-lived, login-PURPOSE team_invites row for this user. The invite
+        // table IS the OTP holder; a re-login is just a system-generated invite
+        // for someone who already exists. The structural marker that makes it a
+        // re-login (not an onboarding invite) is: accepted_user_id is set to the
+        // user AT CREATION, and allowed_modules is left empty — because the
+        // user's LIVE assignment is the source of truth for access, never this
+        // synthetic row. /verify reads that marker and the live assignment.
         phone = normalizePhone(b.phone_number || b.phone);
         if (!phone) return res.status(400).json({ receipt: "Enter the phone number on your account (10 digits)." });
-        // plain login requires an existing active user with this phone
-        const u = (await pool.query(`select id from users where phone=$1 and status<>'suspended'`, [phone])).rows[0];
+
+        const u = (await pool.query(
+          `select id, name from users where phone=$1 and status<>'suspended'`, [phone])).rows[0];
         if (!u) return res.status(404).json({ receipt: "No active account for that number. You may need an invite first." });
+
+        // they must own access to at least one property — otherwise there is
+        // nothing to log into. Scope the login to a property they're active on.
+        // (Single-session-per-verify is the schema's model; a stuck multi-
+        // property picker is a later step — for now, land them on a property
+        // they own, preferring one where they can manage roles.)
+        const a = (await pool.query(
+          `select property_id from property_team_assignments
+            where user_id=$1 and active=true
+            order by can_manage_roles desc, updated_at desc
+            limit 1`, [u.id])).rows[0];
+        if (!a) return res.status(403).json({
+          receipt: "Your account exists but isn't assigned to a property yet. Ask a manager to add you.",
+        });
+
+        // resend floor for re-login: if a live login invite for this phone
+        // already has a fresh code, don't mint another (same 60s floor rule).
+        const recent = (await pool.query(
+          `select id, otp_sent_at from team_invites
+            where phone_number=$1 and property_id=$2 and status='active'
+              and accepted_user_id=$3 and allowed_modules='{}'
+            order by created_at desc limit 1`, [phone, a.property_id, u.id])).rows[0];
+        if (recent && recent.otp_sent_at &&
+            (Date.now() - new Date(recent.otp_sent_at).getTime()) < RESEND_FLOOR_SEC * 1000) {
+          return res.status(429).json({ receipt: "A code was just sent. Wait a moment before requesting another." });
+        }
+
+        // supersede any prior live login invite for this phone+property, then
+        // mint a fresh login-purpose invite (the OTP holder).
+        const loginToken = newToken();
+        const prior = recent ? [recent.id] : (await pool.query(
+          `select id from team_invites
+            where phone_number=$1 and property_id=$2 and status='active'
+              and accepted_user_id=$3 and allowed_modules='{}'`,
+          [phone, a.property_id, u.id])).rows.map(r => r.id);
+
+        inviteRow = (await pool.query(
+          `insert into team_invites
+             (property_id, phone_number, invited_name, allowed_modules,
+              accepted_user_id, invited_by_user_id, token, status, expires_at)
+           values ($1,$2,$3,'{}',$4,$4,$5,'active', now() + ($6 || ' minutes')::interval)
+           returning *`,
+          [a.property_id, phone, u.name, u.id, loginToken, String(OTP_TTL_MIN)])).rows[0];
+
+        if (prior.length) {
+          await pool.query(
+            `update team_invites set status='superseded', superseded_by=$1 where id = any($2)`,
+            [inviteRow.id, prior]);
+        }
+        // fall through to the shared send path below (one code path, not two).
       }
 
-      // rate-limit resends (60s floor) using the invite's otp_sent_at, or a
-      // transient login code row. For login (no invite), we stash the OTP on
-      // a short-lived invite-less record keyed by phone via a lightweight
-      // reuse of team_invites is wrong; instead, for login we mint a code and
-      // store its hash on the most recent invite for that phone if present,
-      // else we create a login-purpose holder. To keep this slice tight and
-      // honest, LOGIN reuses the same OTP-on-invite slot only when an invite
-      // exists; pure passwordless re-login for already-active users issues a
-      // session-bootstrap code stored on a fresh staff_sessions precursor.
-      // → For clarity and to avoid a half-built path, this slice supports the
-      //   INVITE-ACCEPT flow fully (the onboarding spine). Pure re-login for
-      //   existing users is the documented next step.
-      if (!inviteRow) {
-        return res.status(501).json({
-          receipt: "Re-login for existing users is the next step. Use your invite link to set up access first.",
-          supported_now: "invite_accept",
-        });
+      // resend floor (invite-accept path; re-login already checked its own above)
+      if (inviteRow.otp_sent_at && (Date.now() - new Date(inviteRow.otp_sent_at).getTime()) < RESEND_FLOOR_SEC * 1000) {
+        return res.status(429).json({ receipt: "A code was just sent. Wait a moment before requesting another." });
       }
 
       // resend floor
@@ -226,12 +273,20 @@ module.exports = function teamAccessModule({ pool, sms }) {
         catch (e) { delivery = "sms_failed"; }
       }
 
+      // a re-login invite is marked by accepted_user_id set at creation with
+      // empty allowed_modules. The client has no link, so it needs the token
+      // back to call /verify. (For the invite-accept flow the client already
+      // holds the token from its link, so we don't echo it there.)
+      const isRelogin = !!inviteRow.accepted_user_id && (inviteRow.allowed_modules || []).length === 0;
+
       const out = {
         receipt: delivery === "sms_sent" ? "Code sent by text." : "SMS transport not active.",
         masked_phone: maskPhone(phone),
         delivery,
+        flow: isRelogin ? "relogin" : "invite_accept",
         expires_in_minutes: OTP_TTL_MIN,
       };
+      if (isRelogin) out.token = inviteRow.token;   // client passes this to /verify
       // ONLY in non-production with no real SMS: surface the code so the flow
       // is testable. Never in production — that would be a security hole.
       if (!isProd() && delivery !== "sms_sent") out.dev_code = code;
@@ -268,7 +323,60 @@ module.exports = function teamAccessModule({ pool, sms }) {
         return res.status(401).json({ receipt: "That code didn't match. Try again." });
       }
 
-      // ── code is valid. Upsert the user by normalized phone. ──
+      // ── RE-LOGIN branch ─────────────────────────────────────────────────
+      // Marker: this invite was minted WITH accepted_user_id set and empty
+      // allowed_modules (the /start re-login path). It is NOT an onboarding
+      // invite — it must not provision or overwrite access. We read the user's
+      // CURRENT live assignment and issue a session from that live truth.
+      const isRelogin = !!inv.accepted_user_id && (inv.allowed_modules || []).length === 0;
+      if (isRelogin) {
+        const user = (await client.query(
+          `update users set phone_verified_at = coalesce(phone_verified_at, now())
+            where id=$1 returning *`, [inv.accepted_user_id])).rows[0];
+        if (!user || user.status === "suspended") {
+          await client.query("rollback");
+          return res.status(403).json({ receipt: "This account is not active. Ask a manager." });
+        }
+
+        // the user's LIVE access on the property this login was scoped to.
+        const a = (await client.query(
+          `select role_title, allowed_modules, primary_for_modules, can_manage_roles
+             from property_team_assignments
+            where property_id=$1 and user_id=$2 and active=true`,
+          [inv.property_id, user.id])).rows[0];
+        if (!a) {
+          // access was revoked between /start and /verify — fail honestly.
+          await client.query("rollback");
+          return res.status(403).json({ receipt: "Your access to this property was removed. Ask a manager." });
+        }
+
+        // close the login invite (so the code can't be replayed).
+        await client.query(
+          `update team_invites set status='accepted', accepted_at=now() where id=$1`, [inv.id]);
+
+        // issue the scoped staff session (same as accept path).
+        const sessionToken = newToken();
+        await client.query(
+          `insert into staff_sessions (user_id, property_id, token, expires_at)
+           values ($1,$2,$3, now() + ($4 || ' days')::interval)`,
+          [user.id, inv.property_id, sessionToken, String(SESSION_TTL_DAYS)]);
+
+        await client.query("commit");
+        return res.json({
+          receipt: "Welcome back. You're in.",
+          flow: "relogin",
+          session_token: sessionToken,
+          user: { id: user.id, name: user.name, phone_number: user.phone },
+          property_id: inv.property_id,
+          role_title: a.role_title,
+          allowed_modules: a.allowed_modules,
+          can_manage_roles: a.can_manage_roles,
+          landing_module: landingModule(a.allowed_modules, a.primary_for_modules),
+        });
+      }
+
+      // ── INVITE-ACCEPT branch (onboarding) ──────────────────────────────
+      // code is valid. Upsert the user by normalized phone.
       const phone = inv.phone_number;
       let user = (await client.query(`select * from users where phone=$1`, [phone])).rows[0];
       if (!user) {
