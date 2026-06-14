@@ -315,7 +315,12 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       await client.query("begin");
       const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
       if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
-      await client.query(`update leasing_tours set status='confirmed', scheduled_for=$1, confirmed_by=$2, updated_at=now() where id=$3`, [scheduledFor, confirmedBy, tourId]);
+      // NOTE: this legacy route confirms WITHOUT a real availability slot (it
+      // takes a hand-typed scheduled_for). It stamps confirmed_by and scheduled_for,
+      // then goes through the new door so status='confirmed_by_prospect' and a
+      // tour_event is written — never the deleted 038 word 'confirmed'.
+      await client.query(`update leasing_tours set scheduled_for=$1, confirmed_by=$2, updated_at=now() where id=$3`, [scheduledFor, confirmedBy, tourId]);
+      await recordTourEvent(client, { tourId, leadId: tour.lead_id, type: "confirmed_by_prospect", actorType: "human", actorId: confirmedBy, metadata: { scheduled_for: scheduledFor, via: "legacy_confirm" } });
       await recordLeadEvent(client, { leadId: tour.lead_id, type: "tour_scheduled", actorType: "human", actorId: confirmedBy, metadata: { tour_id: tourId, scheduled_for: scheduledFor }, statusPatch: { tour_scheduled_at: scheduledFor } });
       await client.query(`insert into lead_takeover_queue (lead_id, property_id, reason, status) values ($1,$2,$3,'open')`, [tour.lead_id, tour.property_id, "Tour confirmed — on-site team to run the tour and close."]);
       await recordLeadEvent(client, { leadId: tour.lead_id, type: "human_takeover", actorType: "system", metadata: { trigger: "tour_confirmed", tour_id: tourId }, statusPatch: { human_takeover_at: new Date().toISOString() } });
@@ -407,7 +412,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     try {
       const bySource = (await pool.query(
         `with lead_tour as (
-           select lead_id, min(scheduled_for) as scheduled_for from leasing_tours where status in ('confirmed','completed') group by lead_id
+           select lead_id, min(scheduled_for) as scheduled_for from leasing_tours where status in ('scheduled','confirmed_by_prospect','checked_in','completed') group by lead_id
          )
          select s.id as source_id, s.name as source, s.monthly_cost,
            count(distinct t.lead_id)                                          as leads,
@@ -427,7 +432,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
 
       const totals = (await pool.query(
         `with lead_tour as (
-           select lead_id, min(scheduled_for) as scheduled_for from leasing_tours where status in ('confirmed','completed') group by lead_id
+           select lead_id, min(scheduled_for) as scheduled_for from leasing_tours where status in ('scheduled','confirmed_by_prospect','checked_in','completed') group by lead_id
          )
          select count(*) as leads, count(distinct l.person_id) as people,
            count(*) filter (where first_response_at is not null) as responded,
