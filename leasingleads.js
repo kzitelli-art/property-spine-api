@@ -470,5 +470,370 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     } catch (e) { console.error("leasing report:", e); return res.status(500).json({ receipt: "Could not build the leasing report.", error: e.message }); }
   });
 
+  // ════════════════════════════════════════════════════════════════════
+  //  TOUR SCHEDULING — the show-rate instrument (migration 039)
+  //
+  //  A scheduled tour is a CLAIM. A completed tour is PROOF. A no_show is
+  //  EXPOSURE. tour_events is the per-tour source of truth; leasing_tours.status
+  //  is only its projection. This block is the ONLY writer of tour status.
+  // ════════════════════════════════════════════════════════════════════
+
+  // ── THE DOOR ──────────────────────────────────────────────────────────
+  //  Write a tour_event AND refresh the tour's status projection together, in
+  //  the caller's transaction, so the log and the cached status never drift.
+  //  Mirrors recordLeadEvent one grain down. statusPatch carries the timestamp
+  //  column for this transition (confirmed_at, checked_in_at, ...). Nothing
+  //  outside this function writes leasing_tours.status.
+  //
+  //  TRUTH-POINT GUARD: 'checked_in' may ONLY be written by an actor_type of
+  //  'human' (the on-site queue). The system asserting arrival would make show
+  //  rate fiction, so it is refused here, structurally.
+  async function recordTourEvent(client, { tourId, leadId, type, actorType, actorId = null, slotId = null, metadata = null }) {
+    if (type === "checked_in" && actorType !== "human") {
+      throw new Error("checked_in is a truth point: only a human (on-site) may assert arrival.");
+    }
+    // event row FIRST (source of truth)
+    const ev = (await client.query(
+      `insert into tour_events (tour_id, lead_id, event_type, actor_type, actor_id, slot_id, metadata)
+       values ($1,$2,$3,$4,$5,$6,$7) returning *`,
+      [tourId, leadId, type, actorType, actorId, slotId, metadata ? JSON.stringify(metadata) : null])).rows[0];
+
+    // projection SECOND — status + the matching timestamp column
+    const TS_COL = {
+      scheduled: "scheduled_for", confirmed_by_prospect: "confirmed_at",
+      reminder_sent: "reminded_at", checked_in: "checked_in_at",
+      completed: "completed_at", no_show: "no_show_at",
+      cancelled: "cancelled_at", rescheduled: null, // rescheduled stamps no own col; successor tour carries on
+    };
+    const tsCol = TS_COL[type];
+    const sets = [`status=$1`]; const vals = [type]; let i = 2;
+    if (tsCol) { sets.push(`${tsCol}=$${i++}`); vals.push(ev.event_at); }
+    sets.push(`updated_at=now()`); vals.push(tourId);
+    await client.query(`update leasing_tours set ${sets.join(", ")} where id=$${i}`, vals);
+    return ev;
+  }
+
+  // ── OPEN A SLOT — operator opens real availability (the truth source) ──
+  //  The AI later offers ONLY rows this creates. property-scoped; agent optional.
+  router.post("/leasing/availability", requireOperator, async (req, res) => {
+    const b = req.body || {};
+    if (!b.property_id || !b.starts_at || !b.ends_at) {
+      return res.status(400).json({ receipt: "property_id, starts_at and ends_at are required to open a slot." });
+    }
+    try {
+      const slot = (await pool.query(
+        `insert into tour_availability (property_id, unit_id, leasing_agent_id, starts_at, ends_at, capacity, created_by)
+         values ($1,$2,$3,$4,$5,coalesce($6,1),$7) returning *`,
+        [b.property_id, b.unit_id || null, b.leasing_agent_id || null, b.starts_at, b.ends_at, b.capacity || null, b.created_by || null])).rows[0];
+      return res.json({ receipt: `Slot opened ${b.starts_at} → ${b.ends_at}.`, slot });
+    } catch (e) { console.error("leasing availability open:", e); return res.status(500).json({ receipt: "Could not open the slot.", error: e.message }); }
+  });
+
+  // ── LIST OPEN SLOTS — what the AI is allowed to offer, and what the dash shows
+  router.get("/properties/:propertyId/leasing/availability", requireOperator, async (req, res) => {
+    try {
+      const r = await pool.query(
+        `select * from tour_availability
+          where property_id=$1 and status='open' and starts_at > now()
+          order by starts_at`, [req.params.propertyId]);
+      return res.json({ receipt: `${r.rows.length} open slot(s).`, slots: r.rows });
+    } catch (e) { console.error("leasing availability list:", e); return res.status(500).json({ receipt: "Could not load availability.", error: e.message }); }
+  });
+
+  // ── BLOCK / REOPEN a slot (operator housekeeping) ──
+  router.post("/leasing/availability/:slotId/block", requireOperator, async (req, res) => {
+    try {
+      const r = await pool.query(
+        `update tour_availability set status='blocked', updated_at=now()
+          where id=$1 and status='open' returning *`, [req.params.slotId]);
+      if (!r.rows.length) return res.status(409).json({ receipt: "Slot is not open (already booked or blocked)." });
+      return res.json({ receipt: "Slot blocked.", slot: r.rows[0] });
+    } catch (e) { console.error("leasing availability block:", e); return res.status(500).json({ receipt: "Could not block the slot.", error: e.message }); }
+  });
+
+  // ── BOOK A TOUR ONTO A REAL SLOT — the CLAIM ──────────────────────────
+  //  This is the seam: writing a tour onto a real slot ALSO advances the funnel
+  //  (lead_events 'tour_scheduled'). The double-booking wall lives in the slot
+  //  flip: we only proceed if the slot is still 'open' at write time, under a
+  //  row lock, so two prospects cannot take the same slot. A tour row is created
+  //  here if no tour_id is given (the AI path), or an existing requested tour is
+  //  promoted onto the slot (the request→schedule path).
+  router.post("/leasing/slots/:slotId/book", requireOperator, async (req, res) => {
+    const { slotId } = req.params;
+    const b = req.body || {};
+    if (!b.lead_id) return res.status(400).json({ receipt: "lead_id is required to book a slot." });
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      // lock the slot row; only book if STILL open — this is the wall
+      const slot = (await client.query(
+        `select * from tour_availability where id=$1 for update`, [slotId])).rows[0];
+      if (!slot) { await client.query("rollback"); return res.status(404).json({ receipt: "No slot with that id." }); }
+      if (slot.status !== "open") { await client.query("rollback"); return res.status(409).json({ receipt: "That slot is no longer open." }); }
+
+      const lead = (await client.query(`select * from leasing_leads where id=$1`, [b.lead_id])).rows[0];
+      if (!lead) { await client.query("rollback"); return res.status(404).json({ receipt: "No opportunity with that id." }); }
+
+      // create or promote the tour onto this slot
+      let tour;
+      if (b.tour_id) {
+        tour = (await client.query(
+          `update leasing_tours set slot_id=$1, scheduled_for=$2, unit_id=coalesce(unit_id,$3),
+                  leasing_agent_id=coalesce(leasing_agent_id,$4), updated_at=now()
+            where id=$5 returning *`,
+          [slotId, slot.starts_at, slot.unit_id, slot.leasing_agent_id, b.tour_id])).rows[0];
+        if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id to promote." }); }
+      } else {
+        tour = (await client.query(
+          `insert into leasing_tours (lead_id, property_id, unit_id, leasing_agent_id, slot_id, scheduled_for, status)
+           values ($1,$2,$3,$4,$5,$6,'scheduled') returning *`,
+          [b.lead_id, lead.property_id, slot.unit_id, slot.leasing_agent_id, slotId, slot.starts_at])).rows[0];
+      }
+
+      // flip the slot to booked, pointed at this tour (the wall: partial unique
+      // index guarantees one booking; the for-update + status check guarantee
+      // we got here first)
+      await client.query(
+        `update tour_availability set status='booked', booked_tour_id=$1, updated_at=now() where id=$2`,
+        [tour.id, slotId]);
+
+      // tour_events: scheduled (the claim)
+      await recordTourEvent(client, {
+        tourId: tour.id, leadId: b.lead_id, type: "scheduled",
+        actorType: b.actor_type || "human", actorId: b.actor_id || null, slotId,
+        metadata: { scheduled_for: slot.starts_at, slot_id: slotId },
+      });
+
+      // SEAM → funnel advances. Reuse 038's recordLeadEvent so leasing_leads.status
+      // projects 'tour_scheduled' exactly as the confirm path does.
+      await recordLeadEvent(client, {
+        leadId: b.lead_id, type: "tour_scheduled", actorType: "system",
+        metadata: { tour_id: tour.id, slot_id: slotId, scheduled_for: slot.starts_at },
+        statusPatch: { tour_scheduled_at: slot.starts_at },
+      });
+
+      await client.query("commit");
+      return res.json({ receipt: `Tour scheduled for ${slot.starts_at}. Slot booked; funnel advanced to tour_scheduled.`, tour_id: tour.id, slot_id: slotId });
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      // the partial unique index is the backstop if two requests race past the
+      // status check (shouldn't, with for-update, but the wall is structural)
+      if (e.code === "23505") return res.status(409).json({ receipt: "That slot was just booked by someone else." });
+      console.error("leasing slot book:", e);
+      return res.status(500).json({ receipt: "Could not book the slot.", error: e.message });
+    } finally { client.release(); }
+  });
+
+  // ── PROSPECT CONFIRMS — TRUTH INPUT #1 ────────────────────────────────
+  //  The prospect affirming they're coming. actor_type 'prospect' (inbound
+  //  reply) or 'human' (staff logging a call-back). NOT something the system
+  //  asserts on its own.
+  router.post("/leasing/tours/:tourId/confirm-prospect", requireOperator, async (req, res) => {
+    const { tourId } = req.params; const b = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
+      if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
+      if (!tour.scheduled_for) { await client.query("rollback"); return res.status(409).json({ receipt: "Tour has no scheduled time yet — book a slot first." }); }
+      await recordTourEvent(client, {
+        tourId, leadId: tour.lead_id, type: "confirmed_by_prospect",
+        actorType: b.actor_type === "prospect" ? "prospect" : "human",
+        actorId: b.actor_id || tour.confirmed_by || null,
+        metadata: { via: b.via || "manual" },
+      });
+      await client.query("commit");
+      return res.json({ receipt: "Prospect confirmed. This is a truth input to show rate.", tour_id: tourId });
+    } catch (e) { try { await client.query("rollback"); } catch {} console.error("leasing confirm-prospect:", e); return res.status(500).json({ receipt: "Could not record confirmation.", error: e.message }); }
+    finally { client.release(); }
+  });
+
+  // ── REMINDER SENT — schema records it; sms.js does the wire (env-gated) ──
+  router.post("/leasing/tours/:tourId/reminder", requireOperator, async (req, res) => {
+    const { tourId } = req.params;
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
+      if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
+      await recordTourEvent(client, {
+        tourId, leadId: tour.lead_id, type: "reminder_sent",
+        actorType: "system", metadata: { scheduled_for: tour.scheduled_for },
+      });
+      await client.query("commit");
+      // actual outbound text reuses sms.js like 038 intake; left to the wiring task
+      return res.json({ receipt: "Reminder recorded. (Outbound text reuses sms.js once the property line is pointed at leasing.)", tour_id: tourId });
+    } catch (e) { try { await client.query("rollback"); } catch {} console.error("leasing reminder:", e); return res.status(500).json({ receipt: "Could not record the reminder.", error: e.message }); }
+    finally { client.release(); }
+  });
+
+  // ── CHECK IN — TRUTH POINT #2 (on-site only) ──────────────────────────
+  //  The single most important honest input. recordTourEvent refuses this for
+  //  any actor_type other than 'human', so the system can never fake an arrival.
+  //  The on-site queue is the caller; actor_id is the staff user who tapped it.
+  router.post("/leasing/tours/:tourId/check-in", requireOperator, async (req, res) => {
+    const { tourId } = req.params; const b = req.body || {};
+    if (!b.actor_id) return res.status(400).json({ receipt: "actor_id (the on-site staff user) is required — check-in is a human truth point." });
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
+      if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
+      await recordTourEvent(client, {
+        tourId, leadId: tour.lead_id, type: "checked_in",
+        actorType: "human", actorId: b.actor_id,
+        metadata: { scheduled_for: tour.scheduled_for },
+      });
+      await client.query("commit");
+      return res.json({ receipt: "Checked in — the prospect physically showed. This is the proof the instrument exists to capture.", tour_id: tourId });
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      console.error("leasing check-in:", e);
+      return res.status(500).json({ receipt: e.message.includes("truth point") ? e.message : "Could not check in the tour.", error: e.message });
+    } finally { client.release(); }
+  });
+
+  // ── COMPLETE — PROOF. Optional seam back to the funnel toward application.
+  router.post("/leasing/tours/:tourId/complete", requireOperator, async (req, res) => {
+    const { tourId } = req.params; const b = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
+      if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
+      await recordTourEvent(client, {
+        tourId, leadId: tour.lead_id, type: "completed",
+        actorType: "human", actorId: b.actor_id || null,
+        metadata: { scheduled_for: tour.scheduled_for },
+      });
+      await client.query("commit");
+      return res.json({ receipt: "Tour completed — proof recorded. (Application-start is the next funnel seam, logged on lead_events when it happens.)", tour_id: tourId });
+    } catch (e) { try { await client.query("rollback"); } catch {} console.error("leasing complete:", e); return res.status(500).json({ receipt: "Could not complete the tour.", error: e.message }); }
+    finally { client.release(); }
+  });
+
+  // ── NO-SHOW — EXPOSURE. A booked tour that never happened, tracked honestly,
+  //  never silently dropped. Frees the slot back? No — the slot was consumed;
+  //  the no_show is the record that the spend bought nothing. Slot stays booked
+  //  to that tour as the honest history.
+  router.post("/leasing/tours/:tourId/no-show", requireOperator, async (req, res) => {
+    const { tourId } = req.params; const b = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
+      if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
+      await recordTourEvent(client, {
+        tourId, leadId: tour.lead_id, type: "no_show",
+        actorType: b.actor_id ? "human" : "system", actorId: b.actor_id || null,
+        metadata: { scheduled_for: tour.scheduled_for },
+      });
+      await client.query("commit");
+      return res.json({ receipt: "Marked no_show — exposure recorded honestly. This is the number that separates a 30%-show source from an 85% one.", tour_id: tourId });
+    } catch (e) { try { await client.query("rollback"); } catch {} console.error("leasing no-show:", e); return res.status(500).json({ receipt: "Could not mark no_show.", error: e.message }); }
+    finally { client.release(); }
+  });
+
+  // ── CANCEL — called off before the slot. Frees the slot back to 'open'.
+  router.post("/leasing/tours/:tourId/cancel", requireOperator, async (req, res) => {
+    const { tourId } = req.params; const b = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
+      if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
+      // a cancel before the slot frees the slot for someone else
+      if (tour.slot_id) {
+        await client.query(
+          `update tour_availability set status='open', booked_tour_id=null, updated_at=now() where id=$1`,
+          [tour.slot_id]);
+        await client.query(`update leasing_tours set slot_id=null where id=$1`, [tourId]);
+      }
+      await recordTourEvent(client, {
+        tourId, leadId: tour.lead_id, type: "cancelled",
+        actorType: b.actor_type === "prospect" ? "prospect" : "human", actorId: b.actor_id || null,
+        metadata: { freed_slot: tour.slot_id || null },
+      });
+      await client.query("commit");
+      return res.json({ receipt: "Tour cancelled; slot released back to open.", tour_id: tourId });
+    } catch (e) { try { await client.query("rollback"); } catch {} console.error("leasing cancel:", e); return res.status(500).json({ receipt: "Could not cancel the tour.", error: e.message }); }
+    finally { client.release(); }
+  });
+
+  // ── RESCHEDULE — move a tour to a new slot. The honest model: the old tour is
+  //  marked 'rescheduled' (its lifecycle ends), a NEW tour object is booked onto
+  //  the new slot carrying rescheduled_from = old. Two tours, two clean
+  //  histories — exactly why tour_events is per-tour, not per-opportunity.
+  router.post("/leasing/tours/:tourId/reschedule", requireOperator, async (req, res) => {
+    const { tourId } = req.params; const b = req.body || {};
+    if (!b.new_slot_id) return res.status(400).json({ receipt: "new_slot_id is required to reschedule." });
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const oldTour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
+      if (!oldTour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
+
+      const newSlot = (await client.query(`select * from tour_availability where id=$1 for update`, [b.new_slot_id])).rows[0];
+      if (!newSlot) { await client.query("rollback"); return res.status(404).json({ receipt: "No new slot with that id." }); }
+      if (newSlot.status !== "open") { await client.query("rollback"); return res.status(409).json({ receipt: "The new slot is no longer open." }); }
+
+      // free the old slot
+      if (oldTour.slot_id) {
+        await client.query(`update tour_availability set status='open', booked_tour_id=null, updated_at=now() where id=$1`, [oldTour.slot_id]);
+        await client.query(`update leasing_tours set slot_id=null where id=$1`, [tourId]);
+      }
+      // close the old tour's lifecycle
+      await recordTourEvent(client, {
+        tourId, leadId: oldTour.lead_id, type: "rescheduled",
+        actorType: b.actor_type === "prospect" ? "prospect" : "human", actorId: b.actor_id || null,
+        metadata: { to_slot: b.new_slot_id },
+      });
+      // new tour onto the new slot
+      const newTour = (await client.query(
+        `insert into leasing_tours (lead_id, property_id, unit_id, leasing_agent_id, slot_id, scheduled_for, status, rescheduled_from)
+         values ($1,$2,$3,$4,$5,$6,'scheduled',$7) returning *`,
+        [oldTour.lead_id, oldTour.property_id, newSlot.unit_id, newSlot.leasing_agent_id, b.new_slot_id, newSlot.starts_at, tourId])).rows[0];
+      await client.query(`update tour_availability set status='booked', booked_tour_id=$1, updated_at=now() where id=$2`, [newTour.id, b.new_slot_id]);
+      await recordTourEvent(client, {
+        tourId: newTour.id, leadId: oldTour.lead_id, type: "scheduled",
+        actorType: b.actor_type === "prospect" ? "prospect" : "human", actorId: b.actor_id || null, slotId: b.new_slot_id,
+        metadata: { scheduled_for: newSlot.starts_at, rescheduled_from: tourId },
+      });
+      await client.query("commit");
+      return res.json({ receipt: `Rescheduled. Old tour closed; new tour ${newTour.id} booked for ${newSlot.starts_at}.`, old_tour_id: tourId, new_tour_id: newTour.id });
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      if (e.code === "23505") return res.status(409).json({ receipt: "The new slot was just booked by someone else." });
+      console.error("leasing reschedule:", e);
+      return res.status(500).json({ receipt: "Could not reschedule.", error: e.message });
+    } finally { client.release(); }
+  });
+
+  // ── TODAY'S TOURS — the on-site operating view (what the dash/iOS reads) ──
+  router.get("/properties/:propertyId/leasing/tours/today", requireOperator, async (req, res) => {
+    try {
+      const r = await pool.query(
+        `select t.*, p.name as prospect_name, p.phone as prospect_phone
+           from leasing_tours t
+           join leasing_leads l on l.id = t.lead_id
+           join persons p on p.id = l.person_id
+          where t.property_id=$1
+            and t.scheduled_for::date = (now() at time zone 'utc')::date
+            and t.status not in ('cancelled','rescheduled')
+          order by t.scheduled_for`, [req.params.propertyId]);
+      return res.json({ receipt: `${r.rows.length} tour(s) on the board today.`, tours: r.rows });
+    } catch (e) { console.error("leasing tours today:", e); return res.status(500).json({ receipt: "Could not load today's tours.", error: e.message }); }
+  });
+
+  // ── ONE TOUR, full lifecycle — the tour's own honest history ──
+  router.get("/leasing/tours/:tourId", requireOperator, async (req, res) => {
+    try {
+      const tour = (await pool.query(`select * from leasing_tours where id=$1`, [req.params.tourId])).rows[0];
+      if (!tour) return res.status(404).json({ receipt: "No tour with that id." });
+      const events = (await pool.query(`select * from tour_events where tour_id=$1 order by event_at`, [req.params.tourId])).rows;
+      return res.json({ receipt: `Tour is '${tour.status}'; ${events.length} lifecycle event(s).`, tour, events });
+    } catch (e) { console.error("leasing tour get:", e); return res.status(500).json({ receipt: "Could not load the tour.", error: e.message }); }
+  });
+
   return router;
 };
