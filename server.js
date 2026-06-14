@@ -3113,7 +3113,9 @@ const publicReview = require("./public_review");
 const intakeModule = require("./intake");
 app.use("/", intakeModule({ pool, anthropic, INGEST_MODEL, registryInstance, upload }));
 const dealIntakeModule = require("./dealintake");
+const leasingLeadsModule = require("./leasingleads"); // leasing lead intake: one-human/many-opportunities funnel + AI first response
 app.use("/", dealIntakeModule({ pool, anthropic, INGEST_MODEL, registryInstance, fileToText, runIngestAuto, upload }));
+app.use("/", leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms }));
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
