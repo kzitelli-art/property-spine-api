@@ -108,11 +108,7 @@ module.exports = function teamAccessModule({ pool, sms }) {
       const allowed = cleanModules(b.allowed_modules);
       if (allowed.length === 0)
         return res.status(400).json({ receipt: "Choose at least one module the job allows (management, leasing, maintenance, reporting)." });
-      // primary defaults to all allowed if not specified (you own what you're given).
-      const primary = cleanModules(b.primary_for_modules);
-      const primaryFinal = primary.length ? primary.filter(m => allowed.includes(m)) : allowed.slice();
 
-      const email = b.email && String(b.email).trim() ? String(b.email).trim() : null;
       const scope = ["property", "portfolio", "owner"].includes(b.scope_type) ? b.scope_type : "property";
 
       // supersede any existing active invite for this phone at this property
@@ -124,13 +120,13 @@ module.exports = function teamAccessModule({ pool, sms }) {
 
       const inv = (await pool.query(
         `insert into team_invites
-           (property_id, phone_number, invited_name, email, role_title, scope_type,
-            allowed_modules, primary_for_modules, backup_user_id, escalates_to_user_id,
+           (property_id, phone_number, invited_name, role_title, scope_type,
+            allowed_modules, backup_user_id, escalates_to_user_id,
             can_manage_roles, invited_by_user_id, token, expires_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now() + ($14 || ' hours')::interval)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now() + ($12 || ' hours')::interval)
          returning id, expires_at`,
-        [propertyId, phone, b.invited_name || b.name || null, email, String(b.role_title).trim(), scope,
-         allowed, primaryFinal, b.backup_user_id || null, b.escalates_to_user_id || null,
+        [propertyId, phone, b.invited_name || b.name || null, String(b.role_title).trim(), scope,
+         allowed, b.backup_user_id || null, b.escalates_to_user_id || null,
          b.can_manage_roles === true, b.invited_by_user_id || null, token, String(INVITE_TTL_HOURS)])).rows[0];
 
       if (prior.length) {
@@ -277,17 +273,21 @@ module.exports = function teamAccessModule({ pool, sms }) {
       let user = (await client.query(`select * from users where phone=$1`, [phone])).rows[0];
       if (!user) {
         user = (await client.query(
-          `insert into users (name, phone, email, role, auth_provider, phone_verified_at, status)
-           values ($1,$2,$3, coalesce($4::role_name,'property_manager'::role_name), 'phone_otp', now(), 'active')
+          `insert into users (name, phone, role, auth_provider, phone_verified_at, status)
+           values ($1,$2, 'property_manager'::role_name, 'phone_otp', now(), 'active')
            returning *`,
-          [inv.invited_name || "New teammate", phone, inv.email || null, null])).rows[0];
+          [inv.invited_name || "New teammate", phone])).rows[0];
       } else {
         user = (await client.query(
           `update users set phone_verified_at = coalesce(phone_verified_at, now()),
-                            status = case when status='invited' then 'active' else status end,
-                            email = coalesce(email, $2)
-            where id=$1 returning *`, [user.id, inv.email || null])).rows[0];
+                            status = case when status='invited' then 'active' else status end
+            where id=$1 returning *`, [user.id])).rows[0];
       }
+
+      // primary_for_modules is derived at ACCEPT time (their schema's design):
+      // you own everything you're granted unless narrowed later via PATCH.
+      const allowed = inv.allowed_modules || [];
+      const primaryFinal = allowed.slice();
 
       // ── provision the assignment from the invite (upsert on (property,user)) ──
       await client.query(
@@ -305,21 +305,21 @@ module.exports = function teamAccessModule({ pool, sms }) {
             can_manage_roles = excluded.can_manage_roles,
             active = true,
             updated_at = now()`,
-        [inv.property_id, user.id, inv.role_title, inv.scope_type, inv.allowed_modules,
-         inv.primary_for_modules, inv.backup_user_id, inv.escalates_to_user_id, inv.can_manage_roles]);
+        [inv.property_id, user.id, inv.role_title, inv.scope_type, allowed,
+         primaryFinal, inv.backup_user_id, inv.escalates_to_user_id, inv.can_manage_roles]);
 
-      await client.query(`update team_invites set status='accepted', accepted_at=now() where id=$1`, [inv.id]);
+      await client.query(`update team_invites set status='accepted', accepted_at=now(), accepted_user_id=$2 where id=$1`, [inv.id, user.id]);
 
-      // ── issue the scoped staff session ──
+      // ── issue the scoped staff session (property-scoped, per their schema) ──
       const sessionToken = newToken();
       await client.query(
-        `insert into staff_sessions (user_id, token, expires_at)
-         values ($1,$2, now() + ($3 || ' days')::interval)`,
-        [user.id, sessionToken, String(SESSION_TTL_DAYS)]);
+        `insert into staff_sessions (user_id, property_id, token, expires_at)
+         values ($1,$2,$3, now() + ($4 || ' days')::interval)`,
+        [user.id, inv.property_id, sessionToken, String(SESSION_TTL_DAYS)]);
 
       await client.query("commit");
 
-      const landing = landingModule(inv.allowed_modules, inv.primary_for_modules);
+      const landing = landingModule(inv.allowed_modules, primaryFinal);
       return res.json({
         receipt: "Verified. You're in.",
         session_token: sessionToken,
