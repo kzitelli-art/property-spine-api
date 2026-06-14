@@ -69,6 +69,15 @@ function currentPeriod() {
   return d.toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
 }
 
+// the current period as the 1st-of-month DATE the charge ledger uses for
+// aging (e.g. "2026-06-01"). Same grain scheduled_charges.period stores.
+function currentPeriodDate() {
+  const d = new Date();
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  return `${y}-${m}-01`;
+}
+
 module.exports = function reportingModule({ pool }) {
   const router = express.Router();
 
@@ -97,28 +106,57 @@ module.exports = function reportingModule({ pool }) {
       const provenExpense = money(expenseRow.mapped_expense);
       const unmappedExpense = money(expenseRow.unmapped_expense);
 
-      // ── CLAIMED (NOT proven): BILLED INCOME (scheduled_charges) ────────────
-      // status, not a payment→deposit proof tie. This is billed rent, a
-      // CLAIM. Kept SEPARATE from proven income, which is 0 until the
-      // payment/deposit rung exists. We report it so the operator sees the
-      // claim beside the truth — never blended into NOI.
-      let billedIncome = 0, billedOpen = 0, incomeSourceOk = true, incomeReason = null;
+      // ── INCOME (slice 2): billed claim from scheduled_charges ──────────────
+      // The charge ledger (036) is the CLAIM side. We read the charge-side
+      // numbers that CAN be computed (billed, billed-but-unpaid, written-off,
+      // disputed, missing-charge). PROVEN income stays pending — the payment→
+      // deposit tie is slice 3; until it exists, proven_collected is pending,
+      // NOT zero. "Pending" is the honest state when the proof rung doesn't
+      // exist yet — distinct from "$0", which would claim we checked and found
+      // none. The three payment-dependent buckets (paid-but-unmatched,
+      // overpaid, unapplied-payment) are therefore pending, never zeroed.
+      const period = currentPeriodDate(); // 1st-of-month for the current period
+      let billedClaimed = 0, billedUnpaid = 0, writtenOff = 0, disputed = 0;
+      let missingCharge = null, incomeSourceOk = true, incomeReason = null;
       try {
         const incomeRow = (await pool.query(
           `select
-             coalesce(sum(amount), 0)::numeric(14,2)                                            as billed,
-             coalesce(sum(amount - coalesce(amount_paid,0)) filter (where status in ('scheduled','partial')), 0)::numeric(14,2) as open_billed
+             coalesce(sum(amount),0)::numeric(14,2)                                              as billed,
+             coalesce(sum(amount - coalesce(amount_paid,0))
+                      filter (where status in ('claimed','partially_paid')),0)::numeric(14,2)    as billed_unpaid,
+             coalesce(sum(amount) filter (where status='written_off'),0)::numeric(14,2)          as written_off,
+             coalesce(sum(amount) filter (where status='disputed'),0)::numeric(14,2)             as disputed
            from scheduled_charges
           where property_id = $1
             and charge_type in ('rent','first_month')`, [propertyId])).rows[0];
-        billedIncome = money(incomeRow.billed);
-        billedOpen = money(incomeRow.open_billed);
+        billedClaimed = money(incomeRow.billed);
+        billedUnpaid  = money(incomeRow.billed_unpaid);
+        writtenOff    = money(incomeRow.written_off);
+        disputed      = money(incomeRow.disputed);
+
+        // missing-charge: active leases (with rent) lacking a rent charge for
+        // the current period — a real charge-side exposure.
+        const miss = (await pool.query(
+          `select count(*)::int as missing
+             from leases l
+             join spaces s on s.id = l.space_id
+            where l.property_id = $1
+              and l.lease_status = 'active'
+              and l.rent is not null and l.rent > 0
+              and not exists (
+                select 1 from scheduled_charges c
+                 where c.lease_id = l.id and c.period = $2 and c.charge_type = 'rent')`,
+          [propertyId, period])).rows[0];
+        missingCharge = miss.missing;
       } catch (e) {
         incomeSourceOk = false;
         incomeReason = e && e.code === "42P01"
           ? "scheduled_charges not present"
           : e.message;
       }
+
+      // keep billedOpen as the name downstream open-items uses (= billed-unpaid).
+      const billedOpen = billedUnpaid;
 
       // proven income = 0 today (no payment/deposit proof rung). NOI is read
       // over PROVEN only — so NOI = 0 − provenExpense. The billed figure
@@ -141,7 +179,7 @@ module.exports = function reportingModule({ pool }) {
           proven_expense: provenExpense,
           proven_income: provenIncome,
           noi,
-          billed_income_claimed: incomeSourceOk ? billedIncome : null,
+          billed_income_claimed: incomeSourceOk ? billedClaimed : null,
           income_status: "pending",            // no payment/deposit proof rung yet
           income_reason: incomeSourceOk
             ? "billed rent is a claim — no payment→deposit proof tie exists yet; not counted as NOI income"
@@ -151,6 +189,50 @@ module.exports = function reportingModule({ pool }) {
           mapped_categories: expenseRow.mapped_categories,
           owner: "backend / accounting",
           note: "Expenses are proven (report_ready × category map). Income awaits the payment/deposit proof rung — billed rent shown as a claim, never blended into NOI.",
+        },
+
+        // ── INCOME (slice 2 shape): claim vs proven vs exposure buckets ────────
+        // billed_claimed = the structured claim (charges exist).
+        // proven_collected = PENDING (payment rung is slice 3) — never zero.
+        // exposure: two buckets COMPUTED from charges; three PENDING because
+        // they require payment data that does not exist yet. A pending bucket
+        // is not a zero bucket — zero would falsely claim we measured and found
+        // none. This is the doctrine: a confident wrong number is worse than an
+        // honest blank, and pending is the honest blank.
+        income: {
+          billed_claimed: incomeSourceOk
+            ? { status: "claim", value: billedClaimed,
+                reason: "scheduled charges exist for period" }
+            : { status: "pending", value: null, reason: incomeReason },
+          proven_collected: {
+            status: "pending", value: null,
+            reason: "awaits payment/deposit proof rung",
+          },
+          exposure: {
+            billed_but_unpaid: incomeSourceOk
+              ? { status: "computed", value: billedUnpaid }
+              : { status: "pending", value: null, reason: incomeReason },
+            missing_charge: (incomeSourceOk && missingCharge !== null)
+              ? { status: "computed", value: missingCharge }
+              : { status: "pending", value: null, reason: incomeReason || "no period charges to compare" },
+            paid_but_unmatched: {
+              status: "pending", value: null,
+              reason: "awaits payment records",
+            },
+            overpaid: {
+              status: "pending", value: null,
+              reason: "awaits payment applications",
+            },
+            unapplied_payment: {
+              status: "pending", value: null,
+              reason: "awaits payment records",
+            },
+          },
+          // charge-side extras the operator can see (claims, not proof):
+          written_off: incomeSourceOk ? writtenOff : null,
+          disputed: incomeSourceOk ? disputed : null,
+          owner: "accounting",
+          note: "Charge-side buckets are computed from the ledger. Payment-side buckets are pending until the payment/deposit rung (slice 3) exists — pending, not zero.",
         },
         exposure: exposure ? {
           status: exposureComplete ? "proven" : "partial",
