@@ -49,6 +49,15 @@
 --  match prior migrations (uuid pk, timestamptz, gen_random_uuid).
 -- ════════════════════════════════════════════════════════════════════
 
+-- ── PRE-EXISTING TABLE GUARD (added at deploy) ──────────────────────
+-- An earlier migration created a DIFFERENT scheduled_charges (move-in /
+-- concession shape: label, due_on, is_move_in_gate, recur_period…) with no
+-- `period` column, so the income-rung index below failed. That table is
+-- EMPTY (verified 0 rows before this change), so we drop it and let this
+-- migration build the income-rung ledger clean. Idempotent: `if exists`
+-- makes this safe on a fresh DB too.
+drop table if exists scheduled_charges cascade;
+
 create table if not exists scheduled_charges (
   id            uuid primary key default gen_random_uuid(),
 
