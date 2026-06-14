@@ -542,19 +542,31 @@ module.exports = function teamAccessModule({ pool, sms }) {
   // ── PATCH /property-team-assignments/:id — authorized manager edits access ──
   router.patch("/property-team-assignments/:id", async (req, res) => {
     try {
-      const me = await currentUser(req);
-      if (!me) return res.status(401).json({ receipt: "Not signed in." });
-
       const target = (await pool.query(
         `select * from property_team_assignments where id=$1`, [req.params.id])).rows[0];
       if (!target) return res.status(404).json({ error: "assignment not found" });
 
-      // only a role-manager on the SAME property may edit access.
-      const mine = (await pool.query(
-        `select can_manage_roles from property_team_assignments
-          where property_id=$1 and user_id=$2 and active=true`, [target.property_id, me.id])).rows[0];
-      if (!mine || !mine.can_manage_roles)
-        return res.status(403).json({ receipt: "Only an authorized manager on this property can change access." });
+      // ── AUTH: two accepted callers ──────────────────────────────────────
+      // (1) OWNER via the operator dashboard. This route is NOT under /auth/,
+      //     so the global operator-key gate in server.js has ALREADY required
+      //     a valid x-operator-key to reach this handler. A request carrying a
+      //     matching operator key is the owner/admin surface — allow it. The
+      //     operator dashboard auths with the key, not a staff phone session.
+      // (2) MANAGER via a staff phone session: must be can_manage_roles on the
+      //     SAME property (the staff-facing path).
+      // Either is sufficient; we don't require both.
+      const opKey = process.env.OPERATOR_KEY;
+      const isOperator = !!opKey && req.get("x-operator-key") === opKey;
+
+      if (!isOperator) {
+        const me = await currentUser(req);
+        if (!me) return res.status(401).json({ receipt: "Not signed in." });
+        const mine = (await pool.query(
+          `select can_manage_roles from property_team_assignments
+            where property_id=$1 and user_id=$2 and active=true`, [target.property_id, me.id])).rows[0];
+        if (!mine || !mine.can_manage_roles)
+          return res.status(403).json({ receipt: "Only an authorized manager on this property can change access." });
+      }
 
       const b = req.body || {};
       const allowed = b.allowed_modules != null ? cleanModules(b.allowed_modules) : target.allowed_modules;
