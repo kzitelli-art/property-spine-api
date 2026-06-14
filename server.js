@@ -30,6 +30,7 @@ const bankIntakeModule = require("./bankintake");   // bank intake: onboarding/t
 const exposureModule = require("./exposure");
 const reportingModule = require("./reporting");
 const chargesModule = require("./charges"); // income rung slice 2A: charge generation (the claim side)
+const paymentsModule = require("./payments"); // income rung slice 3: payment proof (apply + cash proof)
 const bankBridgeModule = require('./bankbridge');
 const compareModule = require("./compare");   // report comparison layer (the hook)
 const explainModule = require("./explain");
@@ -3093,6 +3094,7 @@ app.use('/', bankBridgeModule({ pool, spawnObligationFromEvent, satisfyObligatio
 app.use("/", exposureModule({ pool }));
 app.use("/", reportingModule({ pool }));
 app.use("/", chargesModule({ pool })); // income rung slice 2A: /properties/:id/charges[/generate|/summary]
+app.use("/", paymentsModule({ pool })); // income rung slice 3: /properties/:id/payments, /payments/:id/apply|link-bank, /income-proof
 app.use("/", require("./board")({ pool })); // morning board: GET /properties/:id/today (read-only)
 app.use("/", leasingIntelModule({ pool, upload }));
 app.use("/", require("./desks")({ pool })); // V3 three desks: operator-home + management/leasing/maintenance dashboards (read-only)
