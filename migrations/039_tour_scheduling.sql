@@ -63,6 +63,17 @@ alter table leasing_tours add column if not exists no_show_at       timestamptz;
 alter table leasing_tours add column if not exists cancelled_at     timestamptz;
 alter table leasing_tours add column if not exists rescheduled_from uuid references leasing_tours(id); -- the prior tour, if this is a rebook
 
+-- FIRST migrate any EXISTING rows off the old 038 status words, or the tighter
+-- CHECK below will reject them. 038 allowed 'confirmed'; the instrument renames
+-- that to 'confirmed_by_prospect' (same meaning — a confirmed tour).
+update leasing_tours set status = 'confirmed_by_prospect' where status = 'confirmed';
+-- safety net: park any other unexpected legacy status as 'requested' (the
+-- neutral carryover state) so the migration can never be blocked by a stray
+-- value. Idempotent — only touches rows outside the new vocabulary.
+update leasing_tours set status = 'requested'
+  where status not in ('requested','scheduled','confirmed_by_prospect','checked_in',
+                       'completed','no_show','cancelled','rescheduled');
+
 -- Widen the status projection vocabulary. Drop the 038 CHECK by its generated
 -- name and re-add the full set. 'scheduled' is the new live state once a real
 -- slot is booked (distinct from 038 'requested' = asked, not yet on a slot).
