@@ -88,6 +88,10 @@ create table if not exists scheduled_charges (
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now(),
 
+  -- one charge per (lease/unit, period, type) when generated from a lease —
+  -- prevents double-billing the same rent for the same month. Partial:
+  -- only applies when lease_id is present (imports without a lease are not
+  -- forced unique, since the same unit can legitimately carry odd history).
   constraint scheduled_charges_amount_nonneg check (amount >= 0)
 );
 
