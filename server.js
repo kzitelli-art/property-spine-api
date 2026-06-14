@@ -28,6 +28,7 @@ const identifyModule = require("./identify");        // property-agnostic front 
 const ownerModule = require("./owner");              // owner-facing aggregate endpoints (property cards + needs-attention queue)
 const bankIntakeModule = require("./bankintake");   // bank intake: onboarding/training pass (012)
 const exposureModule = require("./exposure");
+const reportingModule = require("./reporting");
 const bankBridgeModule = require('./bankbridge');
 const compareModule = require("./compare");   // report comparison layer (the hook)
 const explainModule = require("./explain");
@@ -3088,6 +3089,7 @@ app.use("/", registryInstance);
 app.use("/", bankIntakeModule({ pool }));
 app.use('/', bankBridgeModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", exposureModule({ pool }));
+app.use("/", reportingModule({ pool }));
 app.use("/", require("./board")({ pool })); // morning board: GET /properties/:id/today (read-only)
 app.use("/", leasingIntelModule({ pool, upload }));
 app.use("/", require("./desks")({ pool })); // V3 three desks: operator-home + management/leasing/maintenance dashboards (read-only)
