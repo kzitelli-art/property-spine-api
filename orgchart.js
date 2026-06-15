@@ -13,7 +13,7 @@
 // ============================================================
 
 // ---- fixed role vocabulary (regional_manager OUT for v1) ----------
-const ROLES = ['property_manager','maintenance','leasing','bookkeeper','asset_manager','owner'];
+const ROLES = ['property_manager','maintenance','leasing','bookkeeper','asset_manager','owner','reporting','capital'];
 const SCOPES = ['all','maintenance','leasing','accounting','management'];
 
 // ---- role default seeds -------------------------------------------
@@ -25,6 +25,8 @@ const ROLE_DEFAULTS = {
   property_manager: { spend_cap: 500,  approval_cap: 2500,  scope: 'all'         },
   asset_manager:    { spend_cap: null, approval_cap: 25000, scope: 'all'         },
   owner:            { spend_cap: null, approval_cap: -1,    scope: 'all'         },
+  reporting:        { spend_cap: 0,    approval_cap: 0,     scope: 'all'         },
+  capital:          { spend_cap: 0,    approval_cap: 0,     scope: 'all'         },
 };
 
 // pick first defined of a list; lets caller override role defaults
