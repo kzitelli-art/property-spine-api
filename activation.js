@@ -532,5 +532,232 @@ module.exports = function activationModule({
     }
   });
 
+
+  // =========================================================================
+  // GET /activations/:id/readiness  — the progress-bar / lock source.
+  // A thin AGGREGATOR over already-live queries. The two sources that don't
+  // exist yet (source documents, charge→event cash links) return null — an
+  // honest blank, never a fabricated zero. progress_percent is computed from
+  // required-step completion, not stored.
+  // =========================================================================
+  router.get("/activations/:id/readiness", async (req, res) => {
+    try {
+      const act = await pool.query("select * from activations where id=$1", [req.params.id]);
+      if (act.rows.length === 0) return res.status(404).json({ error: "activation not found" });
+      const activation = act.rows[0];
+      const propertyId = activation.property_id;
+
+      // ── LIVE exposure sources ───────────────────────────────────────────
+      // 1. units untied (leasing exposure)
+      let unitsUntied = null, totalUnits = null;
+      if (propertyId) {
+        const exp = await leasingExposure(propertyId);
+        unitsUntied = exp.untied;
+        totalUnits = exp.total_units;
+      }
+
+      // 2. leases still unconfirmed (proposed rows not yet promoted/rejected)
+      const unconf = await pool.query(
+        `select count(*)::int as n from proposed_records
+          where activation_id=$1 and status in ('staged','needs_review')`,
+        [req.params.id]);
+      const leasesUnconfirmed = unconf.rows[0].n;
+
+      // 3. rooms unassigned (active assignments in the mapped roles).
+      //    Mirrors roomowners.js: Management's role is property_manager and is
+      //    the hard unlock blocker; the rest are visible exposure.
+      const ROOM_TO_ROLE = {
+        management: "property_manager", leasing: "leasing",
+        maintenance: "maintenance", money: "bookkeeper",
+        reporting: "reporting", capital: "capital",
+      };
+      let roomsUnassigned = null, managementOwned = false, missingRooms = [];
+      if (propertyId) {
+        const owned = (await pool.query(
+          `select distinct role from assignments
+            where property_id=$1 and is_active=true and role = any($2)
+              and coalesce((provenance->>'room_backup')::boolean, false) = false`,
+          [propertyId, Object.values(ROOM_TO_ROLE)]
+        )).rows.map(r => r.role);
+        const ownedSet = new Set(owned);
+        for (const [room, role] of Object.entries(ROOM_TO_ROLE)) {
+          if (!ownedSet.has(role)) missingRooms.push(room);
+        }
+        roomsUnassigned = missingRooms.length;
+        managementOwned = ownedSet.has("property_manager");
+      }
+
+      // 4. unit structure established (≥1 unit) — a launch blocker
+      let unitCount = null;
+      if (propertyId) {
+        unitCount = (await pool.query(
+          "select count(*)::int as n from units where property_id=$1", [propertyId]
+        )).rows[0].n;
+      }
+
+      // ── BUILD-later sources: honest null until they exist ───────────────
+      const documentsUnclassified = null; // no source_documents table yet
+      const cashUnexplained       = null; // no charge→event link yet
+
+      // ── the required steps (drives progress_percent + ready_to_launch) ──
+      const propertyConfirmed = Boolean(propertyId);
+      const unitsEstablished  = (unitCount || 0) >= 1;
+
+      const steps = [
+        { key: "property",   label: "Property identity confirmed",
+          status: propertyConfirmed ? "done" : "todo", required: true },
+        { key: "units",      label: "Unit structure established",
+          status: unitsEstablished ? "done" : "todo", required: true,
+          missing: unitsEstablished ? undefined : "No units exist yet — confirm at least one rent-roll row." },
+        { key: "leases",     label: "Leases confirmed",
+          status: leasesUnconfirmed === 0 ? "done" : "todo", required: false,
+          exposure_count: leasesUnconfirmed },
+        { key: "management", label: "Management owner assigned",
+          status: managementOwned ? "done" : "todo", required: true },
+        { key: "rooms",      label: "All rooms assigned",
+          status: (roomsUnassigned === 0) ? "done" : "todo", required: false,
+          exposure_count: roomsUnassigned, missing: missingRooms.length ? missingRooms : undefined },
+      ];
+
+      // progress = share of REQUIRED steps that are done
+      const required = steps.filter(s => s.required);
+      const doneRequired = required.filter(s => s.status === "done").length;
+      const progressPercent = required.length
+        ? Math.round((doneRequired / required.length) * 100) : 0;
+
+      // the three TRUE launch blockers (match POST /activate exactly)
+      const blockers = [];
+      if (!propertyConfirmed) blockers.push("Property identity not confirmed");
+      if (!unitsEstablished)  blockers.push("Unit structure not yet established");
+      if (!managementOwned)   blockers.push("Management owner missing");
+      const readyToLaunch = blockers.length === 0;
+
+      res.json({
+        activation_id: req.params.id,
+        property_id: propertyId,
+        progress_percent: progressPercent,
+        ready_to_launch: readyToLaunch,
+        status: activation.status,
+        steps,
+        blockers,
+        exposure: {
+          units_untied: unitsUntied,
+          total_units: totalUnits,
+          leases_unconfirmed: leasesUnconfirmed,
+          rooms_unassigned: roomsUnassigned,
+          documents_unclassified: documentsUnclassified, // null until source_documents exists
+          cash_unexplained: cashUnexplained,             // null until charge→event link exists
+        },
+        receipt: readyToLaunch
+          ? `Ready to launch. ${progressPercent}% of required steps complete.`
+          : `Not ready: ${blockers.join("; ")}. ${progressPercent}% of required steps complete.`,
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // =========================================================================
+  // POST /activations/:id/activate  — the final lock.
+  // Succeeds ONLY if the three TRUE blockers are cleared:
+  //   1. property identity confirmed   (activation has a property_id)
+  //   2. unit structure established    (≥1 unit on that property)
+  //   3. Management owner assigned      (active property_manager assignment)
+  // On success: flip activation.status -> 'activated'. On failure: 422 + the
+  // unmet blockers. Re-activating an already-activated envelope is a no-op 200.
+  // =========================================================================
+  router.post("/activations/:id/activate", async (req, res) => {
+    try {
+      const act = await pool.query("select * from activations where id=$1", [req.params.id]);
+      if (act.rows.length === 0) return res.status(404).json({ error: "activation not found" });
+      const activation = act.rows[0];
+
+      if (activation.status === "activated") {
+        return res.json({ activated: true, already: true,
+          receipt: `Activation ${req.params.id} was already activated.` });
+      }
+
+      const propertyId = activation.property_id;
+      const blockers = [];
+
+      if (!propertyId) {
+        blockers.push("Property identity not confirmed");
+      } else {
+        const units = (await pool.query(
+          "select count(*)::int as n from units where property_id=$1", [propertyId]
+        )).rows[0].n;
+        if (units < 1) blockers.push("Unit structure not yet established (no units exist)");
+
+        const mgmt = (await pool.query(
+          `select 1 from assignments
+            where property_id=$1 and is_active=true and role='property_manager'
+              and coalesce((provenance->>'room_backup')::boolean, false) = false
+            limit 1`,
+          [propertyId]
+        )).rows.length;
+        if (!mgmt) blockers.push("Management owner missing");
+      }
+
+      if (blockers.length > 0) {
+        return res.status(422).json({
+          activated: false, blockers,
+          receipt: `Cannot activate yet: ${blockers.join("; ")}.`,
+        });
+      }
+
+      const upd = await pool.query(
+        `update activations set status='activated', updated_at=now()
+          where id=$1 returning *`, [req.params.id]);
+      res.json({
+        activated: true,
+        activation: upd.rows[0],
+        receipt: `Activation ${req.params.id} is now LIVE. The property has entered the funnel.`,
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // =========================================================================
+  // DELETE /activations/:id  — the SAFE RESET for repeatable testing.
+  // Drops the activation envelope; proposed_records cascade via FK
+  // (on delete cascade). This does NOT undo PROMOTED live units/leases —
+  // promotion writes real records on purpose. For a truly repeatable test,
+  // run against a THROWAWAY property shell so reset = fresh shell + activation
+  // and no production truth is ever touched. The response says so plainly.
+  // =========================================================================
+  router.delete("/activations/:id", async (req, res) => {
+    try {
+      const act = await pool.query("select * from activations where id=$1", [req.params.id]);
+      if (act.rows.length === 0) return res.status(404).json({ error: "activation not found" });
+
+      const promoted = (await pool.query(
+        `select count(*)::int as n from proposed_records
+          where activation_id=$1 and status='promoted'`, [req.params.id]
+      )).rows[0].n;
+
+      const dropped = (await pool.query(
+        `with d as (delete from proposed_records where activation_id=$1 returning 1)
+         select count(*)::int as n from d`, [req.params.id]
+      )).rows[0].n;
+
+      await pool.query("delete from activations where id=$1", [req.params.id]);
+
+      res.json({
+        deleted: true,
+        proposed_dropped: dropped,
+        promoted_left_live: promoted,
+        receipt: promoted > 0
+          ? `Activation deleted; ${dropped} proposed row(s) dropped. ` +
+            `WARNING: ${promoted} row(s) were already PROMOTED — their live units/leases ` +
+            `remain and were NOT undone. Reset on a throwaway shell to avoid this.`
+          : `Activation deleted; ${dropped} proposed row(s) dropped. Nothing was promoted, ` +
+            `so no live records remained to undo. Clean reset.`,
+      });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   return router;
 };
