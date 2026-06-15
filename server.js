@@ -18,6 +18,7 @@ const XLSX = require("xlsx");              // parses the spreadsheet to rows
 const maintenanceModule = require("./maintenance");  // isolated maintenance routes
 const downUnitsModule = require("./down_units");      // isolated down-units routes
 const orgchartModule = require("./orgchart");
+const roomOwnersModule = require("./roomowners"); // thin room-owner API over assignments (041); six rooms → owners
 const moneyModule = require("./money");
 const turnoversModule = require("./turnovers");
 const moveinModule = require("./movein");
@@ -32,6 +33,7 @@ const reportingModule = require("./reporting");
 const chargesModule = require("./charges"); // income rung slice 2A: charge generation (the claim side)
 const paymentsModule = require("./payments"); // income rung slice 3: payment proof (apply + cash proof)
 const bankBridgeModule = require('./bankbridge');
+const plaidModule = require('./plaid'); // Plaid: second feed into bank_transactions (031); fail-soft when unconfigured
 const compareModule = require("./compare");   // report comparison layer (the hook)
 const explainModule = require("./explain");
 const tenantLinkModule = require("./tenantlink"); // tenant text line Phase 1: connection (invite link → verify → session)
@@ -3083,6 +3085,7 @@ app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));
 // ── ORG CHART MODULE (isolated; same injection pattern) ──
 app.use("/", moneyModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, reassignObligation }));
 app.use("/", orgchartModule({ pool }));
+app.use("/", roomOwnersModule({ pool }));
 app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", onboardingModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
@@ -3091,6 +3094,7 @@ app.use("/api", onboardingFunnel({ pool }));
 app.use("/", registryInstance);
 app.use("/", bankIntakeModule({ pool }));
 app.use('/', bankBridgeModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
+app.use('/', plaidModule({ pool }));
 app.use("/", exposureModule({ pool }));
 app.use("/", reportingModule({ pool }));
 app.use("/", chargesModule({ pool })); // income rung slice 2A: /properties/:id/charges[/generate|/summary]
