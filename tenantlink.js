@@ -1004,13 +1004,23 @@ Rules: classification "emergency" only for active danger or major damage in prog
           where c.id = $1`, [conversationId]);
       if (!convoQ.rows.length) return res.status(404).json({ receipt: "No conversation with that id." });
       const convo = convoQ.rows[0];
-      const messages = (await pool.query(
-        `select id, direction, channel, body, classification,
+      const rawMessages = (await pool.query(
+        `select id, direction, channel, body, classification, sender_role,
                 created_object_type, created_object_id, needs_human, occurred_at
            from comm_events
           where conversation_id = $1
           order by occurred_at asc, id asc
           limit 500`, [conversationId])).rows;
+      // Who said it. Explicit sender_role wins; otherwise derive from the
+      // columns we already have so historical rows still render correctly.
+      // 'contact' = the other party (prospect or tenant) — the inbound bubble.
+      const senderTypeOf = (m) => {
+        if (m.sender_role) return m.sender_role;
+        if (m.direction === "inbound") return "contact";
+        if (["ai_reply", "ai_leasing", "auto_reply"].includes(m.classification)) return "ai";
+        return "agent";
+      };
+      const messages = rawMessages.map((m) => ({ ...m, sender_type: senderTypeOf(m) }));
       const humanCount = messages.filter(m => m.needs_human).length;
       res.json({
         receipt: `Conversation with ${convo.person_name || "unknown person"}${convo.unit_number ? ` in unit ${convo.unit_number}` : ""} · ${messages.length} message${messages.length === 1 ? "" : "s"}${humanCount ? ` · ${humanCount} still need${humanCount === 1 ? "s" : ""} a human` : ""}.`,
@@ -1049,8 +1059,8 @@ Rules: classification "emergency" only for active danger or major damage in prog
       if (!convoQ.rows.length) return res.status(404).json({ receipt: "No conversation with that id." });
       const convo = convoQ.rows[0];
       const out = (await pool.query(
-        `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification)
-         values ($1,$2,$3,$4,'portal','outbound',$5,'manager_reply') returning id`,
+        `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification, sender_role)
+         values ($1,$2,$3,$4,'portal','outbound',$5,'manager_reply','agent') returning id`,
         [convo.property_id, convo.person_id, convo.unit_id, conversationId, body])).rows[0];
       await pool.query(`update conversations set last_message_at = now() where id = $1`, [conversationId]);
       // Replying IS handling it — clear the human flag on this thread's inbounds.
