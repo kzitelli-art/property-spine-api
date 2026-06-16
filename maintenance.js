@@ -72,6 +72,74 @@ module.exports = function maintenance(deps) {
     "high";
 
   // ════════════════════════════════════════════════════════════════
+  //  THE NOT-DONE REASONS  (the continuity engine's input)
+  //
+  //  When a tech closes a work order as NOT 100% done, they pick a reason
+  //  from THIS fixed list — never free text (same discipline as the down-unit
+  //  DOWN_REASONS and the EMERGENCY_TYPES above). The reason is what lets the
+  //  chain stay alive: each reason routes to a specific follow-up obligation
+  //  through the shared engine, so a stalled job always has a named next step
+  //  and a named owner. "Nothing is done until the next step is visible."
+  //
+  //  Each entry declares how it routes:
+  //    follow_type      — the obligation type spawned for the next step
+  //    follow_role      — who owns that next step (an org-chart role)
+  //    escalates_to     — where it escalates if that owner doesn't move
+  //    follow_label(wo) — the human sentence the owner sees
+  // ════════════════════════════════════════════════════════════════
+  const NOT_DONE_REASONS = {
+    need_part: {
+      label: "Waiting on a part",
+      follow_type: "supply_followup",
+      follow_role: "maintenance",
+      escalates_to: "property_manager",
+      follow_label: (wo) => `Part needed to finish: ${wo.title || "work order"} — order / track the part`,
+    },
+    need_vendor: {
+      label: "Needs an outside vendor",
+      follow_type: "vendor_quote",
+      follow_role: "property_manager",
+      escalates_to: "owner",
+      follow_label: (wo) => `Outside vendor needed for: ${wo.title || "work order"} — get quote / schedule`,
+    },
+    no_access: {
+      label: "Couldn't get access to the unit",
+      follow_type: "reschedule_access",
+      follow_role: "maintenance",
+      escalates_to: "property_manager",
+      follow_label: (wo) => `No access — reschedule a return visit for: ${wo.title || "work order"}`,
+    },
+    needs_approval: {
+      label: "Needs PM approval to proceed",
+      follow_type: "approval_followup",
+      follow_role: "property_manager",
+      escalates_to: "owner",
+      follow_label: (wo) => `Approval needed before finishing: ${wo.title || "work order"}`,
+    },
+    bigger_job: {
+      label: "Bigger job than expected",
+      follow_type: "scope_review",
+      follow_role: "property_manager",
+      escalates_to: "owner",
+      follow_label: (wo) => `Re-scope — larger than expected: ${wo.title || "work order"}`,
+    },
+    second_visit: {
+      label: "Partly done — needs a second visit",
+      follow_type: "return_visit",
+      follow_role: "maintenance",
+      escalates_to: "property_manager",
+      follow_label: (wo) => `Return visit to finish: ${wo.title || "work order"}`,
+    },
+    other: {
+      label: "Other (PM to review)",
+      follow_type: "not_done_followup",
+      follow_role: "property_manager",
+      escalates_to: "owner",
+      follow_label: (wo) => `Stalled — PM to review: ${wo.title || "work order"}`,
+    },
+  };
+
+  // ════════════════════════════════════════════════════════════════
   //  THE CATEGORY ENGINE  (field + context → operating → gl)
   // ════════════════════════════════════════════════════════════════
   // Pure function. Same input always gives same output. The tech sets
@@ -124,6 +192,15 @@ module.exports = function maintenance(deps) {
   router.get("/maintenance/emergency-types", (_req, res) => {
     res.json(
       Object.entries(EMERGENCY_TYPES).map(([key, v]) => ({ key, ...v }))
+    );
+  });
+
+  // List the fixed not-done reasons (for the closeout "not done" dropdown).
+  // Returns key + label only — the routing internals (follow_type/role) stay
+  // server-side. The UI shows labels; the server decides where each one goes.
+  router.get("/maintenance/not-done-reasons", (_req, res) => {
+    res.json(
+      Object.entries(NOT_DONE_REASONS).map(([key, v]) => ({ key, label: v.label }))
     );
   });
 
@@ -318,7 +395,7 @@ module.exports = function maintenance(deps) {
   //  not silently disappear. needs_pm_review stays true.
   // ════════════════════════════════════════════════════════════════
   router.patch("/work-orders/:id/closeout", async (req, res) => {
-    const { completion_photo, completion_note, done = true } = req.body || {};
+    const { completion_photo, completion_note, done = true, not_done_reason } = req.body || {};
     const client = await pool.connect();
     try {
       await client.query("begin");
@@ -327,31 +404,85 @@ module.exports = function maintenance(deps) {
       if (woQ.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "work order not found" }); }
       const wo = woQ.rows[0];
 
-      // ── NOT DONE PATH: create a follow-up review, leave WO open ──
+      // ── NOT DONE PATH: route the stall, leave WO open ──
+      //
+      //  THE CONTINUITY ENGINE. A not-done close is not a dead end — it is a
+      //  fork that MUST produce a named next step with a named owner. The tech
+      //  picks a structured reason; that reason both (a) gets stored on the WO
+      //  in its own column (not jammed into completion_note) and (b) spawns the
+      //  RIGHT follow-up obligation through the SAME shared engine every other
+      //  obligation is born from. The chain cannot break.
       if (done === false) {
-        const reason = completion_note || "Work not completed — no reason given";
+        // Reason must be one we know. Default to 'other' only if none given,
+        // so an old/blank caller still routes somewhere real (PM review) rather
+        // than vanishing. A WRONG reason is rejected — never silently coerced.
+        const reasonKey = not_done_reason || "other";
+        const route = NOT_DONE_REASONS[reasonKey];
+        if (!route) {
+          await client.query("rollback");
+          return res.status(400).json({
+            error: "invalid not_done_reason",
+            allowed: Object.keys(NOT_DONE_REASONS),
+          });
+        }
+
+        // 1) Durable event — the obligation is born only from an event.
         const followNote = {
           work_order_id: wo.id,
-          kind: "not_done_followup",
-          reason,
-          action: "PM/supervisor to review next morning, confirm tenant experience, ensure resolution",
+          kind: "not_done",
+          reason: reasonKey,
+          reason_label: route.label,
+          routes_to: route.follow_type,
+          owner_role: route.follow_role,
+          note: completion_note || null,   // optional tech context, kept separate
         };
-        await client.query(
+        const ev = await client.query(
           `insert into events (property_id, person_id, unit_id, type, note)
-           values ($1,$2,$3,'maintenance_followup',$4)`,
+           values ($1,$2,$3,'maintenance_followup',$4) returning *`,
           [wo.property_id, wo.person_id ?? null, wo.unit_id ?? null, JSON.stringify(followNote)]
         );
+
+        // 2) The WO stays OPEN, flagged for review, with the structured reason
+        //    in its OWN column. completion_note now means only "completion note"
+        //    — we no longer overwrite it with the stall reason.
         await client.query(
-          `update work_orders set status='needs_followup', needs_pm_review=true,
-             completion_note=$2, updated_at=now() where id=$1`,
-          [wo.id, reason]
+          `update work_orders
+             set status='needs_followup', needs_pm_review=true,
+                 not_done_reason=$2, updated_at=now()
+           where id=$1`,
+          [wo.id, reasonKey]
         );
+
+        // 3) The ROUTED follow-up obligation — through the shared engine, in
+        //    THIS transaction. related_id/related_type link it back to the WO
+        //    so the next owner inherits full context. This is the named next
+        //    step: who owns it, where it escalates, what it's for.
+        const followup = await spawnObligationFromEvent(client, {
+          property_id: wo.property_id,
+          person_id: wo.person_id ?? null,
+          unit_id: wo.unit_id ?? null,
+          source_event_id: ev.rows[0].id,
+          module: "maintenance",
+          type: route.follow_type,
+          label: route.follow_label(wo),
+          owner_type: "human",
+          assigned_role: route.follow_role,
+          escalates_to_role: route.escalates_to,
+          status: "open",
+          priority: "normal",
+          severity: "normal",
+          related_id: wo.id,
+          related_type: "work_order",
+        });
+
         await client.query("commit");
         const updated = await pool.query("select * from work_orders where id=$1", [wo.id]);
         return res.status(200).json({
           work_order: updated.rows[0],
           followup_created: true,
-          message: "Work marked not done — follow-up review created for PM/supervisor.",
+          not_done_reason: reasonKey,
+          followup_obligation: followup,
+          message: `Work marked not done (${route.label}) — ${route.follow_type} follow-up created for ${route.follow_role}.`,
         });
       }
 
