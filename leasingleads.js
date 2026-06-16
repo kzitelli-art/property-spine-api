@@ -83,6 +83,28 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // Write a lead_event AND refresh the opportunity's status projection together
   // so the log and the cached status never drift. statusPatch carries the
   // timestamp columns the funnel pins to events.
+  // ── PERSON-SCOPED THREAD (memo §1–2): leasing messaging is NOT a separate
+  //    store. A lead is a person at a property, and conversations are keyed
+  //    (property_id, person_id) — the exact same grain. This upsert guarantees
+  //    the one thread for this human at this property exists, then hands back
+  //    its id so every leasing comm_event can attach to it. Idempotent: the
+  //    unique (property_id, person_id) index means re-opening a drawer never
+  //    spawns a second thread. Mirrors the tenant-line upsert in tenantlink.js
+  //    so prospect history and tenant history are literally the same row after
+  //    a prospect signs.
+  async function ensureConversation(client, { propertyId, personId, unitId = null }) {
+    if (!propertyId || !personId) return null;
+    await client.query(
+      `insert into conversations (property_id, person_id, unit_id, channel_primary, status)
+       values ($1,$2,$3,'sms','open')
+       on conflict (property_id, person_id) do nothing`,
+      [propertyId, personId, unitId]);
+    const c = (await client.query(
+      `select id from conversations where property_id=$1 and person_id=$2`,
+      [propertyId, personId])).rows[0];
+    return c ? c.id : null;
+  }
+
   async function recordLeadEvent(client, { leadId, type, actorType, actorId = null, commEventId = null, metadata = null, statusPatch = null }) {
     const ev = (await client.query(
       `insert into lead_events (lead_id, event_type, actor_type, actor_id, comm_event_id, metadata)
@@ -275,10 +297,15 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       await client.query("begin");
       const lead = (await client.query(`select * from leasing_leads where id=$1`, [leadId])).rows[0];
       if (!lead) { await client.query("rollback"); return res.status(404).json({ receipt: "No opportunity with that id." }); }
+      // Attach to the person's one thread (memo §2.2): never an orphaned event.
+      const conversationId = await ensureConversation(client, {
+        propertyId: lead.property_id, personId: lead.person_id, unitId: lead.unit_id,
+      });
       const commEvent = (await client.query(
-        `insert into comm_events (property_id, person_id, unit_id, channel, direction, body, classification)
-         values ($1,$2,$3,'text','inbound',$4,'leasing') returning id`,
-        [lead.property_id, lead.person_id, lead.unit_id, text])).rows[0];
+        `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification, sender_role)
+         values ($1,$2,$3,$4,'text','inbound',$5,'leasing','prospect') returning id`,
+        [lead.property_id, lead.person_id, lead.unit_id, conversationId, text])).rows[0];
+      if (conversationId) await client.query(`update conversations set last_message_at = now() where id = $1`, [conversationId]);
       await recordLeadEvent(client, { leadId, type: "prospect_replied", actorType: "prospect", actorId: lead.person_id, commEventId: commEvent.id, metadata: { body: text } });
       await client.query("commit");
       return res.json({ receipt: "Reply logged.", lead_id: leadId });
@@ -334,10 +361,13 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   router.get("/properties/:propertyId/leasing/queue", requireOperator, async (req, res) => {
     try {
       const r = await pool.query(
-        `select q.*, p.name, p.phone, p.email, l.status as lead_status
+        `select q.*, p.name, p.phone, p.email, l.status as lead_status,
+                l.person_id, c.id as conversation_id
            from lead_takeover_queue q
            join leasing_leads l on l.id = q.lead_id
            join persons p on p.id = l.person_id
+           left join conversations c
+                  on c.property_id = l.property_id and c.person_id = l.person_id
           where q.property_id=$1 and q.status <> 'resolved' order by q.created_at`,
         [req.params.propertyId]);
       return res.json({ receipt: `${r.rows.length} item(s) waiting for the on-site team.`, items: r.rows });
@@ -818,10 +848,13 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   router.get("/properties/:propertyId/leasing/tours/today", requireOperator, async (req, res) => {
     try {
       const r = await pool.query(
-        `select t.*, p.name as prospect_name, p.phone as prospect_phone
+        `select t.*, p.name as prospect_name, p.phone as prospect_phone,
+                l.person_id, c.id as conversation_id
            from leasing_tours t
            join leasing_leads l on l.id = t.lead_id
            join persons p on p.id = l.person_id
+           left join conversations c
+                  on c.property_id = l.property_id and c.person_id = l.person_id
           where t.property_id=$1
             and t.scheduled_for::date = (now() at time zone 'utc')::date
             and t.status not in ('cancelled','rescheduled')
@@ -833,10 +866,24 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // ── ONE TOUR, full lifecycle — the tour's own honest history ──
   router.get("/leasing/tours/:tourId", requireOperator, async (req, res) => {
     try {
-      const tour = (await pool.query(`select * from leasing_tours where id=$1`, [req.params.tourId])).rows[0];
+      const tour = (await pool.query(
+        `select t.*, l.person_id, l.property_id as lead_property_id, l.unit_id as lead_unit_id,
+                p.name as prospect_name, p.phone as prospect_phone, p.email as prospect_email
+           from leasing_tours t
+           join leasing_leads l on l.id = t.lead_id
+           join persons p on p.id = l.person_id
+          where t.id=$1`, [req.params.tourId])).rows[0];
       if (!tour) return res.status(404).json({ receipt: "No tour with that id." });
+      // Opening the tour drawer guarantees the person's thread exists (memo §2.4):
+      // the drawer opens the person conversation, with this tour as context.
+      const conversationId = await ensureConversation(pool, {
+        propertyId: tour.property_id || tour.lead_property_id,
+        personId: tour.person_id,
+        unitId: tour.unit_id || tour.lead_unit_id,
+      });
+      tour.conversation_id = conversationId;
       const events = (await pool.query(`select * from tour_events where tour_id=$1 order by event_at`, [req.params.tourId])).rows;
-      return res.json({ receipt: `Tour is '${tour.status}'; ${events.length} lifecycle event(s).`, tour, events });
+      return res.json({ receipt: `Tour is '${tour.status}'; ${events.length} lifecycle event(s).`, tour, conversation_id: conversationId, events });
     } catch (e) { console.error("leasing tour get:", e); return res.status(500).json({ receipt: "Could not load the tour.", error: e.message }); }
   });
 
