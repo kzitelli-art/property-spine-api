@@ -3102,6 +3102,7 @@ app.use("/", paymentsModule({ pool })); // income rung slice 3: /properties/:id/
 app.use("/", require("./board")({ pool })); // morning board: GET /properties/:id/today (read-only)
 app.use("/", leasingIntelModule({ pool, upload }));
 app.use("/", require("./desks")({ pool })); // V3 three desks: operator-home + management/leasing/maintenance dashboards (read-only)
+app.use("/", require("./management")({ pool })); // Management reverse-funnel surface: GET /properties/:id/management-surface (Needs You primary, Collections/Operations secondary, Rent Roll reference)
 app.use("/", compareModule({ pool }));
 app.use("/", explainModule({ pool }));
 // tenant link (text line: connection + message loop) — pool, AI for classification.
