@@ -33,6 +33,9 @@ const reportingModule = require("./reporting");
 const chargesModule = require("./charges"); // income rung slice 2A: charge generation (the claim side)
 const paymentsModule = require("./payments"); // income rung slice 3: payment proof (apply + cash proof)
 const bankBridgeModule = require('./bankbridge');
+const autoConfirmModule = require('./autoconfirm');
+const moneyBoardModule = require('./moneyboard');
+const attributionsModule = require('./attributions');
 const plaidModule = require('./plaid'); // Plaid: second feed into bank_transactions (031); fail-soft when unconfigured
 const compareModule = require("./compare");   // report comparison layer (the hook)
 const explainModule = require("./explain");
@@ -3094,6 +3097,9 @@ app.use("/api", onboardingFunnel({ pool }));
 app.use("/", registryInstance);
 app.use("/", bankIntakeModule({ pool }));
 app.use('/', bankBridgeModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
+app.use('/', autoConfirmModule({ pool }));
+app.use('/', moneyBoardModule({ pool }));
+app.use('/', attributionsModule({ pool }));
 app.use('/', plaidModule({ pool }));
 app.use("/", exposureModule({ pool }));
 app.use("/", reportingModule({ pool }));
