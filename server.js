@@ -37,6 +37,7 @@ const autoConfirmModule = require('./autoconfirm');
 const moneyBoardModule = require('./moneyboard');
 const attributionsModule = require('./attributions');
 const portfolioModule = require('./portfolio');
+const snapshotLoaderModule = require('./snapshot_loader');
 const plaidModule = require('./plaid'); // Plaid: second feed into bank_transactions (031); fail-soft when unconfigured
 const compareModule = require("./compare");   // report comparison layer (the hook)
 const explainModule = require("./explain");
@@ -3102,6 +3103,7 @@ app.use('/', autoConfirmModule({ pool }));
 app.use('/', moneyBoardModule({ pool }));
 app.use('/', attributionsModule({ pool }));
 app.use('/api', portfolioModule({ pool }));
+app.use('/', snapshotLoaderModule({ pool, upload }));
 app.use('/', plaidModule({ pool }));
 app.use("/", exposureModule({ pool }));
 app.use("/", reportingModule({ pool }));
