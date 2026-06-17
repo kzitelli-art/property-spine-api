@@ -52,12 +52,15 @@ module.exports = function seedEndpoint(deps){
   router.get("/admin/seed-snapshot/status", async (req, res) => {
     try {
       const r = await pool.query(
-        `select b.id, b.source_file, b.source_as_of_date, b.leasing_model, b.confidence, b.loaded_at,
+        `select b.id, b.property_id, b.source_file, b.source_as_of_date, b.leasing_model, b.confidence, b.loaded_at,
                 p.name as property_name, p.canonical_key,
                 (select count(*) from units u where u.import_batch_id=b.id)::int as units,
                 (select count(*) from spaces s where s.import_batch_id=b.id)::int as spaces,
                 (select count(*) from persons pe where pe.import_batch_id=b.id)::int as persons,
-                (select count(*) from leases l where l.import_batch_id=b.id)::int as leases
+                (select count(*) from leases l where l.import_batch_id=b.id)::int as leases,
+                (select count(*) from leases l where l.import_batch_id=b.id and l.lease_status='active')::int as current_leases,
+                (select count(*) from leases l where l.import_batch_id=b.id and l.lease_status='commercial')::int as commercial_leases,
+                (select count(*) from leases l where l.import_batch_id=b.id and l.lease_status='pending')::int as future_leases
            from import_batches b
            join properties p on p.id=b.property_id
           where b.source_type='historical_snapshot'
