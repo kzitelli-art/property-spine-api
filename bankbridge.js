@@ -58,6 +58,11 @@ const ELIGIBLE = `t.status = 'identified'
 module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }) {
   const router = express.Router();
 
+  // earned-autonomy decision helpers (migration 044). The bridge OWNS the
+  // money-event birth path; this only answers "may this line auto-confirm?"
+  // and "revoke on override." Same pool, no duplicate lifecycle.
+  const { decideAutoConfirm, revokeOnOverride } = require("./autoconfirm").helpers({ pool });
+
   // ── the report vocabulary is DATA: valid categories = category_report_map
   async function validCategories(client) {
     const r = await (client || pool).query(
@@ -1704,6 +1709,98 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
     } catch (e) {
       console.error("repay-candidates error", e);
       return res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────────
+  //  AUTO-CONFIRM LANDING (migration 044) — the real-time path.
+  //  Sweeps a property's eligible UNBRIDGED lines and, for each, asks
+  //  autoconfirm.decideAutoConfirm whether the (vendor, property) switch
+  //  is on AND the amount is inside the learned band. Auto-eligible lines
+  //  bridge through the SAME bridgeTxn lifecycle every human confirm uses —
+  //  but stamped confirm_method='auto' + the authorizing rule, and with
+  //  confirmed_by = the human who GRANTED the switch (not a live click).
+  //  Out-of-band or no-switch lines are LEFT for the human queue. This is
+  //  the "fires when a Plaid row lands" entry point — call it after a pull.
+  //
+  //  Body: { acting_as_person_id? }  — optional override of the recorded
+  //         grantor for the confirmed_by stamp; defaults to the rule's
+  //         auto_confirm_by (the human who earned+granted the autonomy).
+  //  It NEVER auto-confirms a multi-nature vendor (same handler block as
+  //  bridge-vendor) and NEVER an exception/credit line (ELIGIBLE guard).
+  // ──────────────────────────────────────────────────────────────────
+  router.post("/bank/properties/:id/bridge-auto", async (req, res) => {
+    const propertyId = req.params.id;
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+
+      const prop = await client.query("select id from properties where id = $1", [propertyId]);
+      if (prop.rowCount === 0) { await client.query("rollback"); return res.status(404).json({ error: "property not found" }); }
+
+      // candidate lines: eligible (unbridged, non-exception, debits), with a
+      // known vendor, at this property. Locked for the txn.
+      const txns = (await client.query(
+        `select t.* from bank_transactions t
+          where t.bank_account_id in (select id from bank_accounts where property_id = $1)
+            and t.vendor_id is not null and ${ELIGIBLE}
+          order by t.txn_date for update`, [propertyId])).rows;
+
+      const auto = [];
+      const left = [];
+      for (const txn of txns) {
+        // multi-nature vendors are never auto-confirmed — fetch nature + name
+        const v = await client.query(
+          "select id, canonical_name, multi_nature from vendors where id = $1", [txn.vendor_id]);
+        if (v.rowCount === 0) { left.push({ id: txn.id, reason: "vendor_row_missing" }); continue; }
+        const vendor = v.rows[0];
+        if (vendor.multi_nature === true) { left.push({ id: txn.id, reason: "multi_nature" }); continue; }
+
+        const decision = await decideAutoConfirm(client, {
+          property_id: propertyId, vendor_id: vendor.id, amount: txn.amount });
+
+        if (!decision.auto) {
+          left.push({ id: txn.id, vendor: vendor.canonical_name, reason: decision.reason,
+                      ...(decision.band ? { band: decision.band, amount: decision.amount } : {}) });
+          continue;
+        }
+
+        // resolve the human who granted autonomy → confirmed_by stamp
+        const ruleRow = await client.query(
+          "select auto_confirm_by from vendor_property_categories where id = $1", [decision.rule_id]);
+        const grantor = (req.body && req.body.acting_as_person_id) || ruleRow.rows[0]?.auto_confirm_by || null;
+        if (!grantor) { left.push({ id: txn.id, vendor: vendor.canonical_name, reason: "no_grantor_on_rule" }); continue; }
+
+        const meId = await bridgeTxn(client, {
+          txn, vendorName: vendor.canonical_name, property_id: propertyId,
+          confirmed_category: decision.confirmed_category,
+          confirmed_by_person_id: grantor, what_for: "other", mode: "auto_confirm",
+          extraProv: { auto_confirm: true, rule_id: decision.rule_id },
+        });
+        // stamp HOW it was confirmed + which rule authorized it
+        await client.query(
+          `update money_events set confirm_method = 'auto', auto_confirm_rule_id = $1 where id = $2`,
+          [decision.rule_id, meId]);
+        auto.push({ bank_txn: txn.id, money_event: meId, vendor: vendor.canonical_name,
+                    category: decision.confirmed_category, amount: Math.abs(Number(txn.amount)) });
+      }
+
+      await client.query("commit");
+      res.status(201).json({
+        property_id: propertyId,
+        auto_confirmed: auto.length,
+        auto_gross: Number(auto.reduce((s, a) => s + a.amount, 0).toFixed(2)),
+        auto,
+        left_for_human: left.length,
+        left,
+        note: "Auto-confirmed lines bridged through the same obligation lifecycle as a human confirm, stamped confirm_method='auto'. Out-of-band and un-switched lines were left for the human queue — today's behavior.",
+      });
+    } catch (e) {
+      await client.query("rollback");
+      console.error("bridge-auto error:", e);
+      res.status(500).json({ error: "auto-confirm landing failed", detail: e.message });
+    } finally {
+      client.release();
     }
   });
 
