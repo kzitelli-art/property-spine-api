@@ -40,6 +40,7 @@ const portfolioModule = require('./portfolio');
 const snapshotLoaderModule = require('./snapshot_loader');
 const seedEndpointModule = require('./seed_endpoint');
 const managementReadModule = require('./management_read');
+const propertySurfaceModule = require('./property_surface');
 const plaidModule = require('./plaid'); // Plaid: second feed into bank_transactions (031); fail-soft when unconfigured
 const compareModule = require("./compare");   // report comparison layer (the hook)
 const explainModule = require("./explain");
@@ -3108,6 +3109,7 @@ app.use('/api', portfolioModule({ pool }));
 app.use('/', snapshotLoaderModule({ pool, upload }));
 app.use('/', seedEndpointModule({ pool }));
 app.use('/', managementReadModule({ pool }));
+app.use('/', propertySurfaceModule({ pool }));
 app.use('/', plaidModule({ pool }));
 app.use("/", exposureModule({ pool }));
 app.use("/", reportingModule({ pool }));
