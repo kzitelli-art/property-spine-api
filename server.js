@@ -3147,5 +3147,12 @@ app.use("/", leasingConversionModule({ pool, spawnObligationFromEvent, completeO
 app.use("/", leasingSchedulingModule({ pool }));
 app.use("/", leasingInteractionsModule({ pool, sms }));
 
+// ── Skyline ride-along shadow import (migration 050). Three-state phone identity
+//    (new -> preview lead · known -> intent task, never a new lead · no/invalid ->
+//    conflict). Preview rows are outreach-barred by construction; this module has
+//    NO sms dependency and cannot send. ──
+const leasingShadowImportModule = require("./leasingShadowImport");
+app.use("/", leasingShadowImportModule({ pool }));
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
