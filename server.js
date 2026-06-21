@@ -3138,5 +3138,14 @@ const leasingLeadsModule = require("./leasingleads"); // leasing lead intake: on
 app.use("/", dealIntakeModule({ pool, anthropic, INGEST_MODEL, registryInstance, fileToText, runIngestAuto, upload }));
 app.use("/", leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms }));
 
+// ── Post-tour leasing conversion rail + scheduling intake + interaction ledger ──
+// (migrations 047/048/049). sms + the obligation engine fns are all in scope here.
+const leasingConversionModule = require("./leasingconversion");   // conversion case + immutable child obligations + explicit handoff
+const leasingSchedulingModule = require("./leasingscheduling");   // Acuity/Outlook source events -> canonical scheduled tours
+const leasingInteractionsModule = require("./leasinginteractions"); // Twilio interaction ledger on extended comm_events
+app.use("/", leasingConversionModule({ pool, spawnObligationFromEvent, completeObligation }));
+app.use("/", leasingSchedulingModule({ pool }));
+app.use("/", leasingInteractionsModule({ pool, sms }));
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
