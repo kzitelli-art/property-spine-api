@@ -192,10 +192,18 @@ module.exports = function demoModule(deps) {
         );
 
         // a manager must exist (real users row). use provided, else first user.
-        const mgrId = req.body && req.body.manager_user_id
+        // a manager must exist (real users row). prefer an explicit one, then a
+        // leasing_manager (the role the application_approval gate routes to), then
+        // any user as a last resort. seed creates a leasing_manager so this resolves.
+        const mgrId = (req.body && req.body.manager_user_id)
           ? req.body.manager_user_id
-          : (await client.query("select id from users order by created_at asc limit 1")).rows[0]?.id;
-        if (!mgrId) throw httpErr(409, "No users row to act as manager — seed a user first.");
+          : (
+              (await client.query(
+                "select id from users where role='leasing_manager'::role_name order by created_at asc limit 1"
+              )).rows[0]?.id
+              || (await client.query("select id from users order by created_at asc limit 1")).rows[0]?.id
+            );
+        if (!mgrId) throw httpErr(409, "No users row to act as manager — POST /demo/runs/:slug/seed first (it creates one).");
 
         // fresh synthetic tenant person (a real persons row; lifecycle 'lead')
         const name = (req.body && req.body.tenant_name) || "Jordan Avery (demo)";
@@ -296,34 +304,65 @@ module.exports = function demoModule(deps) {
   });
 
   // SEED — create (or confirm) the demo_run row for a slug, pointed at a REAL
-  // property + one of its REAL units. Idempotent: re-calling updates the property/
-  // unit pointers, never duplicates (slug is unique). No demo_attempt is created
-  // here — that's what reset does. Default property is Solo on Chestnut.
+  // property + a REAL unit IN THE BACKEND DB. Idempotent (slug is unique; the demo
+  // property is found by its marker name and reused). No demo_attempt is created
+  // here — reset does that.
+  //
+  // Property resolution order:
+  //   1. explicit body.property_id (must exist) — pin to a real property if you have one
+  //   2. else: a dedicated demo property (name 'Property Spine Demo Building'),
+  //      created with one demo unit if it doesn't exist yet.
+  // This removes any dependency on the offline app's IDs — those do NOT exist in the
+  // backend DB. The demo owns its own property, matching the "dedicated DEMO property"
+  // guardrail in the plan.
   router.post("/demo/runs/:slug/seed", async (req, res) => {
     try {
       const out = await tx(async (client) => {
         const slug = req.params.slug;
-        const propertyId = (req.body && req.body.property_id)
-          || "9e2bb96e-08e2-41db-81c2-91055ceb50a3"; // Solo on Chestnut
+        const DEMO_PROP_NAME = "Property Spine Demo Building";
+        let propertyId = (req.body && req.body.property_id) || null;
+        let unitId = (req.body && req.body.unit_id) || null;
 
-        const prop = (await client.query(
-          "select id from properties where id=$1", [propertyId]
-        )).rows[0];
-        if (!prop) throw httpErr(404, "No property with that id — pass a real property_id.");
+        if (propertyId) {
+          const p = (await client.query(
+            "select id from properties where id=$1", [propertyId]
+          )).rows[0];
+          if (!p) throw httpErr(404, "No property with that id in the backend DB — omit property_id to use the demo property.");
+        } else {
+          // find or create the dedicated demo property
+          let prop = (await client.query(
+            "select id from properties where name=$1 order by created_at asc limit 1",
+            [DEMO_PROP_NAME]
+          )).rows[0];
+          if (!prop) {
+            prop = (await client.query(
+              `insert into properties (name, address, city, state, zip, property_type)
+                 values ($1,'1 Demo Way','Philadelphia','PA','19104','multifamily')
+               returning id`,
+              [DEMO_PROP_NAME]
+            )).rows[0];
+          }
+          propertyId = prop.id;
+        }
 
-        // a real unit on that property (caller may pin one; else first by number)
-        let unitId = req.body && req.body.unit_id ? req.body.unit_id : null;
+        // resolve a unit on that property (pin one, else first, else create one)
         if (unitId) {
           const u = (await client.query(
             "select id from units where id=$1 and property_id=$2", [unitId, propertyId]
           )).rows[0];
           if (!u) throw httpErr(404, "That unit_id is not on that property.");
         } else {
-          const u = (await client.query(
+          let u = (await client.query(
             "select id from units where property_id=$1 order by unit_number asc limit 1",
             [propertyId]
           )).rows[0];
-          if (!u) throw httpErr(409, "That property has no units — seed a unit first.");
+          if (!u) {
+            u = (await client.query(
+              `insert into units (property_id, unit_number, bedrooms, bathrooms, square_feet, market_rent)
+                 values ($1,'101',1,1,650,1500) returning id`,
+              [propertyId]
+            )).rows[0];
+          }
           unitId = u.id;
         }
 
@@ -337,7 +376,23 @@ module.exports = function demoModule(deps) {
           [slug, propertyId, unitId]
         )).rows[0];
 
-        return { seeded: true, run };
+        // ensure a leasing_manager user exists for reset to use as the approver.
+        // the application_approval gate routes to role 'leasing_manager' (047 enum),
+        // so the demo manager should hold that role. find-or-create by a marker email.
+        const DEMO_MGR_EMAIL = "demo-manager@propertyspine.internal";
+        let mgr = (await client.query(
+          "select id from users where email=$1 limit 1", [DEMO_MGR_EMAIL]
+        )).rows[0];
+        if (!mgr) {
+          mgr = (await client.query(
+            `insert into users (name, email, phone, role)
+               values ('Demo Leasing Manager', $1, null, 'leasing_manager'::role_name)
+             returning id`,
+            [DEMO_MGR_EMAIL]
+          )).rows[0];
+        }
+
+        return { seeded: true, run, manager_user_id: mgr.id };
       });
       res.json(out);
     } catch (e) { res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
