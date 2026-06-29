@@ -200,7 +200,7 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
   // RULE: completing/releasing a rung writes a WRITE-ONCE outcome + proof, then
   // (only if kept and not released) spawns the next rung. NEVER mutates the
   // closed rung. result ∈ completed | released | missed.
-  async function resolveRung(client, { obligation_id, result, proof = null, by_user_id = null }) {
+  async function resolveRung(client, { obligation_id, result, proof = null, by_user_id = null, suppress_next = false }) {
     const link = (await client.query(
       "select * from leasing_conversion_obligations where obligation_id=$1 for update", [obligation_id]
     )).rows[0];
@@ -240,10 +240,15 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
 
     const conv = (await client.query("select * from leasing_conversions where id=$1 for update", [link.conversion_id])).rows[0];
 
-    // Advance ONLY on kept + not released + a conversation rung with a next.
+    // Advance ONLY on kept + not released + a conversation rung with a next —
+    // AND only when the caller has not suppressed the auto-advance. suppress_next
+    // exists because some transitions are GATED, not automatic: an application
+    // submission closes applicant_followup but must NOT auto-start lease-signature
+    // follow-up — that begins only when the leasing_manager APPROVES. The caller
+    // (submission) suppresses here; approval explicitly spawns the next rung.
     let spawned = null;
     const cfg = RUNG[link.rung];
-    if (outcome === "kept" && resolution !== "released" && cfg && cfg.kind === "conversation" && cfg.next) {
+    if (!suppress_next && outcome === "kept" && resolution !== "released" && cfg && cfg.kind === "conversation" && cfg.next) {
       spawned = await spawnRung(client, {
         conversion: conv, rung: cfg.next, owner_user_id: conv.conversation_owner_user_id,
       });
@@ -253,7 +258,7 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
       await client.query(`update leasing_conversions set status='released', closed_at=now(), updated_at=now() where id=$1`, [conv.id]);
     }
 
-    return { obligation_id, rung: link.rung, outcome, resolution, spawned: spawned ? spawned.link.rung : null };
+    return { obligation_id, rung: link.rung, outcome, resolution, spawned: spawned ? spawned.link.rung : null, suppressed_next: !!(suppress_next && cfg && cfg.next) };
   }
 
   // Add a separate decision/operating GATE that coexists with the conversation.
@@ -263,6 +268,25 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     const conv = (await client.query("select * from leasing_conversions where id=$1", [conversion_id])).rows[0];
     if (!conv) throw httpErr(404, "conversion not found.");
     return spawnRung(client, { conversion: conv, rung, owner_user_id, owner_role: cfg.gate_role });
+  }
+
+  // Explicitly advance the conversation to a named CONVERSATION rung. Used when
+  // a transition is GATED rather than automatic: e.g. an approved application
+  // STARTS lease_signature_followup (submission suppressed the auto-advance, so
+  // approval is what begins signature work). Idempotent-guarded: refuses if an
+  // open rung of that type already exists on the conversion.
+  async function advanceToRung(client, { conversion_id, rung, owner_user_id = null }) {
+    const cfg = RUNG[rung];
+    if (!cfg || cfg.kind !== "conversation") throw httpErr(400, `"${rung}" is not a conversation rung.`);
+    const conv = (await client.query("select * from leasing_conversions where id=$1 for update", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+    const existing = await client.query(
+      `select 1 from leasing_conversion_obligations
+        where conversion_id=$1 and rung=$2 and outcome is null limit 1`,
+      [conversion_id, rung]
+    );
+    if (existing.rows.length) throw httpErr(409, `an open ${rung} rung already exists on this conversion.`);
+    return spawnRung(client, { conversion: conv, rung, owner_user_id: owner_user_id || conv.conversation_owner_user_id });
   }
 
   // ── read: the full conversion view (record + history + open/closed rungs) ──
@@ -345,7 +369,7 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
   // Expose the service layer for in-process tests + future server-side callers.
   router._service = {
     createConversionFromTour, handoffConversation, flagHandoffRequired,
-    resolveRung, addGate, readConversion, spawnRung, RUNG, CONVERSATION_RUNGS,
+    resolveRung, addGate, advanceToRung, readConversion, spawnRung, RUNG, CONVERSATION_RUNGS,
   };
   return router;
 };
