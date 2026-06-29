@@ -3086,7 +3086,8 @@ app.post("/ingest/:runId/approve", async (req, res) => {
 
 // ── MAINTENANCE MODULE (isolated; injected pool + shared obligation path) ──
 app.use("/", maintenanceModule({ pool, spawnObligationFromEvent }));
-app.use("/", applicationsModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
+// applications module mounted lower (after the conversion + submission services exist,
+// so /approve can close the leasing_manager application_approval gate). See below.
 app.use("/", leasePacketsModule({ pool, satisfyObligation }));
 // ── DOWN UNITS MODULE (isolated; same injection pattern) ──
 app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));
@@ -3143,7 +3144,24 @@ app.use("/", leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms }));
 const leasingConversionModule = require("./leasingconversion");   // conversion case + immutable child obligations + explicit handoff
 const leasingSchedulingModule = require("./leasingscheduling");   // Acuity/Outlook source events -> canonical scheduled tours
 const leasingInteractionsModule = require("./leasinginteractions"); // Twilio interaction ledger on extended comm_events
-app.use("/", leasingConversionModule({ pool, spawnObligationFromEvent, completeObligation }));
+const __leasingConversion = leasingConversionModule({ pool, spawnObligationFromEvent, completeObligation });
+app.use("/", __leasingConversion);
+
+// ── APPLICATION SUBMISSION SLICE (invitation front + shared submit service +
+//    deny + gated approval→signature). Shares the conversion rail's service layer. ──
+const applicationSubmissionModule = require("./applicationSubmission");
+const __applicationSubmission = applicationSubmissionModule({
+  pool, spawnObligationFromEvent, completeObligation,
+  conversionService: __leasingConversion._service,
+});
+app.use("/", __applicationSubmission);
+
+// applications mounted HERE (moved down) so it can close the application_approval
+// gate via the submission service, then spawn activation as before.
+app.use("/", applicationsModule({
+  pool, spawnObligationFromEvent, satisfyObligation, completeObligation,
+  submissionService: __applicationSubmission._service,
+}));
 app.use("/", leasingSchedulingModule({ pool }));
 app.use("/", leasingInteractionsModule({ pool, sms }));
 
