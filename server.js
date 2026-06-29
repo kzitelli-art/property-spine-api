@@ -77,7 +77,7 @@ app.use(express.json({ limit: "1mb" }));  // body-size cap — stops oversized p
 // for removal in a later cleanup, not worth a 3-file deploy today.
 const OPERATOR_KEY = process.env.OPERATOR_KEY;
 const PUBLIC_EXACT = new Set(["/health", "/leasing/intake"]); // /leasing/intake carries its own intake-secret (webhooks have no operator key)
-const PUBLIC_PREFIXES = ["/tenant/", "/t/", "/public/", "/intake/", "/intake", "/auth/"];
+const PUBLIC_PREFIXES = ["/tenant/", "/t/", "/public/", "/intake/", "/intake", "/auth/", "/demo/"];
 app.use((req, res, next) => {
   if (req.method === "OPTIONS") return next(); // CORS preflight carries no custom headers
   const p = req.path;
