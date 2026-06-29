@@ -3172,5 +3172,11 @@ app.use("/", leasingInteractionsModule({ pool, sms }));
 const leasingShadowImportModule = require("./leasingShadowImport");
 app.use("/", leasingShadowImportModule({ pool }));
 
+// ── Two-sided live demo orchestration (migration 052). Reset/state/application-submit/
+//    application-approve. Owns NO domain truth; calls the application submission SERVICE
+//    inside its own transaction and appends an append-only demo_event. ──
+const demoModule = require("./demo");
+app.use("/", demoModule({ pool, submissionService: __applicationSubmission._service }));
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
