@@ -295,6 +295,54 @@ module.exports = function demoModule(deps) {
     } catch (e) { res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
   });
 
+  // SEED — create (or confirm) the demo_run row for a slug, pointed at a REAL
+  // property + one of its REAL units. Idempotent: re-calling updates the property/
+  // unit pointers, never duplicates (slug is unique). No demo_attempt is created
+  // here — that's what reset does. Default property is Solo on Chestnut.
+  router.post("/demo/runs/:slug/seed", async (req, res) => {
+    try {
+      const out = await tx(async (client) => {
+        const slug = req.params.slug;
+        const propertyId = (req.body && req.body.property_id)
+          || "9e2bb96e-08e2-41db-81c2-91055ceb50a3"; // Solo on Chestnut
+
+        const prop = (await client.query(
+          "select id from properties where id=$1", [propertyId]
+        )).rows[0];
+        if (!prop) throw httpErr(404, "No property with that id — pass a real property_id.");
+
+        // a real unit on that property (caller may pin one; else first by number)
+        let unitId = req.body && req.body.unit_id ? req.body.unit_id : null;
+        if (unitId) {
+          const u = (await client.query(
+            "select id from units where id=$1 and property_id=$2", [unitId, propertyId]
+          )).rows[0];
+          if (!u) throw httpErr(404, "That unit_id is not on that property.");
+        } else {
+          const u = (await client.query(
+            "select id from units where property_id=$1 order by unit_number asc limit 1",
+            [propertyId]
+          )).rows[0];
+          if (!u) throw httpErr(409, "That property has no units — seed a unit first.");
+          unitId = u.id;
+        }
+
+        const run = (await client.query(
+          `insert into demo_runs (slug, property_id, unit_id)
+             values ($1,$2,$3)
+           on conflict (slug) do update
+             set property_id = excluded.property_id,
+                 unit_id     = excluded.unit_id
+           returning id, slug, property_id, unit_id`,
+          [slug, propertyId, unitId]
+        )).rows[0];
+
+        return { seeded: true, run };
+      });
+      res.json(out);
+    } catch (e) { res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
+  });
+
   // expose for tests / later transitions
   router._service = { composeState, CHECKPOINT_FROM };
   return router;
