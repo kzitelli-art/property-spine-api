@@ -132,9 +132,14 @@ module.exports = function demoModule(deps) {
       records.person = person ? { id: person.id, display_name: person.name } : null;
       if (attempt.application_id) {
         const app = (await client.query(
-          "select id, status from lease_applications where id=$1", [attempt.application_id]
+          "select id, status, applicant_name, rent, deposit, captured from lease_applications where id=$1",
+          [attempt.application_id]
         )).rows[0];
-        records.application = app ? { id: app.id, status: app.status } : null;
+        records.application = app ? {
+          id: app.id, status: app.status, applicant_name: app.applicant_name,
+          rent: app.rent, deposit: app.deposit,
+          captured: app.captured || {},
+        } : null;
       }
       const ev = await client.query(
         `select sequence_no, event_type, actor_type, source_record_type,
@@ -239,21 +244,58 @@ module.exports = function demoModule(deps) {
   });
 
   // APPLICATION SUBMIT — tenant completes the REAL application via the app service
+  // APPLICATION SUBMIT — tenant completes the REAL application via the app service.
+  // Full field set: identity/contact land on the persons row AND in the application's
+  // `captured` JSON; rent/deposit are real columns. Nothing faked — every field
+  // persists on the real lease_applications record.
   router.post("/demo/runs/:slug/application-submit", async (req, res) => {
     try {
       await tx(async (client) => {
         const { attempt } = await loadCurrent(client, req.params.slug);
         requireCheckpoint(attempt, "application_ready");
 
+        const b = req.body || {};
+        const fullName = (b.applicant_name || "").trim() || "Jordan Avery";
+        const email    = (b.email || "").trim() || null;
+        const phone    = (b.phone || "").trim() || null;
+
+        // the rich applicant detail → application.captured (JSON the table is built for)
+        const captured = {
+          email, phone,
+          date_of_birth:   (b.date_of_birth || "").trim() || null,
+          current_address: (b.current_address || "").trim() || null,
+          employer:        (b.employer || "").trim() || null,
+          job_title:       (b.job_title || "").trim() || null,
+          monthly_income:  b.monthly_income != null && b.monthly_income !== "" ? Number(b.monthly_income) : null,
+          occupants:       b.occupants != null && b.occupants !== "" ? Number(b.occupants) : null,
+          desired_move_in: (b.desired_move_in || "").trim() || null,
+          pets:            typeof b.pets === "boolean" ? b.pets : ((b.pets || "") === "yes"),
+        };
+        const rent    = b.rent != null && b.rent !== "" ? Number(b.rent) : null;
+        const deposit = b.deposit != null && b.deposit !== "" ? Number(b.deposit) : null;
+
+        // keep the real person row in step with what the applicant just told us
+        await client.query(
+          `update persons set
+             name  = $2,
+             email = coalesce($3, email),
+             phone = coalesce($4, phone),
+             updated_at = now()
+           where id = $1`,
+          [attempt.tenant_person_id, fullName, email, phone]
+        );
+
         const result = await submissionService.submitApplicationService(client, {
           property_id: (await client.query(
             "select property_id from demo_runs where id=$1", [attempt.demo_run_id]
           )).rows[0].property_id,
           person_id: attempt.tenant_person_id,
-          applicant_name: (req.body && req.body.applicant_name) || "Jordan Avery",
+          applicant_name: fullName,
           unit_id: (await client.query(
             "select unit_id from demo_runs where id=$1", [attempt.demo_run_id]
           )).rows[0].unit_id || null,
+          rent, deposit,
+          captured,
           source: "applicant",
         });
         // submitApplicationService returns { application, approval_obligation_id, ... }
