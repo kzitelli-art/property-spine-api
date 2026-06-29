@@ -245,7 +245,7 @@ module.exports = function demoModule(deps) {
         const { attempt } = await loadCurrent(client, req.params.slug);
         requireCheckpoint(attempt, "application_ready");
 
-        const app = await submissionService.submitApplicationService(client, {
+        const result = await submissionService.submitApplicationService(client, {
           property_id: (await client.query(
             "select property_id from demo_runs where id=$1", [attempt.demo_run_id]
           )).rows[0].property_id,
@@ -256,6 +256,10 @@ module.exports = function demoModule(deps) {
           )).rows[0].unit_id || null,
           source: "applicant",
         });
+        // submitApplicationService returns { application, approval_obligation_id, ... }
+        // — NOT the application row directly. Read the nested application.
+        const app = result.application;
+        if (!app || !app.id) throw httpErr(500, "Application service returned no application record.");
 
         await client.query(
           "update demo_attempts set application_id=$2, updated_at=now() where id=$1",
