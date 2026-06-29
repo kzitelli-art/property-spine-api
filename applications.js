@@ -27,6 +27,12 @@ const express = require("express");
 
 module.exports = function applicationsModule(deps) {
   const { pool, spawnObligationFromEvent, satisfyObligation, completeObligation } = deps;
+  // Optional: the application-submission service (its _service exposes
+  // closeApprovalGate) and the conversion service. Injected so /approve can
+  // close the leasing_manager application_approval gate before spawning the
+  // property_manager activation obligation. Backward-compatible: if absent,
+  // approve behaves exactly as before (no gate to close).
+  const submissionService = deps.submissionService || null;
   const router = express.Router();
 
   const ACTIVATION_TYPE = "lease_activation";
@@ -142,6 +148,17 @@ module.exports = function applicationsModule(deps) {
 
       const evId = await recordEvent(client, { property_id: app.property_id, person_id: app.person_id, unit_id: app.unit_id,
         type: "application_approved", note: `Application approved${approved_by ? " by " + approved_by : ""}` });
+
+      // Close the leasing_manager application_approval gate (born at submission)
+      // in THIS transaction — the manager's decision is made. The rail records
+      // kept/missed timeliness; this approval is the disposition. Only the
+      // submission-backed flow has the gate; the legacy direct-create path may
+      // not, so this is guarded.
+      if (app.approval_obligation_id && submissionService && submissionService.closeApprovalGate) {
+        try {
+          await submissionService.closeApprovalGate(client, { app, by_user_id: null, decision: "approved" });
+        } catch (e) { /* gate already closed or not rail-linked — non-fatal */ }
+      }
 
       const hasGuarantor = !!app.guarantor_name;
       const obligation = await spawnObligationFromEvent(client, {
