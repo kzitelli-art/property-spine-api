@@ -1,0 +1,301 @@
+// demo.js — Two-sided live demo ORCHESTRATION layer (first-proof slice).
+//
+// Owns NO domain truth. Each transition opens ONE transaction, calls the owning
+// module's transaction-aware SERVICE (never an Express route), and appends a
+// demo_event on the SAME client. Real record write + proof append commit together
+// or both roll back.
+//
+// First-proof slice = reset · state · application-submit · application-approve.
+// The remaining lifecycle transitions are added per the compatibility matrix in
+// DEMO_052_PLAN.md once each owning module's service boundary is verified.
+//
+// Mount in server.js AFTER the application submission module (so its _service is in
+// scope), e.g. directly under the leasingShadowImport mount:
+//   const demoModule = require("./demo");
+//   app.use("/", demoModule({ pool, submissionService: __applicationSubmission._service }));
+//
+// Grounded against live server.js (Jun 29 2026): ids are uuid; application table is
+// lease_applications; persons/properties/units/users/events are the real tables.
+
+const crypto = require("crypto");
+
+function tokenHash(raw) {
+  return crypto.createHash("sha256").update(String(raw)).digest("hex");
+}
+
+// the legal predecessor each checkpoint advances FROM (server-owned state machine)
+const CHECKPOINT_FROM = {
+  application_submitted: "application_ready",
+  application_approved: "application_submitted",
+};
+
+module.exports = function demoModule(deps) {
+  const { pool, submissionService } = deps;
+  if (!pool) throw new Error("demo.js requires { pool }");
+  if (!submissionService) throw new Error("demo.js requires { submissionService } (= applicationSubmissionModule(...)._service)");
+
+  // run a fn inside ONE transaction; we own begin/commit (NOT the app module's tx()).
+  async function tx(fn) {
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await fn(client);
+      await client.query("commit");
+      return out;
+    } catch (e) {
+      await client.query("rollback");
+      throw e;
+    } finally {
+      client.release();
+    }
+  }
+
+  function httpErr(status, msg) {
+    const e = new Error(msg); e.httpStatus = status; e.publicMessage = msg; return e;
+  }
+
+  // append the next demo_event on the SAME client, gap-free sequence within the attempt
+  async function appendEvent(client, attempt_id, ev) {
+    const seq = await client.query(
+      "select coalesce(max(sequence_no),0)+1 as n from demo_events where demo_attempt_id=$1",
+      [attempt_id]
+    );
+    const n = seq.rows[0].n;
+    await client.query(
+      `insert into demo_events
+         (demo_attempt_id, sequence_no, event_type, actor_type, actor_person_id,
+          actor_user_id, actor_role, source_module, source_record_type, source_record_id,
+          source_event_id, payload_json)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [attempt_id, n, ev.event_type, ev.actor_type, ev.actor_person_id ?? null,
+       ev.actor_user_id ?? null, ev.actor_role ?? null, ev.source_module ?? null,
+       ev.source_record_type ?? null, ev.source_record_id ?? null,
+       ev.source_event_id ?? null, JSON.stringify(ev.payload_json || {})]
+    );
+    return n;
+  }
+
+  // load run + its current (active) attempt; throws 404 if none
+  async function loadCurrent(client, slug) {
+    const run = (await client.query("select * from demo_runs where slug=$1", [slug])).rows[0];
+    if (!run) throw httpErr(404, "No demo run with that slug.");
+    const attempt = (await client.query(
+      "select * from demo_attempts where demo_run_id=$1 and status='active' order by created_at desc limit 1",
+      [run.id]
+    )).rows[0];
+    return { run, attempt };
+  }
+
+  // require the attempt to be at the expected checkpoint before a transition writes
+  function requireCheckpoint(attempt, expected) {
+    if (!attempt) throw httpErr(409, "No active attempt — reset the demo to begin.");
+    if (attempt.checkpoint !== expected) {
+      throw httpErr(409, `Not allowed at checkpoint '${attempt.checkpoint}'. Expected '${expected}'.`);
+    }
+  }
+
+  async function advance(client, attempt_id, checkpoint) {
+    await client.query(
+      "update demo_attempts set checkpoint=$2, updated_at=now() where id=$1",
+      [attempt_id, checkpoint]
+    );
+  }
+
+  // ── the composed read: ONE object both phones render (JOIN over real records) ──
+  const SCENES = [
+    "application_ready","application_submitted","application_approved",
+    "lease_terms_ready","lease_sent","tenant_signed","lease_countersigned",
+    "move_in_ready","move_in_confirmed","operations","completed",
+  ];
+  function unlockedFor(checkpoint) {
+    // what each side may do next at this checkpoint (role-aware)
+    switch (checkpoint) {
+      case "application_ready":
+        return { tenant: { action: "application-submit", label: "Complete your application" }, manager: null };
+      case "application_submitted":
+        return { tenant: null, manager: { action: "application-approve", label: "Approve application" } };
+      case "application_approved":
+        return { tenant: { action: null, label: "Awaiting lease" }, manager: { action: null, label: "Prepare lease" } };
+      default:
+        return { tenant: null, manager: null };
+    }
+  }
+
+  async function composeState(client, slug) {
+    const { run, attempt } = await loadCurrent(client, slug);
+    let records = { person: null, application: null, lease: null, thread: null };
+    let timeline = [];
+    if (attempt) {
+      const person = (await client.query(
+        "select id, name from persons where id=$1", [attempt.tenant_person_id]
+      )).rows[0];
+      records.person = person ? { id: person.id, display_name: person.name } : null;
+      if (attempt.application_id) {
+        const app = (await client.query(
+          "select id, status from lease_applications where id=$1", [attempt.application_id]
+        )).rows[0];
+        records.application = app ? { id: app.id, status: app.status } : null;
+      }
+      const ev = await client.query(
+        `select sequence_no, event_type, actor_type, source_record_type,
+                source_record_id, source_event_id, created_at
+           from demo_events where demo_attempt_id=$1 order by sequence_no asc`,
+        [attempt.id]
+      );
+      timeline = ev.rows.map(r => ({
+        seq: r.sequence_no, event_type: r.event_type, actor_type: r.actor_type,
+        source_record_type: r.source_record_type, source_record_id: r.source_record_id,
+        source_event_id: r.source_event_id, at: r.created_at,
+      }));
+    }
+    const checkpoint = attempt ? attempt.checkpoint : null;
+    return {
+      slug: run.slug,
+      attempt_id: attempt ? attempt.id : null,
+      attempt_status: attempt ? attempt.status : null,
+      checkpoint,
+      scene_index: checkpoint ? SCENES.indexOf(checkpoint) : -1,
+      scene_total: SCENES.length,
+      unlocked_action: checkpoint ? unlockedFor(checkpoint) : { tenant: null, manager: null },
+      records,
+      timeline,
+      updated_at: attempt ? attempt.updated_at : null,
+    };
+  }
+
+  // ───────────────────────── ROUTES ─────────────────────────
+  const router = require("express").Router();
+
+  async function sendState(res, slug) {
+    const state = await tx((client) => composeState(client, slug));
+    res.json(state);
+  }
+
+  // GET state — both phones poll this
+  router.get("/demo/runs/:slug/state", async (req, res) => {
+    try { await sendState(res, req.params.slug); }
+    catch (e) { res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
+  });
+
+  // RESET — close current attempt, open a fresh one with a fresh synthetic person,
+  // fresh role-scoped tokens; PRESERVES old attempts + their events.
+  router.post("/demo/runs/:slug/reset", async (req, res) => {
+    try {
+      const out = await tx(async (client) => {
+        const run = (await client.query("select * from demo_runs where slug=$1", [req.params.slug])).rows[0];
+        if (!run) throw httpErr(404, "No demo run with that slug.");
+
+        // close any active attempt
+        await client.query(
+          "update demo_attempts set status='reset', closed_at=now(), updated_at=now() where demo_run_id=$1 and status='active'",
+          [run.id]
+        );
+
+        // a manager must exist (real users row). use provided, else first user.
+        const mgrId = req.body && req.body.manager_user_id
+          ? req.body.manager_user_id
+          : (await client.query("select id from users order by created_at asc limit 1")).rows[0]?.id;
+        if (!mgrId) throw httpErr(409, "No users row to act as manager — seed a user first.");
+
+        // fresh synthetic tenant person (a real persons row; lifecycle 'lead')
+        const name = (req.body && req.body.tenant_name) || "Jordan Avery (demo)";
+        const phone = (req.body && req.body.tenant_phone) || null;
+        const person = (await client.query(
+          `insert into persons (name, phone, source, lifecycle_status, leasing_stage)
+           values ($1,$2,'demo','lead','lead') returning id`,
+          [name, phone]
+        )).rows[0];
+
+        // fresh role-scoped tokens (return raw once; store only hashes)
+        const tenantTok = crypto.randomBytes(24).toString("hex");
+        const mgrTok = crypto.randomBytes(24).toString("hex");
+
+        const attempt = (await client.query(
+          `insert into demo_attempts
+             (demo_run_id, status, checkpoint, tenant_person_id, manager_user_id,
+              manager_role, tenant_token_hash, manager_token_hash)
+           values ($1,'active','application_ready',$2,$3,'leasing_manager',$4,$5)
+           returning id`,
+          [run.id, person.id, mgrId, tokenHash(tenantTok), tokenHash(mgrTok)]
+        )).rows[0];
+
+        await appendEvent(client, attempt.id, {
+          event_type: "demo_reset", actor_type: "system",
+          payload_json: { tenant_person_id: person.id },
+        });
+
+        return { attempt_id: attempt.id, tenant_token: tenantTok, manager_token: mgrTok };
+      });
+      res.json(out); // raw tokens returned ONCE for link building
+    } catch (e) { res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
+  });
+
+  // APPLICATION SUBMIT — tenant completes the REAL application via the app service
+  router.post("/demo/runs/:slug/application-submit", async (req, res) => {
+    try {
+      await tx(async (client) => {
+        const { attempt } = await loadCurrent(client, req.params.slug);
+        requireCheckpoint(attempt, "application_ready");
+
+        const app = await submissionService.submitApplicationService(client, {
+          property_id: (await client.query(
+            "select property_id from demo_runs where id=$1", [attempt.demo_run_id]
+          )).rows[0].property_id,
+          person_id: attempt.tenant_person_id,
+          applicant_name: (req.body && req.body.applicant_name) || "Jordan Avery",
+          unit_id: (await client.query(
+            "select unit_id from demo_runs where id=$1", [attempt.demo_run_id]
+          )).rows[0].unit_id || null,
+          source: "applicant",
+        });
+
+        await client.query(
+          "update demo_attempts set application_id=$2, updated_at=now() where id=$1",
+          [attempt.id, app.id]
+        );
+        await appendEvent(client, attempt.id, {
+          event_type: "application_submitted", actor_type: "tenant",
+          actor_person_id: attempt.tenant_person_id,
+          source_module: "application_submission", source_record_type: "lease_application",
+          source_record_id: app.id,
+          payload_json: { applicant_name: app.applicant_name },
+        });
+        await advance(client, attempt.id, "application_submitted");
+      });
+      await sendState(res, req.params.slug);
+    } catch (e) { res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
+  });
+
+  // APPLICATION APPROVE — manager approves via the REAL service (closes the gate)
+  router.post("/demo/runs/:slug/application-approve", async (req, res) => {
+    try {
+      await tx(async (client) => {
+        const { attempt } = await loadCurrent(client, req.params.slug);
+        requireCheckpoint(attempt, "application_submitted");
+        if (!attempt.application_id) throw httpErr(409, "No application on this attempt.");
+
+        const app = (await client.query(
+          "select * from lease_applications where id=$1", [attempt.application_id]
+        )).rows[0];
+        if (!app) throw httpErr(404, "Application record missing.");
+
+        await submissionService.closeApprovalGate(client, {
+          app, by_user_id: attempt.manager_user_id, decision: "approved",
+        });
+
+        await appendEvent(client, attempt.id, {
+          event_type: "application_approved", actor_type: "manager",
+          actor_user_id: attempt.manager_user_id, actor_role: attempt.manager_role,
+          source_module: "application_submission", source_record_type: "lease_application",
+          source_record_id: app.id, payload_json: { decision: "approved" },
+        });
+        await advance(client, attempt.id, "application_approved");
+      });
+      await sendState(res, req.params.slug);
+    } catch (e) { res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
+  });
+
+  // expose for tests / later transitions
+  router._service = { composeState, CHECKPOINT_FROM };
+  return router;
+};
