@@ -20,15 +20,9 @@ module.exports = function agentCapabilityModule({ anthropic, INGEST_MODEL }) {
   const MODEL = INGEST_MODEL || "claude-sonnet-4-6";
 
   // GET /agent/capability — protected (operator gate). One real generation.
+  // (The temporary public /demo/agent-capability proof route was removed after
+  //  Stage 0 confirmed the model path — capability checks are operator-gated only.)
   router.get("/agent/capability", async (_req, res) => {
-    return runCapabilityCheck(res);
-  });
-
-  // GET /demo/agent-capability — TEMPORARY public proof (rides the /demo/ allowlist
-  // so it can be verified from a browser without exposing the operator key). Returns
-  // ONLY { ok, reachable, model } — identical safety to the gated route. DELETE THIS
-  // route once Stage 0 is confirmed; it exists only to prove the path from a phone.
-  router.get("/demo/agent-capability", async (_req, res) => {
     return runCapabilityCheck(res);
   });
 
