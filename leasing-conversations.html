@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Property Spine — Leasing Conversations</title>
+<style>
+  :root{
+    --ink:#1a1a1a; --paper:#ffffff; --line:#e5e2dc; --muted:#6b6862; --soft:#f7f5f1;
+    --m-red:#b23b2e; --m-amber:#9a6b1f; --m-green:#1d6b54; --m-blue:#2a4a68;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--soft);color:var(--ink);
+    font-family:"IBM Plex Sans",-apple-system,system-ui,sans-serif;font-size:15px;line-height:1.5;}
+  .wrap{max-width:760px;margin:0 auto;padding:0 0 64px;}
+  header.app{padding:20px 20px 14px;border-bottom:1px solid var(--line);background:var(--paper);position:sticky;top:0;z-index:5;}
+  .eyebrow{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);}
+  h1{font-family:"Fraunces",Georgia,serif;font-weight:600;font-size:22px;margin:2px 0 0;letter-spacing:-.01em;}
+  .sub{font-size:13px;color:var(--muted);margin-top:3px;}
+  .pad{padding:18px 20px;}
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:12px;margin:14px 20px;overflow:hidden;}
+  .card .hd{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px;}
+  .card .hd h2{font-family:"Fraunces",serif;font-weight:600;font-size:15px;margin:0;}
+  .card .bd{padding:14px 16px;}
+  .mono{font-family:"IBM Plex Mono",monospace;}
+  .muted{color:var(--muted);}
+  .pill{display:inline-block;font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.05em;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line);text-transform:uppercase;}
+  .pill.green{color:var(--m-green);border-color:var(--m-green);}
+  .pill.amber{color:var(--m-amber);border-color:var(--m-amber);}
+  .pill.red{color:var(--m-red);border-color:var(--m-red);}
+  .pill.blue{color:var(--m-blue);border-color:var(--m-blue);}
+  button{font-family:inherit;font-size:14px;border:1px solid var(--ink);background:var(--ink);color:#fff;
+    border-radius:9px;padding:9px 14px;cursor:pointer;}
+  button.ghost{background:transparent;color:var(--ink);}
+  button.soft{background:var(--soft);color:var(--ink);border-color:var(--line);}
+  button:disabled{opacity:.4;cursor:default;}
+  .row{display:flex;gap:8px;flex-wrap:wrap;}
+  input,select,textarea{font-family:inherit;font-size:14px;width:100%;padding:9px 11px;border:1px solid var(--line);
+    border-radius:9px;background:var(--paper);color:var(--ink);}
+  textarea{resize:vertical;min-height:64px;}
+  label.f{display:block;margin:10px 0 4px;font-size:12px;color:var(--muted);font-weight:600;}
+  .thread{display:flex;flex-direction:column;gap:8px;}
+  .msg{max-width:80%;padding:8px 12px;border-radius:12px;font-size:14px;}
+  .msg.in{align-self:flex-start;background:var(--soft);border:1px solid var(--line);}
+  .msg.out{align-self:flex-end;background:var(--m-blue);color:#fff;}
+  .msg .t{font-size:10px;opacity:.7;margin-top:3px;font-family:"IBM Plex Mono",monospace;}
+  .draft{border:1px dashed var(--m-amber);border-radius:12px;padding:12px;background:#fdfaf4;}
+  .draft .lbl{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--m-amber);margin-bottom:6px;}
+  .err{color:var(--m-red);font-size:13px;margin:8px 0;}
+  .convitem{padding:12px 16px;border-bottom:1px solid var(--line);cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;}
+  .convitem:hover{background:var(--soft);}
+  .convitem:last-child{border-bottom:none;}
+  .factrow{padding:10px 0;border-bottom:1px solid var(--line);}
+  .factrow:last-child{border-bottom:none;}
+  .factkey{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--m-blue);}
+  .small{font-size:12px;}
+  .center{text-align:center;}
+  .hidden{display:none;}
+  a.back{font-size:13px;color:var(--m-blue);cursor:pointer;text-decoration:none;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="app">
+    <div class="eyebrow">Property Spine · Leasing</div>
+    <h1>Leasing Conversations</h1>
+    <div class="sub" id="who">Connecting…</div>
+  </header>
+
+  <div id="errbox" class="pad hidden"></div>
+
+  <!-- LOGIN-REQUIRED STATE (shown when no session and not in demo mode) -->
+  <div id="loginState" class="card hidden">
+    <div class="hd"><h2>Staff sign-in required</h2></div>
+    <div class="bd">
+      <p class="muted small">This is an authenticated Property Spine operator surface. Sign in with your staff phone to manage leasing conversations.</p>
+      <p class="muted small">(SMS staff sign-in arrives with the Twilio line. This page does not store any session — reloading always returns here unless a session is active.)</p>
+    </div>
+  </div>
+
+  <!-- DEMO BOOTSTRAP STATE (shown only when DEMO_MODE bridge is available) -->
+  <div id="bootstrapState" class="card hidden">
+    <div class="hd"><h2>Demo operator session</h2></div>
+    <div class="bd">
+      <p class="muted small">No active session in this tab. Enter the demo access code to start a scoped operator session for the seeded demo manager.</p>
+      <label class="f">Demo access code</label>
+      <input id="accessCode" type="password" autocomplete="off" placeholder="single-purpose demo code" />
+      <div class="row" style="margin-top:12px;">
+        <button id="bootstrapBtn">Start operator session</button>
+      </div>
+      <div id="bootstrapErr" class="err"></div>
+    </div>
+  </div>
+
+  <!-- LIST VIEW -->
+  <div id="listView" class="hidden">
+    <div class="card">
+      <div class="hd"><h2>Active conversations</h2><span class="pill" id="listCount"></span></div>
+      <div id="convList"></div>
+    </div>
+  </div>
+
+  <!-- DETAIL VIEW -->
+  <div id="detailView" class="hidden">
+    <div class="pad"><a class="back" id="backLink">← All conversations</a></div>
+
+    <div class="card">
+      <div class="hd"><h2 id="detailName">Conversation</h2><span class="pill" id="modePill"></span></div>
+      <div class="bd">
+        <div class="thread" id="thread"></div>
+        <div id="draftWrap" style="margin-top:14px;"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="hd"><h2>Verified facts the agent may use</h2><span class="pill" id="factCount"></span></div>
+      <div class="bd">
+        <div id="factList" class="muted small">No verified facts yet.</div>
+        <details style="margin-top:12px;">
+          <summary class="small mono" style="cursor:pointer;color:var(--m-blue);">+ Add a verified fact</summary>
+          <div style="margin-top:8px;">
+            <label class="f">Fact</label>
+            <select id="fKey">
+              <option value="pet_policy">pet_policy</option>
+              <option value="parking_rules">parking_rules</option>
+              <option value="tour_window">tour_window</option>
+              <option value="fee_policy">fee_policy</option>
+              <option value="required_documents">required_documents</option>
+              <option value="office_contact">office_contact</option>
+              <option value="communication_instructions">communication_instructions</option>
+            </select>
+            <label class="f">Approved wording (exact text the agent may rely on)</label>
+            <textarea id="fText" placeholder="e.g. Cats and dogs under 50 lbs are welcome; $250 refundable pet deposit per pet."></textarea>
+            <label class="f">Source</label>
+            <select id="fSource">
+              <option value="management_policy">management policy</option>
+              <option value="lease_or_addendum">lease or addendum</option>
+              <option value="verified_operator_confirmation">verified operator confirmation</option>
+              <option value="other_documented_source">other documented source</option>
+            </select>
+            <label class="f">Confirmed date (optional — defaults to today)</label>
+            <input id="fConfirmed" type="date" />
+            <div class="row" style="margin-top:12px;">
+              <button id="addFactBtn">Add verified fact</button>
+            </div>
+            <div id="factErr" class="err"></div>
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── DEMO config (page-level) ──────────────────────────────────────────────
+  // This shows the demo access-code bootstrap on this page. The BACKEND still
+  // independently requires DEMO_MODE=true + a valid DEMO_ACCESS_CODE to mint a
+  // session — this flag only controls which sign-in UI the page renders. Remove
+  // this line (or set "false") to make the page show the real staff-login state.
+  window.__DEMO_MODE__ = "true";
+</script>
+<script>
+(function(){
+  "use strict";
+  // ── config: same API base as the other operator/demo pages ──
+  var API = (window.__API_BASE__ || "https://property-spine-api.onrender.com");
+  var DEMO_MODE = (String(window.__DEMO_MODE__) === "true");   // set by the page host; gates the bootstrap UI
+  var SLUG = new URLSearchParams(location.search).get("slug") || "solo-live-demo";
+
+  // ── SESSION TOKEN: held in MEMORY ONLY. Never localStorage / URL / query. ──
+  // On reload this variable resets to null — which is the point: the demo bridge
+  // must never become permanent browser auth.
+  var SESSION = null;
+  var PROPERTY = null;
+  var currentConvId = null;
+  var POLL = 3000, pollTimer = null, busy = false;
+
+  function el(id){ return document.getElementById(id); }
+  function show(id){ el(id).classList.remove("hidden"); }
+  function hide(id){ el(id).classList.add("hidden"); }
+  function esc(s){ return String(s==null?"":s).replace(/[&<>]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;"}[c];}); }
+  function fmt(iso){ try{ return new Date(iso).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"});}catch(e){return"";} }
+  function showErr(m){ var b=el("errbox"); if(m){ b.textContent=m; b.classList.remove("hidden"); } else { b.classList.add("hidden"); } }
+
+  // authenticated fetch — attaches the in-memory session header. 401 → drop to sign-in.
+  async function api(path, opts){
+    opts = opts || {};
+    opts.headers = Object.assign({}, opts.headers || {}, { "accept":"application/json" });
+    if (SESSION) opts.headers["x-staff-session"] = SESSION;
+    if (opts.body && typeof opts.body !== "string"){ opts.headers["content-type"]="application/json"; opts.body=JSON.stringify(opts.body); }
+    var r = await fetch(API + path, opts);
+    if (r.status === 401){ SESSION = null; PROPERTY = null; stopPoll(); renderAuthGate(); throw new Error("session expired"); }
+    var j = null; try{ j = await r.json(); }catch(e){}
+    if (!r.ok) throw new Error((j && (j.error||j.message)) || ("HTTP "+r.status));
+    return j;
+  }
+
+  // ── auth gate: decide which "no session" state to show ──
+  function renderAuthGate(){
+    hide("listView"); hide("detailView"); hide("bootstrapState"); hide("loginState");
+    el("who").textContent = "Not signed in";
+    if (DEMO_MODE){ show("bootstrapState"); }   // demo bridge available
+    else { show("loginState"); }                 // real staff sign-in required
+  }
+
+  // ── demo bootstrap: exchanges a single-purpose access code for a REAL scoped session ──
+  el("bootstrapBtn").onclick = async function(){
+    el("bootstrapErr").textContent = ""; showErr("");
+    var code = el("accessCode").value;        // held in memory only, for this exchange
+    if (!code){ el("bootstrapErr").textContent = "Enter the demo access code."; return; }
+    this.disabled = true; this.textContent = "Starting…";
+    try{
+      var r = await fetch(API + "/demo/operator-session", {
+        method:"POST", headers:{"content-type":"application/json"},
+        body: JSON.stringify({ access_code: code })
+      });
+      var j = await r.json();
+      // discard the access code immediately, regardless of outcome
+      code = null; el("accessCode").value = "";
+      if (!r.ok || !j.ok) throw new Error(j.error || "bootstrap failed");
+      SESSION = j.session_token;            // memory only
+      PROPERTY = j.property_id;
+      await afterAuth();
+    }catch(e){ el("bootstrapErr").textContent = e.message; this.disabled=false; this.textContent="Start operator session"; }
+  };
+
+  async function afterAuth(){
+    hide("bootstrapState"); hide("loginState");
+    var me = await api("/operator/me");
+    PROPERTY = me.property_id;
+    el("who").textContent = me.name + " · " + me.role + " · scoped to one property";
+    openList();
+  }
+
+  // ── LIST ──
+  async function openList(){
+    currentConvId = null; stopPoll();
+    hide("detailView"); show("listView");
+    try{
+      var data = await api("/operator/leasing/conversations");
+      var list = el("convList"); list.innerHTML = "";
+      el("listCount").textContent = (data.conversations||[]).length + " shown";
+      if (!data.conversations || !data.conversations.length){
+        list.innerHTML = '<div class="bd muted small">No conversations yet. When a lead messages, it appears here.</div>';
+      } else {
+        data.conversations.forEach(function(c){
+          var div = document.createElement("div"); div.className="convitem";
+          var badge = c.ready_drafts>0 ? '<span class="pill amber">draft to review</span>'
+                    : (c.mode==='human_takeover' ? '<span class="pill blue">you have this</span>' : '<span class="pill green">agent active</span>');
+          div.innerHTML = '<div><div>'+esc(c.person_name||'Lead')+'</div><div class="muted small mono">'+esc((c.id||'').slice(0,8))+'</div></div>'+badge;
+          div.onclick = function(){ openDetail(c.id, c.person_name); };
+          list.appendChild(div);
+        });
+      }
+      // refresh list periodically too
+      startPoll(openListSilent);
+    }catch(e){ showErr(e.message); }
+  }
+  async function openListSilent(){
+    try{
+      var data = await api("/operator/leasing/conversations");
+      if (currentConvId) return; // user navigated away
+      var list = el("convList"); list.innerHTML = "";
+      el("listCount").textContent = (data.conversations||[]).length + " shown";
+      (data.conversations||[]).forEach(function(c){
+        var div=document.createElement("div"); div.className="convitem";
+        var badge=c.ready_drafts>0?'<span class="pill amber">draft to review</span>':(c.mode==='human_takeover'?'<span class="pill blue">you have this</span>':'<span class="pill green">agent active</span>');
+        div.innerHTML='<div><div>'+esc(c.person_name||'Lead')+'</div><div class="muted small mono">'+esc((c.id||'').slice(0,8))+'</div></div>'+badge;
+        div.onclick=function(){ openDetail(c.id, c.person_name); };
+        list.appendChild(div);
+      });
+    }catch(e){}
+  }
+
+  // ── DETAIL ──
+  el("backLink").onclick = function(){ openList(); };
+
+  async function openDetail(convId, name){
+    currentConvId = convId; stopPoll();
+    hide("listView"); show("detailView");
+    el("detailName").textContent = name || "Conversation";
+    await refreshDetail();
+    startPoll(refreshDetail);
+  }
+
+  async function refreshDetail(){
+    if (!currentConvId) return;
+    try{
+      var s = await api("/operator/leasing/conversations/" + encodeURIComponent(currentConvId));
+      // mode pill
+      var mp = el("modePill");
+      if (s.mode==='human_takeover'){ mp.textContent="you have this"; mp.className="pill blue"; }
+      else if (s.mode==='awaiting_review' || (s.draft)){ mp.textContent="draft to review"; mp.className="pill amber"; }
+      else { mp.textContent="agent active"; mp.className="pill green"; }
+
+      // thread
+      var t = el("thread"); t.innerHTML="";
+      (s.messages||[]).forEach(function(m){
+        var d=document.createElement("div"); d.className="msg "+(m.direction==='inbound'?'in':'out');
+        d.innerHTML = esc(m.body) + '<div class="t">'+(m.direction==='inbound'?'lead':'sent')+' · '+fmt(m.occurred_at)+'</div>';
+        t.appendChild(d);
+      });
+
+      // draft + actions
+      renderDraft(s.draft, s.mode);
+
+      // facts
+      renderFacts(s.facts || []);
+    }catch(e){ if(e.message!=='session expired') showErr(e.message); }
+  }
+
+  function renderDraft(draft, mode){
+    var w = el("draftWrap"); w.innerHTML="";
+    if (mode==='human_takeover'){
+      w.innerHTML = '<div class="muted small">You\'ve taken over this conversation. The agent will not draft replies until reactivated.</div>';
+      return;
+    }
+    if (!draft){
+      w.innerHTML = '<div class="muted small">No draft awaiting review. The agent drafts when the lead sends a message.</div>';
+      return;
+    }
+    var policy = draft.policy_decision && draft.policy_decision!=='allow'
+      ? '<span class="pill red">handoff: '+esc(draft.handoff_reason_code||draft.policy_decision)+'</span>' : '';
+    var box = document.createElement("div"); box.className="draft";
+    box.innerHTML = '<div class="lbl">AI draft — review before sending '+policy+'</div>'+
+      '<textarea id="draftBody">'+esc(draft.generated_body)+'</textarea>'+
+      '<div class="row" style="margin-top:10px;">'+
+        '<button id="sendBtn">Send</button>'+
+        '<button id="editSendBtn" class="soft">Edit &amp; send</button>'+
+        '<button id="regenBtn" class="ghost">Regenerate</button>'+
+        '<button id="takeoverBtn" class="ghost">Take over</button>'+
+      '</div><div id="draftErr" class="err"></div>';
+    w.appendChild(box);
+
+    el("sendBtn").onclick = function(){ doSend(draft.id, null); };
+    el("editSendBtn").onclick = function(){ doSend(draft.id, el("draftBody").value, true); };
+    el("regenBtn").onclick = function(){ doRegen(draft.id); };
+    el("takeoverBtn").onclick = function(){ doTakeover(); };
+  }
+
+  async function doSend(draftId, body, isEdit){
+    if (busy) return; busy=true;
+    try{
+      if (isEdit){ await api("/operator/agent-drafts/"+encodeURIComponent(draftId)+"/edit-and-send", { method:"POST", body:{ body: body } }); }
+      else { await api("/operator/agent-drafts/"+encodeURIComponent(draftId)+"/send", { method:"POST", body:{} }); }
+      await refreshDetail();
+    }catch(e){ var de=el("draftErr"); if(de) de.textContent = e.message; }
+    finally{ busy=false; }
+  }
+  async function doRegen(draftId){
+    if (busy) return; busy=true;
+    try{ await api("/operator/agent-drafts/"+encodeURIComponent(draftId)+"/regenerate", { method:"POST", body:{} }); await refreshDetail(); }
+    catch(e){ var de=el("draftErr"); if(de) de.textContent=e.message; }
+    finally{ busy=false; }
+  }
+  async function doTakeover(){
+    if (busy) return; busy=true;
+    try{ await api("/operator/conversations/"+encodeURIComponent(currentConvId)+"/take-over", { method:"POST", body:{} }); await refreshDetail(); }
+    catch(e){ var de=el("draftErr"); if(de) de.textContent=e.message; }
+    finally{ busy=false; }
+  }
+
+  // ── FACTS ──
+  function renderFacts(facts){
+    el("factCount").textContent = facts.length + " active";
+    var fl = el("factList");
+    if (!facts.length){ fl.className="muted small"; fl.textContent="No verified facts yet. The agent will hand off questions it can't ground in a verified fact."; return; }
+    fl.className=""; fl.innerHTML="";
+    facts.forEach(function(f){
+      var div=document.createElement("div"); div.className="factrow";
+      div.innerHTML='<div class="factkey">'+esc(f.fact_key)+'</div>'+
+        '<div>'+esc(f.rendered_text)+'</div>'+
+        '<div class="muted small mono" style="margin-top:3px;">'+esc(f.source_type)+(f.confirmed_at?(' · confirmed '+new Date(f.confirmed_at).toLocaleDateString()):'')+'</div>';
+      fl.appendChild(div);
+    });
+  }
+
+  el("addFactBtn").onclick = async function(){
+    if (busy) return; busy=true; el("factErr").textContent="";
+    var body = { fact_key: el("fKey").value, rendered_text: el("fText").value, source_type: el("fSource").value };
+    if (el("fConfirmed").value) body.confirmed_at = el("fConfirmed").value;
+    try{
+      await api("/operator/agent-facts", { method:"POST", body: body });
+      el("fText").value="";
+      await refreshDetail();
+    }catch(e){ el("factErr").textContent = e.message; }
+    finally{ busy=false; }
+  };
+
+  // ── polling helpers ──
+  function startPoll(fn){ stopPoll(); pollTimer = setInterval(fn, POLL); }
+  function stopPoll(){ if (pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
+
+  // ── boot ──
+  // No persisted session exists (memory only) → always start at the auth gate on load.
+  renderAuthGate();
+})();
+</script>
+</body>
+</html>
