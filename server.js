@@ -3249,5 +3249,11 @@ app.use("/", agentApp);
 const operatorModule = require("./operator");
 app.use("/", operatorModule({ pool, agentService: agentApp._service }));
 
+// ── ONE-TIME demo facts seed — loads the REAL Solo handbook facts onto the demo
+// property (the operating-onboarding fact layer, hand-confirmed once from the 2026
+// Field Guide). Demo-only (/demo/, fail-closed on DEMO_MODE). (facts-seed.js)
+const factsSeedModule = require("./facts-seed");
+app.use("/", factsSeedModule({ pool }));
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
