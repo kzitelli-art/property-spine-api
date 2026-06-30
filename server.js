@@ -3178,5 +3178,11 @@ app.use("/", leasingShadowImportModule({ pool }));
 const demoModule = require("./demo");
 app.use("/", demoModule({ pool, submissionService: __applicationSubmission._service }));
 
+// ── Agent Stage 0: model capability proof (operator-gated, NO schema, NO secrets
+//    exposed). One real generation to confirm the live model path works before any
+//    agent architecture is built on it. GET /agent/capability → { ok, reachable, model }. ──
+const agentCapabilityModule = require("./agentcapability");
+app.use("/", agentCapabilityModule({ anthropic, INGEST_MODEL }));
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
