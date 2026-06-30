@@ -77,7 +77,11 @@ app.use(express.json({ limit: "1mb" }));  // body-size cap — stops oversized p
 // for removal in a later cleanup, not worth a 3-file deploy today.
 const OPERATOR_KEY = process.env.OPERATOR_KEY;
 const PUBLIC_EXACT = new Set(["/health", "/leasing/intake"]); // /leasing/intake carries its own intake-secret (webhooks have no operator key)
-const PUBLIC_PREFIXES = ["/tenant/", "/t/", "/public/", "/intake/", "/intake", "/auth/", "/demo/"];
+// NOTE: "/agent/" is public ONLY for the two-phone browser DEMO (synthetic data,
+// operator-controlled). The agent operates on real records and proposes outbound
+// messages — so before any REAL lead touches this, "/agent/" MUST be removed from
+// this allowlist and the browser views moved behind real auth (token→session).
+const PUBLIC_PREFIXES = ["/tenant/", "/t/", "/public/", "/intake/", "/intake", "/auth/", "/demo/", "/agent/"];
 app.use((req, res, next) => {
   if (req.method === "OPTIONS") return next(); // CORS preflight carries no custom headers
   const p = req.path;
@@ -3183,6 +3187,13 @@ app.use("/", demoModule({ pool, submissionService: __applicationSubmission._serv
 //    agent architecture is built on it. GET /agent/capability → { ok, reachable, model }. ──
 const agentCapabilityModule = require("./agentcapability");
 app.use("/", agentCapabilityModule({ anthropic, INGEST_MODEL }));
+
+// ── Agent Stage A: supervised, grounded, draft-first conversation loop. The agent
+//    PROPOSES; nothing reaches a lead until a human dispatches it. Two-transaction
+//    model call, monotonic thread versioning, obligation-backed review, server-derived
+//    manager identity. (Migration 053.) ──
+const agentModule = require("./agent");
+app.use("/", agentModule({ pool, anthropic, INGEST_MODEL, spawnObligationFromEvent, completeObligation }));
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
