@@ -467,44 +467,57 @@ module.exports = function agentModule(deps) {
 
   // ── manager READ: the current draft + thread state for a conversation ──────
   // Demo-friendly: resolve conversation from (property_id, person_id).
+  // ── SHARED ACTION SERVICE: getConversationState (by resolved conversationId) ──
+  // Returns the thread read both doors render. Caller resolves+authorizes the
+  // conversation first (demo: by person+property; operator: scoped to session).
+  async function getConversationStateService({ conversationId }) {
+    const client = await pool.connect();
+    try {
+      const conv = (await client.query("select * from conversations where id=$1", [conversationId])).rows[0];
+      if (!conv) return { exists: false, messages: [], draft: null, mode: null };
+
+      const state = (await client.query("select * from agent_thread_state where conversation_id=$1", [conv.id])).rows[0] || null;
+      const messages = (await client.query(
+        `select id, direction, body, sender_role, ai_drafted_at, sent_by_user_id, occurred_at
+           from comm_events where conversation_id=$1 and channel='text' and body is not null
+           order by occurred_at asc nulls last, id asc`,
+        [conv.id]
+      )).rows;
+      const draft = (await client.query(
+        `select d.id, d.generated_body, d.status, r.policy_decision, r.handoff_reason_code, r.status as run_status
+           from agent_drafts d join agent_runs r on r.id=d.agent_run_id
+          where r.conversation_id=$1 and d.status='ready'
+          order by d.created_at desc limit 1`,
+        [conv.id]
+      )).rows[0] || null;
+
+      return {
+        exists: true, conversation_id: conv.id,
+        mode: state ? state.mode : "ai_active",
+        thread_version: state ? Number(state.thread_version) : 0,
+        messages, draft,
+      };
+    } finally { client.release(); }
+  }
+
+  // helper: resolve the canonical conversation by (person, property). Used by demo routes.
+  async function resolveConversationByPair(person_id, property_id) {
+    const c = (await pool.query(
+      "select * from conversations where person_id=$1 and property_id=$2 order by created_at limit 1",
+      [person_id, property_id]
+    )).rows[0];
+    return c || null;
+  }
+
+  // LEGACY/DEMO adapter route.
   router.get("/agent/thread", async (req, res) => {
     try {
       const property_id = req.query.property_id, person_id = req.query.person_id;
       if (!property_id || !person_id) return res.status(400).json({ error: "property_id and person_id required" });
-      const client = await pool.connect();
-      try {
-        const conv = (await client.query(
-          "select * from conversations where person_id=$1 and property_id=$2 order by created_at limit 1",
-          [person_id, property_id]
-        )).rows[0];
-        if (!conv) return res.json({ exists: false, messages: [], draft: null, mode: null });
-
-        const state = (await client.query("select * from agent_thread_state where conversation_id=$1", [conv.id])).rows[0] || null;
-
-        // visible thread = real comm_events (inbound + dispatched outbound only)
-        const messages = (await client.query(
-          `select id, direction, body, sender_role, ai_drafted_at, sent_by_user_id, occurred_at
-             from comm_events where conversation_id=$1 and channel='text' and body is not null
-             order by occurred_at asc nulls last, id asc`,
-          [conv.id]
-        )).rows;
-
-        // the current ready draft (if any), with its run's policy info
-        const draft = (await client.query(
-          `select d.id, d.generated_body, d.status, r.policy_decision, r.handoff_reason_code, r.status as run_status
-             from agent_drafts d join agent_runs r on r.id=d.agent_run_id
-            where r.conversation_id=$1 and d.status='ready'
-            order by d.created_at desc limit 1`,
-          [conv.id]
-        )).rows[0] || null;
-
-        return res.json({
-          exists: true, conversation_id: conv.id,
-          mode: state ? state.mode : "ai_active",
-          thread_version: state ? Number(state.thread_version) : 0,
-          messages, draft,
-        });
-      } finally { client.release(); }
+      const conv = await resolveConversationByPair(person_id, property_id);
+      if (!conv) return res.json({ exists: false, messages: [], draft: null, mode: null });
+      const out = await getConversationStateService({ conversationId: conv.id });
+      return res.json(out);
     } catch (e) {
       return res.status(500).json({ error: e.message });
     }
@@ -515,58 +528,75 @@ module.exports = function agentModule(deps) {
 
   // SEND (optionally edited): dispatch the draft as a real OUTBOUND comm_event.
   // Enforces the stale-draft invariant: draft.status=ready AND run version == thread version.
+  // ── SHARED ACTION SERVICE: sendDraft ──────────────────────────────────────
+  // The single source of truth for dispatching a draft. Both the legacy /agent/*
+  // route and the authenticated /operator/* route call THIS. The actor identity is
+  // supplied by the caller (server-derived) — never inferred from browser input.
+  // Enforces: stale-draft guarantee, immutable generated_body vs dispatch_body,
+  // canonical outbound comm_event, obligation completion, return-to-ai_active.
+  async function sendDraftService({ draftId, editedBody, actorUserId }) {
+    if (!actorUserId) throw httpErr(400, "actorUserId is required (server-derived).");
+    return tx(async (client) => {
+      const d = (await client.query("select * from agent_drafts where id=$1 for update", [draftId])).rows[0];
+      if (!d) throw httpErr(404, "Draft not found.");
+      if (d.status !== "ready") throw httpErr(409, `Draft is '${d.status}', not sendable.`);
+
+      const run = (await client.query("select * from agent_runs where id=$1", [d.agent_run_id])).rows[0];
+      const state = await loadThreadState(client, run.conversation_id, true); // FOR UPDATE
+
+      // STALE GUARANTEE: a newer inbound exists → cannot send.
+      if (Number(state.thread_version) !== Number(run.input_thread_version)) {
+        await client.query("update agent_drafts set status='superseded', superseded_at=now(), updated_at=now() where id=$1", [draftId]);
+        throw httpErr(409, "A newer message arrived — this draft is stale and can't be sent. A fresh draft is being prepared.");
+      }
+
+      const conv = (await client.query("select * from conversations where id=$1", [run.conversation_id])).rows[0];
+      const mgrId = actorUserId;
+      const bodyToSend = editedBody && editedBody.trim() ? editedBody.trim() : d.generated_body;
+
+      // dispatch → a REAL outbound comm_event (with AI-drafted + sent-by provenance)
+      const outbound = (await client.query(
+        `insert into comm_events
+           (property_id, person_id, conversation_id, channel, direction, body, classification, sender_role,
+            ai_drafted_at, human_approved_by_user_id, human_approved_at, sent_by_user_id, occurred_at)
+         values ($1,$2,$3,'text','outbound',$4,'leasing','agent', now(), $5, now(), $5, now())
+         returning id`,
+        [conv.property_id, conv.person_id, conv.id, bodyToSend, mgrId]
+      )).rows[0];
+      await client.query("update conversations set last_message_at = now() where id=$1", [conv.id]);
+
+      // mark the draft dispatched; record what was actually sent (immutable generated_body preserved)
+      await client.query(
+        `update agent_drafts set status='dispatched', dispatch_body=$2, dispatched_comm_event_id=$3,
+           dispatched_by_user_id=$4, dispatched_at=now(), updated_at=now() where id=$1`,
+        [draftId, bodyToSend, outbound.id, mgrId]
+      );
+
+      // complete the review obligation; return thread to ai_active for the next turn
+      if (state.current_review_obligation_id && completeObligation) {
+        await completeObligation(client, { obligation_id: state.current_review_obligation_id, completed_by: mgrId })
+          .catch(e => { if (e.code !== "ALREADY_COMPLETE") throw e; });
+      }
+      await client.query(
+        "update agent_thread_state set mode='ai_active', current_review_obligation_id=null, updated_at=now() where conversation_id=$1",
+        [conv.id]
+      );
+
+      return { ok: true, outbound_comm_event_id: outbound.id, sent_body: bodyToSend, edited: !!(editedBody && editedBody.trim()) };
+    });
+  }
+
+  // LEGACY/DEMO adapter route — thin wrapper over sendDraftService with the seeded
+  // demo manager as actor. (Demo-access restrictions apply via the allowlist; the
+  // durable manager interface is /operator/agent-drafts/:id/send.)
   router.post("/agent/drafts/:id/send", async (req, res) => {
-    const draftId = req.params.id;
     const editedBody = (req.body && typeof req.body.body === "string") ? req.body.body : null;
     try {
-      const out = await tx(async (client) => {
-        const d = (await client.query("select * from agent_drafts where id=$1 for update", [draftId])).rows[0];
-        if (!d) throw httpErr(404, "Draft not found.");
-        if (d.status !== "ready") throw httpErr(409, `Draft is '${d.status}', not sendable.`);
-
-        const run = (await client.query("select * from agent_runs where id=$1", [d.agent_run_id])).rows[0];
-        const state = await loadThreadState(client, run.conversation_id, true); // FOR UPDATE
-
-        // STALE GUARANTEE: a newer inbound exists → cannot send.
-        if (Number(state.thread_version) !== Number(run.input_thread_version)) {
-          await client.query("update agent_drafts set status='superseded', superseded_at=now(), updated_at=now() where id=$1", [draftId]);
-          throw httpErr(409, "A newer message arrived — this draft is stale and can't be sent. A fresh draft is being prepared.");
-        }
-
-        const conv = (await client.query("select * from conversations where id=$1", [run.conversation_id])).rows[0];
-        const mgrId = await demoManagerUserId(client);
-        const bodyToSend = editedBody && editedBody.trim() ? editedBody.trim() : d.generated_body;
-
-        // dispatch → a REAL outbound comm_event (with AI-drafted + sent-by provenance)
-        const outbound = (await client.query(
-          `insert into comm_events
-             (property_id, person_id, conversation_id, channel, direction, body, classification, sender_role,
-              ai_drafted_at, human_approved_by_user_id, human_approved_at, sent_by_user_id, occurred_at)
-           values ($1,$2,$3,'text','outbound',$4,'leasing','agent', now(), $5, now(), $5, now())
-           returning id`,
-          [conv.property_id, conv.person_id, conv.id, bodyToSend, mgrId]
-        )).rows[0];
-        await client.query("update conversations set last_message_at = now() where id=$1", [conv.id]);
-
-        // mark the draft dispatched; record what was actually sent (immutable generated_body preserved)
-        await client.query(
-          `update agent_drafts set status='dispatched', dispatch_body=$2, dispatched_comm_event_id=$3,
-             dispatched_by_user_id=$4, dispatched_at=now(), updated_at=now() where id=$1`,
-          [draftId, bodyToSend, outbound.id, mgrId]
-        );
-
-        // complete the review obligation; return thread to ai_active for the next turn
-        if (state.current_review_obligation_id && completeObligation) {
-          await completeObligation(client, { obligation_id: state.current_review_obligation_id, completed_by: mgrId })
-            .catch(e => { if (e.code !== "ALREADY_COMPLETE") throw e; });
-        }
-        await client.query(
-          "update agent_thread_state set mode='ai_active', current_review_obligation_id=null, updated_at=now() where conversation_id=$1",
-          [conv.id]
-        );
-
-        return { ok: true, outbound_comm_event_id: outbound.id, sent_body: bodyToSend, edited: !!(editedBody && editedBody.trim()) };
-      });
+      const client0 = await pool.connect();
+      let actorUserId;
+      try { actorUserId = await demoManagerUserId(client0); }
+      finally { client0.release(); }
+      const out = await sendDraftService({ draftId: req.params.id, editedBody, actorUserId });
       return res.json(out);
     } catch (e) {
       return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
@@ -574,35 +604,44 @@ module.exports = function agentModule(deps) {
   });
 
   // TAKE OVER: thread → human_takeover. AI stops drafting/sending. No silent re-entry.
+  // ── SHARED ACTION SERVICE: takeOverConversation ──────────────────────────
+  // thread → human_takeover; discards ready draft; redirects obligation. AI stops.
+  // Caller resolves+authorizes the conversation; actor supplied server-side.
+  async function takeOverConversationService({ conversationId, actorUserId }) {
+    if (!actorUserId) throw httpErr(400, "actorUserId is required (server-derived).");
+    return tx(async (client) => {
+      const conv = (await client.query("select * from conversations where id=$1", [conversationId])).rows[0];
+      if (!conv) throw httpErr(404, "No conversation.");
+      const state = await loadThreadState(client, conv.id, true);
+      const mgrId = actorUserId;
+
+      await client.query(
+        `update agent_drafts d set status='discarded', discarded_at=now(), updated_at=now()
+           from agent_runs r where d.agent_run_id=r.id and r.conversation_id=$1 and d.status='ready'`,
+        [conv.id]
+      );
+      if (state.current_review_obligation_id) {
+        await client.query(
+          "update obligations set label='Human takeover — leasing manager owns this thread', updated_at=now() where id=$1",
+          [state.current_review_obligation_id]
+        ).catch(() => {});
+      }
+      await client.query("update agent_thread_state set mode='human_takeover', updated_at=now() where conversation_id=$1", [conv.id]);
+      return { ok: true, mode: "human_takeover", by: mgrId };
+    });
+  }
+
+  // LEGACY/DEMO adapter route.
   router.post("/agent/thread/takeover", async (req, res) => {
     try {
       const property_id = req.body && req.body.property_id, person_id = req.body && req.body.person_id;
       if (!property_id || !person_id) return res.status(400).json({ error: "property_id and person_id required" });
-      const out = await tx(async (client) => {
-        const conv = (await client.query(
-          "select * from conversations where person_id=$1 and property_id=$2 order by created_at limit 1",
-          [person_id, property_id]
-        )).rows[0];
-        if (!conv) throw httpErr(404, "No conversation.");
-        const state = await loadThreadState(client, conv.id, true);
-        const mgrId = await demoManagerUserId(client);
-
-        // discard any ready draft
-        await client.query(
-          `update agent_drafts d set status='discarded', discarded_at=now(), updated_at=now()
-             from agent_runs r where d.agent_run_id=r.id and r.conversation_id=$1 and d.status='ready'`,
-          [conv.id]
-        );
-        // redirect the obligation as human takeover (kept open, owned by human)
-        if (state.current_review_obligation_id) {
-          await client.query(
-            "update obligations set label='Human takeover — leasing manager owns this thread', updated_at=now() where id=$1",
-            [state.current_review_obligation_id]
-          ).catch(() => {});
-        }
-        await client.query("update agent_thread_state set mode='human_takeover', updated_at=now() where conversation_id=$1", [conv.id]);
-        return { ok: true, mode: "human_takeover", by: mgrId };
-      });
+      const conv = await resolveConversationByPair(person_id, property_id);
+      if (!conv) return res.status(404).json({ error: "No conversation." });
+      const client0 = await pool.connect();
+      let actorUserId;
+      try { actorUserId = await demoManagerUserId(client0); } finally { client0.release(); }
+      const out = await takeOverConversationService({ conversationId: conv.id, actorUserId });
       return res.json(out);
     } catch (e) {
       return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
@@ -611,10 +650,13 @@ module.exports = function agentModule(deps) {
 
   // REGENERATE: new run + new draft (does NOT mutate the old). Supersedes the prior
   // ready draft. SAME review obligation (no duplicate). Re-runs the model.
-  router.post("/agent/thread/regenerate", async (req, res) => {
-    try {
-      const property_id = req.body && req.body.property_id, person_id = req.body && req.body.person_id;
-      if (!property_id || !person_id) return res.status(400).json({ error: "property_id and person_id required" });
+  // ── SHARED ACTION SERVICE: regenerateDraft ───────────────────────────────
+  // New run + new draft (never mutates the old); supersedes prior ready draft; SAME
+  // review obligation (no duplicate); re-runs the model via the locked two-tx pattern.
+  // Returns plain result data. Both doors call this; caller authorizes the conversation.
+  async function regenerateDraftService({ property_id, person_id }) {
+    {
+      if (!property_id || !person_id) throw httpErr(400, "property_id and person_id required");
 
       // TX1': supersede prior draft, create a new pending run at the CURRENT version,
       // generation_no = max+1, reason=manager_regenerate. (Same obligation.)
@@ -725,12 +767,28 @@ module.exports = function agentModule(deps) {
         return { ok: true, draft_id: draft.id, regenerated: true, policy_decision: policyDecision };
       });
 
-      return res.json(result);
+      return result;
+    }
+  }
+
+  // LEGACY/DEMO adapter route.
+  router.post("/agent/thread/regenerate", async (req, res) => {
+    try {
+      const property_id = req.body && req.body.property_id, person_id = req.body && req.body.person_id;
+      const out = await regenerateDraftService({ property_id, person_id });
+      return res.json(out);
     } catch (e) {
       return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
     }
   });
 
-  router._service = { preGenerationPolicy, postGenerationPolicy, resolveContext, buildMessages };
+  // The SHARED ACTION SERVICES — the single source of truth for the consequential
+  // operator actions. Both the legacy /agent/* adapter routes and the authenticated
+  // /operator/* routes call THESE. (editAndSend = sendDraftService with editedBody.)
+  router._service = {
+    preGenerationPolicy, postGenerationPolicy, resolveContext, buildMessages,
+    sendDraftService, getConversationStateService, takeOverConversationService,
+    regenerateDraftService, resolveConversationByPair,
+  };
   return router;
 };
