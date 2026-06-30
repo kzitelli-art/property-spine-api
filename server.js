@@ -57,7 +57,40 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 const app = express();
-app.use(cors());            // lets the frontend (Netlify) call this API
+// ── CORS ──────────────────────────────────────────────────────────────
+// /operator/ gets its OWN fail-closed CORS policy. It is NEVER reflective and NEVER
+// wildcard: it allows EXACTLY the configured OPERATOR_APP_ORIGIN and nothing else. If
+// OPERATOR_APP_ORIGIN is unset, cross-origin /operator/ requests are DENIED (the
+// surface is permissive only when correctly configured — the opposite of a reflective
+// fallback). CORS is not authorization, but it stops an arbitrary site from using a
+// browser that holds the in-memory staff token to drive the operator surface.
+const OPERATOR_APP_ORIGIN = String(process.env.OPERATOR_APP_ORIGIN || "").trim();
+function isOperatorPath(p) { return p === "/operator" || p.startsWith("/operator/"); }
+
+const operatorCors = cors({
+  origin: function (origin, cb) {
+    // server-to-server / curl (no Origin header) is allowed (CORS only governs browsers).
+    if (!origin) return cb(null, true);
+    if (OPERATOR_APP_ORIGIN && origin === OPERATOR_APP_ORIGIN) return cb(null, true);
+    return cb(null, false); // unset OR mismatch → denied (fail closed)
+  },
+  allowedHeaders: ["content-type", "x-staff-session"],
+  methods: ["GET", "POST", "OPTIONS"],
+  credentials: false,
+});
+
+// general CORS for everything else (tenant/demo/public pages). Permissive origin is
+// fine here because those routes carry their own per-door secrets; the operator
+// surface above does NOT rely on this.
+const generalCors = cors({
+  allowedHeaders: ["content-type", "x-operator-key", "x-staff-session", "accept"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+});
+
+app.use((req, res, next) => {
+  if (isOperatorPath(req.path)) return operatorCors(req, res, next);
+  return generalCors(req, res, next);
+});
 app.use(express.json({ limit: "1mb" }));  // body-size cap — stops oversized payloads
 
 // ── operator gate (Phase 0 auth centralization) ──────────────────────
@@ -82,10 +115,21 @@ const PUBLIC_EXACT = new Set(["/health", "/leasing/intake"]); // /leasing/intake
 // messages — so before any REAL lead touches this, "/agent/" MUST be removed from
 // this allowlist and the browser views moved behind real auth (token→session).
 const PUBLIC_PREFIXES = ["/tenant/", "/t/", "/public/", "/intake/", "/intake", "/auth/", "/demo/", "/agent/"];
+// SESSION-GATED (NOT public): these routes enforce their OWN staff-session auth
+// (x-staff-session → real users row, property-scoped) inside the route handlers, so
+// they must skip the operator-KEY gate — we never put the raw OPERATOR_KEY in a
+// browser. Skipping the key gate here does NOT mean unauthenticated: every /operator/
+// route is behind requireOperator. (operator.js)
+// SESSION-GATED (NOT public): /operator/* enforces its OWN staff-session auth
+// (x-staff-session → real users row, property-scoped) inside the route handlers, so it
+// skips the operator-KEY gate — we never put the raw OPERATOR_KEY in a browser.
+// Matching is EXACT-boundary (isOperatorPath): '/operator' or '/operator/...', so a
+// lookalike like '/operatorial' or '/operatorX' does NOT bypass the key gate.
 app.use((req, res, next) => {
   if (req.method === "OPTIONS") return next(); // CORS preflight carries no custom headers
   const p = req.path;
   if (PUBLIC_EXACT.has(p) || PUBLIC_PREFIXES.some((x) => p === x || p.startsWith(x))) return next();
+  if (isOperatorPath(p)) return next(); // /operator/* applies its own staff-session auth
   if (!OPERATOR_KEY) {
     return res.status(503).json({ receipt: "Operator routes are locked: set OPERATOR_KEY in Render's environment, then send it as the x-operator-key header." });
   }
@@ -3193,7 +3237,17 @@ app.use("/", agentCapabilityModule({ anthropic, INGEST_MODEL }));
 //    model call, monotonic thread versioning, obligation-backed review, server-derived
 //    manager identity. (Migration 053.) ──
 const agentModule = require("./agent");
-app.use("/", agentModule({ pool, anthropic, INGEST_MODEL, spawnObligationFromEvent, completeObligation }));
+const agentApp = agentModule({ pool, anthropic, INGEST_MODEL, spawnObligationFromEvent, completeObligation });
+app.use("/", agentApp);
+
+// ── THE FIRST LIVE OPERATOR SURFACE — Leasing Conversations. ──
+// /operator/* is the authenticated, property-scoped manager interface. It reuses the
+// agent's EXTRACTED shared services (one source of truth for dispatch/regenerate/
+// takeover/obligation/stale-draft) — agentApp._service. Identity is a real staff
+// session (x-staff-session → users row); the browser never claims identity. The
+// demo-session bootstrap is fail-closed (DEMO_MODE=true only). (operator.js)
+const operatorModule = require("./operator");
+app.use("/", operatorModule({ pool, agentService: agentApp._service }));
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
