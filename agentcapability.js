@@ -21,8 +21,19 @@ module.exports = function agentCapabilityModule({ anthropic, INGEST_MODEL }) {
 
   // GET /agent/capability — protected (operator gate). One real generation.
   router.get("/agent/capability", async (_req, res) => {
+    return runCapabilityCheck(res);
+  });
+
+  // GET /demo/agent-capability — TEMPORARY public proof (rides the /demo/ allowlist
+  // so it can be verified from a browser without exposing the operator key). Returns
+  // ONLY { ok, reachable, model } — identical safety to the gated route. DELETE THIS
+  // route once Stage 0 is confirmed; it exists only to prove the path from a phone.
+  router.get("/demo/agent-capability", async (_req, res) => {
+    return runCapabilityCheck(res);
+  });
+
+  async function runCapabilityCheck(res) {
     if (!anthropic) {
-      // honest: no client constructed at all (key missing at boot)
       console.error("[agent/capability] no anthropic client — ANTHROPIC_API_KEY likely unset");
       return res.json({ ok: false, reachable: false, model: MODEL, reason: "client_unavailable" });
     }
@@ -39,15 +50,13 @@ module.exports = function agentCapabilityModule({ anthropic, INGEST_MODEL }) {
         .trim()
         .toLowerCase();
       const got = text.includes("ready");
-      // server-side log ONLY — provider reachable, model selected, request ok, response received
       console.log(`[agent/capability] reachable=true model=${MODEL} request=ok response=${got ? "received" : "unexpected"}`);
       return res.json({ ok: true, reachable: true, model: MODEL, response_ok: got });
     } catch (e) {
-      // log the real reason server-side; NEVER leak it (or the key) to the caller
       console.error("[agent/capability] generation failed:", e && e.message ? e.message : e);
       return res.status(502).json({ ok: false, reachable: false, model: MODEL, reason: "generation_failed" });
     }
-  });
+  }
 
   return router;
 };
