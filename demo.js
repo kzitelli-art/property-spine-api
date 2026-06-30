@@ -156,6 +156,9 @@ module.exports = function demoModule(deps) {
     const checkpoint = attempt ? attempt.checkpoint : null;
     return {
       slug: run.slug,
+      property_id: run.property_id,            // for the agent demo bridge (identity resolution)
+      unit_id: run.unit_id || null,
+      tenant_person_id: attempt ? attempt.tenant_person_id : null,
       attempt_id: attempt ? attempt.id : null,
       attempt_status: attempt ? attempt.status : null,
       checkpoint,
