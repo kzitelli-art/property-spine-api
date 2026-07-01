@@ -28,7 +28,7 @@ const PROMPT_REVISION = "stage-a-v3"; // v3: warm/brief/human, earns tour over c
 const POLICY_REVISION = "stage-a-v1";
 
 module.exports = function agentModule(deps) {
-  const { pool, anthropic, INGEST_MODEL, spawnObligationFromEvent, completeObligation } = deps;
+  const { pool, anthropic, INGEST_MODEL, spawnObligationFromEvent, completeObligation, leasingLifecycle } = deps;
   if (!pool) throw new Error("agent.js requires { pool }");
   const MODEL = INGEST_MODEL || "claude-sonnet-4-6";
   const router = require("express").Router();
@@ -254,6 +254,16 @@ module.exports = function agentModule(deps) {
           [b.property_id, b.person_id, b.unit_id || null, conv.id, b.body]
         )).rows[0];
         await client.query("update conversations set last_message_at = now() where id=$1", [conv.id]);
+
+        // GENUINE-INBOUND REOPEN: a qualifying prospect inbound persisted above. If this
+        // conversation's latest-relevant lifecycle state is closed_not_fit, reopen it in
+        // THIS transaction (source_comm_event_id = this inbound). No-op when not closed;
+        // idempotent under the conversation lock. (Foundation 054 lifecycle rail.)
+        if (leasingLifecycle && b.body && String(b.body).trim() !== "") {
+          await leasingLifecycle.maybeReopenOnQualifyingInbound(client, {
+            conversationId: conv.id, sourceCommEventId: inbound.id,
+          });
+        }
 
         const mode = state.mode;
         const newVersion = Number(state.thread_version) + 1;
