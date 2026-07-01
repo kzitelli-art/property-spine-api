@@ -23,7 +23,7 @@
 
 const express = require("express");
 
-module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms }) {
+module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle }) {
   const router = express.Router();
 
   // ── AUTH ──────────────────────────────────────────────────────────────
@@ -307,6 +307,14 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         [lead.property_id, lead.person_id, lead.unit_id, conversationId, text])).rows[0];
       if (conversationId) await client.query(`update conversations set last_message_at = now() where id = $1`, [conversationId]);
       await recordLeadEvent(client, { leadId, type: "prospect_replied", actorType: "prospect", actorId: lead.person_id, commEventId: commEvent.id, metadata: { body: text } });
+      // GENUINE-INBOUND REOPEN: this is a qualifying prospect inbound. If the conversation
+      // is soft-closed (closed_not_fit), reopen it in THIS transaction. No-op otherwise;
+      // idempotent under the conversation lock. (Foundation 054.)
+      if (leasingLifecycle && conversationId && text && String(text).trim() !== "") {
+        await leasingLifecycle.maybeReopenOnQualifyingInbound(client, {
+          conversationId, sourceCommEventId: commEvent.id,
+        });
+      }
       await client.query("commit");
       return res.json({ receipt: "Reply logged.", lead_id: leadId });
     } catch (e) { try { await client.query("rollback"); } catch {} console.error("leasing reply:", e); return res.status(500).json({ receipt: "Could not log the reply.", error: e.message }); }
