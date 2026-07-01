@@ -489,7 +489,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       // ── ensure the tagging source exists (demo-scope only; the authenticated
       //    intake's source behavior is unchanged) ──
       await pool.query(
-        `insert into lead_sources (name) values ($1) on conflict do nothing`,
+        `insert into lead_sources (name, source_type) values ($1, 'manual') on conflict do nothing`,
         [DEMO_INTAKE_SOURCE]
       );
 
