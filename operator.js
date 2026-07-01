@@ -46,6 +46,13 @@ module.exports = function operatorModule(deps) {
 
   function httpErr(status, msg) { const e = new Error(msg); e.httpStatus = status; e.publicMessage = msg; return e; }
 
+  // ── Pre-Tour AI Conversations: the lifecycle write service (054) ──
+  // Instantiated once inside this closure. We expose only close-not-fit + reopen as
+  // browser routes (below); linkTour/cancelTour/correctTourLink stay as internal
+  // service functions to be called by the canonical tour-creation / scheduling-
+  // cancellation / audited-repair paths — NOT general operator endpoints.
+  const leasingLifecycle = require("./leasing_lifecycle_service")({ pool });
+
   // Compare a presented bearer credential against the configured one in constant time.
   // We SHA-256 BOTH sides first so the timingSafeEqual inputs are always equal fixed
   // length — a malformed or wrong-length code can never throw (no 500), and missing /
@@ -428,7 +435,202 @@ module.exports = function operatorModule(deps) {
     return r;
   }
 
+  // ════════════════════════════════════════════════════════════════════
+  //  PRE-TOUR AI CONVERSATIONS — the queue read + the two browser lifecycle writes
+  //  (Foundation 054). Three axes: commercial_state / waiting_on / delivery_state.
+  //  Scoped to the session property on read AND write via requireOperator. The write
+  //  path locks the conversation row and asserts tour property+person match.
+  //
+  //  AUTHORITY (locked + tested): close_not_fit / reopen are a REOPENABLE disposition —
+  //  they do NOT write leasing_leads.status. The lead stays in the open set (so reopen
+  //  always works) and leaves/re-enters the ACTIVE queue purely by projection. Terminal
+  //  'lost' remains owned by the lead module (leasingleads.recordLeadEvent), not here.
+  // ════════════════════════════════════════════════════════════════════
+
+  const QUEUE_LIMIT = 50;
+  const ACTIVE_STATES = ["new", "active"];
+
+  // The proven queue_projection_v1 logic, parameterized by property ($1). One row per
+  // ELIGIBLE conversation (open lead, not applied/leased/lost, conversation open).
+  const PROJECTION_CTE = `
+    with eligible as (
+      select c.id as conversation_id, c.property_id, c.person_id, ll.status as lead_status
+      from leasing_leads ll
+      join conversations c on c.property_id = ll.property_id and c.person_id = ll.person_id
+      where ll.status not in ('applied','leased','lost') and c.status = 'open'
+        and c.property_id = $1
+    ),
+    life as (
+      select conversation_id,
+             max(event_sequence) filter (where event_type='closed_not_fit') as close_seq,
+             max(event_sequence) filter (where event_type='reopened')       as reopen_seq
+      from leasing_lead_lifecycle_events group by conversation_id
+    ),
+    close_reason as (
+      select distinct on (e.conversation_id) e.conversation_id, e.reason_code
+      from leasing_lead_lifecycle_events e where e.event_type='closed_not_fit'
+      order by e.conversation_id, e.event_sequence desc
+    ),
+    live_tour as (
+      select distinct on (l.conversation_id) l.conversation_id, t.id as tour_id, t.status as tour_status
+      from leasing_conversation_tour_links l join scheduled_tours t on t.id = l.tour_id
+      where l.unlinked_at is null and t.status in ('scheduled','rescheduled')
+      order by l.conversation_id, t.created_at asc
+    ),
+    qual_in as (
+      select conversation_id, max(occurred_at) as at from comm_events
+      where direction='inbound' and sender_role='prospect' and body is not null and btrim(body) <> ''
+      group by conversation_id
+    ),
+    qual_out as (
+      select conversation_id, max(occurred_at) as at from comm_events
+      where direction='outbound' and sender_role in ('agent','ai') and provider_status in ('sent','delivered')
+      group by conversation_id
+    ),
+    any_out as (
+      select distinct on (conversation_id) conversation_id, occurred_at as at, provider_status
+      from comm_events where direction='outbound' and sender_role in ('agent','ai')
+      order by conversation_id, occurred_at desc
+    ),
+    base as (
+      select e.conversation_id, e.person_id, e.property_id, e.lead_status,
+        pr.name as person_name,
+        coalesce(ats.mode,'ai_active') as control_mode,
+        qi.at as last_inbound_at, qo.at as last_delivered_outbound_at,
+        ao.at as last_any_outbound_at, ao.provider_status as last_outbound_status,
+        greatest(coalesce(qi.at,'epoch'::timestamptz), coalesce(ao.at,'epoch'::timestamptz),
+                 coalesce(c.last_message_at,'epoch'::timestamptz)) as last_meaningful_activity_at,
+        lt.tour_id, lt.tour_status, cr.reason_code as closure_reason,
+        (qi.at is not null and (qo.at is null or qi.at >= qo.at)) as inbound_unanswered,
+        (li.close_seq is not null and (li.reopen_seq is null or li.reopen_seq < li.close_seq)) as is_closed,
+        (lt.conversation_id is not null) as is_booked,
+        (qi.at is not null or ao.at is not null) as has_engagement
+      from eligible e
+      join conversations c on c.id = e.conversation_id
+      join persons pr on pr.id = e.person_id
+      left join life li on li.conversation_id = e.conversation_id
+      left join close_reason cr on cr.conversation_id = e.conversation_id
+      left join live_tour lt on lt.conversation_id = e.conversation_id
+      left join qual_in qi on qi.conversation_id = e.conversation_id
+      left join qual_out qo on qo.conversation_id = e.conversation_id
+      left join any_out ao on ao.conversation_id = e.conversation_id
+      left join agent_thread_state ats on ats.conversation_id = e.conversation_id
+    ),
+    projected as (
+      select *,
+        case when is_closed then 'closed_not_fit' when is_booked then 'booked_tour'
+             when has_engagement then 'active' else 'new' end as commercial_state,
+        case when is_closed or is_booked then 'none'
+             when inbound_unanswered and control_mode in ('awaiting_review','human_takeover') then 'manager'
+             when inbound_unanswered and control_mode = 'ai_active' then 'ai'
+             when last_delivered_outbound_at is not null
+                  and (last_inbound_at is null or last_delivered_outbound_at > last_inbound_at) then 'prospect'
+             else 'none' end as waiting_on,
+        case when last_any_outbound_at is null then 'none'
+             when last_outbound_status in ('sent','delivered') then 'delivered'
+             else 'unknown' end as delivery_state,
+        jsonb_build_object('rule_code',
+          case when is_closed then 'latest_relevant_lifecycle_is_close'
+               when is_booked then 'live_linked_tour'
+               when inbound_unanswered and control_mode in ('awaiting_review','human_takeover') then 'qualifying_prospect_inbound_unanswered_pending_human'
+               when inbound_unanswered then 'qualifying_prospect_inbound_unanswered'
+               when last_delivered_outbound_at is not null and (last_inbound_at is null or last_delivered_outbound_at > last_inbound_at) then 'delivered_outreach_is_latest'
+               when has_engagement then 'engaged_no_clear_owner'
+               else 'open_lead_no_qualifying_engagement' end,
+          'projection_version','queue_projection_v1') as derivation
+      from base
+    )`;
+
+  // GET /operator/leasing/conversation-queue — the ACTIVE WORK QUEUE (working states),
+  // cursor-paginated, with server-side counts across ALL commercial states.
+  router.get("/operator/leasing/conversation-queue", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const propertyId = req.operator.property_id;
+      const limit = Math.min(Number(req.query.limit) || QUEUE_LIMIT, QUEUE_LIMIT);
+      const beforeTs = req.query.before_activity_at || null;
+      const beforeId = req.query.before_id || null;
+      const asOf = (await pool.query("select now() as now")).rows[0].now;
+
+      const counts = (await pool.query(
+        PROJECTION_CTE + `
+        select commercial_state, count(*)::int as n,
+               count(*) filter (where waiting_on='ai')::int       as waiting_ai,
+               count(*) filter (where waiting_on='manager')::int  as waiting_manager,
+               count(*) filter (where waiting_on='prospect')::int as waiting_prospect
+        from projected group by commercial_state`,
+        [propertyId]
+      )).rows.reduce((acc, r) => {
+        acc.by_state[r.commercial_state] = r.n;
+        acc.waiting.ai += r.waiting_ai; acc.waiting.manager += r.waiting_manager; acc.waiting.prospect += r.waiting_prospect;
+        return acc;
+      }, { by_state: {}, waiting: { ai:0, manager:0, prospect:0 } });
+
+      const params = [propertyId, ACTIVE_STATES];
+      let cursorClause = "";
+      if (beforeTs) {
+        params.push(beforeTs);
+        if (beforeId) { params.push(beforeId);
+          cursorClause = ` and (last_meaningful_activity_at, conversation_id) < ($${params.length-1}::timestamptz, $${params.length}::uuid)`;
+        } else { cursorClause = ` and last_meaningful_activity_at < $${params.length}::timestamptz`; }
+      }
+      params.push(limit + 1);
+      const rows = (await pool.query(
+        PROJECTION_CTE + `
+        select conversation_id, person_id, person_name, lead_status,
+               commercial_state, waiting_on, control_mode, delivery_state,
+               last_inbound_at, last_delivered_outbound_at, last_meaningful_activity_at,
+               tour_id, tour_status, closure_reason, derivation
+        from projected
+        where commercial_state = any($2::text[]) ${cursorClause}
+        order by last_meaningful_activity_at desc, conversation_id desc
+        limit $${params.length}`,
+        params
+      )).rows;
+
+      let nextCursor = null;
+      if (rows.length > limit) {
+        const last = rows[limit - 1];
+        nextCursor = { before_activity_at: last.last_meaningful_activity_at, before_id: last.conversation_id };
+        rows.length = limit;
+      }
+      return res.json({
+        property_id: propertyId, as_of: asOf, projection_version: "queue_projection_v1",
+        counts, conversations: rows, next_cursor: nextCursor, limit,
+      });
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
+  });
+
+  // POST /operator/leasing/conversations/:conversationId/close-not-fit
+  router.post("/operator/leasing/conversations/:conversationId/close-not-fit", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { reason_code, reason_note, idempotency_key } = req.body || {};
+      const out = await leasingLifecycle.closeNotFit({
+        conversationId: req.params.conversationId, propertyId: req.operator.property_id,
+        actorUserId: req.operator.id, reasonCode: reason_code, reasonNote: reason_note,
+        idempotencyKey: idempotency_key,
+      });
+      return res.json(out);
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
+  });
+
+  // POST /operator/leasing/conversations/:conversationId/reopen — manual manager
+  // correction. (Genuine-inbound reopen is wired in the comm_event ingestion path,
+  // not here.)
+  router.post("/operator/leasing/conversations/:conversationId/reopen", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { idempotency_key } = req.body || {};
+      const out = await leasingLifecycle.reopen({
+        conversationId: req.params.conversationId, propertyId: req.operator.property_id,
+        actorType: "operator", actorUserId: req.operator.id, idempotencyKey: idempotency_key,
+      });
+      return res.json(out);
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
+  });
+
   // expose internals for headless proofs + for later route files
-  router._internal = { resolveSession, requireOperator, scopedConversation, scopedFact, normalizeFactBody, insertActiveFact, assertDraftInScope, DEMO_MODE };
+  router._internal = { resolveSession, requireOperator, scopedConversation, scopedFact, normalizeFactBody, insertActiveFact, assertDraftInScope, DEMO_MODE, leasingLifecycle };
   return router;
 };
