@@ -25,7 +25,7 @@
 
 const express = require("express");
 
-module.exports = function leasingInteractionsModule({ pool, sms }) {
+module.exports = function leasingInteractionsModule({ pool, sms, leasingLifecycle }) {
   const router = express.Router();
 
   function requireOperator(req, res, next) {
@@ -163,6 +163,16 @@ module.exports = function leasingInteractionsModule({ pool, sms }) {
        values ($1,'twilio',$2,$3,$4)`,
       [row.id, provider_event_id, provider_status, raw ? JSON.stringify(raw) : null]
     );
+    // GENUINE-INBOUND REOPEN: only a genuinely NEW inbound message reaches here (replays
+    // and status callbacks return above via the (provider, provider_event_id) dedup). If
+    // this is an inbound prospect message on a known conversation and the thread is
+    // soft-closed, reopen it in THIS transaction. No-op otherwise; idempotent under the
+    // conversation lock. (Foundation 054.)
+    if (leasingLifecycle && direction === "inbound" && conversation_id && body && String(body).trim() !== "") {
+      await leasingLifecycle.maybeReopenOnQualifyingInbound(client, {
+        conversationId: conversation_id, sourceCommEventId: row.id,
+      });
+    }
     return { created: true, comm_event: row };
   }
 
