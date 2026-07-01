@@ -112,7 +112,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       [leadId, type, actorType, actorId, commEventId, metadata ? JSON.stringify(metadata) : null])).rows[0];
 
     const STATUS_FOR = {
-      lead_received: "new", ai_text_sent: "ai_responded", prospect_replied: null,
+      lead_received: "new", ai_text_sent: "ai_responded", ai_response_prepared: "ai_responded", prospect_replied: null,
       tour_requested: "tour_requested", tour_scheduled: "tour_scheduled",
       human_takeover: "human_takeover", application_started: "applied",
       lease_signed: "leased", lost: "lost",
@@ -182,22 +182,31 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   //     resolve-or-create PERSON (global) → resolve-or-create OPPORTUNITY
   //     (property-scoped) → touch + lead_received → immediate AI response.
   // ════════════════════════════════════════════════════════════════════
-  router.post("/leasing/intake", requireIntakeSecret, async (req, res) => {
-    const b = req.body || {};
+  // ── THE CANONICAL INTAKE SERVICE — one implementation, two doors. ──
+  // Called by the authenticated /leasing/intake AND the demo-only /demo/intake.
+  // Person creation, phone normalization, lead reuse-or-create, attribution touch,
+  // conversation threading, event writing: ONE system. attemptSms=false prepares
+  // the AI opening response with NO transport call and NO sent claim
+  // ('ai_response_prepared', not 'ai_text_sent').
+  // Returns a result object; throws { httpStatus, publicReceipt } on known failures.
+  async function intakeProspect(b) {
     const propertyId = b.property_id;
-    if (!propertyId) return res.status(400).json({ receipt: "property_id is required." });
+    if (!propertyId) { const e = new Error("property_id is required."); e.httpStatus = 400; e.publicReceipt = e.message; throw e; }
 
     const phone = normalizePhone(b.phone);
     const email = normalizeEmail(b.email);
-    if (!phone && !email) return res.status(400).json({ receipt: "A phone or email is required to identify the prospect." });
+    if (!phone && !email) { const e = new Error("A phone or email is required to identify the prospect."); e.httpStatus = 400; e.publicReceipt = e.message; throw e; }
     const sourceName = b.source || b.source_name || null;
+    const attemptSms = b.attempt_sms !== false;   // default true (authenticated path unchanged)
 
+    let conversationId = null;
     const client = await pool.connect();
+    let person, createdPerson, lead, reusedOpportunity, prop;
     try {
       await client.query("begin");
 
-      const prop = (await client.query(`select id, name from properties where id=$1`, [propertyId])).rows[0];
-      if (!prop) { await client.query("rollback"); return res.status(404).json({ receipt: "No property with that id." }); }
+      prop = (await client.query(`select id, name from properties where id=$1`, [propertyId])).rows[0];
+      if (!prop) { await client.query("rollback"); const e = new Error("No property with that id."); e.httpStatus = 404; e.publicReceipt = e.message; throw e; }
 
       let sourceId = null;
       if (sourceName) {
@@ -206,15 +215,16 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       }
 
       // ── GLOBAL identity: one human across the portfolio ──
-      const { person, createdPerson } = await resolveOrCreatePerson(client, { name: b.name, phone, email, source: sourceName });
+      const rp = await resolveOrCreatePerson(client, { name: b.name, phone, email, source: sourceName });
+      person = rp.person; createdPerson = rp.createdPerson;
 
       // ── PROPERTY-SCOPED opportunity: reuse the open one for this (person,
       //    property), else open a new one. Repeat touch ≠ new opportunity. ──
-      let lead = (await client.query(
+      lead = (await client.query(
         `select * from leasing_leads where person_id=$1 and property_id=$2 and status not in ('leased','lost') order by created_at limit 1`,
         [person.id, propertyId])).rows[0] || null;
 
-      const reusedOpportunity = !!lead;
+      reusedOpportunity = !!lead;
       if (lead) {
         if (b.unit_id) await client.query(`update leasing_leads set unit_id=coalesce(unit_id,$1), updated_at=now() where id=$2`, [b.unit_id, lead.id]);
       } else {
@@ -236,11 +246,20 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         metadata: { source: sourceName, repeat: reusedOpportunity },
       });
 
+      // ── THREAD IT (memo §2.2: never an orphaned event). The conversation-queue
+      //    projection inner-joins conversations — without this row an intake lead is
+      //    INVISIBLE to the operator door. Upsert on (property, person): a repeat
+      //    submit reuses the same conversation (idempotent by the natural key). ──
+      conversationId = await ensureConversation(client, {
+        propertyId: propertyId, personId: person.id, unitId: lead.unit_id || null,
+      });
+
       await client.query("commit");
 
       // ── Immediate AI first response (outside the txn; lead is durable). ──
       let responseReceipt = "Opportunity saved. No phone on file, so no text sent — the team can follow up by email.";
       let firstResponseSent = false;
+      let draftBody = null;
       if (phone) {
         let unitLabel = null, rent = null;
         if (lead.unit_id) {
@@ -248,44 +267,192 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           if (u) { unitLabel = u.unit_number ? `Unit ${u.unit_number}` : null; rent = u.market_rent || null; }
         }
         const body = await draftFirstResponse({ name: person.name, unitLabel, propertyName: prop.name, rent });
+        draftBody = body;
 
+        // THREADED outbound: conversation_id + sender_role so the message lives on the
+        // person's one thread (the door reads it). provider_status stays NULL — the
+        // projection treats that as NOT delivered, which is the truth until a carrier
+        // confirms dispatch.
         const commEvent = (await pool.query(
-          `insert into comm_events (property_id, person_id, unit_id, channel, direction, body, classification)
-           values ($1,$2,$3,'text','outbound',$4,'leasing') returning id`,
-          [propertyId, person.id, lead.unit_id, body])).rows[0];
-        const line = await propertyLine(propertyId);
-        const wire = await smsForEvent({ eventId: commEvent.id, to: phone, from: line, body });
-        firstResponseSent = wire.sent;
+          `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification, sender_role)
+           values ($1,$2,$3,$4,'text','outbound',$5,'leasing','ai') returning id`,
+          [propertyId, person.id, lead.unit_id, conversationId, body])).rows[0];
+        if (conversationId) await pool.query(`update conversations set last_message_at = now() where id=$1`, [conversationId]);
 
-        const c2 = await pool.connect();
-        try {
-          await c2.query("begin");
-          await recordLeadEvent(c2, {
-            leadId: lead.id, type: "ai_text_sent", actorType: "ai", commEventId: commEvent.id,
-            metadata: { sent: wire.sent, reason: wire.reason || null },
-            statusPatch: { first_response_at: new Date().toISOString() },
-          });
-          await c2.query("commit");
-        } catch (e) { await c2.query("rollback"); throw e; } finally { c2.release(); }
+        if (attemptSms) {
+          const line = await propertyLine(propertyId);
+          const wire = await smsForEvent({ eventId: commEvent.id, to: phone, from: line, body });
+          firstResponseSent = wire.sent;
 
-        responseReceipt = wire.sent
-          ? `AI texted ${firstName(person.name)} from the property line. Draft: "${body}"`
-          : `Opportunity saved and AI reply drafted, but the text didn't go out (${wire.reason}). Draft is on the message for the team: "${body}"`;
+          const c2 = await pool.connect();
+          try {
+            await c2.query("begin");
+            await recordLeadEvent(c2, {
+              leadId: lead.id, type: "ai_text_sent", actorType: "ai", commEventId: commEvent.id,
+              metadata: { sent: wire.sent, reason: wire.reason || null },
+              statusPatch: { first_response_at: new Date().toISOString() },
+            });
+            await c2.query("commit");
+          } catch (e) { await c2.query("rollback"); throw e; } finally { c2.release(); }
+
+          responseReceipt = wire.sent
+            ? `AI texted ${firstName(person.name)} from the property line. Draft: "${body}"`
+            : `Opportunity saved and AI reply drafted, but the text didn't go out (${wire.reason}). Draft is on the message for the team: "${body}"`;
+        } else {
+          // NO transport call, NO sent claim. The truthful facts: inquiry received,
+          // person/conversation created, AI opening response PREPARED. The event type
+          // says exactly that ('ai_response_prepared' — never 'ai_text_sent').
+          firstResponseSent = false;
+          const c2 = await pool.connect();
+          try {
+            await c2.query("begin");
+            await recordLeadEvent(c2, {
+              leadId: lead.id, type: "ai_response_prepared", actorType: "ai", commEventId: commEvent.id,
+              metadata: { sent: false, prepared: true, channel: b.response_channel || "demo_browser" },
+              statusPatch: { first_response_at: new Date().toISOString() },
+            });
+            await c2.query("commit");
+          } catch (e) { await c2.query("rollback"); throw e; } finally { c2.release(); }
+          responseReceipt = `AI opening response prepared (no message dispatched). Draft: "${body}"`;
+        }
       }
 
       const who = createdPerson ? "New prospect" : "Known prospect";
       const what = reusedOpportunity ? `added a ${sourceName || "new"} touch to their open ${prop.name} opportunity` : `opened a new ${prop.name} opportunity`;
-      return res.json({
+      return {
         receipt: `${who} — ${what}. ${responseReceipt}`,
-        person_id: person.id, lead_id: lead.id,
+        person_id: person.id, lead_id: lead.id, conversation_id: conversationId,
         new_person: createdPerson, reused_opportunity: reusedOpportunity,
-        first_response_sent: firstResponseSent, status: lead.status,
-      });
+        first_response_sent: firstResponseSent, status: lead.status, draft_body: draftBody,
+        property_name: prop.name,
+      };
     } catch (e) {
       try { await client.query("rollback"); } catch {}
+      throw e;
+    } finally { client.release(); }
+  }
+
+  // ── 1. AUTHENTICATED INTAKE (unchanged contract) — thin wrapper on the service. ──
+  router.post("/leasing/intake", requireIntakeSecret, async (req, res) => {
+    try {
+      const out = await intakeProspect(req.body || {});
+      return res.json({
+        receipt: out.receipt, person_id: out.person_id, lead_id: out.lead_id,
+        new_person: out.new_person, reused_opportunity: out.reused_opportunity,
+        first_response_sent: out.first_response_sent, status: out.status,
+      });
+    } catch (e) {
+      if (e.httpStatus) return res.status(e.httpStatus).json({ receipt: e.publicReceipt || e.message });
       console.error("leasing intake:", e);
       return res.status(500).json({ receipt: "Could not capture the lead.", error: e.message });
-    } finally { client.release(); }
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════════
+  //  PUBLIC DEMO INTAKE — POST /demo/intake  (Boardroom Live Mode, entry 1)
+  //  A constrained public door into the SAME intakeProspect service — not a
+  //  second implementation. Fail-closed controls:
+  //    • DEMO_MODE=true required (absent/false → 403, same as /demo/operator-session)
+  //    • property is SERVER-DERIVED: always the property named DEMO_INTAKE_PROP_NAME
+  //      (the identical constant operator.js uses to mint the door's session, so the
+  //      form and the door are guaranteed to agree). A client-supplied property_id
+  //      is IGNORED — an env typo cannot redirect public lead creation into a live
+  //      asset because no env var carries the property at all.
+  //    • rate-limited BEFORE any DB work, by IP AND by normalized phone — a limited
+  //      request creates no partial person/lead/conversation.
+  //    • honeypot: bots that fill the hidden 'company' field get a generic success
+  //      and NOTHING is created.
+  //    • tight validation on name + phone.
+  //    • records are tagged source='boardroom_demo' (lead source + person first-touch
+  //      + raw_payload.channel) so a boardroom session can be reset without touching
+  //      seeded-sandbox or production records.
+  //    • attempt_sms=false: the AI opening response is PREPARED, never claimed sent
+  //      ('ai_response_prepared'). No transport call is made.
+  // ════════════════════════════════════════════════════════════════════
+  const DEMO_INTAKE_PROP_NAME = "Property Spine Demo Building"; // MUST match operator.js DEMO_PROP_NAME
+  const DEMO_INTAKE_SOURCE = "boardroom_demo";
+  const _demoRate = { ip: new Map(), phone: new Map() };
+  function _rateOk(map, key, max, windowMs) {
+    const now = Date.now();
+    let e = map.get(key);
+    if (!e || now - e.start > windowMs) { e = { start: now, n: 0 }; map.set(key, e); }
+    e.n += 1;
+    if (map.size > 5000) { for (const [k, v] of map) { if (now - v.start > windowMs) map.delete(k); } }
+    return e.n <= max;
+  }
+
+  router.post("/demo/intake", async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      // ── fail-closed: demo mode only ──
+      if (String(process.env.DEMO_MODE || "").toLowerCase() !== "true") {
+        return res.status(403).json({ receipt: "The live demo is not enabled on this deployment." });
+      }
+      const b = req.body || {};
+
+      // ── honeypot: the public form carries a hidden 'company' field no human sees.
+      //    A filled honeypot gets a bland success and creates NOTHING. ──
+      if (typeof b.company === "string" && b.company.trim() !== "") {
+        return res.json({ ok: true, receipt: "Your inquiry was received." });
+      }
+
+      // ── tight validation (public door) ──
+      const name = typeof b.name === "string" ? b.name.trim() : "";
+      if (name.length < 2 || name.length > 80 || !/[a-zA-Z]/.test(name)) {
+        return res.status(400).json({ receipt: "Please enter your name." });
+      }
+      const phone = normalizePhone(b.phone);
+      if (!phone || !/^\+1\d{10}$/.test(phone)) {
+        return res.status(400).json({ receipt: "Please enter a valid US mobile number." });
+      }
+
+      // ── rate limits BEFORE any DB touch: nothing partial is ever created ──
+      const ip = (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown").toString().split(",")[0].trim();
+      if (!_rateOk(_demoRate.ip, ip, 10, 10 * 60 * 1000)) {
+        return res.status(429).json({ receipt: "Too many requests — please wait a few minutes." });
+      }
+      if (!_rateOk(_demoRate.phone, phone, 3, 10 * 60 * 1000)) {
+        return res.status(429).json({ receipt: "That number just signed up — the manager workspace already has your inquiry." });
+      }
+
+      // ── SERVER-DERIVED demo property (client property_id ignored entirely) ──
+      const prop = (await pool.query(
+        "select id, name from properties where name=$1 order by created_at asc limit 1",
+        [DEMO_INTAKE_PROP_NAME]
+      )).rows[0];
+      if (!prop) {
+        return res.status(409).json({ receipt: "The demo property is not seeded yet — start the demo first." });
+      }
+
+      // ── ensure the tagging source exists (demo-scope only; the authenticated
+      //    intake's source behavior is unchanged) ──
+      await pool.query(
+        `insert into lead_sources (name) values ($1) on conflict do nothing`,
+        [DEMO_INTAKE_SOURCE]
+      );
+
+      // ── the ONE canonical intake, constrained ──
+      const out = await intakeProspect({
+        property_id: prop.id,                    // server-derived, never from the browser
+        name: name, phone: phone,
+        source: DEMO_INTAKE_SOURCE,              // person first-touch + lead source tag
+        attempt_sms: false,                      // prepared, never claimed sent
+        response_channel: "demo_browser",
+        raw_payload: { channel: "demo_public_intake", idempotency_key: b.idempotency_key || null },
+      });
+
+      // constraint 5's honest confirmation — no text has gone out.
+      return res.json({
+        ok: true,
+        receipt: "Your inquiry was received. In this demo, it will now appear in the manager workspace.",
+        person_id: out.person_id, conversation_id: out.conversation_id,
+        new_person: out.new_person, reused: out.reused_opportunity,
+      });
+    } catch (e) {
+      if (e.httpStatus) return res.status(e.httpStatus).json({ receipt: e.publicReceipt || e.message });
+      console.error("demo intake:", e);
+      return res.status(500).json({ receipt: "Could not capture the inquiry." });
+    }
   });
 
   // ── 2. PROSPECT REPLY (transport-agnostic; SMS webhook or operator UI) ──
