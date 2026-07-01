@@ -26,6 +26,41 @@ const express = require("express");
 module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle }) {
   const router = express.Router();
 
+  // ── SELF-HEAL (runs once at boot; idempotent; never blocks startup) ────
+  // The demo door records the honest event 'ai_response_prepared' (prepared,
+  // never claimed sent). The lead_events.event_type CHECK from migration 038
+  // predates that type, so on an unmigrated database the write fails and the
+  // demo door 500s AFTER the lead has already committed. This block widens
+  // the CHECK by exactly that one value if — and only if — it's missing.
+  // Re-running is a no-op; migration 055 records the same change in the
+  // ledger for environments that migrate properly. Failure here is logged
+  // and swallowed: a boot must never die on bookkeeping.
+  (async () => {
+    try {
+      const con = (await pool.query(
+        `select con.conname, pg_get_constraintdef(con.oid) as def
+         from pg_constraint con join pg_class rel on rel.oid = con.conrelid
+         where rel.relname = 'lead_events' and con.contype = 'c'
+           and pg_get_constraintdef(con.oid) ilike '%event_type%'`)).rows[0];
+      if (con && !con.def.includes("ai_response_prepared")) {
+        const client = await pool.connect();
+        try {
+          await client.query("begin");
+          await client.query(`alter table lead_events drop constraint "${con.conname}"`);
+          await client.query(
+            `alter table lead_events add constraint lead_events_event_type_check
+             check (event_type in (
+               'lead_received','ai_text_sent','ai_response_prepared','prospect_replied',
+               'tour_requested','tour_scheduled','human_takeover',
+               'application_started','lease_signed','lost'))`);
+          await client.query("commit");
+          console.log("self-heal: lead_events event_type CHECK widened to accept ai_response_prepared");
+        } catch (e) { await client.query("rollback").catch(() => {}); throw e; }
+        finally { client.release(); }
+      }
+    } catch (e) { console.error("self-heal (lead_events check):", e.message); }
+  })();
+
   // ── AUTH ──────────────────────────────────────────────────────────────
   function requireOperator(req, res, next) {
     const expected = process.env.OPERATOR_KEY;
