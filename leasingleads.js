@@ -35,6 +35,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // Re-running is a no-op; migration 055 records the same change in the
   // ledger for environments that migrate properly. Failure here is logged
   // and swallowed: a boot must never die on bookkeeping.
+  let _selfHealStatus = "starting";
   (async () => {
     try {
       const con = (await pool.query(
@@ -55,10 +56,13 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
                'application_started','lease_signed','lost'))`);
           await client.query("commit");
           console.log("self-heal: lead_events event_type CHECK widened to accept ai_response_prepared");
+          _selfHealStatus = "widened the check just now";
         } catch (e) { await client.query("rollback").catch(() => {}); throw e; }
         finally { client.release(); }
+      } else {
+        _selfHealStatus = con ? "check already accepts ai_response_prepared" : "no check constraint found on lead_events";
       }
-    } catch (e) { console.error("self-heal (lead_events check):", e.message); }
+    } catch (e) { console.error("self-heal (lead_events check):", e.message); _selfHealStatus = "FAILED: " + e.message; }
   })();
 
   // ── AUTH ──────────────────────────────────────────────────────────────
@@ -416,6 +420,29 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     return e.n <= max;
   }
 
+  // TEMP DIAGNOSTIC — GET status page, viewable in a normal browser.
+  router.get("/demo/intake/health", async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    let db = "unknown", checkdef = null;
+    try {
+      await pool.query("select 1");
+      db = "connected";
+      const c = (await pool.query(
+        `select pg_get_constraintdef(con.oid) as def
+         from pg_constraint con join pg_class rel on rel.oid = con.conrelid
+         where rel.relname = 'lead_events' and con.contype = 'c'
+           and pg_get_constraintdef(con.oid) ilike '%event_type%'`)).rows[0];
+      checkdef = c ? (c.def.includes("ai_response_prepared") ? "ACCEPTS ai_response_prepared" : "STILL OLD — missing ai_response_prepared") : "no constraint found";
+    } catch (e) { db = "ERROR: " + e.message; }
+    return res.json({
+      build: "diag-1 (self-heal + verbose errors)",
+      demo_mode: String(process.env.DEMO_MODE || "").toLowerCase() === "true",
+      database: db,
+      lead_events_check: checkdef,
+      self_heal: _selfHealStatus,
+    });
+  });
+
   router.post("/demo/intake", async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
@@ -486,7 +513,8 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     } catch (e) {
       if (e.httpStatus) return res.status(e.httpStatus).json({ receipt: e.publicReceipt || e.message });
       console.error("demo intake:", e);
-      return res.status(500).json({ receipt: "Could not capture the inquiry." });
+      // TEMP DIAGNOSTIC — revert to the plain receipt once the demo path is proven.
+      return res.status(500).json({ receipt: "Could not capture the inquiry. [diagnostic: " + (e.message || "unknown error") + "]" });
     }
   });
 
