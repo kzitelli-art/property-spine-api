@@ -137,6 +137,9 @@ create index if not exists lctl_conv_active_idx
 create index if not exists lctl_tour_idx
   on leasing_conversation_tour_links (tour_id);
 
-insert into schema_migrations (version) values ('054');
+-- NOTE: the ledger row (version, name) is inserted by migrate.js, NOT here.
+-- (Verified against the real runner: it wraps each file and does the insert itself;
+--  no migration in this repo self-inserts. A self-insert here would violate
+--  name NOT NULL and duplicate-key against the runner's insert.)
 
 commit;
