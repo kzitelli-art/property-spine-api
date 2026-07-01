@@ -3183,9 +3183,14 @@ const publicReview = require("./public_review");
 const intakeModule = require("./intake");
 app.use("/", intakeModule({ pool, anthropic, INGEST_MODEL, registryInstance, upload }));
 const dealIntakeModule = require("./dealintake");
+// ── Shared lifecycle write service (Foundation 054) — ONE instance, injected into
+// every canonical inbound writer so a qualifying prospect inbound transactionally
+// reopens a soft-closed conversation. Stateless over the pool; safe to share.
+const leasingLifecycle = require("./leasing_lifecycle_service")({ pool });
+
 const leasingLeadsModule = require("./leasingleads"); // leasing lead intake: one-human/many-opportunities funnel + AI first response
 app.use("/", dealIntakeModule({ pool, anthropic, INGEST_MODEL, registryInstance, fileToText, runIngestAuto, upload }));
-app.use("/", leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms }));
+app.use("/", leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle }));
 
 // ── Post-tour leasing conversion rail + scheduling intake + interaction ledger ──
 // (migrations 047/048/049). sms + the obligation engine fns are all in scope here.
@@ -3211,7 +3216,7 @@ app.use("/", applicationsModule({
   submissionService: __applicationSubmission._service,
 }));
 app.use("/", leasingSchedulingModule({ pool }));
-app.use("/", leasingInteractionsModule({ pool, sms }));
+app.use("/", leasingInteractionsModule({ pool, sms, leasingLifecycle }));
 
 // ── Skyline ride-along shadow import (migration 050). Three-state phone identity
 //    (new -> preview lead · known -> intent task, never a new lead · no/invalid ->
@@ -3237,7 +3242,7 @@ app.use("/", agentCapabilityModule({ anthropic, INGEST_MODEL }));
 //    model call, monotonic thread versioning, obligation-backed review, server-derived
 //    manager identity. (Migration 053.) ──
 const agentModule = require("./agent");
-const agentApp = agentModule({ pool, anthropic, INGEST_MODEL, spawnObligationFromEvent, completeObligation });
+const agentApp = agentModule({ pool, anthropic, INGEST_MODEL, spawnObligationFromEvent, completeObligation, leasingLifecycle });
 app.use("/", agentApp);
 
 // ── THE FIRST LIVE OPERATOR SURFACE — Leasing Conversations. ──
