@@ -183,10 +183,19 @@ module.exports = function operatorModule(deps) {
   });
 
   // ── a trivial "who am I" so the page can confirm its session resolved ──
+  // property_name is included (additive) so the app's chrome can honestly label
+  // the LIVE door with the session's property instead of the shell's active deal
+  // ("SOLO ON CHESTNUT over Demo Building data" fix). Best-effort: a lookup
+  // failure degrades to null, never a 500 — the identity fields still resolve.
   router.get("/operator/me", requireOperator, async (req, res) => {
     const o = req.operator;
     res.set("Cache-Control", "no-store");
-    return res.json({ id: o.id, name: o.name, role: o.role, property_id: o.property_id });
+    let propertyName = null;
+    try {
+      const p = (await pool.query("select name from properties where id=$1", [o.property_id])).rows[0];
+      propertyName = p ? p.name : null;
+    } catch (_) { /* honest null beats a failed handshake */ }
+    return res.json({ id: o.id, name: o.name, role: o.role, property_id: o.property_id, property_name: propertyName });
   });
 
   // ── property-scope verification helpers (used by every read/write below) ──
