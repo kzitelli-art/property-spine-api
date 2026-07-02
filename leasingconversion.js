@@ -371,5 +371,8 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     createConversionFromTour, handoffConversation, flagHandoffRequired,
     resolveRung, addGate, advanceToRung, readConversion, spawnRung, RUNG, CONVERSATION_RUNGS,
   };
-  return router;
+  // Expose the single-door service alongside the router so the tour-outcome
+  // seam (leasingleads /complete) opens the conversion rail through THIS
+  // instance — no module reimplements conversion opening.
+  return Object.assign(router, { services: { createConversionFromTour } });
 };
