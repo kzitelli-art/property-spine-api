@@ -22,9 +22,17 @@
 // ════════════════════════════════════════════════════════════════════
 
 const express = require("express");
+const crypto = require("crypto");
 
-module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle }) {
+module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices }) {
   const router = express.Router();
+
+  // ── PHASE B: signed public booking continuation (tour_booking_links, mig 056) ──
+  // Store ONLY the digest; the raw token lives solely in the /demo/intake receipt.
+  // Reuses the codebase's randomBytes(base64url) → sha256(digest) convention
+  // (applicationSubmission.js, lease_packets.js, tenantlink.js).
+  function digestBookingToken(raw){ return crypto.createHash("sha256").update(String(raw)).digest("hex"); }
+  const DEMO_BOOKING_TTL_MIN = 60; // short window; a demo run is minutes, not days
 
   // ── SELF-HEAL (runs once at boot; idempotent; never blocks startup) ────
   // The demo door records the honest event 'ai_response_prepared' (prepared,
@@ -459,7 +467,11 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       }
 
       // ── tight validation (public door) ──
-      const name = typeof b.name === "string" ? b.name.trim() : "";
+      //    The form now sends first_name + last_name; a legacy single `name`
+      //    still works. Same 2..80 human-name rule applies to the built name.
+      const _fn = typeof b.first_name === "string" ? b.first_name.trim().slice(0, 40) : "";
+      const _ln = typeof b.last_name  === "string" ? b.last_name.trim().slice(0, 40)  : "";
+      const name = (typeof b.name === "string" && b.name.trim()) ? b.name.trim() : [_fn, _ln].filter(Boolean).join(" ");
       if (name.length < 2 || name.length > 80 || !/[a-zA-Z]/.test(name)) {
         return res.status(400).json({ receipt: "Please enter your name." });
       }
@@ -500,8 +512,44 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         source: DEMO_INTAKE_SOURCE,              // person first-touch + lead source tag
         attempt_sms: false,                      // prepared, never claimed sent
         response_channel: "demo_browser",
-        raw_payload: { channel: "demo_public_intake", idempotency_key: b.idempotency_key || null },
+        raw_payload: {
+          channel: "demo_public_intake", idempotency_key: b.idempotency_key || null,
+          // stated preference captured AT THE SOURCE (first-party, not inferred):
+          // a YYYY-MM within the next 12 months, or 'flexible'. Anything else → null.
+          desired_move_month: (function (v) {
+            if (v === "flexible") return "flexible";
+            if (typeof v !== "string" || !/^\d{4}-(0[1-9]|1[0-2])$/.test(v)) return null;
+            const now = new Date(); const cur = now.getFullYear() * 12 + now.getMonth();
+            const [y, m] = v.split("-").map(Number); const tgt = y * 12 + (m - 1);
+            return (tgt >= cur && tgt <= cur + 12) ? v : null;
+          })(b.desired_move_month),
+          first_name: _fn || null, last_name: _ln || null,
+        },
       });
+
+      // PHASE B: mint a signed, short-lived booking continuation. The prospect can
+      // book a tour straight from this receipt with NO operator key and WITHOUT any
+      // raw db id crossing to the browser — only the opaque bearer token does. The
+      // property is pinned to the Demo Building here (server-derived) and re-verified
+      // in /demo/book. A best-effort insert: if it fails, the demo still captured the
+      // lead — booking just isn't offered (honest degrade, never a 500 for the lead).
+      let bookingToken = null;
+      try {
+        if (out.conversation_id) {
+          const rawTok = crypto.randomBytes(24).toString("base64url");
+          const expiresAt = new Date(Date.now() + DEMO_BOOKING_TTL_MIN * 60000).toISOString();
+          await pool.query(
+            `insert into tour_booking_links
+               (token_digest, conversation_id, person_id, lead_id, property_id, phone_snapshot, expires_at)
+             values ($1,$2,$3,$4,$5,$6,$7)`,
+            [digestBookingToken(rawTok), out.conversation_id, out.person_id || null,
+             out.lead_id || null, prop.id, phone || null, expiresAt]
+          );
+          bookingToken = rawTok;
+        }
+      } catch (mintErr) {
+        console.error("demo booking-link mint (non-fatal):", mintErr.message);
+      }
 
       // constraint 5's honest confirmation — no text has gone out.
       return res.json({
@@ -509,12 +557,227 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         receipt: "Your inquiry was received. In this demo, it will now appear in the manager workspace.",
         person_id: out.person_id, conversation_id: out.conversation_id,
         new_person: out.new_person, reused: out.reused_opportunity,
+        booking_token: bookingToken,                 // null if minting was skipped/failed
+        booking_expires_in_min: bookingToken ? DEMO_BOOKING_TTL_MIN : null,
       });
     } catch (e) {
       if (e.httpStatus) return res.status(e.httpStatus).json({ receipt: e.publicReceipt || e.message });
       console.error("demo intake:", e);
       // TEMP DIAGNOSTIC — revert to the plain receipt once the demo path is proven.
       return res.status(500).json({ receipt: "Could not capture the inquiry. [diagnostic: " + (e.message || "unknown error") + "]" });
+    }
+  });
+
+  // ── 1b. PUBLIC TOUR BOOKING (boardroom demo) ──────────────────────────
+  //  The ONLY public tour-creation door. No operator key. Authority is the
+  //  signed booking token minted at /demo/intake (tour_booking_links, mig 056):
+  //  the browser presents the opaque token + a slot_id — never a raw lead or
+  //  conversation id. Every wall the authenticated /leasing/slots/:id/book has,
+  //  plus three more:
+  //    • DEMO_MODE required (403 if absent) — same fail-closed as /demo/intake.
+  //    • SCOPE WALL: the link's property MUST be the Demo Building; a booking can
+  //      never land on a live property even if the row were tampered with.
+  //    • CLOSED-NOT-FIT GUARD: assertNotSoftClosedForTour runs inside the txn
+  //      (this is what finally WIRES that dormant guard) — a closed conversation
+  //      cannot be booked without an explicit reopen.
+  //  Idempotent: a link is single-use (status flips to 'consumed'); a double-tap
+  //  returns the SAME tour, never a second one. The structural double-booking
+  //  wall (for-update + status check + partial unique index) is unchanged.
+  router.post("/demo/book", async (req, res) => {
+    // KILL SWITCH (distinct from DEMO_MODE): public booking is OFF unless the
+    // operator deliberately sets DEMO_BOOKING_ENABLED=true in the server env.
+    // Server-owned only — no browser request, query param, localStorage value, or
+    // UI state can flip it. DEMO_MODE gates intake; this SEPARATELY gates writes.
+    if (String(process.env.DEMO_MODE || "").toLowerCase() !== "true" ||
+        String(process.env.DEMO_BOOKING_ENABLED || "").toLowerCase() !== "true") {
+      return res.status(403).json({ receipt: "The demo booking door is not enabled." });
+    }
+    const b = req.body || {};
+    const rawToken = b.booking_token || b.token;
+    const slotId = b.slot_id;
+    if (!rawToken) return res.status(400).json({ receipt: "A booking token is required." });
+    if (!slotId)   return res.status(400).json({ receipt: "A slot_id is required to book." });
+
+    const DEMO_INTAKE_PROP_NAME = "Property Spine Demo Building"; // MUST match /demo/intake + operator.js
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+
+      // 1) resolve the link by DIGEST (raw token never stored). Lock it so two
+      //    taps can't both consume it.
+      const link = (await client.query(
+        `select * from tour_booking_links where token_digest=$1 for update`,
+        [digestBookingToken(rawToken)])).rows[0];
+      if (!link) { await client.query("rollback"); return res.status(404).json({ receipt: "That booking link is not valid." }); }
+
+      // 2) IDEMPOTENCY: if already consumed, return the same tour (no second tour).
+      if (link.status === "consumed" && link.booked_tour_id) {
+        const existing = (await client.query(`select scheduled_for from leasing_tours where id=$1`, [link.booked_tour_id])).rows[0];
+        await client.query("commit");
+        return res.json({ receipt: `You're already booked${existing && existing.scheduled_for ? " for " + existing.scheduled_for : ""}.`, tour_id: link.booked_tour_id, already_booked: true });
+      }
+      if (link.status === "revoked") { await client.query("rollback"); return res.status(409).json({ receipt: "This booking link is no longer active." }); }
+      if (link.expires_at && new Date(link.expires_at).getTime() < Date.now()) {
+        await client.query(`update tour_booking_links set status='expired', updated_at=now() where id=$1`, [link.id]);
+        await client.query("commit");
+        return res.status(409).json({ receipt: "This booking link has expired." });
+      }
+
+      // 3) SCOPE WALL: the link's property must be the Demo Building. Re-verify by
+      //    name, so a tampered property_id can't aim a booking at a live property.
+      const demoProp = (await client.query(`select id, name from properties where name=$1`, [DEMO_INTAKE_PROP_NAME])).rows[0];
+      if (!demoProp || demoProp.id !== link.property_id) {
+        await client.query("rollback");
+        return res.status(409).json({ receipt: "This booking link is not valid for this property." });
+      }
+
+      // 4) OPTIONAL consistency check: if a phone is presented, it must match the
+      //    snapshot. The token is the authority; this only catches obvious misuse.
+      if (b.phone && link.phone_snapshot) {
+        const norm = normalizePhone(b.phone);
+        if (norm && norm !== link.phone_snapshot) {
+          await client.query("rollback");
+          return res.status(409).json({ receipt: "That phone number doesn't match this booking link." });
+        }
+      }
+
+      // 5) CLOSED-NOT-FIT GUARD (this WIRES the dormant guard). Refuses a booking
+      //    on a conversation that was closed-not-fit without an explicit reopen.
+      if (leasingLifecycle && typeof leasingLifecycle.assertNotSoftClosedForTour === "function") {
+        await leasingLifecycle.assertNotSoftClosedForTour(client, { conversationId: link.conversation_id });
+      }
+
+      // 6) lock the slot; only book if STILL open — the structural wall.
+      const slot = (await client.query(`select * from tour_availability where id=$1 for update`, [slotId])).rows[0];
+      if (!slot) { await client.query("rollback"); return res.status(404).json({ receipt: "No slot with that id." }); }
+      if (slot.status !== "open") { await client.query("rollback"); return res.status(409).json({ receipt: "That time was just taken. Please pick another." }); }
+      if (slot.property_id !== link.property_id) { await client.query("rollback"); return res.status(409).json({ receipt: "That slot isn't at this property." }); }
+
+      // 7) resolve the lead behind this conversation (server-side; never from browser).
+      const lead = (await client.query(
+        `select * from leasing_leads where id=$1`, [link.lead_id])).rows[0]
+        || (await client.query(
+             `select l.* from leasing_leads l
+                join conversations c on c.person_id=l.person_id and c.property_id=l.property_id
+               where c.id=$1 and l.status not in ('lost') order by l.created_at limit 1`,
+             [link.conversation_id])).rows[0];
+      if (!lead) { await client.query("rollback"); return res.status(404).json({ receipt: "Could not find the inquiry for this booking." }); }
+      // SCOPE WALL (same threat model as step 3): the resolved lead must belong to
+      // the link's (Demo Building) property. Under normal mint this always holds;
+      // this closes the tampered-lead_id row case so a tour can NEVER be created
+      // with a live property's lead through this door.
+      if (lead.property_id !== link.property_id) {
+        await client.query("rollback");
+        return res.status(409).json({ receipt: "This booking link is not valid for this inquiry." });
+      }
+
+      // 7.5) CONVERSATION-GRAIN IDEMPOTENCY: re-inquiry mints a fresh token for the
+      //      SAME open lead (038's one-open-opportunity-per-person-property index).
+      //      If a live tour already exists for this lead, a second token must NOT
+      //      create a duplicate — it converges on the existing tour and this link
+      //      is consumed pointing at it. (Rescheduling stays an operator action.)
+      const liveTour = (await client.query(
+        `select id, scheduled_for from leasing_tours
+          where lead_id=$1 and status in ('scheduled','confirmed_by_prospect','checked_in')
+          order by created_at asc limit 1`, [lead.id])).rows[0];
+      if (liveTour) {
+        await client.query(
+          `update tour_booking_links set status='consumed', booked_tour_id=$1, consumed_at=now(), updated_at=now() where id=$2`,
+          [liveTour.id, link.id]);
+        await client.query("commit");
+        return res.json({ receipt: `You're already booked${liveTour.scheduled_for ? " for " + liveTour.scheduled_for : ""}.`, tour_id: liveTour.id, already_booked: true });
+      }
+
+      // 8) create the tour on this slot (status 'scheduled'). commercial_state=
+      //    booked_tour is DERIVED by the queue projection from this live tour —
+      //    no lead status is mutated here (D-6).
+      const tour = (await client.query(
+        `insert into leasing_tours (lead_id, property_id, unit_id, leasing_agent_id, slot_id, scheduled_for, status)
+         values ($1,$2,$3,$4,$5,$6,'scheduled') returning *`,
+        [lead.id, lead.property_id, slot.unit_id, slot.leasing_agent_id, slotId, slot.starts_at])).rows[0];
+
+      // 9) flip the slot to booked (partial unique index is the race backstop).
+      await client.query(
+        `update tour_availability set status='booked', booked_tour_id=$1, updated_at=now() where id=$2`,
+        [tour.id, slotId]);
+
+      // 10) tour_events: scheduled — actor is the prospect (they booked it).
+      await recordTourEvent(client, {
+        tourId: tour.id, leadId: lead.id, type: "scheduled",
+        actorType: "prospect", actorId: lead.person_id, slotId,
+        metadata: { scheduled_for: slot.starts_at, slot_id: slotId, via: "public_demo_booking" },
+      });
+
+      // 11) funnel advances via the SAME recordLeadEvent the operator path uses.
+      await recordLeadEvent(client, {
+        leadId: lead.id, type: "tour_scheduled", actorType: "system",
+        metadata: { tour_id: tour.id, slot_id: slotId, scheduled_for: slot.starts_at, via: "public_demo_booking" },
+        statusPatch: { tour_scheduled_at: slot.starts_at },
+      });
+
+      // 12) consume the link (single-use).
+      await client.query(
+        `update tour_booking_links set status='consumed', booked_tour_id=$1, consumed_at=now(), updated_at=now() where id=$2`,
+        [tour.id, link.id]);
+      // 12b) revoke any SIBLING issued links for this conversation (e.g. from a
+      //      re-inquiry): once booked, outstanding public booking authority for
+      //      this conversation collapses to zero. Read paths already show
+      //      'already booked' for consumed; revoked siblings can't book at all.
+      await client.query(
+        `update tour_booking_links set status='revoked', updated_at=now()
+          where conversation_id=$1 and status='issued' and id<>$2`,
+        [link.conversation_id, link.id]);
+
+      await client.query("commit");
+      return res.json({
+        receipt: `You're booked for ${slot.starts_at}. See you then!`,
+        tour_id: tour.id, slot_id: slotId, scheduled_for: slot.starts_at,
+      });
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      if (e.httpStatus === 409) return res.status(409).json({ receipt: e.publicMessage || e.message || "This conversation needs to be reopened before booking." });
+      if (e.code === "23505") return res.status(409).json({ receipt: "That time was just taken. Please pick another." });
+      console.error("demo book:", e);
+      // TEMP DIAGNOSTIC (revert with the /demo/intake diagnostic, D-9): e.message
+      // is exposed on this PUBLIC route only during the proving phase.
+      return res.status(500).json({ receipt: "Could not complete the booking.", error: e.message });
+    } finally { client.release(); }
+  });
+
+  // ── 1c. PUBLIC OPEN-SLOT LIST (boardroom demo) ────────────────────────
+  //  The booking UI needs to show the prospect open times. Token-gated (not an
+  //  open enumeration of the calendar) and Demo-Building-scoped: a valid booking
+  //  token is required, and only OPEN slots at the Demo Building are returned.
+  router.get("/demo/slots", async (req, res) => {
+    // Same distinct kill switch as /demo/book — the slot list is part of the
+    // booking door and must be dark unless DEMO_BOOKING_ENABLED=true (server env).
+    if (String(process.env.DEMO_MODE || "").toLowerCase() !== "true" ||
+        String(process.env.DEMO_BOOKING_ENABLED || "").toLowerCase() !== "true") {
+      return res.status(403).json({ receipt: "The demo booking door is not enabled." });
+    }
+    const rawToken = req.query.booking_token || req.query.token;
+    if (!rawToken) return res.status(400).json({ receipt: "A booking token is required to see open times." });
+    try {
+      const link = (await pool.query(
+        `select property_id, status, expires_at from tour_booking_links where token_digest=$1`,
+        [digestBookingToken(rawToken)])).rows[0];
+      if (!link) return res.status(404).json({ receipt: "That booking link is not valid." });
+      if (link.status === "consumed") return res.json({ receipt: "You're already booked.", already_booked: true, slots: [] });
+      if (link.status === "revoked" || (link.expires_at && new Date(link.expires_at).getTime() < Date.now())) {
+        return res.status(409).json({ receipt: "This booking link is no longer active.", slots: [] });
+      }
+      // only OPEN, FUTURE slots at THIS (demo) property.
+      const slots = (await pool.query(
+        `select id, starts_at, ends_at, unit_id from tour_availability
+          where property_id=$1 and status='open' and starts_at > now()
+          order by starts_at asc limit 24`,
+        [link.property_id])).rows;
+      return res.json({ receipt: `${slots.length} open time(s).`, slots });
+    } catch (e) {
+      console.error("demo slots:", e);
+      // TEMP DIAGNOSTIC (revert with the /demo/intake diagnostic, D-9): e.message
+      // is exposed on this PUBLIC route only during the proving phase.
+      return res.status(500).json({ receipt: "Could not load open times.", error: e.message });
     }
   });
 
@@ -969,19 +1232,91 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // ── COMPLETE — PROOF. Optional seam back to the funnel toward application.
   router.post("/leasing/tours/:tourId/complete", requireOperator, async (req, res) => {
     const { tourId } = req.params; const b = req.body || {};
+    const fb = b.feedback || {};
     const client = await pool.connect();
     try {
       await client.query("begin");
       const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
       if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
+      // OUTCOME IS RECORDED ONCE. A terminal tour keeps its truth; corrections
+      // go through explicit lifecycle actions, never a silent re-submit.
+      if (["completed", "no_show", "cancelled", "rescheduled"].includes(tour.status)) {
+        const existing = (await client.query(
+          `select id, current_stage, status from leasing_conversions where origin_tour_id=$1 order by opened_at asc limit 1`, [tourId])).rows[0];
+        await client.query("rollback");
+        return res.status(409).json({ receipt: `Outcome already recorded — this tour is ${tour.status}.`, tour_id: tourId, conversion_id: existing ? existing.id : null });
+      }
+
+      // ── attendance truth (the same one-door event write as always) ──
       await recordTourEvent(client, {
         tourId, leadId: tour.lead_id, type: "completed",
         actorType: "human", actorId: b.actor_id || null,
-        metadata: { scheduled_for: tour.scheduled_for },
+        metadata: { scheduled_for: tour.scheduled_for, tour_given: fb.tour_given !== false },
       });
+
+      // ── actual units shown (1..5; every unit must belong to THIS property) ──
+      const unitsShown = Array.isArray(b.units_shown) ? b.units_shown.filter(Boolean).slice(0, 5) : [];
+      for (let i = 0; i < unitsShown.length; i++) {
+        const u = (await client.query(`select id from units where id=$1 and property_id=$2`, [unitsShown[i], tour.property_id])).rows[0];
+        if (!u) { await client.query("rollback"); return res.status(409).json({ receipt: "One of the units shown isn't at this property." }); }
+        await client.query(
+          `insert into tour_units_shown (tour_id, unit_id, shown_order) values ($1,$2,$3)
+           on conflict (tour_id, unit_id) do nothing`, [tourId, unitsShown[i], i + 1]);
+      }
+
+      // ── preferred unit: a PREFERENCE record only — never a hold, never a
+      //    reservation, creates no turnover priority (asset-protection rule) ──
+      let preferredUnitId = null;
+      if (b.preferred_unit_id) {
+        const pu = (await client.query(`select id from units where id=$1 and property_id=$2`, [b.preferred_unit_id, tour.property_id])).rows[0];
+        if (!pu) { await client.query("rollback"); return res.status(409).json({ receipt: "The preferred unit isn't at this property." }); }
+        preferredUnitId = pu.id;
+      }
+
+      // ── open the conversion rail (047's single door) when a tour was GIVEN.
+      //    Assignment is not authorship: the ACTUAL host is who gave it. ──
+      let conversion = null;
+      if (fb.tour_given !== false) {
+        if (!conversionServices || typeof conversionServices.createConversionFromTour !== "function") {
+          await client.query("rollback");
+          return res.status(503).json({ receipt: "Outcome rail is not wired on this server yet — deploy the wave-3 server.js, then retry." });
+        }
+        const actualHost = b.actual_tour_host_user_id || b.actor_id || null;
+        // (the service itself 422s without an actual host — its rule, kept)
+        const opened = await conversionServices.createConversionFromTour(client, {
+          person_id: tour.lead_id ? (await client.query(`select person_id from leasing_leads where id=$1`, [tour.lead_id])).rows[0].person_id : null,
+          property_id: tour.property_id,
+          origin_tour_id: tourId, lead_id: tour.lead_id,
+          scheduled_tour_host_user_id: tour.leasing_agent_id || null,
+          actual_tour_host_user_id: actualHost,
+          feedback_recorded_by_user_id: b.actor_id || null,
+          tour_outcome: fb.interest_level || null,
+          tour_notes: fb.notes || null,
+        });
+        conversion = opened.conversion;
+        // reactions (what landed) — durable person knowledge with tour provenance
+        const reactions = {
+          cared_about: Array.isArray(b.cared_about) ? b.cared_about.slice(0, 12) : [],
+          objection: fb.objection || null,
+          next_step: fb.next_step || null,
+          unusual: b.unusual || null,
+        };
+        await client.query(
+          `update leasing_conversions set reactions=$1, preferred_unit_id=$2, updated_at=now() where id=$3`,
+          [JSON.stringify(reactions), preferredUnitId, conversion.id]);
+      }
+
       await client.query("commit");
-      return res.json({ receipt: "Tour completed — proof recorded. (Application-start is the next funnel seam, logged on lead_events when it happens.)", tour_id: tourId });
-    } catch (e) { try { await client.query("rollback"); } catch {} console.error("leasing complete:", e); return res.status(500).json({ receipt: "Could not complete the tour.", error: e.message }); }
+      const bits = [`Outcome recorded — tour ${fb.tour_given === false ? "marked complete (no tour given)" : "given"}.`];
+      if (unitsShown.length) bits.push(`${unitsShown.length} unit${unitsShown.length > 1 ? "s" : ""} shown.`);
+      if (conversion) bits.push(`Follow-up rail opened — ${fb.interest_level || "outcome"} · owner set to the actual host.`);
+      return res.json({ receipt: bits.join(" "), tour_id: tourId, conversion_id: conversion ? conversion.id : null });
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      if (e.http === 422 || e.httpStatus === 422) return res.status(422).json({ receipt: e.message });
+      console.error("leasing complete:", e);
+      return res.status(500).json({ receipt: "Could not complete the tour.", error: e.message });
+    }
     finally { client.release(); }
   });
 
@@ -1001,8 +1336,43 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         actorType: b.actor_id ? "human" : "system", actorId: b.actor_id || null,
         metadata: { scheduled_for: tour.scheduled_for },
       });
+      // ── RECOVERY (wave 3): no-show is a recovery opportunity, not a dead end.
+      //    One server-owned attempt record, linked to the canonical person/
+      //    conversation/tour. Variant = least-used ACTIVE approved variant for
+      //    this property (deterministic, explainable). PREPARED only — no
+      //    dispatch; transport stays dormant. Zero approved variants = honest
+      //    blank: nothing is prepared and the receipt says so.
+      let recoveryNote = "";
+      try {
+        const lead = tour.lead_id ? (await client.query(`select person_id, property_id from leasing_leads where id=$1`, [tour.lead_id])).rows[0] : null;
+        const variant = (await client.query(
+          `select v.id, v.variant_key, v.body_template,
+                  (select count(*) from recovery_attempts a where a.variant_id=v.id) as used
+             from recovery_variants v
+            where v.property_id=$1 and v.status='active'
+            order by used asc, v.created_at asc limit 1`, [tour.property_id])).rows[0];
+        if (variant && lead) {
+          const person = (await client.query(`select id, name from persons where id=$1`, [lead.person_id])).rows[0];
+          const conv = (await client.query(
+            `select id from conversations where person_id=$1 and property_id=$2 order by created_at asc limit 1`,
+            [lead.person_id, tour.property_id])).rows[0];
+          const first = person && person.name ? String(person.name).trim().split(/\s+/)[0] : "there";
+          const body = String(variant.body_template).replace(/\{\{\s*first_name\s*\}\}/g, first);
+          await client.query(
+            `insert into recovery_attempts (tour_id, person_id, conversation_id, variant_id, prepared_body, created_by)
+             values ($1,$2,$3,$4,$5,$6)`,
+            [tourId, lead.person_id, conv ? conv.id : null, variant.id, body, b.actor_id || null]);
+          recoveryNote = ` Recovery: prepared "${variant.variant_key}" for review — nothing was sent.`;
+        } else if (!variant) {
+          recoveryNote = " Recovery: no approved variants yet — nothing prepared.";
+        }
+      } catch (recErr) {
+        // 058 not applied yet, or a data edge: the no-show truth still commits.
+        console.error("no-show recovery attempt (non-fatal):", recErr.message);
+        recoveryNote = " Recovery: rail unavailable (see server log) — no attempt prepared.";
+      }
       await client.query("commit");
-      return res.json({ receipt: "Marked no_show — exposure recorded honestly. This is the number that separates a 30%-show source from an 85% one.", tour_id: tourId });
+      return res.json({ receipt: "Marked no_show — exposure recorded honestly. This is the number that separates a 30%-show source from an 85% one." + recoveryNote, tour_id: tourId });
     } catch (e) { try { await client.query("rollback"); } catch {} console.error("leasing no-show:", e); return res.status(500).json({ receipt: "Could not mark no_show.", error: e.message }); }
     finally { client.release(); }
   });
@@ -1083,6 +1453,69 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   });
 
   // ── TODAY'S TOURS — the on-site operating view (what the dash/iOS reads) ──
+  // ── RECOVERY VISIBILITY (wave 3) — managers see: approach used, message
+  //    state, response, rebooked. Attended/applied/leased are read from their
+  //    canonical tables when needed; nothing here duplicates outcome truth. ──
+  router.get("/properties/:propertyId/leasing/recovery", requireOperator, async (req, res) => {
+    const pid = req.params.propertyId;
+    try {
+      const rows = (await pool.query(
+        `select a.id, a.state, a.prepared_body, a.created_at, a.voided_at, a.void_reason,
+                v.variant_key, p.name as person_name, a.tour_id, a.conversation_id,
+                exists (select 1 from comm_events ce
+                         where ce.conversation_id = a.conversation_id
+                           and ce.direction='inbound' and ce.occurred_at > a.created_at) as replied,
+                exists (select 1 from leasing_tours t2
+                         join leasing_leads l2 on l2.id = t2.lead_id
+                        where l2.person_id = a.person_id and t2.property_id = $1
+                          and t2.created_at > a.created_at
+                          and t2.status in ('scheduled','confirmed_by_prospect','checked_in','completed')) as rebooked
+           from recovery_attempts a
+           join recovery_variants v on v.id = a.variant_id
+           left join persons p on p.id = a.person_id
+          where v.property_id = $1
+          order by a.created_at desc limit 100`, [pid])).rows;
+      return res.json({ property_id: pid, attempts: rows });
+    } catch (e) { console.error("recovery list:", e); return res.status(500).json({ receipt: "Could not load recovery attempts.", error: e.message }); }
+  });
+  // Variants are HUMAN-approved. Creating one IS the approval act.
+  router.post("/leasing/recovery-variants", requireOperator, async (req, res) => {
+    const b = req.body || {};
+    if (!b.property_id || !b.variant_key || !b.body_template) return res.status(400).json({ receipt: "property_id, variant_key, and body_template are required." });
+    if (!b.approved_by) return res.status(400).json({ receipt: "approved_by (your user id) is required — variants are human-approved." });
+    try {
+      const row = (await pool.query(
+        `insert into recovery_variants (property_id, variant_key, body_template, approved_by)
+         values ($1,$2,$3,$4) returning id, variant_key, status`,
+        [b.property_id, b.variant_key, b.body_template, b.approved_by])).rows[0];
+      return res.json({ receipt: `Variant "${row.variant_key}" approved and active.`, variant: row });
+    } catch (e) {
+      if (e.code === "23505") return res.status(409).json({ receipt: "A variant with that key already exists for this property." });
+      console.error("variant create:", e); return res.status(500).json({ receipt: "Could not create the variant.", error: e.message });
+    }
+  });
+  router.post("/leasing/recovery-variants/:id/retire", requireOperator, async (req, res) => {
+    try {
+      const row = (await pool.query(
+        `update recovery_variants set status='retired', retired_at=now() where id=$1 and status='active' returning variant_key`,
+        [req.params.id])).rows[0];
+      if (!row) return res.status(404).json({ receipt: "No active variant with that id." });
+      return res.json({ receipt: `Variant "${row.variant_key}" retired — no new attempts will use it.` });
+    } catch (e) { console.error("variant retire:", e); return res.status(500).json({ receipt: "Could not retire the variant.", error: e.message }); }
+  });
+  // Every automatic behavior is reversible: voiding an attempt keeps the record.
+  router.post("/leasing/recovery-attempts/:id/void", requireOperator, async (req, res) => {
+    const reason = (req.body && req.body.reason || "").trim();
+    if (!reason) return res.status(400).json({ receipt: "A reason is required to void an attempt." });
+    try {
+      const row = (await pool.query(
+        `update recovery_attempts set state='voided', voided_at=now(), void_reason=$2 where id=$1 and state='prepared' returning id`,
+        [req.params.id, reason])).rows[0];
+      if (!row) return res.status(404).json({ receipt: "No prepared attempt with that id." });
+      return res.json({ receipt: "Attempt voided — recorded with your reason." });
+    } catch (e) { console.error("attempt void:", e); return res.status(500).json({ receipt: "Could not void the attempt.", error: e.message }); }
+  });
+
   router.get("/properties/:propertyId/leasing/tours/today", requireOperator, async (req, res) => {
     try {
       const r = await pool.query(
