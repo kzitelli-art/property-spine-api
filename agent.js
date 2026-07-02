@@ -501,7 +501,8 @@ module.exports = function agentModule(deps) {
 
       const state = (await client.query("select * from agent_thread_state where conversation_id=$1", [conv.id])).rows[0] || null;
       const messages = (await client.query(
-        `select id, direction, body, sender_role, ai_drafted_at, sent_by_user_id, occurred_at
+        `select id, direction, body, sender_role, ai_drafted_at, sent_by_user_id, occurred_at,
+                provider_status, provider_status_updated_at
            from comm_events where conversation_id=$1 and channel='text' and body is not null
            order by occurred_at asc nulls last, id asc`,
         [conv.id]
