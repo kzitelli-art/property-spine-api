@@ -9,7 +9,15 @@
 // Neon — that join happens later). Operators can edit/retire any of these through the
 // live operator surface afterward.
 //
-// SOURCE: 4233 Chestnut (SOLO) / 01. Training & Resources / 2026 Field Guide.pdf
+// SOURCES (all under SharePoint "4233 Chestnut (SOLO)"):
+//   • 01. Training & Resources / 2026 Field Guide.pdf                        (original six facts)
+//   • 00. All Templates / 03. Move-Ins / 03. SOLO Move-In Guide.pdf          (amenities, rent schedule,
+//     insurance, prohibited items, noise, contacts)
+//   • 00. All Templates / 07. Resident Resources / Community Policies.pdf    (fobs/keys/lockouts, guests)
+//   • 00. All Templates / 02. Letter Templates / Welcome Letter (per-unit PDFs; standardized fields only)
+//   • 01. Training & Resources / 02. Leasing Process / SOPs (lead mgmt; application & screening)
+// Values with source conflicts are NOT seeded here — they are held in SOLO_FACTS_PACK.md
+// for Katie to resolve first (honest blank beats confident wrong).
 //
 // Mounted under /demo/ (fail-closed on DEMO_MODE, like the other demo doors). Idempotent:
 // re-running retires the prior active fact of each key and writes the current one, so it
@@ -28,6 +36,12 @@ module.exports = function factsSeedModule(deps) {
   const CATEGORY_FOR = {
     pet_policy: "pets", parking_rules: "parking", tour_window: "tours", fee_policy: "fees",
     required_documents: "documents", office_contact: "routing", communication_instructions: "routing",
+    // July 2026 expansion — sourced from Katie's SharePoint library (see SOLO_FACTS_PACK.md
+    // for the per-fact source receipts): Move-In Guide, Welcome Letter, Community Policies
+    // addendum, and the Leasing SOPs.
+    utilities_policy: "utilities", renters_insurance: "insurance", rent_payment_policy: "rent",
+    move_in_process: "movein", amenities_list: "amenities", noise_policy: "policies",
+    guest_policy: "policies", building_restrictions: "policies", entry_access: "fees",
   };
 
   // The REAL Solo facts, verbatim numbers from the 2026 Field Guide. Written as the
@@ -64,16 +78,91 @@ module.exports = function factsSeedModule(deps) {
     {
       fact_key: "required_documents",
       rendered_text:
-        "Applications are screened on credit, criminal background, eviction history, and income, with a " +
-        "decision typically in 24–48 hours. For income verification we accept 3 months of pay stubs, an " +
-        "employment offer letter, tax filings, or an I-20 for student visa holders. A guarantor may be an " +
-        "option if needed.",
+        "Applications are screened on credit history, criminal background, eviction records, and income, " +
+        "with a decision typically in 24–48 hours. You'll need a government-issued photo ID plus one form " +
+        "of income verification: your three most recent bank statements, pay stubs from the last three " +
+        "months, a signed employment offer letter, or your most recent tax returns. International " +
+        "students provide an I-20 and three months of bank statements. If a denial happens, additional " +
+        "documents or a guarantor may be an option.",
     },
     {
       fact_key: "office_contact",
       rendered_text:
-        "Solo on Chestnut is at 4233 Chestnut Street, Philadelphia. The leasing office handles tours, " +
-        "applications, and move-in scheduling; front desk hours vary by day.",
+        "Solo on Chestnut is at 4233 Chestnut Street, Philadelphia, PA 19104. The leasing office handles " +
+        "tours, applications, and move-in scheduling — reach them at sololeasing@onefivecap.com or " +
+        "(215) 359-1082. Office hours are Monday–Friday, 9:00 AM–4:30 PM ET.",
+    },
+
+    // ── July 2026 expansion: prospect-facing facts from Katie's library ──
+    {
+      fact_key: "utilities_policy",
+      rendered_text:
+        "The building is all-electric. Water, sewer, wifi, and electricity are billed monthly through " +
+        "Conservice, the third-party utility provider — charges are split among roommates and appear on " +
+        "the resident portal. Wifi is through FLUME Internet: 1GB service at $40/month, billed on the " +
+        "portal. Furnished all-inclusive packages cover utilities.",
+    },
+    {
+      fact_key: "renters_insurance",
+      rendered_text:
+        "Proof of renter's insurance is required before move-in, with at least $100,000 in liability " +
+        "coverage, effective on or before your move-in date. All adults on the lease must be on the same " +
+        "policy, or each carry their own meeting the minimum. '4233 Chestnut LLC' must be named as an " +
+        "additional interested party. If you'd rather not shop for a policy, coverage is available through " +
+        "the building for $15/month.",
+    },
+    {
+      fact_key: "rent_payment_policy",
+      rendered_text:
+        "Rent is due on the 1st of each month, with a courtesy grace period through the 5th. If payment " +
+        "isn't received by end of day on the 5th, a 10% late fee applies to any unpaid base rent. Payments " +
+        "are electronic through the resident portal at solochestnut.com (e-check, credit, or debit), " +
+        "one-time or recurring. If you're using financial aid, rent is still paid directly to Solo on the " +
+        "portal — the building isn't affiliated with any school.",
+    },
+    {
+      fact_key: "move_in_process",
+      rendered_text:
+        "Move-ins happen during business hours, 9:00 AM–5:00 PM — check in at the leasing office first " +
+        "with a government-issued photo ID to get your keys. All move-in charges must be paid in full at " +
+        "least three weeks before your move-in date (the office confirms exact timing at lease signing), " +
+        "and proof of renter's insurance is required before keys are released. If you can't arrive during " +
+        "business hours, coordinate an alternative check-in with the team in advance.",
+    },
+    {
+      fact_key: "amenities_list",
+      rendered_text:
+        "Amenities by floor: gym and golf simulator on 2, study lounges on 3 and 5, ping-pong lounges on " +
+        "4 and 6, and the big 7th-floor amenity level with a co-working lounge, game room, two TV lounges, " +
+        "and a study lounge. The rooftop has seating areas and the pet run. Ground floor has package " +
+        "lockers, the mail room, and the parking garage.",
+    },
+    {
+      fact_key: "noise_policy",
+      rendered_text:
+        "Quiet hours follow Philadelphia's noise curfew: 9:00 PM–8:00 AM Sunday through Thursday, and " +
+        "11:00 PM–8:00 AM Friday and Saturday. Noise should stay at a respectful volume at all times, and " +
+        "residents are responsible for their guests.",
+    },
+    {
+      fact_key: "guest_policy",
+      rendered_text:
+        "Guests are welcome. In the amenity spaces, residents may bring up to two guests, and guests must " +
+        "be accompanied at all times. Guest parking is in designated guest spaces.",
+    },
+    {
+      fact_key: "building_restrictions",
+      rendered_text:
+        "The building is smoke-free — cigarettes, vapes, hookahs, and e-cigarettes included. Candles, " +
+        "incense, electric heaters, hot plates, air fryers, and grills aren't permitted for fire safety. " +
+        "Alcohol isn't permitted for residents under 21.",
+    },
+    {
+      fact_key: "entry_access",
+      rendered_text:
+        "Each occupant gets one access fob; additional or replacement fobs are $75 each, replacement keys " +
+        "are $25, and after-hours lockout service is $25. During office hours the team can help with " +
+        "lockouts with valid ID.",
     },
   ];
 
