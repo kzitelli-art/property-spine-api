@@ -3190,15 +3190,18 @@ const leasingLifecycle = require("./leasing_lifecycle_service")({ pool });
 
 const leasingLeadsModule = require("./leasingleads"); // leasing lead intake: one-human/many-opportunities funnel + AI first response
 app.use("/", dealIntakeModule({ pool, anthropic, INGEST_MODEL, registryInstance, fileToText, runIngestAuto, upload }));
-app.use("/", leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle }));
-
 // ── Post-tour leasing conversion rail + scheduling intake + interaction ledger ──
 // (migrations 047/048/049). sms + the obligation engine fns are all in scope here.
+// NOTE (wave 3): the conversion module is instantiated BEFORE the leads module so
+// its single-door createConversionFromTour service can be injected into the
+// tour-outcome seam (/leasing/tours/:id/complete). Route mounting order is
+// unaffected (paths are disjoint).
 const leasingConversionModule = require("./leasingconversion");   // conversion case + immutable child obligations + explicit handoff
 const leasingSchedulingModule = require("./leasingscheduling");   // Acuity/Outlook source events -> canonical scheduled tours
 const leasingInteractionsModule = require("./leasinginteractions"); // Twilio interaction ledger on extended comm_events
 const __leasingConversion = leasingConversionModule({ pool, spawnObligationFromEvent, completeObligation });
 app.use("/", __leasingConversion);
+app.use("/", leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices: __leasingConversion.services }));
 
 // ── APPLICATION SUBMISSION SLICE (invitation front + shared submit service +
 //    deny + gated approval→signature). Shares the conversion rail's service layer. ──
