@@ -3237,6 +3237,11 @@ app.use("/", leasingShadowImportModule({ pool }));
 const demoModule = require("./demo");
 app.use("/", demoModule({ pool, submissionService: __applicationSubmission._service }));
 
+// ── Rehearsal reset (demo-only). Empties the live boardroom Conversations queue by
+//    closing every boardroom_demo conversation through the canonical close service —
+//    no deletes, reversible, fail-closed to the Demo Building. (demo_reset.js) ──
+app.use("/", require("./demo_reset")({ pool, leasingLifecycle }));
+
 // ── Agent Stage 0: model capability proof (operator-gated, NO schema, NO secrets
 //    exposed). One real generation to confirm the live model path works before any
 //    agent architecture is built on it. GET /agent/capability → { ok, reachable, model }. ──
