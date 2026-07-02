@@ -472,10 +472,29 @@ module.exports = function operatorModule(deps) {
       order by e.conversation_id, e.event_sequence desc
     ),
     live_tour as (
-      select distinct on (l.conversation_id) l.conversation_id, t.id as tour_id, t.status as tour_status
-      from leasing_conversation_tour_links l join scheduled_tours t on t.id = l.tour_id
-      where l.unlinked_at is null and t.status in ('scheduled','rescheduled')
-      order by l.conversation_id, t.created_at asc
+      -- A live tour for a conversation can come from EITHER store:
+      --  (a) an externally-ingested scheduled_tours row explicitly linked via the
+      --      054 lifecycle links (unchanged), or
+      --  (b) the CANONICAL internal booking domain (039 leasing_tours), derived
+      --      through the same lead → (person, property) → conversation join the
+      --      Tours surface (/leasing/tours/today) already uses. Before this
+      --      correction, internally-booked tours (operator slot-book AND
+      --      /demo/book) never flipped commercial_state to booked_tour.
+      --      Read-only projection fix: no schema, no second appointment record.
+      select distinct on (conversation_id) conversation_id, tour_id, tour_status
+      from (
+        select l.conversation_id, t.id as tour_id, t.status as tour_status, t.created_at
+          from leasing_conversation_tour_links l
+          join scheduled_tours t on t.id = l.tour_id
+         where l.unlinked_at is null and t.status in ('scheduled','rescheduled')
+        union all
+        select c.id as conversation_id, t.id as tour_id, t.status as tour_status, t.created_at
+          from leasing_tours t
+          join leasing_leads ll on ll.id = t.lead_id
+          join conversations c on c.person_id = ll.person_id and c.property_id = ll.property_id
+         where t.status in ('scheduled','confirmed_by_prospect','checked_in')
+      ) u
+      order by conversation_id, created_at asc
     ),
     qual_in as (
       select conversation_id, max(occurred_at) as at from comm_events
@@ -520,7 +539,16 @@ module.exports = function operatorModule(deps) {
       select *,
         case when is_closed then 'closed_not_fit' when is_booked then 'booked_tour'
              when has_engagement then 'active' else 'new' end as commercial_state,
-        case when is_closed or is_booked then 'none'
+        -- waiting_on: a closed conversation waits on no one. A BOOKED conversation
+        -- normally waits on no one EITHER — the tour is set — EXCEPT when a NEW
+        -- qualifying inbound arrived after booking and is still unanswered: that
+        -- is a real question the manager must answer BEFORE the tour, so it
+        -- surfaces as 'manager' (never buried) while commercial_state stays
+        -- booked_tour (the tour remains the primary context; the person is NOT
+        -- returned to ordinary pre-tour work). [D-7]
+        case when is_closed then 'none'
+             when is_booked and inbound_unanswered then 'manager'
+             when is_booked then 'none'
              when inbound_unanswered and control_mode in ('awaiting_review','human_takeover') then 'manager'
              when inbound_unanswered and control_mode = 'ai_active' then 'ai'
              when last_delivered_outbound_at is not null
@@ -531,13 +559,14 @@ module.exports = function operatorModule(deps) {
              else 'unknown' end as delivery_state,
         jsonb_build_object('rule_code',
           case when is_closed then 'latest_relevant_lifecycle_is_close'
+               when is_booked and inbound_unanswered then 'booked_tour_inbound_unanswered_pending_human'
                when is_booked then 'live_linked_tour'
                when inbound_unanswered and control_mode in ('awaiting_review','human_takeover') then 'qualifying_prospect_inbound_unanswered_pending_human'
                when inbound_unanswered then 'qualifying_prospect_inbound_unanswered'
                when last_delivered_outbound_at is not null and (last_inbound_at is null or last_delivered_outbound_at > last_inbound_at) then 'delivered_outreach_is_latest'
                when has_engagement then 'engaged_no_clear_owner'
                else 'open_lead_no_qualifying_engagement' end,
-          'projection_version','queue_projection_v1') as derivation
+          'projection_version','queue_projection_v2') as derivation
       from base
     )`;
 
@@ -582,7 +611,14 @@ module.exports = function operatorModule(deps) {
                last_inbound_at, last_delivered_outbound_at, last_meaningful_activity_at,
                tour_id, tour_status, closure_reason, derivation
         from projected
-        where commercial_state = any($2::text[]) ${cursorClause}
+        -- The active queue is new/active. PLUS [D-7]: a booked tour that has a
+        -- new unanswered inbound (waiting_on='manager') surfaces here too — and
+        -- ONLY those booked tours, never all of them — so a question asked after
+        -- booking is answered before the tour instead of being buried. Its
+        -- commercial_state stays 'booked_tour', so the UI renders it as
+        -- tour-context ("needs your answer before this tour"), not a fresh lead.
+        where (commercial_state = any($2::text[])
+               or (commercial_state = 'booked_tour' and waiting_on = 'manager')) ${cursorClause}
         order by last_meaningful_activity_at desc, conversation_id desc
         limit $${params.length}`,
         params
