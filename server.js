@@ -3201,6 +3201,9 @@ const leasingSchedulingModule = require("./leasingscheduling");   // Acuity/Outl
 const leasingInteractionsModule = require("./leasinginteractions"); // Twilio interaction ledger on extended comm_events
 const __leasingConversion = leasingConversionModule({ pool, spawnObligationFromEvent, completeObligation });
 app.use("/", __leasingConversion);
+const decisionsModule = require("./decisions");   // the Decision Rail (059)
+const __decisions = decisionsModule({ pool, spawnObligationFromEvent, completeObligation });
+app.use("/", __decisions);
 app.use("/", leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices: __leasingConversion.services }));
 
 // ── APPLICATION SUBMISSION SLICE (invitation front + shared submit service +
