@@ -192,7 +192,9 @@ module.exports = function operatorModule(deps) {
     res.set("Cache-Control", "no-store");
     let propertyName = null;
     try {
-      const p = (await pool.query("select name from properties where id=$1", [o.property_id])).rows[0];
+      // display_name (migration 060) is what humans call the property; the
+      // internal name is load-bearing plumbing. Honest chrome shows the former.
+      const p = (await pool.query("select coalesce(display_name, name) as name from properties where id=$1", [o.property_id])).rows[0];
       propertyName = p ? p.name : null;
     } catch (_) { /* honest null beats a failed handshake */ }
     return res.json({ id: o.id, name: o.name, role: o.role, property_id: o.property_id, property_name: propertyName });
@@ -782,6 +784,48 @@ module.exports = function operatorModule(deps) {
       return res.json({
         property_id: propertyId, as_of: asOf, projection_version: "queue_projection_v1",
         counts, sources, today, conversations: rows, next_cursor: nextCursor, limit,
+      });
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
+  });
+
+  // GET /operator/leasing/follow-ups — THE CADENCE DUE-ENGINE (read side).
+  // The rungs already exist and already carry due_by at spawn (24h → 72h →
+  // 48h, leasingconversion.js); what never existed was anything that SURFACES
+  // them. This is that surface: a rung is DUE when now() ≥ due_by — computed
+  // server-side at read time (queue_projection pattern: the browser is never
+  // the source of truth). DISPATCH deliberately does not live here — actually
+  // sending the follow-up stays behind the Twilio wall; this read tells a
+  // human what is due, it never texts anyone.
+  router.get("/operator/leasing/follow-ups", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const propertyId = req.operator.property_id;
+      const limit = Math.min(Number(req.query.limit) || 100, 100);
+      const asOf = (await pool.query("select now() as now")).rows[0].now;
+
+      const rows = (await pool.query(
+        `select lco.rung, lco.due_by, lco.owner_user_id, lco.owner_role,
+                lco.conversion_id, lco.obligation_id,
+                lc.person_id, lc.current_stage, lc.tour_outcome, lc.origin_tour_id,
+                p.name as person_name,
+                (lco.due_by <= now()) as is_due,
+                greatest(0, floor(extract(epoch from (now() - lco.due_by)) / 3600))::int as overdue_hours
+           from leasing_conversion_obligations lco
+           join obligations o        on o.id = lco.obligation_id and o.status = 'open'
+           join leasing_conversions lc on lc.id = lco.conversion_id
+           left join persons p       on p.id = lc.person_id
+          where lc.property_id = $1 and lc.status = 'active'
+          order by (lco.due_by <= now()) desc, lco.due_by asc
+          limit $2`,
+        [propertyId, limit]
+      )).rows;
+
+      const due = rows.filter(r => r.is_due);
+      const upcoming = rows.filter(r => !r.is_due);
+      return res.json({
+        property_id: propertyId, as_of: asOf,
+        counts: { due: due.length, upcoming: upcoming.length },
+        due, upcoming,
       });
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
   });
