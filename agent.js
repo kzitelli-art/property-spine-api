@@ -391,7 +391,7 @@ module.exports = function agentModule(deps) {
         } else if (anthropic) {
           const propName = (await (async () => {
             const c = await pool.connect();
-            try { return (await c.query("select name from properties where id=$1", [tx1.property_id])).rows[0]?.name || null; }
+            try { return (await c.query("select coalesce(display_name, name) as name from properties where id=$1", [tx1.property_id])).rows[0]?.name || null; }
             finally { c.release(); }
           })());
           const built = buildMessages({ persona: PERSONA, facts: ctx.facts, unit: ctx.unit, history, propertyName: propName });
@@ -745,7 +745,7 @@ module.exports = function agentModule(deps) {
         } else if (anthropic) {
           const c2 = await pool.connect();
           let propName;
-          try { propName = (await c2.query("select name from properties where id=$1", [prep.property_id])).rows[0]?.name || null; }
+          try { propName = (await c2.query("select coalesce(display_name, name) as name from properties where id=$1", [prep.property_id])).rows[0]?.name || null; }
           finally { c2.release(); }
           const built = buildMessages({ persona: PERSONA, facts: ctx.facts, unit: ctx.unit, history, propertyName: propName });
           const r = await anthropic.messages.create({ model: MODEL, max_tokens: 320, system: built.system, messages: built.messages });
