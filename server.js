@@ -3204,7 +3204,10 @@ app.use("/", __leasingConversion);
 const decisionsModule = require("./decisions");   // the Decision Rail (059)
 const __decisions = decisionsModule({ pool, spawnObligationFromEvent, completeObligation });
 app.use("/", __decisions);
-app.use("/", leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices: __leasingConversion.services }));
+const commitmentLedgerModule = require("./commitmentledger");   // pricing authority + lease offers (062–065)
+const __commitmentLedger = commitmentLedgerModule({ pool, spawnObligationFromEvent, completeObligation, decisionService: __decisions._service });
+app.use("/", __commitmentLedger);
+app.use("/", leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices: __leasingConversion.services, commitmentLedger: __commitmentLedger._service }));
 
 // ── APPLICATION SUBMISSION SLICE (invitation front + shared submit service +
 //    deny + gated approval→signature). Shares the conversion rail's service layer. ──
@@ -3220,6 +3223,7 @@ app.use("/", __applicationSubmission);
 app.use("/", applicationsModule({
   pool, spawnObligationFromEvent, satisfyObligation, completeObligation,
   submissionService: __applicationSubmission._service,
+  ledgerService: __commitmentLedger._service,   // J1: countersign locks the economic schedule
 }));
 app.use("/", leasingSchedulingModule({ pool }));
 app.use("/", leasingInteractionsModule({ pool, sms, leasingLifecycle }));
