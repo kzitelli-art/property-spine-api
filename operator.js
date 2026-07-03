@@ -359,14 +359,49 @@ module.exports = function operatorModule(deps) {
     } catch (e) { return res.status(500).json({ error: e.message }); }
   });
 
+  // ── PROSPECT VITALS — the Person Card's permanent data contract. ──────────
+  // Given a person + property, return the structured facts we know about a
+  // prospect, in a FIXED shape the Person Card already renders. This is the
+  // birth of the lifetime Person Record's prospect vitals: today only
+  // `move_month` is fed from real data (captured at propertyspine.com and stored
+  // on the lead's raw_payload); every other slot is an HONEST NULL. Slice 2 (the
+  // typed person_attributes store + conversational AI capture) fills the SAME
+  // slots — no re-plumbing, because the contract is fixed here once.
+  //   Read-only. Never invents a value. Absence = null, never a guess.
+  async function prospectVitals(client, { personId, propertyId }) {
+    const empty = { move_month: null, budget: null, unit_type: null, occupants: null, pets: null, reason: null };
+    if (!personId) return empty;
+    // Most recent lead for this person at this property (the opportunity in view).
+    const lead = (await client.query(
+      `select raw_payload from leasing_leads
+        where person_id=$1 and property_id=$2
+        order by created_at desc limit 1`,
+      [personId, propertyId]
+    )).rows[0];
+    let moveMonth = null;
+    try {
+      const rp = lead && lead.raw_payload
+        ? (typeof lead.raw_payload === "string" ? JSON.parse(lead.raw_payload) : lead.raw_payload)
+        : null;
+      // Validated at capture to YYYY-MM or 'flexible'; trust only that shape.
+      const v = rp && rp.desired_move_month;
+      if (v === "flexible" || (typeof v === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(v))) moveMonth = v;
+    } catch (_) { /* honest null beats a bad parse */ }
+    return { ...empty, move_month: moveMonth };
+  }
+
   // GET /operator/leasing/conversations/:conversationId — one convo, SCOPE-VERIFIED.
-  // Returns the thread/draft via the shared getConversationStateService.
+  // Returns the thread/draft via the shared getConversationStateService, PLUS the
+  // prospect vitals for the Person Card (fixed contract; honest nulls).
   router.get("/operator/leasing/conversations/:conversationId", requireOperator, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
+      let vitals;
       const client = await pool.connect();
-      try { await scopedConversation(client, req.params.conversationId, req.operator.property_id); }
-      finally { client.release(); }
+      try {
+        const conv = await scopedConversation(client, req.params.conversationId, req.operator.property_id);
+        vitals = await prospectVitals(client, { personId: conv.person_id, propertyId: req.operator.property_id });
+      } finally { client.release(); }
       const state = await agentService.getConversationStateService({ conversationId: req.params.conversationId });
       // also include this property's facts so the page shows what the agent may use
       const facts = (await pool.query(
@@ -374,7 +409,7 @@ module.exports = function operatorModule(deps) {
            from agent_facts where property_id=$1 and status='active' order by fact_key asc`,
         [req.operator.property_id]
       )).rows;
-      return res.json({ ...state, facts });
+      return res.json({ ...state, facts, vitals });
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
   });
 
