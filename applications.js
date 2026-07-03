@@ -33,6 +33,12 @@ module.exports = function applicationsModule(deps) {
   // property_manager activation obligation. Backward-compatible: if absent,
   // approve behaves exactly as before (no gate to close).
   const submissionService = deps.submissionService || null;
+  // Optional: the commitment-ledger service (062/063). When present, the
+  // countersign transaction locks the immutable economic schedule from an
+  // eligible lease offer (J1). Backward-compatible: absent service, or an
+  // application with NO offer, behaves exactly as before.
+  const ledgerService = deps.ledgerService || null;
+  const { dormantWriteGuard } = require("./dormant_gate");  // fail-closed commitment-write gate
   const router = express.Router();
 
   const ACTIVATION_TYPE = "lease_activation";
@@ -267,7 +273,7 @@ module.exports = function applicationsModule(deps) {
   // completes the obligation (which itself refuses on any outstanding
   // input). 'active' is set ONLY here, ONLY after completeObligation
   // succeeds — the single, structural path to an active lease.
-  router.post("/applications/:id/countersign", async (req, res) => {
+  router.post("/applications/:id/countersign", dormantWriteGuard, async (req, res) => {
     const { countersigned_by = null, note = null } = req.body || {};
     if (!countersigned_by) return res.status(400).json({ receipt: "countersigned_by required — a human must countersign." });
 
@@ -313,6 +319,72 @@ module.exports = function applicationsModule(deps) {
           return res.status(409).json({ receipt: "Cannot activate — required inputs still outstanding.", outstanding: e.outstanding_inputs });
         }
         if (e.code !== "ALREADY_COMPLETE") throw e;
+      }
+
+      // ── J1: THE COUNTERSIGN LOCK (Commitment Ledger, 063) ─────────────
+      // If an eligible lease offer is bound to this application, its dated
+      // economic schedule locks HERE, in this same transaction — the lease
+      // and its committed economics activate together or not at all.
+      //   · no ledger service / no offer → exactly the prior behavior.
+      //   · offer present but the calendar contract (month placement) is
+      //     not filled yet → REFUSE the countersign honestly rather than
+      //     activate a lease whose committed economics can't be recorded.
+      if (ledgerService && ledgerService.findEligibleOfferForApplication) {
+        const offers = await ledgerService.findEligibleOfferForApplication(client, app.id);
+        if (offers && offers.length > 0) {
+          const offer = offers[0];
+          // D10: the lock is attributed to the COUNTERSIGNER, a real person
+          // row — the free-text countersigned_by name is not enough when
+          // committed economics are being locked. Fail-closed, never faked.
+          const countersignerPersonId = (req.body || {}).countersigned_by_person_id || null;
+          if (!countersignerPersonId) {
+            await client.query("rollback");
+            return res.status(409).json({
+              receipt: "Cannot countersign — this application carries a lease offer, so the lock needs countersigned_by_person_id (the actual countersigning person). Committed economics are never attributed to a name string.",
+              offer_id: offer.id,
+            });
+          }
+          let lines;
+          // Scoped offer (an eligibility class, not a quoted slot): the
+          // lease chooses the room. Resolve the application's unit to its
+          // '(whole unit)' space; an application with NO unit cannot lock
+          // a scoped offer — refuse honestly, never guess a room.
+          let resolvedSpaceId = null;
+          if (!offer.space_id) {
+            if (!app.unit_id) {
+              await client.query("rollback");
+              return res.status(409).json({
+                receipt: "Cannot countersign — the lease offer is scoped (no exact unit quoted) and this application has no unit selected. Select the unit first; an offer never holds a room, the lease chooses one.",
+                offer_id: offer.id,
+              });
+            }
+            const sp = await client.query(
+              `select id from spaces where unit_id = $1 order by created_at limit 1`, [app.unit_id]);
+            if (sp.rowCount === 0) {
+              await client.query("rollback");
+              return res.status(409).json({ receipt: "Cannot countersign — the application's unit has no space record.", offer_id: offer.id });
+            }
+            resolvedSpaceId = sp.rows[0].id;
+          }
+          try {
+            lines = ledgerService.computeScheduleLines(offer);
+          } catch (e) {
+            if (e.code === "CALENDAR_CONTRACT_MISSING") {
+              await client.query("rollback");
+              return res.status(409).json({
+                receipt: "Cannot countersign yet — this application carries a lease offer, but the calendar contract (concession month placement) is not configured. The lease cannot activate with its committed economics unrecorded.",
+                offer_id: offer.id,
+              });
+            }
+            throw e;
+          }
+          const locked = await ledgerService.lockLeaseEconomics(client, {
+            application_id: app.id, offer_id: offer.id, lines,
+            locked_by_person_id: countersignerPersonId,
+            resolved_space_id: resolvedSpaceId,
+          });
+          void locked;
+        }
       }
 
       // the ONLY path that sets 'active' — and only after the gate completed.
