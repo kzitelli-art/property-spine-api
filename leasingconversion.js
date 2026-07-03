@@ -70,7 +70,7 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
   // Spawn ONE rung: create the commitment in the shared obligations table via
   // the injected engine, then write the conversion-link row that carries the
   // immutable outcome. Returns { obligation, link }.
-  async function spawnRung(client, { conversion, rung, owner_user_id, owner_role }) {
+  async function spawnRung(client, { conversion, rung, owner_user_id, owner_role, labelSuffix = null }) {
     const cfg = RUNG[rung];
     if (!cfg) throw httpErr(400, `unknown rung "${rung}"`);
     const name = await personName(client, conversion.person_id);
@@ -81,7 +81,7 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
       person_id:   conversion.person_id,
       module:      "leasing",
       type:        rung,
-      label:       cfg.label(name),
+      label:       cfg.label(name) + (labelSuffix || ""),
       owner_type:  "human",
       assigned_role: owner_role || null,
       status:      "open",
@@ -110,10 +110,39 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
   // RULE: a conversion record cannot be created without a confirmed actual host.
   // Creates the parent, the synthetic 'origin' handoff (so history starts with
   // the tour), and the first tour_followup rung owned by the actual host.
+  // ── OWNERSHIP ≠ ATTRIBUTION (module-level, one rule for every spawn site) ──
+  // A user may OWN a follow-up obligation only if it resolves to an active
+  // assignment at this property. assignments(004) keys on person_id; no
+  // users↔persons bridge exists yet, so an asserted host id is not provably
+  // eligible and must never silently become an owner. Resolves an owner from
+  // a preference-ordered list of candidate user ids, returning the first
+  // eligible one, else null (UNASSIGNED — honest).
+  async function eligibleOwner(client, propertyId, candidates) {
+    for (const uid of candidates) {
+      if (!uid) continue;
+      try {
+        const r = await client.query(
+          `select 1 from assignments a
+             join users u on u.person_id = a.person_id
+            where u.id = $1 and a.property_id = $2 and a.is_active = true
+            limit 1`, [uid, propertyId]);
+        if (r.rowCount > 0) return { owner: uid, basis: "eligible_assignment" };
+      } catch (_) { /* no bridge column → not provably eligible; try next */ }
+    }
+    return { owner: null, basis: "unassigned" };
+  }
+
   async function createConversionFromTour(client, {
     person_id, property_id, origin_tour_id = null, lead_id = null,
     scheduled_tour_host_user_id = null, actual_tour_host_user_id,
     feedback_recorded_by_user_id = null, tour_outcome = null, tour_notes = null,
+    // v2: the recommendation from the tour outcome (next_move). A recommendation
+    // is never a soft word that can rot unowned — it IS the content of the
+    // follow-up obligation, carried in the rung's label and owned by the host.
+    recommendation = null,
+    // #1: the operator may explicitly choose the follow-up owner. Honored ONLY
+    // when it resolves to an active eligible assignment (re-validated here).
+    explicit_owner_user_id = null,
   }) {
     if (!actual_tour_host_user_id) {
       throw httpErr(422, "INCOMPLETE: actual_tour_host_user_id is required — a completed-tour outcome cannot spawn the conversion rail until the actual host is confirmed.");
@@ -141,11 +170,49 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
       [conv.id, actual_tour_host_user_id, feedback_recorded_by_user_id || actual_tour_host_user_id]
     );
 
+    const REC_LABEL = {
+      send_application: "send the application", send_terms: "send terms",
+      send_options: "send best options", send_follow_up: "send a follow-up",
+      set_follow_up_time: "set a follow-up time", different_home: "offer a different home",
+      different_price: "revisit price", different_timing: "revisit timing",
+      follow_up_later: "follow up later", watch_future: "watch for a future fit",
+      close_out: "close out",
+    };
+
+    // ── OWNERSHIP ≠ ATTRIBUTION (see eligibleOwner) — the operator's EXPLICIT
+    // choice wins if eligible; else the actual host if eligible; else the
+    // scheduled host if eligible; else UNASSIGNED. The claim is preserved on the
+    // conversion row regardless of who ends up owning.
+    const owned = await eligibleOwner(client, property_id,
+      [explicit_owner_user_id, actual_tour_host_user_id, scheduled_tour_host_user_id]);
+    const ownerUserId = owned.owner;
+    const ownerBasis = !ownerUserId ? "unassigned"
+                     : ownerUserId === explicit_owner_user_id ? "chosen"
+                     : ownerUserId === actual_tour_host_user_id ? "actual_host"
+                     : ownerUserId === scheduled_tour_host_user_id ? "scheduled_host"
+                     : "unassigned";
+
     const first = await spawnRung(client, {
-      conversion: conv, rung: "tour_followup", owner_user_id: actual_tour_host_user_id,
+      conversion: conv, rung: "tour_followup", owner_user_id: ownerUserId,
+      labelSuffix: recommendation && REC_LABEL[recommendation]
+        ? ` — recommended: ${REC_LABEL[recommendation]}` : null,
     });
 
-    return { conversion: conv, first_rung: first };
+    return {
+      conversion: conv, first_rung: first,
+      // next_move stays a machine-readable CODE — routing/reporting/AI read this,
+      // never the rendered label. The label is presentation only.
+      next_move_code: recommendation || null,
+      next_move_label: (recommendation && REC_LABEL[recommendation]) ? REC_LABEL[recommendation] : null,
+      // attribution facts stay distinct + inspectable
+      ownership: {
+        actual_host_claim_user_id: actual_tour_host_user_id,
+        scheduled_host_user_id: scheduled_tour_host_user_id,
+        recorded_by_user_id: feedback_recorded_by_user_id,
+        obligation_owner_user_id: ownerUserId,
+        owner_basis: ownerBasis,
+      },
+    };
   }
 
   // RULE: explicit handoff is the ONLY way the conversation owner changes.
@@ -249,8 +316,11 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     let spawned = null;
     const cfg = RUNG[link.rung];
     if (!suppress_next && outcome === "kept" && resolution !== "released" && cfg && cfg.kind === "conversation" && cfg.next) {
+      // the conversation owner is an attribution pointer, not proof of
+      // eligibility — gate it through the same ownership contract.
+      const nextOwned = await eligibleOwner(client, conv.property_id, [conv.conversation_owner_user_id]);
       spawned = await spawnRung(client, {
-        conversion: conv, rung: cfg.next, owner_user_id: conv.conversation_owner_user_id,
+        conversion: conv, rung: cfg.next, owner_user_id: nextOwned.owner,
       });
     }
     // Released closes the whole conversation.
@@ -286,7 +356,11 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
       [conversion_id, rung]
     );
     if (existing.rows.length) throw httpErr(409, `an open ${rung} rung already exists on this conversion.`);
-    return spawnRung(client, { conversion: conv, rung, owner_user_id: owner_user_id || conv.conversation_owner_user_id });
+    // an explicit owner passed by the caller is honored; the conversation-owner
+    // FALLBACK is gated — an attribution pointer is not proof of eligibility.
+    let owner = owner_user_id;
+    if (!owner) owner = (await eligibleOwner(client, conv.property_id, [conv.conversation_owner_user_id])).owner;
+    return spawnRung(client, { conversion: conv, rung, owner_user_id: owner });
   }
 
   // ── read: the full conversion view (record + history + open/closed rungs) ──
