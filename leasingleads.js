@@ -24,7 +24,7 @@
 const express = require("express");
 const crypto = require("crypto");
 
-module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices }) {
+module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices, commitmentLedger = null }) {
   const router = express.Router();
 
   // ── PHASE B: signed public booking continuation (tour_booking_links, mig 056) ──
@@ -1300,6 +1300,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       // ── open the conversion rail (047's single door) when a tour was GIVEN.
       //    Assignment is not authorship: the ACTUAL host is who gave it. ──
       let conversion = null;
+      const bitsExtra = [];   // concession-capture receipt lines (built in-tx, joined after commit)
       if (fb.tour_given !== false) {
         if (!conversionServices || typeof conversionServices.createConversionFromTour !== "function") {
           await client.query("rollback");
@@ -1328,12 +1329,101 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         await client.query(
           `update leasing_conversions set reactions=$1, preferred_unit_id=$2, updated_at=now() where id=$3`,
           [JSON.stringify(reactions), preferredUnitId, conversion.id]);
+
+        // ── STRUCTURED CONCESSION CAPTURE (Commitment Ledger, Stream 2) ──
+        // The promise is born WHERE it happens — on the tour, not later
+        // through a developer endpoint. If the host captured a concession,
+        // it leaves the soft-reactions junk drawer and becomes a first-class
+        // guardrail-checked claim, with the tour itself as the evidence of
+        // communication (host attestation: a claim, attributed and timed).
+        //   · in-scope / soft  → a real lease_offer, in THIS transaction
+        //   · hard-blocked     → NO offer, but the spoken promise is
+        //     RECORDED as an incident + resolution obligation — and the
+        //     tour outcome itself is never rolled back by the block
+        //     (blocked concession and completed tour commit together).
+        if (b.concession && commitmentLedger && typeof commitmentLedger.createLeaseOffer === "function") {
+          // dormant gate: the capture hook invokes the ledger DIRECTLY (not via
+          // an HTTP route), so the fail-closed check must run HERE too — an
+          // internal caller must not bypass dormancy to mint an offer/incident.
+          const { resolveMode } = require("./dormant_gate");
+          if (resolveMode() !== "enabled") {
+            await client.query("rollback");
+            return res.status(403).json({
+              error: "commitment_ledger_dormant", code: "LEDGER_DORMANT",
+              receipt: "Concession capture is disabled: the Commitment Ledger is in DORMANT mode. No offer or incident can be created until it is explicitly enabled.",
+            });
+          }
+          const cSpec = b.concession || {};
+          // grants/offers key on PERSONS; tour actors are USERS — the
+          // users↔persons identity bridge is an open ask, so the promiser's
+          // person identity is explicit here (flagged, not papered over).
+          if (!cSpec.granted_by_person_id) {
+            await client.query("rollback");
+            return res.status(400).json({ receipt: "concession.granted_by_person_id is required — the promise must be attributed to the person who made it." });
+          }
+          const prospectPersonId = tour.lead_id
+            ? (await client.query(`select person_id from leasing_leads where id=$1`, [tour.lead_id])).rows[0].person_id
+            : null;
+          // #2 EVIDENCE HONESTY. A scheduled appointment time is NOT proof the
+          // tour occurred then, nor that the promise was communicated then.
+          // So we do NOT auto-manufacture a tour window from tour.scheduled_for
+          // and feed it to an attestation as if it were observed. The caller
+          // must supply the real observed window (actual attendance / recorded
+          // start-end) when it exists; otherwise the host attestation stands on
+          // an attributable late_capture_reason. The scheduled time is passed
+          // ONLY as an explicit, labeled fallback boundary the ledger may use
+          // for sanity, never as verified actual communication time.
+          const observedWindowStart = cSpec.tour_window_start || null;
+          const observedWindowEnd = cSpec.tour_window_end || null;
+          const scheduledFallback = tour.scheduled_for || null;   // planned, NOT observed
+          const ledgerOut = await commitmentLedger.createLeaseOffer(client, {
+            property_id: tour.property_id,
+            granted_by_person_id: cSpec.granted_by_person_id,
+            recorded_by_person_id: cSpec.recorded_by_person_id || cSpec.granted_by_person_id,
+            person_id: prospectPersonId,
+            application_id: null,
+            promise_state: cSpec.promise_state || "communicated",
+            // target: an exact quoted space OR an eligibility scope —
+            // either way the offer NEVER holds a room.
+            space_id: cSpec.space_id || null,
+            scope: cSpec.space_id ? null : (cSpec.scope || "property"),
+            scope_ref: cSpec.space_id ? null : (cSpec.scope_ref || null),
+            max_economic_value: cSpec.max_economic_value || null,
+            source: cSpec.source || "discretionary",
+            unit_type: cSpec.unit_type,
+            lease_term_months: cSpec.lease_term_months,
+            published: cSpec.published || null,
+            discretionary: cSpec.discretionary || null,
+            // the host attestation IS the communication evidence — an
+            // attributed claim, not a recording. communicated_at is the host's
+            // stated time; recorded_at is stamped now by the ledger.
+            communicated_at: cSpec.communicated_at || new Date().toISOString(),
+            evidence_type: "tour_host_attestation",
+            evidence_ref: String(tourId),
+            source_tour_id: tourId,
+            // observed window ONLY if the caller actually captured it; the
+            // scheduled time is passed separately as a labeled planned fallback.
+            tour_window_start: observedWindowStart,
+            tour_window_end: observedWindowEnd,
+            scheduled_reference: scheduledFallback,
+            late_capture_reason: cSpec.late_capture_reason || null,
+          });
+          if (ledgerOut.blocked && ledgerOut.exploratory) {
+            bitsExtra.push(`Concession was exploratory and outside guardrails — nothing promised, nothing recorded.`);
+          } else if (ledgerOut.blocked) {
+            const incId = ledgerOut.incident ? ledgerOut.incident.id : "(recording)";
+            bitsExtra.push(`Concession OUTSIDE guardrails (${ledgerOut.why}) — offer NOT created; the spoken promise was recorded as incident ${incId}${ledgerOut.deduped ? " (already recorded)" : ""} and routed for resolution.`);
+          } else {
+            bitsExtra.push(`Concession captured as a real offer (${ledgerOut.band}) · value $${Number(ledgerOut.concession_authority_value).toLocaleString()}${ledgerOut.offer.guardrail_flag ? " · FLAGGED for review" : ""}.`);
+          }
+        }
       }
 
       await client.query("commit");
       const bits = [`Outcome recorded — tour ${fb.tour_given === false ? "marked complete (no tour given)" : "given"}.`];
       if (unitsShown.length) bits.push(`${unitsShown.length} unit${unitsShown.length > 1 ? "s" : ""} shown.`);
       if (conversion) bits.push(`Follow-up rail opened — ${fb.interest_level || "outcome"} · owner set to the actual host.`);
+      bits.push(...bitsExtra);
       return res.json({ receipt: bits.join(" "), tour_id: tourId, conversion_id: conversion ? conversion.id : null });
     } catch (e) {
       try { await client.query("rollback"); } catch {}
