@@ -830,6 +830,267 @@ module.exports = function operatorModule(deps) {
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
   });
 
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/leasing/person-card — THE PERSON × PROPERTY CARD READ.
+  //
+  // The card is a LENS, not a table: it assembles attributed entries from
+  // the real systems of record (comm_events, tour_events/leasing_tours,
+  // conversion obligations, person_attributes) into three bands —
+  // RELATIONSHIP / NEXT / HISTORY — per the frozen entry contract
+  // (ENTRY_CONTRACT.md). Nothing here writes; editing a rendered line is
+  // impossible by construction because there is nothing to edit.
+  //
+  // Rules enforced here:
+  //  · Person × Property, always — the session's property is the wall.
+  //  · HISTORY sorts by occurred_at (when it happened), never write time.
+  //  · Every entry is verb-first with a named actor; actual-host entries
+  //    carry claim_strength='asserted' (identity bridge pending).
+  //  · Honest blank: empty sources contribute nothing; dark sources
+  //    (offer/application/lease) do not exist here at all.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/leasing/person-card", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const client = await pool.connect();
+    try {
+      const propertyId = req.operator.property_id;
+      let personId = req.query.person_id || null;
+      // accept lead_id and resolve — the tour drawer only knows the lead
+      if (!personId && req.query.lead_id) {
+        const l = (await client.query(
+          `select person_id from leasing_leads where id=$1 and property_id=$2`,
+          [req.query.lead_id, propertyId])).rows[0];
+        personId = l ? l.person_id : null;
+      }
+      if (!personId) return res.status(400).json({ error: "person_id or lead_id required" });
+      // the property wall: the person must actually have presence at THIS property
+      const p = (await client.query(`select id, name from persons where id=$1`, [personId])).rows[0];
+      if (!p) return res.status(404).json({ error: "person not found" });
+      const presence = (await client.query(
+        `select 1 where exists (select 1 from leasing_leads where person_id=$1 and property_id=$2)
+             or exists (select 1 from conversations where person_id=$1 and property_id=$2)
+             or exists (select 1 from person_attributes where person_id=$1 and property_id=$2)`,
+        [personId, propertyId])).rows[0];
+      if (!presence) return res.status(404).json({ error: "person not found" }); // no presence here → the name does not leak across the wall
+
+      const userName = async (uid) => {
+        if (!uid) return null;
+        const u = (await client.query(`select name from users where id=$1`, [uid])).rows[0];
+        return u ? u.name : null;
+      };
+      const entries = [];
+
+      // ── conversation → message entries ─────────────────────────────
+      const msgs = (await client.query(
+        `select ce.id, ce.direction, ce.sender_role, ce.body, ce.created_at
+           from comm_events ce
+          where ce.person_id=$1 and ce.property_id=$2
+          order by ce.created_at asc limit 200`,
+        [personId, propertyId])).rows;
+      for (const m of msgs) {
+        const who = m.direction === "inbound" ? (p.name || "Prospect") : (m.sender_role || "Property");
+        entries.push({
+          occurred_at: m.created_at, recorded_at: m.created_at,
+          source: "conversation", verb: "sent",
+          actor: { id: null, name: who, kind: m.direction === "inbound" ? "person" : "user" },
+          summary: `${who} sent: ${String(m.body || "").slice(0, 140)}`,
+          claim_strength: "proven",
+          detail: { direction: m.direction, body: m.body },
+          supersedes: null,
+        });
+      }
+
+      // ── tours → scheduled / gave / no-show entries ─────────────────
+      const tours = (await client.query(
+        `select t.id, t.scheduled_for, t.status, t.created_at, t.leasing_agent_id,
+                t.completed_at, t.no_show_at
+           from leasing_tours t
+           join leasing_leads l on l.id = t.lead_id
+          where l.person_id=$1 and t.property_id=$2
+          order by t.created_at asc limit 50`,
+        [personId, propertyId])).rows;
+      for (const t of tours) {
+        const schedName = (await userName(t.leasing_agent_id)) || "the team";
+        entries.push({
+          occurred_at: t.created_at, recorded_at: t.created_at,
+          source: "tour", verb: "scheduled",
+          actor: { id: t.leasing_agent_id, name: schedName, kind: "user" },
+          summary: `Tour scheduled with ${schedName}`,
+          claim_strength: "proven",
+          detail: { tour_id: t.id, scheduled_for: t.scheduled_for }, supersedes: null,
+        });
+        // completed/no-show truth from tour_events (occurred = when it happened,
+        // recorded = when the event row was written)
+        const evs = (await client.query(
+          `select event_type, actor_id, event_at, metadata
+             from tour_events where tour_id=$1 and event_type in ('completed','no_show','outcome_corrected')
+             order by event_at asc`, [t.id])).rows;
+        for (const ev of evs) {
+          const md = ev.metadata || {};
+          if (ev.event_type === "outcome_corrected") {
+            const who = (await userName(md.corrected_by_user_id || ev.actor_id)) || "staff";
+            const priorD = md.prior && md.prior.disposition ? md.prior.disposition : "the prior outcome";
+            const revD = md.revised && md.revised.disposition ? md.revised.disposition : "a revised outcome";
+            entries.push({
+              occurred_at: ev.event_at, recorded_at: ev.event_at,
+              source: "outcome", verb: "corrected",
+              actor: { id: md.corrected_by_user_id || ev.actor_id, name: who, kind: "user" },
+              summary: `${who} corrected the tour outcome: ${priorD} → ${revD}${md.reason ? ` (${md.reason})` : ""}`,
+              claim_strength: "proven",
+              detail: { corrects_event: md.corrects_event, reason: md.reason, prior: md.prior, revised: md.revised },
+              supersedes: md.prior ? { value: (md.prior.disposition || null), source: "prior tour outcome" } : null,
+            });
+            continue;
+          }
+          if (ev.event_type === "completed") {
+            const hostId = md.actual_tour_host_user_id || ev.actor_id || null;
+            const hostName = (await userName(hostId)) || "staff";
+            entries.push({
+              occurred_at: t.scheduled_for || ev.event_at, recorded_at: ev.event_at,
+              source: "tour", verb: "gave",
+              actor: { id: hostId, name: hostName, kind: "user" },
+              summary: `${hostName} gave the tour`,
+              claim_strength: "asserted",           // identity bridge pending
+              detail: { tour_id: t.id }, supersedes: null,
+            });
+            // the outcome capture itself — recorded by whoever wrote it
+            if (md.outcome) {
+              const recId = md.recorded_by_user_id || ev.actor_id || null;
+              const recName = (await userName(recId)) || "staff";
+              entries.push({
+                occurred_at: ev.event_at, recorded_at: ev.event_at,
+                source: "outcome", verb: "recorded",
+                actor: { id: recId, name: recName, kind: "user" },
+                summary: `${recName} recorded the outcome — ${md.outcome.disposition || ""}${md.outcome.sub_read ? " · " + md.outcome.sub_read : ""}`,
+                claim_strength: "proven",
+                detail: md.outcome, supersedes: null,
+              });
+            }
+          } else {
+            // #5: prefer the split axes; fall back to the legacy compound flavor
+            const notified = md.notice_status === "notified" || md.attendance === "no_show_notified";
+            entries.push({
+              occurred_at: t.scheduled_for || ev.event_at, recorded_at: ev.event_at,
+              source: "tour", verb: "no_show",
+              actor: { id: ev.actor_id, name: (await userName(ev.actor_id)) || "staff", kind: "user" },
+              summary: notified
+                ? `Did not attend — gave notice${md.reason ? " (" + md.reason + ")" : ""}`
+                : `Did not attend — no contact`,
+              claim_strength: "proven",
+              detail: { tour_id: t.id, attendance_status: md.attendance_status || "did_not_attend",
+                        notice_status: notified ? "notified" : "none", reason: md.reason || null },
+              supersedes: null,
+            });
+          }
+        }
+      }
+
+      // ── obligations → owns / closed entries + the NEXT band ────────
+      const obls = (await client.query(
+        `select lco.rung, lco.due_by, lco.owner_user_id, lco.created_at as spawned_at,
+                o.id as obligation_id, o.status, o.label, o.completed_at
+           from leasing_conversion_obligations lco
+           join obligations o on o.id = lco.obligation_id
+           join leasing_conversions lc on lc.id = lco.conversion_id
+          where lc.person_id=$1 and lc.property_id=$2
+          order by lco.created_at asc limit 50`,
+        [personId, propertyId])).rows;
+      const next = [];
+      // the scheduled host for THIS person's tours — used to explain WHY the
+      // owner is who it is (actual host wasn't eligible → fell to scheduled).
+      for (const ob of obls) {
+        const ownerName = (await userName(ob.owner_user_id)) || "Unassigned";
+        // owner basis: the follow-up owner is the ELIGIBLE assignment, which may
+        // differ from who GAVE the tour (an asserted attribution). Explain it.
+        const ownerBasis = ob.owner_user_id ? "eligible assignment" : "unassigned";
+        entries.push({
+          occurred_at: ob.spawned_at, recorded_at: ob.spawned_at,
+          source: "obligation", verb: "owns",
+          actor: { id: ob.owner_user_id, name: ownerName, kind: "user" },
+          summary: ob.owner_user_id ? `${ownerName} owns: ${ob.label}` : `Unassigned: ${ob.label}`,
+          claim_strength: "proven",
+          detail: { obligation_id: ob.obligation_id, rung: ob.rung, due_by: ob.due_by, owner_basis: ownerBasis },
+          supersedes: null,
+        });
+        if (ob.status === "open") {
+          next.push({ obligation_id: ob.obligation_id, label: ob.label, rung: ob.rung,
+                      owner: { id: ob.owner_user_id, name: ownerName, basis: ownerBasis }, due_by: ob.due_by });
+        } else if (ob.completed_at) {
+          entries.push({
+            occurred_at: ob.completed_at, recorded_at: ob.completed_at,
+            source: "obligation", verb: "closed",
+            actor: { id: ob.owner_user_id, name: ownerName, kind: "user" },
+            summary: `${ownerName} closed: ${ob.label}`,
+            claim_strength: "proven",
+            detail: { obligation_id: ob.obligation_id, rung: ob.rung }, supersedes: null,
+          });
+        }
+      }
+      next.sort((a, b) => new Date(a.due_by || "2099-01-01") - new Date(b.due_by || "2099-01-01"));
+
+      // ── observations → confirmed/updated entries WITH supersede lineage
+      const attrs = (await client.query(
+        `select attr_key, attr_value, source, source_ref, status, created_at
+           from person_attributes
+          where person_id=$1 and property_id is not distinct from $2
+          order by created_at asc`, [personId, propertyId])).rows;
+      const lastByKey = {};
+      for (const a of attrs) {
+        const prior = lastByKey[a.attr_key] || null;
+        entries.push({
+          occurred_at: a.created_at, recorded_at: a.created_at,
+          source: "observation", verb: prior ? "updated" : "confirmed",
+          actor: { id: null, name: a.source === "human" ? "staff" : a.source, kind: a.source === "human" ? "user" : "system" },
+          summary: prior
+            ? `${a.attr_key} updated: ${prior.attr_value} → ${a.attr_value}`
+            : `${a.attr_key} confirmed: ${a.attr_value}`,
+          claim_strength: "proven",
+          detail: { key: a.attr_key, value: a.attr_value, source: a.source },
+          supersedes: prior ? { value: prior.attr_value, source: prior.source } : null,
+        });
+        lastByKey[a.attr_key] = a;
+      }
+
+      // ── the canonical chronology: occurred_at ASC, never write order ─
+      entries.sort((a, b) => new Date(a.occurred_at) - new Date(b.occurred_at));
+
+      const vitals = await prospectVitals(client, { personId, propertyId });
+      const recent = msgs.slice(-8).map((m) => ({
+        direction: m.direction, body: m.body, at: m.created_at,
+        who: m.direction === "inbound" ? (p.name || "Prospect") : (m.sender_role || "Property"),
+      }));
+
+      return res.json({
+        person: { id: p.id, name: p.name },
+        property_id: propertyId,
+        relationship: { vitals, recent_messages: recent },
+        next,                                  // empty array = honestly nothing pending
+        history: entries,                      // occurred_at ASC; empty = honestly nothing yet
+      });
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
+    finally { client.release(); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/property/eligible-staff — the active-eligible roster for
+  // the follow-up-owner selector (#1). Only users who resolve to an active
+  // assignment at THIS property (the same eligibility the obligation owner
+  // gate uses). This is what the capture's "Change owner" selector reads —
+  // never an arbitrary id. Requires the users↔persons bridge to return rows;
+  // returns an honest empty list until then, which the UI states plainly.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/property/eligible-staff", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const propertyId = req.operator.property_id;
+      const rows = (await pool.query(
+        `select distinct u.id, u.name, u.role
+           from assignments a join users u on u.person_id = a.person_id
+          where a.property_id = $1 and a.is_active = true
+          order by u.name asc`, [propertyId])).rows;
+      return res.json({ property_id: propertyId, eligible_staff: rows });
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
   // POST /operator/leasing/conversations/:conversationId/close-not-fit
   router.post("/operator/leasing/conversations/:conversationId/close-not-fit", requireOperator, async (req, res) => {
     res.set("Cache-Control", "no-store");
