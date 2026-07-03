@@ -80,6 +80,21 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     if (req.headers["x-operator-key"] !== expected) return res.status(401).json({ receipt: "Operator key missing or wrong. Set it in the operator page header." });
     next();
   }
+  // ── SERVER-DERIVED RECORDER (attribution the system CAN verify today) ──
+  // The operator app carries a real per-user staff session (x-staff-session).
+  // When present, the recorder is derived from it SERVER-SIDE — never from the
+  // request body. b.actor_id is accepted ONLY as a fallback on the shared-key-
+  // only path (no session), and never overrides a resolved session identity.
+  async function resolveRecorderUserId(req) {
+    const token = req.headers["x-staff-session"];
+    if (!token) return null;
+    try {
+      const r = await pool.query(
+        `select u.id from staff_sessions s join users u on u.id = s.user_id
+          where s.token = $1 and s.revoked = false and s.expires_at > now()`, [token]);
+      return r.rows[0] ? r.rows[0].id : null;
+    } catch (_) { return null; }
+  }
   function requireIntakeSecret(req, res, next) {
     const expected = process.env.LEASING_INTAKE_SECRET || process.env.INTAKE_PASSWORD;
     if (!expected) return res.status(503).json({ receipt: "Lead intake is locked: set LEASING_INTAKE_SECRET in Render's environment." });
@@ -1272,10 +1287,56 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       }
 
       // ── attendance truth (the same one-door event write as always) ──
+      // v2: the event metadata carries the FULL structured outcome + the
+      // tri-attribution (scheduled / actual-claim / recorder). The event row
+      // is the record; conversions/board are projections of it.
+      // ── #4: the RECORDER is server-derived from the staff session when
+      //    present; the body value is only a shared-key-path fallback and can
+      //    never override a resolved session identity.
+      const sessionRecorderId = await resolveRecorderUserId(req);
+      const recordedByUserId = sessionRecorderId || b.actor_id || null;
+
+      // ── #3: the ACTUAL-HOST claim has exactly two honest shapes:
+      //    (A) a roster-selected active property-staff user → asserted staff
+      //        claim, eligible to be considered for ownership; or
+      //    (B) a free-text name → stored/rendered as free text ONLY, never
+      //        dereferenced to a user, never eligible to own.
+      //    An arbitrary id that is not an active assignment at THIS property is
+      //    NOT accepted as a staff identity — it degrades to a free-text claim.
+      let actualHostUserId = null;      // a real, roster-validated staff user
+      let actualHostNameClaim = null;   // free-text only
+      const rawHostId = b.actual_tour_host_user_id || null;
+      if (rawHostId) {
+        const rosterOk = (await client.query(
+          `select 1 from assignments a join users u on u.person_id = a.person_id
+            where u.id = $1 and a.property_id = $2 and a.is_active = true limit 1`,
+          [rawHostId, tour.property_id])).rows[0];
+        if (rosterOk) actualHostUserId = rawHostId;      // path A — verified roster
+        else actualHostNameClaim = String(b.actual_tour_host_name || rawHostId).slice(0, 120); // arbitrary id → free text only
+      } else if (b.actual_tour_host_name) {
+        actualHostNameClaim = String(b.actual_tour_host_name).slice(0, 120); // path B — free text
+      }
+      // legacy default: if nothing supplied, the scheduled agent is the presumed host claim
+      const actualHostEarly = actualHostUserId || (actualHostNameClaim ? null : (b.actor_id || null));
+      const v2outcome = (fb.disposition || fb.what_landed || fb.whats_in_way || fb.next_move) ? {
+        disposition: fb.disposition || null,               // start_application|keep_working|needs_change|close_watch
+        sub_read: fb.sub_read || null,                     // hot|warm|exploring (keep_working only)
+        what_landed: Array.isArray(fb.what_landed) ? fb.what_landed.slice(0, 9) : [],
+        whats_in_way: Array.isArray(fb.whats_in_way) ? fb.whats_in_way.slice(0, 8) : [],
+        next_move: fb.next_move || null,
+        future_fit: fb.future_fit || null,                 // close_watch: keep|close
+        note: fb.notes || null,
+      } : null;
       await recordTourEvent(client, {
         tourId, leadId: tour.lead_id, type: "completed",
-        actorType: "human", actorId: b.actor_id || null,
-        metadata: { scheduled_for: tour.scheduled_for, tour_given: fb.tour_given !== false },
+        actorType: "human", actorId: recordedByUserId,
+        metadata: {
+          scheduled_for: tour.scheduled_for, tour_given: fb.tour_given !== false,
+          actual_tour_host_user_id: actualHostEarly,           // roster-validated user OR null
+          actual_tour_host_name_claim: actualHostNameClaim,    // #3: free-text only, never dereferenced
+          recorded_by_user_id: recordedByUserId,               // #4: SERVER-DERIVED from the session
+          outcome: v2outcome,
+        },
       });
 
       // ── actual units shown (1..5; every unit must belong to THIS property) ──
@@ -1306,7 +1367,11 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           await client.query("rollback");
           return res.status(503).json({ receipt: "Outcome rail is not wired on this server yet — deploy the wave-3 server.js, then retry." });
         }
-        const actualHost = b.actual_tour_host_user_id || b.actor_id || null;
+        // The conversion needs SOME actual-host anchor. Use the roster-validated
+        // host if we have one; otherwise fall back to the scheduled agent (a real
+        // user) so the rail can open — the free-text name claim is NOT a user and
+        // is carried separately on the event, never as the host user id.
+        const actualHost = actualHostUserId || tour.leasing_agent_id || recordedByUserId || null;
         // (the service itself 422s without an actual host — its rule, kept)
         const opened = await conversionServices.createConversionFromTour(client, {
           person_id: tour.lead_id ? (await client.query(`select person_id from leasing_leads where id=$1`, [tour.lead_id])).rows[0].person_id : null,
@@ -1314,11 +1379,48 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           origin_tour_id: tourId, lead_id: tour.lead_id,
           scheduled_tour_host_user_id: tour.leasing_agent_id || null,
           actual_tour_host_user_id: actualHost,
-          feedback_recorded_by_user_id: b.actor_id || null,
-          tour_outcome: fb.interest_level || null,
+          feedback_recorded_by_user_id: recordedByUserId,      // #4: server-derived
+          // #1: the operator may explicitly choose the follow-up owner from the
+          // active-eligible roster. It is honored ONLY if eligible (the service
+          // re-validates); absent it, ownership falls to eligible actual/scheduled.
+          explicit_owner_user_id: (b.follow_up_owner_user_id || null),
+          tour_outcome: (fb.disposition || fb.interest_level) || null,
           tour_notes: fb.notes || null,
+          // v2: the RECOMMENDATION is the content of the follow-up obligation —
+          // never a soft word that can rot unowned. Carried into the rung label.
+          recommendation: fb.next_move || null,
         });
         conversion = opened.conversion;
+
+        // ── SOURCED OBSERVATIONS (v2) — recognition over re-entry, with the
+        //    061 supersede model: retire-then-insert, one active per key,
+        //    every fact carries its receipt (source_ref = this tour).
+        //    The frontend sends only what was confirmed/edited on a live lead;
+        //    a dead lead sends nothing (never forced).
+        const ess = b.essentials || {};
+        const OBS_KEYS = { budget: "budget", move_month: "move_month", unit_type: "unit_type" };
+        for (const [k, attrKey] of Object.entries(OBS_KEYS)) {
+          const v = ess[k] && typeof ess[k].value === "string" ? ess[k].value.trim() : null;
+          if (!v) continue;
+          // skip a no-op confirm of the identical active value (still a real
+          // confirm? — a confirm IS knowledge; write it only when changed OR
+          // explicitly flagged confirmed, so the lineage stays meaningful)
+          const cur = (await client.query(
+            `select id, attr_value from person_attributes
+              where person_id=$1 and property_id=$2 and attr_key=$3 and status='active'`,
+            [conversion.person_id, tour.property_id, attrKey])).rows[0];
+          // identical to the active value → the record already holds this truth;
+          // writing a duplicate row would fake a change that didn't happen.
+          if (cur && cur.attr_value === v) continue;
+          if (cur) {
+            await client.query(`update person_attributes set status='retired' where id=$1`, [cur.id]);
+          }
+          await client.query(
+            `insert into person_attributes (person_id, property_id, attr_key, attr_value, source, source_ref)
+             values ($1,$2,$3,$4,'human',$5)`,
+            [conversion.person_id, tour.property_id, attrKey, v, tourId]);
+          bitsExtra.push(`${attrKey} ${cur ? "updated" : "captured"}: ${v}.`);
+        }
         // reactions (what landed) — durable person knowledge with tour provenance
         const reactions = {
           cared_about: Array.isArray(b.cared_about) ? b.cared_about.slice(0, 12) : [],
@@ -1434,6 +1536,91 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     finally { client.release(); }
   });
 
+  // ══════════════════════════════════════════════════════════════════
+  // POST /leasing/tours/:tourId/correct-outcome — THE MINIMUM CORRECTION LANE (#2).
+  //
+  // A staff member WILL sometimes record the wrong disposition, host, next move,
+  // or no-show flavor. Without a deliberate correction action, the only recourse
+  // is back-channel work or DB repair — the exact rot this product replaces. This
+  // is the bounded, honest correction primitive: it NEVER mutates the original.
+  //
+  // Requires:  reason (non-empty) · authenticated correction actor (server-derived)
+  //            · the prior tour outcome exists · revised fields
+  // Writes:    an append-only 'outcome_corrected' tour_event carrying
+  //            { corrects_event, reason, prior, revised, corrected_by, corrected_at }
+  //            · updates the conversion's tour_outcome projection to the revised value
+  //            · the card's HISTORY renders it as a distinct "tour outcome corrected"
+  //              entry (tour_events are already projected), original preserved above it.
+  // The original completed event and its outcome remain byte-unchanged.
+  // ══════════════════════════════════════════════════════════════════
+  router.post("/leasing/tours/:tourId/correct-outcome", requireOperator, async (req, res) => {
+    const { tourId } = req.params; const b = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const correctedBy = (await resolveRecorderUserId(req)) || b.actor_id || null;
+      const reason = (typeof b.reason === "string") ? b.reason.trim() : "";
+      if (!reason) { await client.query("rollback"); return res.status(400).json({ receipt: "A correction needs a reason — the person who recorded it deserves to know why it changed." }); }
+
+      const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
+      if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
+
+      // the prior outcome we are correcting must exist (the original completed event)
+      const original = (await client.query(
+        `select id, metadata, event_at from tour_events
+          where tour_id=$1 and event_type='completed' order by event_at asc limit 1`, [tourId])).rows[0];
+      if (!original) { await client.query("rollback"); return res.status(409).json({ receipt: "There's no recorded tour outcome to correct yet." }); }
+
+      const priorOutcome = (original.metadata && original.metadata.outcome) || null;
+      // revised fields — only the outcome-shaped ones, validated against the frozen vocab shape
+      const rev = b.revised || {};
+      const revised = {
+        disposition: rev.disposition || (priorOutcome && priorOutcome.disposition) || null,
+        sub_read: rev.sub_read !== undefined ? rev.sub_read : (priorOutcome && priorOutcome.sub_read) || null,
+        what_landed: Array.isArray(rev.what_landed) ? rev.what_landed.slice(0, 9) : (priorOutcome && priorOutcome.what_landed) || [],
+        whats_in_way: Array.isArray(rev.whats_in_way) ? rev.whats_in_way.slice(0, 8) : (priorOutcome && priorOutcome.whats_in_way) || [],
+        next_move: rev.next_move || (priorOutcome && priorOutcome.next_move) || null,
+        future_fit: rev.future_fit !== undefined ? rev.future_fit : (priorOutcome && priorOutcome.future_fit) || null,
+        note: rev.note !== undefined ? rev.note : (priorOutcome && priorOutcome.note) || null,
+      };
+
+      // APPEND the correction event — the original is never touched.
+      await recordTourEvent(client, {
+        tourId, leadId: tour.lead_id, type: "outcome_corrected",
+        actorType: "human", actorId: correctedBy,
+        metadata: {
+          corrects_event: original.id,
+          reason,
+          prior: priorOutcome,
+          revised,
+          corrected_by_user_id: correctedBy,     // server-derived
+          corrected_at: new Date().toISOString(),
+        },
+      });
+
+      // update the conversion's projection (current truth) — the correction event
+      // is the audit trail; the conversion reflects the revised current disposition.
+      const conv = (await client.query(
+        `select id from leasing_conversions where origin_tour_id=$1 order by opened_at asc limit 1`, [tourId])).rows[0];
+      if (conv && revised.disposition) {
+        await client.query(
+          `update leasing_conversions set tour_outcome=$1, updated_at=now() where id=$2`,
+          [revised.disposition, conv.id]);
+      }
+
+      await client.query("commit");
+      return res.json({
+        receipt: `Outcome corrected — the original is preserved and the change is on the record with your reason.`,
+        tour_id: tourId, conversion_id: conv ? conv.id : null,
+        prior_disposition: priorOutcome ? priorOutcome.disposition : null,
+        revised_disposition: revised.disposition,
+      });
+    } catch (e) {
+      try { await client.query("rollback"); } catch (_) {}
+      return res.status(e.httpStatus || 500).json({ receipt: e.publicMessage || e.message });
+    } finally { client.release(); }
+  });
+
   // ── NO-SHOW — EXPOSURE. A booked tour that never happened, tracked honestly,
   //  never silently dropped. Frees the slot back? No — the slot was consumed;
   //  the no_show is the record that the spend bought nothing. Slot stays booked
@@ -1447,8 +1634,23 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
       await recordTourEvent(client, {
         tourId, leadId: tour.lead_id, type: "no_show",
-        actorType: b.actor_id ? "human" : "system", actorId: b.actor_id || null,
-        metadata: { scheduled_for: tour.scheduled_for },
+        actorType: b.actor_id ? "human" : "system", actorId: (await resolveRecorderUserId(req)) || b.actor_id || null,
+        // #5: attendance truth and NOTICE are SEPARATE facts — a person who told
+        // us they couldn't come is not operationally a silent no-show. Storing
+        // one flat "notified no-show" would lose the distinction future
+        // reliability/conversion analysis needs. Persist both axes.
+        //   attendance_status: showed_up | did_not_attend | rescheduled
+        //   notice_status:     none | notified
+        metadata: {
+          scheduled_for: tour.scheduled_for,
+          attendance_status: "did_not_attend",
+          notice_status: (b.notified === true || b.attendance === "no_show_notified" || b.notice_status === "notified")
+            ? "notified" : "none",
+          // legacy compound kept for back-compat readers; new readers use the two axes above
+          attendance: (b.notified === true || b.attendance === "no_show_notified" || b.notice_status === "notified")
+            ? "no_show_notified" : "no_show_no_contact",
+          reason: (typeof b.reason === "string" && b.reason.trim()) ? b.reason.trim().slice(0, 300) : null,
+        },
       });
       // ── RECOVERY (wave 3): no-show is a recovery opportunity, not a dead end.
       //    One server-owned attempt record, linked to the canonical person/
