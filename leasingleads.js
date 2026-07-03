@@ -252,7 +252,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     try {
       await client.query("begin");
 
-      prop = (await client.query(`select id, name from properties where id=$1`, [propertyId])).rows[0];
+      prop = (await client.query(`select id, name, coalesce(display_name, name) as display_name from properties where id=$1`, [propertyId])).rows[0];
       if (!prop) { await client.query("rollback"); const e = new Error("No property with that id."); e.httpStatus = 404; e.publicReceipt = e.message; throw e; }
 
       let sourceId = null;
@@ -313,7 +313,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           const u = (await pool.query(`select unit_number, market_rent from units where id=$1`, [lead.unit_id])).rows[0];
           if (u) { unitLabel = u.unit_number ? `Unit ${u.unit_number}` : null; rent = u.market_rent || null; }
         }
-        const body = await draftFirstResponse({ name: person.name, unitLabel, propertyName: prop.name, rent });
+        const body = await draftFirstResponse({ name: person.name, unitLabel, propertyName: prop.display_name, rent });
         draftBody = body;
 
         // THREADED outbound: conversation_id + sender_role so the message lives on the
@@ -491,7 +491,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
 
       // ── SERVER-DERIVED demo property (client property_id ignored entirely) ──
       const prop = (await pool.query(
-        "select id, name from properties where name=$1 order by created_at asc limit 1",
+        "select id, name, coalesce(display_name, name) as display_name from properties where name=$1 order by created_at asc limit 1",
         [DEMO_INTAKE_PROP_NAME]
       )).rows[0];
       if (!prop) {
@@ -1556,37 +1556,6 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       const events = (await pool.query(`select * from tour_events where tour_id=$1 order by event_at`, [req.params.tourId])).rows;
       return res.json({ receipt: `Tour is '${tour.status}'; ${events.length} lifecycle event(s).`, tour, conversation_id: conversationId, events });
     } catch (e) { console.error("leasing tour get:", e); return res.status(500).json({ receipt: "Could not load the tour.", error: e.message }); }
-  });
-
-  // ════════════════════════════════════════════════════════════════════
-  //  SMS TEST-SEND — prove the wire before the funnel depends on it.
-  //  Sends ONE real text FROM the property's sms_number (the same line the
-  //  intake/tour flows use) TO a given number. Operator-gated. The receipt
-  //  is sms.js's honest result verbatim: sent:true with a Twilio sid, or
-  //  sent:false with the reason (transport_not_configured, send_failed +
-  //  Twilio's error, etc). No simulation — if this says sent, a phone rang.
-  // ════════════════════════════════════════════════════════════════════
-  router.post("/leasing/sms/test-send", requireOperator, async (req, res) => {
-    const b = req.body || {};
-    if (!b.property_id || !b.to) {
-      return res.status(400).json({ receipt: "property_id and to (E.164, like +17245551234) are required." });
-    }
-    try {
-      const prop = (await pool.query(`select id, name, sms_number from properties where id=$1`, [b.property_id])).rows[0];
-      if (!prop) return res.status(404).json({ receipt: "No property with that id." });
-      if (!prop.sms_number) {
-        return res.status(409).json({ receipt: `${prop.name || prop.id} has no text line yet — set properties.sms_number first (POST /properties/:id/sms-number).` });
-      }
-      const body = b.body || `OneFive test — the ${prop.name || "property"} leasing line is live. Reply STOP to opt out.`;
-      const result = await sms.sendSms({ to: b.to, from: prop.sms_number, body });
-      const receipt = result.sent
-        ? `SENT — a real text left ${prop.sms_number} for ${b.to} (Twilio sid ${result.sid}, status ${result.status}).`
-        : `NOT sent — ${result.reason}${result.error ? `: ${result.error}` : ""}. ${result.reason === "transport_not_configured" ? "Set TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN in Render." : ""}`;
-      return res.status(result.sent ? 200 : 502).json({ receipt, ...result, from: prop.sms_number, to: b.to });
-    } catch (e) {
-      console.error("sms test-send:", e);
-      return res.status(500).json({ receipt: "Test send failed unexpectedly.", error: e.message });
-    }
   });
 
   return router;
