@@ -371,23 +371,63 @@ module.exports = function operatorModule(deps) {
   async function prospectVitals(client, { personId, propertyId }) {
     const empty = { move_month: null, budget: null, unit_type: null, occupants: null, pets: null, reason: null };
     if (!personId) return empty;
-    // Most recent lead for this person at this property (the opportunity in view).
+    const out = { ...empty };
+    // 1) Form fallback: the intake's move-month on the most recent lead's raw_payload.
     const lead = (await client.query(
       `select raw_payload from leasing_leads
         where person_id=$1 and property_id=$2
         order by created_at desc limit 1`,
       [personId, propertyId]
     )).rows[0];
-    let moveMonth = null;
     try {
       const rp = lead && lead.raw_payload
         ? (typeof lead.raw_payload === "string" ? JSON.parse(lead.raw_payload) : lead.raw_payload)
         : null;
-      // Validated at capture to YYYY-MM or 'flexible'; trust only that shape.
       const v = rp && rp.desired_move_month;
-      if (v === "flexible" || (typeof v === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(v))) moveMonth = v;
+      if (v === "flexible" || (typeof v === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(v))) out.move_month = v;
     } catch (_) { /* honest null beats a bad parse */ }
-    return { ...empty, move_month: moveMonth };
+    // 2) The REAL store (migration 061): typed, sourced person_attributes OVERLAY the
+    //    fallback — the newest confirmed capture wins. Fail-soft if the table is not
+    //    migrated yet: vitals degrade to the form fallback, never a 500.
+    try {
+      const attrs = (await client.query(
+        `select attr_key, attr_value from person_attributes
+          where person_id=$1 and property_id is not distinct from $2 and status='active'`,
+        [personId, propertyId]
+      )).rows;
+      for (const a of attrs) if (a.attr_key in out && a.attr_value != null) out[a.attr_key] = a.attr_value;
+    } catch (_) { /* table may not exist yet — degrade to fallback */ }
+    return out;
+  }
+
+  // ── SOURCE CONVERSION (slice 3) — the funnel per lead source, HONEST COUNTS. ──
+  // leads   = distinct opportunities by source (leasing_leads.source_id)
+  // tours   = of those, leads whose person has a scheduled tour at this property
+  // leases  = of those, leads whose status reached 'leased'
+  // Rates are computed by the CALLER (the UI), from raw counts — the API ships
+  // counts only, so no rounding opinion is baked into the truth. Fail-soft: any
+  // error returns [] (the UI simply shows nothing) — never breaks the queue.
+  async function sourceConversion(propertyId) {
+    try {
+      return (await pool.query(
+        `select coalesce(ls.name,'(no source)') as source,
+                count(ll.id)::int as leads,
+                count(ll.id) filter (where exists (
+                  select 1 from scheduled_tours st
+                   where st.person_id = ll.person_id and st.property_id = ll.property_id
+                ))::int as tours,
+                count(ll.id) filter (where ll.status = 'leased')::int as leases
+           from leasing_leads ll
+           left join lead_sources ls on ls.id = ll.source_id
+          where ll.property_id = $1
+          group by coalesce(ls.name,'(no source)')
+          order by leads desc`,
+        [propertyId]
+      )).rows;
+    } catch (e) {
+      console.error("[operator] sourceConversion failed (non-fatal):", (e && e.message) || "unknown");
+      return [];
+    }
   }
 
   // GET /operator/leasing/conversations/:conversationId — one convo, SCOPE-VERIFIED.
@@ -674,9 +714,13 @@ module.exports = function operatorModule(deps) {
         nextCursor = { before_activity_at: last.last_meaningful_activity_at, before_id: last.conversation_id };
         rows.length = limit;
       }
+      // SLICE 3: per-source funnel counts ride the queue response (no new loader
+      // resource; the Pre-Tour page renders a compact source strip from this).
+      const sources = await sourceConversion(propertyId);
+
       return res.json({
         property_id: propertyId, as_of: asOf, projection_version: "queue_projection_v1",
-        counts, conversations: rows, next_cursor: nextCursor, limit,
+        counts, sources, conversations: rows, next_cursor: nextCursor, limit,
       });
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
   });
