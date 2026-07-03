@@ -430,6 +430,63 @@ module.exports = function operatorModule(deps) {
     }
   }
 
+  // ── TODAY COUNTS — Jessica's 7pm EOD email, computed instead of typed. ────────
+  // The thin "TODAY · N new leads · N tours" strip at the top of the Leasing panel.
+  // V1 ships the TWO counts we can prove against confirmed columns:
+  //   new_leads = leasing_leads created today (created_at)
+  //   tours     = tours BOOKED today across BOTH stores, deduped exactly like the
+  //               live_tour CTE: external scheduled_tours (property-scoped) UNION the
+  //               canonical internal leasing_tours (039), joined lead → (person,
+  //               property). A tour that exists in both stores counts once.
+  // Deliberately NOT included yet: applications-today and signed-today. There is no
+  // confirmed created-timestamp for a lease_applications row, and lead.status='leased'
+  // is a CURRENT-STATE filter, not a "flipped-today" fact — counting it would print the
+  // same number every day regardless of activity (a confident-wrong number). Those two
+  // ride the Commitment Ledger's real timestamps (locked_at / deposit_received_at) when
+  // they exist; this resolver simply gains two fields then. Honest blank beats a guess.
+  //
+  // DAY BOUNDARY: the portfolio has no per-property timezone column, and every property
+  // that exists is Philadelphia / Western PA (Eastern). "Today" is therefore bounded by
+  // America/New_York, not the Render server clock (which is UTC and would flip the day at
+  // 8pm local — wrong during a 7pm-referenced demo). Single-timezone assumption is stated
+  // here on purpose: when a non-Eastern property lands, this is the line that must change.
+  // Fail-soft to zeros: any error returns all-zero counts and never breaks the queue.
+  async function todayCounts(propertyId) {
+    const zero = { new_leads: 0, tours: 0 };
+    try {
+      const r = (await pool.query(
+        `with today as (
+           select (now() at time zone 'America/New_York')::date as d
+         ),
+         nl as (
+           select count(*)::int as n
+             from leasing_leads ll, today
+            where ll.property_id = $1
+              and (ll.created_at at time zone 'America/New_York')::date = today.d
+         ),
+         booked as (
+           select st.id as tour_id
+             from scheduled_tours st, today
+            where st.property_id = $1
+              and (st.created_at at time zone 'America/New_York')::date = today.d
+           union
+           select t.id as tour_id
+             from leasing_tours t
+             join leasing_leads ll on ll.id = t.lead_id, today
+            where ll.property_id = $1
+              and (t.created_at at time zone 'America/New_York')::date = today.d
+         )
+         select (select n from nl) as new_leads,
+                (select count(*)::int from booked) as tours`,
+        [propertyId]
+      )).rows[0];
+      return { new_leads: (r && r.new_leads) || 0, tours: (r && r.tours) || 0 };
+    } catch (e) {
+      console.error("[operator] todayCounts failed (non-fatal):", (e && e.message) || "unknown");
+      return zero;
+    }
+  }
+
   // GET /operator/leasing/conversations/:conversationId — one convo, SCOPE-VERIFIED.
   // Returns the thread/draft via the shared getConversationStateService, PLUS the
   // prospect vitals for the Person Card (fixed contract; honest nulls).
@@ -717,10 +774,14 @@ module.exports = function operatorModule(deps) {
       // SLICE 3: per-source funnel counts ride the queue response (no new loader
       // resource; the Pre-Tour page renders a compact source strip from this).
       const sources = await sourceConversion(propertyId);
+      // TODAY STRIP: same pattern — today's counts ride the queue response so the
+      // offline Leasing door can render them through the loader tile snapshot, with
+      // no new loader resource and no session change.
+      const today = await todayCounts(propertyId);
 
       return res.json({
         property_id: propertyId, as_of: asOf, projection_version: "queue_projection_v1",
-        counts, sources, conversations: rows, next_cursor: nextCursor, limit,
+        counts, sources, today, conversations: rows, next_cursor: nextCursor, limit,
       });
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
   });
