@@ -303,6 +303,30 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
 
       await client.query("commit");
 
+      // ── SLICE 2 (form side): the stated move-month is a first-party captured fact —
+      //    record it in the typed person_attributes store (source='form', the lead is
+      //    the receipt). Fail-soft AFTER the commit: if the store isn't migrated yet,
+      //    the intake still succeeds and vitals fall back to raw_payload. ──
+      try {
+        const _rp = b.raw_payload || {};
+        const _mm = _rp.desired_move_month;
+        if (_mm === "flexible" || (typeof _mm === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(_mm))) {
+          const _cur = (await pool.query(
+            `select id, attr_value from person_attributes
+              where person_id=$1 and property_id is not distinct from $2 and attr_key='move_month' and status='active'`,
+            [person.id, propertyId]
+          )).rows[0];
+          if (!_cur || _cur.attr_value !== _mm) {
+            if (_cur) await pool.query(`update person_attributes set status='retired' where id=$1`, [_cur.id]);
+            await pool.query(
+              `insert into person_attributes (person_id, property_id, attr_key, attr_value, source, source_ref)
+               values ($1,$2,'move_month',$3,'form',$4)`,
+              [person.id, propertyId, _mm, lead.id]
+            );
+          }
+        }
+      } catch (_) { /* store not migrated yet or transient — intake is already durable */ }
+
       // ── Immediate AI first response (outside the txn; lead is durable). ──
       let responseReceipt = "Opportunity saved. No phone on file, so no text sent — the team can follow up by email.";
       let firstResponseSent = false;
