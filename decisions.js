@@ -37,7 +37,7 @@
 
 const express = require("express");
 
-const DECISION_TYPES = ["rent_forgiveness", "writeoff", "waiver", "capex_recat"];
+const DECISION_TYPES = ["rent_forgiveness", "writeoff", "waiver", "capex_recat", "concession"];
 const REASON_CODES = ["hardship", "service_failure", "error_correction", "retention", "legal", "other"];
 
 // assignments.role (004 + 041 vocabulary) → role_name enum for
@@ -69,6 +69,7 @@ const TYPE_LABEL = {
   writeoff: "Write-off",
   waiver: "Waiver",
   capex_recat: "CapEx recategorization",
+  concession: "Concession",   // 064 — over-guardrail discretionary concessions
 };
 
 function money(n) {
