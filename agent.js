@@ -29,6 +29,10 @@ const POLICY_REVISION = "stage-a-v1";
 
 module.exports = function agentModule(deps) {
   const { pool, anthropic, INGEST_MODEL, spawnObligationFromEvent, completeObligation, leasingLifecycle } = deps;
+  // SLICE 2: conversational prospect capture — extracts VOLUNTEERED facts from the
+  // prospect's own inbound messages into person_attributes, fire-and-forget after
+  // a draft is created. Fail-soft by construction (see prospect_capture.js).
+  const prospectCapture = require("./prospect_capture")({ pool, anthropic, INGEST_MODEL });
   if (!pool) throw new Error("agent.js requires { pool }");
   const MODEL = INGEST_MODEL || "claude-sonnet-4-6";
   const router = require("express").Router();
@@ -480,6 +484,15 @@ module.exports = function agentModule(deps) {
 
         return { ok: true, draft_id: draft.id, policy_decision: policyDecision, handoff_reason_code: policyCode };
       });
+
+      // ── SLICE 2 hook: capture volunteered prospect facts, fire-and-forget. ──
+      // AFTER the draft transaction (never inside it), non-blocking, fail-soft:
+      // a capture failure can never delay or break the reply loop.
+      try {
+        prospectCapture.captureFromConversation({
+          conversationId: tx1.conversation_id, personId: tx1.person_id, propertyId: tx1.property_id,
+        }).catch(() => {});
+      } catch (_) {}
 
       return res.json(result);
     } catch (e) {
