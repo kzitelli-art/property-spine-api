@@ -62,9 +62,10 @@ module.exports = function factsSeedModule(deps) {
     {
       fact_key: "fee_policy",
       rendered_text:
-        "Move-in fees: $50 application fee, $300 amenity fee ($250 at renewal), a $99 admin fee " +
+        "Move-in fees: $50 application fee, $250 amenity fee ($150 at renewal), a $99 admin fee " +
         "per unit (at move-in and renewal), and a security deposit of $1,000 (or up to one month's " +
-        "rent, subject to conditions). Wifi (Flume) is $40/month. Renter's insurance can be your own " +
+        "rent, subject to conditions). The security deposit secures your unit and is due within 72 hours " +
+        "of approval to hold it. Wifi (Flume) is $40/month. Renter's insurance can be your own " +
         "policy or $15/month through the building. Parking is $300/month; pet fee $300 one-time plus " +
         "$30/month pet rent. All electric building — residents cover electric, water/sewer, and internet " +
         "unless on an all-inclusive furnished package.",
