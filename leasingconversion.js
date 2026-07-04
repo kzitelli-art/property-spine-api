@@ -25,6 +25,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 const express = require("express");
+const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 
 module.exports = function leasingConversionModule({ pool, spawnObligationFromEvent, completeObligation }) {
   const router = express.Router();
@@ -118,18 +119,13 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
   // a preference-ordered list of candidate user ids, returning the first
   // eligible one, else null (UNASSIGNED — honest).
   async function eligibleOwner(client, propertyId, candidates) {
-    for (const uid of candidates) {
-      if (!uid) continue;
-      try {
-        const r = await client.query(
-          `select 1 from assignments a
-             join users u on u.person_id = a.person_id
-            where u.id = $1 and a.property_id = $2 and a.is_active = true
-            limit 1`, [uid, propertyId]);
-        if (r.rowCount > 0) return { owner: uid, basis: "eligible_assignment" };
-      } catch (_) { /* no bridge column → not provably eligible; try next */ }
-    }
-    return { owner: null, basis: "unassigned" };
+    // 067: delegated to the CANONICAL staff identity resolver. Same contract
+    // ({owner, basis}), stricter truth: eligibility now also requires an
+    // active-eligible account (is_active AND status='active' — anything
+    // else, including unknown future statuses, fails closed), a deliberate
+    // audited bridge, human_staff classification, and no bridge conflict.
+    // No raw users.person_id join lives in this module anymore.
+    return staffIdentity.resolveEligibleOwner(client, propertyId, candidates);
   }
 
   async function createConversionFromTour(client, {
@@ -213,27 +209,31 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
       labelSuffix: primaryMove ? ` — recommended: ${REC_LABEL[primaryMove]}` : null,
     });
 
-    // sibling tasks for the additional moves — each a distinct owned obligation.
+    // ── LOOP-B SIBLING TASKS: SUPPRESSED (identity-bridge release, locked) ──
+    // Sibling `leasing_task` obligations have NO visible queue/board home
+    // yet. An obligation nobody can see is an open loop disguised as
+    // automation — the bridge must not activate invisible owned work. Until
+    // every sibling has a visible, completeable surface (queue presence,
+    // owner, due state, source tour, completion path, visible reassignment),
+    // generation stays OFF. The extra moves are NOT lost: they are recorded
+    // durably as a real event below and returned in next_move_codes.
+    // Re-enable by restoring the spawn loop ONLY after the visibility bar
+    // in the 067 handoff is proven.
+    const LOOPB_SIBLING_TASKS_SUPPRESSED = true;
     const siblingTasks = [];
-    const nm = await personName(client, conv.person_id);
-    for (const mv of extraMoves) {
-      const ob = await spawnObligationFromEvent(client, {
-        property_id: conv.property_id, person_id: conv.person_id,
-        module: "leasing", type: "leasing_task",
-        label: `${REC_LABEL[mv].charAt(0).toUpperCase()}${REC_LABEL[mv].slice(1)} — ${nm}`,
-        owner_type: "human", status: "open", due_at: dueFromNow(3 * 24 * 60 * 60 * 1000),
-        related_id: conv.id, related_type: "leasing_conversion",
-      });
-      const link = (await client.query(
-        `insert into leasing_conversion_obligations
-           (conversion_id, obligation_id, rung, owner_user_id, owner_role, due_by)
-         values ($1,$2,'leasing_task',$3,null,$4) returning *`,
-        [conv.id, ob.id, ownerUserId || null, ob.due_at])).rows[0];
-      siblingTasks.push({ obligation: ob, link, move_code: mv });
+    if (extraMoves.length && LOOPB_SIBLING_TASKS_SUPPRESSED) {
+      // durable record of the operator's full intent — a fact, not a task.
+      await client.query(
+        `insert into events (property_id, person_id, type, note)
+         values ($1, $2, 'leasing_next_moves_recorded', $3)`,
+        [conv.property_id, conv.person_id,
+         `Additional next moves noted: ${extraMoves.map((m) => REC_LABEL[m]).join("; ")} [${extraMoves.join(",")}]`]);
     }
 
     return {
       conversion: conv, first_rung: first, sibling_tasks: siblingTasks,
+      sibling_tasks_suppressed: extraMoves.length > 0,   // 067: honest receipt — extra moves recorded as an event, no invisible obligations spawned
+      suppressed_move_codes: extraMoves,
       // next_move stays a machine-readable CODE — routing/reporting/AI read this,
       // never the rendered label. The label is presentation only.
       next_move_code: primaryMove,
