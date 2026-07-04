@@ -14,6 +14,10 @@ const multer = require("multer");          // handles file uploads (rent roll .x
 const leasingIntelModule = require("./leasingintel");
 const leasePacketsModule = require("./leasepackets");
 const applicationsModule = require("./applications");
+const { createConversionClosureAuthority } = require("./conversion_obligation_closure");
+// created ONCE; handed ONLY to the conversion rail below — never to the engine,
+// never to any other module. That exclusivity IS the structural guarantee.
+const __conversionClosureAuthority = createConversionClosureAuthority();
 const XLSX = require("xlsx");              // parses the spreadsheet to rows
 const maintenanceModule = require("./maintenance");  // isolated maintenance routes
 const downUnitsModule = require("./down_units");      // isolated down-units routes
@@ -268,6 +272,22 @@ async function satisfyObligation(client, { obligation_id, input, proof = null })
 // Complete an obligation — the proof gate. Refuses (throws) if required_inputs
 // remain or it's already complete. Returns the completed obligation row.
 async function completeObligation(client, { obligation_id, completed_by = null }) {
+  // CLOSURE AUTHORITY (structural — reviewer ruling Jul 4): a conversion-linked
+  // obligation closes ONLY through the conversion rail's closure capability
+  // (conversion_obligation_closure.js). This public engine categorically
+  // rejects linked obligations and carries NO bypass parameter, flag, header,
+  // or marker of any kind. There is nothing a future caller can pass.
+  {
+    const linked = (await client.query(
+      `select 1 from leasing_conversion_obligations where obligation_id=$1
+        and (select to_regclass('leasing_conversion_obligations')) is not null limit 1`,
+      [obligation_id])).rows[0];
+    if (linked) {
+      const err = new Error("Conversion-linked obligations must resolve through the conversion rail.");
+      err.code = "CONVERSION_RAIL_REQUIRED"; err.httpStatus = 409; err.publicMessage = err.message;
+      throw err;
+    }
+  }
   const o = await client.query("select * from obligations where id=$1 for update", [obligation_id]);
   if (o.rows.length === 0) throw obligationError("NOT_FOUND", "obligation not found");
   const obligation = o.rows[0];
@@ -3210,7 +3230,7 @@ app.use("/", dealIntakeModule({ pool, anthropic, INGEST_MODEL, registryInstance,
 const leasingConversionModule = require("./leasingconversion");   // conversion case + immutable child obligations + explicit handoff
 const leasingSchedulingModule = require("./leasingscheduling");   // Acuity/Outlook source events -> canonical scheduled tours
 const leasingInteractionsModule = require("./leasinginteractions"); // Twilio interaction ledger on extended comm_events
-const __leasingConversion = leasingConversionModule({ pool, spawnObligationFromEvent, completeObligation });
+const __leasingConversion = leasingConversionModule({ pool, spawnObligationFromEvent, completeObligation, closureAuthority: __conversionClosureAuthority });
 app.use("/", __leasingConversion);
 const decisionsModule = require("./decisions");   // the Decision Rail (059)
 const __decisions = decisionsModule({ pool, spawnObligationFromEvent, completeObligation });
@@ -3234,6 +3254,7 @@ app.use("/", __applicationSubmission);
 app.use("/", applicationsModule({
   pool, spawnObligationFromEvent, satisfyObligation, completeObligation,
   submissionService: __applicationSubmission._service,
+  conversionService: __leasingConversion._service, // 068: approval is the ONLY creator of signature follow-up work
   ledgerService: __commitmentLedger._service,   // J1: countersign locks the economic schedule
 }));
 app.use("/", leasingSchedulingModule({ pool }));
