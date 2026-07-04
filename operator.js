@@ -32,6 +32,7 @@
 //       the operator-facing actions agent.js exposes. Mounted under "/".
 
 const crypto = require("crypto");
+const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 
 module.exports = function operatorModule(deps) {
   const { pool, agentService } = deps;
@@ -1082,11 +1083,14 @@ module.exports = function operatorModule(deps) {
     res.set("Cache-Control", "no-store");
     try {
       const propertyId = req.operator.property_id;
-      const rows = (await pool.query(
-        `select distinct u.id, u.name, u.role
-           from assignments a join users u on u.person_id = a.person_id
-          where a.property_id = $1 and a.is_active = true
-          order by u.name asc`, [propertyId])).rows;
+      // 067: the roster reads through the CANONICAL resolver — only
+      // classified human staff on active-eligible accounts, deliberately
+      // bridged, unconflicted, with an active assignment HERE. No raw
+      // users.person_id join lives in this module anymore.
+      const client = await pool.connect();
+      let rows;
+      try { rows = await staffIdentity.listEligibleStaff(client, propertyId); }
+      finally { client.release(); }
       return res.json({ property_id: propertyId, eligible_staff: rows });
     } catch (e) { return res.status(500).json({ error: e.message }); }
   });
