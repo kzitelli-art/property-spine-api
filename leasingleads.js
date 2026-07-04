@@ -22,6 +22,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 const express = require("express");
+const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 const crypto = require("crypto");
 
 module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices, commitmentLedger = null }) {
@@ -1307,12 +1308,14 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       let actualHostNameClaim = null;   // free-text only
       const rawHostId = b.actual_tour_host_user_id || null;
       if (rawHostId) {
-        const rosterOk = (await client.query(
-          `select 1 from assignments a join users u on u.person_id = a.person_id
-            where u.id = $1 and a.property_id = $2 and a.is_active = true limit 1`,
-          [rawHostId, tour.property_id])).rows[0];
-        if (rosterOk) actualHostUserId = rawHostId;      // path A — verified roster
-        else actualHostNameClaim = String(b.actual_tour_host_name || rawHostId).slice(0, 120); // arbitrary id → free text only
+        // 067: roster validation goes through the CANONICAL resolver — the
+        // same eligibility the obligation owner gate uses (active-eligible
+        // account + deliberate bridge + human_staff + no conflict + active
+        // assignment HERE). No raw users.person_id join in this module.
+        const hostRes = await staffIdentity.resolveStaffIdentity(client,
+          { user_id: rawHostId, property_id: tour.property_id });
+        if (hostRes.state === "resolved") actualHostUserId = rawHostId; // path A — verified roster
+        else actualHostNameClaim = String(b.actual_tour_host_name || rawHostId).slice(0, 120); // arbitrary/unresolvable id → free text only
       } else if (b.actual_tour_host_name) {
         actualHostNameClaim = String(b.actual_tour_host_name).slice(0, 120); // path B — free text
       }
