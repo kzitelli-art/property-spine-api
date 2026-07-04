@@ -1,401 +1,487 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-<title>Property Spine — Leasing Conversations</title>
-<style>
-  :root{
-    --ink:#1a1a1a; --paper:#ffffff; --line:#e5e2dc; --muted:#6b6862; --soft:#f7f5f1;
-    --m-red:#b23b2e; --m-amber:#9a6b1f; --m-green:#1d6b54; --m-blue:#2a4a68;
-  }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--soft);color:var(--ink);
-    font-family:"IBM Plex Sans",-apple-system,system-ui,sans-serif;font-size:15px;line-height:1.5;}
-  .wrap{max-width:760px;margin:0 auto;padding:0 0 64px;}
-  header.app{padding:20px 20px 14px;border-bottom:1px solid var(--line);background:var(--paper);position:sticky;top:0;z-index:5;}
-  .eyebrow{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);}
-  h1{font-family:"Fraunces",Georgia,serif;font-weight:600;font-size:22px;margin:2px 0 0;letter-spacing:-.01em;}
-  .sub{font-size:13px;color:var(--muted);margin-top:3px;}
-  .pad{padding:18px 20px;}
-  .card{background:var(--paper);border:1px solid var(--line);border-radius:12px;margin:14px 20px;overflow:hidden;}
-  .card .hd{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:10px;}
-  .card .hd h2{font-family:"Fraunces",serif;font-weight:600;font-size:15px;margin:0;}
-  .card .bd{padding:14px 16px;}
-  .mono{font-family:"IBM Plex Mono",monospace;}
-  .muted{color:var(--muted);}
-  .pill{display:inline-block;font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.05em;
-    padding:2px 8px;border-radius:999px;border:1px solid var(--line);text-transform:uppercase;}
-  .pill.green{color:var(--m-green);border-color:var(--m-green);}
-  .pill.amber{color:var(--m-amber);border-color:var(--m-amber);}
-  .pill.red{color:var(--m-red);border-color:var(--m-red);}
-  .pill.blue{color:var(--m-blue);border-color:var(--m-blue);}
-  button{font-family:inherit;font-size:14px;border:1px solid var(--ink);background:var(--ink);color:#fff;
-    border-radius:9px;padding:9px 14px;cursor:pointer;}
-  button.ghost{background:transparent;color:var(--ink);}
-  button.soft{background:var(--soft);color:var(--ink);border-color:var(--line);}
-  button:disabled{opacity:.4;cursor:default;}
-  .row{display:flex;gap:8px;flex-wrap:wrap;}
-  input,select,textarea{font-family:inherit;font-size:14px;width:100%;padding:9px 11px;border:1px solid var(--line);
-    border-radius:9px;background:var(--paper);color:var(--ink);}
-  textarea{resize:vertical;min-height:64px;}
-  label.f{display:block;margin:10px 0 4px;font-size:12px;color:var(--muted);font-weight:600;}
-  .thread{display:flex;flex-direction:column;gap:8px;}
-  .msg{max-width:80%;padding:8px 12px;border-radius:12px;font-size:14px;}
-  .msg.in{align-self:flex-start;background:var(--soft);border:1px solid var(--line);}
-  .msg.out{align-self:flex-end;background:var(--m-blue);color:#fff;}
-  .msg .t{font-size:10px;opacity:.7;margin-top:3px;font-family:"IBM Plex Mono",monospace;}
-  .draft{border:1px dashed var(--m-amber);border-radius:12px;padding:12px;background:#fdfaf4;}
-  .draft .lbl{font-family:"IBM Plex Mono",monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--m-amber);margin-bottom:6px;}
-  .err{color:var(--m-red);font-size:13px;margin:8px 0;}
-  .convitem{padding:12px 16px;border-bottom:1px solid var(--line);cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px;}
-  .convitem:hover{background:var(--soft);}
-  .convitem:last-child{border-bottom:none;}
-  .factrow{padding:10px 0;border-bottom:1px solid var(--line);}
-  .factrow:last-child{border-bottom:none;}
-  .factkey{font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--m-blue);}
-  .small{font-size:12px;}
-  .center{text-align:center;}
-  .hidden{display:none;}
-  a.back{font-size:13px;color:var(--m-blue);cursor:pointer;text-decoration:none;}
-</style>
-</head>
-<body>
-<div class="wrap">
-  <header class="app">
-    <div class="eyebrow">Property Spine · Leasing</div>
-    <h1>Leasing Conversations</h1>
-    <div class="sub" id="who">Connecting…</div>
-  </header>
+// ════════════════════════════════════════════════════════════════════
+//  LEASING CONVERSION RAIL — leasingconversion.js
+//
+//  The canonical system-of-record for a prospect's POST-TOUR relationship.
+//  After a completed tour, the human who ACTUALLY gave it owns the
+//  conversation until they explicitly hand it off. AI prepares; the human
+//  sends. This module owns the durable truth: who toured them, who owns the
+//  conversation now, every handoff, and each rung's immutable kept/missed
+//  outcome — the history the Leasing queues and the Grade later read.
+//
+//  WHAT THIS MODULE DOES NOT DO (by contract): no UI, no Grade math, no
+//  Twilio. It does not invent people. Child follow-up COMMITMENTS are created
+//  through the SHARED obligation engine (spawnObligationFromEvent / complete-
+//  Obligation), injected — never reimplemented here.
+//
+//  Deps: { pool, spawnObligationFromEvent, completeObligation }.
+//  Operator routes gated by shared OPERATOR_KEY (x-operator-key), fail-closed.
+//
+//  THE RUNGS:
+//    Core human-conversation rungs (owned by the conversation owner):
+//      tour_followup → applicant_followup → lease_signature_followup
+//    Separate decision / operating gates (can run ALONGSIDE; owned by a role):
+//      application_approval, lease_terms_approval, lease_countersign,
+//      move_in_readiness
+// ════════════════════════════════════════════════════════════════════
 
-  <div id="errbox" class="pad hidden"></div>
+const express = require("express");
 
-  <!-- LOGIN-REQUIRED STATE (shown when no session and not in demo mode) -->
-  <div id="loginState" class="card hidden">
-    <div class="hd"><h2>Staff sign-in required</h2></div>
-    <div class="bd">
-      <p class="muted small">This is an authenticated Property Spine operator surface. Sign in with your staff phone to manage leasing conversations.</p>
-      <p class="muted small">(SMS staff sign-in arrives with the Twilio line. This page does not store any session — reloading always returns here unless a session is active.)</p>
-    </div>
-  </div>
+module.exports = function leasingConversionModule({ pool, spawnObligationFromEvent, completeObligation }) {
+  const router = express.Router();
 
-  <!-- DEMO BOOTSTRAP STATE (shown only when DEMO_MODE bridge is available) -->
-  <div id="bootstrapState" class="card hidden">
-    <div class="hd"><h2>Demo operator session</h2></div>
-    <div class="bd">
-      <p class="muted small">No active session in this tab. Enter the demo access code to start a scoped operator session for the seeded demo manager.</p>
-      <label class="f">Demo access code</label>
-      <input id="accessCode" type="password" autocomplete="off" placeholder="single-purpose demo code" />
-      <div class="row" style="margin-top:12px;">
-        <button id="bootstrapBtn">Start operator session</button>
-      </div>
-      <div id="bootstrapErr" class="err"></div>
-    </div>
-  </div>
-
-  <!-- LIST VIEW -->
-  <div id="listView" class="hidden">
-    <div class="card">
-      <div class="hd"><h2>Active conversations</h2><span class="pill" id="listCount"></span></div>
-      <div id="convList"></div>
-    </div>
-  </div>
-
-  <!-- DETAIL VIEW -->
-  <div id="detailView" class="hidden">
-    <div class="pad"><a class="back" id="backLink">← All conversations</a></div>
-
-    <div class="card">
-      <div class="hd"><h2 id="detailName">Conversation</h2><span class="pill" id="modePill"></span></div>
-      <div class="bd">
-        <div class="thread" id="thread"></div>
-        <div id="draftWrap" style="margin-top:14px;"></div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="hd"><h2>Verified facts the agent may use</h2><span class="pill" id="factCount"></span></div>
-      <div class="bd">
-        <div id="factList" class="muted small">No verified facts yet.</div>
-        <details style="margin-top:12px;">
-          <summary class="small mono" style="cursor:pointer;color:var(--m-blue);">+ Add a verified fact</summary>
-          <div style="margin-top:8px;">
-            <label class="f">Fact</label>
-            <select id="fKey">
-              <option value="pet_policy">pet_policy</option>
-              <option value="parking_rules">parking_rules</option>
-              <option value="tour_window">tour_window</option>
-              <option value="fee_policy">fee_policy</option>
-              <option value="required_documents">required_documents</option>
-              <option value="office_contact">office_contact</option>
-              <option value="communication_instructions">communication_instructions</option>
-            </select>
-            <label class="f">Approved wording (exact text the agent may rely on)</label>
-            <textarea id="fText" placeholder="e.g. Cats and dogs under 50 lbs are welcome; $250 refundable pet deposit per pet."></textarea>
-            <label class="f">Source</label>
-            <select id="fSource">
-              <option value="management_policy">management policy</option>
-              <option value="lease_or_addendum">lease or addendum</option>
-              <option value="verified_operator_confirmation">verified operator confirmation</option>
-              <option value="other_documented_source">other documented source</option>
-            </select>
-            <label class="f">Confirmed date (optional — defaults to today)</label>
-            <input id="fConfirmed" type="date" />
-            <div class="row" style="margin-top:12px;">
-              <button id="addFactBtn">Add verified fact</button>
-            </div>
-            <div id="factErr" class="err"></div>
-          </div>
-        </details>
-      </div>
-    </div>
-  </div>
-</div>
-
-<script>
-  // ── DEMO config (page-level) ──────────────────────────────────────────────
-  // This shows the demo access-code bootstrap on this page. The BACKEND still
-  // independently requires DEMO_MODE=true + a valid DEMO_ACCESS_CODE to mint a
-  // session — this flag only controls which sign-in UI the page renders. Remove
-  // this line (or set "false") to make the page show the real staff-login state.
-  window.__DEMO_MODE__ = "true";
-</script>
-<script>
-(function(){
-  "use strict";
-  // ── config: same API base as the other operator/demo pages ──
-  var API = (window.__API_BASE__ || "https://property-spine-api.onrender.com");
-  var DEMO_MODE = (String(window.__DEMO_MODE__) === "true");   // set by the page host; gates the bootstrap UI
-  var SLUG = new URLSearchParams(location.search).get("slug") || "solo-live-demo";
-
-  // ── SESSION TOKEN: held in MEMORY ONLY. Never localStorage / URL / query. ──
-  // On reload this variable resets to null — which is the point: the demo bridge
-  // must never become permanent browser auth.
-  var SESSION = null;
-  var PROPERTY = null;
-  var currentConvId = null;
-  var POLL = 3000, pollTimer = null, busy = false;
-
-  function el(id){ return document.getElementById(id); }
-  function show(id){ el(id).classList.remove("hidden"); }
-  function hide(id){ el(id).classList.add("hidden"); }
-  function esc(s){ return String(s==null?"":s).replace(/[&<>]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;"}[c];}); }
-  function fmt(iso){ try{ return new Date(iso).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"});}catch(e){return"";} }
-  function showErr(m){ var b=el("errbox"); if(m){ b.textContent=m; b.classList.remove("hidden"); } else { b.classList.add("hidden"); } }
-
-  // authenticated fetch — attaches the in-memory session header. 401 → drop to sign-in.
-  async function api(path, opts){
-    opts = opts || {};
-    opts.headers = Object.assign({}, opts.headers || {}, { "accept":"application/json" });
-    if (SESSION) opts.headers["x-staff-session"] = SESSION;
-    if (opts.body && typeof opts.body !== "string"){ opts.headers["content-type"]="application/json"; opts.body=JSON.stringify(opts.body); }
-    var r = await fetch(API + path, opts);
-    if (r.status === 401){ SESSION = null; PROPERTY = null; stopPoll(); renderAuthGate(); throw new Error("session expired"); }
-    var j = null; try{ j = await r.json(); }catch(e){}
-    if (!r.ok) throw new Error((j && (j.error||j.message)) || ("HTTP "+r.status));
-    return j;
+  // ── AUTH ────────────────────────────────────────────────────────────
+  function requireOperator(req, res, next) {
+    const expected = process.env.OPERATOR_KEY;
+    if (!expected) return res.status(503).json({ receipt: "Operator routes are locked: set OPERATOR_KEY in Render's environment, then send it as the x-operator-key header." });
+    if (req.headers["x-operator-key"] !== expected) return res.status(401).json({ receipt: "Operator key missing or wrong." });
+    next();
   }
 
-  // ── auth gate: decide which "no session" state to show ──
-  function renderAuthGate(){
-    hide("listView"); hide("detailView"); hide("bootstrapState"); hide("loginState");
-    el("who").textContent = "Not signed in";
-    if (DEMO_MODE){ show("bootstrapState"); }   // demo bridge available
-    else { show("loginState"); }                 // real staff sign-in required
-  }
-
-  // ── demo bootstrap: exchanges a single-purpose access code for a REAL scoped session ──
-  el("bootstrapBtn").onclick = async function(){
-    el("bootstrapErr").textContent = ""; showErr("");
-    var code = el("accessCode").value;        // held in memory only, for this exchange
-    if (!code){ el("bootstrapErr").textContent = "Enter the demo access code."; return; }
-    this.disabled = true; this.textContent = "Starting…";
-    try{
-      var r = await fetch(API + "/demo/operator-session", {
-        method:"POST", headers:{"content-type":"application/json"},
-        body: JSON.stringify({ access_code: code })
-      });
-      var j = await r.json();
-      // discard the access code immediately, regardless of outcome
-      code = null; el("accessCode").value = "";
-      if (!r.ok || !j.ok) throw new Error(j.error || "bootstrap failed");
-      SESSION = j.session_token;            // memory only
-      PROPERTY = j.property_id;
-      await afterAuth();
-    }catch(e){ el("bootstrapErr").textContent = e.message; this.disabled=false; this.textContent="Start operator session"; }
+  // ── RUNG CONFIG ─────────────────────────────────────────────────────
+  // Default windows (ms). Conservative starting values; configurable later.
+  const HOUR = 3600 * 1000;
+  const RUNG = {
+    tour_followup:            { window: 24 * HOUR,  next: "applicant_followup",      kind: "conversation", label: (n) => `Tour follow-up — ${n}` },
+    applicant_followup:       { window: 72 * HOUR,  next: "lease_signature_followup",kind: "conversation", label: (n) => `Application follow-up — ${n}` },
+    lease_signature_followup: { window: 48 * HOUR,  next: null,                      kind: "conversation", label: (n) => `Lease-signature follow-up — ${n}` },
+    // gates — owned by a role, not the conversation owner. No auto-next.
+    application_approval:     { window: 48 * HOUR,  next: null, kind: "gate", gate_role: "leasing_manager",          label: (n) => `Application approval — ${n}` },
+    lease_terms_approval:     { window: 48 * HOUR,  next: null, kind: "gate", gate_role: "property_manager",         label: (n) => `Lease-terms approval — ${n}` },
+    lease_countersign:        { window: 48 * HOUR,  next: null, kind: "gate", gate_role: "property_manager",         label: (n) => `Lease countersign — ${n}` },
+    move_in_readiness:        { window: 72 * HOUR,  next: null, kind: "gate", gate_role: "property_manager",         label: (n) => `Move-in readiness — ${n}` },
   };
+  const CONVERSATION_RUNGS = Object.keys(RUNG).filter(k => RUNG[k].kind === "conversation");
 
-  async function afterAuth(){
-    hide("bootstrapState"); hide("loginState");
-    var me = await api("/operator/me");
-    PROPERTY = me.property_id;
-    el("who").textContent = me.name + " · " + me.role + " · scoped to one property";
-    openList();
+  function dueFromNow(ms) { return new Date(Date.now() + ms).toISOString(); }
+
+  // ── personname helper for labels (best-effort; never blocks) ──
+  async function personName(client, person_id) {
+    try {
+      const r = await client.query("select name from persons where id=$1", [person_id]);
+      return (r.rows[0] && r.rows[0].name) || "prospect";
+    } catch { return "prospect"; }
   }
 
-  // ── LIST ──
-  async function openList(){
-    currentConvId = null; stopPoll();
-    hide("detailView"); show("listView");
-    try{
-      var data = await api("/operator/leasing/conversations");
-      var list = el("convList"); list.innerHTML = "";
-      el("listCount").textContent = (data.conversations||[]).length + " shown";
-      if (!data.conversations || !data.conversations.length){
-        list.innerHTML = '<div class="bd muted small">No conversations yet. When a lead messages, it appears here.</div>';
-      } else {
-        data.conversations.forEach(function(c){
-          var div = document.createElement("div"); div.className="convitem";
-          var badge = c.ready_drafts>0 ? '<span class="pill amber">draft to review</span>'
-                    : (c.mode==='human_takeover' ? '<span class="pill blue">you have this</span>' : '<span class="pill green">agent active</span>');
-          div.innerHTML = '<div><div>'+esc(c.person_name||'Lead')+'</div><div class="muted small mono">'+esc((c.id||'').slice(0,8))+'</div></div>'+badge;
-          div.onclick = function(){ openDetail(c.id, c.person_name); };
-          list.appendChild(div);
-        });
-      }
-      // refresh list periodically too
-      startPoll(openListSilent);
-    }catch(e){ showErr(e.message); }
-  }
-  async function openListSilent(){
-    try{
-      var data = await api("/operator/leasing/conversations");
-      if (currentConvId) return; // user navigated away
-      var list = el("convList"); list.innerHTML = "";
-      el("listCount").textContent = (data.conversations||[]).length + " shown";
-      (data.conversations||[]).forEach(function(c){
-        var div=document.createElement("div"); div.className="convitem";
-        var badge=c.ready_drafts>0?'<span class="pill amber">draft to review</span>':(c.mode==='human_takeover'?'<span class="pill blue">you have this</span>':'<span class="pill green">agent active</span>');
-        div.innerHTML='<div><div>'+esc(c.person_name||'Lead')+'</div><div class="muted small mono">'+esc((c.id||'').slice(0,8))+'</div></div>'+badge;
-        div.onclick=function(){ openDetail(c.id, c.person_name); };
-        list.appendChild(div);
-      });
-    }catch(e){}
-  }
+  // ════════════════════════════════════════════════════════════════════
+  //  CORE SERVICE — these functions ARE the canonical rules. The HTTP routes
+  //  below are thin wrappers. Each takes an open transaction `client`.
+  // ════════════════════════════════════════════════════════════════════
 
-  // ── DETAIL ──
-  el("backLink").onclick = function(){ openList(); };
+  // Spawn ONE rung: create the commitment in the shared obligations table via
+  // the injected engine, then write the conversion-link row that carries the
+  // immutable outcome. Returns { obligation, link }.
+  async function spawnRung(client, { conversion, rung, owner_user_id, owner_role, labelSuffix = null }) {
+    const cfg = RUNG[rung];
+    if (!cfg) throw httpErr(400, `unknown rung "${rung}"`);
+    const name = await personName(client, conversion.person_id);
 
-  async function openDetail(convId, name){
-    currentConvId = convId; stopPoll();
-    hide("listView"); show("detailView");
-    el("detailName").textContent = name || "Conversation";
-    await refreshDetail();
-    startPoll(refreshDetail);
-  }
-
-  async function refreshDetail(){
-    if (!currentConvId) return;
-    try{
-      var s = await api("/operator/leasing/conversations/" + encodeURIComponent(currentConvId));
-      // mode pill
-      var mp = el("modePill");
-      if (s.mode==='human_takeover'){ mp.textContent="you have this"; mp.className="pill blue"; }
-      else if (s.mode==='awaiting_review' || (s.draft)){ mp.textContent="draft to review"; mp.className="pill amber"; }
-      else { mp.textContent="agent active"; mp.className="pill green"; }
-
-      // thread
-      var t = el("thread"); t.innerHTML="";
-      (s.messages||[]).forEach(function(m){
-        var d=document.createElement("div"); d.className="msg "+(m.direction==='inbound'?'in':'out');
-        d.innerHTML = esc(m.body) + '<div class="t">'+(m.direction==='inbound'?'lead':'sent')+' · '+fmt(m.occurred_at)+'</div>';
-        t.appendChild(d);
-      });
-
-      // draft + actions
-      renderDraft(s.draft, s.mode);
-
-      // facts
-      renderFacts(s.facts || []);
-    }catch(e){ if(e.message!=='session expired') showErr(e.message); }
-  }
-
-  function renderDraft(draft, mode){
-    var w = el("draftWrap"); w.innerHTML="";
-    if (mode==='human_takeover'){
-      w.innerHTML = '<div class="muted small">You\'ve taken over this conversation. The agent will not draft replies until reactivated.</div>';
-      return;
-    }
-    if (!draft){
-      w.innerHTML = '<div class="muted small">No draft awaiting review. The agent drafts when the lead sends a message.</div>';
-      return;
-    }
-    var policy = draft.policy_decision && draft.policy_decision!=='allow'
-      ? '<span class="pill red">handoff: '+esc(draft.handoff_reason_code||draft.policy_decision)+'</span>' : '';
-    var box = document.createElement("div"); box.className="draft";
-    box.innerHTML = '<div class="lbl">AI draft — review before sending '+policy+'</div>'+
-      '<textarea id="draftBody">'+esc(draft.generated_body)+'</textarea>'+
-      '<div class="row" style="margin-top:10px;">'+
-        '<button id="sendBtn">Send</button>'+
-        '<button id="editSendBtn" class="soft">Edit &amp; send</button>'+
-        '<button id="regenBtn" class="ghost">Regenerate</button>'+
-        '<button id="takeoverBtn" class="ghost">Take over</button>'+
-      '</div><div id="draftErr" class="err"></div>';
-    w.appendChild(box);
-
-    el("sendBtn").onclick = function(){ doSend(draft.id, null); };
-    el("editSendBtn").onclick = function(){ doSend(draft.id, el("draftBody").value, true); };
-    el("regenBtn").onclick = function(){ doRegen(draft.id); };
-    el("takeoverBtn").onclick = function(){ doTakeover(); };
-  }
-
-  async function doSend(draftId, body, isEdit){
-    if (busy) return; busy=true;
-    try{
-      if (isEdit){ await api("/operator/agent-drafts/"+encodeURIComponent(draftId)+"/edit-and-send", { method:"POST", body:{ body: body } }); }
-      else { await api("/operator/agent-drafts/"+encodeURIComponent(draftId)+"/send", { method:"POST", body:{} }); }
-      await refreshDetail();
-    }catch(e){ var de=el("draftErr"); if(de) de.textContent = e.message; }
-    finally{ busy=false; }
-  }
-  async function doRegen(draftId){
-    if (busy) return; busy=true;
-    try{ await api("/operator/agent-drafts/"+encodeURIComponent(draftId)+"/regenerate", { method:"POST", body:{} }); await refreshDetail(); }
-    catch(e){ var de=el("draftErr"); if(de) de.textContent=e.message; }
-    finally{ busy=false; }
-  }
-  async function doTakeover(){
-    if (busy) return; busy=true;
-    try{ await api("/operator/conversations/"+encodeURIComponent(currentConvId)+"/take-over", { method:"POST", body:{} }); await refreshDetail(); }
-    catch(e){ var de=el("draftErr"); if(de) de.textContent=e.message; }
-    finally{ busy=false; }
-  }
-
-  // ── FACTS ──
-  function renderFacts(facts){
-    el("factCount").textContent = facts.length + " active";
-    var fl = el("factList");
-    if (!facts.length){ fl.className="muted small"; fl.textContent="No verified facts yet. The agent will hand off questions it can't ground in a verified fact."; return; }
-    fl.className=""; fl.innerHTML="";
-    facts.forEach(function(f){
-      var div=document.createElement("div"); div.className="factrow";
-      div.innerHTML='<div class="factkey">'+esc(f.fact_key)+'</div>'+
-        '<div>'+esc(f.rendered_text)+'</div>'+
-        '<div class="muted small mono" style="margin-top:3px;">'+esc(f.source_type)+(f.confirmed_at?(' · confirmed '+new Date(f.confirmed_at).toLocaleDateString()):'')+'</div>';
-      fl.appendChild(div);
+    // The follow-up commitment is a real obligation (one accountable-human spine).
+    const ob = await spawnObligationFromEvent(client, {
+      property_id: conversion.property_id,
+      person_id:   conversion.person_id,
+      module:      "leasing",
+      type:        rung,
+      label:       cfg.label(name) + (labelSuffix || ""),
+      owner_type:  "human",
+      assigned_role: owner_role || null,
+      status:      "open",
+      due_at:      dueFromNow(cfg.window),
+      related_id:  conversion.id,
+      related_type:"leasing_conversion",
     });
+
+    const link = (await client.query(
+      `insert into leasing_conversion_obligations
+         (conversion_id, obligation_id, rung, owner_user_id, owner_role, due_by)
+       values ($1,$2,$3,$4,$5,$6) returning *`,
+      [conversion.id, ob.id, rung, owner_user_id || null, owner_role || null, ob.due_at]
+    )).rows[0];
+
+    // Cache latest stage for fast queue reads (conversation rungs only).
+    if (cfg.kind === "conversation") {
+      await client.query(
+        `update leasing_conversions set current_stage=$1, updated_at=now() where id=$2`,
+        [rung, conversion.id]
+      );
+    }
+    return { obligation: ob, link };
   }
 
-  el("addFactBtn").onclick = async function(){
-    if (busy) return; busy=true; el("factErr").textContent="";
-    var body = { fact_key: el("fKey").value, rendered_text: el("fText").value, source_type: el("fSource").value };
-    if (el("fConfirmed").value) body.confirmed_at = el("fConfirmed").value;
-    try{
-      await api("/operator/agent-facts", { method:"POST", body: body });
-      el("fText").value="";
-      await refreshDetail();
-    }catch(e){ el("factErr").textContent = e.message; }
-    finally{ busy=false; }
+  // RULE: a conversion record cannot be created without a confirmed actual host.
+  // Creates the parent, the synthetic 'origin' handoff (so history starts with
+  // the tour), and the first tour_followup rung owned by the actual host.
+  // ── OWNERSHIP ≠ ATTRIBUTION (module-level, one rule for every spawn site) ──
+  // A user may OWN a follow-up obligation only if it resolves to an active
+  // assignment at this property. assignments(004) keys on person_id; no
+  // users↔persons bridge exists yet, so an asserted host id is not provably
+  // eligible and must never silently become an owner. Resolves an owner from
+  // a preference-ordered list of candidate user ids, returning the first
+  // eligible one, else null (UNASSIGNED — honest).
+  async function eligibleOwner(client, propertyId, candidates) {
+    for (const uid of candidates) {
+      if (!uid) continue;
+      try {
+        const r = await client.query(
+          `select 1 from assignments a
+             join users u on u.person_id = a.person_id
+            where u.id = $1 and a.property_id = $2 and a.is_active = true
+            limit 1`, [uid, propertyId]);
+        if (r.rowCount > 0) return { owner: uid, basis: "eligible_assignment" };
+      } catch (_) { /* no bridge column → not provably eligible; try next */ }
+    }
+    return { owner: null, basis: "unassigned" };
+  }
+
+  async function createConversionFromTour(client, {
+    person_id, property_id, origin_tour_id = null, lead_id = null,
+    scheduled_tour_host_user_id = null, actual_tour_host_user_id,
+    feedback_recorded_by_user_id = null, tour_outcome = null, tour_notes = null,
+    // v2: the recommendation from the tour outcome (next_move). A recommendation
+    // is never a soft word that can rot unowned — it IS the content of the
+    // follow-up obligation, carried in the rung's label and owned by the host.
+    recommendation = null,
+    // multi-move: an ordered array of next-move codes. First = primary (anchors
+    // the conversation); the rest spawn sibling task obligations.
+    recommendations = null,
+    // #1: the operator may explicitly choose the follow-up owner. Honored ONLY
+    // when it resolves to an active eligible assignment (re-validated here).
+    explicit_owner_user_id = null,
+  }) {
+    if (!actual_tour_host_user_id) {
+      throw httpErr(422, "INCOMPLETE: actual_tour_host_user_id is required — a completed-tour outcome cannot spawn the conversion rail until the actual host is confirmed.");
+    }
+    if (!person_id || !property_id) throw httpErr(400, "person_id and property_id are required.");
+
+    // actual host becomes the initial conversation owner.
+    const conv = (await client.query(
+      `insert into leasing_conversions
+         (person_id, property_id, origin_tour_id, lead_id,
+          scheduled_tour_host_user_id, actual_tour_host_user_id, feedback_recorded_by_user_id,
+          conversation_owner_user_id, current_stage, status, tour_outcome, tour_notes)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,'tour_followup','active',$9,$10)
+       returning *`,
+      [person_id, property_id, origin_tour_id, lead_id,
+       scheduled_tour_host_user_id, actual_tour_host_user_id, feedback_recorded_by_user_id,
+       actual_tour_host_user_id, tour_outcome, tour_notes]
+    )).rows[0];
+
+    // origin row in the handoff history: "toured by X" (from = null).
+    await client.query(
+      `insert into leasing_conversation_handoffs
+         (conversion_id, from_user_id, to_user_id, by_user_id, kind, reason)
+       values ($1, null, $2, $3, 'origin', 'gave the completed tour')`,
+      [conv.id, actual_tour_host_user_id, feedback_recorded_by_user_id || actual_tour_host_user_id]
+    );
+
+    const REC_LABEL = {
+      send_application: "send the application", send_terms: "send terms",
+      send_options: "send best options", send_follow_up: "send a follow-up",
+      set_follow_up_time: "set a follow-up time", different_home: "offer a different home",
+      different_price: "revisit price", different_timing: "revisit timing",
+      follow_up_later: "follow up later", watch_future: "watch for a future fit",
+      close_out: "close out", send_floor_plans: "send floor plans of available units",
+    };
+
+    // ── OWNERSHIP ≠ ATTRIBUTION (see eligibleOwner) — the operator's EXPLICIT
+    // choice wins if eligible; else the actual host if eligible; else the
+    // scheduled host if eligible; else UNASSIGNED. The claim is preserved on the
+    // conversion row regardless of who ends up owning.
+    const owned = await eligibleOwner(client, property_id,
+      [explicit_owner_user_id, actual_tour_host_user_id, scheduled_tour_host_user_id]);
+    const ownerUserId = owned.owner;
+    const ownerBasis = !ownerUserId ? "unassigned"
+                     : ownerUserId === explicit_owner_user_id ? "chosen"
+                     : ownerUserId === actual_tour_host_user_id ? "actual_host"
+                     : ownerUserId === scheduled_tour_host_user_id ? "scheduled_host"
+                     : "unassigned";
+
+    // ── MULTI-MOVE: the operator may pick several next moves. Each is a REAL,
+    // separately-owned task — never collapsed into one vague follow-up. The
+    // PRIMARY move anchors the conversation (the tour_followup rung that drives
+    // the queue + current_stage); every ADDITIONAL move spawns its own sibling
+    // task obligation (same owner, own recommendation, own due). recommendations
+    // is an ordered array of move codes; `recommendation` (singular) stays
+    // supported for back-compat and becomes the sole/primary move.
+    const moves = Array.isArray(recommendations) && recommendations.length
+      ? recommendations.filter((m) => REC_LABEL[m])
+      : (recommendation && REC_LABEL[recommendation] ? [recommendation] : []);
+    const primaryMove = moves[0] || null;
+    const extraMoves = moves.slice(1);
+
+    const first = await spawnRung(client, {
+      conversion: conv, rung: "tour_followup", owner_user_id: ownerUserId,
+      labelSuffix: primaryMove ? ` — recommended: ${REC_LABEL[primaryMove]}` : null,
+    });
+
+    // sibling tasks for the additional moves — each a distinct owned obligation.
+    const siblingTasks = [];
+    const nm = await personName(client, conv.person_id);
+    for (const mv of extraMoves) {
+      const ob = await spawnObligationFromEvent(client, {
+        property_id: conv.property_id, person_id: conv.person_id,
+        module: "leasing", type: "leasing_task",
+        label: `${REC_LABEL[mv].charAt(0).toUpperCase()}${REC_LABEL[mv].slice(1)} — ${nm}`,
+        owner_type: "human", status: "open", due_at: dueFromNow(3 * 24 * 60 * 60 * 1000),
+        related_id: conv.id, related_type: "leasing_conversion",
+      });
+      const link = (await client.query(
+        `insert into leasing_conversion_obligations
+           (conversion_id, obligation_id, rung, owner_user_id, owner_role, due_by)
+         values ($1,$2,'leasing_task',$3,null,$4) returning *`,
+        [conv.id, ob.id, ownerUserId || null, ob.due_at])).rows[0];
+      siblingTasks.push({ obligation: ob, link, move_code: mv });
+    }
+
+    return {
+      conversion: conv, first_rung: first, sibling_tasks: siblingTasks,
+      // next_move stays a machine-readable CODE — routing/reporting/AI read this,
+      // never the rendered label. The label is presentation only.
+      next_move_code: primaryMove,
+      next_move_label: primaryMove ? REC_LABEL[primaryMove] : null,
+      next_move_codes: moves,                       // the full ordered set
+      // attribution facts stay distinct + inspectable
+      ownership: {
+        actual_host_claim_user_id: actual_tour_host_user_id,
+        scheduled_host_user_id: scheduled_tour_host_user_id,
+        recorded_by_user_id: feedback_recorded_by_user_id,
+        obligation_owner_user_id: ownerUserId,
+        owner_basis: ownerBasis,
+      },
+    };
+  }
+
+  // RULE: explicit handoff is the ONLY way the conversation owner changes.
+  // Preserves the original tour host, writes a durable transfer, re-points the
+  // currently-OPEN conversation rung to the new owner (closed rungs keep their
+  // owner forever). Clears handoff_required.
+  async function handoffConversation(client, { conversion_id, from_user_id = null, to_user_id, by_user_id = null, kind = "handoff", reason = null, note = null }) {
+    if (!to_user_id) throw httpErr(400, "handoff requires a named successor (to_user_id).");
+    const conv = (await client.query("select * from leasing_conversions where id=$1 for update", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+    if (conv.status !== "active") throw httpErr(409, `conversion is ${conv.status}; cannot hand off.`);
+    if (from_user_id && from_user_id !== conv.conversation_owner_user_id) {
+      throw httpErr(409, "handoff 'from' does not match the current conversation owner.");
+    }
+
+    const prev = conv.conversation_owner_user_id;
+    await client.query(
+      `update leasing_conversions
+         set conversation_owner_user_id=$1, handoff_required=false, updated_at=now()
+       where id=$2`,
+      [to_user_id, conversion_id]
+    );
+    await client.query(
+      `insert into leasing_conversation_handoffs
+         (conversion_id, from_user_id, to_user_id, by_user_id, kind, reason, note)
+       values ($1,$2,$3,$4,$5,$6,$7)`,
+      [conversion_id, prev, to_user_id, by_user_id || prev, kind, reason, note]
+    );
+
+    // Move only OPEN conversation rungs to the new owner. (Gate rungs and any
+    // closed rung are untouched — gates belong to roles; closed = history.)
+    await client.query(
+      `update leasing_conversion_obligations lco
+         set owner_user_id=$1
+       from leasing_conversions c
+       where lco.conversion_id=$2 and lco.outcome is null
+         and lco.rung in ('tour_followup','applicant_followup','lease_signature_followup')`,
+      [to_user_id, conversion_id]
+    );
+
+    return { conversion_id, previous_owner: prev, new_owner: to_user_id };
+  }
+
+  // RULE: absence sets a VISIBLE handoff_required risk — never an auto-reroute.
+  async function flagHandoffRequired(client, { conversion_id }) {
+    const conv = (await client.query("select * from leasing_conversions where id=$1 for update", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+    await client.query(`update leasing_conversions set handoff_required=true, updated_at=now() where id=$1`, [conversion_id]);
+    return { conversion_id, handoff_required: true, conversation_owner_user_id: conv.conversation_owner_user_id };
+  }
+
+  // RULE: completing/releasing a rung writes a WRITE-ONCE outcome + proof, then
+  // (only if kept and not released) spawns the next rung. NEVER mutates the
+  // closed rung. result ∈ completed | released | missed.
+  async function resolveRung(client, { obligation_id, result, proof = null, by_user_id = null, suppress_next = false }) {
+    const link = (await client.query(
+      "select * from leasing_conversion_obligations where obligation_id=$1 for update", [obligation_id]
+    )).rows[0];
+    if (!link) throw httpErr(404, "no conversion rung for that obligation.");
+    if (link.outcome != null) throw httpErr(409, `rung already closed as ${link.outcome}/${link.resolution}.`); // write-once
+
+    const outcome = (result === "missed") ? "missed" : "kept"; // released = honored = kept
+    const resolution = (result === "released") ? "released" : (result === "missed" ? "missed" : "completed");
+
+    // Stamp the immutable outcome on the link (what the Grade reads).
+    await client.query(
+      `update leasing_conversion_obligations
+         set outcome=$1, resolution=$2, proof=$3, closed_at=now()
+       where id=$4`,
+      [outcome, resolution, proof ? JSON.stringify(proof) : null, link.id]
+    );
+
+    // Close the underlying obligation through the shared engine when the human
+    // acted (completed/released). A MISSED rung leaves the obligation open-but-
+    // overdue? No — we mark it closed too, but as missed, so it leaves queues.
+    try {
+      if (resolution === "completed" || resolution === "released") {
+        await completeObligation(client, { obligation_id, completed_by: by_user_id });
+      } else {
+        // missed: close the obligation row without proof-gate completion.
+        await client.query(`update obligations set status='missed', updated_at=now() where id=$1`, [obligation_id]);
+      }
+    } catch (e) {
+      // If the shared engine refuses (e.g. inputs outstanding), surface honestly
+      // rather than silently — but the outcome stamp above already persisted.
+      if (e.code !== "ALREADY_COMPLETE") {
+        // best-effort fallback so the rung still leaves the queue
+        await client.query(`update obligations set status=$1, updated_at=now() where id=$2`,
+          [resolution === "missed" ? "missed" : "complete", obligation_id]);
+      }
+    }
+
+    const conv = (await client.query("select * from leasing_conversions where id=$1 for update", [link.conversion_id])).rows[0];
+
+    // Advance ONLY on kept + not released + a conversation rung with a next —
+    // AND only when the caller has not suppressed the auto-advance. suppress_next
+    // exists because some transitions are GATED, not automatic: an application
+    // submission closes applicant_followup but must NOT auto-start lease-signature
+    // follow-up — that begins only when the leasing_manager APPROVES. The caller
+    // (submission) suppresses here; approval explicitly spawns the next rung.
+    let spawned = null;
+    const cfg = RUNG[link.rung];
+    if (!suppress_next && outcome === "kept" && resolution !== "released" && cfg && cfg.kind === "conversation" && cfg.next) {
+      // the conversation owner is an attribution pointer, not proof of
+      // eligibility — gate it through the same ownership contract.
+      const nextOwned = await eligibleOwner(client, conv.property_id, [conv.conversation_owner_user_id]);
+      spawned = await spawnRung(client, {
+        conversion: conv, rung: cfg.next, owner_user_id: nextOwned.owner,
+      });
+    }
+    // Released closes the whole conversation.
+    if (resolution === "released") {
+      await client.query(`update leasing_conversions set status='released', closed_at=now(), updated_at=now() where id=$1`, [conv.id]);
+    }
+
+    return { obligation_id, rung: link.rung, outcome, resolution, spawned: spawned ? spawned.link.rung : null, suppressed_next: !!(suppress_next && cfg && cfg.next) };
+  }
+
+  // Add a separate decision/operating GATE that coexists with the conversation.
+  async function addGate(client, { conversion_id, rung, owner_user_id = null }) {
+    const cfg = RUNG[rung];
+    if (!cfg || cfg.kind !== "gate") throw httpErr(400, `"${rung}" is not a gate rung.`);
+    const conv = (await client.query("select * from leasing_conversions where id=$1", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+    return spawnRung(client, { conversion: conv, rung, owner_user_id, owner_role: cfg.gate_role });
+  }
+
+  // Explicitly advance the conversation to a named CONVERSATION rung. Used when
+  // a transition is GATED rather than automatic: e.g. an approved application
+  // STARTS lease_signature_followup (submission suppressed the auto-advance, so
+  // approval is what begins signature work). Idempotent-guarded: refuses if an
+  // open rung of that type already exists on the conversion.
+  async function advanceToRung(client, { conversion_id, rung, owner_user_id = null }) {
+    const cfg = RUNG[rung];
+    if (!cfg || cfg.kind !== "conversation") throw httpErr(400, `"${rung}" is not a conversation rung.`);
+    const conv = (await client.query("select * from leasing_conversions where id=$1 for update", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+    const existing = await client.query(
+      `select 1 from leasing_conversion_obligations
+        where conversion_id=$1 and rung=$2 and outcome is null limit 1`,
+      [conversion_id, rung]
+    );
+    if (existing.rows.length) throw httpErr(409, `an open ${rung} rung already exists on this conversion.`);
+    // an explicit owner passed by the caller is honored; the conversation-owner
+    // FALLBACK is gated — an attribution pointer is not proof of eligibility.
+    let owner = owner_user_id;
+    if (!owner) owner = (await eligibleOwner(client, conv.property_id, [conv.conversation_owner_user_id])).owner;
+    return spawnRung(client, { conversion: conv, rung, owner_user_id: owner });
+  }
+
+  // ── read: the full conversion view (record + history + open/closed rungs) ──
+  async function readConversion(client, conversion_id) {
+    const conv = (await client.query("select * from leasing_conversions where id=$1", [conversion_id])).rows[0];
+    if (!conv) return null;
+    const handoffs = (await client.query(
+      "select * from leasing_conversation_handoffs where conversion_id=$1 order by created_at", [conversion_id]
+    )).rows;
+    const rungs = (await client.query(
+      `select lco.*, o.status as obligation_status, o.due_at
+         from leasing_conversion_obligations lco
+         join obligations o on o.id = lco.obligation_id
+        where lco.conversion_id=$1 order by lco.created_at`, [conversion_id]
+    )).rows;
+    return { conversion: conv, ownership_history: handoffs, rungs };
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  //  HTTP — thin wrappers over the service, each in its own transaction.
+  // ════════════════════════════════════════════════════════════════════
+  function httpErr(status, message) { const e = new Error(message); e.http = status; return e; }
+  async function tx(fn, res) {
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await fn(client);
+      await client.query("commit");
+      return res.json(out);
+    } catch (e) {
+      await client.query("rollback");
+      const status = e.http || 500;
+      return res.status(status).json({ receipt: e.message });
+    } finally {
+      client.release();
+    }
+  }
+
+  // POST /leasing/conversions  — create from a confirmed completed tour
+  router.post("/leasing/conversions", requireOperator, (req, res) => tx(async (client) => {
+    const out = await createConversionFromTour(client, req.body || {});
+    return { receipt: `Conversion opened for the prospect; tour_followup is owned by the actual host.`, ...out };
+  }, res));
+
+  // GET /leasing/conversions/:id — full canonical view
+  router.get("/leasing/conversions/:id", requireOperator, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      const out = await readConversion(client, req.params.id);
+      if (!out) return res.status(404).json({ receipt: "conversion not found." });
+      return res.json(out);
+    } catch (e) { return res.status(500).json({ receipt: e.message }); }
+    finally { client.release(); }
+  });
+
+  // POST /leasing/conversions/:id/handoff — explicit owner transfer
+  router.post("/leasing/conversions/:id/handoff", requireOperator, (req, res) => tx(async (client) => {
+    const out = await handoffConversation(client, { conversion_id: req.params.id, ...(req.body || {}) });
+    return { receipt: `Conversation handed to the named successor; original tour host preserved in history.`, ...out };
+  }, res));
+
+  // POST /leasing/conversions/:id/handoff-required — flag absence risk (no reroute)
+  router.post("/leasing/conversions/:id/handoff-required", requireOperator, (req, res) => tx(async (client) => {
+    const out = await flagHandoffRequired(client, { conversion_id: req.params.id });
+    return { receipt: `handoff_required flagged — the conversation was NOT rerouted; a named handoff is needed.`, ...out };
+  }, res));
+
+  // POST /leasing/conversions/:id/gates — add a decision/operating gate
+  router.post("/leasing/conversions/:id/gates", requireOperator, (req, res) => tx(async (client) => {
+    const out = await addGate(client, { conversion_id: req.params.id, ...(req.body || {}) });
+    return { receipt: `Gate "${req.body && req.body.rung}" added alongside the conversation.`, obligation_id: out.obligation.id, rung: out.link.rung };
+  }, res));
+
+  // POST /leasing/rungs/:obligationId/resolve — complete | release | missed
+  router.post("/leasing/rungs/:obligationId/resolve", requireOperator, (req, res) => tx(async (client) => {
+    const out = await resolveRung(client, { obligation_id: req.params.obligationId, ...(req.body || {}) });
+    return { receipt: `Rung ${out.rung} closed as ${out.outcome}/${out.resolution}${out.spawned ? `; spawned ${out.spawned}` : ""}.`, ...out };
+  }, res));
+
+  // Expose the service layer for in-process tests + future server-side callers.
+  router._service = {
+    createConversionFromTour, handoffConversation, flagHandoffRequired,
+    resolveRung, addGate, advanceToRung, readConversion, spawnRung, RUNG, CONVERSATION_RUNGS,
   };
-
-  // ── polling helpers ──
-  function startPoll(fn){ stopPoll(); pollTimer = setInterval(fn, POLL); }
-  function stopPoll(){ if (pollTimer){ clearInterval(pollTimer); pollTimer=null; } }
-
-  // ── boot ──
-  // No persisted session exists (memory only) → always start at the auth gate on load.
-  renderAuthGate();
-})();
-</script>
-</body>
-</html>
+  // Expose the single-door service alongside the router so the tour-outcome
+  // seam (leasingleads /complete) opens the conversion rail through THIS
+  // instance — no module reimplements conversion opening.
+  return Object.assign(router, { services: { createConversionFromTour } });
+};
