@@ -140,6 +140,9 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     // is never a soft word that can rot unowned — it IS the content of the
     // follow-up obligation, carried in the rung's label and owned by the host.
     recommendation = null,
+    // multi-move: an ordered array of next-move codes. First = primary (anchors
+    // the conversation); the rest spawn sibling task obligations.
+    recommendations = null,
     // #1: the operator may explicitly choose the follow-up owner. Honored ONLY
     // when it resolves to an active eligible assignment (re-validated here).
     explicit_owner_user_id = null,
@@ -176,7 +179,7 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
       set_follow_up_time: "set a follow-up time", different_home: "offer a different home",
       different_price: "revisit price", different_timing: "revisit timing",
       follow_up_later: "follow up later", watch_future: "watch for a future fit",
-      close_out: "close out",
+      close_out: "close out", send_floor_plans: "send floor plans of available units",
     };
 
     // ── OWNERSHIP ≠ ATTRIBUTION (see eligibleOwner) — the operator's EXPLICIT
@@ -192,18 +195,50 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
                      : ownerUserId === scheduled_tour_host_user_id ? "scheduled_host"
                      : "unassigned";
 
+    // ── MULTI-MOVE: the operator may pick several next moves. Each is a REAL,
+    // separately-owned task — never collapsed into one vague follow-up. The
+    // PRIMARY move anchors the conversation (the tour_followup rung that drives
+    // the queue + current_stage); every ADDITIONAL move spawns its own sibling
+    // task obligation (same owner, own recommendation, own due). recommendations
+    // is an ordered array of move codes; `recommendation` (singular) stays
+    // supported for back-compat and becomes the sole/primary move.
+    const moves = Array.isArray(recommendations) && recommendations.length
+      ? recommendations.filter((m) => REC_LABEL[m])
+      : (recommendation && REC_LABEL[recommendation] ? [recommendation] : []);
+    const primaryMove = moves[0] || null;
+    const extraMoves = moves.slice(1);
+
     const first = await spawnRung(client, {
       conversion: conv, rung: "tour_followup", owner_user_id: ownerUserId,
-      labelSuffix: recommendation && REC_LABEL[recommendation]
-        ? ` — recommended: ${REC_LABEL[recommendation]}` : null,
+      labelSuffix: primaryMove ? ` — recommended: ${REC_LABEL[primaryMove]}` : null,
     });
 
+    // sibling tasks for the additional moves — each a distinct owned obligation.
+    const siblingTasks = [];
+    const nm = await personName(client, conv.person_id);
+    for (const mv of extraMoves) {
+      const ob = await spawnObligationFromEvent(client, {
+        property_id: conv.property_id, person_id: conv.person_id,
+        module: "leasing", type: "leasing_task",
+        label: `${REC_LABEL[mv].charAt(0).toUpperCase()}${REC_LABEL[mv].slice(1)} — ${nm}`,
+        owner_type: "human", status: "open", due_at: dueFromNow(3 * 24 * 60 * 60 * 1000),
+        related_id: conv.id, related_type: "leasing_conversion",
+      });
+      const link = (await client.query(
+        `insert into leasing_conversion_obligations
+           (conversion_id, obligation_id, rung, owner_user_id, owner_role, due_by)
+         values ($1,$2,'leasing_task',$3,null,$4) returning *`,
+        [conv.id, ob.id, ownerUserId || null, ob.due_at])).rows[0];
+      siblingTasks.push({ obligation: ob, link, move_code: mv });
+    }
+
     return {
-      conversion: conv, first_rung: first,
+      conversion: conv, first_rung: first, sibling_tasks: siblingTasks,
       // next_move stays a machine-readable CODE — routing/reporting/AI read this,
       // never the rendered label. The label is presentation only.
-      next_move_code: recommendation || null,
-      next_move_label: (recommendation && REC_LABEL[recommendation]) ? REC_LABEL[recommendation] : null,
+      next_move_code: primaryMove,
+      next_move_label: primaryMove ? REC_LABEL[primaryMove] : null,
+      next_move_codes: moves,                       // the full ordered set
       // attribution facts stay distinct + inspectable
       ownership: {
         actual_host_claim_user_id: actual_tour_host_user_id,
