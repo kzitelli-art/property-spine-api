@@ -1006,6 +1006,10 @@ app.patch("/obligations/:id/complete", async (req, res) => {
     await client.query("rollback");
     if (e.code === "NOT_FOUND") return res.status(404).json({ error: e.message });
     if (e.code === "ALREADY_COMPLETE") return res.status(409).json({ error: e.message });
+    // CLOSURE BOUNDARY (R2): a conversion-linked obligation refused by the engine
+    // is a WRONG-DOOR condition, not a server fault. Surface the honest 409 the
+    // error already carries (err.httpStatus) rather than a misleading 500.
+    if (e.code === "CONVERSION_RAIL_REQUIRED") return res.status(e.httpStatus || 409).json({ error: e.publicMessage || e.message });
     if (e.code === "INPUTS_OUTSTANDING") return res.status(409).json({
       error: e.message,
       outstanding_inputs: e.outstanding_inputs,
