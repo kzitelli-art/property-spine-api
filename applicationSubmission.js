@@ -236,23 +236,14 @@ module.exports = function applicationSubmissionModule(deps) {
       } catch (e) { if (e.code !== "ALREADY_COMPLETE") throw e; }
     }
 
-    // GATED TRANSITION: lease-signature follow-up begins ONLY on approval.
-    // Submission suppressed the auto-advance; approval is the event that starts
-    // signature work. A decline/withdraw/expire never reaches here with
-    // decision='approved', so signature work cannot be opened on a non-approval.
-    // advanceToRung is idempotent-guarded (refuses a duplicate open rung).
-    if (decision === "approved" && app.conversion_id &&
-        conversionService && conversionService.advanceToRung) {
-      try {
-        await conversionService.advanceToRung(client, {
-          conversion_id: app.conversion_id,
-          rung: "lease_signature_followup",
-        });
-      } catch (e) {
-        // a duplicate open signature rung is fine (idempotent); anything else surfaces
-        if (!/already exists/i.test(e.message || "")) throw e;
-      }
-    }
+    // ONE CREATOR (reviewer ruling §2, Jul 4 2026): signature-chasing work is
+    // created ONLY by ensureLeaseSignatureFollowup, called by the approve
+    // transaction AFTER it writes the application's post-approval status —
+    // because the creator SELF-VERIFIES approval with its own read, and the
+    // 068 unique index makes double-creation impossible. The old advanceToRung
+    // spawn here ran while status was still 'submitted' and carried no
+    // verification; it is removed, not relocated. Gate close = decision
+    // recorded; creation belongs to the approver.
   }
 
   // ─────────────── ROUTES ───────────────
@@ -528,6 +519,9 @@ module.exports = function applicationSubmissionModule(deps) {
             obligation_id: row.id, result: "released",
             by_user_id: decided_by_user_id || null,
             suppress_next: true,
+            // an identified human releasing WORK they do not own states the
+            // truthful basis: the application is dead, the work is moot.
+            resolution_basis: "no_longer_needed",
             proof: { reason: `application ${reason}`, application_id: app.id },
           });
         } catch (e) { if (!/already closed/i.test(e.message || "")) throw e; }
