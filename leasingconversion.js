@@ -27,7 +27,14 @@
 const express = require("express");
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 
-module.exports = function leasingConversionModule({ pool, spawnObligationFromEvent, completeObligation }) {
+module.exports = function leasingConversionModule({ pool, spawnObligationFromEvent, completeObligation, closureAuthority }) {
+  // THE CLOSURE CAPABILITY (structural, not conventional): server.js creates
+  // the conversion closure authority and hands it ONLY to this module. The
+  // generic engine never receives it and carries no bypass parameter. If the
+  // capability is absent, the rail fails CLOSED — no fallback to the engine.
+  if (!closureAuthority || typeof closureAuthority.closeLinkedConversionObligation !== "function") {
+    throw new Error("leasingConversionModule requires the conversion closure authority (see conversion_obligation_closure.js).");
+  }
   const router = express.Router();
 
   // ── AUTH ────────────────────────────────────────────────────────────
@@ -43,7 +50,12 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
   const HOUR = 3600 * 1000;
   const RUNG = {
     tour_followup:            { window: 24 * HOUR,  next: "applicant_followup",      kind: "conversation", label: (n) => `Tour follow-up — ${n}` },
-    applicant_followup:       { window: 72 * HOUR,  next: "lease_signature_followup",kind: "conversation", label: (n) => `Application follow-up — ${n}` },
+    // 051 DOCTRINE, LOCKED AT THE DOMAIN LAYER (not a route flag): resolving an
+    // application follow-up NEVER auto-creates signature-chasing work. next=null.
+    // The ONLY authorized cause of lease_signature_followup is the manager-approval
+    // domain event, via the idempotent ensureLeaseSignatureFollowup below. A route
+    // that forgets suppress_next can no longer recreate the pre-approval chase.
+    applicant_followup:       { window: 72 * HOUR,  next: null,                      kind: "conversation", label: (n) => `Application follow-up — ${n}` },
     lease_signature_followup: { window: 48 * HOUR,  next: null,                      kind: "conversation", label: (n) => `Lease-signature follow-up — ${n}` },
     // gates — owned by a role, not the conversation owner. No auto-next.
     application_approval:     { window: 48 * HOUR,  next: null, kind: "gate", gate_role: "leasing_manager",          label: (n) => `Application approval — ${n}` },
@@ -71,7 +83,7 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
   // Spawn ONE rung: create the commitment in the shared obligations table via
   // the injected engine, then write the conversion-link row that carries the
   // immutable outcome. Returns { obligation, link }.
-  async function spawnRung(client, { conversion, rung, owner_user_id, owner_role, labelSuffix = null }) {
+  async function spawnRung(client, { conversion, rung, owner_user_id, owner_role, labelSuffix = null, next_move_code = null }) {
     const cfg = RUNG[rung];
     if (!cfg) throw httpErr(400, `unknown rung "${rung}"`);
     const name = await personName(client, conversion.person_id);
@@ -93,9 +105,9 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
 
     const link = (await client.query(
       `insert into leasing_conversion_obligations
-         (conversion_id, obligation_id, rung, owner_user_id, owner_role, due_by)
-       values ($1,$2,$3,$4,$5,$6) returning *`,
-      [conversion.id, ob.id, rung, owner_user_id || null, owner_role || null, ob.due_at]
+         (conversion_id, obligation_id, rung, owner_user_id, owner_role, due_by, next_move_code)
+       values ($1,$2,$3,$4,$5,$6,$7) returning *`,
+      [conversion.id, ob.id, rung, owner_user_id || null, owner_role || null, ob.due_at, next_move_code || null]
     )).rows[0];
 
     // Cache latest stage for fast queue reads (conversation rungs only).
@@ -302,43 +314,56 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
   // RULE: completing/releasing a rung writes a WRITE-ONCE outcome + proof, then
   // (only if kept and not released) spawns the next rung. NEVER mutates the
   // closed rung. result ∈ completed | released | missed.
-  async function resolveRung(client, { obligation_id, result, proof = null, by_user_id = null, suppress_next = false }) {
+  const RESOLUTION_BASES = ["coverage", "manager_intervention", "completed_together", "no_longer_needed", "unassigned_pickup"];
+  async function resolveRung(client, { obligation_id, result, proof = null, by_user_id = null, suppress_next = false, resolution_basis = null }) {
     const link = (await client.query(
       "select * from leasing_conversion_obligations where obligation_id=$1 for update", [obligation_id]
     )).rows[0];
     if (!link) throw httpErr(404, "no conversion rung for that obligation.");
     if (link.outcome != null) throw httpErr(409, `rung already closed as ${link.outcome}/${link.resolution}.`); // write-once
 
+    // SHARED TO SEE, NAMED TO DO, COVERAGE IS VISIBLE: the owner may resolve
+    // directly; anyone else must state WHY they are closing another person's
+    // work. No silent cross-closure.
+    const isOwner = link.owner_user_id != null && by_user_id != null && link.owner_user_id === by_user_id;
+    // BASIS SCOPE (execute vs decide, + honest blank):
+    //  · GATES (kind:'gate') are DECIDED by role authority — the decision in
+    //    `proof` is the record; a coverage story would be fiction. Exempt.
+    //  · NULL-ACTOR service closes (by_user_id null, e.g. the operator-key
+    //    approve flow) have no human to attribute coverage to — demanding a
+    //    basis would force a lie. Honest blank: basis stays null.
+    //  · Every IDENTIFIED HUMAN closing WORK they do not own states the basis.
+    const isGate = RUNG[link.rung] && RUNG[link.rung].kind === "gate";
+    let basis = null;
+    if (isOwner) {
+      basis = "owner";
+    } else if (isGate || by_user_id == null) {
+      basis = resolution_basis && RESOLUTION_BASES.includes(resolution_basis) ? resolution_basis : null;
+    } else {
+      if (!resolution_basis || !RESOLUTION_BASES.includes(resolution_basis)) {
+        const err = httpErr(400, link.owner_user_id == null
+          ? "resolution_basis required for an UNASSIGNED task: unassigned_pickup | coverage | manager_intervention | completed_together | no_longer_needed."
+          : "resolution_basis required when closing work you do not own: coverage | manager_intervention | completed_together | no_longer_needed.");
+        err.code = "BASIS_REQUIRED";
+        throw err;
+      }
+      if (resolution_basis === "unassigned_pickup" && link.owner_user_id != null) {
+        throw httpErr(400, "unassigned_pickup applies only to tasks with no owner — this task is owned.");
+      }
+      basis = resolution_basis;
+    }
+
     const outcome = (result === "missed") ? "missed" : "kept"; // released = honored = kept
     const resolution = (result === "released") ? "released" : (result === "missed" ? "missed" : "completed");
 
-    // Stamp the immutable outcome on the link (what the Grade reads).
-    await client.query(
-      `update leasing_conversion_obligations
-         set outcome=$1, resolution=$2, proof=$3, closed_at=now()
-       where id=$4`,
-      [outcome, resolution, proof ? JSON.stringify(proof) : null, link.id]
-    );
+    // THE TERMINAL PART runs through the ONE closure capability: link stamp,
+    // identity snapshots, and the obligation mutation — atomic in this tx.
+    const conv0 = (await client.query("select property_id from leasing_conversions where id=$1", [link.conversion_id])).rows[0];
+    await closureAuthority.closeLinkedConversionObligation(client, {
+      link, property_id: conv0.property_id, outcome, resolution, proof,
+      by_user_id, resolution_basis: basis,
+    });
 
-    // Close the underlying obligation through the shared engine when the human
-    // acted (completed/released). A MISSED rung leaves the obligation open-but-
-    // overdue? No — we mark it closed too, but as missed, so it leaves queues.
-    try {
-      if (resolution === "completed" || resolution === "released") {
-        await completeObligation(client, { obligation_id, completed_by: by_user_id });
-      } else {
-        // missed: close the obligation row without proof-gate completion.
-        await client.query(`update obligations set status='missed', updated_at=now() where id=$1`, [obligation_id]);
-      }
-    } catch (e) {
-      // If the shared engine refuses (e.g. inputs outstanding), surface honestly
-      // rather than silently — but the outcome stamp above already persisted.
-      if (e.code !== "ALREADY_COMPLETE") {
-        // best-effort fallback so the rung still leaves the queue
-        await client.query(`update obligations set status=$1, updated_at=now() where id=$2`,
-          [resolution === "missed" ? "missed" : "complete", obligation_id]);
-      }
-    }
 
     const conv = (await client.query("select * from leasing_conversions where id=$1 for update", [link.conversion_id])).rows[0];
 
@@ -364,6 +389,33 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     }
 
     return { obligation_id, rung: link.rung, outcome, resolution, spawned: spawned ? spawned.link.rung : null, suppressed_next: !!(suppress_next && cfg && cfg.next) };
+  }
+
+  // THE ONLY AUTHORIZED CAUSE of lease_signature_followup. Called by the
+  // application-approval domain event — never by task completion, missed
+  // handling, bulk actions, generic resolves, or retries. Idempotent: at most
+  // one lease_signature_followup link EVER exists per conversion; retries and
+  // concurrent approvals return the existing one. Serialized on the conversion.
+  async function ensureLeaseSignatureFollowup(client, { conversion_id, owner_user_id = null }) {
+    const conv = (await client.query("select * from leasing_conversions where id=$1 for update", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+    // APPROVAL IS AUTHORITY TRUTH — verified HERE, not trusted from the caller.
+    // The approving transaction writes the application's post-approval status
+    // BEFORE calling this, so this same-transaction read sees it. A caller with
+    // a conversion_id but no approved application gets nothing.
+    const approved = (await client.query(
+      `select 1 from lease_applications
+        where conversion_id=$1
+          and status in ('approved','lease_ready','tenant_signed','countersigned','active')
+        limit 1`, [conversion_id])).rows[0];
+    if (!approved) throw httpErr(409, "No approved application on this conversion — signature-chasing work is created only by approval.");
+    const existing = (await client.query(
+      `select * from leasing_conversion_obligations where conversion_id=$1 and rung='lease_signature_followup' limit 1`,
+      [conversion_id])).rows[0];
+    if (existing) return { ensured: false, link: existing };
+    const owned = await eligibleOwner(client, conv.property_id, [owner_user_id, conv.conversation_owner_user_id]);
+    const spawned = await spawnRung(client, { conversion: conv, rung: "lease_signature_followup", owner_user_id: owned.owner });
+    return { ensured: true, link: spawned.link };
   }
 
   // Add a separate decision/operating GATE that coexists with the conversation.
@@ -478,7 +530,7 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
   // Expose the service layer for in-process tests + future server-side callers.
   router._service = {
     createConversionFromTour, handoffConversation, flagHandoffRequired,
-    resolveRung, addGate, advanceToRung, readConversion, spawnRung, RUNG, CONVERSATION_RUNGS,
+    resolveRung, addGate, advanceToRung, readConversion, spawnRung, ensureLeaseSignatureFollowup, RUNG, CONVERSATION_RUNGS,
   };
   // Expose the single-door service alongside the router so the tour-outcome
   // seam (leasingleads /complete) opens the conversion rail through THIS
