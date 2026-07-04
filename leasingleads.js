@@ -1389,6 +1389,9 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           // v2: the RECOMMENDATION is the content of the follow-up obligation —
           // never a soft word that can rot unowned. Carried into the rung label.
           recommendation: fb.next_move || null,
+          // multi-move: the frontend may send next_moves[] (ordered). First is
+          // primary; the rest become sibling task obligations.
+          recommendations: Array.isArray(fb.next_moves) && fb.next_moves.length ? fb.next_moves : null,
         });
         conversion = opened.conversion;
 
