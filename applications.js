@@ -33,6 +33,7 @@ module.exports = function applicationsModule(deps) {
   // property_manager activation obligation. Backward-compatible: if absent,
   // approve behaves exactly as before (no gate to close).
   const submissionService = deps.submissionService || null;
+  const conversionService = deps.conversionService || null; // 068: approval's signature-work creator
   // Optional: the commitment-ledger service (062/063). When present, the
   // countersign transaction locks the immutable economic schedule from an
   // eligible lease offer (J1). Backward-compatible: absent service, or an
@@ -190,6 +191,14 @@ module.exports = function applicationsModule(deps) {
            where id=$2 returning *`,
         [obligation.id, app.id]
       );
+
+      // 051 doctrine, domain-locked + self-verifying: APPROVAL is the only
+      // authorized cause of signature-chasing work. The creator re-reads the
+      // application's post-approval status in THIS transaction (written just
+      // above) and the DB's unique index makes double-creation impossible.
+      if (app.conversion_id && conversionService && conversionService.ensureLeaseSignatureFollowup) {
+        await conversionService.ensureLeaseSignatureFollowup(client, { conversion_id: app.conversion_id });
+      }
 
       await client.query("commit");
       const gate = await outstanding(pool, upd.rows[0]);
