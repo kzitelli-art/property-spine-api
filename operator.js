@@ -35,7 +35,7 @@ const crypto = require("crypto");
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 
 module.exports = function operatorModule(deps) {
-  const { pool, agentService } = deps;
+  const { pool, agentService, conversionService = null } = deps;
   if (!pool) throw new Error("operator.js requires { pool }");
   const router = require("express").Router();
 
@@ -1093,6 +1093,183 @@ module.exports = function operatorModule(deps) {
       finally { client.release(); }
       return res.json({ property_id: propertyId, eligible_staff: rows });
     } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // ════════════════════════════════════════════════════════════════════
+  //  THE LEASING TASK QUEUE — the visible home for every conversion-linked
+  //  obligation (067 follow-on). tour_followup anchors appear TODAY; the
+  //  moment Loop-B sibling generation is re-enabled, leasing_task siblings
+  //  land in this SAME queue with owner, due state, source tour, and a
+  //  completion path — the five-point visibility bar the suppression gates
+  //  on. Items leave ONLY through the write-once resolve below; nothing
+  //  silently disappears. UNASSIGNED renders honestly, never hidden.
+  // ════════════════════════════════════════════════════════════════════
+  // ── THE LEASING-MODULE ACCESS PLANE (reviewer ruling §3) ─────────────
+  // Two planes, never merged:
+  //   property_team_assignments (user-keyed)  → may this user READ/OPERATE the
+  //     leasing queue at this property? (allowed_modules is the gate)
+  //   users.person_id + assignments (person-keyed) → durable identity and
+  //     AUTOMATIC ownership eligibility (the canonical resolver only)
+  // Team access never makes someone an owner; the bridge never grants access.
+  async function requireLeasingModuleAccess(req, res, next) {
+    try {
+      const ok = (await pool.query(
+        `select 1 from property_team_assignments
+          where user_id=$1 and property_id=$2 and active=true
+            and 'leasing' = any(allowed_modules) limit 1`,
+        [req.operator.id, req.operator.property_id])).rows[0];
+      if (!ok) return res.status(403).json({
+        error: "leasing-module access required at this property (property_team_assignments.allowed_modules)." });
+      return next();
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  }
+
+  // ── TOUR FOLLOW-UPS AND LEASING TASKS — the queue read (contract §6) ──
+  // Deterministic order: overdue → due today → upcoming → no due date, then
+  // due_at, created_at, id (stable tie-break). Bounded: limit ≤ 200, keyset
+  // cursor. A null owner, null due date, or sibling type NEVER hides a row.
+  router.get("/operator/leasing/task-queue", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const propertyId = req.operator.property_id;
+      const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+      let cursorClause = "", params = [propertyId, limit];
+      if (req.query.cursor) {
+        try {
+          const c = JSON.parse(Buffer.from(String(req.query.cursor), "base64url").toString("utf8"));
+          params.push(c.b, c.d, c.c, c.id);
+          cursorClause = `and (bucket, coalesce(due_at,'infinity'::timestamptz), created_at, obligation_id)
+                            > ($3::int, coalesce($4::timestamptz,'infinity'::timestamptz), $5::timestamptz, $6::uuid)`;
+        } catch (_) { return res.status(400).json({ error: "bad cursor." }); }
+      }
+      const rows = (await pool.query(
+        `with q as (
+           select o.id as obligation_id, lco.conversion_id, c.property_id,
+                  p.id as person_id, p.name as person_name,
+                  c.origin_tour_id, lco.rung,
+                  case when lco.rung = 'leasing_task' then 'sibling' else 'anchor' end as anchor_or_sibling,
+                  o.status, o.label, o.due_at, o.created_at,
+                  o.due_at::text as due_at_cur, o.created_at::text as created_at_cur,
+                  lco.owner_user_id, ou.name as owner_name,
+                  lco.next_move_code,
+                  case when o.due_at is null then 'none'
+                       when o.due_at < now() then 'overdue'
+                       when o.due_at < date_trunc('day', now()) + interval '1 day' then 'today'
+                       else 'upcoming' end as due_state,
+                  case when o.due_at is null then 3
+                       when o.due_at < now() then 0
+                       when o.due_at < date_trunc('day', now()) + interval '1 day' then 1
+                       else 2 end as bucket
+             from leasing_conversion_obligations lco
+             join obligations o         on o.id = lco.obligation_id
+             join leasing_conversions c on c.id = lco.conversion_id
+             join persons p             on p.id = c.person_id
+             left join users ou         on ou.id = lco.owner_user_id
+            where c.property_id = $1 and lco.outcome is null
+         )
+         select q.*, t.total_open, t.total_overdue, t.total_due_today,
+                t.total_unassigned, t.total_anchors, t.total_siblings
+           from q
+          cross join (
+            select count(*) as total_open,
+                   count(*) filter (where due_state='overdue')         as total_overdue,
+                   count(*) filter (where due_state='today')           as total_due_today,
+                   count(*) filter (where owner_user_id is null)       as total_unassigned,
+                   count(*) filter (where anchor_or_sibling='anchor')  as total_anchors,
+                   count(*) filter (where anchor_or_sibling='sibling') as total_siblings
+              from q
+          ) t
+          where true ${cursorClause}
+          order by bucket, coalesce(due_at,'infinity'::timestamptz), created_at, obligation_id
+          limit $2`,
+        params)).rows;
+      // owner_basis through the ONE canonical resolver — never a forked raw
+      // join (the static gate enforces this). One resolver read per DISTINCT
+      // owner on the page.
+      const ownerIds = [...new Set(rows.map((r) => r.owner_user_id).filter(Boolean))];
+      const basisByOwner = {};
+      for (const uid of ownerIds) {
+        try {
+          const idn = await staffIdentity.resolveStaffIdentity(pool, { user_id: uid, property_id: propertyId });
+          basisByOwner[uid] = idn.state === "resolved" ? "eligible_assignment" : "eligibility_lapsed";
+        } catch (_) { basisByOwner[uid] = "eligibility_lapsed"; }
+      }
+      const NEXT_MOVE_LABELS = {
+        send_application: "Send the application", send_floor_plans: "Send floor plans",
+        schedule_second_tour: "Schedule a second tour", send_follow_up: "Send a follow-up",
+        call_prospect: "Call the prospect",
+      };
+      const items = rows.map((r) => ({
+        obligation_id: r.obligation_id, conversion_id: r.conversion_id, property_id: r.property_id,
+        person_id: r.person_id, person_name: r.person_name,
+        origin_tour_id: r.origin_tour_id, rung: r.rung, anchor_or_sibling: r.anchor_or_sibling,
+        status: r.status, label: r.label,
+        owner_user_id: r.owner_user_id, owner_name: r.owner_name,
+        owner_basis: r.owner_user_id ? basisByOwner[r.owner_user_id] : "unassigned",
+        due_at: r.due_at, due_state: r.due_state,
+        next_move_code: r.next_move_code,
+        next_move_label: r.next_move_code ? (NEXT_MOVE_LABELS[r.next_move_code] || r.next_move_code.replace(/_/g, " ")) : null,
+        created_at: r.created_at,
+      }));
+      const t = rows[0] || {};
+      const counts = {
+        open: Number(t.total_open || 0), overdue: Number(t.total_overdue || 0),
+        due_today: Number(t.total_due_today || 0), unassigned: Number(t.total_unassigned || 0),
+        anchors: Number(t.total_anchors || 0), siblings: Number(t.total_siblings || 0),
+      };
+      let next_cursor = null;
+      if (rows.length === limit) {
+        const last = rows[rows.length - 1];
+        // cursor carries POSTGRES-precision text (::text), never a JS Date —
+        // Date→ISO truncates microseconds and readmits the boundary row.
+        next_cursor = Buffer.from(JSON.stringify({
+          b: last.bucket, d: last.due_at_cur, c: last.created_at_cur, id: last.obligation_id,
+        })).toString("base64url");
+      }
+      return res.json({
+        name: "tour_followups_and_leasing_tasks",
+        property_id: propertyId, counts, items, next_cursor,
+        receipt: `${counts.open} open (${counts.anchors} follow-ups, ${counts.siblings} tasks): ${counts.overdue} overdue, ${counts.due_today} due today, ${counts.unassigned} unassigned.`,
+      });
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // Session-authed completion for a queue item. Property wall enforced from
+  // the CONVERSION row (the source of truth), never from client input; the
+  // completion actor is SERVER-DERIVED from the staff session — a body-
+  // supplied by_user_id is ignored. Write-once semantics live in the shared
+  // resolveRung service (one door for anchors and future siblings alike).
+  router.post("/operator/leasing/tasks/:obligationId/resolve", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!conversionService || !conversionService.resolveRung) {
+      return res.status(503).json({ error: "task resolution is not wired on this deploy (conversionService missing)" });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const wall = (await client.query(
+        `select c.property_id from leasing_conversion_obligations lco
+           join leasing_conversions c on c.id = lco.conversion_id
+          where lco.obligation_id = $1`, [req.params.obligationId])).rows[0];
+      if (!wall) { await client.query("rollback"); return res.status(404).json({ error: "no conversion task for that obligation." }); }
+      if (wall.property_id !== req.operator.property_id) {
+        await client.query("rollback");
+        return res.status(403).json({ error: "that task belongs to another property." });
+      }
+      const b = req.body || {};
+      const out = await conversionService.resolveRung(client, {
+        obligation_id: req.params.obligationId,
+        result: b.result || "completed",
+        proof: b.proof || null,
+        by_user_id: req.operator.id,                 // SERVER-DERIVED — never the body
+        resolution_basis: b.resolution_basis || null, // required by the DOMAIN when closing unowned work
+      });
+      await client.query("commit");
+      return res.json(out);
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      return res.status(e.httpStatus || e.http || 500).json({ error: e.publicMessage || e.message });
+    } finally { client.release(); }
   });
 
   // POST /operator/leasing/conversations/:conversationId/close-not-fit
