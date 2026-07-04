@@ -545,6 +545,17 @@ app.get("/persons", async (req, res) => {
     if (lifecycle_status) { vals.push(lifecycle_status); where.push(`lifecycle_status = $${vals.length}`); }
     if (source)           { vals.push(source);           where.push(`source = $${vals.length}`); }
     if (property_id)      { vals.push(property_id);      where.push(`id in (select person_id from events where property_id = $${vals.length})`); }
+    // ── STAFF LEAK GUARD (067) ── a staff-only person carries the schema's
+    // floor lifecycle ('lead') but is NOT an inquiry. Exclude anyone with an
+    // ACTIVE staff context UNLESS a real leasing relationship exists (a
+    // leasing_leads row) — the same human may legitimately also be a
+    // prospect (additive contexts, never a mutually-exclusive type).
+    where.push(
+      `not exists (select 1 from person_contexts pc
+                    where pc.person_id = persons.id
+                      and pc.context_type = 'staff' and pc.active_to is null
+                      and not exists (select 1 from leasing_leads ll
+                                       where ll.person_id = persons.id))`);
     const sql =
       "select * from persons" +
       (where.length ? " where " + where.join(" and ") : "") +
@@ -3267,7 +3278,20 @@ app.use("/", agentApp);
 // session (x-staff-session → users row); the browser never claims identity. The
 // demo-session bootstrap is fail-closed (DEMO_MODE=true only). (operator.js)
 const operatorModule = require("./operator");
-app.use("/", operatorModule({ pool, agentService: agentApp._service }));
+app.use("/", operatorModule({ pool, agentService: agentApp._service,
+  // 067 follow-on: the session-authed leasing task queue resolves through the
+  // conversion rail's ONE resolveRung service — no module reimplements closing.
+  conversionService: __leasingConversion._service }));
+
+// ── STAFF IDENTITY BRIDGE (067) — the authorized point-and-confirm workflow:
+// classify accounts, suggest candidates (exact verified email only, never
+// applied), link/relink/unlink with an append-only effective-dated audit,
+// and the coverage + 004↔035 divergence report. Bridges are deliberate,
+// audited acts by an admin staff session — never inference, never capture
+// flow. Eligibility resolution lives in staff_identity_resolver.js (the ONE
+// module allowed to join users.person_id to assignments). (staffbridge.js)
+const staffBridgeModule = require("./staffbridge");
+app.use("/", staffBridgeModule({ pool }));
 
 // ── ONE-TIME demo facts seed — loads the REAL Solo handbook facts onto the demo
 // property (the operating-onboarding fact layer, hand-confirmed once from the 2026
