@@ -96,6 +96,13 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       return r.rows[0] ? r.rows[0].id : null;
     } catch (_) { return null; }
   }
+  // ── service-error: carries the EXACT http status + json body the route
+  //    should send. Lets the completion tx live in ONE service both the
+  //    operator-key door and the staff-session door call (no fork). ──
+  function svcErr(status, body) {
+    const e = new Error((body && (body.receipt || body.error)) || ("HTTP " + status));
+    e.svc = true; e.http = status; e.body = body; return e;
+  }
   function requireIntakeSecret(req, res, next) {
     const expected = process.env.LEASING_INTAKE_SECRET || process.env.INTAKE_PASSWORD;
     if (!expected) return res.status(503).json({ receipt: "Lead intake is locked: set LEASING_INTAKE_SECRET in Render's environment." });
@@ -1270,21 +1277,28 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   });
 
   // ── COMPLETE — PROOF. Optional seam back to the funnel toward application.
-  router.post("/leasing/tours/:tourId/complete", requireOperator, async (req, res) => {
-    const { tourId } = req.params; const b = req.body || {};
-    const fb = b.feedback || {};
-    const client = await pool.connect();
-    try {
-      await client.query("begin");
+  // ════════════════════════════════════════════════════════════════════
+  // completeTourService — the ONE tour-completion transaction. Extracted
+  // (byte-faithful) from the operator-key route so the session-authed
+  // /operator door calls the SAME canonical service (no fork — the
+  // intakeProspect precedent). Caller owns client + begin/commit/rollback.
+  // enforcePropertyId: the staff-session door passes the session's property;
+  // the tour must belong to it (server-derived wall). The key door passes null.
+  // Throws svcErr(status, body) — the exact response the route should send.
+  // ════════════════════════════════════════════════════════════════════
+  async function completeTourService(client, { tourId, b, recordedByUserId, enforcePropertyId = null }) {
+      const fb = b.feedback || {};
       const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
-      if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
+      if (!tour) { throw svcErr(404, { receipt: "No tour with that id." }); }
+      if (enforcePropertyId && tour.property_id !== enforcePropertyId) {
+        throw svcErr(403, { receipt: "That tour belongs to another property." });
+      }
       // OUTCOME IS RECORDED ONCE. A terminal tour keeps its truth; corrections
       // go through explicit lifecycle actions, never a silent re-submit.
       if (["completed", "no_show", "cancelled", "rescheduled"].includes(tour.status)) {
         const existing = (await client.query(
           `select id, current_stage, status from leasing_conversions where origin_tour_id=$1 order by opened_at asc limit 1`, [tourId])).rows[0];
-        await client.query("rollback");
-        return res.status(409).json({ receipt: `Outcome already recorded — this tour is ${tour.status}.`, tour_id: tourId, conversion_id: existing ? existing.id : null });
+        throw svcErr(409, { receipt: `Outcome already recorded — this tour is ${tour.status}.`, tour_id: tourId, conversion_id: existing ? existing.id : null });
       }
 
       // ── attendance truth (the same one-door event write as always) ──
@@ -1294,8 +1308,6 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       // ── #4: the RECORDER is server-derived from the staff session when
       //    present; the body value is only a shared-key-path fallback and can
       //    never override a resolved session identity.
-      const sessionRecorderId = await resolveRecorderUserId(req);
-      const recordedByUserId = sessionRecorderId || b.actor_id || null;
 
       // ── #3: the ACTUAL-HOST claim has exactly two honest shapes:
       //    (A) a roster-selected active property-staff user → asserted staff
@@ -1346,7 +1358,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       const unitsShown = Array.isArray(b.units_shown) ? b.units_shown.filter(Boolean).slice(0, 5) : [];
       for (let i = 0; i < unitsShown.length; i++) {
         const u = (await client.query(`select id from units where id=$1 and property_id=$2`, [unitsShown[i], tour.property_id])).rows[0];
-        if (!u) { await client.query("rollback"); return res.status(409).json({ receipt: "One of the units shown isn't at this property." }); }
+        if (!u) { throw svcErr(409, { receipt: "One of the units shown isn't at this property." }); }
         await client.query(
           `insert into tour_units_shown (tour_id, unit_id, shown_order) values ($1,$2,$3)
            on conflict (tour_id, unit_id) do nothing`, [tourId, unitsShown[i], i + 1]);
@@ -1357,7 +1369,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       let preferredUnitId = null;
       if (b.preferred_unit_id) {
         const pu = (await client.query(`select id from units where id=$1 and property_id=$2`, [b.preferred_unit_id, tour.property_id])).rows[0];
-        if (!pu) { await client.query("rollback"); return res.status(409).json({ receipt: "The preferred unit isn't at this property." }); }
+        if (!pu) { throw svcErr(409, { receipt: "The preferred unit isn't at this property." }); }
         preferredUnitId = pu.id;
       }
 
@@ -1367,8 +1379,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       const bitsExtra = [];   // concession-capture receipt lines (built in-tx, joined after commit)
       if (fb.tour_given !== false) {
         if (!conversionServices || typeof conversionServices.createConversionFromTour !== "function") {
-          await client.query("rollback");
-          return res.status(503).json({ receipt: "Outcome rail is not wired on this server yet — deploy the wave-3 server.js, then retry." });
+          throw svcErr(503, { receipt: "Outcome rail is not wired on this server yet — deploy the wave-3 server.js, then retry." });
         }
         // The conversion needs SOME actual-host anchor. Use the roster-validated
         // host if we have one; otherwise fall back to the scheduled agent (a real
@@ -1455,8 +1466,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           // internal caller must not bypass dormancy to mint an offer/incident.
           const { resolveMode } = require("./dormant_gate");
           if (resolveMode() !== "enabled") {
-            await client.query("rollback");
-            return res.status(403).json({
+            throw svcErr(403, {
               error: "commitment_ledger_dormant", code: "LEDGER_DORMANT",
               receipt: "Concession capture is disabled: the Commitment Ledger is in DORMANT mode. No offer or incident can be created until it is explicitly enabled.",
             });
@@ -1466,8 +1476,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           // users↔persons identity bridge is an open ask, so the promiser's
           // person identity is explicit here (flagged, not papered over).
           if (!cSpec.granted_by_person_id) {
-            await client.query("rollback");
-            return res.status(400).json({ receipt: "concession.granted_by_person_id is required — the promise must be attributed to the person who made it." });
+            throw svcErr(400, { receipt: "concession.granted_by_person_id is required — the promise must be attributed to the person who made it." });
           }
           const prospectPersonId = tour.lead_id
             ? (await client.query(`select person_id from leasing_leads where id=$1`, [tour.lead_id])).rows[0].person_id
@@ -1527,14 +1536,28 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         }
       }
 
-      await client.query("commit");
       const bits = [`Outcome recorded — tour ${fb.tour_given === false ? "marked complete (no tour given)" : "given"}.`];
       if (unitsShown.length) bits.push(`${unitsShown.length} unit${unitsShown.length > 1 ? "s" : ""} shown.`);
       if (conversion) bits.push(`Follow-up rail opened — ${fb.interest_level || "outcome"} · owner set to the actual host.`);
       bits.push(...bitsExtra);
-      return res.json({ receipt: bits.join(" "), tour_id: tourId, conversion_id: conversion ? conversion.id : null });
+      return { receipt: bits.join(" "), tour_id: tourId, conversion_id: conversion ? conversion.id : null };
+  }
+
+  // ── the operator-KEY door: identical external contract to before the
+  //    extraction (same auth, same statuses, same bodies). ──
+  router.post("/leasing/tours/:tourId/complete", requireOperator, async (req, res) => {
+    const { tourId } = req.params; const b = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const sessionRecorderId = await resolveRecorderUserId(req);
+      const recordedByUserId = sessionRecorderId || b.actor_id || null;
+      const out = await completeTourService(client, { tourId, b, recordedByUserId, enforcePropertyId: null });
+      await client.query("commit");
+      return res.json(out);
     } catch (e) {
       try { await client.query("rollback"); } catch {}
+      if (e.svc) return res.status(e.http).json(e.body);
       if (e.http === 422 || e.httpStatus === 422) return res.status(422).json({ receipt: e.message });
       console.error("leasing complete:", e);
       return res.status(500).json({ receipt: "Could not complete the tour.", error: e.message });
@@ -1880,5 +1903,8 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     } catch (e) { console.error("leasing tour get:", e); return res.status(500).json({ receipt: "Could not load the tour.", error: e.message }); }
   });
 
+  // ONE canonical completion service, exposed for the staff-session door
+  // in operator.js — the same no-fork handoff as agentApp._service.
+  router._service = { completeTour: completeTourService };
   return router;
 };
