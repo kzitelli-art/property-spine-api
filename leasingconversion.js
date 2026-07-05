@@ -83,7 +83,7 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
   // Spawn ONE rung: create the commitment in the shared obligations table via
   // the injected engine, then write the conversion-link row that carries the
   // immutable outcome. Returns { obligation, link }.
-  async function spawnRung(client, { conversion, rung, owner_user_id, owner_role, labelSuffix = null, next_move_code = null }) {
+  async function spawnRung(client, { conversion, rung, owner_user_id, owner_role, labelSuffix = null, next_move_code = null, ownership_origin = null, owner_eligibility_state = null }) {
     const cfg = RUNG[rung];
     if (!cfg) throw httpErr(400, `unknown rung "${rung}"`);
     const name = await personName(client, conversion.person_id);
@@ -109,6 +109,17 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
        values ($1,$2,$3,$4,$5,$6,$7) returning *`,
       [conversion.id, ob.id, rung, owner_user_id || null, owner_role || null, ob.due_at, next_move_code || null]
     )).rows[0];
+
+    // R3 (069): birth is a ledger fact. Origin (how ownership was decided) and
+    // eligibility (whether the owner is currently eligible) stay TWO fields.
+    await closureAuthority.appendEvent(client, {
+      conversion_obligation_id: link.id, event_type: "created",
+      actor_user_id: null, identity_resolution_basis: null,
+      prior_status: null, next_status: "open",
+      prior_owner_user_id: null, next_owner_user_id: owner_user_id || null,
+      ownership_origin: owner_user_id ? ownership_origin : null,
+      owner_eligibility_state: owner_user_id ? (owner_eligibility_state || "eligible_assignment") : "unassigned",
+    });
 
     // Cache latest stage for fast queue reads (conversation rungs only).
     if (cfg.kind === "conversation") {
@@ -219,6 +230,10 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     const first = await spawnRung(client, {
       conversion: conv, rung: "tour_followup", owner_user_id: ownerUserId,
       labelSuffix: primaryMove ? ` — recommended: ${REC_LABEL[primaryMove]}` : null,
+      next_move_code: primaryMove || null,
+      ownership_origin: ownerBasis === "chosen" ? "explicit_choice"
+                      : ownerBasis === "actual_host" ? "auto_actual_host"
+                      : ownerBasis === "scheduled_host" ? "auto_scheduled_host" : null,
     });
 
     // ── LOOP-B SIBLING TASKS: SUPPRESSED (identity-bridge release, locked) ──
@@ -314,6 +329,218 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
   // RULE: completing/releasing a rung writes a WRITE-ONCE outcome + proof, then
   // (only if kept and not released) spawns the next rung. NEVER mutates the
   // closed rung. result ∈ completed | released | missed.
+    // ════════════════════════════════════════════════════════════════════
+  //  RELEASE 3 — RECOVERY + REASSIGNMENT (reviewer ruling, Jul 4)
+  //  A task may be completed, handed off, or recovered — it cannot silently
+  //  change the truth of the relationship around it.
+  // ════════════════════════════════════════════════════════════════════
+
+  const REOPEN_WINDOW_HOURS = 72;
+  const REASSIGN_REASONS = ["coverage_change","vacation_or_absence","actual_host_correction","workload_balance","unassigned_pickup","other"];
+  const RECOVERY_REASONS = ["closed_by_mistake","couldnt_complete","new_information","other"];
+
+  // Dependency-aware reopenability — one rail-level rule (Amendment 2).
+  // V1: reopenable ONLY when no material downstream work exists.
+  async function assessReopenability(client, { obligation_id }) {
+    const link = (await client.query(
+      `select lco.*, c.property_id, c.status as conversion_status
+         from leasing_conversion_obligations lco
+         join leasing_conversions c on c.id = lco.conversion_id
+        where lco.obligation_id = $1`, [obligation_id])).rows[0];
+    if (!link) return { reopenable: false, reason_code: "NOT_A_CONVERSION_TASK" };
+    if (link.outcome == null) return { reopenable: false, reason_code: "NOT_TERMINAL", link };
+
+    const cfg = RUNG[link.rung];
+    // gates are DECISIONS — reopening a decision is lifecycle correction, not
+    // task recovery. Future lane; not Release 3.
+    if (cfg && cfg.kind === "gate") return { reopenable: false, reason_code: "DECISION_NOT_RECOVERABLE", link };
+
+    // a close that released the relationship is not undone from a task row
+    if (link.resolution === "released" || link.conversion_status !== "active")
+      return { reopenable: false, reason_code: "RELATIONSHIP_CLOSED", link };
+
+    // the 72h recovery window — SERVER arithmetic on the absolute UTC fact
+    const win = (await client.query(
+      `select (now() - $1::timestamptz) <= interval '${REOPEN_WINDOW_HOURS} hours' as ok`,
+      [link.closed_at])).rows[0];
+    if (!win.ok) return { reopenable: false, reason_code: "REOPEN_WINDOW_EXPIRED", link };
+
+    // material downstream work — the ladder's successor rung
+    if (cfg && cfg.next) {
+      const succ = (await client.query(
+        `select 1 from leasing_conversion_obligations where conversion_id=$1 and rung=$2 limit 1`,
+        [link.conversion_id, cfg.next])).rows[0];
+      if (succ) return { reopenable: false, reason_code: "DOWNSTREAM_WORK_EXISTS", link };
+    }
+    // rung-specific lifecycle facts
+    if (link.rung === "applicant_followup") {
+      const app = (await client.query(
+        `select 1 from lease_applications where conversion_id=$1
+          and status in ('submitted','approved','lease_ready','tenant_signed','countersigned','active') limit 1`,
+        [link.conversion_id])).rows[0];
+      if (app) return { reopenable: false, reason_code: "DOWNSTREAM_WORK_EXISTS", link };
+    }
+    if (link.rung === "lease_signature_followup") {
+      const sig = (await client.query(
+        `select 1 from lease_applications where conversion_id=$1
+          and status in ('tenant_signed','countersigned','active') limit 1`,
+        [link.conversion_id])).rows[0];
+      if (sig) return { reopenable: false, reason_code: "DOWNSTREAM_WORK_EXISTS", link };
+    }
+    // a later recovery already attached to this exact closure cycle.
+    // to_regclass guard: a missing-table error inside the caller's transaction
+    // would poison it — never risk that for an optional pre-069 read.
+    const hasLedger = (await client.query("select to_regclass('leasing_conversion_obligation_events') as t")).rows[0];
+    if (hasLedger && hasLedger.t) {
+      const later = (await client.query(
+        `select 1 from leasing_conversion_obligation_events
+          where conversion_obligation_id=$1 and event_type='reopened' and occurred_at >= $2 limit 1`,
+        [link.id, link.closed_at])).rows[0];
+      if (later) return { reopenable: false, reason_code: "ALREADY_RECOVERED", link };
+    }
+
+    return { reopenable: true, link };
+  }
+
+  // REOPEN — deliberate recovery (Amendment 3). Requires reason + new_due_at.
+  // Ownership: prior owner kept ONLY if still eligible now; else UNASSIGNED.
+  async function reopenRung(client, { obligation_id, by_user_id = null, reason, reason_detail = null, new_due_at, idempotency_key = null }) {
+    if (!reason || !RECOVERY_REASONS.includes(reason))
+      throw httpErr(400, "reason required: " + RECOVERY_REASONS.join(" | ") + ".");
+    if (reason === "other" && !(reason_detail && String(reason_detail).trim()))
+      throw httpErr(400, "a short detail is required for reason 'other'.");
+    let due = new_due_at ? new Date(new_due_at) : null;
+    if (!due || isNaN(due)) throw httpErr(400, "new_due_at required — a reopened task must not be born instantly overdue by accident.");
+    // a past timestamp means "due immediately" — deliberately clamped to
+    // server-now (never browser arithmetic, never accidental instant-overdue)
+    if (due.getTime() < Date.now()) due = new Date();
+
+    // §3 SERIALIZATION: every task mutation begins by locking the ONE link row.
+    // The assessment and every decision below run UNDER this lock — no
+    // concurrent resolve/reassign/due-change can interleave a contradiction.
+    await client.query(
+      `select id from leasing_conversion_obligations where obligation_id=$1 for update`, [obligation_id]);
+    const assess = await assessReopenability(client, { obligation_id });
+    if (!assess.reopenable) {
+      const codes = { NOT_A_CONVERSION_TASK: 404, NOT_TERMINAL: 409, REOPEN_WINDOW_EXPIRED: 409,
+                      DOWNSTREAM_WORK_EXISTS: 409, RELATIONSHIP_CLOSED: 409, DECISION_NOT_RECOVERABLE: 409, ALREADY_RECOVERED: 409 };
+      const err = httpErr(codes[assess.reason_code] || 409, assess.reason_code);
+      err.code = assess.reason_code;
+      throw err;
+    }
+    const link = assess.link;
+    // ownership rule — never revive under a stale or false owner
+    let nextOwner = null, elig = "unassigned";
+    if (link.owner_user_id) {
+      const conv = (await client.query(`select property_id from leasing_conversions where id=$1`, [link.conversion_id])).rows[0];
+      const owned = await eligibleOwner(client, conv.property_id, [link.owner_user_id]);
+      if (owned.owner === link.owner_user_id) { nextOwner = link.owner_user_id; elig = "eligible_assignment"; }
+    }
+    const conv0 = (await client.query(`select property_id from leasing_conversions where id=$1`, [link.conversion_id])).rows[0];
+    const out = await closureAuthority.reopenLinkedConversionObligation(client, {
+      link, property_id: conv0.property_id, by_user_id,
+      reason: reason === "other" ? `other: ${String(reason_detail).trim()}` : reason,
+      new_due_at: due, next_owner_user_id: nextOwner, owner_eligibility_state: elig,
+      idempotency_key,
+    });
+    return { ...out, obligation_id, rung: link.rung };
+  }
+
+  // CHANGE FOLLOW-UP TIME (reviewer §1): the follow-up's DUE TIME changed —
+  // deliberately NOT "rescheduled" (that word means a tour/appointment moved,
+  // a different fact). Allowed on ANY active task: a prospect may ask at 10am
+  // to be contacted next week; staff never wait for overdue to record a real
+  // timing change. Owner unchanged · no conversation change · no terminal change.
+  async function changeDueTime(client, { obligation_id, by_user_id = null, reason, reason_detail = null, new_due_at, idempotency_key = null }) {
+    if (!reason || !RECOVERY_REASONS.includes(reason))
+      throw httpErr(400, "reason required: " + RECOVERY_REASONS.join(" | ") + ".");
+    if (reason === "other" && !(reason_detail && String(reason_detail).trim()))
+      throw httpErr(400, "a short detail is required for reason 'other'.");
+    let due = new_due_at ? new Date(new_due_at) : null;
+    if (!due || isNaN(due)) throw httpErr(400, "new_due_at required.");
+    if (due.getTime() < Date.now()) due = new Date(); // "due immediately" — clamped to server-now
+
+    const link = (await client.query(
+      `select lco.*, c.property_id from leasing_conversion_obligations lco
+         join leasing_conversions c on c.id = lco.conversion_id
+        where lco.obligation_id=$1 for update of lco`, [obligation_id])).rows[0];
+    if (!link) throw httpErr(404, "no conversion task for that obligation.");
+    if (link.outcome != null) throw httpErr(409, "task is closed — use reopen, not change-due.");
+
+    let snapPerson = null, snapAssignment = null, snapBasis = "unbridged";
+    if (by_user_id) {
+      try {
+        const idn = await staffIdentity.resolveStaffIdentity(client, { user_id: by_user_id, property_id: link.property_id });
+        snapPerson = idn.person_id || null; snapAssignment = idn.assignment_id || null; snapBasis = idn.state || "unbridged";
+      } catch (_) {}
+    }
+    await closureAuthority.appendEvent(client, {
+      conversion_obligation_id: link.id, event_type: "due_changed",
+      actor_user_id: by_user_id || null, actor_person: snapPerson, actor_assignment: snapAssignment,
+      identity_resolution_basis: snapBasis,
+      prior_status: "open", next_status: "open",
+      prior_owner_user_id: link.owner_user_id, next_owner_user_id: link.owner_user_id,
+      reason: reason === "other" ? `other: ${String(reason_detail).trim()}` : reason,
+      prior_due_at: link.due_by, next_due_at: due, idempotency_key,
+    });
+    await client.query(`update leasing_conversion_obligations set due_by=$2 where id=$1`, [link.id, due]);
+    await client.query(`update obligations set due_at=$2, updated_at=now() where id=$1`, [link.obligation_id, due]);
+    return { due_changed: true, obligation_id, rung: link.rung, next_due_at: due, owner_user_id: link.owner_user_id };
+  }
+  const rescheduleTask = changeDueTime; // PRIVATE, DEPRECATED alias only — never exported, never routed.
+  void rescheduleTask; // the public contract is POST …/change-due + event_type due_changed
+
+  // REASSIGN — a task event, never a quiet owner overwrite (Amendment 5).
+  // Task-only (Q1): conversation ownership is untouched. Eligible targets
+  // only (Q3), re-resolved INSIDE this transaction — picker state is never
+  // trusted at write time.
+  async function reassignTask(client, { obligation_id, by_user_id = null, to_user_id, reason, reason_detail = null, idempotency_key = null }) {
+    if (!to_user_id) throw httpErr(400, "to_user_id required — reassignment names an owner.");
+    if (!reason || !REASSIGN_REASONS.includes(reason))
+      throw httpErr(400, "reason required: " + REASSIGN_REASONS.join(" | ") + ".");
+    if (reason === "other" && !(reason_detail && String(reason_detail).trim()))
+      throw httpErr(400, "a short detail is required for reason 'other'.");
+
+    const link = (await client.query(
+      `select lco.*, c.property_id from leasing_conversion_obligations lco
+         join leasing_conversions c on c.id = lco.conversion_id
+        where lco.obligation_id=$1 for update of lco`, [obligation_id])).rows[0];
+    if (!link) throw httpErr(404, "no conversion task for that obligation.");
+    if (link.outcome != null) throw httpErr(409, "task is closed — a terminal task cannot be reassigned.");
+    if (link.owner_user_id && link.owner_user_id === to_user_id)
+      throw httpErr(409, "already owned by that person — nothing to change.");
+
+    // eligibility, decided NOW, through the one canonical resolver
+    const owned = await eligibleOwner(client, link.property_id, [to_user_id]);
+    if (owned.owner !== to_user_id)
+      throw httpErr(400, "that person is not an eligible owner at this property (bridged + active assignment required). Team access alone does not make an owner.");
+
+    const origin = (!link.owner_user_id && by_user_id && to_user_id === by_user_id)
+      ? "unassigned_pickup" : "manual_reassignment";
+
+    let snapPerson = null, snapAssignment = null, snapBasis = "unbridged";
+    if (by_user_id) {
+      try {
+        const idn = await staffIdentity.resolveStaffIdentity(client, { user_id: by_user_id, property_id: link.property_id });
+        snapPerson = idn.person_id || null; snapAssignment = idn.assignment_id || null; snapBasis = idn.state || "unbridged";
+      } catch (_) {}
+    }
+    await closureAuthority.appendEvent(client, {
+      conversion_obligation_id: link.id, event_type: "reassigned",
+      actor_user_id: by_user_id || null, actor_person: snapPerson, actor_assignment: snapAssignment,
+      identity_resolution_basis: snapBasis,
+      prior_status: "open", next_status: "open",
+      prior_owner_user_id: link.owner_user_id, next_owner_user_id: to_user_id,
+      ownership_origin: origin, owner_eligibility_state: "eligible_assignment",
+      reason: reason === "other" ? `other: ${String(reason_detail).trim()}` : reason,
+      idempotency_key,
+    });
+    // due_at unchanged; conversation ownership untouched — TASK ONLY.
+    await client.query(`update leasing_conversion_obligations set owner_user_id=$2 where id=$1`, [link.id, to_user_id]);
+    return { reassigned: true, obligation_id, rung: link.rung,
+             prior_owner_user_id: link.owner_user_id, owner_user_id: to_user_id, ownership_origin: origin };
+  }
+
   const RESOLUTION_BASES = ["coverage", "manager_intervention", "completed_together", "no_longer_needed", "unassigned_pickup"];
   async function resolveRung(client, { obligation_id, result, proof = null, by_user_id = null, suppress_next = false, resolution_basis = null }) {
     const link = (await client.query(
@@ -531,6 +758,7 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
   router._service = {
     createConversionFromTour, handoffConversation, flagHandoffRequired,
     resolveRung, addGate, advanceToRung, readConversion, spawnRung, ensureLeaseSignatureFollowup, RUNG, CONVERSATION_RUNGS,
+    assessReopenability, reopenRung, changeDueTime, reassignTask,
   };
   // Expose the single-door service alongside the router so the tour-outcome
   // seam (leasingleads /complete) opens the conversion rail through THIS
