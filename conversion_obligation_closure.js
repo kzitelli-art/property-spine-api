@@ -6,7 +6,10 @@
 //  STRUCTURAL property, not a convention. A boolean argument, route flag,
 //  header, or session marker is a bypass waiting for a forgetful caller.
 //
-//  THE CAPABILITY PATTERN:
+//  THE CAPABILITY PATTERN — an ARCHITECTURAL closure boundary, enforced by
+//  import discipline and static gates (this is JavaScript in one process;
+//  we do not claim an absolute runtime-security boundary — the static gate
+//  fails the build if any module other than server.js imports this factory):
 //    createConversionClosureAuthority() → { closeLinkedConversionObligation }
 //    · server.js creates the authority ONCE and hands it ONLY to the
 //      conversion rail (leasingconversion.js).
@@ -115,11 +118,108 @@ function createConversionClosureAuthority() {
            `Closed through the conversion rail (${resolution}).`]);
       }
     }
+    // R3 (069): the close is also an append-only ledger fact — written in the
+    // SAME transaction as the terminal mutation. If 069 has not been applied
+    // (pre-R3 deploy window), the ledger write is skipped rather than faked.
+    await appendEvent(client, {
+      conversion_obligation_id: link.id, event_type: "resolved",
+      actor_user_id: by_user_id || null, actor_person: snapPerson, actor_assignment: snapAssignment,
+      identity_resolution_basis: snapIdBasis,
+      prior_status: "open", next_status: resolution === "missed" ? "missed" : "complete",
+      resolution_code: resolution, resolution_basis,
+    });
+
     return { outcome, resolution, closed_by_user_id: by_user_id || null,
              closed_identity_resolution_basis: snapIdBasis, resolution_basis };
   }
 
-  return Object.freeze({ closeLinkedConversionObligation });
+  // ── the append-only ledger write (069) — shared by close/reopen ──────
+  async function appendEvent(client, e) {
+    const has = (await client.query("select to_regclass('leasing_conversion_obligation_events') as t")).rows[0];
+    if (!has || !has.t) return null; // 069 not applied yet — never fabricate
+    if (e.idempotency_key) {
+      const dup = (await client.query(
+        "select id from leasing_conversion_obligation_events where idempotency_key=$1", [e.idempotency_key])).rows[0];
+      if (dup) return dup.id; // safe retry: history appends nothing new
+    }
+    const r = await client.query(
+      `insert into leasing_conversion_obligation_events
+         (conversion_obligation_id, event_type, actor_user_id, actor_person_id_at_event,
+          actor_assignment_id_at_event, identity_resolution_basis,
+          prior_status, next_status, prior_owner_user_id, next_owner_user_id,
+          ownership_origin, owner_eligibility_state,
+          resolution_code, resolution_basis, reason, prior_due_at, next_due_at,
+          prior_event_id, idempotency_key)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+       returning id`,
+      [e.conversion_obligation_id, e.event_type, e.actor_user_id || null,
+       e.actor_person || null, e.actor_assignment || null, e.identity_resolution_basis || null,
+       e.prior_status || null, e.next_status || null,
+       e.prior_owner_user_id || null, e.next_owner_user_id || null,
+       e.ownership_origin || null, e.owner_eligibility_state || null,
+       e.resolution_code || null, e.resolution_basis || null, e.reason || null,
+       e.prior_due_at || null, e.next_due_at || null,
+       e.prior_event_id || null, e.idempotency_key || null]);
+    return r.rows[0].id;
+  }
+
+  /**
+   * REOPEN — the inverse terminal mutation. Same structural exclusivity as
+   * close: only the rail (via this capability) can un-terminate a linked
+   * obligation. POLICY (window, dependency check, ownership rule) lives in
+   * the rail; this function performs the mutation + ledger append atomically,
+   * given the rail's already-made decisions.
+   *
+   * The prior close is NOT erased: the 'reopened' event carries the prior
+   * resolution facts; the link's closure columns are cleared so the row
+   * re-enters the active queue (the queue reads `outcome is null`).
+   */
+  async function reopenLinkedConversionObligation(client, {
+    link, property_id, by_user_id = null, reason, new_due_at,
+    next_owner_user_id = null, owner_eligibility_state = null, idempotency_key = null,
+  }) {
+    if (!link || !link.id || !link.obligation_id) throw httpErr(500, "closure authority: link row required.");
+    const fresh = (await client.query(
+      `select * from leasing_conversion_obligations where id=$1 for update`, [link.id])).rows[0];
+    if (!fresh) throw httpErr(404, "closure authority: link vanished.");
+    if (fresh.outcome == null) throw httpErr(409, "task is already open — nothing to reopen.");
+
+    let snapPerson = null, snapAssignment = null, snapIdBasis = "unbridged";
+    if (by_user_id) {
+      try {
+        const idn = await staffIdentity.resolveStaffIdentity(client, { user_id: by_user_id, property_id });
+        snapPerson = idn.person_id || null; snapAssignment = idn.assignment_id || null;
+        snapIdBasis = idn.state || "unbridged";
+      } catch (_) { /* honest unbridged snapshot */ }
+    }
+
+    const evId = await appendEvent(client, {
+      conversion_obligation_id: fresh.id, event_type: "reopened",
+      actor_user_id: by_user_id || null, actor_person: snapPerson, actor_assignment: snapAssignment,
+      identity_resolution_basis: snapIdBasis,
+      prior_status: fresh.resolution === "missed" ? "missed" : "complete", next_status: "open",
+      prior_owner_user_id: fresh.owner_user_id, next_owner_user_id,
+      owner_eligibility_state,
+      resolution_code: fresh.resolution, resolution_basis: fresh.resolution_basis,
+      reason, prior_due_at: fresh.due_by, next_due_at: new_due_at, idempotency_key,
+    });
+
+    await client.query(
+      `update leasing_conversion_obligations
+          set outcome=null, resolution=null, proof=null, closed_at=null,
+              closed_by_user_id=null, closed_by_person_id_at_close=null,
+              closed_by_assignment_id_at_close=null, closed_identity_resolution_basis=null,
+              resolution_basis=null, owner_user_id=$2, due_by=$3
+        where id=$1`, [fresh.id, next_owner_user_id, new_due_at]);
+    await client.query(
+      `update obligations set status='open', completed_at=null, due_at=$2, updated_at=now() where id=$1`,
+      [fresh.obligation_id, new_due_at]);
+
+    return { reopened: true, event_id: evId, owner_user_id: next_owner_user_id,
+             owner_eligibility_state, new_due_at };
+  }
+
+  return Object.freeze({ closeLinkedConversionObligation, reopenLinkedConversionObligation, appendEvent });
 }
 
 // The factory is the ONLY export. There is no raw helper to import.
