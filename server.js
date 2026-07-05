@@ -3242,7 +3242,8 @@ app.use("/", __decisions);
 const commitmentLedgerModule = require("./commitmentledger");   // pricing authority + lease offers (062–065)
 const __commitmentLedger = commitmentLedgerModule({ pool, spawnObligationFromEvent, completeObligation, decisionService: __decisions._service });
 app.use("/", __commitmentLedger);
-app.use("/", leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices: __leasingConversion.services, commitmentLedger: __commitmentLedger._service }));
+const __leasingLeads = leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices: __leasingConversion.services, commitmentLedger: __commitmentLedger._service });
+app.use("/", __leasingLeads); // instance captured: its ONE tour-completion service is handed to the operator door below (no fork)
 
 // ── APPLICATION SUBMISSION SLICE (invitation front + shared submit service +
 //    deny + gated approval→signature). Shares the conversion rail's service layer. ──
@@ -3304,6 +3305,7 @@ app.use("/", agentApp);
 // demo-session bootstrap is fail-closed (DEMO_MODE=true only). (operator.js)
 const operatorModule = require("./operator");
 app.use("/", operatorModule({ pool, agentService: agentApp._service,
+  leasingTourService: __leasingLeads._service, // the ONE completion service (leasingleads.js) — session door calls the same tx
   // 067 follow-on: the session-authed leasing task queue resolves through the
   // conversion rail's ONE resolveRung service — no module reimplements closing.
   conversionService: __leasingConversion._service }));
