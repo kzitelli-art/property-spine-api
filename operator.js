@@ -869,7 +869,10 @@ module.exports = function operatorModule(deps) {
       const presence = (await client.query(
         `select 1 where exists (select 1 from leasing_leads where person_id=$1 and property_id=$2)
              or exists (select 1 from conversations where person_id=$1 and property_id=$2)
-             or exists (select 1 from person_attributes where person_id=$1 and property_id=$2)`,
+             or exists (select 1 from person_attributes where person_id=$1 and property_id=$2)
+             -- R3: a conversion IS presence — the card projects task events for
+             -- conversion-driven people, so the wall must recognize them.
+             or exists (select 1 from leasing_conversions where person_id=$1 and property_id=$2)`,
         [personId, propertyId])).rows[0];
       if (!presence) return res.status(404).json({ error: "person not found" }); // no presence here → the name does not leak across the wall
 
@@ -1052,6 +1055,46 @@ module.exports = function operatorModule(deps) {
       }
 
       // ── the canonical chronology: occurred_at ASC, never write order ─
+      // ── R3 (069): task recovery + handoff events → History entries.
+      // The ledger is the immutable record for conversion-linked obligations;
+      // the card PROJECTS it (never writes it). Pre-069 closures still render
+      // from their closure columns above — no fabricated past.
+      const hasLedger = (await client.query("select to_regclass('leasing_conversion_obligation_events') as t")).rows[0];
+      if (hasLedger && hasLedger.t) {
+        const taskEvents = (await client.query(
+          `select e.event_type, e.occurred_at, e.reason,
+                  e.resolution_code, e.resolution_basis, e.next_due_at,
+                  au.name as actor_name, po.name as prior_owner_name, no_.name as next_owner_name,
+                  o.label as task_label
+             from leasing_conversion_obligation_events e
+             join leasing_conversion_obligations lco on lco.id = e.conversion_obligation_id
+             join obligations o on o.id = lco.obligation_id
+             join leasing_conversions c on c.id = lco.conversion_id
+             left join users au  on au.id = e.actor_user_id
+             left join users po  on po.id = e.prior_owner_user_id
+             left join users no_ on no_.id = e.next_owner_user_id
+            where c.person_id = $1 and c.property_id = $2
+              and e.event_type in ('reassigned','reopened','due_changed')
+            order by e.occurred_at asc`, [personId, propertyId])).rows;
+        for (const ev of taskEvents) {
+          const who = ev.actor_name || "The system";
+          let text = null;
+          if (ev.event_type === "reassigned") {
+            text = ev.prior_owner_name
+              ? `${who} reassigned ${ev.task_label} — ${ev.prior_owner_name} → ${ev.next_owner_name || "Unassigned"}`
+              : `${who} picked up ${ev.task_label}`;
+          } else if (ev.event_type === "reopened") {
+            text = `${who} reopened ${ev.task_label}` + (ev.next_owner_name ? ` — ${ev.next_owner_name} owns it` : " — Unassigned");
+          } else if (ev.event_type === "due_changed") {
+            text = `${who} changed the follow-up time — ${ev.task_label}`;
+          }
+          if (text) entries.push({
+            kind: "task_event", occurred_at: ev.occurred_at, text,
+            reason: ev.reason || null, next_due_at: ev.next_due_at || null,
+          });
+        }
+      }
+
       entries.sort((a, b) => new Date(a.occurred_at) - new Date(b.occurred_at));
 
       const vitals = await prospectVitals(client, { personId, propertyId });
@@ -1270,6 +1313,116 @@ module.exports = function operatorModule(deps) {
       await client.query("rollback").catch(() => {});
       return res.status(e.httpStatus || e.http || 500).json({ error: e.publicMessage || e.message });
     } finally { client.release(); }
+  });
+
+  // ── R3: shared property-wall + service-call shape for task actions ─────
+  async function taskAction(req, res, fn) {
+    if (!conversionService) return res.status(503).json({ error: "conversion service not wired on this deploy." });
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const wall = (await client.query(
+        `select c.property_id from leasing_conversion_obligations lco
+           join leasing_conversions c on c.id = lco.conversion_id
+          where lco.obligation_id = $1`, [req.params.obligationId])).rows[0];
+      if (!wall) { await client.query("rollback"); return res.status(404).json({ error: "no conversion task for that obligation." }); }
+      if (wall.property_id !== req.operator.property_id) {
+        await client.query("rollback");
+        return res.status(403).json({ error: "that task belongs to another property." });
+      }
+      const out = await fn(client);
+      await client.query("commit");
+      return res.json(out);
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      return res.status(e.httpStatus || e.http || 500).json({ error: e.publicMessage || e.message, code: e.code });
+    } finally { client.release(); }
+  }
+
+  // REASSIGN — task-only, eligible targets only, reason-bearing, in-tx
+  // re-resolution of eligibility. The actor is SERVER-DERIVED.
+  router.post("/operator/leasing/tasks/:obligationId/reassign", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const b = req.body || {};
+    return taskAction(req, res, (client) => conversionService.reassignTask(client, {
+      obligation_id: req.params.obligationId,
+      by_user_id: req.operator.id,
+      to_user_id: b.to_user_id || null,
+      reason: b.reason || null, reason_detail: b.reason_detail || null,
+      idempotency_key: b.idempotency_key || null,
+    }));
+  });
+
+  // REOPEN — deliberate recovery of a TERMINAL task: dependency-aware,
+  // 72h server-side window, reason + new_due_at required, stale owners
+  // become UNASSIGNED. The prior close is preserved in the event ledger.
+  router.post("/operator/leasing/tasks/:obligationId/reopen", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const b = req.body || {};
+    return taskAction(req, res, (client) => conversionService.reopenRung(client, {
+      obligation_id: req.params.obligationId,
+      by_user_id: req.operator.id,
+      reason: b.reason || null, reason_detail: b.reason_detail || null,
+      new_due_at: b.new_due_at || null,
+      idempotency_key: b.idempotency_key || null,
+    }));
+  });
+
+  // CHANGE FOLLOW-UP TIME — any ACTIVE task: new due time + reason, no
+  // terminal state, owner kept. (Not "reschedule": that word means a tour moved.)
+  router.post("/operator/leasing/tasks/:obligationId/change-due", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const b = req.body || {};
+    return taskAction(req, res, (client) => conversionService.changeDueTime(client, {
+      obligation_id: req.params.obligationId,
+      by_user_id: req.operator.id,
+      reason: b.reason || null, reason_detail: b.reason_detail || null,
+      new_due_at: b.new_due_at || null,
+      idempotency_key: b.idempotency_key || null,
+    }));
+  });
+
+  // RECENTLY CLOSED — the read that makes Reopen reachable. Same authz,
+  // same wall; terminal tasks from the 72h recovery window, newest first.
+  // Each row carries reopenability so the door never offers a dead button.
+  router.get("/operator/leasing/tasks/recently-closed", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const propertyId = req.operator.property_id;
+      const rows = (await pool.query(
+        `select o.id as obligation_id, lco.id as link_id, lco.conversion_id, lco.rung,
+                case when lco.rung = 'leasing_task' then 'sibling' else 'anchor' end as anchor_or_sibling,
+                o.label, p.id as person_id, p.name as person_name,
+                lco.outcome, lco.resolution, lco.resolution_basis, lco.closed_at,
+                lco.closed_by_user_id, cu.name as closed_by_name
+           from leasing_conversion_obligations lco
+           join obligations o         on o.id = lco.obligation_id
+           join leasing_conversions c on c.id = lco.conversion_id
+           join persons p             on p.id = c.person_id
+           left join users cu         on cu.id = lco.closed_by_user_id
+          where c.property_id = $1 and lco.outcome is not null
+            and lco.closed_at >= now() - interval '72 hours'
+          order by lco.closed_at desc
+          limit 50`, [propertyId])).rows;
+      const items = [];
+      for (const r of rows) {
+        let reopen = { reopenable: false, reason_code: "UNKNOWN" };
+        if (conversionService && conversionService.assessReopenability) {
+          try { const a = await conversionService.assessReopenability(pool, { obligation_id: r.obligation_id });
+                reopen = { reopenable: a.reopenable, reason_code: a.reason_code || null }; }
+          catch (_) {}
+        }
+        items.push({ obligation_id: r.obligation_id, conversion_id: r.conversion_id, rung: r.rung,
+          anchor_or_sibling: r.anchor_or_sibling, label: r.label,
+          person_id: r.person_id, person_name: r.person_name,
+          resolution: r.resolution, resolution_basis: r.resolution_basis,
+          closed_at: r.closed_at, closed_by_user_id: r.closed_by_user_id, closed_by_name: r.closed_by_name,
+          reopenable: reopen.reopenable, not_reopenable_reason: reopen.reopenable ? null : reopen.reason_code });
+      }
+      return res.json({ name: "recently_closed_tasks", property_id: propertyId,
+        window_hours: 72, items,
+        receipt: `${items.length} task(s) closed in the last 72 hours.` });
+    } catch (e) { return res.status(500).json({ error: e.message }); }
   });
 
   // POST /operator/leasing/conversations/:conversationId/close-not-fit
