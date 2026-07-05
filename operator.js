@@ -35,7 +35,7 @@ const crypto = require("crypto");
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 
 module.exports = function operatorModule(deps) {
-  const { pool, agentService, conversionService = null } = deps;
+  const { pool, agentService, conversionService = null, leasingTourService = null } = deps;
   if (!pool) throw new Error("operator.js requires { pool }");
   const router = require("express").Router();
 
@@ -1171,6 +1171,95 @@ module.exports = function operatorModule(deps) {
   // Deterministic order: overdue → due today → upcoming → no due date, then
   // due_at, created_at, id (stable tie-break). Bounded: limit ≤ 200, keyset
   // cursor. A null owner, null due date, or sibling type NEVER hides a row.
+  // ── resolvePropertyOperatingTimeZone ─────────────────────────────────
+  //  A property's "today" is its OPERATIONAL day, not UTC and not a hidden
+  //  Eastern assumption baked into a generic route. Until properties carries
+  //  a timezone column, the source of truth is this explicit, audited
+  //  allowlist (production Demo Building) plus the PROPERTY_OPERATING_TZ_JSON
+  //  env map for QA rigs. An UNCONFIGURED property gets an honest refusal —
+  //  never an invented day.
+  const PROPERTY_OPERATING_TZ = Object.assign(
+    { "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe": "America/New_York" }, // Property Spine Demo Building
+    (function(){ try { return JSON.parse(process.env.PROPERTY_OPERATING_TZ_JSON || "{}"); } catch (_) { return {}; } })()
+  );
+  function resolvePropertyOperatingTimeZone(propertyId) {
+    return PROPERTY_OPERATING_TZ[propertyId] || null;
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  //  LIVE TOUR SURFACE (session door) — the reads/writes that let the
+  //  operator app complete a tour on the session's property through the
+  //  ONE canonical completion service (leasingleads.js completeTourService).
+  //  Same two-plane authz as the task queue: session + leasing module.
+  // ══════════════════════════════════════════════════════════════════
+
+  // Today's tours at the session's property — mirrors the operator-key
+  // read (/properties/:id/leasing/tours/today) with the property SERVER-
+  // DERIVED from the staff session, never from the client.
+  router.get("/operator/leasing/tours/today", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      // "Today" is the PROPERTY'S OPERATIONAL DAY — resolved, never assumed.
+      const PROPERTY_TZ = resolvePropertyOperatingTimeZone(req.operator.property_id);
+      if (!PROPERTY_TZ) {
+        return res.status(422).json({
+          error: "PROPERTY_TIMEZONE_UNCONFIGURED",
+          receipt: "This property has no configured operating timezone, so 'today' cannot be computed honestly. Configure it before using the live tour board here.",
+        });
+      }
+      // ACTIVE tours only — the capture-candidate set. Completed / no-show /
+      // cancelled / rescheduled tours are terminal: they leave this list the
+      // moment their outcome is recorded (the same status set the queue
+      // projection's live_tour CTE treats as live).
+      const r = await pool.query(
+        `select t.*, p.name as prospect_name, p.phone as prospect_phone,
+                l.person_id, c.id as conversation_id,
+                u.name as scheduled_host_name
+           from leasing_tours t
+           join leasing_leads l on l.id = t.lead_id
+           join persons p on p.id = l.person_id
+           left join conversations c
+                  on c.property_id = l.property_id and c.person_id = l.person_id
+           left join users u on u.id = t.leasing_agent_id
+          where t.property_id=$1
+            and (t.scheduled_for at time zone $2)::date = (now() at time zone $2)::date
+            and t.status in ('scheduled','confirmed_by_prospect','checked_in')
+          order by t.scheduled_for`, [req.operator.property_id, PROPERTY_TZ]);
+      return res.json({ receipt: `${r.rows.length} active tour(s) on the board today.`, property_id: req.operator.property_id, tours: r.rows });
+    } catch (e) { console.error("operator tours today:", e); return res.status(500).json({ receipt: "Could not load today's tours.", error: e.message }); }
+  });
+
+  // Session-authed tour completion. The SAME transaction the operator-key
+  // door runs (no fork): leasingleads.js completeTourService, with
+  //   • the RECORDER server-derived from the staff session (req.operator.id)
+  //     — a body actor_id can never override it on this door, and
+  //   • the property wall enforced from the session scope: the tour must
+  //     belong to the session's property (checked inside the service).
+  router.post("/operator/leasing/tours/:tourId/complete", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!leasingTourService || typeof leasingTourService.completeTour !== "function") {
+      return res.status(503).json({ receipt: "Tour completion is not wired on this deploy (leasingTourService missing)." });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await leasingTourService.completeTour(client, {
+        tourId: req.params.tourId,
+        b: req.body || {},
+        recordedByUserId: req.operator.id,            // SERVER-DERIVED — never the body
+        enforcePropertyId: req.operator.property_id,  // the session's wall
+      });
+      await client.query("commit");
+      return res.json(out);
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      if (e.svc) return res.status(e.http).json(e.body);
+      if (e.http === 422 || e.httpStatus === 422) return res.status(422).json({ receipt: e.message });
+      console.error("operator tour complete:", e);
+      return res.status(500).json({ receipt: "Could not complete the tour.", error: e.message });
+    } finally { client.release(); }
+  });
+
   router.get("/operator/leasing/task-queue", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
