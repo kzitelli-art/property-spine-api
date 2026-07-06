@@ -38,6 +38,7 @@
 
 "use strict";
 const express = require("express");
+const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 const resolver = require("./staff_identity_resolver.js");
 
 module.exports = function buildStaffBridge({ pool }) {
@@ -51,15 +52,13 @@ module.exports = function buildStaffBridge({ pool }) {
 
   // ── session → admin user, server-derived. The ONLY identity source. ──
   async function resolveAdmin(req) {
-    const token = req.headers["x-staff-session"];
-    if (!token) return null;
-    const r = await pool.query(
-      `select u.id, u.name, u.role, u.is_active, u.status, u.account_kind
-         from staff_sessions s join users u on u.id = s.user_id
-        where s.token = $1 and s.revoked = false and s.expires_at > now()`, [token]);
-    const u = r.rows[0];
+    // BRICK ONE: shared live resolver (session + active user per 067 +
+    // active assignment for the session's property  a deliberate
+    // TIGHTENING: an admin session now also requires live property
+    // authority  one meaning of authorization everywhere). The bridge's
+    // own narrowing stays layered on top, unchanged below.
+    const u = await staffSessions.resolveStaffSession(pool, req.headers["x-staff-session"]);
     if (!u) return null;
-    if (!resolver.userIsActive(u)) return null;                 // fail-closed
     if (NON_ADMIN_KINDS.includes(u.account_kind)) return null;  // a machine/shared/legacy account never administers
     return ADMIN_ROLES.includes(u.role) ? u : null;             // NO widening — see header
   }
