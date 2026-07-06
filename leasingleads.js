@@ -22,6 +22,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 const express = require("express");
+const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 const crypto = require("crypto");
 
@@ -87,13 +88,12 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // request body. b.actor_id is accepted ONLY as a fallback on the shared-key-
   // only path (no session), and never overrides a resolved session identity.
   async function resolveRecorderUserId(req) {
-    const token = req.headers["x-staff-session"];
-    if (!token) return null;
+    // BRICK ONE: shared live resolver. Same null-on-anything contract 
+    // no session (or a session whose authority lapsed) degrades to the
+    // documented shared-key b.actor_id fallback, exactly as before.
     try {
-      const r = await pool.query(
-        `select u.id from staff_sessions s join users u on u.id = s.user_id
-          where s.token = $1 and s.revoked = false and s.expires_at > now()`, [token]);
-      return r.rows[0] ? r.rows[0].id : null;
+      const op = await staffSessions.resolveStaffSession(pool, req.headers["x-staff-session"]);
+      return op ? op.id : null;
     } catch (_) { return null; }
   }
   // ── service-error: carries the EXACT http status + json body the route
