@@ -67,6 +67,17 @@ function userIsActive(u) {
   return !!u && u.is_active === true && u.status === "active";
 }
 
+// BRICK ONE (Gate 3)  the ONE central internal-QA output-exclusion
+// predicate. Identity eligibility lives HERE, with the account-
+// classification axis it reads. Output boundaries (rosters, eligible-staff,
+// queues, metrics, reporting, outbound, AI context) exclude internal_qa
+// through this helper  never scattered per-route checks. A QA identity
+// can OPERATE (sessions issue/resolve normally); it never contaminates
+// operating output.
+function userIsOperational(u) {
+  return userIsActive(u) && u.account_kind !== "internal_qa";
+}
+
 // A person linked from MORE THAN ONE currently-active user account is a
 // conflict: no automatic ownership until an admin deliberately resolves it.
 async function personHasConflictingLinks(client, personId) {
@@ -236,6 +247,7 @@ module.exports = {
   freeTextClaim,
   readUser,
   userIsActive,
+  userIsOperational,
   LIVE_STATES,
   RESERVED_STATES,
   ACTIVE_USER_PREDICATE,
