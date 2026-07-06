@@ -441,6 +441,41 @@ module.exports = function demoModule(deps) {
           )).rows[0];
         }
 
+        // BRICK ONE: the demo manager holds a REAL active Demo Building
+        // assignment  the shared issuer verifies entitlement like every
+        // other session, so the demo path obeys the one authority model
+        // (case R: without this row, the demo bootstrap fails honestly).
+        // Constraint-agnostic reactivate-or-insert (works whether the table
+        // carries a FULL unique on the pair or the partial active-only
+        // index): touch the current active row; else reactivate the most
+        // recent history row; else insert. Never creates a second row when
+        // one exists; never creates a second ACTIVE row ever.
+        const upd1 = await client.query(
+          `update property_team_assignments
+              set role_title='Demo Leasing Manager', allowed_modules='{leasing}',
+                  primary_for_modules='{leasing}', can_manage_roles=true, updated_at=now()
+            where property_id=$1 and user_id=$2 and active=true`,
+          [propertyId, mgr.id]);
+        if (upd1.rowCount === 0) {
+          const upd2 = await client.query(
+            `update property_team_assignments
+                set active=true, role_title='Demo Leasing Manager', allowed_modules='{leasing}',
+                    primary_for_modules='{leasing}', can_manage_roles=true, updated_at=now()
+              where id = (select id from property_team_assignments
+                           where property_id=$1 and user_id=$2
+                           order by updated_at desc nulls last limit 1)`,
+            [propertyId, mgr.id]);
+          if (upd2.rowCount === 0) {
+            await client.query(
+              `insert into property_team_assignments
+                 (property_id, user_id, role_title, scope_type, allowed_modules,
+                  primary_for_modules, can_manage_roles, active, updated_at)
+               values ($1, $2, 'Demo Leasing Manager', 'property', '{leasing}',
+                       '{leasing}', true, true, now())`,
+              [propertyId, mgr.id]);
+          }
+        }
+
         return { seeded: true, run, manager_user_id: mgr.id };
       });
       res.json(out);
