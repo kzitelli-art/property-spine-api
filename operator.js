@@ -32,6 +32,7 @@
 //       the operator-facing actions agent.js exposes. Mounted under "/".
 
 const crypto = require("crypto");
+const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 
 module.exports = function operatorModule(deps) {
@@ -69,15 +70,11 @@ module.exports = function operatorModule(deps) {
   // Resolves x-staff-session → real users row. Returns null if absent/invalid/expired.
   // Returns { id, name, email, role, property_id } — property_id is the SESSION scope.
   async function resolveSession(req) {
-    const token = req.headers["x-staff-session"];
-    if (!token) return null;
-    const r = await pool.query(
-      `select u.id, u.name, u.email, u.role, s.property_id
-         from staff_sessions s join users u on u.id = s.user_id
-        where s.token = $1 and s.revoked = false and s.expires_at > now()`,
-      [token]
-    );
-    return r.rows[0] || null;
+    // BRICK ONE: THE shared live-authority read. Session validity + active
+    // user (067 rule) + active assignment for the SESSION's property on
+    // EVERY request; returns live role/modules. Legacy raw tokens honored
+    // only inside the 14-day sunset (staff_session_service).
+    return staffSessions.resolveStaffSession(pool, req.headers["x-staff-session"]);
   }
 
   // middleware: require a valid session; attach req.operator = { id, ..., property_id }
@@ -159,16 +156,16 @@ module.exports = function operatorModule(deps) {
             [mgr.id, prop.id]
           );
 
-          // mint a fresh scoped session, short expiry
-          const token = crypto.randomBytes(18).toString("base64url");
-          await client.query(
-            `insert into staff_sessions (user_id, property_id, token, expires_at)
-             values ($1,$2,$3, now() + ($4 || ' hours')::interval)`,
-            [mgr.id, prop.id, token, String(DEMO_SESSION_HOURS)]
-          );
+          // BRICK ONE: mint through the ONE canonical issuer. purpose:"demo"
+          // = server-owned 6h policy; entitlement (the demo manager's real
+          // Demo Building assignment) is verified inside  case R fails
+          // honestly if the seed has not provisioned it.
+          const issued = await staffSessions.issueStaffSession(client, {
+            userId: mgr.id, propertyId: prop.id, purpose: "demo",
+          });
 
           await client.query("commit");
-          return { token, property_id: prop.id, expires_in_hours: DEMO_SESSION_HOURS };
+          return { token: issued.session_token, property_id: prop.id, expires_in_hours: issued.expires_in_hours };
         } catch (e) {
           await client.query("rollback");
           throw e;
@@ -229,7 +226,7 @@ module.exports = function operatorModule(deps) {
   const SOURCE_TYPES = ["management_policy","lease_or_addendum","verified_operator_confirmation","other_documented_source"];
 
   // GET /operator/agent-facts — active + retired facts for the SESSION's property.
-  router.get("/operator/agent-facts", requireOperator, async (req, res) => {
+  router.get("/operator/agent-facts", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
       const rows = (await pool.query(
@@ -276,7 +273,7 @@ module.exports = function operatorModule(deps) {
 
   // POST /operator/agent-facts — add a verified fact. approved_by from SESSION.
   // If an active fact with the same key exists, it's retired (one active per key).
-  router.post("/operator/agent-facts", requireOperator, async (req, res) => {
+  router.post("/operator/agent-facts", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
       const f = normalizeFactBody(req.body);
@@ -292,7 +289,7 @@ module.exports = function operatorModule(deps) {
   });
 
   // POST /operator/agent-facts/:factId/retire — retire one active fact (scoped).
-  router.post("/operator/agent-facts/:factId/retire", requireOperator, async (req, res) => {
+  router.post("/operator/agent-facts/:factId/retire", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
       const client = await pool.connect();
@@ -311,7 +308,7 @@ module.exports = function operatorModule(deps) {
   // POST /operator/agent-facts/:factId/replace — ATOMIC: retire the named active fact
   // AND create the replacement in ONE transaction. Prior wording/source/approver/dates
   // are preserved on the retired row (we never edit in place). approved_by from SESSION.
-  router.post("/operator/agent-facts/:factId/replace", requireOperator, async (req, res) => {
+  router.post("/operator/agent-facts/:factId/replace", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
       const f = normalizeFactBody(req.body); // the replacement's fields (validated first)
@@ -341,7 +338,7 @@ module.exports = function operatorModule(deps) {
 
   // GET /operator/leasing/conversations — active leasing convos for the SESSION's
   // property only. Property derived from session; NO browser filters; capped.
-  router.get("/operator/leasing/conversations", requireOperator, async (req, res) => {
+  router.get("/operator/leasing/conversations", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
       const rows = (await pool.query(
@@ -493,7 +490,7 @@ module.exports = function operatorModule(deps) {
   // GET /operator/leasing/conversations/:conversationId — one convo, SCOPE-VERIFIED.
   // Returns the thread/draft via the shared getConversationStateService, PLUS the
   // prospect vitals for the Person Card (fixed contract; honest nulls).
-  router.get("/operator/leasing/conversations/:conversationId", requireOperator, async (req, res) => {
+  router.get("/operator/leasing/conversations/:conversationId", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
       let vitals;
@@ -514,7 +511,7 @@ module.exports = function operatorModule(deps) {
   });
 
   // POST /operator/agent-drafts/:draftId/send — SCOPE-VERIFIED, actor=session user.
-  router.post("/operator/agent-drafts/:draftId/send", requireOperator, async (req, res) => {
+  router.post("/operator/agent-drafts/:draftId/send", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
       await assertDraftInScope(req.params.draftId, req.operator.property_id);
@@ -527,7 +524,7 @@ module.exports = function operatorModule(deps) {
   });
 
   // POST /operator/agent-drafts/:draftId/edit-and-send — same service, editedBody required.
-  router.post("/operator/agent-drafts/:draftId/edit-and-send", requireOperator, async (req, res) => {
+  router.post("/operator/agent-drafts/:draftId/edit-and-send", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
       const editedBody = (req.body && typeof req.body.body === "string") ? req.body.body.trim() : "";
@@ -542,7 +539,7 @@ module.exports = function operatorModule(deps) {
 
   // POST /operator/agent-drafts/:draftId/regenerate — SCOPE-VERIFIED via the draft's
   // conversation; regenerate service resolves by the conversation's person+property.
-  router.post("/operator/agent-drafts/:draftId/regenerate", requireOperator, async (req, res) => {
+  router.post("/operator/agent-drafts/:draftId/regenerate", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
       const conv = await assertDraftInScope(req.params.draftId, req.operator.property_id);
@@ -552,7 +549,7 @@ module.exports = function operatorModule(deps) {
   });
 
   // POST /operator/conversations/:conversationId/take-over — SCOPE-VERIFIED.
-  router.post("/operator/conversations/:conversationId/take-over", requireOperator, async (req, res) => {
+  router.post("/operator/conversations/:conversationId/take-over", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
       const client = await pool.connect();
@@ -716,7 +713,7 @@ module.exports = function operatorModule(deps) {
 
   // GET /operator/leasing/conversation-queue — the ACTIVE WORK QUEUE (working states),
   // cursor-paginated, with server-side counts across ALL commercial states.
-  router.get("/operator/leasing/conversation-queue", requireOperator, async (req, res) => {
+  router.get("/operator/leasing/conversation-queue", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
       const propertyId = req.operator.property_id;
@@ -797,7 +794,7 @@ module.exports = function operatorModule(deps) {
   // the source of truth). DISPATCH deliberately does not live here — actually
   // sending the follow-up stays behind the Twilio wall; this read tells a
   // human what is due, it never texts anyone.
-  router.get("/operator/leasing/follow-ups", requireOperator, async (req, res) => {
+  router.get("/operator/leasing/follow-ups", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
       const propertyId = req.operator.property_id;
@@ -849,7 +846,7 @@ module.exports = function operatorModule(deps) {
   //  · Honest blank: empty sources contribute nothing; dark sources
   //    (offer/application/lease) do not exist here at all.
   // ══════════════════════════════════════════════════════════════════
-  router.get("/operator/leasing/person-card", requireOperator, async (req, res) => {
+  router.get("/operator/leasing/person-card", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     const client = await pool.connect();
     try {
@@ -1122,7 +1119,7 @@ module.exports = function operatorModule(deps) {
   // never an arbitrary id. Requires the users↔persons bridge to return rows;
   // returns an honest empty list until then, which the UI states plainly.
   // ══════════════════════════════════════════════════════════════════
-  router.get("/operator/property/eligible-staff", requireOperator, async (req, res) => {
+  router.get("/operator/property/eligible-staff", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
       const propertyId = req.operator.property_id;
@@ -1155,16 +1152,12 @@ module.exports = function operatorModule(deps) {
   //     AUTOMATIC ownership eligibility (the canonical resolver only)
   // Team access never makes someone an owner; the bridge never grants access.
   async function requireLeasingModuleAccess(req, res, next) {
-    try {
-      const ok = (await pool.query(
-        `select 1 from property_team_assignments
-          where user_id=$1 and property_id=$2 and active=true
-            and 'leasing' = any(allowed_modules) limit 1`,
-        [req.operator.id, req.operator.property_id])).rows[0];
-      if (!ok) return res.status(403).json({
-        error: "leasing-module access required at this property (property_team_assignments.allowed_modules)." });
-      return next();
-    } catch (e) { return res.status(500).json({ error: e.message }); }
+    // BRICK ONE: req.operator.allowed_modules is LIVE from the shared
+    // resolver (re-read this request)  no second assignment query.
+    const mods = (req.operator && req.operator.allowed_modules) || [];
+    if (!mods.includes("leasing")) return res.status(403).json({
+      error: "leasing-module access required at this property (property_team_assignments.allowed_modules)." });
+    return next();
   }
 
   // ── TOUR FOLLOW-UPS AND LEASING TASKS — the queue read (contract §6) ──
@@ -1515,7 +1508,7 @@ module.exports = function operatorModule(deps) {
   });
 
   // POST /operator/leasing/conversations/:conversationId/close-not-fit
-  router.post("/operator/leasing/conversations/:conversationId/close-not-fit", requireOperator, async (req, res) => {
+  router.post("/operator/leasing/conversations/:conversationId/close-not-fit", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
       const { reason_code, reason_note, idempotency_key } = req.body || {};
@@ -1531,7 +1524,7 @@ module.exports = function operatorModule(deps) {
   // POST /operator/leasing/conversations/:conversationId/reopen — manual manager
   // correction. (Genuine-inbound reopen is wired in the comm_event ingestion path,
   // not here.)
-  router.post("/operator/leasing/conversations/:conversationId/reopen", requireOperator, async (req, res) => {
+  router.post("/operator/leasing/conversations/:conversationId/reopen", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
       const { idempotency_key } = req.body || {};
