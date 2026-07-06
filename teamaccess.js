@@ -37,6 +37,8 @@
 const express = require("express");
 const crypto = require("crypto");
 
+const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
+
 module.exports = function teamAccessModule({ pool, sms }) {
   const router = express.Router();
 
@@ -83,13 +85,10 @@ module.exports = function teamAccessModule({ pool, sms }) {
 
   // resolve the staff session from the header (twin of tenant session resolve).
   async function currentUser(req) {
-    const token = req.headers["x-staff-session"] || req.query.session;
-    if (!token) return null;
-    const r = await pool.query(
-      `select u.id, u.name, u.phone, u.email, u.role, u.status
-         from staff_sessions s join users u on u.id = s.user_id
-        where s.token = $1 and s.revoked = false and s.expires_at > now()`, [token]);
-    return r.rows[0] || null;
+    // BRICK ONE: shared live resolver, HEADER-ONLY (the ?session= query
+    // path is deleted  tokens never belong in URLs). Returns live
+    // property_id / role_title / allowed_modules / can_manage_roles.
+    return staffSessions.resolveStaffSession(pool, req.headers["x-staff-session"]);
   }
 
   // ── POST /properties/:id/team-invites — add staff by phone ───────────
@@ -355,11 +354,10 @@ module.exports = function teamAccessModule({ pool, sms }) {
           `update team_invites set status='accepted', accepted_at=now() where id=$1`, [inv.id]);
 
         // issue the scoped staff session (same as accept path).
-        const sessionToken = newToken();
-        await client.query(
-          `insert into staff_sessions (user_id, property_id, token, expires_at)
-           values ($1,$2,$3, now() + ($4 || ' days')::interval)`,
-          [user.id, inv.property_id, sessionToken, String(SESSION_TTL_DAYS)]);
+        const issued = await staffSessions.issueStaffSession(client, {
+          userId: user.id, propertyId: inv.property_id, purpose: "sms_otp",
+        });
+        const sessionToken = issued.session_token;
 
         await client.query("commit");
         return res.json({
@@ -419,11 +417,10 @@ module.exports = function teamAccessModule({ pool, sms }) {
       await client.query(`update team_invites set status='accepted', accepted_at=now(), accepted_user_id=$2 where id=$1`, [inv.id, user.id]);
 
       // ── issue the scoped staff session (property-scoped, per their schema) ──
-      const sessionToken = newToken();
-      await client.query(
-        `insert into staff_sessions (user_id, property_id, token, expires_at)
-         values ($1,$2,$3, now() + ($4 || ' days')::interval)`,
-        [user.id, inv.property_id, sessionToken, String(SESSION_TTL_DAYS)]);
+      const issued = await staffSessions.issueStaffSession(client, {
+        userId: user.id, propertyId: inv.property_id, purpose: "sms_otp",
+      });
+      const sessionToken = issued.session_token;
 
       await client.query("commit");
 
@@ -465,6 +462,7 @@ module.exports = function teamAccessModule({ pool, sms }) {
            left join users bu on bu.id = a.backup_user_id
            left join users eu on eu.id = a.escalates_to_user_id
           where a.property_id=$1 and a.active = true
+            and u.account_kind <> 'internal_qa'  -- Gate 3: QA never on the roster
           order by u.name asc`, [propertyId])).rows;
 
       // also surface pending invites (added, not yet verified) so the roster
@@ -512,6 +510,10 @@ module.exports = function teamAccessModule({ pool, sms }) {
     try {
       const me = await currentUser(req);
       if (!me) return res.status(401).json({ receipt: "Not signed in. Verify by phone first." });
+      // BRICK ONE property wall: a property-scoped session may read only
+      // ITS property's access. No URL-selected authority.
+      if (propertyId !== me.property_id)
+        return res.status(403).json({ receipt: "Not in your property scope." });
 
       const a = (await pool.query(
         `select role_title, allowed_modules, primary_for_modules, can_manage_roles
@@ -561,10 +563,11 @@ module.exports = function teamAccessModule({ pool, sms }) {
       if (!isOperator) {
         const me = await currentUser(req);
         if (!me) return res.status(401).json({ receipt: "Not signed in." });
-        const mine = (await pool.query(
-          `select can_manage_roles from property_team_assignments
-            where property_id=$1 and user_id=$2 and active=true`, [target.property_id, me.id])).rows[0];
-        if (!mine || !mine.can_manage_roles)
+        // BRICK ONE property wall: the target assignment must belong to the
+        // SESSION's property  can_manage_roles is live off the resolver.
+        if (target.property_id !== me.property_id)
+          return res.status(403).json({ receipt: "Not in your property scope." });
+        if (!me.can_manage_roles)
           return res.status(403).json({ receipt: "Only an authorized manager on this property can change access." });
       }
 
