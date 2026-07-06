@@ -95,6 +95,7 @@ app.use((req, res, next) => {
   if (isOperatorPath(req.path)) return operatorCors(req, res, next);
   return generalCors(req, res, next);
 });
+app.set("trust proxy", 1); // Render = one proxy hop: makes req.ip the real client so per-IP rate limits actually bind per client
 app.use(express.json({ limit: "1mb" }));  // body-size cap — stops oversized payloads
 
 // ── operator gate (Phase 0 auth centralization) ──────────────────────
@@ -3303,6 +3304,7 @@ app.use("/", agentApp);
 // takeover/obligation/stale-draft) — agentApp._service. Identity is a real staff
 // session (x-staff-session → users row); the browser never claims identity. The
 // demo-session bootstrap is fail-closed (DEMO_MODE=true only). (operator.js)
+app.use("/", require("./operator_session_bootstrap")({ pool })); // BRICK ONE: POST /operator/session + /revoke  the only /operator/* routes that self-protect (they create/end the session)
 const operatorModule = require("./operator");
 app.use("/", operatorModule({ pool, agentService: agentApp._service,
   leasingTourService: __leasingLeads._service, // the ONE completion service (leasingleads.js) — session door calls the same tx
