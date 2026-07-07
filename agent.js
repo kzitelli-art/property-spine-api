@@ -668,6 +668,33 @@ module.exports = function agentModule(deps) {
     });
   }
 
+  // HAND BACK: thread human_takeover -> ai_active. The EXPLICIT counterpart to
+  // take-over. The no-silent-re-entry invariant holds: only a deliberate,
+  // server-authenticated manager action (this service, or an approved draft
+  // send) returns a taken-over thread to the AI. Completes the takeover
+  // obligation (the human obligation ends when the human hands the thread
+  // back) and nulls the pointer -- mirrors sendDraftService's cleanup shape.
+  // Caller resolves+authorizes the conversation; actor is server-derived.
+  async function handBackConversationService({ conversationId, actorUserId }) {
+    if (!actorUserId) throw httpErr(400, "actorUserId is required (server-derived).");
+    return tx(async (client) => {
+      const conv = (await client.query("select * from conversations where id=$1", [conversationId])).rows[0];
+      if (!conv) throw httpErr(404, "No conversation.");
+      const state = await loadThreadState(client, conv.id, true);
+      if (state.mode !== "human_takeover") throw httpErr(409, "Thread is '" + state.mode + "', not in human takeover.");
+      const mgrId = actorUserId;
+      if (state.current_review_obligation_id && completeObligation) {
+        await completeObligation(client, { obligation_id: state.current_review_obligation_id, completed_by: mgrId })
+          .catch(e => { if (e.code !== "ALREADY_COMPLETE") throw e; });
+      }
+      await client.query(
+        "update agent_thread_state set mode='ai_active', current_review_obligation_id=null, updated_at=now() where conversation_id=$1",
+        [conv.id]
+      );
+      return { ok: true, mode: "ai_active", by: mgrId };
+    });
+  }
+
   // LEGACY/DEMO adapter route.
   router.post("/agent/thread/takeover", async (req, res) => {
     try {
@@ -825,6 +852,7 @@ module.exports = function agentModule(deps) {
   router._service = {
     preGenerationPolicy, postGenerationPolicy, resolveContext, buildMessages,
     sendDraftService, getConversationStateService, takeOverConversationService,
+    handBackConversationService,
     regenerateDraftService, resolveConversationByPair,
   };
   return router;
