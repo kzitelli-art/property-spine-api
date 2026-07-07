@@ -562,6 +562,23 @@ module.exports = function operatorModule(deps) {
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
   });
 
+  // HAND BACK: the explicit counterpart to take-over. Returns a human_takeover
+  // thread to ai_active. Scope-verified against the session property; the actor
+  // is server-derived. The no-silent-re-entry invariant holds -- only this
+  // deliberate route (or an approved draft send) re-enters the AI.
+  router.post("/operator/conversations/:conversationId/hand-back", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const client = await pool.connect();
+      try { await scopedConversation(client, req.params.conversationId, req.operator.property_id); }
+      finally { client.release(); }
+      const out = await agentService.handBackConversationService({
+        conversationId: req.params.conversationId, actorUserId: req.operator.id,
+      });
+      return res.json(out);
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
+  });
+
   // verify a draft's conversation belongs to the session property; returns the conversation row.
   async function assertDraftInScope(draftId, propertyId) {
     const r = (await pool.query(
@@ -652,6 +669,20 @@ module.exports = function operatorModule(deps) {
       from comm_events where direction='outbound' and sender_role in ('agent','ai')
       order by conversation_id, occurred_at desc
     ),
+    attempts_since_inbound as (
+      -- CADENCE FACT: delivered AI/agent outbound attempts since the prospect
+      -- last spoke (all attempts, if they never have). Server-computed so
+      -- cadence exhaustion is a projection fact, never client math.
+      -- Threshold 3 below is a Class-2 adapter: replace with property-level
+      -- cadence configuration before multi-market activation.
+      select o.conversation_id, count(*)::int as n
+      from comm_events o
+      left join qual_in qi on qi.conversation_id = o.conversation_id
+      where o.direction='outbound' and o.sender_role in ('agent','ai')
+        and o.provider_status in ('sent','delivered')
+        and o.occurred_at > coalesce(qi.at, 'epoch'::timestamptz)
+      group by o.conversation_id
+    ),
     base as (
       select e.conversation_id, e.person_id, e.property_id, e.lead_status,
         pr.name as person_name,
@@ -664,7 +695,8 @@ module.exports = function operatorModule(deps) {
         (qi.at is not null and (qo.at is null or qi.at >= qo.at)) as inbound_unanswered,
         (li.close_seq is not null and (li.reopen_seq is null or li.reopen_seq < li.close_seq)) as is_closed,
         (lt.conversation_id is not null) as is_booked,
-        (qi.at is not null or ao.at is not null) as has_engagement
+        (qi.at is not null or ao.at is not null) as has_engagement,
+        coalesce(asi.n, 0) as outreach_attempts
       from eligible e
       join conversations c on c.id = e.conversation_id
       join persons pr on pr.id = e.person_id
@@ -674,9 +706,10 @@ module.exports = function operatorModule(deps) {
       left join qual_in qi on qi.conversation_id = e.conversation_id
       left join qual_out qo on qo.conversation_id = e.conversation_id
       left join any_out ao on ao.conversation_id = e.conversation_id
+      left join attempts_since_inbound asi on asi.conversation_id = e.conversation_id
       left join agent_thread_state ats on ats.conversation_id = e.conversation_id
     ),
-    projected as (
+    staged as (
       select *,
         case when is_closed then 'closed_not_fit' when is_booked then 'booked_tour'
              when has_engagement then 'active' else 'new' end as commercial_state,
@@ -693,6 +726,9 @@ module.exports = function operatorModule(deps) {
              when inbound_unanswered and control_mode in ('awaiting_review','human_takeover') then 'manager'
              when inbound_unanswered and control_mode = 'ai_active' then 'ai'
              when last_delivered_outbound_at is not null
+                  and (last_inbound_at is null or last_delivered_outbound_at > last_inbound_at)
+                  and outreach_attempts >= 3 then 'manager'
+             when last_delivered_outbound_at is not null
                   and (last_inbound_at is null or last_delivered_outbound_at > last_inbound_at) then 'prospect'
              else 'none' end as waiting_on,
         case when last_any_outbound_at is null then 'none'
@@ -704,11 +740,36 @@ module.exports = function operatorModule(deps) {
                when is_booked then 'live_linked_tour'
                when inbound_unanswered and control_mode in ('awaiting_review','human_takeover') then 'qualifying_prospect_inbound_unanswered_pending_human'
                when inbound_unanswered then 'qualifying_prospect_inbound_unanswered'
+               when last_delivered_outbound_at is not null and (last_inbound_at is null or last_delivered_outbound_at > last_inbound_at) and outreach_attempts >= 3 then 'cadence_exhausted_pending_human'
                when last_delivered_outbound_at is not null and (last_inbound_at is null or last_delivered_outbound_at > last_inbound_at) then 'delivered_outreach_is_latest'
                when has_engagement then 'engaged_no_clear_owner'
                else 'open_lead_no_qualifying_engagement' end,
-          'projection_version','queue_projection_v2') as derivation
+          'projection_version','queue_projection_v3') as derivation
       from base
+    ),
+    projected as (
+      -- THE ROUTING LAYER (Control Board). The bucket is a SERVER-AUTHORED fact
+      -- derived once, here, from the truth axes. The browser renders this
+      -- decision; it never reproduces the precedence. Buckets are mutually
+      -- exclusive by construction: one case expression, one value per row.
+      select *,
+        case
+          when control_mode = 'human_takeover' then 'you_own'
+          when waiting_on = 'manager'          then 'needs_you'
+          when waiting_on = 'ai'               then 'ai_working'
+          when waiting_on = 'prospect'         then 'waiting_on_prospect'
+          else 'exception'
+        end as control_bucket,
+        case
+          when control_mode = 'human_takeover' then 'human_takeover'
+          when waiting_on = 'manager' and (derivation->>'rule_code') = 'cadence_exhausted_pending_human' then 'cadence_exhausted_pending_human'
+          when waiting_on = 'manager'          then 'draft_requires_review'
+          when waiting_on = 'ai'               then 'ai_preparing_reply'
+          when waiting_on = 'prospect'         then 'awaiting_prospect'
+          when has_engagement                  then 'unowned_engaged'
+          else 'unowned_no_engagement'
+        end as bucket_reason_code
+      from staged
     )`;
 
   // GET /operator/leasing/conversation-queue — the ACTIVE WORK QUEUE (working states),
@@ -736,6 +797,21 @@ module.exports = function operatorModule(deps) {
         return acc;
       }, { by_state: {}, waiting: { ai:0, manager:0, prospect:0 } });
 
+      // CONTROL BOARD bucket counts (ruling: server-authored, mutually exclusive,
+      // reconciling exactly with the visible rows). Grouped on the SAME
+      // control_bucket the rows return, over the SAME visible universe.
+      const bucketRows = (await pool.query(
+        PROJECTION_CTE + `
+        select control_bucket, count(*)::int as n
+        from projected
+        where commercial_state = any($2::text[])
+        group by control_bucket`,
+        [propertyId, ACTIVE_STATES]
+      )).rows;
+      const buckets = { needs_you: 0, you_own: 0, ai_working: 0, waiting_on_prospect: 0, exception: 0 };
+      for (const b of bucketRows) { if (Object.prototype.hasOwnProperty.call(buckets, b.control_bucket)) buckets[b.control_bucket] = b.n; }
+      counts.buckets = buckets;
+
       const params = [propertyId, ACTIVE_STATES];
       let cursorClause = "";
       if (beforeTs) {
@@ -750,16 +826,18 @@ module.exports = function operatorModule(deps) {
         select conversation_id, person_id, person_name, lead_status,
                commercial_state, waiting_on, control_mode, delivery_state,
                last_inbound_at, last_delivered_outbound_at, last_meaningful_activity_at,
-               tour_id, tour_status, closure_reason, derivation
+               tour_id, tour_status, closure_reason, outreach_attempts,
+               control_bucket, bucket_reason_code, derivation
         from projected
-        -- The active queue is new/active. PLUS [D-7]: a booked tour that has a
-        -- new unanswered inbound (waiting_on='manager') surfaces here too — and
-        -- ONLY those booked tours, never all of them — so a question asked after
-        -- booking is answered before the tour instead of being buried. Its
-        -- commercial_state stays 'booked_tour', so the UI renders it as
-        -- tour-context ("needs your answer before this tour"), not a fresh lead.
-        where (commercial_state = any($2::text[])
-               or (commercial_state = 'booked_tour' and waiting_on = 'manager')) ${cursorClause}
+        -- CONTROL BOARD universe: new/active only. A booked_tour conversation
+        -- remains in Person history but is NOT an active board card and does not
+        -- inflate bucket counts -- it transfers operationally to the Tours
+        -- surface. ACKNOWLEDGED INTERIM HOLE: the prior [D-7] case (booked tour
+        -- + new unanswered inbound) is no longer surfaced here; the Tours
+        -- surface (next diff) must render it as its own exception with a named
+        -- closure action. The underlying facts (waiting_on='manager') remain
+        -- computed and queryable.
+        where commercial_state = any($2::text[]) ${cursorClause}
         order by last_meaningful_activity_at desc, conversation_id desc
         limit $${params.length}`,
         params
