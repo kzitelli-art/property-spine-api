@@ -1282,20 +1282,88 @@ module.exports = function operatorModule(deps) {
       // cancelled / rescheduled tours are terminal: they leave this list the
       // moment their outcome is recorded (the same status set the queue
       // projection's live_tour CTE treats as live).
+      //
+      // ── TOURS-BOARD ROUTING (diff #3) ─────────────────────────────────
+      // The board is not a flat list. Every tour carries SERVER-AUTHORED
+      // routing facts derived once here — the app renders them and never
+      // re-derives precedence (the same discipline the Control Board holds):
+      //   phase              past | future | unknown   (TIME is the spine;
+      //                        past outranks placement; NULL end -> unknown,
+      //                        NEVER "overdue" — the building admits it does
+      //                        not know when a tour ended)
+      //   primary_bucket     outcomes_needing_capture | tours_needing_owner |
+      //                        answer_before_tour | ready
+      //                        (phase-first, then owner-first WITHIN future)
+      //   primary_action_key capture_outcome | open_tour | reply
+      //                        (assign_host is NOT a canonical write yet, so
+      //                        tours_needing_owner HONESTLY degrades to
+      //                        open_tour — never a phantom action; Rule 9)
+      //   open_issues[]      every unresolved decision on the tour, NONE
+      //                        erased just because another placed the card
+      //   scheduled_end_at   the honest end time (tour_availability.ends_at
+      //                        via slot_id); NULL -> phase can only be unknown
+      // The D-7 signal (booked tour + a new unanswered inbound the manager
+      // must answer BEFORE the tour) is read from the SAME PROJECTION_CTE the
+      // conversation board uses — one server-authored derivation of waiting_on,
+      // no second copy of the precedence. The Control Board removed this case
+      // when booked_tour left its universe; Tours is now its home.
+      const GRACE_MINUTES = 15; // Class-2 adapter: replace with property-level
+                                // capture-grace config before multi-market.
       const r = await pool.query(
-        `select t.*, p.name as prospect_name, p.phone as prospect_phone,
-                l.person_id, c.id as conversation_id,
-                u.name as scheduled_host_name
-           from leasing_tours t
-           join leasing_leads l on l.id = t.lead_id
-           join persons p on p.id = l.person_id
-           left join conversations c
-                  on c.property_id = l.property_id and c.person_id = l.person_id
-           left join users u on u.id = t.leasing_agent_id
-          where t.property_id=$1
-            and (t.scheduled_for at time zone $2)::date = (now() at time zone $2)::date
-            and t.status in ('scheduled','confirmed_by_prospect','checked_in')
-          order by t.scheduled_for`, [req.operator.property_id, PROPERTY_TZ]);
+        PROJECTION_CTE + `,
+        proj as ( select conversation_id, commercial_state, waiting_on from projected ),
+        tours as (
+          select t.*, p.name as prospect_name, p.phone as prospect_phone,
+                 l.person_id, c.id as conversation_id,
+                 u.name as scheduled_host_name,
+                 av.ends_at as scheduled_end_at,
+                 (u.id is null) as host_unassigned,
+                 (proj.commercial_state='booked_tour' and proj.waiting_on='manager')
+                   as booked_inbound_waiting_on_manager,
+                 -- past = ended + grace < now, computed in the PROPERTY'S TZ.
+                 -- NULL end time -> NULL (phase 'unknown'); never fabricates overdue.
+                 case when av.ends_at is null then null
+                      else (av.ends_at + ($3 || ' minutes')::interval)
+                             < (now() at time zone $2) at time zone $2 end as is_past
+            from leasing_tours t
+            join leasing_leads l on l.id = t.lead_id
+            join persons p on p.id = l.person_id
+            left join conversations c
+                   on c.property_id = l.property_id and c.person_id = l.person_id
+            left join users u on u.id = t.leasing_agent_id
+            left join tour_availability av on av.id = t.slot_id
+            left join proj on proj.conversation_id = c.id
+           where t.property_id=$1
+             and (t.scheduled_for at time zone $2)::date = (now() at time zone $2)::date
+             and t.status in ('scheduled','confirmed_by_prospect','checked_in')
+        ),
+        routed as (
+          select *,
+            case when is_past is null then 'unknown'
+                 when is_past then 'past' else 'future' end as phase,
+            array_remove(array[
+              case when host_unassigned then 'host_unassigned' end,
+              case when booked_inbound_waiting_on_manager then 'booked_inbound_waiting_on_manager' end,
+              case when is_past is true then 'outcome_overdue' end
+            ], null) as open_issues
+          from tours
+        ),
+        final as (
+          select *,
+            case
+              when phase='past' then 'outcomes_needing_capture'
+              when host_unassigned then 'tours_needing_owner'
+              when booked_inbound_waiting_on_manager then 'answer_before_tour'
+              else 'ready' end as primary_bucket
+          from routed
+        )
+        select *,
+          case primary_bucket
+            when 'outcomes_needing_capture' then 'capture_outcome'
+            when 'answer_before_tour'       then 'reply'
+            else 'open_tour' end as primary_action_key
+        from final
+        order by scheduled_for`, [req.operator.property_id, PROPERTY_TZ, GRACE_MINUTES]);
       return res.json({ receipt: `${r.rows.length} active tour(s) on the board today.`, property_id: req.operator.property_id, tours: r.rows });
     } catch (e) { console.error("operator tours today:", e); return res.status(500).json({ receipt: "Could not load today's tours.", error: e.message }); }
   });
