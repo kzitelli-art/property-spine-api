@@ -882,15 +882,15 @@ module.exports = function operatorModule(deps) {
 
       // ── conversation → message entries ─────────────────────────────
       const msgs = (await client.query(
-        `select ce.id, ce.direction, ce.sender_role, ce.body, ce.created_at
+        `select ce.id, ce.direction, ce.sender_role, ce.body, ce.occurred_at
            from comm_events ce
           where ce.person_id=$1 and ce.property_id=$2
-          order by ce.created_at asc limit 200`,
+          order by ce.occurred_at asc limit 200`,
         [personId, propertyId])).rows;
       for (const m of msgs) {
         const who = m.direction === "inbound" ? (p.name || "Prospect") : (m.sender_role || "Property");
         entries.push({
-          occurred_at: m.created_at, recorded_at: m.created_at,
+          occurred_at: m.occurred_at, recorded_at: m.occurred_at,
           source: "conversation", verb: "sent",
           actor: { id: null, name: who, kind: m.direction === "inbound" ? "person" : "user" },
           summary: `${who} sent: ${String(m.body || "").slice(0, 140)}`,
@@ -1096,7 +1096,7 @@ module.exports = function operatorModule(deps) {
 
       const vitals = await prospectVitals(client, { personId, propertyId });
       const recent = msgs.slice(-8).map((m) => ({
-        direction: m.direction, body: m.body, at: m.created_at,
+        direction: m.direction, body: m.body, at: m.occurred_at,
         who: m.direction === "inbound" ? (p.name || "Prospect") : (m.sender_role || "Property"),
       }));
 
