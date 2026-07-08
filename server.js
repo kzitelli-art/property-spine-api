@@ -26,6 +26,7 @@ const roomOwnersModule = require("./roomowners"); // thin room-owner API over as
 const moneyModule = require("./money");
 const turnoversModule = require("./turnovers");
 const moveinModule = require("./movein");
+const noticeModule = require("./notice");        // Availability Slice A: resident notice → future supply
 const onboardingModule = require("./onboarding");   // isolated onboarding (takeover) routes
 const onboardingFunnel = require("./onboarding_funnel"); // six-step NOI-goal onboarding funnel (revenue/roles/noi-goal; honest mode)
 const registryModule = require("./registry");        // property alias registry (canonical key / bridge step zero)
@@ -3181,6 +3182,7 @@ app.use("/", orgchartModule({ pool }));
 app.use("/", roomOwnersModule({ pool }));
 app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
+app.use("/", noticeModule({ pool }));   // Availability Slice A — notice writes unit_events only; no obligation spawns at notice
 app.use("/", onboardingModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 // ── ONBOARDING FUNNEL (revenue/roles/NOI-goal; honest mode; only needs pool) ──
 app.use("/api", onboardingFunnel({ pool }));
