@@ -3181,7 +3181,8 @@ app.use("/", moneyModule({ pool, spawnObligationFromEvent, satisfyObligation, co
 app.use("/", orgchartModule({ pool }));
 app.use("/", roomOwnersModule({ pool }));
 app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
-app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
+const deliveryHelper = require("./delivery")({ satisfyObligation, completeObligation }); // Slice D shared completion-feed
+app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, deliveryHelper }));
 app.use("/", noticeModule({ pool }));   // Availability Slice A — notice writes unit_events only; no obligation spawns at notice
 app.use("/", require("./availability")({ pool })); // Availability Slice C — read-only forward-supply projection; derives from live tables, writes nothing
 app.use("/", onboardingModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
