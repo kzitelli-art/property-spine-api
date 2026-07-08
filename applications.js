@@ -634,6 +634,67 @@ module.exports = function applicationsModule(deps) {
         await client.query("update persons set lifecycle_status='tenant' where id=$1", [app.person_id]).catch(() => {});
       }
 
+      // ── SLICE D 2A — lease-linked move-in event (inline, atomic) ──────
+      // The pending lease is a committed move-in. Create the move_in_scheduled
+      // event linked to the lease by a REAL column (migration 074), effective on
+      // the lease start_date (delivery-due default; no separate possession field
+      // this slice). The partial unique index guarantees one move-in per lease —
+      // a concurrent/retry insert fails on the constraint, caught below.
+      if (app.unit_id) {
+        try {
+          await client.query(
+            `insert into unit_events (unit_id, property_id, event_type, effective_date, payload, source, status, lease_id)
+             values ($1,$2,'move_in_scheduled',$3,$4,'confirm_term','scheduled',$5)`,
+            [app.unit_id, app.property_id, start_date,
+             JSON.stringify({ applicant_name: app.applicant_name, lease_id: lease.id }), lease.id]);
+        } catch (e) {
+          // 23505 = the one-move-in-per-lease guard already fired (idempotent replay). Not fatal.
+          if (e.code !== "23505") throw e;
+        }
+
+        // ── SLICE D 2B — PM-owned move_in_delivery obligation ───────────
+        // Severity DERIVES from due_at proximity (not blanket high). Read the
+        // property's delivery window; a move-in far out is planned, not urgent.
+        let windowDays = 14;
+        try {
+          const cal = await client.query(
+            `select delivery_window_days from property_leasing_calendar where property_id=$1 and active=true`,
+            [app.property_id]);
+          if (cal.rows[0] && cal.rows[0].delivery_window_days != null) windowDays = cal.rows[0].delivery_window_days;
+        } catch (e) { /* calendar optional; default window */ }
+        const msPerDay = 86400000;
+        const daysUntil = Math.round((new Date(start_date).getTime() - Date.now()) / msPerDay);
+        let dPriority = "low", dSeverity = "low";        // outside window → planned
+        if (daysUntil <= windowDays) { dPriority = "high"; dSeverity = "normal"; }  // inside window
+        if (daysUntil <= Math.ceil(windowDays / 2)) { dSeverity = "high"; }         // due soon → exception
+
+        // guard: don't spawn a second delivery obligation for the same lease.
+        const existingDelivery = await client.query(
+          `select id from obligations where related_id=$1 and related_type='lease'
+             and type='move_in_delivery' and status in ('open','in_progress') limit 1`, [lease.id]);
+        if (existingDelivery.rows.length === 0) {
+          const dEv = await recordEvent(client, {
+            property_id: app.property_id, person_id: app.person_id, unit_id: app.unit_id,
+            type: "move_in_delivery_opened",
+            note: `Delivery promise opened — deliver unit for move-in ${start_date} (${app.applicant_name})`,
+          });
+          await spawnObligationFromEvent(client, {
+            property_id: app.property_id, person_id: app.person_id, unit_id: app.unit_id,
+            source_event_id: dEv,
+            related_id: lease.id, related_type: "lease",
+            module: "leasing", type: "move_in_delivery",
+            label: `Deliver unit for move-in — ${app.applicant_name}${app.unit_label ? " · " + app.unit_label : ""}`,
+            owner_type: "human", assigned_role: "property_manager",
+            escalates_to_role: "regional_manager",
+            status: "open", due_at: start_date,
+            priority: dPriority, severity: dSeverity,
+            // HARD gates only; resident_instructions_sent + move_in_logistics_considered are
+            // tracked as soft prompts (payload), never required_inputs.
+            required_inputs: ["unit_ready", "keys_access_ready"],
+          });
+        }
+      }
+
       await recordEvent(client, {
         property_id: app.property_id, person_id: app.person_id, unit_id: app.unit_id,
         type: "lease_term_confirmed",
