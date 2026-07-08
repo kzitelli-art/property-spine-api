@@ -37,7 +37,7 @@ module.exports = function movein(deps) {
   const express = require("express");
   const router = express.Router();
 
-  const { pool, spawnObligationFromEvent, satisfyObligation, completeObligation } = deps;
+  const { pool, spawnObligationFromEvent, satisfyObligation, completeObligation, deliveryHelper = null } = deps;
   if (!pool) throw new Error("movein module requires a pool");
 
   // operational gates maintenance must prove, in order of a natural walk
@@ -316,6 +316,34 @@ module.exports = function movein(deps) {
       if (obligation.unit_id) {
         await client.query("update units set occupancy_status='occupied', updated_at=now() where id=$1", [obligation.unit_id]);
         unitNote = "Unit occupancy → occupied (possession).";
+      }
+
+      // ── SLICE D — the ONE thin delivery hook (ruling #2, #3) ─────────
+      // Resolve the lease through the move_in_scheduled event THAT SPAWNED
+      // this readiness obligation (movein.js records spawned_obligation_id),
+      // then feed unit_ready into the PM-owned move_in_delivery obligation via
+      // the shared helper. NO-OP for legacy/manual move-ins with no lease link.
+      // Does NOT mutate occupancy (that happened above, legacy, unchanged).
+      let deliveryNote = null;
+      if (deliveryHelper && typeof deliveryHelper.satisfyDeliveryInput === "function") {
+        try {
+          const linkQ = await client.query(
+            `select lease_id from unit_events
+              where spawned_obligation_id = $1 and event_type = 'move_in_scheduled'
+                and lease_id is not null limit 1`, [obligation_id]);
+          const leaseId = linkQ.rows[0] ? linkQ.rows[0].lease_id : null;
+          if (leaseId) {
+            const r = await deliveryHelper.satisfyDeliveryInput(client, {
+              lease_id: leaseId, input_key: "unit_ready", source: "rent_ready_approval",
+              source_obligation_id: obligation_id, actor: approved_by_person_id, timestamp: new Date().toISOString(),
+            });
+            if (r && r.satisfied) deliveryNote = "Delivery input unit_ready satisfied from readiness approval.";
+            // if not satisfied (legacy / already satisfied / no delivery obligation) → silent, non-fatal
+          }
+        } catch (e) {
+          // the delivery feed must NEVER break the readiness approval flow.
+          console.error("delivery hook (non-fatal):", e.message);
+        }
       }
 
       await client.query("commit");
