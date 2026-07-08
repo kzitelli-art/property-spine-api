@@ -3183,6 +3183,7 @@ app.use("/", roomOwnersModule({ pool }));
 app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 app.use("/", noticeModule({ pool }));   // Availability Slice A — notice writes unit_events only; no obligation spawns at notice
+app.use("/", require("./availability")({ pool })); // Availability Slice C — read-only forward-supply projection; derives from live tables, writes nothing
 app.use("/", onboardingModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 // ── ONBOARDING FUNNEL (revenue/roles/NOI-goal; honest mode; only needs pool) ──
 app.use("/api", onboardingFunnel({ pool }));
