@@ -37,6 +37,7 @@ const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE c
 
 module.exports = function operatorModule(deps) {
   const { pool, agentService, conversionService = null, leasingTourService = null } = deps;
+  const { rankTurnPriority } = require("./turn_priority"); // shared Turn-Priority ranking (Slice: live-wire)
   if (!pool) throw new Error("operator.js requires { pool }");
   const router = require("express").Router();
 
@@ -226,6 +227,23 @@ module.exports = function operatorModule(deps) {
   const SOURCE_TYPES = ["management_policy","lease_or_addendum","verified_operator_confirmation","other_documented_source"];
 
   // GET /operator/agent-facts — active + retired facts for the SESSION's property.
+  // ── TURN-PRIORITY (session-scoped) — GET /operator/leasing/turn-priority ──
+  //  The operator-surface entry point for the Turn-Priority read. Property is
+  //  SERVER-DERIVED from the session (req.operator.property_id), never from the
+  //  client — the same discipline as /operator/leasing/tours/today. Calls the
+  //  shared rankTurnPriority helper (one ranking, no second copy). READ-ONLY.
+  //  Honest-empty is a natural consequence: no in_progress turns → { turns: [] }.
+  router.get("/operator/leasing/turn-priority", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const out = await rankTurnPriority(pool, req.operator.property_id);
+      return res.json(out);
+    } catch (e) {
+      console.error("operator turn-priority error", e);
+      return res.status(500).json({ error: "TURN_PRIORITY_FAILED", receipt: "The turn-priority read failed. Retry; if it persists the ranking service is unavailable." });
+    }
+  });
+
   router.get("/operator/agent-facts", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
