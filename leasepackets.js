@@ -220,11 +220,13 @@ module.exports = function leasePacketsModule(deps) {
         unit_id: app.unit_id || null,
         unit_label: unitLabel,
         unit_number: unitLabel,
-        // money / term — live columns (rent, deposit) + captured for the rest
-        monthly_rent: app.rent != null ? app.rent : (captured.monthly_rent ?? ""),
-        security_deposit: app.deposit != null ? app.deposit : (captured.security_deposit ?? ""),
-        lease_start_date: captured.lease_start_date || "",
-        lease_end_date: captured.lease_end_date || "",
+        // money / term — STRUCTURED live columns only (Build A). captured is NO LONGER
+        // an operating source for dates; it remains audit/fallback display only.
+        monthly_rent: app.rent != null ? app.rent : "",
+        security_deposit: app.deposit != null ? app.deposit : "",
+        lease_start_date: app.lease_start_date || "",   // structured column (075), not captured
+        lease_end_date: app.lease_end_date || "",       // structured column (075), not captured
+        concession_status: app.concession_status || "unknown",
         guarantor_required: !!app.guarantor_name,
       };
 
