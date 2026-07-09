@@ -37,7 +37,8 @@ const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE c
 
 module.exports = function operatorModule(deps) {
   const { pool, agentService, conversionService = null, leasingTourService = null } = deps;
-  const { rankTurnPriority } = require("./turn_priority"); // shared Turn-Priority ranking (Slice: live-wire)
+  const { rankTurnPriority } = require("./turn_priority"); // shared Turn-Priority ranking (slice 1)
+  const { buildReviewList, buildReviewDetail } = require("./application_review"); // application review reads (slice 2)
   if (!pool) throw new Error("operator.js requires { pool }");
   const router = require("express").Router();
 
@@ -228,11 +229,8 @@ module.exports = function operatorModule(deps) {
 
   // GET /operator/agent-facts — active + retired facts for the SESSION's property.
   // ── TURN-PRIORITY (session-scoped) — GET /operator/leasing/turn-priority ──
-  //  The operator-surface entry point for the Turn-Priority read. Property is
-  //  SERVER-DERIVED from the session (req.operator.property_id), never from the
-  //  client — the same discipline as /operator/leasing/tours/today. Calls the
-  //  shared rankTurnPriority helper (one ranking, no second copy). READ-ONLY.
-  //  Honest-empty is a natural consequence: no in_progress turns → { turns: [] }.
+  //  Property SERVER-DERIVED from the session. Calls the shared rankTurnPriority
+  //  helper (one ranking, no second copy). READ-ONLY. (slice 1)
   router.get("/operator/leasing/turn-priority", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
@@ -242,6 +240,38 @@ module.exports = function operatorModule(deps) {
       console.error("operator turn-priority error", e);
       return res.status(500).json({ error: "TURN_PRIORITY_FAILED", receipt: "The turn-priority read failed. Retry; if it persists the ranking service is unavailable." });
     }
+  });
+
+  // ── APPLICATION REVIEW (slice 2) — READ-ONLY. Makes Build A visible: structured
+  //    terms, completeness, concession (governed dated lines if structured), and
+  //    packet currency (not_generated | current | stale — drift is real because
+  //    lease_packets.terms_json is persisted). Property SERVER-DERIVED; each
+  //    application verified to belong to the operator's property. NO write controls.
+  router.get("/operator/leasing/applications-review", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const client = await pool.connect();
+    try {
+      const out = await buildReviewList(client, req.operator.property_id);
+      return res.json(out);
+    } catch (e) {
+      console.error("applications-review list error", e);
+      return res.status(500).json({ error: "APPLICATIONS_REVIEW_FAILED", receipt: "The applications review failed to load. Retry; if it persists the review service is unavailable." });
+    } finally { client.release(); }
+  });
+
+  router.get("/operator/leasing/application-review", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const applicationId = req.query.application_id;
+    if (!applicationId) return res.status(400).json({ error: "MISSING_APPLICATION_ID", receipt: "application_id is required." });
+    const client = await pool.connect();
+    try {
+      const out = await buildReviewDetail(client, applicationId, req.operator.property_id);
+      if (out && out.notInScope) return res.status(404).json({ error: "APPLICATION_NOT_IN_SCOPE", receipt: "No such application for this property." });
+      return res.json(out);
+    } catch (e) {
+      console.error("application-review detail error", e);
+      return res.status(500).json({ error: "APPLICATION_REVIEW_FAILED", receipt: "The application review failed to load. Retry; if it persists the review service is unavailable." });
+    } finally { client.release(); }
   });
 
   router.get("/operator/agent-facts", requireOperator, requireLeasingModuleAccess, async (req, res) => {
