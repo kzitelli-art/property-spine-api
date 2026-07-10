@@ -52,6 +52,7 @@ const explainModule = require("./explain");
 const tenantLinkModule = require("./tenantlink"); // tenant text line Phase 1: connection (invite link → verify → session)
 const teamAccessModule = require("./teamaccess");
 const smsTransport = require("./sms"); // SMS transport (Twilio) — fail-soft when unconfigured
+const communicationsBoundary = require("./communications_boundary"); // the permanent communications boundary — one inbound resolver, one outbound gate
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
 // runaway file still can't choke the box. Oversize returns a clean 413 below.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -3212,8 +3213,9 @@ app.use("/", compareModule({ pool }));
 app.use("/", explainModule({ pool }));
 // tenant link (text line: connection + message loop) — pool, AI for classification.
 const sms = smsTransport(); // SMS transport (Twilio) — disabled until env vars are set; everything degrades to link-only
-app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms }));
-app.use("/", teamAccessModule({ pool, sms }));
+const commBoundary = communicationsBoundary({ pool, sms }); // every business send goes through this gate; raw sms.sendSms is transport only
+app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary }));
+app.use("/", teamAccessModule({ pool, sms, commBoundary }));
 // owner-facing aggregate views (cards + attention queue). Only needs pool.
 app.use("/", ownerModule({ pool }));
 const publicReview = require("./public_review");
@@ -3247,7 +3249,7 @@ app.use("/", __decisions);
 const commitmentLedgerModule = require("./commitmentledger");   // pricing authority + lease offers (062–065)
 const __commitmentLedger = commitmentLedgerModule({ pool, spawnObligationFromEvent, completeObligation, decisionService: __decisions._service });
 app.use("/", __commitmentLedger);
-const __leasingLeads = leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices: __leasingConversion.services, commitmentLedger: __commitmentLedger._service });
+const __leasingLeads = leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices: __leasingConversion.services, commitmentLedger: __commitmentLedger._service, commBoundary });
 app.use("/", __leasingLeads); // instance captured: its ONE tour-completion service is handed to the operator door below (no fork)
 
 // ── APPLICATION SUBMISSION SLICE (invitation front + shared submit service +
@@ -3268,7 +3270,7 @@ app.use("/", applicationsModule({
   ledgerService: __commitmentLedger._service,   // J1: countersign locks the economic schedule
 }));
 app.use("/", leasingSchedulingModule({ pool }));
-app.use("/", leasingInteractionsModule({ pool, sms, leasingLifecycle }));
+app.use("/", leasingInteractionsModule({ pool, sms, leasingLifecycle, commBoundary }));
 
 // ── Skyline ride-along shadow import (migration 050). Three-state phone identity
 //    (new -> preview lead · known -> intent task, never a new lead · no/invalid ->
