@@ -69,7 +69,7 @@ async function count(sql, params) { return Number((await pool.query(sql, params)
   const spaceB = await seedSpace(propB.id, "B");
   await pool.query(`insert into leases (property_id, space_id, tenant_ids, balance, lease_status) values ($1, $2, array[$3::uuid], 0, 'active')`, [propA.id, spaceA, resA.id]);
   await pool.query(`insert into leases (property_id, space_id, tenant_ids, balance, lease_status) values ($1, $2, array[$3::uuid], 0, 'active')`, [propB.id, spaceB, resB.id]);
-  await pool.query(`insert into tenant_invites (person_id, property_id, token, status) values ($1,$2,'__cb_tok_'||gen_random_uuid(),'used'),($3,$4,'__cb_tok_'||gen_random_uuid(),'used')`, [resA.id, propA.id, resB.id, propB.id]);
+  await pool.query(`insert into tenant_invites (person_id, property_id, token, status, expires_at) values ($1,$2,'__cb_tok_'||gen_random_uuid(),'used', now() + interval '1 day'),($3,$4,'__cb_tok_'||gen_random_uuid(),'used', now() + interval '1 day')`, [resA.id, propA.id, resB.id, propB.id]);
 
   // a QA tester with a lead relationship in propA
   const qa = (await pool.query(`insert into persons (name, phone) values ('__CB_HARNESS__QA', '+15551110002') returning *`)).rows[0];
@@ -120,7 +120,7 @@ async function count(sql, params) { return Number((await pool.query(sql, params)
     const spaceDup1 = await seedSpace(propA.id, "D1");
     const spaceDup2 = await seedSpace(propA.id, "D2");
     await pool.query(`insert into leases (property_id, space_id, tenant_ids, balance, lease_status) values ($1, $2, array[$3::uuid], 0, 'active'),($1, $4, array[$5::uuid], 0, 'active')`, [propA.id, spaceDup1, dup1.id, spaceDup2, dup2.id]);
-    await pool.query(`insert into tenant_invites (person_id, property_id, token, status) values ($1,$2,'__cb_tok_'||gen_random_uuid(),'used'),($3,$2,'__cb_tok_'||gen_random_uuid(),'used')`, [dup1.id, propA.id, dup2.id]);
+    await pool.query(`insert into tenant_invites (person_id, property_id, token, status, expires_at) values ($1,$2,'__cb_tok_'||gen_random_uuid(),'used', now() + interval '1 day'),($3,$2,'__cb_tok_'||gen_random_uuid(),'used', now() + interval '1 day')`, [dup1.id, propA.id, dup2.id]);
     const rMulti = await boundary.resolveInboundSmsContext({ To: propA.sms_number, From: "+15551110009", MessageSid: "SIDAMB3", body: "two of me" });
     check(">1 sender match → ambiguous, person-less, no guessed identity", rMulti.ambiguous && rMulti.comm_event.person_id === null);
   }
