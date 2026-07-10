@@ -39,7 +39,7 @@ const crypto = require("crypto");
 
 const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 
-module.exports = function teamAccessModule({ pool, sms }) {
+module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
   const router = express.Router();
 
   const ALLOWED_MODULES = ["management", "leasing", "maintenance", "reporting"];
@@ -137,13 +137,17 @@ module.exports = function teamAccessModule({ pool, sms }) {
       const link = `${base}/join/${token}`;
       const smsText = `You've been added to ${prop.name} on Property Spine. Tap to set up your access: ${link}`;
 
-      // attempt a real send only if transport is ready AND the property has a line.
+      // COMMUNICATIONS BOUNDARY: staff-invite is explicitly classified
+      // credential transport (purpose='staff_invite'); the gate derives
+      // the property line server-side and refuses honestly without one.
       let delivery = "link_only";
-      if (smsReady() && prop.sms_number) {
-        try {
-          await sms.sendSms({ to: phone, from: prop.sms_number, body: smsText });
-          delivery = "sms_sent";
-        } catch (e) { delivery = "sms_failed"; }
+      {
+        const wire = await commBoundary.sendPropertySms({
+          property_id: inv.property_id, recipient: phone, body: smsText,
+          purpose: "staff_invite",
+        });
+        if (wire.sent) delivery = "sms_sent";
+        else if (!["transport_not_configured", "no_property_line", "send_mode_disabled"].includes(wire.reason)) delivery = "sms_failed";
       }
 
       return res.json({
@@ -266,10 +270,16 @@ module.exports = function teamAccessModule({ pool, sms }) {
       const prop = (await pool.query("select name, sms_number from properties where id=$1", [inviteRow.property_id])).rows[0];
       const body = `Your ${prop.name} access code is ${code}. It expires in ${OTP_TTL_MIN} minutes.`;
 
+      // COMMUNICATIONS BOUNDARY: staff OTP is explicitly classified
+      // credential transport (purpose='staff_otp') through the gate.
       let delivery = "link_only";
-      if (smsReady() && prop.sms_number) {
-        try { await sms.sendSms({ to: phone, from: prop.sms_number, body }); delivery = "sms_sent"; }
-        catch (e) { delivery = "sms_failed"; }
+      {
+        const wire = await commBoundary.sendPropertySms({
+          property_id: inviteRow.property_id, recipient: phone, body,
+          purpose: "staff_otp",
+        });
+        if (wire.sent) delivery = "sms_sent";
+        else if (!["transport_not_configured", "no_property_line", "send_mode_disabled"].includes(wire.reason)) delivery = "sms_failed";
       }
 
       // a re-login invite is marked by accepted_user_id set at creation with
