@@ -25,7 +25,7 @@
 
 const express = require("express");
 
-module.exports = function leasingInteractionsModule({ pool, sms, leasingLifecycle }) {
+module.exports = function leasingInteractionsModule({ pool, sms, leasingLifecycle, commBoundary }) {
   const router = express.Router();
 
   function requireOperator(req, res, next) {
@@ -74,16 +74,11 @@ module.exports = function leasingInteractionsModule({ pool, sms, leasingLifecycl
     )).rows[0];
     const consentAtEvent = pref ? pref.consent_state : "unknown";
 
-    // Put it on the wire (fail-soft; we log regardless of carrier result).
-    let providerId = null, providerStatus = null, sendReason = null;
-    if (smsReady() && to) {
-      const r = await sms.sendSms({ to, body });
-      if (r.sent) { providerId = r.sid; providerStatus = r.status || "queued"; }
-      else { providerStatus = "failed"; sendReason = r.reason; }
-    } else {
-      providerStatus = "not_sent_transport_off"; // honest: transport not configured in this env
-    }
-
+    // COMMUNICATIONS BOUNDARY — save-first, then the gate. The event is
+    // real whether or not the wire cooperates. The gate derives the
+    // property line server-side (the old raw sendSms({to, body}) here had
+    // NO `from` and could have left on the Messaging Service default line;
+    // that path is structurally gone).
     const now = new Date().toISOString();
     const row = (await client.query(
       `insert into comm_events
@@ -97,83 +92,59 @@ module.exports = function leasingInteractionsModule({ pool, sms, leasingLifecycl
                $13,$14,$15, now())
        returning *`,
       [property_id, person_id, conv.id, body,
-       providerId, providerStatus, now,
+       null, "pending", now,
        actor_user_id, ai_drafted ? now : null, human_approved_by_user_id, human_approved_by_user_id ? now : now, actor_user_id,
        consentAtEvent, conversion_case_id, obligation_id]
     )).rows[0];
 
-    return { comm_event: row, sent: !!providerId, provider_status: providerStatus, send_reason: sendReason };
+    let providerStatus = "pending", sendReason = null, sent = false;
+    if (to) {
+      const wire = await commBoundary.sendPropertySms({
+        property_id, recipient: to, body,
+        purpose: ai_drafted ? "ai_reply" : "agent",
+        person_id, eventId: row.id, actor_user_id,
+      }, client);
+      sent = wire.sent;
+      if (wire.sent) { providerStatus = "queued"; }
+      else if (wire.reason === "transport_not_configured") { providerStatus = "not_sent_transport_off"; }
+      else { providerStatus = "refused"; sendReason = wire.reason; }
+      await client.query(
+        `update comm_events set provider_event_id = $1, provider_status = $2, provider_status_updated_at = now() where id = $3`,
+        [wire.sid, providerStatus, row.id]
+      );
+      row.provider_event_id = wire.sid; row.provider_status = providerStatus;
+    } else {
+      providerStatus = "not_sent_no_recipient";
+      await client.query(
+        `update comm_events set provider_status = $1, provider_status_updated_at = now() where id = $2`,
+        [providerStatus, row.id]
+      );
+      row.provider_status = providerStatus;
+    }
+
+    return { comm_event: row, sent, provider_status: providerStatus, send_reason: sendReason };
   }
 
   // ════════════════════════════════════════════════════════════════════
-  //  upsertProviderEvent — idempotent landing for an inbound message or a
-  //  delivery-status callback. Resolves by (provider, provider_event_id).
-  //   • new id  → insert (inbound message) OR (rare) a status for an unknown id
-  //   • known id→ UPDATE current status, APPEND to comm_event_status_log
-  //  Never creates a duplicate communication.
+  //  COMMUNICATIONS BOUNDARY — provider events are STATUS-ONLY here.
+  //  The old upsertProviderEvent could INSERT an inbound comm_event with a
+  //  caller-supplied property_id and body through an unauthenticated
+  //  route: an open inbound-message injection hole. That branch is
+  //  structurally gone. Inbound messages have exactly ONE door —
+  //  POST /communications/inbound-sms → resolveInboundSmsContext, where
+  //  the property derives from the receiving line. Delivery/status
+  //  callbacks land here through the boundary's recordProviderStatus,
+  //  which never creates a communication, never accepts a property, and
+  //  never lets body text enter history. Unknown event id → logged no-op.
+  //  (The Foundation-054 inbound-reopen hook rode the removed insert
+  //  branch; genuine inbound reopen continues to fire on the canonical
+  //  inbound door via runInbound, not on status callbacks.)
   // ════════════════════════════════════════════════════════════════════
-  async function upsertProviderEvent(client, {
-    provider = "twilio", provider_event_id, provider_status = null,
-    direction = "inbound", person_id = null, property_id = null,
-    body = null, channel = "text", raw = null,
-  }) {
-    if (!provider_event_id) throw httpErr(400, "provider_event_id is required for idempotent upsert.");
-
-    const existing = (await client.query(
-      `select * from comm_events where provider=$1 and provider_event_id=$2`,
-      [provider, provider_event_id]
-    )).rows[0];
-
-    if (existing) {
-      // Status update path: update current status, append to the audit log.
-      if (provider_status) {
-        await client.query(
-          `update comm_events set provider_status=$1, provider_status_updated_at=now() where id=$2`,
-          [provider_status, existing.id]
-        );
-      }
-      await client.query(
-        `insert into comm_event_status_log (comm_event_id, provider, provider_event_id, provider_status, raw)
-         values ($1,$2,$3,$4,$5)`,
-        [existing.id, provider, provider_event_id, provider_status, raw ? JSON.stringify(raw) : null]
-      );
-      const fresh = (await client.query(`select * from comm_events where id=$1`, [existing.id])).rows[0];
-      return { created: false, comm_event: fresh };
-    }
-
-    // New event (typically an inbound message). Thread it if we know the person.
-    let conversation_id = null;
-    if (person_id && property_id) {
-      const conv = await ensureConversation(client, { person_id, property_id });
-      conversation_id = conv.id;
-    }
-    const row = (await client.query(
-      `insert into comm_events
-         (property_id, person_id, conversation_id, channel, direction, body, sender_role,
-          provider, provider_event_id, provider_status, provider_status_updated_at, occurred_at)
-       values ($1,$2,$3,$4,$5,$6,$7,'twilio',$8,$9, now(), now())
-       returning *`,
-      [property_id, person_id, conversation_id, channel, direction, body,
-       (direction === "inbound" ? "prospect" : "agent"),
-       provider_event_id, provider_status]
-    )).rows[0];
-    // Log the first status too.
-    await client.query(
-      `insert into comm_event_status_log (comm_event_id, provider, provider_event_id, provider_status, raw)
-       values ($1,'twilio',$2,$3,$4)`,
-      [row.id, provider_event_id, provider_status, raw ? JSON.stringify(raw) : null]
+  async function recordProviderStatus(client, { provider = "twilio", provider_event_id, provider_status = null, raw = null }) {
+    if (!provider_event_id) throw httpErr(400, "provider_event_id is required.");
+    return commBoundary.recordProviderStatus(
+      { provider, provider_event_id, provider_status, raw }, client
     );
-    // GENUINE-INBOUND REOPEN: only a genuinely NEW inbound message reaches here (replays
-    // and status callbacks return above via the (provider, provider_event_id) dedup). If
-    // this is an inbound prospect message on a known conversation and the thread is
-    // soft-closed, reopen it in THIS transaction. No-op otherwise; idempotent under the
-    // conversation lock. (Foundation 054.)
-    if (leasingLifecycle && direction === "inbound" && conversation_id && body && String(body).trim() !== "") {
-      await leasingLifecycle.maybeReopenOnQualifyingInbound(client, {
-        conversationId: conversation_id, sourceCommEventId: row.id,
-      });
-    }
-    return { created: true, comm_event: row };
   }
 
   // ── inbound STOP/START maintains canonical opt-out truth. ──
@@ -249,12 +220,32 @@ module.exports = function leasingInteractionsModule({ pool, sms, leasingLifecycl
     return { receipt: "Call logged.", ...out };
   }, res));
 
-  // POST /interactions/provider-event — idempotent inbound/status landing
-  // (the Twilio webhook calls this after sms validates the signature).
-  router.post("/interactions/provider-event", (req, res) => tx(async (client) => {
-    const out = await upsertProviderEvent(client, req.body || {});
-    return { receipt: out.created ? "Inbound communication recorded." : "Existing communication updated (idempotent).", ...out };
-  }, res));
+  // POST /interactions/provider-event — DELIVERY/STATUS CALLBACK ONLY.
+  // Twilio-signature-validated at the route (fail-closed: no signature or
+  // bad signature → 403, zero rows). It cannot create inbound messages,
+  // cannot accept a caller-supplied property, and cannot land arbitrary
+  // body text in communication history. Inbound messages have one door:
+  // POST /communications/inbound-sms.
+  router.post("/interactions/provider-event",
+    express.urlencoded({ extended: false, limit: "100kb" }),
+    (req, res) => {
+      if (!smsReady() || !sms.validateWebhook(req)) {
+        console.error("provider-event: signature validation FAILED or transport off — rejected, zero rows.");
+        return res.status(403).json({ receipt: "Invalid signature." });
+      }
+      const b = req.body || {};
+      const provider_event_id = b.MessageSid || b.provider_event_id || b.SmsSid;
+      const provider_status = b.MessageStatus || b.SmsStatus || b.provider_status || null;
+      return tx(async (client) => {
+        const out = await recordProviderStatus(client, {
+          provider: "twilio", provider_event_id, provider_status, raw: b,
+        });
+        return {
+          receipt: out.updated ? "Delivery status recorded." : "Unknown provider event — status ignored (status-only route).",
+          ...out,
+        };
+      }, res);
+    });
 
   // POST /interactions/consent — apply an opt-out/opt-in signal
   router.post("/interactions/consent", requireOperator, (req, res) => tx(async (client) => {
@@ -272,6 +263,6 @@ module.exports = function leasingInteractionsModule({ pool, sms, leasingLifecycl
     finally { client.release(); }
   });
 
-  router._service = { recordOutboundText, upsertProviderEvent, applyConsentSignal, recordCall, readThread, ensureConversation };
+  router._service = { recordOutboundText, recordProviderStatus, applyConsentSignal, recordCall, readThread, ensureConversation };
   return router;
 };
