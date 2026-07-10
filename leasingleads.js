@@ -26,7 +26,7 @@ const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the O
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 const crypto = require("crypto");
 
-module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices, commitmentLedger = null }) {
+module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices, commitmentLedger = null, commBoundary }) {
   const router = express.Router();
 
   // ── PHASE B: signed public booking continuation (tour_booking_links, mig 056) ──
@@ -108,6 +108,22 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     if (!expected) return res.status(503).json({ receipt: "Lead intake is locked: set LEASING_INTAKE_SECRET in Render's environment." });
     const got = req.headers["x-intake-secret"] || (req.body && req.body.intake_secret);
     if (got !== expected) return res.status(401).json({ receipt: "Intake secret missing or wrong." });
+
+    // COMMUNICATIONS/PROPERTY WALL: the secret proves possession, not
+    // property entitlement. The body property_id is a REQUEST — it is
+    // validated against the property set this credential is bound to
+    // (LEASING_INTAKE_PROPERTY_IDS, comma-separated UUIDs). Unbound
+    // credential → fail closed. A credential for property A can never
+    // create a lead in property B.
+    const allowedRaw = (process.env.LEASING_INTAKE_PROPERTY_IDS || "").trim();
+    if (!allowedRaw) {
+      return res.status(503).json({ receipt: "Lead intake is locked: bind the intake credential to its properties (set LEASING_INTAKE_PROPERTY_IDS)." });
+    }
+    const allowed = allowedRaw.split(",").map(s => s.trim()).filter(Boolean);
+    const requested = req.body && req.body.property_id;
+    if (!requested || !allowed.includes(String(requested))) {
+      return res.status(403).json({ receipt: "This intake credential is not entitled to that property." });
+    }
     next();
   }
 
@@ -205,24 +221,10 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     return ev;
   }
 
-  // Send an SMS for a comm_event that ALREADY EXISTS, then record the wire's
-  // answer on the event. Save-first: the message is real even if the wire fails.
-  async function smsForEvent({ eventId, to, from, body }) {
-    if (!smsReady()) return { sent: false, reason: "transport_not_configured" };
-    if (!from) return { sent: false, reason: "no_property_line" };
-    if (!to) return { sent: false, reason: "no_phone" };
-    const result = await sms.sendSms({ to, from, body });
-    try {
-      if (result.sent) await pool.query(`update comm_events set sms_sid=$1, sms_status=$2 where id=$3`, [result.sid, result.status || "queued", eventId]);
-      else await pool.query(`update comm_events set sms_status='failed', sms_error=$1 where id=$2`, [result.reason + (result.error ? `: ${result.error}` : ""), eventId]);
-    } catch (e) { console.error("leasing smsForEvent record:", e.message); }
-    return result;
-  }
-
-  async function propertyLine(propertyId) {
-    try { const r = await pool.query(`select sms_number from properties where id=$1`, [propertyId]); return r.rows.length ? r.rows[0].sms_number : null; }
-    catch { return null; }
-  }
+  // COMMUNICATIONS BOUNDARY: smsForEvent + propertyLine moved into
+  // communications_boundary.js (sendPropertySms). The property line is
+  // derived server-side inside the gate; save-first is preserved via
+  // eventId. This module never calls raw sms.sendSms.
 
   // AI's first response: speed + clarity. Surface the unit, offer tour slots,
   // stop. If pricing/availability is unknown, the AI says so rather than
@@ -374,8 +376,10 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         if (conversationId) await pool.query(`update conversations set last_message_at = now() where id=$1`, [conversationId]);
 
         if (attemptSms) {
-          const line = await propertyLine(propertyId);
-          const wire = await smsForEvent({ eventId: commEvent.id, to: phone, from: line, body });
+          const wire = await commBoundary.sendPropertySms({
+            property_id: propertyId, recipient: phone, body,
+            purpose: "leasing_first_response", person_id: person.id, eventId: commEvent.id,
+          });
           firstResponseSent = wire.sent;
 
           const c2 = await pool.connect();
