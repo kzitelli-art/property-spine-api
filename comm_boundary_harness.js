@@ -55,8 +55,20 @@ async function count(sql, params) { return Number((await pool.query(sql, params)
   const sharedPhone = "+15551110001";
   const resA = (await pool.query(`insert into persons (name, phone) values ('__CB_HARNESS__ResA', $1) returning *`, [sharedPhone])).rows[0];
   const resB = (await pool.query(`insert into persons (name, phone) values ('__CB_HARNESS__ResB', $1) returning *`, [sharedPhone])).rows[0];
-  await pool.query(`insert into leases (property_id, space_id, tenant_ids, balance, lease_status) values ($1, gen_random_uuid(), array[$2::uuid], 0, 'active')`, [propA.id, resA.id]);
-  await pool.query(`insert into leases (property_id, space_id, tenant_ids, balance, lease_status) values ($1, gen_random_uuid(), array[$2::uuid], 0, 'active')`, [propB.id, resB.id]);
+  // FK chain: leases.space_id → spaces.unit_id → units.property_id. Seed a real
+  // unit + space under each throwaway property, then attach the test lease to it.
+  async function seedSpace(propertyId, label) {
+    const unit = (await pool.query(
+      `insert into units (property_id, unit_number) values ($1, $2) returning id`,
+      [propertyId, "__CB_" + label])).rows[0];
+    const space = (await pool.query(
+      `insert into spaces (unit_id) values ($1) returning id`, [unit.id])).rows[0];
+    return space.id;
+  }
+  const spaceA = await seedSpace(propA.id, "A");
+  const spaceB = await seedSpace(propB.id, "B");
+  await pool.query(`insert into leases (property_id, space_id, tenant_ids, balance, lease_status) values ($1, $2, array[$3::uuid], 0, 'active')`, [propA.id, spaceA, resA.id]);
+  await pool.query(`insert into leases (property_id, space_id, tenant_ids, balance, lease_status) values ($1, $2, array[$3::uuid], 0, 'active')`, [propB.id, spaceB, resB.id]);
   await pool.query(`insert into tenant_invites (person_id, property_id, token, status) values ($1,$2,'__cb_tok_'||gen_random_uuid(),'used'),($3,$4,'__cb_tok_'||gen_random_uuid(),'used')`, [resA.id, propA.id, resB.id, propB.id]);
 
   // a QA tester with a lead relationship in propA
@@ -105,7 +117,9 @@ async function count(sql, params) { return Number((await pool.query(sql, params)
     // and >1 match: give stranger TWO verified identities in propA
     const dup1 = (await pool.query(`insert into persons (name, phone) values ('__CB_HARNESS__Dup1', '+15551110009') returning *`)).rows[0];
     const dup2 = (await pool.query(`insert into persons (name, phone) values ('__CB_HARNESS__Dup2', '+15551110009') returning *`)).rows[0];
-    await pool.query(`insert into leases (property_id, space_id, tenant_ids, balance, lease_status) values ($1, gen_random_uuid(), array[$2::uuid], 0, 'active'),($1, gen_random_uuid(), array[$3::uuid], 0, 'active')`, [propA.id, dup1.id, dup2.id]);
+    const spaceDup1 = await seedSpace(propA.id, "D1");
+    const spaceDup2 = await seedSpace(propA.id, "D2");
+    await pool.query(`insert into leases (property_id, space_id, tenant_ids, balance, lease_status) values ($1, $2, array[$3::uuid], 0, 'active'),($1, $4, array[$5::uuid], 0, 'active')`, [propA.id, spaceDup1, dup1.id, spaceDup2, dup2.id]);
     await pool.query(`insert into tenant_invites (person_id, property_id, token, status) values ($1,$2,'__cb_tok_'||gen_random_uuid(),'used'),($3,$2,'__cb_tok_'||gen_random_uuid(),'used')`, [dup1.id, propA.id, dup2.id]);
     const rMulti = await boundary.resolveInboundSmsContext({ To: propA.sms_number, From: "+15551110009", MessageSid: "SIDAMB3", body: "two of me" });
     check(">1 sender match → ambiguous, person-less, no guessed identity", rMulti.ambiguous && rMulti.comm_event.person_id === null);
@@ -291,6 +305,8 @@ async function count(sql, params) { return Number((await pool.query(sql, params)
   await pool.query(`delete from tenant_invites where property_id in ($1,$2,$3)`, [propA.id, propB.id, propNoLine.id]);
   await pool.query(`delete from leasing_leads where property_id in ($1,$2,$3)`, [propA.id, propB.id, propNoLine.id]);
   await pool.query(`delete from leases where property_id in ($1,$2,$3)`, [propA.id, propB.id, propNoLine.id]);
+  await pool.query(`delete from spaces where unit_id in (select id from units where property_id in ($1,$2,$3))`, [propA.id, propB.id, propNoLine.id]);
+  await pool.query(`delete from units where property_id in ($1,$2,$3)`, [propA.id, propB.id, propNoLine.id]);
   await pool.query(`delete from persons where name like '__CB_HARNESS__%'`);
   await pool.query(`delete from properties where name like '__CB_HARNESS__%'`);
 
