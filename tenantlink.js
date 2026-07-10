@@ -68,7 +68,7 @@
 const express = require("express");
 const crypto = require("crypto");
 
-module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms }) {
+module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary }) {
   const router = express.Router();
 
   // ── OPERATOR AUTH (fail-closed) ──────────────────────────────────────
@@ -142,30 +142,11 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms 
   // ── SMS helpers (030) ────────────────────────────────────────────────
   const smsReady = () => !!(sms && sms.enabled());
 
-  async function propertyLine(propertyId) {
-    const r = await pool.query(`select sms_number from properties where id = $1`, [propertyId]);
-    return r.rows.length ? r.rows[0].sms_number : null;
-  }
-
-  // Send an SMS for a comm_event that ALREADY EXISTS (save-first holds:
-  // the message is real whether or not the wire cooperates), then record
-  // the wire's answer on the event. Returns the transport receipt.
-  async function smsForEvent({ eventId, to, from, body }) {
-    if (!smsReady()) return { sent: false, reason: "transport_not_configured" };
-    if (!from) return { sent: false, reason: "no_property_line" };
-    if (!to) return { sent: false, reason: "no_phone" };
-    const result = await sms.sendSms({ to, from, body });
-    try {
-      if (result.sent) {
-        await pool.query(`update comm_events set sms_sid=$1, sms_status=$2 where id=$3`,
-          [result.sid, result.status || "queued", eventId]);
-      } else {
-        await pool.query(`update comm_events set sms_status='failed', sms_error=$1 where id=$2`,
-          [result.reason + (result.error ? `: ${result.error}` : ""), eventId]);
-      }
-    } catch (e) { console.error("smsForEvent record:", e.message); }
-    return result;
-  }
+  // COMMUNICATIONS BOUNDARY: propertyLine + smsForEvent moved into
+  // communications_boundary.js (sendPropertySms). The line is derived
+  // server-side inside the gate; save-first is preserved (pass eventId
+  // and the gate stamps the wire's answer onto the existing comm_event).
+  // This module never calls raw sms.sendSms.
 
   // ════════════════════════════════════════════════════════════════════
   //  1. MANAGER CONNECTION BOARD
@@ -410,8 +391,10 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms 
       // 030: put it on the wire if we can. Save-first already happened —
       // a failed send is a recorded failure, and the manager still gets
       // the copyable text as the fallback.
-      const line = await propertyLine(propertyId);
-      const wire = await smsForEvent({ eventId: msg.id, to: person.phone, from: line, body: sms_text });
+      const wire = await commBoundary.sendPropertySms({
+        property_id: propertyId, recipient: person.phone, body: sms_text,
+        purpose: "agent", person_id: personId, eventId: msg.id,
+      });
 
       res.json({
         receipt: wire.sent
@@ -518,7 +501,13 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms 
         [otpHash(code, inv.token), inv.id]);
 
       const body = `Your ${theName(inv.property_name)} tenant line code is ${code}. It expires in 10 minutes. Never share this code.`;
-      const wire = await sms.sendSms({ to: inv.person_phone, from: inv.property_sms_number, body });
+      // COMMUNICATIONS BOUNDARY: OTP is explicitly classified credential
+      // transport (purpose='otp'), never an informal raw-transport
+      // exception. No eventId — a secret is not a message.
+      const wire = await commBoundary.sendPropertySms({
+        property_id: inv.property_id, recipient: inv.person_phone, body,
+        purpose: "otp", person_id: inv.person_id,
+      });
       if (!wire.sent) {
         // Honest failure — clear the hash so a stale code can't linger.
         await pool.query(`update tenant_invites set otp_hash = null, otp_expires_at = null where id = $1`, [inv.id]);
@@ -865,55 +854,38 @@ Rules: classification "emergency" only for active danger or major damage in prog
         const body = String(req.body && req.body.Body || "").trim().slice(0, 4000);
         if (!MessageSid || !From || !To) return emptyTwiml(res);
 
-        // Dedupe: Twilio retries on timeout. A sid we've already saved is
-        // already handled — ack and stop. (Unique index backs this up.)
-        const dup = await pool.query(`select id from comm_events where sms_sid = $1`, [MessageSid]);
-        if (dup.rows.length) return emptyTwiml(res);
+        // COMMUNICATIONS BOUNDARY: the route owns transport authentication
+        // (signature + payload shape, above); the boundary owns domain
+        // resolution. To → property FIRST, sender resolved inside that
+        // property, idempotent on MessageSid, unknown line writes nothing.
+        const ctx = await commBoundary.resolveInboundSmsContext({ To, From, MessageSid, body });
 
-        // Resolve the property by the line that was texted.
-        const propQ = await pool.query(
-          `select id, name, address, sms_number from properties where sms_number = $1`, [To]);
-        if (!propQ.rows.length) {
-          // No property owns this number — we have nowhere on the spine to
-          // attach it. Loud log; Twilio's own logs keep the raw message.
-          console.error(`inbound-sms: no property has line ${To} — message ${MessageSid} from ${From} NOT attached.`);
-          return emptyTwiml(res);
-        }
-        const prop = propQ.rows[0];
+        // Retry / duplicate sid → already handled. Ack and stop.
+        if (ctx.idempotentReplay) return emptyTwiml(res);
 
-        // Resolve the person: a VERIFIED resident (used invite) on an
-        // active lease at this property with this phone.
-        const perQ = await pool.query(
-          `select distinct per.id, per.name, per.phone
-             from persons per
-             join leases l on l.lease_status = 'active' and l.property_id = $1
-                          and per.id = any(l.tenant_ids)
-             join tenant_invites ti on ti.person_id = per.id and ti.property_id = $1
-                          and ti.status = 'used'
-            where per.phone = $2`, [prop.id, From]);
+        // Unknown receiving line → zero rows written (no property ledger
+        // exists). Boundary logged it; Twilio's logs keep the raw message.
+        if (ctx.unknownLine) return emptyTwiml(res);
 
-        if (perQ.rows.length !== 1) {
-          // Unknown or ambiguous sender. The message can never silently
-          // disappear: save it on the property, person-less, human-flagged.
-          const saved = (await pool.query(
-            `insert into comm_events (property_id, person_id, unit_id, conversation_id,
-                                      channel, direction, body, sms_sid, classification, needs_human)
-             values ($1, null, null, null, 'sms', 'inbound', $2, $3, 'unknown', true) returning id`,
-            [prop.id, body || "(empty message)", MessageSid])).rows[0];
-          emptyTwiml(res); // ack Twilio first, then reply on the wire
-          const note = perQ.rows.length === 0
-            ? `This is ${theName(prop.name)} tenant line. We couldn't match your number to a resident account — contact your property manager to get set up.`
-            : `This is ${theName(prop.name)} tenant line. Your number matches more than one account — contact your property manager so we can sort it out.`;
-          const outNote = (await pool.query(
-            `insert into comm_events (property_id, channel, direction, body, classification)
-             values ($1, 'sms', 'outbound', $2, 'auto_reply') returning id`, [prop.id, note])).rows[0];
-          await smsForEvent({ eventId: outNote.id, to: From, from: prop.sms_number, body: note });
-          console.error(`inbound-sms: ${perQ.rows.length === 0 ? "unmatched" : "AMBIGUOUS"} sender ${From} at ${prop.name || prop.address} — saved as ${saved.id}, needs_human.`);
-          return;
-        }
-        const person = perQ.rows[0];
+        // Unknown or ambiguous sender → the boundary saved the message on
+        // the PROPERTY (person-less, needs_human). Phase A dispatches ZERO
+        // outbound on ambiguity: a clarification reply is a real send and
+        // ships only under a future explicit policy through the gate.
+        if (ctx.ambiguous) return emptyTwiml(res);
+
+        // Consent keyword (STOP/START): the boundary already recorded the
+        // event once and updated contact_preferences — the one canonical
+        // consent truth. Dispatch NOTHING: no AI turn, no reply text
+        // (replying to a STOP is itself a carrier violation; Twilio's
+        // compliance layer sends the required confirmation).
+        if (ctx.consentSignal) return emptyTwiml(res);
+
+        const person = ctx.person;
+        const prop = ctx.property;
 
         // ONE SPINE, TWO DOORS: the exact same core the browser uses.
+        // runInbound records the inbound comm_event (exactly once — the
+        // resolver wrote nothing on the resolved path).
         const r = await runInbound({
           personId: person.id, propertyId: prop.id, body: body || "(empty message)",
           channel: "sms", smsSid: MessageSid,
@@ -922,7 +894,10 @@ Rules: classification "emergency" only for active danger or major damage in prog
         // Ack Twilio (empty TwiML — the reply travels by REST, not TwiML,
         // so it carries a sid + status receipt like every other text).
         emptyTwiml(res);
-        await smsForEvent({ eventId: r.out.id, to: person.phone, from: prop.sms_number, body: r.reply });
+        await commBoundary.sendPropertySms({
+          property_id: prop.id, recipient: person.phone, body: r.reply,
+          purpose: "ai_reply", person_id: person.id, eventId: r.out.id,
+        });
       } catch (e) {
         console.error("inbound-sms:", e);
         // Ack anyway if we still can — a 500 makes Twilio retry, and if the
@@ -1070,8 +1045,10 @@ Rules: classification "emergency" only for active danger or major damage in prog
         [conversationId]);
 
       // 030: put it on the tenant's phone if we can. Save-first held above.
-      const line = await propertyLine(convo.property_id);
-      const wire = await smsForEvent({ eventId: out.id, to: convo.person_phone, from: line, body });
+      const wire = await commBoundary.sendPropertySms({
+        property_id: convo.property_id, recipient: convo.person_phone, body,
+        purpose: "agent", person_id: convo.person_id, eventId: out.id,
+      });
 
       res.json({
         receipt: `Message sent to ${firstName(convo.person_name)}${convo.unit_number ? ` in unit ${convo.unit_number}` : ""}${wire.sent ? " — delivered by text" : ""}.`,
@@ -1136,8 +1113,10 @@ Rules: classification "emergency" only for active danger or major damage in prog
       await pool.query(`update conversations set last_message_at = now() where id = $1`, [convoQ.rows[0].id]);
 
       // 030: ride the wire when we can. Save-first held above.
-      const line = await propertyLine(wo.property_id);
-      const wire = await smsForEvent({ eventId: noteEvt.id, to: wo.person_phone, from: line, body: note });
+      const wire = await commBoundary.sendPropertySms({
+        property_id: wo.property_id, recipient: wo.person_phone, body: note,
+        purpose: "agent", person_id: wo.person_id, eventId: noteEvt.id,
+      });
 
       res.json({
         receipt: `Work order ${status && status !== wo.status ? `marked ${status} ` : ""}and ${firstName(wo.person_name)} was notified${wo.unit_number ? ` (unit ${wo.unit_number})` : ""}${wire.sent ? " by text" : ""}.`,
