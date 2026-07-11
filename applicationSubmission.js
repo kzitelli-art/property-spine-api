@@ -42,7 +42,7 @@ function digestToken(raw) {
 }
 
 module.exports = function applicationSubmissionModule(deps) {
-  const { pool, spawnObligationFromEvent, completeObligation, conversionService } = deps;
+  const { pool, spawnObligationFromEvent, completeObligation, conversionService, commBoundary = null } = deps;
   const router = express.Router();
 
   // operator gate — same shared key the other modules use
@@ -69,6 +69,13 @@ module.exports = function applicationSubmissionModule(deps) {
     }
   }
   function httpErr(status, msg) { const e = new Error(msg); e.httpStatus = status; e.publicMessage = msg; return e; }
+  // plain transaction for SERVICES (no res): begin/commit/rollback, returns fn's value
+  async function runTx(fn) {
+    const client = await pool.connect();
+    try { await client.query("begin"); const out = await fn(client); await client.query("commit"); return out; }
+    catch (e) { try { await client.query("rollback"); } catch (_) {} throw e; }
+    finally { client.release(); }
+  }
 
   async function recordEvent(client, { property_id, person_id = null, unit_id = null, type, note }) {
     const r = await client.query(
@@ -256,6 +263,13 @@ module.exports = function applicationSubmissionModule(deps) {
     if (!property_id) throw httpErr(400, "property_id is required.");
     const prop = (await client.query("select id from properties where id=$1", [property_id])).rows[0];
     if (!prop) throw httpErr(404, "No property with that id.");
+    // PROPERTY WALL: a supplied unit must belong to THIS property. A valid
+    // credential for one asset can never bind another asset's unit by UUID.
+    if (unit_id) {
+      const u = (await client.query("select property_id from units where id=$1", [unit_id])).rows[0];
+      if (!u) throw httpErr(404, "No unit with that id.");
+      if (u.property_id !== property_id) throw httpErr(403, "That unit belongs to a different property.");
+    }
 
     const rawToken = crypto.randomBytes(24).toString("base64url");
     const tokenDigest = digestToken(rawToken);
@@ -275,6 +289,171 @@ module.exports = function applicationSubmissionModule(deps) {
       status: inv.status,
     };
   }, res));
+
+  // ── CANONICAL SERVICE (funnel-flow 3a): createAndDispatchApplicationInvitation ──
+  //  ONE service defines what "application link dispatched" means, whoever
+  //  invokes it (operator route today; agent/review workflows later):
+  //    authorize → validate person+unit belong to property → create prepared
+  //    invitation (raw token in hand THIS call only — digest-only storage
+  //    means dispatch cannot happen later without a new invitation) → build
+  //    the PUBLIC applicant URL → save-first outbound comm_event → send
+  //    through the communications boundary → on accepted transport, write the
+  //    SAME provider attestation mark-sent defines → on refusal, invitation
+  //    stays 'prepared' with an honest receipt and NO sent-state.
+  //  prepared ≠ dispatched · transport-accepted ≠ received. Both kept.
+  async function createAndDispatchApplicationInvitation({
+    property_id, person_id, unit_id = null, conversion_id = null,
+    expires_at = null, created_by_user_id = null, message_prefix = null,
+    resume_invitation_id = null,
+  }) {
+    if (!commBoundary) return { dispatched: false, reason: "boundary_not_wired" };
+
+    // ── RESUME / CRASH RECONCILIATION ─────────────────────────────────
+    // One invitation ⇒ at most one accepted dispatch. If a prior attempt
+    // crashed after Twilio accepted but before the attestation landed,
+    // resume re-reads the bound comm_event: the gate's already-sent guard
+    // returns the existing sid with NO second wire attempt, and the
+    // attestation is completed. A resume of an already-attested invitation
+    // is an idempotent success.
+    if (resume_invitation_id) {
+      const inv = (await pool.query(`select * from application_invitations where id=$1`, [resume_invitation_id])).rows[0];
+      if (!inv) return { dispatched: false, reason: "invitation_not_found" };
+      if (inv.status === "provider_dispatched") {
+        return { dispatched: true, invitation_id: inv.id, status: inv.status,
+                 provider_message_id: inv.provider_message_id, idempotent: true,
+                 receipt: "Already dispatched — no new send (idempotent)." };
+      }
+      if (inv.status !== "prepared" || !inv.dispatch_comm_event_id) {
+        return { dispatched: false, reason: `not_resumable_status_${inv.status}`, invitation_id: inv.id, status: inv.status };
+      }
+      const evt = (await pool.query(`select id, body from comm_events where id=$1`, [inv.dispatch_comm_event_id])).rows[0];
+      const per = (await pool.query(`select phone from persons where id=$1`, [inv.person_id])).rows[0] || {};
+      if (!per.phone) return { dispatched: false, reason: "no_phone_on_person", invitation_id: inv.id, status: inv.status };
+      const wire = await commBoundary.sendPropertySms({
+        property_id: inv.property_id, recipient: per.phone, body: evt.body,
+        purpose: "application_link", person_id: inv.person_id, eventId: evt.id,
+        actor_user_id: created_by_user_id || null,
+      });
+      if (!wire.sent) {
+        return { dispatched: false, reason: wire.reason, invitation_id: inv.id, status: inv.status };
+      }
+      const att = await runTx(async (client) => {
+        const evId = await recordEvent(client, {
+          property_id: inv.property_id, person_id: inv.person_id, unit_id: inv.unit_id,
+          type: "application_link_sent",
+          note: `Application link dispatched by provider via sms · ${wire.sid}. (Send attested — not a delivery/open confirmation.)`,
+        });
+        const upd = (await client.query(
+          `update application_invitations
+              set status='provider_dispatched', dispatch_source='provider', channel='sms',
+                  provider_message_id=$1, sent_by_user_id=$2, sent_at=now(), updated_at=now()
+            where id=$3 and status='prepared' returning *`,
+          [wire.sid, created_by_user_id, inv.id]
+        )).rows[0];
+        return { evId, status: (upd && upd.status) || "provider_dispatched" };
+      });
+      return { dispatched: true, invitation_id: inv.id, status: att.status,
+               provider_message_id: wire.sid, resumed: true, link_sent_event_id: att.evId,
+               receipt: wire.reason === "already_sent"
+                 ? "Recovered: prior accepted send reconciled into the invitation — no second text."
+                 : "Application link dispatched (resumed)." };
+    }
+    // PUBLIC URL BASE: the applicant-facing route may not live on the API
+    // origin. Named env, fail-closed when absent — never assume.
+    const base = (process.env.PUBLIC_APPLY_BASE_URL || "").trim().replace(/\/$/, "");
+    if (!base) return { dispatched: false, reason: "public_apply_base_url_not_configured" };
+
+    // Phase 1 (txn): validate + create prepared invitation + save-first comm_event.
+    const made = await runTx(async (client) => {
+      const prop = (await client.query("select id from properties where id=$1", [property_id])).rows[0];
+      if (!prop) throw httpErr(404, "No property with that id.");
+      const per = (await client.query("select id, phone from persons where id=$1", [person_id])).rows[0];
+      if (!per) throw httpErr(404, "No person with that id.");
+      if (unit_id) {
+        const u = (await client.query("select property_id from units where id=$1", [unit_id])).rows[0];
+        if (!u) throw httpErr(404, "No unit with that id.");
+        if (u.property_id !== property_id) throw httpErr(403, "That unit belongs to a different property.");
+      }
+      const rawToken = crypto.randomBytes(24).toString("base64url");
+      const inv = (await client.query(
+        `insert into application_invitations
+           (token_digest, conversion_id, person_id, property_id, unit_id, status, expires_at, created_by_user_id)
+         values ($1,$2,$3,$4,$5,'prepared',$6,$7) returning *`,
+        [digestToken(rawToken), conversion_id, person_id, property_id, unit_id, expires_at, created_by_user_id]
+      )).rows[0];
+      const url = `${base}/apply/${rawToken}`;
+      const body = `${message_prefix ? message_prefix + " " : ""}Here's your secure application link: ${url}`;
+      const evt = (await client.query(
+        `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification, sender_role, sent_by_user_id)
+         values ($1,$2,$3,null,'text','outbound',$4,'leasing','agent',$5) returning id`,
+        [property_id, person_id, unit_id, body, created_by_user_id]
+      )).rows[0];
+      // stable dispatch identity: one invitation ⇔ one save-first event
+      await client.query(`update application_invitations set dispatch_comm_event_id=$1 where id=$2`, [evt.id, inv.id]);
+      return { inv, url, body, evt_id: evt.id, phone: per.phone || null };
+    });
+
+    // Phase 2: the ONE gate. No raw transport, ever.
+    if (!made.phone) {
+      return { dispatched: false, reason: "no_phone_on_person", invitation_id: made.inv.id, status: "prepared" };
+    }
+    const wire = await commBoundary.sendPropertySms({
+      property_id, recipient: made.phone, body: made.body,
+      purpose: "application_link", person_id, eventId: made.evt_id,
+      actor_user_id: created_by_user_id || null,
+    });
+
+    if (!wire.sent) {
+      // HONEST REFUSAL: the raw token existed only in this call — a
+      // 'prepared' status would falsely imply this invitation can still
+      // be dispatched later. It cannot. Revoke it in the correction path;
+      // eligibility later requires a FRESH invitation.
+      await runTx(async (client) => {
+        await client.query(
+          `update application_invitations
+              set status='revoked', revoked_by_user_id=$1, revoked_at=now(),
+                  revoked_reason=$2, updated_at=now()
+            where id=$3 and status='prepared'`,
+          [created_by_user_id, `dispatch refused by communications gate: ${wire.reason}`, made.inv.id]
+        );
+      });
+      return { dispatched: false, reason: wire.reason, invitation_id: made.inv.id,
+               status: "revoked", retry_requires_new_invitation: true, comm_event_id: made.evt_id,
+               receipt: `Dispatch refused (${wire.reason}). Invitation revoked — a new invitation is required when sending becomes eligible.` };
+    }
+
+    // Phase 3 (txn): accepted transport → the SAME provider attestation.
+    const attested = await runTx(async (client) => {
+      const evId = await recordEvent(client, {
+        property_id, person_id, unit_id,
+        type: "application_link_sent",
+        note: `Application link dispatched by provider via sms · ${wire.sid}. (Send attested — not a delivery/open confirmation.)`,
+      });
+      const upd = (await client.query(
+        `update application_invitations
+            set status='provider_dispatched', dispatch_source='provider', channel='sms',
+                provider_message_id=$1, sent_by_user_id=$2, sent_at=now(), updated_at=now()
+          where id=$3 and status='prepared' returning *`,
+        [wire.sid, created_by_user_id, made.inv.id]
+      )).rows[0];
+      return { evId, status: (upd && upd.status) || "provider_dispatched" };
+    });
+
+    return { dispatched: true, invitation_id: made.inv.id, status: attested.status,
+             provider_message_id: wire.sid, comm_event_id: made.evt_id, link_sent_event_id: attested.evId,
+             receipt: "Application link dispatched through the communications boundary (transport accepted — delivery arrives as a separate fact)." };
+  }
+
+  // 1b) CREATE + DISPATCH — the governed one-call path (operator-gated).
+  router.post("/leasing/application-invitations/dispatch", requireOperator, async (req, res) => {
+    try {
+      const out = await createAndDispatchApplicationInvitation(req.body || {});
+      const code = out.dispatched ? 200 : 409;
+      return res.status(out.reason === "boundary_not_wired" || out.reason === "public_apply_base_url_not_configured" ? 503 : code).json(out);
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    }
+  });
 
   // 2) MARK SENT — the SEND attestation. This is an authenticated, auditable
   //    operator action, NOT a loose checkbox. It records that a human attested
@@ -545,6 +724,6 @@ module.exports = function applicationSubmissionModule(deps) {
   }, res));
 
   // expose the service for in-process tests + the approve route to close the gate
-  router._service = { submitApplicationService, closeApprovalGate, spawnApprovalGate, approvalGateRole };
+  router._service = { createAndDispatchApplicationInvitation,  submitApplicationService, closeApprovalGate, spawnApprovalGate, approvalGateRole };
   return router;
 };
