@@ -132,7 +132,7 @@ function datasetHash(rows) {
       if (existing) {
         await client.query(
           `update units set bedrooms=$2, bathrooms=$3, square_feet=$4, market_rent=$5,
-                  occupancy_status=$6, is_down=false, operating_use='residential',
+                  occupancy_status=$6, is_down=false, operating_use='standard',
                   source_type='demo_qa_inventory', source_as_of_date=current_date,
                   confidence='demo_qa', updated_at=now()
             where id=$1`,
@@ -142,7 +142,7 @@ function datasetHash(rows) {
         await client.query(
           `insert into units (property_id, unit_number, bedrooms, bathrooms, square_feet, market_rent,
                               occupancy_status, is_down, operating_use, source_type, source_as_of_date, confidence)
-           values ($1,$2,$3,$4,$5,$6,$7,false,'residential','demo_qa_inventory',current_date,'demo_qa')`,
+           values ($1,$2,$3,$4,$5,$6,$7,false,'standard','demo_qa_inventory',current_date,'demo_qa')`,
           [DEMO, r.unit_number, r.bedrooms, r.bathrooms, r.square_feet, r.market_rent, r.occupancy_status]);
         created++;
       }
