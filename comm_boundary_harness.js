@@ -1,288 +1,647 @@
-#!/usr/bin/env node
 // ════════════════════════════════════════════════════════════════════
-//  comm_boundary_harness.js — COMMUNICATIONS BOUNDARY PHASE A PROOF
+//  COMMUNICATIONS BOUNDARY — communications_boundary.js
+//
+//  THE PERMANENT COMMUNICATIONS BOUNDARY for Property Spine.
+//  Class 1 permanent product primitive.
+//
+//  One line, one property, one continuous communication history, one safe
+//  way to send. The person feels only "I text the property." Behind the
+//  glass this module guarantees:
+//    • the RECEIVING line determines the property (never the sender,
+//      never a client/body-supplied property_id)
+//    • the sender is resolved INSIDE that property
+//    • every property-facing send derives its `from` server-side and
+//      refuses without it — never a Messaging Service default fallback
+//    • one central eligibility decision (consent / classification /
+//      scope / purpose / send-mode) gates every outbound, with exactly
+//      one refusal reason
+//    • raw Twilio (sms.js) is transport only; NO business module calls it
+//
+//  Broader than SMS by intent: SMS is today's transport; the boundary is
+//  the primitive. Property, identity, consent, classification,
+//  attribution, and continuous history keep one meaning when future
+//  channels attach here.
+//
+//  ── THE TWO CANONICAL FACTS THIS MODULE READS (kept separate) ──
+//  1) RECORD CLASSIFICATION — person_property_classifications (076).
+//     Property-scoped: the same person can be internal_qa in one property
+//     and production in another. ABSENCE = UNCLASSIFIED, never silently
+//     production. Append-only supersession; record_class never updated
+//     in place.
+//  2) CHANNEL CONSENT — contact_preferences.consent_state.
+//     The one canonical consent truth. Never duplicated onto the
+//     classification row (a STOP must have exactly one place to land).
+//  canSendSmsForRecord REQUIRES both; it never stores both in one row.
+//
+//  Factory: injected with { pool, sms }. Instantiate ONCE in server.js,
+//  inject into every business module that sends. Business modules call
+//  commBoundary.sendPropertySms(...) and never sms.sendSms.
 // ════════════════════════════════════════════════════════════════════
-const { Pool } = require("pg");
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || "postgres://claude:claude@localhost/spinetest",
-  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes("render") === false && process.env.DATABASE_URL.includes("neon") ? { rejectUnauthorized: false } : (process.env.PGSSL ? { rejectUnauthorized: false } : false),
-});
+module.exports = function communicationsBoundary({ pool, sms }) {
+  const smsReady = () => !!(sms && typeof sms.enabled === "function" && sms.enabled());
 
-const wireLog = [];
-const fakeSms = {
-  enabled: () => true,
-  async sendSms({ to, from, body }) {
-    wireLog.push({ to, from, body });
-    if (!from) return { sent: false, reason: "harness_saw_no_from" };
-    return { sent: true, sid: "SM_HARNESS_" + wireLog.length, status: "queued" };
-  },
-  validateWebhook: () => true,
-};
-const boundaryFactory = require("./communications_boundary");
-
-let pass = 0, fail = 0;
-const results = [];
-function check(name, ok, detail) {
-  results.push({ name, ok, detail });
-  if (ok) { pass++; console.log(`  ✓ ${name}`); }
-  else { fail++; console.log(`  ✗ ${name}${detail ? " — " + detail : ""}`); }
-}
-async function count(sql, params) { return Number((await pool.query(sql, params)).rows[0].count); }
-
-(async () => {
-  const boundary = boundaryFactory({ pool, sms: fakeSms });
-  console.log("═══ COMMUNICATIONS BOUNDARY PHASE A HARNESS ═══\n");
-
-  const propA = (await pool.query(`insert into properties (name, sms_number) values ('__CB_HARNESS__A', '+15550000001') returning *`)).rows[0];
-  const propB = (await pool.query(`insert into properties (name, sms_number) values ('__CB_HARNESS__B', '+15550000002') returning *`)).rows[0];
-  const propNoLine = (await pool.query(`insert into properties (name, sms_number) values ('__CB_HARNESS__NOLINE', null) returning *`)).rows[0];
-
-  const sharedPhone = "+15551110001";
-  const resA = (await pool.query(`insert into persons (name, phone) values ('__CB_HARNESS__ResA', $1) returning *`, [sharedPhone])).rows[0];
-  const resB = (await pool.query(`insert into persons (name, phone) values ('__CB_HARNESS__ResB', $1) returning *`, [sharedPhone])).rows[0];
-  async function seedSpace(propertyId, label) {
-    const unit = (await pool.query(
-      `insert into units (property_id, unit_number) values ($1, $2) returning id`,
-      [propertyId, "__CB_" + label])).rows[0];
-    const space = (await pool.query(
-      `insert into spaces (unit_id) values ($1) returning id`, [unit.id])).rows[0];
-    return space.id;
+  // ── SEND MODE ──────────────────────────────────────────────────────
+  //  Env-driven, SAFE code default: absent/unset/unknown ⇒ "disabled".
+  //  Read fresh per send so flipping the env is an immediate kill switch.
+  //
+  //    disabled               → refuse ALL sends. Phase A default.
+  //    proof_only             → ONLY purpose='proof_text' to the single
+  //                             designated proof cell (SMS_PROOF_CELL).
+  //                             Credential sends (otp/staff_otp/
+  //                             staff_invite) refuse UNLESS the named
+  //                             flag SMS_ALLOW_CREDENTIAL_SENDS=1 is set.
+  //                             proof_only never silently means
+  //                             "proof plus whatever calls SMS".
+  //    internal_qa_autonomous → autonomous/agent sends ONLY to recipients
+  //                             holding a CURRENT internal_qa
+  //                             classification in this property AND
+  //                             consent_state='opted_in'. No row = refuse.
+  //                             Unknown consent = refuse. Credential sends
+  //                             allowed only within the QA property.
+  //    customer_care          → HELD. Requires an explicit current
+  //                             'production' classification, which has no
+  //                             authoritative source yet — so agent sends
+  //                             fail closed until that policy is
+  //                             deliberately activated. Credential sends
+  //                             allowed (opted_out always blocks).
+  const VALID_MODES = ["disabled", "proof_only", "internal_qa_autonomous", "customer_care"];
+  function sendMode() {
+    const m = (process.env.SMS_SEND_MODE || "disabled").trim();
+    return VALID_MODES.includes(m) ? m : "disabled";
   }
-  const spaceA = await seedSpace(propA.id, "A");
-  const spaceB = await seedSpace(propB.id, "B");
-  await pool.query(`insert into leases (property_id, space_id, tenant_ids, balance, lease_status) values ($1, $2, array[$3::uuid], 0, 'active')`, [propA.id, spaceA, resA.id]);
-  await pool.query(`insert into leases (property_id, space_id, tenant_ids, balance, lease_status) values ($1, $2, array[$3::uuid], 0, 'active')`, [propB.id, spaceB, resB.id]);
-  await pool.query(`insert into tenant_invites (person_id, property_id, token, status, expires_at) values ($1,$2,'__cb_tok_'||gen_random_uuid(),'used', now() + interval '1 day'),($3,$4,'__cb_tok_'||gen_random_uuid(),'used', now() + interval '1 day')`, [resA.id, propA.id, resB.id, propB.id]);
+  const proofCell = () => (process.env.SMS_PROOF_CELL || "").trim() || null;
+  const qaPropertyId = () => (process.env.SMS_QA_PROPERTY_ID || "").trim() || null;
+  const credentialSendsAllowed = () => process.env.SMS_ALLOW_CREDENTIAL_SENDS === "1";
 
-  {
-    const probe = await pool.query(
+  // Purposes that are credential transport (user-requested codes/links),
+  // not autonomous outreach. Explicitly named — no informal exceptions.
+  const CREDENTIAL_PURPOSES = new Set(["otp", "staff_otp", "staff_invite"]);
+  // Purposes that are autonomous/agent outreach.
+  const AUTONOMOUS_PURPOSES = new Set([
+    "agent", "ai_reply", "leasing_first_response", "followup", "customer_care", "application_link",
+  ]);
+
+  // ── PROPERTY LINE (server-derived `from`) ──────────────────────────
+  //  The ONLY place a property's SMS line is resolved for sending.
+  //  Internal detail of the boundary; business modules never call it.
+  async function propertyLine(q, propertyId) {
+    const r = await q.query(`select sms_number from properties where id = $1`, [propertyId]);
+    return r.rows.length ? r.rows[0].sms_number : null;
+  }
+
+  // ── PERSON × PROPERTY CONTEXT RESOLVER ─────────────────────────────
+  //  resolvePersonPropertyContext — ONE read/projection over the REAL
+  //  distributed relationship sources plus the classification fact.
+  //  It does not invent relationships: a classification row alone does
+  //  not create a lease, lead, invite, or conversation.
+  //
+  //  Live relationship semantics (verified against current source):
+  //    leases        → person is a tenant via tenant_ids ARRAY
+  //                    (per.id = any(l.tenant_ids)), property_id scoped
+  //    leasing_leads → (person_id, property_id) opportunity rows
+  //    tenant_invites→ (person_id, property_id)
+  //    conversations → (person_id, property_id)
+  //
+  //  Returns:
+  //    {
+  //      relationship_exists: bool,
+  //      relationship_sources: { lease, lead, invite, conversation },
+  //      classification: { record_class, classified_at,
+  //                        classification_source } | null,   // null = UNCLASSIFIED
+  //      is_qa: bool,
+  //    }
+  async function resolvePersonPropertyContext(person_id, property_id, clientArg = null) {
+    const q = clientArg || pool;
+    const src = (await q.query(
+      `select
+         exists (select 1 from leases l
+                  where l.property_id = $2 and $1 = any(l.tenant_ids)) as lease,
+         exists (select 1 from leasing_leads ll
+                  where ll.person_id = $1 and ll.property_id = $2)     as lead,
+         exists (select 1 from tenant_invites ti
+                  where ti.person_id = $1 and ti.property_id = $2)     as invite,
+         exists (select 1 from conversations c
+                  where c.person_id = $1 and c.property_id = $2)       as conversation`,
+      [person_id, property_id]
+    )).rows[0];
+
+    // FAIL-CLOSED READ: if the classification table is unavailable (e.g.
+    // new code deployed before migration 076 lands, or a rolling
+    // instance), the read failure becomes an explicit refusal signal —
+    // never a crash, never a bypass of the classification gate.
+    let cls = null, clsError = false;
+    try {
+      cls = (await q.query(
+        `select record_class, classified_at, classification_source
+           from person_property_classifications
+          where person_id = $1 and property_id = $2 and superseded_at is null
+          limit 1`,
+        [person_id, property_id]
+      )).rows[0] || null;
+    } catch (e) {
+      clsError = true;
+      console.error(`resolvePersonPropertyContext: classification read FAILED (${e.code || e.message}) — treating as classification_unavailable (fail closed).`);
+    }
+
+    return {
+      relationship_exists: !!(src.lease || src.lead || src.invite || src.conversation),
+      relationship_sources: {
+        lease: !!src.lease, lead: !!src.lead,
+        invite: !!src.invite, conversation: !!src.conversation,
+      },
+      classification: cls,
+      classification_unavailable: clsError,
+      is_qa: !!(cls && cls.record_class === "internal_qa"),
+    };
+  }
+
+  // ── QA ENROLLMENT — one governed operation, two canonical facts ────
+  //  enrollInternalQa writes, in ONE transaction:
+  //    1. a current internal_qa classification row (superseding any
+  //       existing current row for the pair, append-only), and
+  //    2. contact_preferences.consent_state = 'opted_in' for text,
+  //  each with attribution. The facts remain distinct rows in their own
+  //  canonical tables; the OPERATION is governed and atomic.
+  //
+  //  Testers enter through the canonical relationship/intake path first —
+  //  enrollment classifies an existing person, it does not create one.
+  async function enrollInternalQa({ person_id, property_id, actor_user_id, reason = null }, clientArg = null) {
+    if (!person_id || !property_id) throw new Error("enrollInternalQa: person_id and property_id are required.");
+    const ownClient = !clientArg;
+    const client = clientArg || await pool.connect();
+    try {
+      if (ownClient) await client.query("begin");
+
+      // The person must already have a REAL relationship in this property
+      // (canonical intake first). Classification never invents one.
+      const ctx = await resolvePersonPropertyContext(person_id, property_id, client);
+      if (!ctx.relationship_exists) {
+        throw new Error("enrollInternalQa: no Person × Property relationship exists — intake the tester through the canonical path first.");
+      }
+
+      // Supersede any current classification for the pair (append-only).
+      await client.query(
+        `update person_property_classifications
+            set superseded_at = now(), superseded_by_user_id = $3
+          where person_id = $1 and property_id = $2 and superseded_at is null`,
+        [person_id, property_id, actor_user_id || null]
+      );
+      const row = (await client.query(
+        `insert into person_property_classifications
+           (person_id, property_id, record_class, classified_by_user_id,
+            classification_source, classification_reason)
+         values ($1, $2, 'internal_qa', $3, 'operator', $4)
+         returning *`,
+        [person_id, property_id, actor_user_id || null, reason]
+      )).rows[0];
+
+      // Consent: the separate canonical fact, written explicitly.
+      await client.query(
+        `insert into contact_preferences (person_id, channel, consent_state, source, updated_at)
+         values ($1, 'text', 'opted_in', 'internal_qa_enrollment', now())
+         on conflict (person_id, channel)
+         do update set consent_state = 'opted_in', source = 'internal_qa_enrollment', updated_at = now()`,
+        [person_id]
+      );
+
+      if (ownClient) await client.query("commit");
+      return {
+        receipt: `Enrolled as internal_qa for property ${property_id}: classification row ${row.id}, text consent opted_in.`,
+        classification: row,
+      };
+    } catch (e) {
+      if (ownClient) { try { await client.query("rollback"); } catch (_) {} }
+      throw e;
+    } finally {
+      if (ownClient) client.release();
+    }
+  }
+
+  // Revoke / reclassify (append-only): supersede current, insert new.
+  async function reclassify({ person_id, property_id, record_class, actor_user_id, reason = null }, clientArg = null) {
+    if (!["production", "internal_qa"].includes(record_class)) throw new Error("reclassify: record_class must be production or internal_qa.");
+    const ownClient = !clientArg;
+    const client = clientArg || await pool.connect();
+    try {
+      if (ownClient) await client.query("begin");
+      await client.query(
+        `update person_property_classifications
+            set superseded_at = now(), superseded_by_user_id = $3
+          where person_id = $1 and property_id = $2 and superseded_at is null`,
+        [person_id, property_id, actor_user_id || null]
+      );
+      const row = (await client.query(
+        `insert into person_property_classifications
+           (person_id, property_id, record_class, classified_by_user_id,
+            classification_source, classification_reason)
+         values ($1, $2, $3, $4, 'operator', $5)
+         returning *`,
+        [person_id, property_id, record_class, actor_user_id || null, reason]
+      )).rows[0];
+      if (ownClient) await client.query("commit");
+      return { classification: row };
+    } catch (e) {
+      if (ownClient) { try { await client.query("rollback"); } catch (_) {} }
+      throw e;
+    } finally {
+      if (ownClient) client.release();
+    }
+  }
+
+  // ── CENTRAL OUTBOUND ELIGIBILITY ───────────────────────────────────
+  //  canSendSmsForRecord — the ONE decision point. Consent, record
+  //  classification, property/recipient scope, purpose, and send mode.
+  //  Returns exactly one decision and one refusal reason:
+  //    { allowed: true, reason: "ok" | <aperture> }
+  //    { allowed: false, reason }
+  //
+  //  Eligibility law (ruling):
+  //    · opted_out ALWAYS blocks, every mode, every purpose.
+  //    · internal_qa_autonomous agent sends require a CURRENT internal_qa
+  //      classification AND consent 'opted_in'. No row = refuse.
+  //      Unknown consent = refuse.
+  //    · customer_care agent sends require a current 'production'
+  //      classification — no authoritative source yet, so this fails
+  //      closed until that policy is deliberately activated.
+  //    · proof_only permits only the exact proof aperture (+ credential
+  //      sends only behind the named SMS_ALLOW_CREDENTIAL_SENDS flag).
+  //    · unclassified never silently means production.
+  async function canSendSmsForRecord({
+    property_id, recipient, person_id = null, purpose, from,
+  }, clientArg = null) {
+    const q = clientArg || pool;
+    const mode = sendMode();
+
+    // 0. Structural preconditions.
+    if (!smsReady()) return { allowed: false, reason: "transport_not_configured" };
+    if (!property_id) return { allowed: false, reason: "no_property" };
+    if (!from) return { allowed: false, reason: "no_property_line" };
+    if (!recipient) return { allowed: false, reason: "no_recipient" };
+    if (!purpose) return { allowed: false, reason: "no_purpose" };
+
+    // 1. Consent — read once; opted_out blocks EVERYTHING, every mode.
+    let consent = "unknown";
+    if (person_id) {
+      const pref = (await q.query(
+        `select consent_state from contact_preferences where person_id = $1 and channel = 'text'`,
+        [person_id]
+      )).rows[0];
+      consent = pref ? String(pref.consent_state).toLowerCase() : "unknown";
+      if (["opted_out", "stop", "revoked"].includes(consent)) {
+        return { allowed: false, reason: "consent_opted_out" };
+      }
+    }
+
+    // 2. Mode gates.
+    if (mode === "disabled") {
+      return { allowed: false, reason: "send_mode_disabled" };
+    }
+
+    if (mode === "proof_only") {
+      if (purpose === "proof_text") {
+        const cell = proofCell();
+        if (!cell) return { allowed: false, reason: "proof_cell_not_configured" };
+        if (recipient !== cell) return { allowed: false, reason: "proof_only_recipient_not_proof_cell" };
+        return { allowed: true, reason: "proof_aperture" };
+      }
+      if (CREDENTIAL_PURPOSES.has(purpose)) {
+        if (!credentialSendsAllowed()) return { allowed: false, reason: "credential_sends_disabled_in_proof_only" };
+        return { allowed: true, reason: "credential_aperture" };
+      }
+      return { allowed: false, reason: "send_mode_proof_only_blocks_this_purpose" };
+    }
+
+    if (mode === "internal_qa_autonomous") {
+      if (CREDENTIAL_PURPOSES.has(purpose)) {
+        // Credential transport inside the QA perimeter only.
+        const qaProp = qaPropertyId();
+        if (!qaProp || property_id !== qaProp) {
+          return { allowed: false, reason: "credential_send_outside_qa_property" };
+        }
+        return { allowed: true, reason: "qa_credential" };
+      }
+      if (AUTONOMOUS_PURPOSES.has(purpose)) {
+        if (!person_id) return { allowed: false, reason: "qa_autonomous_requires_person_record" };
+        const ctx = await resolvePersonPropertyContext(person_id, property_id, q);
+        if (ctx.classification_unavailable) return { allowed: false, reason: "classification_unavailable" };
+        if (!ctx.classification) return { allowed: false, reason: "record_unclassified" };
+        if (!ctx.is_qa) return { allowed: false, reason: "record_not_internal_qa" };
+        if (consent !== "opted_in") return { allowed: false, reason: "qa_autonomous_requires_opted_in_consent" };
+        // Scope is implied and verified: classification is property-scoped
+        // and the relationship check below re-confirms the tie.
+        if (!ctx.relationship_exists) return { allowed: false, reason: "recipient_not_in_property_scope" };
+        return { allowed: true, reason: "qa_autonomous" };
+      }
+      return { allowed: false, reason: "purpose_not_permitted_in_qa_mode" };
+    }
+
+    if (mode === "customer_care") {
+      if (CREDENTIAL_PURPOSES.has(purpose)) {
+        // Credential sends allowed; opted_out already blocked above.
+        if (person_id) {
+          const ctx = await resolvePersonPropertyContext(person_id, property_id, q);
+          if (!ctx.relationship_exists) return { allowed: false, reason: "recipient_not_in_property_scope" };
+        }
+        return { allowed: true, reason: "credential" };
+      }
+      // Agent/autonomous sends require an explicit current 'production'
+      // classification. No authoritative source populates that yet, so
+      // this fails closed — deliberately — until the activation policy
+      // writes production classifications.
+      if (!person_id) return { allowed: false, reason: "customer_care_requires_person_record" };
+      const ctx = await resolvePersonPropertyContext(person_id, property_id, q);
+      if (ctx.classification_unavailable) return { allowed: false, reason: "classification_unavailable" };
+      if (!ctx.classification) return { allowed: false, reason: "record_unclassified" };
+      if (ctx.classification.record_class !== "production") {
+        return { allowed: false, reason: "customer_care_requires_production_classification" };
+      }
+      if (!ctx.relationship_exists) return { allowed: false, reason: "recipient_not_in_property_scope" };
+      if (consent !== "opted_in") return { allowed: false, reason: "customer_care_requires_opted_in_consent" };
+      return { allowed: true, reason: "customer_care" };
+    }
+
+    return { allowed: false, reason: "send_mode_unknown" };
+  }
+
+  // ── CANONICAL OUTBOUND GATE ────────────────────────────────────────
+  //  sendPropertySms — the ONE place a property-facing text goes out.
+  //  Derives the line server-side → runs canSendSmsForRecord → records
+  //  the attempt/refusal → raw transport → records the provider result.
+  //  Save-first is preserved: the CALLER owns the comm_event (the message
+  //  is real whether or not the wire cooperates); pass eventId and the
+  //  gate stamps the wire's answer onto it.
+  //
+  //  Returns: { sent, reason, sid }
+  async function sendPropertySms({
+    property_id, recipient, body, purpose = "agent",
+    person_id = null, eventId = null, actor_user_id = null,
+  }, clientArg = null) {
+    const q = clientArg || pool;
+
+    async function stamp(status, detail) {
+      if (!eventId) return;
+      try {
+        await q.query(
+          `update comm_events set sms_status = $1, sms_error = $2 where id = $3`,
+          [status, detail || null, eventId]
+        );
+      } catch (e) { console.error("sendPropertySms stamp:", e.message); }
+    }
+
+    // IDEMPOTENT DISPATCH GUARD: an event that already carries an accepted
+    // provider sid has ALREADY been sent — a retry (crash recovery, double
+    // click, replayed job) must never put it on the wire twice. One event,
+    // at most one accepted send.
+    if (eventId) {
+      const prior = (await q.query(`select sms_sid from comm_events where id = $1`, [eventId])).rows[0];
+      if (prior && prior.sms_sid) {
+        return { sent: true, reason: "already_sent", sid: prior.sms_sid };
+      }
+    }
+
+    // Server-derived property line. No line → NO SEND, never a
+    // Messaging Service default fallback.
+    const from = await propertyLine(q, property_id);
+    if (!from) {
+      await stamp("refused", "gate:no_property_line");
+      console.error(`sendPropertySms REFUSED property=${property_id} purpose=${purpose} reason=no_property_line`);
+      return { sent: false, reason: "no_property_line", sid: null };
+    }
+
+    const elig = await canSendSmsForRecord(
+      { property_id, recipient, person_id, purpose, from }, q
+    );
+    if (!elig.allowed) {
+      await stamp("refused", `gate:${elig.reason}`);
+      console.error(`sendPropertySms REFUSED property=${property_id} purpose=${purpose} reason=${elig.reason}`);
+      return { sent: false, reason: elig.reason, sid: null };
+    }
+
+    // Raw transport — the boundary is the ONLY business-side caller.
+    const result = await sms.sendSms({ to: recipient, from, body });
+
+    if (result.sent) {
+      await stamp(result.status || "queued", null);
+      if (eventId) {
+        try { await q.query(`update comm_events set sms_sid = $1 where id = $2`, [result.sid, eventId]); }
+        catch (e) { console.error("sendPropertySms sid record:", e.message); }
+      }
+    } else {
+      await stamp("failed", result.reason + (result.error ? `: ${result.error}` : ""));
+    }
+
+    return { sent: !!result.sent, reason: result.sent ? "sent" : result.reason, sid: result.sid || null };
+  }
+
+  // ── CANONICAL INBOUND RESOLVER ─────────────────────────────────────
+  //  resolveInboundSmsContext — To-number-FIRST domain resolution.
+  //  The ROUTE owns transport authentication (Twilio signature + payload
+  //  shape) and calls this only with a verified request (T1).
+  //
+  //  Live conventions preserved (verified against current source):
+  //    · idempotency key is comm_events.sms_sid (unique-indexed)
+  //    · sender = verified resident: active lease via tenant_ids array
+  //      JOIN tenant_invites status='used', phone match, THIS property
+  //    · channel 'sms' on this path
+  //
+  //  Event-writing contract (no double-write): the resolver records the
+  //  inbound comm_event for the UNRESOLVED cases (ambiguous/unmatched
+  //  sender — person-less, property-scoped, needs_human). For the
+  //  RESOLVED case it returns context and writes nothing — the canonical
+  //  inbound core (runInbound) records the event exactly once, same as
+  //  the browser door. One spine, two doors, one write per message.
+  //
+  //  Outcomes:
+  //    unknown To line  → { unknownLine:true }, ZERO rows written (T2),
+  //                       server log only
+  //    duplicate sid    → { idempotentReplay:true }, existing event id,
+  //                       zero new rows
+  //    resolved sender  → { property, person }, no event written here
+  //    0 or >1 senders  → { ambiguous:true, comm_event }, person-less
+  //                       property-scoped record; NO outbound (Phase A)
+  // ── CONSENT KEYWORDS (Twilio-standard) ─────────────────────────────
+  //  A STOP is a consent signal, not a conversation. When a RESOLVED
+  //  sender texts one, the boundary: records the inbound event
+  //  (classification 'consent_signal'), updates the ONE canonical
+  //  consent truth (contact_preferences.consent_state), and tells the
+  //  route to dispatch NOTHING — no AI reply, no confirmation text
+  //  (replying to a STOP is itself a carrier violation; Twilio's own
+  //  compliance reply covers it). START/UNSTOP/YES re-opts in.
+  const STOP_KEYWORDS = new Set(["stop", "stopall", "unsubscribe", "cancel", "end", "quit"]);
+  const START_KEYWORDS = new Set(["start", "unstop", "yes"]);
+  function consentKeyword(body) {
+    const w = String(body || "").trim().toLowerCase();
+    if (STOP_KEYWORDS.has(w)) return "opted_out";
+    if (START_KEYWORDS.has(w)) return "opted_in";
+    return null;
+  }
+  async function applyConsent(q, { person_id, consent_state, source }) {
+    await q.query(
+      `insert into contact_preferences (person_id, channel, consent_state, source, updated_at)
+       values ($1, 'text', $2, $3, now())
+       on conflict (person_id, channel)
+       do update set consent_state = $2, source = $3, updated_at = now()`,
+      [person_id, consent_state, source]
+    );
+  }
+
+  async function resolveInboundSmsContext({ To, From, MessageSid, body = null }, clientArg = null) {
+    const q = clientArg || pool;
+
+    if (!MessageSid || !From || !To) {
+      // Malformed at the domain layer (route should have rejected).
+      // Write nothing.
+      return { property: null, person: null, ambiguous: false, unknownLine: false, comm_event: null, idempotentReplay: false, malformed: true };
+    }
+
+    // Idempotency FIRST — a Twilio retry must never create a second event.
+    const dup = (await q.query(
+      `select id, property_id, person_id from comm_events where sms_sid = $1 limit 1`,
+      [MessageSid]
+    )).rows[0];
+    if (dup) {
+      return {
+        property: dup.property_id ? { id: dup.property_id } : null,
+        person: dup.person_id ? { id: dup.person_id } : null,
+        ambiguous: false, unknownLine: false,
+        comm_event: dup, idempotentReplay: true,
+      };
+    }
+
+    // TO → PROPERTY. The receiving line is the property wall; resolve it
+    // before touching the sender.
+    const prop = (await q.query(
+      `select id, name, address, sms_number from properties where sms_number = $1 limit 1`,
+      [To]
+    )).rows[0];
+
+    if (!prop) {
+      // No property owns this line → no property ledger exists. Write
+      // NOTHING to operating history (T2). Loud server log; Twilio's own
+      // logs retain the raw message.
+      console.error(`communications_boundary: UNKNOWN LINE ${To} — message ${MessageSid} from ${From} NOT attached; zero rows written.`);
+      return { property: null, person: null, ambiguous: false, unknownLine: true, comm_event: null, idempotentReplay: false };
+    }
+
+    // SENDER resolved ONLY inside this property: a VERIFIED resident
+    // (used invite) on an active lease at this property with this phone.
+    const senders = (await q.query(
       `select distinct per.id, per.name, per.phone
          from persons per
          join leases l on l.lease_status = 'active' and l.property_id = $1
                       and per.id = any(l.tenant_ids)
          join tenant_invites ti on ti.person_id = per.id and ti.property_id = $1
                       and ti.status = 'used'
-        where per.phone = $2`, [propA.id, sharedPhone]);
-    console.log(`  [diag] sender-match for resA at propA: ${probe.rows.length} row(s)` +
-      (probe.rows.length === 0 ? " <- THIS is why STOP shows UNMATCHED" : ` (${probe.rows[0].id})`));
-    if (probe.rows.length === 0) {
-      const leaseCheck = await pool.query(`select lease_status, tenant_ids, property_id from leases where property_id=$1`, [propA.id]);
-      const invCheck = await pool.query(`select status, person_id from tenant_invites where property_id=$1`, [propA.id]);
-      const perCheck = await pool.query(`select id, phone from persons where id=$1`, [resA.id]);
-      console.log(`  [diag] lease rows:`, JSON.stringify(leaseCheck.rows));
-      console.log(`  [diag] invite rows:`, JSON.stringify(invCheck.rows));
-      console.log(`  [diag] resA person:`, JSON.stringify(perCheck.rows));
+        where per.phone = $2`,
+      [prop.id, From]
+    )).rows;
+
+    if (senders.length !== 1) {
+      // Unknown or ambiguous sender. The message never silently
+      // disappears: save it on the PROPERTY, person-less, human-flagged.
+      // NO outbound is dispatched (Phase A: zero sends on ambiguity; a
+      // future clarification policy must route through sendPropertySms).
+      const saved = (await q.query(
+        `insert into comm_events (property_id, person_id, unit_id, conversation_id,
+                                  channel, direction, body, sms_sid, classification, needs_human)
+         values ($1, null, null, null, 'sms', 'inbound', $2, $3, 'unknown', true)
+         returning *`,
+        [prop.id, body || "(empty message)", MessageSid]
+      )).rows[0];
+      console.error(`communications_boundary: ${senders.length === 0 ? "UNMATCHED" : "AMBIGUOUS"} sender ${From} at ${prop.name || prop.address} — saved ${saved.id}, needs_human, zero outbound.`);
+      return {
+        property: { id: prop.id, name: prop.name, sms_number: prop.sms_number },
+        person: null, ambiguous: true, unknownLine: false,
+        comm_event: saved, idempotentReplay: false,
+      };
     }
+
+    // RESOLVED. Consent keywords are intercepted HERE: the boundary
+    // records the message once (classification 'consent_signal'),
+    // updates contact_preferences — the one canonical consent truth —
+    // and the route dispatches nothing. Twilio may also block at the
+    // carrier layer; the application's own gate must never reason from
+    // stale institutional truth.
+    const person = senders[0];
+    const consentSignal = consentKeyword(body);
+    if (consentSignal) {
+      const saved = (await q.query(
+        `insert into comm_events (property_id, person_id, unit_id, conversation_id,
+                                  channel, direction, body, sms_sid, classification, needs_human)
+         values ($1, $2, null, null, 'sms', 'inbound', $3, $4, 'consent_signal', false)
+         returning *`,
+        [prop.id, person.id, body, MessageSid]
+      )).rows[0];
+      await applyConsent(q, { person_id: person.id, consent_state: consentSignal, source: "inbound_sms_keyword" });
+      console.error(`communications_boundary: CONSENT SIGNAL ${consentSignal} from ${person.id} at ${prop.name || prop.address} — canonical consent updated, event ${saved.id}, zero outbound.`);
+      return {
+        property: { id: prop.id, name: prop.name, sms_number: prop.sms_number },
+        person, ambiguous: false, unknownLine: false,
+        comm_event: saved, idempotentReplay: false,
+        consentSignal,
+      };
+    }
+
+    // RESOLVED conversation message: return context; the canonical
+    // inbound core records the event (exactly once — same write path as
+    // the browser door).
+    return {
+      property: { id: prop.id, name: prop.name, sms_number: prop.sms_number },
+      person, ambiguous: false, unknownLine: false,
+      comm_event: null, idempotentReplay: false, consentSignal: null,
+    };
   }
 
-  const qa = (await pool.query(`insert into persons (name, phone) values ('__CB_HARNESS__QA', '+15551110002') returning *`)).rows[0];
-  await pool.query(`insert into leasing_leads (person_id, property_id) values ($1,$2)`, [qa.id, propA.id]);
-  const stranger = (await pool.query(`insert into persons (name, phone) values ('__CB_HARNESS__Stray', '+15551110003') returning *`)).rows[0];
-  const optedOut = (await pool.query(`insert into persons (name, phone) values ('__CB_HARNESS__Stop', '+15551110004') returning *`)).rows[0];
-  await pool.query(`insert into leasing_leads (person_id, property_id) values ($1,$2)`, [optedOut.id, propA.id]);
-  await pool.query(`insert into contact_preferences (person_id, channel, consent_state, source) values ($1,'text','opted_out','harness')`, [optedOut.id]);
+  // ── PROVIDER STATUS (delivery callbacks) — status-only by design ───
+  //  recordProviderStatus updates delivery state for an EXISTING
+  //  communication and appends to comm_event_status_log. It NEVER creates
+  //  a communication, never accepts a property, never accepts body text
+  //  into history. Unknown (provider, provider_event_id) → logged no-op.
+  async function recordProviderStatus({ provider = "twilio", provider_event_id, provider_status, raw = null }, clientArg = null) {
+    const q = clientArg || pool;
+    if (!provider_event_id) return { updated: false, reason: "no_provider_event_id" };
 
-  console.log("── inbound: To → property first, sender within property ──");
-  {
-    const rA = await boundary.resolveInboundSmsContext({ To: propA.sms_number, From: sharedPhone, MessageSid: "SIDA1", body: "hello A" });
-    check("To resolves property A", rA.property && rA.property.id === propA.id);
-    check("sender resolved within property A only (no ambiguity despite shared phone)", !rA.ambiguous && rA.person && rA.person.id === resA.id);
-    const rB = await boundary.resolveInboundSmsContext({ To: propB.sms_number, From: sharedPhone, MessageSid: "SIDB1", body: "hello B" });
-    check("same phone at property B resolves the OTHER person", !rB.ambiguous && rB.person && rB.person.id === resB.id, rB.person && rB.person.id);
-    check("resolved path writes NO event in the resolver (runInbound owns it)", rA.comm_event === null && rB.comm_event === null);
-  }
-  {
-    const before = await count(`select count(*) as count from comm_events where sms_sid='SIDAMB1'`);
-    const r1 = await boundary.resolveInboundSmsContext({ To: propA.sms_number, From: stranger.phone, MessageSid: "SIDAMB1", body: "who am I" });
-    check("unmatched sender creates ONE person-less property-scoped event", r1.ambiguous && r1.comm_event && r1.comm_event.property_id === propA.id && r1.comm_event.person_id === null);
-    const r2 = await boundary.resolveInboundSmsContext({ To: propA.sms_number, From: stranger.phone, MessageSid: "SIDAMB1", body: "who am I" });
-    const after = await count(`select count(*) as count from comm_events where sms_sid='SIDAMB1'`);
-    check("duplicate MessageSid is idempotent (one event ever)", r2.idempotentReplay === true && after === before + 1, `events=${after - before}`);
-  }
-  {
-    const before = await count(`select count(*) as count from comm_events`);
-    const r = await boundary.resolveInboundSmsContext({ To: "+19999999999", From: sharedPhone, MessageSid: "SIDUNK1", body: "lost" });
-    const after = await count(`select count(*) as count from comm_events`);
-    check("unknown receiving line → unknownLine:true", r.unknownLine === true);
-    check("unknown receiving line writes ZERO operating history (T2)", after === before, `delta=${after - before}`);
-  }
-  {
-    const wiresBefore = wireLog.length;
-    await boundary.resolveInboundSmsContext({ To: propA.sms_number, From: "+15559998888", MessageSid: "SIDAMB2", body: "??" });
-    check("ambiguous sender dispatches ZERO outbound (Phase A)", wireLog.length === wiresBefore);
-    const dup1 = (await pool.query(`insert into persons (name, phone) values ('__CB_HARNESS__Dup1', '+15551110009') returning *`)).rows[0];
-    const dup2 = (await pool.query(`insert into persons (name, phone) values ('__CB_HARNESS__Dup2', '+15551110009') returning *`)).rows[0];
-    const spaceDup1 = await seedSpace(propA.id, "D1");
-    const spaceDup2 = await seedSpace(propA.id, "D2");
-    await pool.query(`insert into leases (property_id, space_id, tenant_ids, balance, lease_status) values ($1, $2, array[$3::uuid], 0, 'active'),($1, $4, array[$5::uuid], 0, 'active')`, [propA.id, spaceDup1, dup1.id, spaceDup2, dup2.id]);
-    await pool.query(`insert into tenant_invites (person_id, property_id, token, status, expires_at) values ($1,$2,'__cb_tok_'||gen_random_uuid(),'used', now() + interval '1 day'),($3,$2,'__cb_tok_'||gen_random_uuid(),'used', now() + interval '1 day')`, [dup1.id, propA.id, dup2.id]);
-    const rMulti = await boundary.resolveInboundSmsContext({ To: propA.sms_number, From: "+15551110009", MessageSid: "SIDAMB3", body: "two of me" });
-    check(">1 sender match → ambiguous, person-less, no guessed identity", rMulti.ambiguous && rMulti.comm_event.person_id === null);
-  }
-  {
-    const before = await count(`select count(*) as count from comm_events`);
-    const r = await boundary.resolveInboundSmsContext({ To: propA.sms_number, From: null, MessageSid: null });
-    const after = await count(`select count(*) as count from comm_events`);
-    check("malformed payload (domain layer) writes zero rows", r.malformed === true && after === before);
+    const existing = (await q.query(
+      `select id from comm_events
+        where (provider = $1 and provider_event_id = $2) or sms_sid = $2
+        limit 1`,
+      [provider, provider_event_id]
+    )).rows[0];
+
+    if (!existing) {
+      console.error(`recordProviderStatus: unknown ${provider} event ${provider_event_id} — status ignored, zero rows.`);
+      return { updated: false, reason: "unknown_provider_event" };
+    }
+
+    if (provider_status) {
+      await q.query(
+        `update comm_events set provider_status = $1, provider_status_updated_at = now() where id = $2`,
+        [provider_status, existing.id]
+      );
+    }
+    await q.query(
+      `insert into comm_event_status_log (comm_event_id, provider, provider_event_id, provider_status, raw)
+       values ($1, $2, $3, $4, $5)`,
+      [existing.id, provider, provider_event_id, provider_status || null, raw ? JSON.stringify(raw) : null]
+    );
+    return { updated: true, comm_event_id: existing.id };
   }
 
-  console.log("── outbound: send modes ──");
-  delete process.env.SMS_SEND_MODE;
-  {
-    const wiresBefore = wireLog.length;
-    const r = await boundary.sendPropertySms({ property_id: propA.id, recipient: resA.phone, body: "hi", purpose: "agent", person_id: resA.id });
-    check("mode absent/unset defaults to disabled (safe default)", r.sent === false && r.reason === "send_mode_disabled");
-    check("disabled: nothing reaches the wire", wireLog.length === wiresBefore);
-  }
-  process.env.SMS_SEND_MODE = "garbage_mode";
-  {
-    const r = await boundary.sendPropertySms({ property_id: propA.id, recipient: resA.phone, body: "hi", purpose: "agent", person_id: resA.id });
-    check("unknown mode value resolves to disabled", r.reason === "send_mode_disabled");
-  }
-
-  process.env.SMS_SEND_MODE = "customer_care";
-  {
-    const wiresBefore = wireLog.length;
-    const r = await boundary.sendPropertySms({ property_id: propNoLine.id, recipient: resA.phone, body: "hi", purpose: "agent", person_id: resA.id });
-    check("property without sms_number cannot send (no_property_line)", r.sent === false && r.reason === "no_property_line");
-    check("no Messaging Service default fallback (wire untouched)", wireLog.length === wiresBefore);
-  }
-
-  process.env.SMS_SEND_MODE = "proof_only";
-  process.env.SMS_PROOF_CELL = "+17243098434";
-  delete process.env.SMS_ALLOW_CREDENTIAL_SENDS;
-  {
-    const r1 = await boundary.sendPropertySms({ property_id: propA.id, recipient: "+17243098434", body: "proof", purpose: "proof_text" });
-    check("proof_only permits the exact proof aperture", r1.sent === true, r1.reason);
-    check("proof aperture leaves on the PROPERTY line", wireLog[wireLog.length - 1].from === propA.sms_number);
-    const r2 = await boundary.sendPropertySms({ property_id: propA.id, recipient: resA.phone, body: "proof", purpose: "proof_text" });
-    check("proof_only refuses proof purpose to a NON-proof cell", r2.sent === false && r2.reason === "proof_only_recipient_not_proof_cell");
-    const r3 = await boundary.sendPropertySms({ property_id: propA.id, recipient: resA.phone, body: "hey", purpose: "agent", person_id: resA.id });
-    check("proof_only refuses agent sends", r3.sent === false);
-    const r4 = await boundary.sendPropertySms({ property_id: propA.id, recipient: resA.phone, body: "code 123", purpose: "otp", person_id: resA.id });
-    check("proof_only refuses OTP without the named flag (no smuggling)", r4.sent === false && r4.reason === "credential_sends_disabled_in_proof_only");
-    process.env.SMS_ALLOW_CREDENTIAL_SENDS = "1";
-    const r5 = await boundary.sendPropertySms({ property_id: propA.id, recipient: resA.phone, body: "code 123", purpose: "otp", person_id: resA.id });
-    check("OTP allowed only via the named SMS_ALLOW_CREDENTIAL_SENDS flag", r5.sent === true, r5.reason);
-    delete process.env.SMS_ALLOW_CREDENTIAL_SENDS;
-  }
-
-  console.log("── classification: unclassified ≠ production; enrollment; QA mode ──");
-  process.env.SMS_SEND_MODE = "internal_qa_autonomous";
-  process.env.SMS_QA_PROPERTY_ID = propA.id;
-  {
-    const r0 = await boundary.sendPropertySms({ property_id: propA.id, recipient: qa.phone, body: "auto", purpose: "agent", person_id: qa.id });
-    check("no classification row → record_unclassified (refuse)", r0.sent === false && r0.reason === "record_unclassified");
-
-    let enrollErr = null;
-    try { await boundary.enrollInternalQa({ person_id: stranger.id, property_id: propB.id, reason: "should fail" }); }
-    catch (e) { enrollErr = e.message; }
-    check("enrollment refuses when no Person×Property relationship exists", !!enrollErr, enrollErr);
-
-    const enr = await boundary.enrollInternalQa({ person_id: qa.id, property_id: propA.id, reason: "harness QA" });
-    check("enrollInternalQa writes a current internal_qa classification", enr.classification.record_class === "internal_qa");
-    const consent = (await pool.query(`select consent_state from contact_preferences where person_id=$1 and channel='text'`, [qa.id])).rows[0];
-    check("enrollment writes consent opted_in as a SEPARATE canonical fact", consent && consent.consent_state === "opted_in");
-
-    const r1 = await boundary.sendPropertySms({ property_id: propA.id, recipient: qa.phone, body: "auto", purpose: "agent", person_id: qa.id });
-    check("QA-enrolled + opted_in → autonomous send allowed", r1.sent === true, r1.reason);
-    check("QA autonomous send uses the property line", wireLog[wireLog.length - 1].from === propA.sms_number);
-
-    await pool.query(`insert into leasing_leads (person_id, property_id) values ($1,$2)`, [qa.id, propB.id]);
-    const r2 = await boundary.sendPropertySms({ property_id: propB.id, recipient: qa.phone, body: "auto", purpose: "agent", person_id: qa.id });
-    check("classification is property-scoped (same person, property B → refuse)", r2.sent === false && r2.reason === "record_unclassified");
-
-    await pool.query(`delete from contact_preferences where person_id=$1`, [qa.id]);
-    const r3 = await boundary.sendPropertySms({ property_id: propA.id, recipient: qa.phone, body: "auto", purpose: "agent", person_id: qa.id });
-    check("unknown consent blocks autonomous sends even for QA-classified", r3.sent === false && r3.reason === "qa_autonomous_requires_opted_in_consent");
-    await pool.query(`insert into contact_preferences (person_id, channel, consent_state, source) values ($1,'text','opted_in','harness')`, [qa.id]);
-
-    const r4 = await boundary.sendPropertySms({ property_id: propA.id, recipient: optedOut.phone, body: "auto", purpose: "agent", person_id: optedOut.id });
-    check("opted_out blocks in every mode (consent_opted_out)", r4.sent === false && r4.reason === "consent_opted_out");
-
-    const before = await count(`select count(*) as count from person_property_classifications where person_id=$1 and property_id=$2`, [qa.id, propA.id]);
-    await boundary.reclassify({ person_id: qa.id, property_id: propA.id, record_class: "production", reason: "harness flip" });
-    const after = await count(`select count(*) as count from person_property_classifications where person_id=$1 and property_id=$2`, [qa.id, propA.id]);
-    const current = (await pool.query(`select record_class from person_property_classifications where person_id=$1 and property_id=$2 and superseded_at is null`, [qa.id, propA.id])).rows[0];
-    check("reclassify is append-only (rows grow, history retained)", after === before + 1 && current.record_class === "production");
-    const r5 = await boundary.sendPropertySms({ property_id: propA.id, recipient: qa.phone, body: "auto", purpose: "agent", person_id: qa.id });
-    check("QA mode refuses a now-production record (record_not_internal_qa)", r5.sent === false && r5.reason === "record_not_internal_qa");
-    await boundary.reclassify({ person_id: qa.id, property_id: propA.id, record_class: "internal_qa", reason: "harness flip back" });
-  }
-
-  process.env.SMS_SEND_MODE = "customer_care";
-  {
-    const r1 = await boundary.sendPropertySms({ property_id: propB.id, recipient: resB.phone, body: "care", purpose: "agent", person_id: resB.id });
-    check("customer_care agent send fails closed on unclassified record", r1.sent === false && r1.reason === "record_unclassified");
-    const r2 = await boundary.sendPropertySms({ property_id: propA.id, recipient: qa.phone, body: "care", purpose: "agent", person_id: qa.id });
-    check("customer_care refuses internal_qa records (needs production)", r2.sent === false && r2.reason === "customer_care_requires_production_classification");
-    const r3 = await boundary.sendPropertySms({ property_id: propA.id, recipient: resB.phone, body: "care", purpose: "otp", person_id: resB.id });
-    check("cross-property recipient refused (recipient_not_in_property_scope)", r3.sent === false && r3.reason === "recipient_not_in_property_scope");
-  }
-
-  console.log("── provider events: status-only ──");
-  {
-    const commBefore = await count(`select count(*) as count from comm_events`);
-    const r1 = await boundary.recordProviderStatus({ provider_event_id: "SM_NEVER_SEEN", provider_status: "delivered", raw: { property_id: propA.id, body: "INJECTED" } });
-    const commAfter = await count(`select count(*) as count from comm_events`);
-    check("unknown provider event → no-op, ZERO new communications", r1.updated === false && commAfter === commBefore);
-
-    const ev = (await pool.query(`select id, sms_sid from comm_events where sms_sid='SIDAMB1'`)).rows[0];
-    const r2 = await boundary.recordProviderStatus({ provider_event_id: ev.sms_sid, provider_status: "delivered", raw: { s: 1 } });
-    const logN = await count(`select count(*) as count from comm_event_status_log where comm_event_id=$1`, [ev.id]);
-    check("known event → status recorded + appended to status log", r2.updated === true && logN >= 1);
-    const commAfter2 = await count(`select count(*) as count from comm_events`);
-    check("status recording creates no communications", commAfter2 === commBefore);
-  }
-
-  {
-    process.env.SMS_SEND_MODE = "disabled";
-    const ev = (await pool.query(
-      `insert into comm_events (property_id, person_id, channel, direction, body) values ($1,$2,'text','outbound','stamp me') returning id`,
-      [propA.id, resA.id])).rows[0];
-    await boundary.sendPropertySms({ property_id: propA.id, recipient: resA.phone, body: "stamp me", purpose: "agent", person_id: resA.id, eventId: ev.id });
-    const st = (await pool.query(`select sms_status, sms_error from comm_events where id=$1`, [ev.id])).rows[0];
-    check("refusal is stamped on the comm_event (refused + gate reason)", st.sms_status === "refused" && /gate:send_mode_disabled/.test(st.sms_error || ""), JSON.stringify(st));
-  }
-
-  console.log("── consent keywords: STOP updates the application's canonical truth ──");
-  {
-    process.env.SMS_SEND_MODE = "customer_care";
-    const commBefore = await count(`select count(*) as count from comm_events where person_id=$1`, [resA.id]);
-    const wiresBefore = wireLog.length;
-    const rStop = await boundary.resolveInboundSmsContext({ To: propA.sms_number, From: resA.phone, MessageSid: "SIDSTOP1", body: "STOP" });
-    const commAfter = await count(`select count(*) as count from comm_events where person_id=$1`, [resA.id]);
-    check("STOP is recognized as a consent signal on the resolved path", rStop.consentSignal === "opted_out");
-    check("STOP is recorded ONCE as a consent_signal event", commAfter === commBefore + 1 && rStop.comm_event && rStop.comm_event.classification === "consent_signal");
-    const pref1 = (await pool.query(`select consent_state, source from contact_preferences where person_id=$1 and channel='text'`, [resA.id])).rows[0];
-    check("STOP updates contact_preferences.consent_state = opted_out (canonical truth)", pref1 && pref1.consent_state === "opted_out", JSON.stringify(pref1));
-    check("STOP dispatches ZERO outbound (no reply, no AI turn)", wireLog.length === wiresBefore);
-    const rBlocked = await boundary.sendPropertySms({ property_id: propA.id, recipient: resA.phone, body: "code 999", purpose: "otp", person_id: resA.id });
-    check("after STOP, the application gate refuses (consent_opted_out), not just the carrier", rBlocked.sent === false && rBlocked.reason === "consent_opted_out");
-    const rReplay = await boundary.resolveInboundSmsContext({ To: propA.sms_number, From: resA.phone, MessageSid: "SIDSTOP1", body: "STOP" });
-    check("STOP replay (same MessageSid) is idempotent", rReplay.idempotentReplay === true);
-    const rStart = await boundary.resolveInboundSmsContext({ To: propA.sms_number, From: resA.phone, MessageSid: "SIDSTART1", body: "START" });
-    const pref2 = (await pool.query(`select consent_state from contact_preferences where person_id=$1 and channel='text'`, [resA.id])).rows[0];
-    check("START re-opts in (consent_state = opted_in)", rStart.consentSignal === "opted_in" && pref2.consent_state === "opted_in");
-  }
-
-  await pool.query(`delete from comm_event_status_log where comm_event_id in (select id from comm_events where property_id in ($1,$2,$3))`, [propA.id, propB.id, propNoLine.id]);
-  await pool.query(`delete from comm_events where property_id in ($1,$2,$3)`, [propA.id, propB.id, propNoLine.id]);
-  await pool.query(`delete from person_property_classifications where property_id in ($1,$2,$3)`, [propA.id, propB.id, propNoLine.id]);
-  await pool.query(`delete from contact_preferences where person_id in (select id from persons where name like '__CB_HARNESS__%')`);
-  await pool.query(`delete from tenant_invites where property_id in ($1,$2,$3)`, [propA.id, propB.id, propNoLine.id]);
-  await pool.query(`delete from leasing_leads where property_id in ($1,$2,$3)`, [propA.id, propB.id, propNoLine.id]);
-  await pool.query(`delete from leases where property_id in ($1,$2,$3)`, [propA.id, propB.id, propNoLine.id]);
-  await pool.query(`delete from spaces where unit_id in (select id from units where property_id in ($1,$2,$3))`, [propA.id, propB.id, propNoLine.id]);
-  await pool.query(`delete from units where property_id in ($1,$2,$3)`, [propA.id, propB.id, propNoLine.id]);
-  await pool.query(`delete from persons where name like '__CB_HARNESS__%'`);
-  await pool.query(`delete from properties where name like '__CB_HARNESS__%'`);
-
-  console.log(`\n═══ RESULT: ${pass} passed · ${fail} failed ═══`);
-  console.log(`Wire attempts recorded by fake transport: ${wireLog.length} (every one carried an explicit property from)`);
-  const noFrom = wireLog.filter(w => !w.from).length;
-  console.log(noFrom === 0 ? "✓ ZERO wire attempts without a from line" : `✗ ${noFrom} wire attempts WITHOUT from`);
-  await pool.end();
-  process.exit(fail === 0 && noFrom === 0 ? 0 : 1);
-})().catch(async (e) => { console.error("HARNESS CRASH:", e); try { await pool.end(); } catch (_) {} process.exit(2); });
+  return {
+    // the three core primitives
+    resolveInboundSmsContext,
+    canSendSmsForRecord,
+    sendPropertySms,
+    // the relationship/classification read
+    resolvePersonPropertyContext,
+    // governed classification operations
+    enrollInternalQa,
+    reclassify,
+    // status-only provider callback landing
+    recordProviderStatus,
+    // introspection (harness/ops only)
+    _sendMode: sendMode,
+    _validModes: VALID_MODES,
+  };
+};
