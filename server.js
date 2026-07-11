@@ -3214,6 +3214,31 @@ app.use("/", explainModule({ pool }));
 // tenant link (text line: connection + message loop) — pool, AI for classification.
 const sms = smsTransport(); // SMS transport (Twilio) — disabled until env vars are set; everything degrades to link-only
 const commBoundary = communicationsBoundary({ pool, sms }); // every business send goes through this gate; raw sms.sendSms is transport only
+
+// ── SMS PROOF ROUTE (Phase B · Class 2 adapter — DELETE when Phase C customer-care
+//    sends are live). The ONLY caller of sendPropertySms with purpose 'proof_text'.
+//    Sits behind the global operator-key gate. The recipient is SERVER-FORCED to
+//    SMS_PROOF_CELL — this route physically cannot text any number but the one
+//    designated proof cell, and proof_only refuses every other purpose. The
+//    operator-supplied property_id only selects WHICH property line it sends FROM.
+app.post("/sms-proof", async (req, res) => {
+  try {
+    const cell = (process.env.SMS_PROOF_CELL || "").trim();
+    if (!cell) return res.status(400).json({ sent: false, reason: "proof_cell_not_configured" });
+    const property_id = (req.body && req.body.property_id) || null;
+    if (!property_id) return res.status(400).json({ sent: false, reason: "property_id_required" });
+    const out = await commBoundary.sendPropertySms({
+      property_id,
+      recipient: cell,
+      body: (req.body && req.body.body) || "Property Spine proof text - Phase B. Reply STOP to opt out.",
+      purpose: "proof_text",
+    });
+    return res.status(out.sent ? 200 : 409).json(out);
+  } catch (e) {
+    console.error("[/sms-proof]", e.message);
+    return res.status(500).json({ sent: false, reason: "proof_route_error", error: e.message });
+  }
+});
 app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary }));
 app.use("/", teamAccessModule({ pool, sms, commBoundary }));
 // owner-facing aggregate views (cards + attention queue). Only needs pool.
