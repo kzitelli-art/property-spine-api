@@ -25,6 +25,13 @@ const express = require("express");
 const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 const crypto = require("crypto");
+// Rule-0 capture-first attribution buckets (Fable ruling): two materially different
+// truths, never folded together. A MISSING/blank tag = no channel data arrived.
+// A SUPPLIED-but-unrecognized tag = a real source-mapping gap (raw value preserved
+// so the channel can be identified and added). Folding unmapped into unattributed
+// would make an integration defect look like genuine direct demand.
+const SOURCE_UNATTRIBUTED = "Unattributed"; // caller supplied no source
+const SOURCE_UNMAPPED     = "Unmapped";     // caller supplied a source we don't recognize
 
 module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices, commitmentLedger = null, commBoundary }) {
   const router = express.Router();
@@ -281,9 +288,31 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       if (!prop) { await client.query("rollback"); const e = new Error("No property with that id."); e.httpStatus = 404; e.publicReceipt = e.message; throw e; }
 
       let sourceId = null;
+      let claimedButUnmapped = false;
       if (sourceName) {
         const s = (await client.query(`select id from lead_sources where lower(name)=lower($1)`, [sourceName])).rows[0];
-        sourceId = s ? s.id : null;
+        if (s) sourceId = s.id; else claimedButUnmapped = true; // supplied, but not a source we map
+      }
+
+      // Capture-first: never lose a real prospect over attribution. Assign the
+      // honest bucket — 'Unmapped' if a source was supplied but unrecognized (the
+      // raw claim is preserved in raw_payload below), else 'Unattributed'. We do
+      // NOT mint arbitrary sources from untrusted input. Savepoint-guarded so a
+      // concurrent first-create cannot poison this transaction.
+      if (!sourceId) {
+        const bucket = claimedButUnmapped ? SOURCE_UNMAPPED : SOURCE_UNATTRIBUTED;
+        let fb = (await client.query(`select id from lead_sources where lower(name)=lower($1) order by id limit 1`, [bucket])).rows[0];
+        if (!fb) {
+          await client.query("savepoint ensure_house_source");
+          try {
+            fb = (await client.query(`insert into lead_sources (name, source_type) values ($1,'system') returning id`, [bucket])).rows[0];
+            await client.query("release savepoint ensure_house_source");
+          } catch (_) {
+            await client.query("rollback to savepoint ensure_house_source");
+            fb = (await client.query(`select id from lead_sources where lower(name)=lower($1) order by id limit 1`, [bucket])).rows[0];
+          }
+        }
+        sourceId = fb.id;
       }
 
       // ── GLOBAL identity: one human across the portfolio ──
@@ -442,7 +471,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     } catch (e) {
       if (e.httpStatus) return res.status(e.httpStatus).json({ receipt: e.publicReceipt || e.message });
       console.error("leasing intake:", e);
-      return res.status(500).json({ receipt: "Could not capture the lead.", error: e.message });
+      return res.status(500).json({ receipt: "Could not capture the lead." });
     }
   });
 
