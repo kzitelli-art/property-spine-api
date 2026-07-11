@@ -3257,7 +3257,7 @@ app.use("/", __leasingLeads); // instance captured: its ONE tour-completion serv
 const applicationSubmissionModule = require("./applicationSubmission");
 const __applicationSubmission = applicationSubmissionModule({
   pool, spawnObligationFromEvent, completeObligation,
-  conversionService: __leasingConversion._service,
+  conversionService: __leasingConversion._service, commBoundary,
 });
 app.use("/", __applicationSubmission);
 
@@ -3301,7 +3301,7 @@ app.use("/", agentCapabilityModule({ anthropic, INGEST_MODEL }));
 //    model call, monotonic thread versioning, obligation-backed review, server-derived
 //    manager identity. (Migration 053.) ──
 const agentModule = require("./agent");
-const agentApp = agentModule({ pool, anthropic, INGEST_MODEL, spawnObligationFromEvent, completeObligation, leasingLifecycle });
+const agentApp = agentModule({ pool, anthropic, INGEST_MODEL, spawnObligationFromEvent, completeObligation, leasingLifecycle, commBoundary });
 app.use("/", agentApp);
 
 // ── THE FIRST LIVE OPERATOR SURFACE — Leasing Conversations. ──
