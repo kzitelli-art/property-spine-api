@@ -90,11 +90,15 @@ function datasetHash(rows) {
       if (owned.length > 10) console.log(`  … and ${owned.length - 10} more`);
       if (!yes) process.exit(1);
       await client.query("begin");
+      const hasApps = (await client.query("select to_regclass('applications') is not null as x")).rows[0].x;
+      const refUnion = [
+        "select unit_id from leasing_leads where unit_id is not null",
+        "select unit_id from application_invitations where unit_id is not null",
+        hasApps ? "select unit_id from applications where unit_id is not null" : null,
+      ].filter(Boolean).join(" union ");
       const gone = await client.query(
         `delete from units where property_id=$1 and source_type='demo_qa_inventory'
-          and id not in (select unit_id from leasing_leads where unit_id is not null
-                         union select unit_id from application_invitations where unit_id is not null
-                         union select unit_id from applications where unit_id is not null)`,
+          and id not in (${refUnion})`,
         [DEMO]);
       await client.query("commit");
       console.log(`RESET: removed ${gone.rowCount} unreferenced dataset units (referenced units retained + listed):`);
@@ -111,11 +115,12 @@ function datasetHash(rows) {
       `select id, unit_number, occupancy_status, market_rent, source_type from units
         where property_id=$1 and (source_type is distinct from 'demo_qa_inventory')`, [DEMO])).rows;
     for (const p of preexisting) {
+      const hasApps2 = (await client.query("select to_regclass('applications') is not null as x")).rows[0].x;
       const refs = (await client.query(
         `select
            (select count(*) from leasing_leads where unit_id=$1)::int as leads,
            (select count(*) from application_invitations where unit_id=$1)::int as invites,
-           (select count(*) from applications where unit_id=$1)::int as apps,
+           ${hasApps2 ? "(select count(*) from applications where unit_id=$1)::int" : "0"} as apps,
            (select count(*) from spaces where unit_id=$1)::int as spaces`, [p.id])).rows[0];
       console.log(`PRE-EXISTING unit ${p.unit_number} (source=${p.source_type || "(null)"}): refs leads=${refs.leads} invites=${refs.invites} apps=${refs.apps} spaces=${refs.spaces} → RETAINED outside the dataset (governed decision: keep; it is not adopted into ${DATASET}).`);
     }
