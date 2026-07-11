@@ -28,7 +28,11 @@ const PROMPT_REVISION = "stage-a-v3"; // v3: warm/brief/human, earns tour over c
 const POLICY_REVISION = "stage-a-v1";
 
 module.exports = function agentModule(deps) {
-  const { pool, anthropic, INGEST_MODEL, spawnObligationFromEvent, completeObligation, leasingLifecycle } = deps;
+  const { pool, anthropic, INGEST_MODEL, spawnObligationFromEvent, completeObligation, leasingLifecycle, commBoundary = null } = deps;
+  // FUNNEL-FLOW: grounded inventory discovery + governed attachment live in
+  // leasing_inventory.js (Class 1). The agent gains ONE tool over it; the
+  // attach fires only on the prospect's own confirming words (offered ≠ selected).
+  const inventory = require("./leasing_inventory")({ pool });
   // SLICE 2: conversational prospect capture — extracts VOLUNTEERED facts from the
   // prospect's own inbound messages into person_attributes, fire-and-forget after
   // a draft is created. Fail-soft by construction (see prospect_capture.js).
@@ -269,6 +273,58 @@ module.exports = function agentModule(deps) {
           });
         }
 
+        // ── OFFERED → SELECTED (funnel-flow Build 2) ────────────────────
+        // If the last DISPATCHED draft carried a real offered-unit set,
+        // check whether THIS inbound explicitly confirms one. Only the
+        // prospect's own words attach a unit — a mention by the agent
+        // never does. Deterministic matcher; ambiguity attaches nothing.
+        let selectedUnit = null, selectionFailed = null;
+        try {
+          const lastOffer = (await client.query(
+            `select ar.offered_units_json, d.dispatched_comm_event_id
+               from agent_runs ar
+               join agent_drafts d on d.agent_run_id = ar.id and d.status = 'dispatched'
+              where ar.conversation_id = $1 and ar.offered_units_json is not null
+              order by d.dispatched_at desc limit 1`,
+            [conv.id]
+          )).rows[0];
+          const offered = lastOffer && lastOffer.offered_units_json;
+          let match = offered ? inventory.matchConfirmationToOffer(b.body, offered) : null;
+          // FRESHNESS: a bare affirmative binds only to an offer that is still
+          // the LAST outbound in the conversation — "yes" after newer messages
+          // must not select from an older offer. (An explicit unit-number
+          // citation still binds only to the latest offer set, read above.)
+          if (match && lastOffer) {
+            const bare = !new RegExp(`(^|[^a-z0-9])${String(match.unit_number).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|[^a-z0-9])`).test(String(b.body).toLowerCase());
+            if (bare) {
+              const newer = (await client.query(
+                `select count(*)::int as n from comm_events
+                  where conversation_id = $1 and direction = 'outbound'
+                    and occurred_at > (select occurred_at from comm_events where id = $2)`,
+                [conv.id, lastOffer.dispatched_comm_event_id]
+              )).rows[0].n;
+              if (newer > 0) {
+                console.log(`[agent/inbound] bare affirmative ignored — a newer outbound intervened after the offer (freshness rule).`);
+                match = null;
+              }
+            }
+          }
+          if (match) {
+            const att = await inventory.attachSelectedUnit(
+              { property_id: b.property_id, person_id: b.person_id, unit_id: match.id }, client
+            );
+            if (att.attached) {
+              selectedUnit = { id: match.id, unit_number: match.unit_number };
+              console.log(`[agent/inbound] prospect SELECTED unit ${match.unit_number} — attached to lead ${att.lead_id} (offered≠selected honored).`);
+            } else if (att.reason === "unit_no_longer_available") {
+              selectionFailed = { unit_number: match.unit_number, reason: att.reason };
+              console.log(`[agent/inbound] prospect chose unit ${match.unit_number} but it is NO LONGER AVAILABLE — nothing attached; agent will say so honestly.`);
+            } else {
+              console.log(`[agent/inbound] selection matched unit ${match.unit_number} but attach refused: ${att.reason}`);
+            }
+          }
+        } catch (e) { console.error("[agent/inbound] selection check failed (non-fatal):", e.message); }
+
         const mode = state.mode;
         const newVersion = Number(state.thread_version) + 1;
 
@@ -351,7 +407,9 @@ module.exports = function agentModule(deps) {
         );
 
         return { skipModel: false, run, conversation_id: conv.id, inbound_id: inbound.id,
-                 version: newVersion, property_id: b.property_id, unit_id: b.unit_id || null,
+                 version: newVersion, property_id: b.property_id,
+                 unit_id: (selectedUnit && selectedUnit.id) || b.unit_id || null,
+                 selected_unit: selectedUnit, selection_failed: selectionFailed,
                  person_id: b.person_id, review_obligation_id: obId, inboundText: b.body };
       });
 
@@ -367,6 +425,7 @@ module.exports = function agentModule(deps) {
 
       // ── model call OUTSIDE any transaction ──
       let generated = null, providerReqId = null, genErr = null, factSnapshot = [], snapshotHash = "";
+      let offeredUnits = null; // real units surfaced by the inventory tool this run (offered ≠ selected)
       try {
         // resolve context fresh (read-only; not in a write txn)
         const client0 = await pool.connect();
@@ -399,10 +458,63 @@ module.exports = function agentModule(deps) {
             finally { c.release(); }
           })());
           const built = buildMessages({ persona: PERSONA, facts: ctx.facts, unit: ctx.unit, history, propertyName: propName });
-          const r = await anthropic.messages.create({
+          if (tx1.selection_failed) {
+            built.system += `\nIMPORTANT: the prospect just tried to choose Unit ${tx1.selection_failed.unit_number}, but it is NO LONGER AVAILABLE (it was taken after being offered). Apologize briefly, say so plainly, and offer to look for current alternatives (you may use the find_available_units tool). Never pretend it is still available.`;
+          }
+
+          // ── GROUNDED INVENTORY TOOL (funnel-flow Build 2) ──────────────
+          // One tool. Property is SERVER-DERIVED (tx1.property_id) — the
+          // model chooses criteria, never the property. Max one tool round.
+          const INVENTORY_TOOL = {
+            name: "find_available_units",
+            description: "Search THIS property's real available units (vacant, not out of service) when the prospect asks what's available or states preferences (bedrooms, budget). Returns real units only. If the result is empty, say so honestly — NEVER invent or imply a unit that is not in the result.",
+            input_schema: {
+              type: "object",
+              properties: {
+                bedrooms: { type: "integer", description: "exact bedroom count if stated" },
+                bathrooms: { type: "number", description: "minimum bathrooms if stated" },
+                max_rent: { type: "number", description: "budget ceiling in dollars if stated" },
+              },
+            },
+          };
+          let r = await anthropic.messages.create({
             model: MODEL, max_tokens: 320, system: built.system, messages: built.messages,
+            tools: [INVENTORY_TOOL],
           });
           providerReqId = (r && r.id) || null;
+
+          const toolUse = (r.content || []).find(x => x.type === "tool_use" && x.name === "find_available_units");
+          if (toolUse) {
+            // run the canonical query in its own short read (two-transaction
+            // discipline: never a DB txn spanning a model call)
+            const qc = await pool.connect();
+            let found;
+            try {
+              found = await inventory.availableUnits({
+                property_id: tx1.property_id,
+                bedrooms: toolUse.input && toolUse.input.bedrooms,
+                bathrooms: toolUse.input && toolUse.input.bathrooms,
+                max_rent: toolUse.input && toolUse.input.max_rent,
+              }, qc);
+            } finally { qc.release(); }
+            offeredUnits = found.units.map(u => ({
+              id: u.id, unit_number: u.unit_number, bedrooms: u.bedrooms,
+              bathrooms: u.bathrooms, square_feet: u.square_feet, market_rent: u.market_rent,
+            }));
+            const toolResultText = offeredUnits.length
+              ? JSON.stringify({ qualification: found.qualification, units: offeredUnits.map(({ id, ...pub }) => pub) })
+              : JSON.stringify({ qualification: found.qualification, units: [], note: "No units match. Tell the prospect honestly; offer to note their preferences." });
+            r = await anthropic.messages.create({
+              model: MODEL, max_tokens: 320, system: built.system,
+              messages: [
+                ...built.messages,
+                { role: "assistant", content: r.content },
+                { role: "user", content: [{ type: "tool_result", tool_use_id: toolUse.id, content: toolResultText }] },
+              ],
+              tools: [INVENTORY_TOOL],
+            });
+            providerReqId = (r && r.id) || providerReqId;
+          }
           generated = (r.content || []).filter(x => x.type === "text").map(x => x.text).join("").trim();
         } else {
           genErr = "no_model_client";
@@ -418,6 +530,17 @@ module.exports = function agentModule(deps) {
         const post = postGenerationPolicy(generated);
         if (post.decision !== "safe") { policyDecision = post.decision; policyCode = post.code; }
       }
+      // GROUNDING GUARD: if the inventory tool ran, the draft may cite ONLY
+      // units it returned (plus the lead's own unit). A fabricated unit number
+      // blocks the draft — hallucinated inventory never reaches a prospect.
+      if (generated && policyDecision === "safe" && Array.isArray(offeredUnits)) {
+        const allowed = new Set(offeredUnits.map(u => String(u.unit_number).toLowerCase()));
+        const leadU = tx1.selected_unit && tx1.selected_unit.unit_number;
+        if (leadU) allowed.add(String(leadU).toLowerCase());
+        const cited = [...generated.matchAll(/\bunit\s+#?([a-z0-9-]+)\b/gi)].map(m => m[1].toLowerCase());
+        const bad = cited.find(c => !allowed.has(c));
+        if (bad) { policyDecision = "blocked"; policyCode = "hallucinated_unit:" + bad; }
+      }
 
       // ── TX2: re-lock, reject stale, create draft on success / mark failed ──
       const result = await tx(async (client) => {
@@ -432,8 +555,10 @@ module.exports = function agentModule(deps) {
 
         // record the resolved fact snapshot + hash + provider id on the run regardless
         await client.query(
-          "update agent_runs set resolved_fact_snapshot_json=$2, fact_snapshot_hash=$3, provider_request_id=$4, policy_decision=$5, handoff_reason_code=$6 where id=$1",
-          [run.id, JSON.stringify(factSnapshot), snapshotHash, providerReqId, policyDecision, policyCode]
+          "update agent_runs set resolved_fact_snapshot_json=$2, fact_snapshot_hash=$3, provider_request_id=$4, policy_decision=$5, handoff_reason_code=$6, offered_units_json=coalesce($7::jsonb, offered_units_json), selected_unit_id=coalesce($8, selected_unit_id) where id=$1",
+          [run.id, JSON.stringify(factSnapshot), snapshotHash, providerReqId, policyDecision, policyCode,
+           offeredUnits ? JSON.stringify(offeredUnits) : null,
+           (tx1.selected_unit && tx1.selected_unit.id) || null]
         );
 
         if (genErr || (!generated && policyDecision !== "blocked")) {
@@ -484,6 +609,33 @@ module.exports = function agentModule(deps) {
 
         return { ok: true, draft_id: draft.id, policy_decision: policyDecision, handoff_reason_code: policyCode };
       });
+
+      // ── AUTO-DISPATCH PERIMETER (funnel-flow 3c) ──────────────────────
+      // The agent may dispatch its OWN draft only when ALL hold:
+      //   · the property is explicitly named in AGENT_AUTO_DISPATCH_PROPERTY_IDS
+      //     (absent env = OFF everywhere; review-only remains the default);
+      //   · this run produced a normal safe draft (never blocked, never
+      //     requires_handoff — those keep their human obligation);
+      //   · dispatch itself re-checks staleness under lock (sendDraftService).
+      // Provenance stays honest: dispatch_mode='auto', no borrowed human id.
+      // THE NET: the SMS still leaves only through sendPropertySms — consent,
+      // classification, and send-mode are enforced there regardless.
+      if (result && result.ok && result.draft_id && result.policy_decision === "safe") {
+        const perim = (process.env.AGENT_AUTO_DISPATCH_PROPERTY_IDS || "")
+          .split(",").map(s => s.trim()).filter(Boolean);
+        if (perim.includes(String(tx1.property_id))) {
+          try {
+            const autoOut = await sendDraftService({ draftId: result.draft_id, auto: true });
+            result.auto_dispatched = true;
+            result.outbound_comm_event_id = autoOut.outbound_comm_event_id;
+            result.sms = autoOut.sms;
+          } catch (e) {
+            // stale/conflict/etc → the draft simply remains for human review
+            result.auto_dispatched = false;
+            result.auto_dispatch_reason = e.publicMessage || e.message;
+          }
+        }
+      }
 
       // ── SLICE 2 hook: capture volunteered prospect facts, fire-and-forget. ──
       // AFTER the draft transaction (never inside it), non-blocking, fail-soft:
@@ -571,9 +723,13 @@ module.exports = function agentModule(deps) {
   // supplied by the caller (server-derived) — never inferred from browser input.
   // Enforces: stale-draft guarantee, immutable generated_body vs dispatch_body,
   // canonical outbound comm_event, obligation completion, return-to-ai_active.
-  async function sendDraftService({ draftId, editedBody, actorUserId }) {
-    if (!actorUserId) throw httpErr(400, "actorUserId is required (server-derived).");
-    return tx(async (client) => {
+  async function sendDraftService({ draftId, editedBody, actorUserId, auto = false }) {
+    // HONEST PROVENANCE: a human dispatch requires the human's server-derived
+    // identity; an AUTO dispatch must NOT borrow one — dispatched_by stays null
+    // and dispatch_mode='auto' says exactly what happened.
+    if (!auto && !actorUserId) throw httpErr(400, "actorUserId is required (server-derived).");
+    if (auto && actorUserId) throw httpErr(400, "auto dispatch must not carry a human actor.");
+    const out = await tx(async (client) => {
       const d = (await client.query("select * from agent_drafts where id=$1 for update", [draftId])).rows[0];
       if (!d) throw httpErr(404, "Draft not found.");
       if (d.status !== "ready") throw httpErr(409, `Draft is '${d.status}', not sendable.`);
@@ -588,8 +744,9 @@ module.exports = function agentModule(deps) {
       }
 
       const conv = (await client.query("select * from conversations where id=$1", [run.conversation_id])).rows[0];
-      const mgrId = actorUserId;
-      const bodyToSend = editedBody && editedBody.trim() ? editedBody.trim() : d.generated_body;
+      const mgrId = auto ? null : actorUserId;
+      const bodyToSend = (!auto && editedBody && editedBody.trim()) ? editedBody.trim() : d.generated_body;
+      const person = (await client.query("select id, phone from persons where id=$1", [conv.person_id])).rows[0] || {};
 
       // dispatch → a REAL outbound comm_event (with AI-drafted + sent-by provenance)
       const outbound = (await client.query(
@@ -605,8 +762,8 @@ module.exports = function agentModule(deps) {
       // mark the draft dispatched; record what was actually sent (immutable generated_body preserved)
       await client.query(
         `update agent_drafts set status='dispatched', dispatch_body=$2, dispatched_comm_event_id=$3,
-           dispatched_by_user_id=$4, dispatched_at=now(), updated_at=now() where id=$1`,
-        [draftId, bodyToSend, outbound.id, mgrId]
+           dispatched_by_user_id=$4, dispatch_mode=$5, dispatched_at=now(), updated_at=now() where id=$1`,
+        [draftId, bodyToSend, outbound.id, mgrId, auto ? "auto" : "human"]
       );
 
       // complete the review obligation; return thread to ai_active for the next turn
@@ -619,8 +776,32 @@ module.exports = function agentModule(deps) {
         [conv.id]
       );
 
-      return { ok: true, outbound_comm_event_id: outbound.id, sent_body: bodyToSend, edited: !!(editedBody && editedBody.trim()) };
+      return { ok: true, outbound_comm_event_id: outbound.id, sent_body: bodyToSend,
+               edited: !!(!auto && editedBody && editedBody.trim()),
+               property_id: conv.property_id, person_id: conv.person_id, person_phone: person.phone || null,
+               dispatch_mode: auto ? "auto" : "human" };
     });
+
+    // ── THE WIRE (funnel-flow 3b): AFTER commit, the dispatched reply leaves
+    // through the ONE communications gate. Consent, classification, send-mode,
+    // and the property line are enforced there; refusals stamp the comm_event
+    // honestly. In Phase A (disabled) this refuses — which is correct.
+    if (out && out.ok && commBoundary && out.person_phone) {
+      try {
+        const wire = await commBoundary.sendPropertySms({
+          property_id: out.property_id, recipient: out.person_phone, body: out.sent_body,
+          purpose: "ai_reply", person_id: out.person_id, eventId: out.outbound_comm_event_id,
+          actor_user_id: actorUserId || null,
+        });
+        out.sms = { sent: wire.sent, reason: wire.reason };
+      } catch (e) {
+        console.error("[agent/dispatch] gate call failed (event stamped separately):", e.message);
+        out.sms = { sent: false, reason: "gate_error" };
+      }
+    } else if (out && out.ok) {
+      out.sms = { sent: false, reason: commBoundary ? "no_phone_on_person" : "boundary_not_wired" };
+    }
+    return out;
   }
 
   // LEGACY/DEMO adapter route — thin wrapper over sendDraftService with the seeded
