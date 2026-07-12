@@ -537,10 +537,23 @@ module.exports = function applicationSubmissionModule(deps) {
        sent_by_user_id, note, progressObId, inv.id]
     )).rows[0];
 
+    // THE TRANSITION FACT: an actually-sent invitation advances this leasing
+    // opportunity from Post-Tour into Applicants. The conversion rail is the
+    // authority — we ASK it to ensure the applicant_followup rung (idempotent,
+    // conversion-scoped); the invitation module never spawns rungs itself. Same
+    // transaction, so it sees the sent status we just wrote. Prepared invitations
+    // never reach here. Only advances when this invitation belongs to a conversion.
+    let applicant_followup = null;
+    if (inv.conversion_id && conversionService && conversionService.ensureApplicantFollowup) {
+      const ens = await conversionService.ensureApplicantFollowup(client, { conversion_id: inv.conversion_id });
+      applicant_followup = { ensured: ens.ensured, rung: ens.link && ens.link.rung, obligation_id: ens.link && ens.link.obligation_id };
+    }
+
     return {
       receipt: `Send attested (${newStatus}) via ${channel}. The applicant-follow-up clock has started.`,
       invitation_id: upd.id, status: upd.status, link_sent_event_id: evId,
       progress_obligation_id: progressObId,
+      applicant_followup,   // the Post-Tour → Applicants transition, or null if no conversion
       note: "This records that the link was SENT, not that the prospect received or opened it.",
     };
   }
