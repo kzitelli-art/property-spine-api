@@ -618,6 +618,43 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     return { obligation_id, rung: link.rung, outcome, resolution, spawned: spawned ? spawned.link.rung : null, suppressed_next: !!(suppress_next && cfg && cfg.next) };
   }
 
+  // THE ONLY AUTHORIZED CAUSE of applicant_followup. Called by the
+  // application-INVITATION-SENT domain event (an invitation that reached
+  // manually_sent / provider_dispatched) — never by a merely PREPARED
+  // invitation, never by task completion, missed handling, bulk actions,
+  // generic resolves, or retries. Idempotent: at most one applicant_followup
+  // link EVER exists per conversion; retries return the existing one.
+  // Serialized on the conversion.
+  //
+  // AUTHORITY TRUTH — an actually-sent invitation — is verified HERE, not
+  // trusted from the caller. The attesting transaction writes the invitation's
+  // sent status BEFORE calling this, so this same-transaction read sees it. A
+  // caller with a conversion_id but no sent invitation gets nothing. This is
+  // the fact that moves a leasing opportunity from Post-Tour into Applicants.
+  //
+  // SCOPE: keyed entirely on conversion_id (the leasing opportunity), never on
+  // the person — a person may hold other conversions (re-lease, another
+  // property); those are untouched.
+  async function ensureApplicantFollowup(client, { conversion_id, owner_user_id = null }) {
+    const conv = (await client.query("select * from leasing_conversions where id=$1 for update", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+    // An ACTUALLY-SENT invitation on this conversion is the authority. A
+    // 'prepared' invitation is NOT a send and must NOT advance the opportunity.
+    const sent = (await client.query(
+      `select 1 from application_invitations
+        where conversion_id=$1
+          and status in ('manually_sent','provider_dispatched')
+        limit 1`, [conversion_id])).rows[0];
+    if (!sent) throw httpErr(409, "No sent application invitation on this conversion — Applicants work is created only by an actual send (a prepared link does not count).");
+    const existing = (await client.query(
+      `select * from leasing_conversion_obligations where conversion_id=$1 and rung='applicant_followup' limit 1`,
+      [conversion_id])).rows[0];
+    if (existing) return { ensured: false, link: existing };
+    const owned = await eligibleOwner(client, conv.property_id, [owner_user_id, conv.conversation_owner_user_id]);
+    const spawned = await spawnRung(client, { conversion: conv, rung: "applicant_followup", owner_user_id: owned.owner });
+    return { ensured: true, link: spawned.link };
+  }
+
   // THE ONLY AUTHORIZED CAUSE of lease_signature_followup. Called by the
   // application-approval domain event — never by task completion, missed
   // handling, bulk actions, generic resolves, or retries. Idempotent: at most
@@ -757,7 +794,7 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
   // Expose the service layer for in-process tests + future server-side callers.
   router._service = {
     createConversionFromTour, handoffConversation, flagHandoffRequired,
-    resolveRung, addGate, advanceToRung, readConversion, spawnRung, ensureLeaseSignatureFollowup, RUNG, CONVERSATION_RUNGS,
+    resolveRung, addGate, advanceToRung, readConversion, spawnRung, ensureApplicantFollowup, ensureLeaseSignatureFollowup, RUNG, CONVERSATION_RUNGS,
     assessReopenability, reopenRung, changeDueTime, reassignTask,
   };
   // Expose the single-door service alongside the router so the tour-outcome
