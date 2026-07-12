@@ -36,7 +36,7 @@ const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the O
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 
 module.exports = function operatorModule(deps) {
-  const { pool, agentService, conversionService = null, leasingTourService = null } = deps;
+  const { pool, agentService, conversionService = null, leasingTourService = null, applicationInvitations = null } = deps;
   const { rankTurnPriority } = require("./turn_priority"); // shared Turn-Priority ranking (slice 1)
   const { buildReviewList, buildReviewDetail } = require("./application_review"); // application review reads (slice 2)
   if (!pool) throw new Error("operator.js requires { pool }");
@@ -1221,6 +1221,69 @@ module.exports = function operatorModule(deps) {
       entries.sort((a, b) => new Date(a.occurred_at) - new Date(b.occurred_at));
 
       const vitals = await prospectVitals(client, { personId, propertyId });
+
+      // ── APPLICATION SUMMARY — the card's Application band (compact, honest). ──
+      // The person's most-recent application at THIS property. The card is the
+      // operating SUMMARY: status + the reviewable facts only. Sensitive fields
+      // (SSN, ID/selfie/verification artifacts) are NEVER surfaced here — the
+      // full application lives behind the View-full-application action. Read-only;
+      // absent application = null (no band), never a guess. Fail-soft: if the
+      // table/columns differ, the card still returns without the application.
+      let application = null;
+      let stage = "prospect";                     // default lifecycle read for a card
+      try {
+        const app = (await client.query(
+          `select id, status, unit_label, unit_id, applicant_name, captured,
+                  created_at, updated_at
+             from lease_applications
+            where person_id=$1 and property_id=$2
+            order by created_at desc limit 1`,
+          [personId, propertyId])).rows[0];
+        if (app) {
+          let cap = app.captured || {};
+          if (typeof cap === "string") { try { cap = JSON.parse(cap); } catch (_) { cap = {}; } }
+          // map the raw disposition to a clean, human status the card renders.
+          const statusMap = {
+            submitted: "Submitted", under_review: "In review", in_review: "In review",
+            approved: "Approved", denied: "Declined", declined: "Declined", withdrawn: "Withdrawn",
+          };
+          application = {
+            application_id: app.id,
+            status: statusMap[app.status] || app.status || null,
+            raw_status: app.status || null,
+            unit_label: app.unit_label || null,
+            submitted_at: app.created_at || null,
+            // compact, reviewable facts only — pulled from captured, honest nulls
+            intended_move_in: cap.desired_move_in || cap.move_in || null,
+            occupants: cap.occupants != null ? cap.occupants : null,
+            pets: cap.pets != null ? cap.pets : null,
+            employer: cap.employer || null,
+            job_title: cap.job_title || null,
+            monthly_income: cap.monthly_income != null ? cap.monthly_income : null,
+            // the detail action — the summary card never dumps the full application
+            view_full_application: `/operator/leasing/application-review?application_id=${app.id}`,
+          };
+          // lifecycle read: an application at any live stage makes this an Applicant.
+          // (A declined/withdrawn application still means they applied — the card
+          //  shows the status; the badge reflects the relationship reaching applicant.)
+          stage = "applicant";
+          // the submission is also a durable event on the relationship timeline —
+          // same shape as every other history entry, so History shows the moment
+          // they became an applicant.
+          entries.push({
+            occurred_at: app.created_at, recorded_at: app.created_at,
+            source: "application", verb: "submitted",
+            actor: { id: null, name: app.applicant_name || (p.name || "Applicant"), kind: "person" },
+            summary: `Application submitted${app.unit_label ? ` — Unit ${app.unit_label}` : ""}`,
+            claim_strength: "proven",
+            detail: { application_id: app.id, status: app.status || null, unit_label: app.unit_label || null },
+            supersedes: null,
+          });
+          // keep History in occurred_at order now that the application entry is in.
+          entries.sort((a, b) => new Date(a.occurred_at) - new Date(b.occurred_at));
+        }
+      } catch (_) { /* table/columns may differ — card degrades to no application band */ }
+
       const recent = msgs.slice(-8).map((m) => ({
         direction: m.direction, body: m.body, at: m.occurred_at,
         who: m.direction === "inbound" ? (p.name || "Prospect") : (m.sender_role || "Property"),
@@ -1229,7 +1292,9 @@ module.exports = function operatorModule(deps) {
       return res.json({
         person: { id: p.id, name: p.name },
         property_id: propertyId,
+        stage,                                 // 'prospect' | 'applicant' — drives the card badge
         relationship: { vitals, recent_messages: recent },
+        application,                           // compact Application band, or null (honestly not applied yet)
         next,                                  // empty array = honestly nothing pending
         history: entries,                      // occurred_at ASC; empty = honestly nothing yet
       });
@@ -1731,6 +1796,141 @@ module.exports = function operatorModule(deps) {
   });
 
   // expose internals for headless proofs + for later route files
+  // ══════════════════════════════════════════════════════════════════
+  //  APPLICATION INVITATION — the PERMANENT live-operator entry point.
+  //  Staff-session authenticated; actor SERVER-DERIVED (req.operator.id).
+  //  Calls the existing applicationSubmission services — NO duplicate
+  //  invitation logic. (The legacy shared-key /leasing/application-invitations
+  //  route in applicationSubmission.js is marked for retirement.)
+  //
+  //  Two verbs, preserving prepared vs. manually_sent:
+  //   POST /operator/leasing/application-invitations
+  //        → create a 'prepared' invitation (returns applicant link). NOT a send.
+  //   POST /operator/leasing/application-invitations/:id/sent
+  //        → attest a manual send → 'manually_sent'. Only this moves the status.
+  // ══════════════════════════════════════════════════════════════════
+  // LEASEABLE ALLOWLIST — explicit, from availability semantics. NOT "!= unavailable".
+  //   ready_now      : vacant, ready to lease now.
+  //   vacant_turning : vacant, turn in progress → leaseable-forward.
+  //   on_notice      : occupied but resident vacating → leaseable-forward (not tourable).
+  // EXCLUDED: committed_future (ALREADY leased to someone else — not open supply),
+  //           unavailable (down/model/occupied-no-notice).
+  const LEASEABLE_STATES = ["ready_now", "vacant_turning", "on_notice"];
+
+  // is a specific unit currently offerable at this property? Reads the SAME
+  // availability projection (no second system). Used for the selector AND for
+  // send-time revalidation of a unit attached to a conversation. Optionally
+  // checks the unit can be ready for an intended move-in date.
+  async function unitOfferableState(property_id, unit_id, intended_move_in) {
+    const availability = require("./availability")({ pool });
+    const proj = await availability._service.readAvailability(property_id);
+    const space = (proj.spaces || []).find((s) => String(s.unit_id) === String(unit_id));
+    if (!space) return { offerable: false, reason: "not_at_property", state: null };
+    if (!LEASEABLE_STATES.includes(space.availability_state)) {
+      return { offerable: false, reason: "not_leaseable", state: space.availability_state, space };
+    }
+    // future/turning units: if an intended move-in is known and the unit has a
+    // projected ready date, the ready date must not be AFTER the move-in.
+    if (intended_move_in && space.projected_ready_date) {
+      try {
+        const ready = new Date(space.projected_ready_date);
+        const want = new Date(intended_move_in);
+        if (isFinite(ready) && isFinite(want) && ready > want) {
+          return { offerable: false, reason: "not_ready_by_move_in", state: space.availability_state,
+                   projected_ready_date: space.projected_ready_date, space };
+        }
+      } catch (_) { /* if either date won't parse, don't block on it */ }
+    }
+    return { offerable: true, state: space.availability_state, space };
+  }
+
+  router.post("/operator/leasing/application-invitations", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!applicationInvitations || !applicationInvitations.createPreparedInvitation) {
+      return res.status(503).json({ error: "invitation service not wired." });
+    }
+    const unit_id = req.body && req.body.unit_id || null;
+    if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
+    // REVALIDATE at send time: a unit attached earlier may have become
+    // unavailable/committed. Only offerable units may receive an application.
+    const chk = await unitOfferableState(req.operator.property_id, unit_id, (req.body && req.body.intended_move_in) || null);
+    if (!chk.offerable) {
+      return res.status(409).json({ error: "unit_not_offerable", reason: chk.reason,
+        state: chk.state || null, receipt: "That unit can no longer be offered. Choose a currently leaseable unit." });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await applicationInvitations.createPreparedInvitation(client, {
+        property_id: req.operator.property_id,             // session scope, not body
+        person_id: req.body && req.body.person_id || null,
+        unit_id: unit_id,
+        conversion_id: req.body && req.body.conversion_id || null,
+        created_by_user_id: req.operator.id,               // server-derived actor
+      });
+      await client.query("commit");
+      return res.json(out);
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    } finally { client.release(); }
+  });
+
+  router.post("/operator/leasing/application-invitations/:id/sent", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!applicationInvitations || !applicationInvitations.attestInvitationSent) {
+      return res.status(503).json({ error: "invitation service not wired." });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      // PROPERTY WALL: the invitation must belong to the session's property.
+      // Server-derived sent_by_user_id alone is not enough — an operator must
+      // not attest a send on another property's invitation.
+      const inv = (await client.query(
+        "select id, property_id from application_invitations where id=$1", [req.params.id])).rows[0];
+      if (!inv) { await client.query("rollback"); return res.status(404).json({ error: "No invitation with that id." }); }
+      if (String(inv.property_id) !== String(req.operator.property_id)) {
+        await client.query("rollback");
+        return res.status(403).json({ error: "Not in your property scope." });
+      }
+      const out = await applicationInvitations.attestInvitationSent(client, {
+        invitation_id: req.params.id,
+        dispatch_source: "manual",
+        // preserve the ACTUAL channel + recipient the operator reports.
+        channel: (req.body && req.body.channel) || "other",
+        recipient_snapshot: (req.body && req.body.recipient_snapshot) || null,
+        sent_by_user_id: req.operator.id,                  // server-derived — who attests
+      });
+      await client.query("commit");
+      return res.json(out);
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    } finally { client.release(); }
+  });
+
+  // LEASEABLE UNITS for the send-application selector. Session-gated, read-only,
+  // over the EXISTING availability projection (availability.js readAvailability)
+  // — no second availability system. Returns only spaces that can be offered
+  // (availability_state !== 'unavailable'); property is the session's scope.
+  router.get("/operator/leasing/leaseable-units", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const availability = require("./availability")({ pool });
+      const proj = await availability._service.readAvailability(req.operator.property_id);
+      const spaces = (proj.spaces || []).filter((s) => LEASEABLE_STATES.includes(s.availability_state));
+      const units = spaces.map((s) => ({
+        unit_id: s.unit_id, unit_number: s.unit_number,
+        availability_state: s.availability_state,
+        projected_ready_date: s.projected_ready_date || null,
+      }));
+      return res.json({ property_id: req.operator.property_id, count: units.length, units });
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.message || "leaseable-units read failed" });
+    }
+  });
+
   router._internal = { resolveSession, requireOperator, scopedConversation, scopedFact, normalizeFactBody, insertActiveFact, assertDraftInScope, DEMO_MODE, leasingLifecycle };
   return router;
 };
