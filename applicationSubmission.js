@@ -547,6 +547,29 @@ module.exports = function applicationSubmissionModule(deps) {
     if (inv.conversion_id && conversionService && conversionService.ensureApplicantFollowup) {
       const ens = await conversionService.ensureApplicantFollowup(client, { conversion_id: inv.conversion_id });
       applicant_followup = { ensured: ens.ensured, rung: ens.link && ens.link.rung, obligation_id: ens.link && ens.link.obligation_id };
+
+      // ONE LEASING OPPORTUNITY, ONE CURRENT FOLLOW-UP POSITION: sending the
+      // application IS the completion of the post-tour follow-up. Close the open
+      // tour_followup rung in the same transaction so this opportunity never
+      // sits in two buckets. suppress_next is mandatory — the applicant rung was
+      // just ensured above; the rail's
+      // auto-advance would double-spawn it. Mirrors the submission path exactly.
+      if (conversionService.resolveRung) {
+        const openTour = (await client.query(
+          `select lco.obligation_id from leasing_conversion_obligations lco
+            where lco.conversion_id=$1 and lco.rung='tour_followup' and lco.outcome is null
+            limit 1`, [inv.conversion_id])).rows[0];
+        if (openTour) {
+          const closed = await conversionService.resolveRung(client, {
+            obligation_id: openTour.obligation_id,
+            result: "completed",
+            by_user_id: sent_by_user_id || null,
+            suppress_next: true,
+            proof: { invitation_id: inv.id, kind: "application_link_sent" },
+          });
+          applicant_followup.tour_followup_closed = { obligation_id: openTour.obligation_id, outcome: closed.outcome };
+        }
+      }
     }
 
     return {
