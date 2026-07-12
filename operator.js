@@ -665,6 +665,19 @@ module.exports = function operatorModule(deps) {
       join conversations c on c.property_id = ll.property_id and c.person_id = ll.person_id
       where ll.status not in ('applied','leased','lost') and c.status = 'open'
         and c.property_id = $1
+        -- FLOW POSITION (Slice 3): one leasing opportunity, one position. Once
+        -- this person+property's conversion has advanced to applicant_followup
+        -- or beyond (an application was ACTUALLY SENT — the rail's authorized
+        -- transition), they are no longer pre-tour work. The exclusion lives
+        -- HERE, in the one shared CTE, so every consumer (counts, buckets,
+        -- rows) reconciles by construction. The conversation itself stays open
+        -- and reachable from the Follow-Ups row's Message action.
+        and not exists (
+          select 1 from leasing_conversions lc
+          join leasing_conversion_obligations flo on flo.conversion_id = lc.id
+          where lc.person_id = c.person_id and lc.property_id = c.property_id
+            and flo.rung in ('applicant_followup','lease_signature_followup')
+        )
     ),
     life as (
       select conversation_id,
@@ -1531,6 +1544,8 @@ module.exports = function operatorModule(deps) {
            select o.id as obligation_id, lco.conversion_id, c.property_id,
                   p.id as person_id, p.name as person_name,
                   c.origin_tour_id, lco.rung,
+                  tu.unit_id, un.unit_number,
+                  subst.applicant_substatus,
                   case when lco.rung = 'leasing_task' then 'sibling' else 'anchor' end as anchor_or_sibling,
                   o.status, o.label, o.due_at, o.created_at,
                   o.due_at::text as due_at_cur, o.created_at::text as created_at_cur,
@@ -1549,6 +1564,30 @@ module.exports = function operatorModule(deps) {
              join leasing_conversions c on c.id = lco.conversion_id
              join persons p             on p.id = c.person_id
              left join users ou         on ou.id = lco.owner_user_id
+             -- the tour's unit, when the opportunity has one (for Send application)
+             left join lateral (
+               select t.unit_id from leasing_tours t
+                where t.id = c.origin_tour_id limit 1
+             ) tu on true
+             left join units un on un.id = tu.unit_id
+             -- APPLICANT SUB-STATUS (Slice 2): event-backed only, minimal set.
+             -- Application truth wins over invitation truth; honest null else.
+             left join lateral (
+               select case
+                 when exists (select 1 from lease_applications la where la.conversion_id = lco.conversion_id
+                              and la.status in ('approved','lease_ready','tenant_signed','countersigned','active'))
+                   then 'approved'
+                 when exists (select 1 from lease_applications la where la.conversion_id = lco.conversion_id
+                              and la.status in ('denied','declined','withdrawn'))
+                   then 'declined'
+                 when exists (select 1 from lease_applications la where la.conversion_id = lco.conversion_id
+                              and la.status = 'submitted')
+                   then 'submitted'
+                 when exists (select 1 from application_invitations ai where ai.conversion_id = lco.conversion_id
+                              and ai.status in ('manually_sent','provider_dispatched'))
+                   then 'application_sent'
+                 else null end as applicant_substatus
+             ) subst on true
             where c.property_id = $1 and lco.outcome is null
          )
          select q.*, t.total_open, t.total_overdue, t.total_due_today,
@@ -1587,6 +1626,8 @@ module.exports = function operatorModule(deps) {
         obligation_id: r.obligation_id, conversion_id: r.conversion_id, property_id: r.property_id,
         person_id: r.person_id, person_name: r.person_name,
         origin_tour_id: r.origin_tour_id, rung: r.rung, anchor_or_sibling: r.anchor_or_sibling,
+        unit_id: r.unit_id || null, unit_number: r.unit_number || null,
+        applicant_substatus: r.applicant_substatus || null,
         status: r.status, label: r.label,
         owner_user_id: r.owner_user_id, owner_name: r.owner_name,
         owner_basis: r.owner_user_id ? basisByOwner[r.owner_user_id] : "unassigned",
@@ -1869,6 +1910,10 @@ module.exports = function operatorModule(deps) {
         created_by_user_id: req.operator.id,               // server-derived actor
       });
       await client.query("commit");
+      // the applicant URL, server-derived from this request's own host — the
+      // client never guesses an origin. Raw token appears only here, once.
+      const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
+      out.link = `${proto}://${req.get("host")}/t/application/${out.token}`;
       return res.json(out);
     } catch (e) {
       await client.query("rollback").catch(() => {});
