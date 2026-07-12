@@ -118,20 +118,13 @@ module.exports = function availability(deps) {
   //  THE READ  —  GET /availability?property_id=<uuid>
   //  One row per space, classified server-side. Read-only.
   // ════════════════════════════════════════════════════════════════
-  router.get("/availability", async (req, res) => {
-    const { property_id } = req.query;
-    if (!property_id) {
-      return res.status(400).json({ error: "property_id is required" });
-    }
-
-    try {
-      // ── one query pulls every fact the classification needs ──────
-      // per SPACE: the unit's contracted axes, the space's own lease
-      // reality (current + future via lateral, mirroring
-      // management_read.js), the open turnover on the unit, the open
-      // notice event naming THIS space, and open applicant demand on
-      // the unit. All reads; no state is created or touched.
-      const rows = (await pool.query(
+  // READ SERVICE (shared): the forward-supply projection for a property.
+  // Derives from live inventory; writes nothing. BOTH the public /availability
+  // route and the session-gated operator units-read call this ONE function —
+  // there is no second availability system and one classifier.
+  async function readAvailability(property_id) {
+    if (!property_id) { const e = new Error("property_id is required"); e.httpStatus = 400; throw e; }
+    const rows = (await pool.query(
         `select
             u.id                as unit_id,
             u.unit_number,
@@ -187,32 +180,28 @@ module.exports = function availability(deps) {
           order by u.unit_number asc, s.created_at asc`,
         [property_id])).rows;
 
-      if (!rows.length) {
-        return res.json({
-          property_id,
-          count: 0,
-          spaces: [],
-          note: "No units/spaces for this property. Availability is derived from live inventory — nothing exists to project yet.",
-        });
-      }
+    if (!rows.length) {
+      return { property_id, count: 0, spaces: [],
+        note: "No units/spaces for this property. Availability is derived from live inventory — nothing exists to project yet." };
+    }
+    const spaces = rows.map(r => classifySpace(r));
+    const summary = {};
+    for (const sp of spaces) summary[sp.availability_state] = (summary[sp.availability_state] || 0) + 1;
+    return {
+      property_id, count: spaces.length,
+      turn_window_days: DEFAULT_TURN_WINDOW_DAYS,
+      turn_window_source: "default_placeholder",
+      summary,
+      note: "Forward supply, derived live. occupancy_status is the contracted rent-roll axis and is reported verbatim — a unit on notice is still occupied until move-out. Dates carry honest confidence; 'unknown' means the building does not know, not that it is fine.",
+      spaces,
+    };
+  }
 
-      const spaces = rows.map(r => classifySpace(r));
-
-      // small server-authored rollup so the reader sees the shape at a
-      // glance — counts only, derived from the same classification.
-      const summary = {};
-      for (const sp of spaces) summary[sp.availability_state] = (summary[sp.availability_state] || 0) + 1;
-
-      res.json({
-        property_id,
-        count: spaces.length,
-        turn_window_days: DEFAULT_TURN_WINDOW_DAYS,
-        turn_window_source: "default_placeholder", // becomes 'property_config' when the policy field lands
-        summary,
-        note: "Forward supply, derived live. occupancy_status is the contracted rent-roll axis and is reported verbatim — a unit on notice is still occupied until move-out. Dates carry honest confidence; 'unknown' means the building does not know, not that it is fine.",
-        spaces,
-      });
+  router.get("/availability", async (req, res) => {
+    try {
+      res.json(await readAvailability(req.query.property_id));
     } catch (e) {
+      if (e.httpStatus === 400) return res.status(400).json({ error: e.message });
       console.error("availability read error", e);
       res.status(500).json({ error: e.message });
     }
@@ -316,5 +305,6 @@ module.exports = function availability(deps) {
     };
   }
 
+  router._service = { readAvailability };
   return router;
 };
