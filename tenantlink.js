@@ -67,8 +67,9 @@
 
 const express = require("express");
 const crypto = require("crypto");
+const { classifyUrgency } = require("./maintenance_urgency.js"); // narrow urgency decision for tenant maintenance
 
-module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary }) {
+module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService }) {
   const router = express.Router();
 
   // ── OPERATOR AUTH (fail-closed) ──────────────────────────────────────
@@ -138,6 +139,69 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
         where token = $1 and revoked = false and expires_at > now()`, [token]);
     return r.rows[0] || null;
   }
+
+  // ── RESIDENT MAINTENANCE — narrow urgency path → canonical work-order service.
+  //    Auth: person/property from the session; unit from placeOf. Body ids are
+  //    never trusted. Every create/append flows through workOrderService.
+  router.post("/tenant/maintenance", async (req, res) => {
+    try {
+      const sess = await sessionOf(req);
+      if (!sess) return res.status(401).json({ receipt: "Session expired. Open your setup link again." });
+      const place = await placeOf(sess.person_id, sess.property_id);
+      if (!place) return res.status(404).json({ receipt: "No active lease found for your account. Contact your manager." });
+      const description = ((req.body && req.body.description) || "").trim();
+      if (!description) return res.status(400).json({ receipt: "Please describe the maintenance issue." });
+      const c = classifyUrgency(description);
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const { workOrder, deduped } = await workOrderService.createWorkOrder(client, {
+          property_id: sess.property_id, unit_id: place.unit_id, person_id: sess.person_id,
+          title: (c.urgency === "emergency" ? "EMERGENCY: " : "") + "Maintenance request",
+          description, source: "tenant",
+          urgency_status: c.urgency, urgency_basis: c.basis, urgency_decided_by: "system",
+          emergency_type: c.emergency_type, idempotency_key: (req.body && req.body.idempotency_key) || null,
+        });
+        await client.query("commit");
+        const receipt = c.urgency === "emergency"
+          ? "Emergency received — management has been notified in the system. If anyone is in immediate danger, call 911 first."
+          : c.urgency === "needs_confirmation"
+          ? "Got it — one quick question so we route this right: " + c.clarifying_question
+          : "Got it — your maintenance request is in, and we'll keep you updated right here.";
+        res.status(201).json({ receipt, work_order_id: workOrder.id, urgency: c.urgency,
+          clarifying_question: c.urgency === "needs_confirmation" ? c.clarifying_question : null, deduped: !!deduped });
+      } catch (e) {
+        try { await client.query("rollback"); } catch (_) {}
+        res.status(e.httpStatus || 500).json({ receipt: "Could not open your maintenance request." });
+      } finally { client.release(); }
+    } catch (e) { console.error("tenant/maintenance:", e); res.status(500).json({ receipt: "Could not open your maintenance request." }); }
+  });
+
+  router.post("/tenant/maintenance/:id/add", async (req, res) => {
+    try {
+      const sess = await sessionOf(req);
+      if (!sess) return res.status(401).json({ receipt: "Session expired. Open your setup link again." });
+      const place = await placeOf(sess.person_id, sess.property_id);
+      if (!place) return res.status(404).json({ receipt: "No active lease found for your account." });
+      const text = ((req.body && req.body.text) || "").trim();
+      if (!text) return res.status(400).json({ receipt: "Please add a detail or answer." });
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        await workOrderService.assertTenantOwnsWorkOrder(client, {
+          work_order_id: req.params.id, person_id: sess.person_id, property_id: sess.property_id, unit_id: place.unit_id });
+        const { escalated } = await workOrderService.appendClarification(client, {
+          work_order_id: req.params.id, person_id: sess.person_id, text, classifyUrgency });
+        await client.query("commit");
+        res.status(200).json({ receipt: escalated
+          ? "Thanks — based on that we've flagged this as urgent and notified management."
+          : "Thanks — added to your request.", escalated: !!escalated });
+      } catch (e) {
+        try { await client.query("rollback"); } catch (_) {}
+        res.status(e.httpStatus || 500).json({ receipt: e.httpStatus === 403 ? "That request isn't on your account." : "Could not add to your request." });
+      } finally { client.release(); }
+    } catch (e) { console.error("tenant/maintenance/add:", e); res.status(500).json({ receipt: "Could not add to your request." }); }
+  });
 
   // ── SMS helpers (030) ────────────────────────────────────────────────
   const smsReady = () => !!(sms && sms.enabled());
@@ -1238,6 +1302,10 @@ input:focus,textarea:focus{border-color:var(--accent)}
     <div class="section">Lease</div>
     <div class="row"><span class="k">start</span><span id="me-start"></span></div>
     <div class="row"><span class="k">end</span><span id="me-end"></span></div>
+    <div class="section">Report a maintenance issue</div>
+    <textarea id="wo-desc" placeholder="Describe the problem — e.g. kitchen faucet won't stop dripping"></textarea>
+    <button class="btn" id="wo-go" onclick="reportIssue()">Report issue</button>
+    <div id="wo-result" class="sub"></div>
     <div class="section">Open maintenance</div>
     <div id="me-wos" class="sub"></div>
   </div>
@@ -1340,6 +1408,45 @@ function enterHome(me){
   show("home"); loadThread();
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(loadThread, 15000);
+}
+async function reportIssue(){
+  const desc = ($("wo-desc").value||"").trim();
+  if(!desc){ $("wo-result").textContent = "Please describe the issue."; return; }
+  $("wo-go").disabled = true;
+  try{
+    const r = await fetch("/tenant/maintenance",{method:"POST",
+      headers:{"Content-Type":"application/json","x-tenant-session":SESSION},
+      body:JSON.stringify({description:desc})});
+    const d = await r.json();
+    if(r.ok){
+      $("wo-desc").value = "";
+      if(d.urgency==="needs_confirmation" && d.work_order_id){
+        $("wo-result").innerHTML = escapeHtml(d.receipt||"") +
+          '<div style="margin-top:8px"><textarea id="wo-ans" placeholder="Your answer"></textarea>'+
+          '<button class="btn" onclick="answerIssue(\''+d.work_order_id+'\')">Send answer</button></div>';
+      } else {
+        $("wo-result").textContent = d.receipt || "Request received.";
+      }
+      const me = await fetch("/tenant/me",{headers:{"x-tenant-session":SESSION}});
+      if(me.ok) renderWos((await me.json()).open_work_orders);
+    } else {
+      $("wo-result").textContent = (d && d.receipt) || "Could not submit.";
+    }
+  } catch(_){ $("wo-result").textContent = "Could not submit — try again."; }
+  finally { $("wo-go").disabled = false; }
+}
+async function answerIssue(id){
+  const ans = ($("wo-ans").value||"").trim();
+  if(!ans) return;
+  try{
+    const r = await fetch("/tenant/maintenance/"+id+"/add",{method:"POST",
+      headers:{"Content-Type":"application/json","x-tenant-session":SESSION},
+      body:JSON.stringify({text:ans})});
+    const d = await r.json();
+    $("wo-result").textContent = (d && d.receipt) || "Added.";
+    const me = await fetch("/tenant/me",{headers:{"x-tenant-session":SESSION}});
+    if(me.ok) renderWos((await me.json()).open_work_orders);
+  } catch(_){ $("wo-result").textContent = "Could not add — try again."; }
 }
 function renderWos(wos){
   $("me-wos").innerHTML = wos && wos.length
