@@ -1955,6 +1955,58 @@ module.exports = function operatorModule(deps) {
     } finally { client.release(); }
   });
 
+  // ONE-TAP SEND (real SMS). The atomic business action behind the Post-Tour
+  // "Send application" button: server revalidates the unit against canonical
+  // availability, dispatches the link over SMS through the ONE comms boundary
+  // (Twilio), records the provider SID, and — ONLY on provider acceptance —
+  // advances the opportunity to Applicants via the ONE shared transition helper.
+  // Dispatch failure ⇒ NO rung advance; honest error for the UI's Retry.
+  // Operator + property are server-derived from the session; unit is required.
+  router.post("/operator/leasing/application-invitations/send", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!applicationInvitations || !applicationInvitations.sendApplication) {
+      return res.status(503).json({ error: "send service not wired." });
+    }
+    const property_id = req.operator.property_id;
+    const person_id = (req.body && req.body.person_id) || null;
+    const unit_id = (req.body && req.body.unit_id) || null;
+    const conversion_id = (req.body && req.body.conversion_id) || null;
+    if (!person_id) return res.status(400).json({ error: "person_id is required." });
+    if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
+
+    // REVALIDATE at the moment of dispatch — the unit (attached or just picked)
+    // may have become unavailable after the picker loaded. Reject honestly.
+    // (Route-level because it uses the availability projection; the business
+    //  operation itself is one call below.)
+    const chk = await unitOfferableState(property_id, unit_id, (req.body && req.body.intended_move_in) || null);
+    if (!chk.offerable) {
+      return res.status(409).json({ error: "unit_not_offerable", reason: chk.reason, state: chk.state || null,
+        receipt: "That unit can no longer be offered. Choose a currently leaseable unit." });
+    }
+
+    // THE ONE OPERATION — guard double-tap, dispatch, advance. Actor + property
+    // server-derived. The route never sees the internal steps.
+    let out;
+    try {
+      out = await applicationInvitations.sendApplication({
+        property_id, person_id, unit_id, conversion_id, created_by_user_id: req.operator.id });
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    }
+    if (!out || !out.sent) {
+      const code = (out && (out.reason === "boundary_not_wired" || out.reason === "public_apply_base_url_not_configured")) ? 503 : 409;
+      return res.status(code).json({ error: out ? out.reason : "dispatch_failed",
+        receipt: (out && out.receipt) || "The application couldn't be sent. Try again.",
+        retry_requires_new_invitation: !!(out && out.retry_requires_new_invitation) });
+    }
+    return res.json({
+      sent: true, idempotent: !!out.idempotent, invitation_id: out.invitation_id, status: out.status,
+      provider_message_id: out.provider_message_id || null,
+      applicant_followup: out.applicant_followup || null,
+      receipt: out.receipt || "Application sent.",
+    });
+  });
+
   // LEASEABLE UNITS for the send-application selector. Session-gated, read-only,
   // over the EXISTING availability projection (availability.js readAvailability)
   // — no second availability system. Returns only spaces that can be offered
