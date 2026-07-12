@@ -80,6 +80,10 @@ module.exports = function communicationsBoundary({ pool, sms }) {
   // Purposes that are autonomous/agent outreach.
   const AUTONOMOUS_PURPOSES = new Set([
     "agent", "ai_reply", "leasing_first_response", "followup", "customer_care",
+    // application_link: sending a prospect their application is legitimate
+    // autonomous leasing outreach — same class as first-response/followup. In
+    // QA mode it still requires a QA-classified, opted-in recipient in scope.
+    "application_link",
   ]);
 
   // ── PROPERTY LINE (server-derived `from`) ──────────────────────────
