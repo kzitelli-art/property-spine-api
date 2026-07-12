@@ -45,7 +45,11 @@ module.exports = function applicationSubmissionModule(deps) {
   const { pool, spawnObligationFromEvent, completeObligation, conversionService, commBoundary = null } = deps;
   const router = express.Router();
 
-  // operator gate — same shared key the other modules use
+  // operator gate — shared key. LEGACY: this shared-key gate and the routes under
+  // it are MARKED FOR RETIREMENT. The permanent live-operator entry point is
+  // operator.js's POST /operator/leasing/application-invitations (staff-session,
+  // server-derived actor), which calls this module's invitation service. These
+  // legacy routes stay untouched until their remaining callers are migrated.
   function requireOperator(req, res, next) {
     const key = req.get("x-operator-key");
     if (!process.env.OPERATOR_KEY || key === process.env.OPERATOR_KEY) return next();
@@ -257,20 +261,24 @@ module.exports = function applicationSubmissionModule(deps) {
 
   // 1) INVITATION — prepare a token. status 'prepared'. NO link-sent event yet
   //    (a prepared token is NOT a send). Internal/operator only.
-  router.post("/leasing/application-invitations", requireOperator, (req, res) => tx(async (client) => {
-    const { conversion_id = null, person_id = null, property_id, unit_id = null,
-            expires_at = null, created_by_user_id = null } = req.body || {};
+  // CREATE-PREPARED SERVICE (shared): create a 'prepared' invitation for a
+  // person/property/unit. Enforces the property wall on the unit. Returns the
+  // raw token ONCE (for building the applicant URL) — digest-only at rest. A
+  // prepared token is NOT a send. BOTH the legacy shared-key route and the new
+  // staff-session operator route call this ONE service — no duplicated logic.
+  async function createPreparedInvitation(client, {
+    conversion_id = null, person_id = null, property_id, unit_id = null,
+    expires_at = null, created_by_user_id = null,
+  }) {
     if (!property_id) throw httpErr(400, "property_id is required.");
     const prop = (await client.query("select id from properties where id=$1", [property_id])).rows[0];
     if (!prop) throw httpErr(404, "No property with that id.");
-    // PROPERTY WALL: a supplied unit must belong to THIS property. A valid
-    // credential for one asset can never bind another asset's unit by UUID.
+    // PROPERTY WALL: a supplied unit must belong to THIS property.
     if (unit_id) {
       const u = (await client.query("select property_id from units where id=$1", [unit_id])).rows[0];
       if (!u) throw httpErr(404, "No unit with that id.");
       if (u.property_id !== property_id) throw httpErr(403, "That unit belongs to a different property.");
     }
-
     const rawToken = crypto.randomBytes(24).toString("base64url");
     const tokenDigest = digestToken(rawToken);
     const inv = (await client.query(
@@ -279,16 +287,18 @@ module.exports = function applicationSubmissionModule(deps) {
        values ($1,$2,$3,$4,$5,'prepared',$6,$7) returning *`,
       [tokenDigest, conversion_id, person_id, property_id, unit_id, expires_at, created_by_user_id]
     )).rows[0];
-
     return {
       receipt: "Invitation prepared. Send it through the real channel, then call /mark-sent to attest the send.",
       invitation_id: inv.id,
-      // RAW token returned ONCE for building the applicant URL. NOT stored
-      // (only its digest is). If lost, revoke and prepare a new invitation.
-      token: rawToken,
+      token: rawToken,          // RAW token returned ONCE — digest-only at rest.
       status: inv.status,
     };
+  }
+
+  router.post("/leasing/application-invitations", requireOperator, (req, res) => tx(async (client) => {
+    return await createPreparedInvitation(client, req.body || {});
   }, res));
+
 
   // ── CANONICAL SERVICE (funnel-flow 3a): createAndDispatchApplicationInvitation ──
   //  ONE service defines what "application link dispatched" means, whoever
@@ -467,32 +477,34 @@ module.exports = function applicationSubmissionModule(deps) {
   //    dispatch_source 'provider' (later, Twilio): the provider send result
   //      writes the SAME event with provider_message_id. Delivery/open arrive
   //      as SEPARATE later facts, never as edits to this send record.
-  router.post("/leasing/application-invitations/:id/mark-sent", requireOperator, (req, res) => tx(async (client) => {
-    const { dispatch_source = "manual", channel, recipient_snapshot = null,
-            provider_message_id = null, sent_by_user_id = null, note = null } = req.body || {};
+  // ATTEST-SENT SERVICE (shared): record a truthful send attestation on a
+  // 'prepared' invitation. manual → requires sent_by_user_id (who attests) +
+  // recipient_snapshot for sms/email → status 'manually_sent'. provider →
+  // provider_message_id → 'provider_dispatched'. A send cannot be re-attested.
+  // BOTH the legacy route and the new operator route call this ONE service.
+  async function attestInvitationSent(client, {
+    invitation_id, dispatch_source = "manual", channel, recipient_snapshot = null,
+    provider_message_id = null, sent_by_user_id = null, note = null,
+  }) {
     if (!["manual", "provider"].includes(dispatch_source)) {
       throw httpErr(400, "dispatch_source must be 'manual' or 'provider'.");
     }
     if (!["sms", "email", "other"].includes(channel || "")) {
       throw httpErr(400, "channel must be 'sms', 'email', or 'other'.");
     }
-    // attestation requirements differ by source
     if (dispatch_source === "manual") {
       if (!sent_by_user_id) throw httpErr(400, "manual send requires sent_by_user_id (who attests they sent it).");
       if ((channel === "sms" || channel === "email") && !recipient_snapshot) {
         throw httpErr(400, `manual ${channel} send requires recipient_snapshot (the destination as sent).`);
       }
-    } else { // provider
+    } else {
       if (!provider_message_id) throw httpErr(400, "provider send requires provider_message_id.");
     }
 
-    const inv = (await client.query("select * from application_invitations where id=$1 for update", [req.params.id])).rows[0];
+    const inv = (await client.query("select * from application_invitations where id=$1 for update", [invitation_id])).rows[0];
     if (!inv) throw httpErr(404, "No invitation with that id.");
     if (inv.status !== "prepared") throw httpErr(409, `Invitation is '${inv.status}', not 'prepared'. A send cannot be re-attested; create a correction instead.`);
 
-    // locate the open applicant_followup rung on the conversion (the progress
-    // commitment the submission will close). If the rail is earlier, it may not
-    // be open yet — submission resolves whatever applicant_followup is open then.
     let progressObId = null;
     if (inv.conversion_id) {
       const r = await client.query(
@@ -505,7 +517,6 @@ module.exports = function applicationSubmissionModule(deps) {
       progressObId = r.rows[0] ? r.rows[0].id : null;
     }
 
-    // the SEND event — an attestation, scoped truthfully.
     const sentByNote = dispatch_source === "manual"
       ? `attested sent via ${channel}${recipient_snapshot ? " to " + recipient_snapshot : ""}`
       : `dispatched by provider via ${channel}${provider_message_id ? " · " + provider_message_id : ""}`;
@@ -532,6 +543,10 @@ module.exports = function applicationSubmissionModule(deps) {
       progress_obligation_id: progressObId,
       note: "This records that the link was SENT, not that the prospect received or opened it.",
     };
+  }
+
+  router.post("/leasing/application-invitations/:id/mark-sent", requireOperator, (req, res) => tx(async (client) => {
+    return await attestInvitationSent(client, Object.assign({ invitation_id: req.params.id }, req.body || {}));
   }, res));
 
   // 2b) REVOKE — a CORRECTION fact (e.g. wrong number, sent in error). Does NOT
@@ -724,6 +739,257 @@ module.exports = function applicationSubmissionModule(deps) {
   }, res));
 
   // expose the service for in-process tests + the approve route to close the gate
-  router._service = { createAndDispatchApplicationInvitation,  submitApplicationService, closeApprovalGate, spawnApprovalGate, approvalGateRole };
+  // ════════════════════════════════════════════════════════════════
+  //  TENANT-FACING APPLICATION SURFACE  (under /t/ — no operator gate)
+  //  Two routes: the context resolver the page reads, and the page itself.
+  //  Authority for what unit/property/economics apply is DERIVED from the
+  //  invitation server-side; the browser never supplies it. Submission goes
+  //  through the existing /applications/submit-public (unchanged).
+  // ════════════════════════════════════════════════════════════════
+
+  // Shared read-only invitation resolver for the tenant surface. Mirrors the
+  // submit route's validation, but takes NO lock and writes nothing (except the
+  // honest lazy expire flip, which is safe/idempotent). Returns a shape the
+  // page renders, plus an honest `state` the page branches on.
+  async function resolveTenantContext(client, rawToken) {
+    const inv = (await client.query(
+      "select * from application_invitations where token_digest=$1",
+      [digestToken(rawToken)]
+    )).rows[0];
+    if (!inv) return { state: "invalid", receipt: "This application link is not valid." };
+    if (inv.status === "revoked") return { state: "revoked", receipt: "This application link was revoked. Contact the leasing office." };
+    if (inv.status === "expired") return { state: "expired", receipt: "This application link has expired. Contact the leasing office for a new one." };
+    if (inv.expires_at && new Date(inv.expires_at) < new Date()) {
+      await client.query("update application_invitations set status='expired', updated_at=now() where id=$1", [inv.id]);
+      return { state: "expired", receipt: "This application link has expired. Contact the leasing office for a new one." };
+    }
+    if (inv.status === "prepared") return { state: "not_sent", receipt: "This link is not active yet." };
+    if (inv.status === "consumed") return { state: "already_submitted", receipt: "This application has already been submitted. The leasing team has it." };
+    if (!["manually_sent", "provider_dispatched"].includes(inv.status)) {
+      return { state: "unavailable", receipt: `This link is not currently open (${inv.status}).` };
+    }
+
+    // live token → resolve the display context, all server-derived from the invitation
+    const prop = inv.property_id
+      ? (await client.query("select id, name from properties where id=$1", [inv.property_id])).rows[0]
+      : null;
+    let unitLabel = null;
+    if (inv.unit_id) {
+      const u = (await client.query("select unit_number from units where id=$1", [inv.unit_id])).rows[0];
+      unitLabel = u ? u.unit_number : null;
+    }
+    // known person → prefill (recognition over re-entry). Honest nulls if absent.
+    let person = null;
+    if (inv.person_id) {
+      const p = (await client.query("select id, name, email, phone from persons where id=$1", [inv.person_id])).rows[0];
+      if (p) person = { name: p.name || null, email: p.email || null, phone: p.phone || null };
+    }
+    // prefill from the most recent lead's raw_payload (same source prospectVitals uses)
+    let prefill = { move_month: null };
+    if (inv.person_id && inv.property_id) {
+      const lead = (await client.query(
+        "select raw_payload from leasing_leads where person_id=$1 and property_id=$2 order by created_at desc limit 1",
+        [inv.person_id, inv.property_id])).rows[0];
+      try {
+        const rp = lead && lead.raw_payload
+          ? (typeof lead.raw_payload === "string" ? JSON.parse(lead.raw_payload) : lead.raw_payload) : null;
+        if (rp && rp.desired_move_month) prefill.move_month = rp.desired_move_month;
+      } catch (_) { /* honest null beats a bad parse */ }
+    }
+    return {
+      state: "open",
+      property_name: prop ? prop.name : null,
+      unit_label: unitLabel,
+      person, prefill,
+    };
+  }
+
+  // Context the page reads. Read-only; the page renders `state` honestly.
+  router.get("/t/application/:token/context", (req, res) => tx(async (client) => {
+    return await resolveTenantContext(client, req.params.token);
+  }, res));
+
+  // The mobile application page. Self-contained inline HTML (no file dependency).
+  // It reads /context, prefills, collects only missing info in short sections,
+  // and POSTs to the existing /applications/submit-public.
+  router.get("/t/application/:token", (req, res) => {
+    const token = String(req.params.token).replace(/[^A-Za-z0-9_\-]/g, "");
+    res.set("Content-Type", "text/html").send(`<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Apply</title>
+<style>
+  :root{ --ink:#0b0b0b; --line:#e6e5e0; --muted:#8a8a84; --brass:#9a6b1f; --good:#1d6b54; --bad:#b23b2e; --bg:#faf9f6; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; font-family:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,system-ui,sans-serif; color:var(--ink); background:var(--bg); -webkit-font-smoothing:antialiased; }
+  .wrap{ max-width:520px; margin:0 auto; min-height:100vh; background:#fff; }
+  header{ padding:34px 22px 22px; border-bottom:1px solid var(--line); }
+  .kicker{ font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:0 0 8px; }
+  h1{ font-family:Fraunces,Georgia,serif; font-weight:600; font-size:30px; line-height:1.1; margin:0; }
+  .sub{ font-size:15px; color:var(--muted); margin:6px 0 0; }
+  main{ padding:22px; }
+  .prog{ display:flex; gap:6px; margin:0 0 22px; }
+  .prog i{ height:3px; flex:1; background:var(--line); border-radius:2px; }
+  .prog i.on{ background:var(--ink); }
+  .sec{ display:none; }
+  .sec.on{ display:block; }
+  .sec h2{ font-family:Fraunces,Georgia,serif; font-weight:600; font-size:20px; margin:0 0 4px; }
+  .sec p.hint{ font-size:13px; color:var(--muted); margin:0 0 18px; }
+  label{ display:block; font-size:13px; font-weight:600; margin:16px 0 6px; }
+  input,select{ width:100%; font:inherit; font-size:16px; padding:13px 14px; border:1px solid var(--line); border-radius:11px; background:#fff; color:var(--ink); }
+  input:focus,select:focus{ outline:none; border-color:#2563a8; }
+  .row2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .known{ background:var(--bg); border:1px solid var(--line); border-radius:11px; padding:12px 14px; font-size:14px; margin:0 0 6px; }
+  .known b{ font-weight:600; } .known span{ color:var(--muted); }
+  .cta{ appearance:none; border:none; width:100%; background:var(--ink); color:#fff; font:inherit; font-size:16px; font-weight:600; padding:15px; border-radius:12px; margin-top:26px; cursor:pointer; }
+  .cta[disabled]{ opacity:.4; cursor:default; }
+  .back{ appearance:none; border:none; background:none; color:var(--muted); font:inherit; font-size:14px; padding:14px 0 0; cursor:pointer; }
+  .review dl{ margin:0; } .review .rr{ display:flex; justify-content:space-between; gap:14px; padding:11px 0; border-bottom:1px solid var(--line); font-size:14px; }
+  .review .rr span{ color:var(--muted); } .review .rr b{ font-weight:600; text-align:right; }
+  .msg{ padding:40px 24px; text-align:center; }
+  .msg .ic{ font-size:40px; } .msg h1{ margin:14px 0 8px; } .msg p{ color:var(--muted); font-size:15px; }
+  .foot{ font-size:12px; color:var(--muted); text-align:center; padding:18px 22px 30px; }
+</style></head>
+<body><div class="wrap" id="app"><div class="msg"><p>Loading…</p></div></div>
+<script>
+const TOKEN = ${JSON.stringify(token)};
+const el = (h)=>{ const d=document.createElement('div'); d.innerHTML=h.trim(); return d.firstChild; };
+const esc = (s)=> String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const app = document.getElementById('app');
+let CTX=null, STEP=0;
+const STATE = { legal_name:'', date_of_birth:'', email:'', phone:'', current_address:'',
+                employer:'', job_title:'', monthly_income:'', occupants:'', pets:'', desired_move_in:'' };
+
+function screenMsg(ic,title,body){ app.innerHTML=''; app.appendChild(el(
+  '<div class="msg"><div class="ic">'+ic+'</div><h1>'+esc(title)+'</h1><p>'+esc(body)+'</p></div>')); }
+
+async function boot(){
+  try{
+    const r = await fetch('/t/application/'+encodeURIComponent(TOKEN)+'/context');
+    CTX = await r.json();
+  }catch(e){ return screenMsg('!','Something went wrong',"Please try again, or contact the leasing office."); }
+  if(!CTX || CTX.state!=='open'){
+    const m = {
+      invalid:['This link isn’t valid', CTX&&CTX.receipt],
+      revoked:['Link revoked', CTX&&CTX.receipt],
+      expired:['Link expired', CTX&&CTX.receipt],
+      not_sent:['Not active yet', CTX&&CTX.receipt],
+      already_submitted:['Already submitted', CTX&&CTX.receipt],
+      unavailable:['Unavailable', CTX&&CTX.receipt],
+    }[(CTX&&CTX.state)||'unavailable'] || ['Unavailable','Please contact the leasing office.'];
+    return screenMsg(CTX&&CTX.state==='already_submitted'?'✓':'—', m[0], m[1]||'Please contact the leasing office.');
+  }
+  // prefill from what Spine already knows
+  if(CTX.person){ STATE.legal_name=CTX.person.name||''; STATE.email=CTX.person.email||''; STATE.phone=CTX.person.phone||''; }
+  if(CTX.prefill && CTX.prefill.move_month) STATE.desired_move_in = CTX.prefill.move_month;
+  render();
+}
+
+function progress(){ let s=''; for(let i=0;i<4;i++) s+='<i class="'+(i<=STEP?'on':'')+'"></i>'; return s; }
+
+function render(){
+  if(STEP>=4) return renderReview();
+  const unit = CTX.unit_label ? ('Unit '+esc(CTX.unit_label)) : 'Your application';
+  const prop = CTX.property_name ? esc(CTX.property_name) : '';
+  const secs = [aboutSec, incomeSec, householdSec][STEP] ? [aboutSec, incomeSec, householdSec][STEP]() : reviewSec();
+  app.innerHTML='';
+  app.appendChild(el(
+    '<div><header><p class="kicker">Apply for '+unit+'</p><h1>'+prop+'</h1>'+
+    (STEP===0?'<p class="sub">A few quick details. We’ve filled in what we already know.</p>':'')+
+    '</header><main><div class="prog">'+progress()+'</div>'+secs+'</main>'+
+    '<div class="foot">Your information is sent securely to the leasing team.</div></div>'));
+  wire();
+}
+
+function fld(label,key,type,ph,extra){ return '<label>'+esc(label)+'</label><input id="f_'+key+'" type="'+(type||'text')+'" placeholder="'+esc(ph||'')+'" value="'+esc(STATE[key]||'')+'" '+(extra||'')+'/>'; }
+
+function aboutSec(){
+  const known = CTX.person && (CTX.person.name||CTX.person.phone||CTX.person.email)
+    ? '<div class="known"><b>'+esc(CTX.person.name||'You')+'</b> '+
+      (CTX.person.phone?'· <span>'+esc(CTX.person.phone)+'</span> ':'')+
+      (CTX.person.email?'· <span>'+esc(CTX.person.email)+'</span>':'')+'</div>' : '';
+  return '<section class="sec on"><h2>About you</h2><p class="hint">Confirm your details.</p>'+known+
+    fld('Legal name','legal_name','text','Full legal name')+
+    fld('Date of birth','date_of_birth','date','')+
+    fld('Email','email','email','you@email.com')+
+    fld('Phone','phone','tel','')+
+    fld('Current address','current_address','text','Street, city, state')+
+    '<button class="cta" id="next">Continue</button></section>';
+}
+function incomeSec(){
+  return '<section class="sec on"><h2>Employment & income</h2><p class="hint">Where you work and what you earn.</p>'+
+    fld('Employer','employer','text','Company name')+
+    fld('Job title','job_title','text','')+
+    fld('Monthly income (before taxes)','monthly_income','number','$ / month')+
+    '<button class="cta" id="next">Continue</button>'+
+    '<button class="back" id="back">‹ Back</button></section>';
+}
+function householdSec(){
+  return '<section class="sec on"><h2>Household & move-in</h2><p class="hint">Who’s moving in and when.</p>'+
+    '<div class="row2"><div>'+fld('Occupants','occupants','number','# people')+'</div>'+
+    '<div>'+fld('Pets','pets','text','None, or describe')+'</div></div>'+
+    fld('Intended move-in','desired_move_in','text','e.g. 2026-09 or flexible')+
+    '<button class="cta" id="next">Review</button>'+
+    '<button class="back" id="back">‹ Back</button></section>';
+}
+function reviewSec(){ return ''; }
+
+function renderReview(){
+  const rows = [
+    ['Applying for', CTX.unit_label?('Unit '+CTX.unit_label):'—'],
+    ['Property', CTX.property_name||'—'],
+    ['Legal name', STATE.legal_name], ['Date of birth', STATE.date_of_birth],
+    ['Email', STATE.email], ['Phone', STATE.phone], ['Current address', STATE.current_address],
+    ['Employer', STATE.employer], ['Job title', STATE.job_title],
+    ['Monthly income', STATE.monthly_income?('$'+Number(STATE.monthly_income).toLocaleString()):''],
+    ['Occupants', STATE.occupants], ['Pets', STATE.pets], ['Intended move-in', STATE.desired_move_in],
+  ];
+  const body = rows.map(r=>'<div class="rr"><span>'+esc(r[0])+'</span><b>'+(r[1]?esc(r[1]):'<span>—</span>')+'</b></div>').join('');
+  app.innerHTML='';
+  app.appendChild(el(
+    '<div><header><p class="kicker">Review & submit</p><h1>Almost done</h1>'+
+    '<p class="sub">Check everything, then submit your application.</p></header>'+
+    '<main><div class="prog">'+progress()+'</div><div class="review sec on"><dl>'+body+'</dl>'+
+    '<button class="cta" id="submit">Submit application</button>'+
+    '<button class="back" id="back">‹ Back</button></div></main>'+
+    '<div class="foot">By submitting, you confirm this information is accurate.</div></div>'));
+  document.getElementById('back').onclick=()=>{ STEP=2; render(); };
+  document.getElementById('submit').onclick=submit;
+}
+
+function grab(){ ['legal_name','date_of_birth','email','phone','current_address','employer','job_title','monthly_income','occupants','pets','desired_move_in'].forEach(k=>{ const n=document.getElementById('f_'+k); if(n) STATE[k]=n.value; }); }
+
+function wire(){
+  const nx=document.getElementById('next'); if(nx) nx.onclick=()=>{ grab(); STEP++; render(); };
+  const bk=document.getElementById('back'); if(bk) bk.onclick=()=>{ grab(); STEP--; render(); };
+}
+
+async function submit(){
+  const btn=document.getElementById('submit'); btn.disabled=true; btn.textContent='Submitting…';
+  const captured = {
+    date_of_birth:STATE.date_of_birth||null, email:STATE.email||null, phone:STATE.phone||null,
+    current_address:STATE.current_address||null, employer:STATE.employer||null, job_title:STATE.job_title||null,
+    monthly_income:STATE.monthly_income||null, occupants:STATE.occupants||null, pets:STATE.pets||null,
+    desired_move_in:STATE.desired_move_in||null,
+  };
+  try{
+    const r = await fetch('/applications/submit-public', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ token:TOKEN, applicant_name:STATE.legal_name||null, captured }),
+    });
+    const out = await r.json();
+    if(!r.ok){ btn.disabled=false; btn.textContent='Submit application';
+      return screenMsg('—','Could not submit', (out&&out.receipt)||'Please try again.'); }
+    screenMsg('✓','Application submitted', "Thanks — the leasing team has your application and will follow up.");
+  }catch(e){ btn.disabled=false; btn.textContent='Submit application';
+    screenMsg('—','Could not submit',"Please check your connection and try again."); }
+}
+
+boot();
+</script>
+</body></html>`);
+  });
+
+  router._service = { createAndDispatchApplicationInvitation, createPreparedInvitation, attestInvitationSent, submitApplicationService, closeApprovalGate, spawnApprovalGate, approvalGateRole, resolveTenantContext };
   return router;
 };
