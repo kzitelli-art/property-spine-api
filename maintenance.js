@@ -23,7 +23,7 @@ module.exports = function maintenance(deps) {
   const router = express.Router();
 
   // ── injected core services (option 1: dependency injection) ──
-  const { pool, spawnObligationFromEvent } = deps;
+  const { pool, spawnObligationFromEvent, workOrderService } = deps;
   if (!pool) throw new Error("maintenance module requires a pool");
   if (typeof spawnObligationFromEvent !== "function") {
     throw new Error("maintenance module requires spawnObligationFromEvent()");
@@ -222,126 +222,28 @@ module.exports = function maintenance(deps) {
   //  the rest of the engine uses) — obligation born only from an event.
   // ════════════════════════════════════════════════════════════════
   router.post("/work-orders", async (req, res) => {
-    const {
-      property_id, unit_id, person_id,
-      title, description,
-      field_category, unit_state, cause, est_cost,
-      assigned_to,
-      is_emergency, emergency_type,
-    } = req.body || {};
-
-    if (!property_id) return res.status(400).json({ error: "property_id is required" });
-    if (!title)       return res.status(400).json({ error: "title is required" });
-
-    // If flagged emergency, the type must be one we know (or manager_override).
-    let emDef = null;
-    if (is_emergency) {
-      emDef = EMERGENCY_TYPES[emergency_type];
-      if (!emDef) {
-        return res.status(400).json({
-          error: "emergency_type required for emergency work order",
-          allowed: Object.keys(EMERGENCY_TYPES),
-        });
-      }
-    }
-
+    // Thin wrapper: business behavior (WO + urgency truth + universal obligation +
+    // event, all in ONE transaction) is owned by the canonical service. This route
+    // owns request shaping, the operator→urgency mapping, and the response contract.
+    const b = req.body || {};
     const client = await pool.connect();
     try {
       await client.query("begin");
-
-      // Validate references (clear errors, same style as /events).
-      const prop = await client.query("select id from properties where id=$1", [property_id]);
-      if (prop.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "property not found" }); }
-      if (unit_id) {
-        const u = await client.query("select id from units where id=$1", [unit_id]);
-        if (u.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "unit not found" }); }
-      }
-      if (person_id) {
-        const p = await client.query("select id from persons where id=$1", [person_id]);
-        if (p.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "person not found" }); }
-      }
-
-      // Derive the three-layer categories at the moment of capture.
-      const derived = deriveCategories({ field_category, unit_state, cause, is_emergency });
-
-      // Insert the work order against the REAL table shape.
-      const wo = await client.query(
-        `insert into work_orders
-           (property_id, unit_id, person_id, title, description,
-            status, assigned_to, source,
-            field_category, operating_category, gl_category,
-            unit_state, cause, is_emergency, is_capex, billback, est_cost,
-            needs_pm_review)
-         values ($1,$2,$3,$4,$5,
-                 'open',$6,$7,
-                 $8,$9,$10,
-                 $11,$12,$13,$14,$15,$16,
-                 $17)
-         returning *`,
-        [
-          property_id, unit_id ?? null, person_id ?? null, title, description ?? null,
-          assigned_to ?? null, "maintenance_module",
-          field_category ?? null, derived.operating_category, derived.gl_category,
-          unit_state ?? null, cause ?? null, !!is_emergency, derived.is_capex, derived.billback, est_cost ?? null,
-          // emergency items default to needing next-morning PM review
-          !!is_emergency,
-        ]
-      );
-      const workOrder = wo.rows[0];
-
-      // ── THE ENGINE LINK (emergency only) ──────────────────────────
-      let obligation = null;
-      let event = null;
-      if (is_emergency) {
-        const dueAt = urgencyToDueAt(emDef.urgency);
-        const priority = urgencyToPriority(emDef.urgency);
-
-        // 1) write the maintenance EVENT (the trigger surface).
-        //    note carries the escalation chain + WO link so the manager's
-        //    next-morning review has the full trail.
-        const noteObj = {
-          work_order_id: workOrder.id,
-          emergency_type: emergency_type,
-          emergency_label: emDef.label,
-          urgency: emDef.urgency,
-          escalation_chain: EMERGENCY_CHAIN,
-          assigned_to: assigned_to ?? "on_call_maintenance",
-        };
-        const ev = await client.query(
-          `insert into events (property_id, person_id, unit_id, type, note)
-           values ($1,$2,$3,'emergency_work_order',$4) returning *`,
-          [property_id, person_id ?? null, unit_id ?? null, JSON.stringify(noteObj)]
-        );
-        event = ev.rows[0];
-
-        // 2) spawn the OBLIGATION from that event — using the SHARED helper
-        //    injected from server.js. We do NOT write the insert ourselves.
-        //    First owner = on-call maintenance; escalates_to = property_manager.
-        //    required_inputs forces the closeout proof gate.
-        obligation = await spawnObligationFromEvent(client, {
-          property_id,
-          person_id: person_id ?? null,
-          unit_id: unit_id ?? null,
-          source_event_id: event.id,
-          module: "maintenance",
-          type: "emergency_repair",
-          label: `EMERGENCY: ${emDef.label} — needs on-call to own it`,
-          owner_type: "human",
-          assigned_role: "maintenance",
-          escalates_to_role: "property_manager",
-          status: "open",
-          due_at: dueAt,
-          priority,
-          severity: "emergency",
-          required_inputs: ["closeout_proof"],
-        });
-      }
-
+      const { workOrder, event, obligation } = await workOrderService.createWorkOrder(client, {
+        property_id: b.property_id, unit_id: b.unit_id, person_id: b.person_id,
+        title: b.title, description: b.description,
+        field_category: b.field_category, unit_state: b.unit_state, cause: b.cause, est_cost: b.est_cost,
+        assigned_to: b.assigned_to, source: "maintenance_module",
+        urgency_status: b.is_emergency ? "emergency" : "regular",
+        urgency_basis: b.is_emergency ? "operator marked emergency" : "operator entry",
+        urgency_decided_by: "operator", emergency_type: b.emergency_type,
+        idempotency_key: b.idempotency_key,
+      });
       await client.query("commit");
       res.status(201).json({ work_order: workOrder, event, obligation });
     } catch (e) {
-      await client.query("rollback");
-      res.status(500).json({ error: e.message });
+      try { await client.query("rollback"); } catch (_) {}
+      res.status(e.httpStatus || 500).json({ error: e.message, ...(e.allowed ? { allowed: e.allowed } : {}) });
     } finally {
       client.release();
     }
