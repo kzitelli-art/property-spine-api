@@ -682,6 +682,14 @@ module.exports = function agentModule(deps) {
 
       return {
         exists: true, conversation_id: conv.id,
+        // person + property of THIS conversation — the live detail must carry them
+        // so operator actions (e.g. Send application) act on the real person/scope,
+        // never a fixture. unit_id lets the send action use the conversation's unit
+        // when one is attached (else the operator selects a leaseable one).
+        // Additive; existing consumers ignore unknown fields.
+        person_id: conv.person_id || null,
+        property_id: conv.property_id || null,
+        unit_id: conv.unit_id || null,
         mode: state ? state.mode : "ai_active",
         thread_version: state ? Number(state.thread_version) : 0,
         messages, draft,
