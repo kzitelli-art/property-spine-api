@@ -542,34 +542,54 @@ module.exports = function applicationSubmissionModule(deps) {
     // authority — we ASK it to ensure the applicant_followup rung (idempotent,
     // conversion-scoped); the invitation module never spawns rungs itself. Same
     // transaction, so it sees the sent status we just wrote. Prepared invitations
-    // never reach here. Only advances when this invitation belongs to a conversion.
-    let applicant_followup = null;
-    if (inv.conversion_id && conversionService && conversionService.ensureApplicantFollowup) {
-      const ens = await conversionService.ensureApplicantFollowup(client, { conversion_id: inv.conversion_id });
-      applicant_followup = { ensured: ens.ensured, rung: ens.link && ens.link.rung, obligation_id: ens.link && ens.link.obligation_id };
-
-      // ONE LEASING OPPORTUNITY, ONE CURRENT FOLLOW-UP POSITION: sending the
-      // application IS the completion of the post-tour follow-up. Close the open
-      // tour_followup rung in the same transaction so this opportunity never
-      // sits in two buckets. suppress_next is mandatory — the applicant rung was
-      // just ensured above; the rail's
-      // auto-advance would double-spawn it. Mirrors the submission path exactly.
-      if (conversionService.resolveRung) {
-        const openTour = (await client.query(
-          `select lco.obligation_id from leasing_conversion_obligations lco
-            where lco.conversion_id=$1 and lco.rung='tour_followup' and lco.outcome is null
-            limit 1`, [inv.conversion_id])).rows[0];
-        if (openTour) {
-          const closed = await conversionService.resolveRung(client, {
-            obligation_id: openTour.obligation_id,
-            result: "completed",
-            by_user_id: sent_by_user_id || null,
-            suppress_next: true,
-            proof: { invitation_id: inv.id, kind: "application_link_sent" },
-          });
-          applicant_followup.tour_followup_closed = { obligation_id: openTour.obligation_id, outcome: closed.outcome };
-        }
+  // ── THE ONE APPLICANTS TRANSITION — shared by BOTH legitimate send sources ──
+  //  (manual attest AND provider SMS dispatch). Given a conversion whose
+  //  invitation just reached a SENT state, this advances the leasing
+  //  opportunity Post-Tour → Applicants: ensure the applicant_followup rung
+  //  (idempotent, conversion-scoped) AND close the open tour_followup rung in
+  //  the SAME transaction, so the opportunity is never in two buckets. One
+  //  transition mechanism, two send sources. Only advances when the invitation
+  //  belongs to a conversion. Returns a summary, or null.
+  //
+  //  resolution_basis: closing the tour rung requires a basis when the closer
+  //  does NOT own it. The sender may be covering another owner's follow-up
+  //  (the common case), so we pass 'coverage' when a human closes work they
+  //  don't own; the rail records 'owner' automatically when they do, and a
+  //  null actor (service close) is exempt. This is the honest attribution the
+  //  rail demands — never a silent close.
+  async function advanceOpportunityToApplicants(client, { conversion_id, invitation_id, by_user_id = null }) {
+    if (!conversion_id || !conversionService || !conversionService.ensureApplicantFollowup) return null;
+    const ens = await conversionService.ensureApplicantFollowup(client, { conversion_id });
+    const out = { ensured: ens.ensured, rung: ens.link && ens.link.rung, obligation_id: ens.link && ens.link.obligation_id };
+    if (conversionService.resolveRung) {
+      const openTour = (await client.query(
+        `select lco.obligation_id, lco.owner_user_id from leasing_conversion_obligations lco
+          where lco.conversion_id=$1 and lco.rung='tour_followup' and lco.outcome is null
+          limit 1`, [conversion_id])).rows[0];
+      if (openTour) {
+        // basis: 'coverage' only when an identified human is closing work they
+        // don't own; owner/service-close cases the rail resolves itself.
+        const closerOwns = by_user_id != null && openTour.owner_user_id != null && String(openTour.owner_user_id) === String(by_user_id);
+        const needsBasis = by_user_id != null && !closerOwns;
+        const closed = await conversionService.resolveRung(client, {
+          obligation_id: openTour.obligation_id,
+          result: "completed",
+          by_user_id: by_user_id || null,
+          suppress_next: true,
+          resolution_basis: needsBasis ? "coverage" : null,
+          proof: { invitation_id, kind: "application_link_sent" },
+        });
+        out.tour_followup_closed = { obligation_id: openTour.obligation_id, outcome: closed.outcome };
       }
+    }
+    return out;
+  }
+
+  // never reach here. Only advances when this invitation belongs to a conversion.
+    let applicant_followup = null;
+    if (inv.conversion_id) {
+      applicant_followup = await advanceOpportunityToApplicants(client, {
+        conversion_id: inv.conversion_id, invitation_id: inv.id, by_user_id: sent_by_user_id || null });
     }
 
     return {
@@ -1026,6 +1046,56 @@ boot();
 </body></html>`);
   });
 
-  router._service = { createAndDispatchApplicationInvitation, createPreparedInvitation, attestInvitationSent, submitApplicationService, closeApprovalGate, spawnApprovalGate, approvalGateRole, resolveTenantContext };
+  // ══════════════════════════════════════════════════════════════════
+  //  sendApplication — THE ONE canonical business operation.
+  //  The operator thinks ONE thought ("Send application"); this owns the whole
+  //  action: guard against a double-send, dispatch the link over SMS (records
+  //  the provider SID), and — only on provider acceptance — advance the
+  //  opportunity to Applicants. The route and UI see ONE operation, never the
+  //  internal steps. Actor + property are passed by the session-scoped route.
+  //
+  //  DOUBLE-TAP: an opportunity gets ONE active application invitation. If this
+  //  conversion already has one that's been sent (manually_sent /
+  //  provider_dispatched) and is still live (not consumed/revoked/expired), a
+  //  second tap does NOT create a second invitation or a second text — it
+  //  returns that existing send idempotently. They're already in Applicants.
+  async function sendApplication({ property_id, person_id, unit_id, conversion_id = null, created_by_user_id = null, intended_move_in = null }) {
+    // 1) DOUBLE-TAP GUARD — an already-sent, still-live invitation on this
+    //    conversion means the application is already out. No second send.
+    if (conversion_id) {
+      const existing = (await pool.query(
+        `select id, status, provider_message_id from application_invitations
+          where conversion_id=$1 and status in ('manually_sent','provider_dispatched')
+          order by sent_at desc nulls last limit 1`, [conversion_id])).rows[0];
+      if (existing) {
+        return { sent: true, idempotent: true, invitation_id: existing.id, status: existing.status,
+                 provider_message_id: existing.provider_message_id || null,
+                 receipt: "Application already sent — no second text." };
+      }
+    }
+    // 2) DISPATCH — the proven primitive (validates person+unit belong to the
+    //    property, creates the prepared invitation, sends via the ONE comms
+    //    gate, records the SID on acceptance; on refusal, revokes honestly).
+    const out = await createAndDispatchApplicationInvitation({
+      property_id, person_id, unit_id, conversion_id, created_by_user_id });
+    if (!out || !out.dispatched) return out;   // honest failure passes straight through — NO advance
+    // 3) ADVANCE — only on provider acceptance. One shared transition helper,
+    //    its own txn. The SMS is already out; an advance hiccup is a follow-up
+    //    reconciliation, not a dispatch failure.
+    if (conversion_id) {
+      try {
+        await runTx(async (client) => {
+          out.applicant_followup = await advanceOpportunityToApplicants(client, {
+            conversion_id, invitation_id: out.invitation_id, by_user_id: created_by_user_id || null });
+        });
+      } catch (e) {
+        out.applicant_followup = { advance_error: e.publicMessage || e.message };
+      }
+    }
+    out.sent = true;
+    return out;
+  }
+
+  router._service = { sendApplication, createAndDispatchApplicationInvitation, createPreparedInvitation, attestInvitationSent, submitApplicationService, closeApprovalGate, spawnApprovalGate, approvalGateRole, resolveTenantContext };
   return router;
 };
