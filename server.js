@@ -3171,9 +3171,7 @@ app.post("/ingest/:runId/approve", async (req, res) => {
 });
 
 // ── MAINTENANCE MODULE (isolated; injected pool + shared obligation path) ──
-const { makeWorkOrderService } = require("./work_order_service.js");
-const workOrderService = makeWorkOrderService({ spawnObligationFromEvent }); // ONE canonical work-order creation path (operator + tenant)
-app.use("/", maintenanceModule({ pool, spawnObligationFromEvent, workOrderService }));
+app.use("/", maintenanceModule({ pool, spawnObligationFromEvent }));
 // applications module mounted lower (after the conversion + submission services exist,
 // so /approve can close the leasing_manager application_approval gate). See below.
 app.use("/", leasePacketsModule({ pool, satisfyObligation }));
@@ -3257,7 +3255,7 @@ app.post("/sms-proof", async (req, res) => {
     return res.status(500).json({ sent: false, reason: "proof_route_error", error: e.message });
   }
 });
-app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService }));
+app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary }));
 app.use("/", teamAccessModule({ pool, sms, commBoundary }));
 // owner-facing aggregate views (cards + attention queue). Only needs pool.
 app.use("/", ownerModule({ pool }));
@@ -3357,6 +3355,9 @@ app.use("/", require("./operator_session_bootstrap")({ pool })); // BRICK ONE: P
 const operatorModule = require("./operator");
 app.use("/", operatorModule({ pool, agentService: agentApp._service,
   leasingTourService: __leasingLeads._service, // the ONE completion service (leasingleads.js) — session door calls the same tx
+  // the invitation service (applicationSubmission) — the session-gated operator
+  // route calls its create/attest services; no duplicate invitation logic.
+  applicationInvitations: __applicationSubmission._service,
   // 067 follow-on: the session-authed leasing task queue resolves through the
   // conversion rail's ONE resolveRung service — no module reimplements closing.
   conversionService: __leasingConversion._service }));
