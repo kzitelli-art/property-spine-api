@@ -3171,7 +3171,9 @@ app.post("/ingest/:runId/approve", async (req, res) => {
 });
 
 // ── MAINTENANCE MODULE (isolated; injected pool + shared obligation path) ──
-app.use("/", maintenanceModule({ pool, spawnObligationFromEvent }));
+const { makeWorkOrderService } = require("./work_order_service.js");
+const workOrderService = makeWorkOrderService({ spawnObligationFromEvent }); // ONE canonical work-order creation path (operator + tenant)
+app.use("/", maintenanceModule({ pool, spawnObligationFromEvent, workOrderService }));
 // applications module mounted lower (after the conversion + submission services exist,
 // so /approve can close the leasing_manager application_approval gate). See below.
 app.use("/", leasePacketsModule({ pool, satisfyObligation }));
@@ -3255,7 +3257,7 @@ app.post("/sms-proof", async (req, res) => {
     return res.status(500).json({ sent: false, reason: "proof_route_error", error: e.message });
   }
 });
-app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary }));
+app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService }));
 app.use("/", teamAccessModule({ pool, sms, commBoundary }));
 // owner-facing aggregate views (cards + attention queue). Only needs pool.
 app.use("/", ownerModule({ pool }));
