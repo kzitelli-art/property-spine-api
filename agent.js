@@ -241,25 +241,59 @@ module.exports = function agentModule(deps) {
   // demo run's tenant person + property. We expose a demo-friendly entry that the
   // tenant browser calls. It does the FULL two-transaction loop.
   //
-  // Body: { property_id, person_id, unit_id?, body, idempotency_key? }
-  router.post("/agent/inbound", async (req, res) => {
-    const b = req.body || {};
+  // Body: { property_id, person_id, unit_id?, body, idempotency_key?, sms_sid? }
+  //   sms_sid: present when this inbound arrived via the SMS door (the Twilio
+  //   MessageSid, handed off from the inbound-sms webhook). It is the SAME
+  //   idempotency anchor the tenant door uses. A Twilio retry that reaches here
+  //   before the first attempt committed must NOT create a second inbound
+  //   comm_event — so we dedup on sms_sid FIRST, and STAMP it on the insert so
+  //   the anchor persists. (idempotency_key still guards agent_runs below,
+  //   preventing a duplicate REPLY; this guards the RECORD.)
+  // ── SHARED INBOUND SERVICE (in-process, one owner) ──────────────────
+  //  processInbound(b) is the single canonical inbound-agent path. BOTH the
+  //  public /agent/inbound route AND the SMS webhook (via _service) call it —
+  //  no loopback HTTP, no duplicated logic. It returns { status, body } so the
+  //  route can map it to res; callers that don't need HTTP just read body.
+  //  Input b: { property_id, person_id, unit_id?, body, idempotency_key?, sms_sid? }
+  //   sms_sid: present when this inbound arrived via the SMS door (the Twilio
+  //   MessageSid). It is the SAME idempotency anchor the tenant door uses. A
+  //   Twilio retry that reaches here before the first attempt committed must
+  //   NOT create a second inbound comm_event — we dedup on sms_sid FIRST, and
+  //   STAMP it on the insert so the anchor persists (comm_events.sms_sid is
+  //   UNIQUE-indexed, so a concurrent double-insert raises 23505, which we
+  //   catch and treat as an idempotent replay rather than a 500).
+  //   (idempotency_key still guards agent_runs, preventing a duplicate REPLY;
+  //   sms_sid guards the RECORD.)
+  async function processInbound(b) {
+    b = b || {};
     if (!b.property_id || !b.person_id || !b.body) {
-      return res.status(400).json({ error: "property_id, person_id, and body are required." });
+      return { status: 400, body: { error: "property_id, person_id, and body are required." } };
     }
     try {
+      // SMS IDEMPOTENCY (across the webhook→agent handoff): if this MessageSid
+      // already produced an inbound comm_event, this is a retry — ack as a
+      // no-op. Never a second record, never a second downstream reply.
+      if (b.sms_sid) {
+        const dup = (await pool.query(
+          `select id from comm_events where sms_sid = $1 limit 1`, [b.sms_sid]
+        )).rows[0];
+        if (dup) {
+          return { status: 200, body: { ok: true, idempotentReplay: true, inbound_comm_event_id: dup.id } };
+        }
+      }
       // ── TX1: persist canonical inbound, lock state, bump version, create pending
       //         run, create/refresh the review obligation. NO model call here. ──
       const tx1 = await tx(async (client) => {
         const conv = await ensureConversation(client, { person_id: b.person_id, property_id: b.property_id });
         const state = await loadThreadState(client, conv.id, true); // FOR UPDATE
 
-        // persist the canonical inbound comm_event (the real record)
+        // persist the canonical inbound comm_event (the real record). sms_sid is
+        // stamped when present (SMS door) — the unique idempotency anchor.
         const inbound = (await client.query(
           `insert into comm_events
-             (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification, sender_role)
-           values ($1,$2,$3,$4,'text','inbound',$5,'leasing','prospect') returning id`,
-          [b.property_id, b.person_id, b.unit_id || null, conv.id, b.body]
+             (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification, sender_role, sms_sid)
+           values ($1,$2,$3,$4,'text','inbound',$5,'leasing','prospect',$6) returning id`,
+          [b.property_id, b.person_id, b.unit_id || null, conv.id, b.body, b.sms_sid || null]
         )).rows[0];
         await client.query("update conversations set last_message_at = now() where id=$1", [conv.id]);
 
@@ -414,10 +448,10 @@ module.exports = function agentModule(deps) {
       });
 
       if (tx1.skipModel) {
-        return res.json({ ok: true, skipped: true, mode: tx1.mode, reason: "thread is human-owned; no agent draft generated" });
+        return { status: 200, body: { ok: true, skipped: true, mode: tx1.mode, reason: "thread is human-owned; no agent draft generated" } };
       }
       if (tx1.reuse) {
-        return res.json({ ok: true, reused: true, run_id: tx1.run.id, status: tx1.run.status });
+        return { status: 200, body: { ok: true, reused: true, run_id: tx1.run.id, status: tx1.run.status } };
       }
 
       // ── pre-generation policy: sensitive inbound → handoff, restricted prompt ──
@@ -646,11 +680,32 @@ module.exports = function agentModule(deps) {
         }).catch(() => {});
       } catch (_) {}
 
-      return res.json(result);
+      return { status: 200, body: result };
     } catch (e) {
+      // CONCURRENCY: two Twilio deliveries with the same MessageSid can race
+      // past the pre-check above and both attempt the inbound insert. The
+      // UNIQUE index on comm_events.sms_sid makes the loser raise 23505. That
+      // is not a failure — it is the idempotency guarantee firing. Resolve the
+      // existing row and return it as an idempotent replay (never a 500).
+      if (e && e.code === "23505" && b && b.sms_sid) {
+        const existing = (await pool.query(
+          `select id from comm_events where sms_sid = $1 limit 1`, [b.sms_sid]
+        )).rows[0];
+        if (existing) {
+          return { status: 200, body: { ok: true, idempotentReplay: true, inbound_comm_event_id: existing.id } };
+        }
+      }
       console.error("[agent/inbound]", e && e.message ? e.message : e);
-      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || "agent inbound failed" });
+      return { status: e.httpStatus || 500, body: { error: e.publicMessage || "agent inbound failed" } };
     }
+  }
+
+  // THIN ROUTE: the public door. Delegates to the shared service; both this
+  // route and the SMS webhook (via router._service.processInbound) run the
+  // SAME in-process path — no loopback HTTP boundary.
+  router.post("/agent/inbound", async (req, res) => {
+    const out = await processInbound(req.body || {});
+    return res.status(out.status).json(out.body);
   });
 
   // ── manager READ: the current draft + thread state for a conversation ──────
@@ -1043,6 +1098,7 @@ module.exports = function agentModule(deps) {
     sendDraftService, getConversationStateService, takeOverConversationService,
     handBackConversationService,
     regenerateDraftService, resolveConversationByPair,
+    processInbound,
   };
   return router;
 };
