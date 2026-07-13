@@ -1369,19 +1369,10 @@ module.exports = function operatorModule(deps) {
   // due_at, created_at, id (stable tie-break). Bounded: limit ≤ 200, keyset
   // cursor. A null owner, null due date, or sibling type NEVER hides a row.
   // ── resolvePropertyOperatingTimeZone ─────────────────────────────────
-  //  A property's "today" is its OPERATIONAL day, not UTC and not a hidden
-  //  Eastern assumption baked into a generic route. Until properties carries
-  //  a timezone column, the source of truth is this explicit, audited
-  //  allowlist (production Demo Building) plus the PROPERTY_OPERATING_TZ_JSON
-  //  env map for QA rigs. An UNCONFIGURED property gets an honest refusal —
-  //  never an invented day.
-  const PROPERTY_OPERATING_TZ = Object.assign(
-    { "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe": "America/New_York" }, // Property Spine Demo Building
-    (function(){ try { return JSON.parse(process.env.PROPERTY_OPERATING_TZ_JSON || "{}"); } catch (_) { return {}; } })()
-  );
-  function resolvePropertyOperatingTimeZone(propertyId) {
-    return PROPERTY_OPERATING_TZ[propertyId] || null;
-  }
+  //  Resolved through the ONE shared resolver (property_timezone.js) — the SAME
+  //  truth leasingleads.js uses for agent tour-offer local times. An
+  //  UNCONFIGURED property gets an honest null (never an invented day).
+  const { resolvePropertyOperatingTimeZone } = require("./property_timezone");
 
   // ══════════════════════════════════════════════════════════════════
   //  LIVE TOUR SURFACE (session door) — the reads/writes that let the
