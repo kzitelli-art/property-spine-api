@@ -116,7 +116,7 @@ app.use(express.json({ limit: "1mb" }));  // body-size cap — stops oversized p
 // run after this and check the SAME key — redundant but harmless; slated
 // for removal in a later cleanup, not worth a 3-file deploy today.
 const OPERATOR_KEY = process.env.OPERATOR_KEY;
-const PUBLIC_EXACT = new Set(["/health", "/leasing/intake"]); // /leasing/intake carries its own intake-secret (webhooks have no operator key)
+const PUBLIC_EXACT = new Set(["/health", "/leasing/intake", "/communications/inbound-sms"]); // these carry their OWN auth (intake-secret / Twilio signature) — webhooks can't send an operator key
 // NOTE: "/agent/" is public ONLY for the two-phone browser DEMO (synthetic data,
 // operator-controlled). The agent operates on real records and proposes outbound
 // messages — so before any REAL lead touches this, "/agent/" MUST be removed from
