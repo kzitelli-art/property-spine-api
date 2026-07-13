@@ -391,7 +391,7 @@ module.exports = function applicationSubmissionModule(deps) {
          values ($1,$2,$3,$4,$5,'prepared',$6,$7) returning *`,
         [digestToken(rawToken), conversion_id, person_id, property_id, unit_id, expires_at, created_by_user_id]
       )).rows[0];
-      const url = `${base}/apply/${rawToken}`;
+      const url = `${base}/t/application/${rawToken}`;
       const body = `${message_prefix ? message_prefix + " " : ""}Here's your secure application link: ${url}`;
       const evt = (await client.query(
         `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification, sender_role, sent_by_user_id)
