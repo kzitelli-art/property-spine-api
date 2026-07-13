@@ -768,31 +768,22 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         return res.json({ receipt: `You're already booked${liveTour.scheduled_for ? " for " + liveTour.scheduled_for : ""}.`, tour_id: liveTour.id, already_booked: true });
       }
 
-      // 8) create the tour on this slot (status 'scheduled'). commercial_state=
-      //    booked_tour is DERIVED by the queue projection from this live tour —
-      //    no lead status is mutated here (D-6).
-      const tour = (await client.query(
-        `insert into leasing_tours (lead_id, property_id, unit_id, leasing_agent_id, slot_id, scheduled_for, status)
-         values ($1,$2,$3,$4,$5,$6,'scheduled') returning *`,
-        [lead.id, lead.property_id, slot.unit_id, slot.leasing_agent_id, slotId, slot.starts_at])).rows[0];
-
-      // 9) flip the slot to booked (partial unique index is the race backstop).
-      await client.query(
-        `update tour_availability set status='booked', booked_tour_id=$1, updated_at=now() where id=$2`,
-        [tour.id, slotId]);
-
-      // 10) tour_events: scheduled — actor is the prospect (they booked it).
-      await recordTourEvent(client, {
-        tourId: tour.id, leadId: lead.id, type: "scheduled",
-        actorType: "prospect", actorId: lead.person_id, slotId,
-        metadata: { scheduled_for: slot.starts_at, slot_id: slotId, via: "public_demo_booking" },
-      });
-
-      // 11) funnel advances via the SAME recordLeadEvent the operator path uses.
-      await recordLeadEvent(client, {
-        leadId: lead.id, type: "tour_scheduled", actorType: "system",
-        metadata: { tour_id: tour.id, slot_id: slotId, scheduled_for: slot.starts_at, via: "public_demo_booking" },
-        statusPatch: { tour_scheduled_at: slot.starts_at },
+      // 8-11) CORE BOOKING via the shared canonical service — the SAME
+      //    transaction the agent uses. It re-reads+locks the slot, re-verifies
+      //    property/lead/slot authority, writes leasing_tours, flips the slot,
+      //    and advances the funnel with split (system-execution) attribution.
+      //    The link path's authority (token → link → lead/slot) was already
+      //    verified above (steps 1-7); this performs the governed write.
+      //    Idempotency for the LINK path stays keyed on the single-use token
+      //    (steps 2 & 12), so no per-action key is passed here.
+      const { tour } = await bookTourIntoSlot(client, {
+        leadId: lead.id,
+        slotId,
+        subjectPersonId: lead.person_id,
+        via: "public_demo_booking",
+        // link path is already scope-walled to the Demo Building above; it does
+        // not require the separate agent-booking capability gate.
+        requireAgentBookingCapability: false,
       });
 
       // 12) consume the link (single-use).
@@ -1127,6 +1118,269 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     sets.push(`updated_at=now()`); vals.push(tourId);
     await client.query(`update leasing_tours set ${sets.join(", ")} where id=$${i}`, vals);
     return ev;
+  }
+
+  // ════════════════════════════════════════════════════════════════════
+  //  SHARED CANONICAL BOOKING SERVICE — bookTourIntoSlot
+  //
+  //  The ONE transaction that turns an eligible slot into a live tour in
+  //  leasing_tours (the Tours module's table). BOTH the public /demo/book link
+  //  route AND the agent's book_tour tool call this — one code path, one
+  //  double-booking wall, one funnel advance. No caller may reimplement it.
+  //
+  //  GOVERNED WRITE (not a consequence of being allowed to converse). Every
+  //  authority fact is re-verified HERE, server-side, under lock — a model- or
+  //  client-supplied lead/slot/property relationship is NEVER trusted:
+  //    · the slot is RE-READ and LOCKED (for update) — a slot id the model saw
+  //      in a prompt is proof of nothing; only a currently-open row books.
+  //    · the slot's property must equal the lead's property (no cross-property).
+  //    · the lead must belong to that property and still be eligible.
+  //    · soft-closed conversations are refused (dormant guard) when wired.
+  //
+  //  IDEMPOTENCY is per CONFIRMATION ACTION, not per lead (a lead may
+  //  legitimately book/reschedule more than one tour over its life):
+  //    · idempotencyKey (agent path: the inbound MessageSid) → same key retried
+  //      converges on the SAME tour. The partial-unique index on
+  //      leasing_tours.booking_idempotency_key (mig 079) is the race backstop:
+  //      a concurrent retry raises 23505, which the caller catches and resolves
+  //      to the existing tour — never a 500, never a duplicate.
+  //    · the slot lock INDEPENDENTLY stops two DIFFERENT people taking one slot.
+  //
+  //  ATTRIBUTION stays split (authenticated actor ≠ subject ≠ host ≠ completer):
+  //    · EXECUTION actor = 'system' (the platform performed the write).
+  //    · the SUBJECT/confirming prospect is recorded as subject_person_id in the
+  //      tour_event metadata (never collapsed into the execution actor).
+  //    · the ORIGINATING cause (comm_event id / agent run) is recorded too.
+  //
+  //  Returns { tour, alreadyBooked }. Throws typed-ish errors with .publicMessage
+  //  and .httpStatus for the caller to map. Runs INSIDE the caller's client/txn.
+  // ════════════════════════════════════════════════════════════════════
+  async function bookTourIntoSlot(client, {
+    leadId,
+    slotId,
+    subjectPersonId = null,     // the prospect who confirmed (subject, NOT executor)
+    sourceCommEventId = null,   // the inbound comm_event that carried the confirmation
+    sourceAgentRunId = null,    // the agent run that caused the booking (if any)
+    idempotencyKey = null,      // per-ACTION key (agent: the MessageSid)
+    via = "agent_book_tour",    // provenance label
+    requireAgentBookingCapability = false, // when true, property must be agent-booking-enabled
+  }) {
+    if (!leadId || !slotId) {
+      const e = new Error("leadId and slotId are required."); e.httpStatus = 400; e.publicMessage = e.message; throw e;
+    }
+
+    // ── ACTION IDEMPOTENCY (pre-check): a retried confirmation returns the same
+    //    tour without booking again. The unique index is the concurrent backstop.
+    if (idempotencyKey) {
+      const prior = (await client.query(
+        `select id, scheduled_for from leasing_tours where booking_idempotency_key=$1 limit 1`,
+        [idempotencyKey])).rows[0];
+      if (prior) return { tour: prior, alreadyBooked: true };
+    }
+
+    // ── LEAD authority: re-read; must exist and still be eligible (not lost). ──
+    const lead = (await client.query(`select * from leasing_leads where id=$1`, [leadId])).rows[0];
+    if (!lead) { const e = new Error("Could not find the inquiry for this booking."); e.httpStatus = 404; e.publicMessage = e.message; throw e; }
+    if (lead.status === "lost" || lead.status === "leased") {
+      const e = new Error("This inquiry is no longer eligible for a tour."); e.httpStatus = 409; e.publicMessage = e.message; throw e;
+    }
+
+    // ── CAPABILITY: property must be enabled for agent booking (governed). This
+    //    is a PERMANENT capability check, distinct from any demo flag. ──
+    if (requireAgentBookingCapability && !propertyAgentBookingEnabled(lead.property_id)) {
+      const e = new Error("Tour booking isn't enabled for this property yet."); e.httpStatus = 403; e.publicMessage = e.message; throw e;
+    }
+
+    // ── SLOT authority: RE-READ + LOCK. Never trust a slot id from the model. ──
+    const slot = (await client.query(`select * from tour_availability where id=$1 for update`, [slotId])).rows[0];
+    if (!slot) { const e = new Error("No slot with that id."); e.httpStatus = 404; e.publicMessage = e.message; throw e; }
+    if (slot.status !== "open") { const e = new Error("That time was just taken. Please pick another."); e.httpStatus = 409; e.publicMessage = e.message; throw e; }
+    // CROSS-PROPERTY WALL: the slot must belong to the lead's property.
+    if (slot.property_id !== lead.property_id) {
+      const e = new Error("That slot isn't at this property."); e.httpStatus = 409; e.publicMessage = e.message; throw e;
+    }
+
+    // ── soft-closed conversation guard (when the lifecycle service is present) ──
+    if (leasingLifecycle && typeof leasingLifecycle.assertNotSoftClosedForLead === "function") {
+      await leasingLifecycle.assertNotSoftClosedForLead(client, { leadId: lead.id });
+    }
+
+    // ── create the tour on this slot (status 'scheduled'). Execution is SYSTEM;
+    //    the confirming prospect + originating cause are recorded, not conflated.
+    const tour = (await client.query(
+      `insert into leasing_tours
+         (lead_id, property_id, unit_id, leasing_agent_id, slot_id, scheduled_for, status, booking_idempotency_key)
+       values ($1,$2,$3,$4,$5,$6,'scheduled',$7) returning *`,
+      [lead.id, lead.property_id, slot.unit_id, slot.leasing_agent_id, slotId, slot.starts_at, idempotencyKey || null])).rows[0];
+
+    // flip the slot to booked (partial unique index is the concurrent backstop)
+    await client.query(
+      `update tour_availability set status='booked', booked_tour_id=$1, updated_at=now() where id=$2`,
+      [tour.id, slotId]);
+
+    // tour_events: EXECUTION actor is 'system'; the prospect is the SUBJECT
+    // (recorded in metadata), the originating comm_event/run is the CAUSE.
+    await recordTourEvent(client, {
+      tourId: tour.id, leadId: lead.id, type: "scheduled",
+      actorType: "system", actorId: null, slotId,
+      metadata: {
+        scheduled_for: slot.starts_at, slot_id: slotId, via,
+        subject_person_id: subjectPersonId || lead.person_id,
+        source_comm_event_id: sourceCommEventId,
+        source_agent_run_id: sourceAgentRunId,
+        execution_actor: "system",
+      },
+    });
+
+    // funnel advance — SAME recordLeadEvent the operator/link paths use.
+    await recordLeadEvent(client, {
+      leadId: lead.id, type: "tour_scheduled", actorType: "system",
+      commEventId: sourceCommEventId || null,
+      metadata: {
+        tour_id: tour.id, slot_id: slotId, scheduled_for: slot.starts_at, via,
+        subject_person_id: subjectPersonId || lead.person_id,
+        source_agent_run_id: sourceAgentRunId,
+      },
+      statusPatch: { tour_scheduled_at: slot.starts_at },
+    });
+
+    return { tour, alreadyBooked: false };
+  }
+
+  // Property capability for AGENT tour booking. PERMANENT gate (not a demo flag):
+  // a property is agent-booking-enabled iff its id is in
+  // AGENT_TOUR_BOOKING_PROPERTY_IDS (comma-separated). Absent = OFF everywhere.
+  // Conversation permission and booking authority are SEPARATE activations —
+  // being allowed to reply never implies being allowed to book.
+  function propertyAgentBookingEnabled(propertyId) {
+    const perim = (process.env.AGENT_TOUR_BOOKING_PROPERTY_IDS || "")
+      .split(",").map(s => s.trim()).filter(Boolean);
+    return perim.includes(String(propertyId));
+  }
+
+  // Property operating timezone — resolved through the ONE shared resolver
+  // (property_timezone.js), the SAME truth operator.js uses. Honest null for an
+  // unconfigured property; booking/offers refuse rather than invent local times.
+  const { resolvePropertyOperatingTimeZone } = require("./property_timezone");
+  function propertyTimezone(propertyId) {
+    return resolvePropertyOperatingTimeZone(propertyId); // null = unconfigured
+  }
+
+  // ── OFFERABLE SLOTS READER — the slots the agent may OFFER this turn,
+  //    formatted in the property's OPERATING timezone. If the property's tz is
+  //    UNCONFIGURED, returns null: no labels, and the caller must not offer or
+  //    book (honest refusal, never an invented local time). Returns real open,
+  //    future slots with a stable id + human label.
+  async function readOfferableSlots(client, { propertyId, limit = 4 }) {
+    const tz = propertyTimezone(propertyId);
+    if (!tz) return null; // unconfigured tz → no offer set (honest)
+    const rows = (await (client || pool).query(
+      `select id, starts_at, ends_at, unit_id
+         from tour_availability
+        where property_id=$1 and status='open' and starts_at > now()
+        order by starts_at
+        limit $2`, [propertyId, limit])).rows;
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz, weekday: "short", month: "short", day: "numeric",
+      hour: "numeric", minute: "2-digit",
+    });
+    return rows.map(r => ({
+      slot_id: r.id,
+      unit_id: r.unit_id,
+      starts_at: r.starts_at,
+      label: fmt.format(new Date(r.starts_at)), // e.g. "Thu, Jul 16, 2:00 PM"
+    }));
+  }
+
+  // ── DURABLE OFFER RECORD ─────────────────────────────────────────────
+  //  A slot is confirmable later ONLY because it was actually PRESENTED to the
+  //  prospect in an outbound message — recorded here, connecting the exact
+  //  stated slot ids + the outbound comm_event + the run + freshness. NOT the
+  //  whole context pool. recordTourOffer SUPERSEDES prior active offers for the
+  //  conversation by default (a new availability offer replaces the old set),
+  //  so contradictory offers never stay simultaneously bookable.
+  const OFFER_TTL_MINUTES = 60 * 48; // 48h freshness on an offer
+  // The OFFER RECORD owns the active→superseded transition — the conversation
+  // (agent turn) never decides it. The algorithm is atomic by construction:
+  //   BEGIN → mark current active offer superseded → insert new active → COMMIT
+  // so there is EXACTLY ONE active offer per conversation, guaranteed. The
+  // partial unique index (agent_tour_offers_one_active_per_conv) makes that a
+  // hard DB invariant: a concurrent second writer raises 23505 rather than
+  // leaving two active offers. resolveActiveOfferedSlotIds is then trivial —
+  // there is one active offer, not "the newest by ordering."
+  //
+  // Runs in its OWN transaction on its OWN connection (decoupled from any caller
+  // tx and from the dispatch path). supersede=false would supplement instead of
+  // replace, but the default and only current caller is supersede=true.
+  async function recordTourOffer(clientIgnored, { conversationId, leadId, propertyId, agentRunId, outboundCommEventId, slotIds, supersede = true }) {
+    if (!conversationId || !propertyId || !Array.isArray(slotIds) || !slotIds.length) return null;
+    const expires = new Date(Date.now() + OFFER_TTL_MINUTES * 60 * 1000);
+    const c = await pool.connect();
+    try {
+      await c.query("begin");
+      if (supersede) {
+        await c.query(
+          `update agent_tour_offers set status='superseded'
+            where conversation_id=$1 and status='active'`, [conversationId]);
+      }
+      const row = (await c.query(
+        `insert into agent_tour_offers
+           (conversation_id, lead_id, property_id, agent_run_id, outbound_comm_event_id, slot_ids, expires_at, status)
+         values ($1,$2,$3,$4,$5,$6::jsonb,$7,'active') returning *`,
+        [conversationId, leadId || null, propertyId, agentRunId || null, outboundCommEventId || null,
+         JSON.stringify(slotIds.map(String)), expires.toISOString()]
+      )).rows[0];
+      await c.query("commit");
+      return row;
+    } catch (e) {
+      try { await c.query("rollback"); } catch (_) {}
+      // 23505 on the one-active-per-conv index = a concurrent offer already won.
+      // The active offer is whatever committed first; surface it rather than
+      // leaving a contradictory state or throwing into the reply loop.
+      if (e && e.code === "23505") {
+        const existing = (await pool.query(
+          `select * from agent_tour_offers where conversation_id=$1 and status='active' limit 1`, [conversationId])).rows[0];
+        if (existing) return existing;
+      }
+      throw e;
+    } finally { c.release(); }
+  }
+
+  // Trivial by construction: there is at most ONE active offer per conversation
+  // (recordTourOffer's atomic supersede+insert + the DB unique index guarantee
+  // it). So this is a single-row lookup, not a "newest by ordering" heuristic.
+  // A superseded or expired offer authorizes nothing.
+  async function resolveActiveOfferedSlotIds(client, { conversationId }) {
+    if (!conversationId) return { ids: new Set(), offerId: null };
+    const row = (await (client || pool).query(
+      `select id, slot_ids from agent_tour_offers
+        where conversation_id=$1 and status='active' and expires_at > now()
+        limit 1`, [conversationId])).rows[0];
+    if (!row) return { ids: new Set(), offerId: null };
+    let arr = row.slot_ids;
+    if (typeof arr === "string") { try { arr = JSON.parse(arr); } catch (_) { arr = []; } }
+    const ids = new Set((Array.isArray(arr) ? arr : []).map(String));
+    return { ids, offerId: row.id };
+  }
+
+  // Mark an offer consumed once its slot is booked (bookkeeping; the tour's own
+  // idempotency key is the real exactly-once guard).
+  async function consumeTourOffer(client, { offerId }) {
+    if (!offerId) return;
+    await (client || pool).query(`update agent_tour_offers set status='consumed' where id=$1 and status='active'`, [offerId]).catch(() => {});
+  }
+
+  // Best-effort provenance: after the presenting reply actually dispatches,
+  // link its outbound comm_event to the offer row. This is PROVENANCE, not
+  // authority — the offer already exists and already authorizes confirmation
+  // (recorded when the model stated the slots). A dispatch hiccup must never
+  // un-authorize a stated offer, so this is fire-and-forget.
+  async function attachOutboundToOffer(client, { offerId, outboundCommEventId }) {
+    if (!offerId || !outboundCommEventId) return;
+    await (client || pool).query(
+      `update agent_tour_offers set outbound_comm_event_id=$2 where id=$1 and outbound_comm_event_id is null`,
+      [offerId, outboundCommEventId]
+    ).catch(() => {});
   }
 
   // ── OPEN A SLOT — operator opens real availability (the truth source) ──
@@ -1938,6 +2192,16 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
 
   // ONE canonical completion service, exposed for the staff-session door
   // in operator.js — the same no-fork handoff as agentApp._service.
-  router._service = { completeTour: completeTourService };
+  router._service = {
+    completeTour: completeTourService,
+    bookTourIntoSlot,          // the ONE canonical booking transaction
+    readOfferableSlots,        // slots the agent may offer this turn (property tz; null if tz unconfigured)
+    recordTourOffer,           // durable offer record (atomic supersede+insert; owns the transition)
+    resolveActiveOfferedSlotIds, // the single active offer's slot ids (booking authority)
+    consumeTourOffer,          // mark an offer consumed on booking
+    attachOutboundToOffer,     // best-effort provenance link to the dispatched outbound
+    propertyAgentBookingEnabled, // permanent per-property booking capability
+    propertyTimezone,          // shared honest-null tz resolver
+  };
   return router;
 };
