@@ -646,8 +646,15 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
           and status in ('manually_sent','provider_dispatched')
         limit 1`, [conversion_id])).rows[0];
     if (!sent) throw httpErr(409, "No sent application invitation on this conversion — Applicants work is created only by an actual send (a prepared link does not count).");
+    // IDEMPOTENT on the OPEN rung only. A CLOSED applicant_followup (outcome
+    // set — e.g. resolved during earlier churn, or a revoke-and-resend cycle)
+    // does NOT block re-advancing: if there is a live sent invitation but no
+    // OPEN applicant rung, the opportunity belongs in Applicants and we spawn a
+    // fresh one. (Mirrors ensureLeaseSignatureFollowup, which already scopes to
+    // outcome is null.) Prevents a person getting stranded in Post-Tour after a
+    // resend when the prior applicant rung was closed.
     const existing = (await client.query(
-      `select * from leasing_conversion_obligations where conversion_id=$1 and rung='applicant_followup' limit 1`,
+      `select * from leasing_conversion_obligations where conversion_id=$1 and rung='applicant_followup' and outcome is null limit 1`,
       [conversion_id])).rows[0];
     if (existing) return { ensured: false, link: existing };
     const owned = await eligibleOwner(client, conv.property_id, [owner_user_id, conv.conversation_owner_user_id]);
