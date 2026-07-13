@@ -479,6 +479,21 @@ module.exports = function communicationsBoundary({ pool, sms }) {
     );
   }
 
+  // Phone → E.164, matching leasingleads.normalizePhone (the SAME shape a lead
+  // is stored in at creation). Used ONLY to match an open lead by normalized
+  // phone; returns null when the input can't be normalized (null never matches
+  // a stored phone, so a bad input simply fails the lead tier — never a false
+  // match). Twilio's own `From` is already E.164; this covers leads that may
+  // have been stored raw.
+  function normalizeE164(raw) {
+    if (!raw) return null;
+    const d = String(raw).replace(/\D/g, "");
+    if (d.length === 10) return "+1" + d;
+    if (d.length === 11 && d[0] === "1") return "+" + d;
+    if (String(raw).startsWith("+")) return String(raw).trim();
+    return null;
+  }
+
   async function resolveInboundSmsContext({ To, From, MessageSid, body = null }, clientArg = null) {
     const q = clientArg || pool;
 
@@ -517,9 +532,18 @@ module.exports = function communicationsBoundary({ pool, sms }) {
       return { property: null, person: null, ambiguous: false, unknownLine: true, comm_event: null, idempotentReplay: false };
     }
 
-    // SENDER resolved ONLY inside this property: a VERIFIED resident
-    // (used invite) on an active lease at this property with this phone.
-    const senders = (await q.query(
+    // SENDER resolution inside this property. Phone is RELATIONSHIP EVIDENCE,
+    // not identity — we resolve only when there is exactly ONE eligible durable
+    // PERSON, and we route by that person's strongest relationship:
+    //   · exactly one resident, and no DIFFERENT person is an open lead → resident
+    //   · exactly one open lead, and no resident                        → lead
+    //   · a resident AND a lead that are the SAME durable person        → resident
+    //   · a resident AND a lead that are DIFFERENT people (same phone)   → needs_human
+    //   · zero eligible, or >1 distinct eligible person, at either tier  → needs_human
+    // Never a silent pick between two different humans, never a merge.
+    //
+    // TIER 1 — active resident (unchanged query; the tenant door's contract).
+    const residents = (await q.query(
       `select distinct per.id, per.name, per.phone
          from persons per
          join leases l on l.lease_status = 'active' and l.property_id = $1
@@ -530,7 +554,50 @@ module.exports = function communicationsBoundary({ pool, sms }) {
       [prop.id, From]
     )).rows;
 
-    if (senders.length !== 1) {
+    // TIER 2 — open leasing lead. Matched by NORMALIZED phone (E.164) so a lead
+    // stored with different formatting still matches; scoped to THIS property.
+    // "Open" = a leasing_leads opportunity that is not terminally closed.
+    // Terminal = 'leased' | 'lost' — the SAME predicate the DB's own
+    // one-open-per-person-property partial unique index uses (verified against
+    // live schema: leasing_leads_status_check allows new / ai_responded /
+    // tour_requested / tour_scheduled / human_takeover / applied / leased /
+    // lost). We ALWAYS run this lookup (even when a resident matched) so a
+    // resident-vs-different-person-lead CONFLICT is detected rather than hidden
+    // by resident precedence. A person may hold leads across properties; here
+    // we count only this-property, non-terminal leads for this phone.
+    const fromNorm = normalizeE164(From);
+    const leads = (await q.query(
+      `select distinct per.id, per.name, per.phone
+         from persons per
+         join leasing_leads ll on ll.person_id = per.id and ll.property_id = $1
+        where ll.status not in ('leased','lost')
+          and (per.phone = $2 or per.phone = $3)`,
+      [prop.id, From, fromNorm]
+    )).rows;
+
+    // Distinct durable persons across BOTH tiers, keyed by person id.
+    const byId = new Map();
+    for (const r of residents) byId.set(r.id, { ...r, isResident: true, isLead: false });
+    for (const l of leads) {
+      const ex = byId.get(l.id);
+      if (ex) ex.isLead = true;
+      else byId.set(l.id, { ...l, isResident: false, isLead: true });
+    }
+    const distinct = [...byId.values()];
+
+    // Resolve ONLY when exactly one distinct eligible person exists. Zero, or
+    // more than one distinct person (whether two residents, two leads, or a
+    // resident and a DIFFERENT-person lead), is ambiguous → needs_human.
+    let relationship = null; // 'resident' | 'lead'
+    let senders = [];
+    if (distinct.length === 1) {
+      const only = distinct[0];
+      // Same durable person may be both; resident is the stronger relationship.
+      relationship = only.isResident ? "resident" : "lead";
+      senders = [{ id: only.id, name: only.name, phone: only.phone }];
+    }
+
+    if (!relationship || senders.length !== 1) {
       // Unknown or ambiguous sender. The message never silently
       // disappears: save it on the PROPERTY, person-less, human-flagged.
       // NO outbound is dispatched (Phase A: zero sends on ambiguity; a
@@ -542,7 +609,13 @@ module.exports = function communicationsBoundary({ pool, sms }) {
          returning *`,
         [prop.id, body || "(empty message)", MessageSid]
       )).rows[0];
-      console.error(`communications_boundary: ${senders.length === 0 ? "UNMATCHED" : "AMBIGUOUS"} sender ${From} at ${prop.name || prop.address} — saved ${saved.id}, needs_human, zero outbound.`);
+      const residentIds = new Set(residents.map(r => r.id));
+      const leadOnlyDifferent = leads.some(l => !residentIds.has(l.id));
+      const why = distinct.length === 0 ? "UNMATCHED"
+                : (residents.length >= 1 && leadOnlyDifferent) ? "AMBIGUOUS_RESIDENT_VS_LEAD"
+                : residents.length > 1 ? "AMBIGUOUS_RESIDENT"
+                : "AMBIGUOUS_LEAD";
+      console.error(`communications_boundary: ${why} sender ${From} at ${prop.name || prop.address} — saved ${saved.id}, needs_human, zero outbound.`);
       return {
         property: { id: prop.id, name: prop.name, sms_number: prop.sms_number },
         person: null, ambiguous: true, unknownLine: false,
@@ -550,12 +623,12 @@ module.exports = function communicationsBoundary({ pool, sms }) {
       };
     }
 
-    // RESOLVED. Consent keywords are intercepted HERE: the boundary
-    // records the message once (classification 'consent_signal'),
-    // updates contact_preferences — the one canonical consent truth —
-    // and the route dispatches nothing. Twilio may also block at the
-    // carrier layer; the application's own gate must never reason from
-    // stale institutional truth.
+    // RESOLVED (as resident or as lead). Consent keywords are intercepted
+    // HERE for EITHER relationship: the boundary records the message once
+    // (classification 'consent_signal'), updates contact_preferences — the
+    // one canonical consent truth — and the route dispatches nothing. Twilio
+    // may also block at the carrier layer; the application's own gate must
+    // never reason from stale institutional truth.
     const person = senders[0];
     const consentSignal = consentKeyword(body);
     if (consentSignal) {
@@ -572,17 +645,21 @@ module.exports = function communicationsBoundary({ pool, sms }) {
         property: { id: prop.id, name: prop.name, sms_number: prop.sms_number },
         person, ambiguous: false, unknownLine: false,
         comm_event: saved, idempotentReplay: false,
-        consentSignal,
+        consentSignal, relationship,
       };
     }
 
-    // RESOLVED conversation message: return context; the canonical
-    // inbound core records the event (exactly once — same write path as
-    // the browser door).
+    // RESOLVED conversation message: return context AND the resolved
+    // relationship type so the ROUTE can pick the correct brain (resident →
+    // tenant inbound core; lead → leasing agent inbound). The canonical
+    // inbound write is owned DOWNSTREAM (exactly once — same discipline as
+    // the browser door): this resolver writes NOTHING on the resolved path,
+    // for a resident OR a lead.
     return {
       property: { id: prop.id, name: prop.name, sms_number: prop.sms_number },
       person, ambiguous: false, unknownLine: false,
       comm_event: null, idempotentReplay: false, consentSignal: null,
+      relationship,
     };
   }
 
