@@ -1061,16 +1061,32 @@ boot();
   //  returns that existing send idempotently. They're already in Applicants.
   async function sendApplication({ property_id, person_id, unit_id, conversion_id = null, created_by_user_id = null, intended_move_in = null }) {
     // 1) DOUBLE-TAP GUARD — an already-sent, still-live invitation on this
-    //    conversion means the application is already out. No second send.
+    //    conversion means the application is already out; we do NOT send a second
+    //    text. BUT "already sent" is not the same as "already in Applicants":
+    //    the opportunity may have lost its applicant rung (a revoke/resend
+    //    cycle, or an earlier advance that never landed). So we still ENSURE the
+    //    advance here (idempotent — a no-op if the open rung already exists).
+    //    This is the reconciling path: it can never double-text, but it can
+    //    always correct a stranded position.
     if (conversion_id) {
       const existing = (await pool.query(
         `select id, status, provider_message_id from application_invitations
           where conversion_id=$1 and status in ('manually_sent','provider_dispatched')
           order by sent_at desc nulls last limit 1`, [conversion_id])).rows[0];
       if (existing) {
+        let applicant_followup = null;
+        try {
+          await runTx(async (client) => {
+            applicant_followup = await advanceOpportunityToApplicants(client, {
+              conversion_id, invitation_id: existing.id, by_user_id: created_by_user_id || null });
+          });
+        } catch (e) {
+          applicant_followup = { advance_error: e.publicMessage || e.message };
+        }
         return { sent: true, idempotent: true, invitation_id: existing.id, status: existing.status,
                  provider_message_id: existing.provider_message_id || null,
-                 receipt: "Application already sent — no second text." };
+                 applicant_followup,
+                 receipt: "Application already sent — no second text. Position reconciled." };
       }
     }
     // 2) DISPATCH — the proven primitive (validates person+unit belong to the
