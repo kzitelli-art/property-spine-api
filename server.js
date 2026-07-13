@@ -3342,7 +3342,7 @@ app.use("/", agentCapabilityModule({ anthropic, INGEST_MODEL }));
 //    model call, monotonic thread versioning, obligation-backed review, server-derived
 //    manager identity. (Migration 053.) ──
 const agentModule = require("./agent");
-const agentApp = agentModule({ pool, anthropic, INGEST_MODEL, spawnObligationFromEvent, completeObligation, leasingLifecycle, commBoundary });
+const agentApp = agentModule({ pool, anthropic, INGEST_MODEL, spawnObligationFromEvent, completeObligation, leasingLifecycle, commBoundary, leasingBookingService: __leasingLeads._service });
 app.use("/", agentApp);
 
 // ── THE FIRST LIVE OPERATOR SURFACE — Leasing Conversations. ──
