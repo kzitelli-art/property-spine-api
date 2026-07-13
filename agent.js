@@ -28,7 +28,7 @@ const PROMPT_REVISION = "stage-a-v3"; // v3: warm/brief/human, earns tour over c
 const POLICY_REVISION = "stage-a-v1";
 
 module.exports = function agentModule(deps) {
-  const { pool, anthropic, INGEST_MODEL, spawnObligationFromEvent, completeObligation, leasingLifecycle, commBoundary = null } = deps;
+  const { pool, anthropic, INGEST_MODEL, spawnObligationFromEvent, completeObligation, leasingLifecycle, commBoundary = null, leasingBookingService = null } = deps;
   // FUNNEL-FLOW: grounded inventory discovery + governed attachment live in
   // leasing_inventory.js (Class 1). The agent gains ONE tool over it; the
   // attach fires only on the prospect's own confirming words (offered ≠ selected).
@@ -460,6 +460,9 @@ module.exports = function agentModule(deps) {
       // ── model call OUTSIDE any transaction ──
       let generated = null, providerReqId = null, genErr = null, factSnapshot = [], snapshotHash = "";
       let offeredUnits = null; // real units surfaced by the inventory tool this run (offered ≠ selected)
+      let offerableSlots = []; // real tour slots the model MAY present this run (candidates)
+      let presentedSlotIds = null; // the EXACT slot ids the model chose to state (offer_tour_slots) — confirmable
+      let recordedOfferId = null;  // the agent_tour_offers row id created when the model presented slots (for provenance link)
       try {
         // resolve context fresh (read-only; not in a write txn)
         const client0 = await pool.connect();
@@ -497,8 +500,8 @@ module.exports = function agentModule(deps) {
           }
 
           // ── GROUNDED INVENTORY TOOL (funnel-flow Build 2) ──────────────
-          // One tool. Property is SERVER-DERIVED (tx1.property_id) — the
-          // model chooses criteria, never the property. Max one tool round.
+          // Property is SERVER-DERIVED (tx1.property_id) — the model chooses
+          // criteria, never the property.
           const INVENTORY_TOOL = {
             name: "find_available_units",
             description: "Search THIS property's real available units (vacant, not out of service) when the prospect asks what's available or states preferences (bedrooms, budget). Returns real units only. If the result is empty, say so honestly — NEVER invent or imply a unit that is not in the result.",
@@ -511,24 +514,108 @@ module.exports = function agentModule(deps) {
               },
             },
           };
+
+          // ── GOVERNED TOUR BOOKING (funnel-flow Build 3) ────────────────
+          // The agent may book a tour ONLY into a currently-open slot it was
+          // shown for THIS property, and only when booking is capability-enabled
+          // for the property AND the prospect has confirmed a specific offered
+          // time. The tool takes a slot_id the model must copy verbatim from the
+          // offered list — the booking service RE-READS and LOCKS that slot and
+          // re-verifies all authority server-side; a slot_id in the prompt is
+          // proof of nothing. Offered ≠ booked: the model proposes; the service
+          // is the sole authority on whether the write happens.
+          const bookingEnabled = !!(leasingBookingService
+            && typeof leasingBookingService.bookTourIntoSlot === "function"
+            && typeof leasingBookingService.propertyAgentBookingEnabled === "function"
+            && leasingBookingService.propertyAgentBookingEnabled(tx1.property_id));
+
+          // Read the REAL open slots (property operating tz). readOfferableSlots
+          // returns NULL when the property's operating tz is UNCONFIGURED — in
+          // that case we do NOT offer times and do NOT expose booking (honest,
+          // never an invented local time). null vs [] is meaningful:
+          //   null  → tz unconfigured → booking unavailable this turn
+          //   []    → tz known, no open slots → "I'll have someone follow up"
+          let tzConfigured = true;
+          if (bookingEnabled && typeof leasingBookingService.readOfferableSlots === "function") {
+            try {
+              const sc = await pool.connect();
+              let read;
+              try { read = await leasingBookingService.readOfferableSlots(sc, { propertyId: tx1.property_id, limit: 4 }); }
+              finally { sc.release(); }
+              if (read === null) { tzConfigured = false; offerableSlots = []; }
+              else offerableSlots = read;
+            } catch (e) { console.error("[agent/inbound] slot read failed (non-fatal):", e.message); offerableSlots = []; }
+          }
+
+          // book_tour + offer_tour_slots are exposed ONLY when booking is
+          // capability-enabled AND the property tz is configured. Unknown tz →
+          // neither tool, no offer (honest).
+          const bookingUsable = bookingEnabled && tzConfigured;
+
+          // Map of the slots we may present this turn, by id, for validation of
+          // what the model chooses to offer. The model may ONLY offer ids from
+          // this set (real, open, this-property); it offers a SUBSET it will
+          // actually state — and ONLY that subset becomes confirmable later.
+          const offerableById = new Map(offerableSlots.map(s => [String(s.slot_id), s]));
+
+          const OFFER_TOUR_SLOTS_TOOL = {
+            name: "offer_tour_slots",
+            description: "Call this to PRESENT specific tour times to the prospect. Pass ONLY the slot_ids you will actually state in your reply — those exact times become the ones the prospect can later confirm. Do not pass slots you won't mention. After calling, state those same times to the prospect in natural language. Use only slot_ids from the offered slot list in your context.",
+            input_schema: {
+              type: "object",
+              properties: {
+                slot_ids: { type: "array", items: { type: "string" }, description: "the exact slot_ids you will state to the prospect (a subset of the available slots)" },
+              },
+              required: ["slot_ids"],
+            },
+          };
+
+          const BOOK_TOUR_TOOL = {
+            name: "book_tour",
+            description: "Book a tour into a SPECIFIC open slot AFTER the prospect has clearly confirmed one of the exact times you previously offered them. Use ONLY a slot_id you actually presented via offer_tour_slots and that the prospect confirmed. Do NOT invent a slot_id, do NOT book a time you did not present, and do NOT book unless the prospect confirmed a specific slot.",
+            input_schema: {
+              type: "object",
+              properties: {
+                slot_id: { type: "string", description: "the exact slot_id the prospect confirmed (one you previously presented)" },
+              },
+              required: ["slot_id"],
+            },
+          };
+
+          // Surface the AVAILABLE slots to the model (with ids) as candidates it
+          // MAY present. Presenting is an explicit act (offer_tour_slots) — the
+          // model states a subset; only that subset is later confirmable.
+          if (bookingUsable) {
+            if (offerableSlots.length) {
+              built.system += `\n\nTOUR SCHEDULING: booking is enabled. Below are the real open tour times you MAY present (property local timezone). To offer times, FIRST call offer_tour_slots with ONLY the slot_ids you will actually state, THEN state those exact times to the prospect. When the prospect confirms one you presented, call book_tour with that slot_id. Never state or book a time not in this list:\n` +
+                offerableSlots.map(s => `  - ${s.label}  [slot_id: ${s.slot_id}]`).join("\n");
+            } else {
+              built.system += `\n\nTOUR SCHEDULING: booking is enabled but there are NO open tour slots right now. If the prospect asks to tour, say you'll have someone follow up with times — do NOT invent a time and do NOT call any tour tool.`;
+            }
+          }
+
+          const activeTools = bookingUsable ? [INVENTORY_TOOL, OFFER_TOUR_SLOTS_TOOL, BOOK_TOUR_TOOL] : [INVENTORY_TOOL];
+
           let r = await anthropic.messages.create({
             model: MODEL, max_tokens: 320, system: built.system, messages: built.messages,
-            tools: [INVENTORY_TOOL],
+            tools: activeTools,
           });
           providerReqId = (r && r.id) || null;
 
-          const toolUse = (r.content || []).find(x => x.type === "tool_use" && x.name === "find_available_units");
-          if (toolUse) {
-            // run the canonical query in its own short read (two-transaction
-            // discipline: never a DB txn spanning a model call)
+          // The model may call one tool this round. Handle whichever came back.
+          const invUse = (r.content || []).find(x => x.type === "tool_use" && x.name === "find_available_units");
+          const offerUse = (r.content || []).find(x => x.type === "tool_use" && x.name === "offer_tour_slots");
+          const bookUse = (r.content || []).find(x => x.type === "tool_use" && x.name === "book_tour");
+
+          if (invUse) {
             const qc = await pool.connect();
             let found;
             try {
               found = await inventory.availableUnits({
                 property_id: tx1.property_id,
-                bedrooms: toolUse.input && toolUse.input.bedrooms,
-                bathrooms: toolUse.input && toolUse.input.bathrooms,
-                max_rent: toolUse.input && toolUse.input.max_rent,
+                bedrooms: invUse.input && invUse.input.bedrooms,
+                bathrooms: invUse.input && invUse.input.bathrooms,
+                max_rent: invUse.input && invUse.input.max_rent,
               }, qc);
             } finally { qc.release(); }
             offeredUnits = found.units.map(u => ({
@@ -543,9 +630,145 @@ module.exports = function agentModule(deps) {
               messages: [
                 ...built.messages,
                 { role: "assistant", content: r.content },
-                { role: "user", content: [{ type: "tool_result", tool_use_id: toolUse.id, content: toolResultText }] },
+                { role: "user", content: [{ type: "tool_result", tool_use_id: invUse.id, content: toolResultText }] },
               ],
-              tools: [INVENTORY_TOOL],
+              tools: activeTools,
+            });
+            providerReqId = (r && r.id) || providerReqId;
+          } else if (offerUse && bookingUsable) {
+            // ── EXPLICIT OFFER ─────────────────────────────────────────────
+            // The model states which slots it will PRESENT. Only ids that are
+            // real, open, and offerable THIS turn pass. Those exact ids ARE the
+            // offer — recorded RIGHT HERE, at tool-execution, as an atomic
+            // supersede+insert that owns the active→superseded transition. This
+            // is decoupled from dispatch: the authority to confirm is "the model
+            // stated these slots," recorded the moment it happens, not deferred
+            // to a later dispatch step that may not fire on a reused-draft turn.
+            const requested = Array.isArray(offerUse.input && offerUse.input.slot_ids) ? offerUse.input.slot_ids.map(String) : [];
+            const valid = requested.filter(id => offerableById.has(id));
+            presentedSlotIds = valid; // may be empty → nothing becomes confirmable
+
+            // Record the offer NOW (only if the model actually stated ≥1 real slot).
+            if (valid.length && leasingBookingService && typeof leasingBookingService.recordTourOffer === "function") {
+              try {
+                const offer = await leasingBookingService.recordTourOffer(null, {
+                  conversationId: tx1.conversation_id,
+                  leadId: tx1.lead_id || null,
+                  propertyId: tx1.property_id,
+                  agentRunId: (tx1.run && tx1.run.id) || null,
+                  outboundCommEventId: null, // linked as provenance after dispatch
+                  slotIds: valid,
+                  supersede: true, // a new availability offer replaces the old set
+                });
+                recordedOfferId = offer && offer.id;
+              } catch (e) { console.error("[agent/inbound] recordTourOffer failed (non-fatal):", e.message); }
+            }
+
+            const confirmed = valid.map(id => {
+              const s = offerableById.get(id);
+              return { slot_id: id, label: s.label };
+            });
+            const offerResult = confirmed.length
+              ? JSON.stringify({ presented: confirmed, note: "Now state EXACTLY these times to the prospect in natural language. These are the times they can confirm." })
+              : JSON.stringify({ presented: [], note: "None of those slot_ids are currently offerable. Do not state any specific time; offer to check availability." });
+            r = await anthropic.messages.create({
+              model: MODEL, max_tokens: 320, system: built.system,
+              messages: [
+                ...built.messages,
+                { role: "assistant", content: r.content },
+                { role: "user", content: [{ type: "tool_result", tool_use_id: offerUse.id, content: offerResult }] },
+              ],
+              tools: activeTools,
+            });
+            providerReqId = (r && r.id) || providerReqId;
+          } else if (bookUse && bookingUsable) {
+            // ── GOVERNED BOOKING WRITE ─────────────────────────────────────
+            // The model proposed a slot_id. The service re-reads+locks it,
+            // re-verifies property/lead/slot authority, and books (or refuses).
+            // Idempotency key = the inbound MessageSid (b.sms_sid): a retried
+            // delivery of the SAME confirmation converges on the SAME tour.
+            // Attribution: EXECUTION actor = system; SUBJECT = the prospect;
+            // CAUSE = this inbound comm_event + agent run.
+            const proposedSlotId = bookUse.input && bookUse.input.slot_id;
+
+            // OFFER AUTHORITY: the slot must belong to the MOST RECENT still-
+            // active, unexpired OFFER for this conversation — the durable record
+            // of what was ACTUALLY PRESENTED to the prospect (agent_tour_offers),
+            // written when the agent stated those times in an outbound message.
+            // This is NOT the whole context pool and NOT a union of history: a
+            // superseded or expired offer does not authorize a booking, so a slot
+            // from an older offer is refused unless the newest offer re-stated it.
+            // Survives the real flow (offer in run A, confirm in run B) because
+            // the offer is persisted. Also covers a confirm in the SAME run the
+            // offer was made, by unioning this run's freshly-presented ids.
+            let offeredIdSet = new Set(Array.isArray(presentedSlotIds) ? presentedSlotIds.map(String) : []);
+            try {
+              const active = await leasingBookingService.resolveActiveOfferedSlotIds(
+                pool, { conversationId: tx1.conversation_id });
+              for (const id of active.ids) offeredIdSet.add(String(id));
+            } catch (e) { console.error("[agent/inbound] active-offer resolve failed (non-fatal):", e.message); }
+
+            const wasOffered = proposedSlotId && offeredIdSet.has(String(proposedSlotId));
+            let bookResult = null, bookErr = null;
+
+            // SERVER-NAMESPACED idempotency key — the model NEVER supplies the
+            // durable key, and it is NOT a raw MessageSid. Namespaced by source +
+            // conversation + message + slot so a retried confirmation converges,
+            // while a different confirmation (different slot / later message)
+            // is a distinct action. The demo-link path uses its own namespace.
+            const bookingActionKey = (b.sms_sid && tx1.conversation_id && proposedSlotId)
+              ? `agent-book-tour:${tx1.conversation_id}:${b.sms_sid}:${proposedSlotId}`
+              : null;
+
+            if (!proposedSlotId || !wasOffered) {
+              bookErr = { public: "That time isn't one I offered for this conversation. Let me share the current available times." };
+              console.error(`[agent/inbound] book_tour refused: slot ${proposedSlotId} not in the persisted offered set for conversation ${tx1.conversation_id} (cross-turn anti-hallucination guard).`);
+            } else {
+              const bc = await pool.connect();
+              try {
+                await bc.query("begin");
+                const out = await leasingBookingService.bookTourIntoSlot(bc, {
+                  leadId: tx1.lead_id || (await bc.query(
+                    `select id from leasing_leads where person_id=$1 and property_id=$2 and status not in ('lost','leased') order by created_at limit 1`,
+                    [tx1.person_id, tx1.property_id])).rows[0]?.id,
+                  slotId: proposedSlotId,
+                  subjectPersonId: tx1.person_id,
+                  sourceCommEventId: tx1.inbound_id || null,
+                  sourceAgentRunId: (tx1.run && tx1.run.id) || null,
+                  idempotencyKey: bookingActionKey,
+                  via: "agent_book_tour",
+                  requireAgentBookingCapability: true, // permanent capability gate
+                });
+                await bc.query("commit");
+                bookResult = out;
+              } catch (e) {
+                try { await bc.query("rollback"); } catch (_) {}
+                // 23505 on the namespaced key = concurrent retry → resolve existing.
+                if (e && e.code === "23505" && bookingActionKey) {
+                  const ex = (await pool.query(`select id, scheduled_for from leasing_tours where booking_idempotency_key=$1 limit 1`, [bookingActionKey])).rows[0];
+                  if (ex) bookResult = { tour: ex, alreadyBooked: true };
+                }
+                if (!bookResult) { bookErr = { public: e.publicMessage || "I couldn't book that time — it may have just been taken. Want me to offer other times?" }; console.error("[agent/inbound] book_tour service error:", e.message); }
+              } finally { bc.release(); }
+            }
+
+            const bookToolResult = bookResult
+              ? JSON.stringify({
+                  booked: true,
+                  already_booked: !!bookResult.alreadyBooked,
+                  scheduled_for: bookResult.tour && bookResult.tour.scheduled_for,
+                  note: "Tour is booked. Confirm the date/time warmly to the prospect in one short message.",
+                })
+              : JSON.stringify({ booked: false, reason: bookErr ? bookErr.public : "unavailable", note: "Do NOT claim the tour is booked. Tell the prospect honestly and offer alternatives." });
+
+            r = await anthropic.messages.create({
+              model: MODEL, max_tokens: 320, system: built.system,
+              messages: [
+                ...built.messages,
+                { role: "assistant", content: r.content },
+                { role: "user", content: [{ type: "tool_result", tool_use_id: bookUse.id, content: bookToolResult }] },
+              ],
+              tools: activeTools,
             });
             providerReqId = (r && r.id) || providerReqId;
           }
@@ -587,7 +810,7 @@ module.exports = function agentModule(deps) {
           return { superseded: true };
         }
 
-        // record the resolved fact snapshot + hash + provider id on the run regardless
+        // record the resolved fact snapshot + hash + provider id on the run.
         await client.query(
           "update agent_runs set resolved_fact_snapshot_json=$2, fact_snapshot_hash=$3, provider_request_id=$4, policy_decision=$5, handoff_reason_code=$6, offered_units_json=coalesce($7::jsonb, offered_units_json), selected_unit_id=coalesce($8, selected_unit_id) where id=$1",
           [run.id, JSON.stringify(factSnapshot), snapshotHash, providerReqId, policyDecision, policyCode,
@@ -663,6 +886,22 @@ module.exports = function agentModule(deps) {
             result.auto_dispatched = true;
             result.outbound_comm_event_id = autoOut.outbound_comm_event_id;
             result.sms = autoOut.sms;
+
+            // PROVENANCE LINK (not authority): the offer was already recorded at
+            // tool-execution time (atomic supersede+insert), so it already
+            // authorizes confirmation regardless of dispatch. Here we just link
+            // the dispatched outbound comm_event onto that offer row for the
+            // audit trail. Fire-and-forget — a dispatch hiccup never un-authorizes
+            // a stated offer.
+            if (recordedOfferId && autoOut.outbound_comm_event_id
+                && leasingBookingService && typeof leasingBookingService.attachOutboundToOffer === "function") {
+              try {
+                await leasingBookingService.attachOutboundToOffer(null, {
+                  offerId: recordedOfferId,
+                  outboundCommEventId: autoOut.outbound_comm_event_id,
+                });
+              } catch (e) { console.error("[agent/inbound] attachOutboundToOffer failed (non-fatal):", e.message); }
+            }
           } catch (e) {
             // stale/conflict/etc → the draft simply remains for human review
             result.auto_dispatched = false;
