@@ -482,6 +482,55 @@ module.exports = function applicationSubmissionModule(deps) {
   // recipient_snapshot for sms/email → status 'manually_sent'. provider →
   // provider_message_id → 'provider_dispatched'. A send cannot be re-attested.
   // BOTH the legacy route and the new operator route call this ONE service.
+
+    // THE TRANSITION FACT: an actually-sent invitation advances this leasing
+    // opportunity from Post-Tour into Applicants. The conversion rail is the
+    // authority — we ASK it to ensure the applicant_followup rung (idempotent,
+    // conversion-scoped); the invitation module never spawns rungs itself. Same
+    // transaction, so it sees the sent status we just wrote. Prepared invitations
+  // ── THE ONE APPLICANTS TRANSITION — shared by BOTH legitimate send sources ──
+  //  (manual attest AND provider SMS dispatch). Given a conversion whose
+  //  invitation just reached a SENT state, this advances the leasing
+  //  opportunity Post-Tour → Applicants: ensure the applicant_followup rung
+  //  (idempotent, conversion-scoped) AND close the open tour_followup rung in
+  //  the SAME transaction, so the opportunity is never in two buckets. One
+  //  transition mechanism, two send sources. Only advances when the invitation
+  //  belongs to a conversion. Returns a summary, or null.
+  //
+  //  resolution_basis: closing the tour rung requires a basis when the closer
+  //  does NOT own it. The sender may be covering another owner's follow-up
+  //  (the common case), so we pass 'coverage' when a human closes work they
+  //  don't own; the rail records 'owner' automatically when they do, and a
+  //  null actor (service close) is exempt. This is the honest attribution the
+  //  rail demands — never a silent close.
+  async function advanceOpportunityToApplicants(client, { conversion_id, invitation_id, by_user_id = null }) {
+    if (!conversion_id || !conversionService || !conversionService.ensureApplicantFollowup) return null;
+    const ens = await conversionService.ensureApplicantFollowup(client, { conversion_id });
+    const out = { ensured: ens.ensured, rung: ens.link && ens.link.rung, obligation_id: ens.link && ens.link.obligation_id };
+    if (conversionService.resolveRung) {
+      const openTour = (await client.query(
+        `select lco.obligation_id, lco.owner_user_id from leasing_conversion_obligations lco
+          where lco.conversion_id=$1 and lco.rung='tour_followup' and lco.outcome is null
+          limit 1`, [conversion_id])).rows[0];
+      if (openTour) {
+        // basis: 'coverage' only when an identified human is closing work they
+        // don't own; owner/service-close cases the rail resolves itself.
+        const closerOwns = by_user_id != null && openTour.owner_user_id != null && String(openTour.owner_user_id) === String(by_user_id);
+        const needsBasis = by_user_id != null && !closerOwns;
+        const closed = await conversionService.resolveRung(client, {
+          obligation_id: openTour.obligation_id,
+          result: "completed",
+          by_user_id: by_user_id || null,
+          suppress_next: true,
+          resolution_basis: needsBasis ? "coverage" : null,
+          proof: { invitation_id, kind: "application_link_sent" },
+        });
+        out.tour_followup_closed = { obligation_id: openTour.obligation_id, outcome: closed.outcome };
+      }
+    }
+    return out;
+  }
+
   async function attestInvitationSent(client, {
     invitation_id, dispatch_source = "manual", channel, recipient_snapshot = null,
     provider_message_id = null, sent_by_user_id = null, note = null,
@@ -536,54 +585,6 @@ module.exports = function applicationSubmissionModule(deps) {
       [newStatus, dispatch_source, channel, recipient_snapshot, provider_message_id,
        sent_by_user_id, note, progressObId, inv.id]
     )).rows[0];
-
-    // THE TRANSITION FACT: an actually-sent invitation advances this leasing
-    // opportunity from Post-Tour into Applicants. The conversion rail is the
-    // authority — we ASK it to ensure the applicant_followup rung (idempotent,
-    // conversion-scoped); the invitation module never spawns rungs itself. Same
-    // transaction, so it sees the sent status we just wrote. Prepared invitations
-  // ── THE ONE APPLICANTS TRANSITION — shared by BOTH legitimate send sources ──
-  //  (manual attest AND provider SMS dispatch). Given a conversion whose
-  //  invitation just reached a SENT state, this advances the leasing
-  //  opportunity Post-Tour → Applicants: ensure the applicant_followup rung
-  //  (idempotent, conversion-scoped) AND close the open tour_followup rung in
-  //  the SAME transaction, so the opportunity is never in two buckets. One
-  //  transition mechanism, two send sources. Only advances when the invitation
-  //  belongs to a conversion. Returns a summary, or null.
-  //
-  //  resolution_basis: closing the tour rung requires a basis when the closer
-  //  does NOT own it. The sender may be covering another owner's follow-up
-  //  (the common case), so we pass 'coverage' when a human closes work they
-  //  don't own; the rail records 'owner' automatically when they do, and a
-  //  null actor (service close) is exempt. This is the honest attribution the
-  //  rail demands — never a silent close.
-  async function advanceOpportunityToApplicants(client, { conversion_id, invitation_id, by_user_id = null }) {
-    if (!conversion_id || !conversionService || !conversionService.ensureApplicantFollowup) return null;
-    const ens = await conversionService.ensureApplicantFollowup(client, { conversion_id });
-    const out = { ensured: ens.ensured, rung: ens.link && ens.link.rung, obligation_id: ens.link && ens.link.obligation_id };
-    if (conversionService.resolveRung) {
-      const openTour = (await client.query(
-        `select lco.obligation_id, lco.owner_user_id from leasing_conversion_obligations lco
-          where lco.conversion_id=$1 and lco.rung='tour_followup' and lco.outcome is null
-          limit 1`, [conversion_id])).rows[0];
-      if (openTour) {
-        // basis: 'coverage' only when an identified human is closing work they
-        // don't own; owner/service-close cases the rail resolves itself.
-        const closerOwns = by_user_id != null && openTour.owner_user_id != null && String(openTour.owner_user_id) === String(by_user_id);
-        const needsBasis = by_user_id != null && !closerOwns;
-        const closed = await conversionService.resolveRung(client, {
-          obligation_id: openTour.obligation_id,
-          result: "completed",
-          by_user_id: by_user_id || null,
-          suppress_next: true,
-          resolution_basis: needsBasis ? "coverage" : null,
-          proof: { invitation_id, kind: "application_link_sent" },
-        });
-        out.tour_followup_closed = { obligation_id: openTour.obligation_id, outcome: closed.outcome };
-      }
-    }
-    return out;
-  }
 
   // never reach here. Only advances when this invitation belongs to a conversion.
     let applicant_followup = null;
