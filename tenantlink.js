@@ -69,7 +69,7 @@ const express = require("express");
 const crypto = require("crypto");
 const { classifyUrgency } = require("./maintenance_urgency.js"); // narrow urgency decision for tenant maintenance
 
-module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService }) {
+module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService, getAgentService }) {
   const router = express.Router();
 
   // ── OPERATOR AUTH (fail-closed) ──────────────────────────────────────
@@ -947,9 +947,50 @@ Rules: classification "emergency" only for active danger or major damage in prog
         const person = ctx.person;
         const prop = ctx.property;
 
-        // ONE SPINE, TWO DOORS: the exact same core the browser uses.
-        // runInbound records the inbound comm_event (exactly once — the
-        // resolver wrote nothing on the resolved path).
+        // ── ROUTE BY RESOLVED RELATIONSHIP (one door, two brains) ──────────
+        // The resolver resolved this sender as a RESIDENT or a LEAD and wrote
+        // NOTHING on either resolved path. The receiving line already fixed the
+        // property; here we only pick the brain.
+        if (ctx.relationship === "lead") {
+          // PROSPECT inbound → the leasing AGENT owns the SINGLE canonical
+          // inbound write AND the governed auto-dispatch. We call the agent's
+          // SHARED IN-PROCESS service (processInbound) — the SAME function the
+          // public /agent/inbound route runs — so there is one code path and
+          // NO loopback HTTP boundary. We do NOT call runInbound and do NOT
+          // write here. Idempotency across the handoff: sms_sid = MessageSid
+          // (the agent dedups the RECORD, incl. a concurrent-insert 23505
+          // catch) and idempotency_key = MessageSid (the agent dedups the
+          // agent_run, so a retry never produces a second REPLY).
+          //
+          // Ack Twilio immediately — the agent's reply leaves by REST (through
+          // sendPropertySms) exactly like the tenant path, not via TwiML.
+          emptyTwiml(res);
+          try {
+            const agentSvc = typeof getAgentService === "function" ? getAgentService() : null;
+            if (!agentSvc || typeof agentSvc.processInbound !== "function") {
+              console.error("inbound-sms: lead route — agent service unavailable; prospect inbound not processed (will retry on Twilio redelivery).");
+            } else {
+              await agentSvc.processInbound({
+                property_id: prop.id,
+                person_id: person.id,
+                body: body || "(empty message)",
+                idempotency_key: MessageSid,
+                sms_sid: MessageSid,
+              });
+            }
+          } catch (e) {
+            // Handoff failure is non-fatal to Twilio (already acked). The
+            // prospect's inbound is not lost: on Twilio's retry the whole
+            // resolve→handoff runs again, and the agent's idempotency makes the
+            // eventual success exactly-once. Loud log so it's visible.
+            console.error("inbound-sms: lead → agent processInbound failed:", e.message);
+          }
+          return;
+        }
+
+        // RESIDENT inbound (unchanged): ONE SPINE, TWO DOORS — the exact same
+        // core the browser uses. runInbound records the inbound comm_event
+        // (exactly once — the resolver wrote nothing on the resolved path).
         const r = await runInbound({
           personId: person.id, propertyId: prop.id, body: body || "(empty message)",
           channel: "sms", smsSid: MessageSid,
