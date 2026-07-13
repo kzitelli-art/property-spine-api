@@ -3255,7 +3255,7 @@ app.post("/sms-proof", async (req, res) => {
     return res.status(500).json({ sent: false, reason: "proof_route_error", error: e.message });
   }
 });
-app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary }));
+app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, getAgentService: () => agentApp._service }));
 app.use("/", teamAccessModule({ pool, sms, commBoundary }));
 // owner-facing aggregate views (cards + attention queue). Only needs pool.
 app.use("/", ownerModule({ pool }));
