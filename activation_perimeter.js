@@ -1,186 +1,208 @@
 // ════════════════════════════════════════════════════════════════════
 //  activation_perimeter.js — THE CONTROLLED ACTIVATION PERIMETER
 //
-//  Reviewer ruling (tenancy-anchor slice, Step 6): before any live route
-//  proof, the two gated tenancy routes (countersign, confirm-term) must be
-//  reachable ONLY inside an explicit perimeter, fail-closed otherwise:
+//  Reviewer ruling (tenancy-anchor slice, Step 6): the two gated tenancy
+//  routes (countersign, confirm-term) may be reachable ONLY inside an
+//  explicit perimeter, fail-closed otherwise:
 //
-//      enabled mode
-//        AND property ∈ approved activation set
-//        AND record classified internal_qa (person × THAT property)
-//        AND authorized operator
-//        AND eligible application state
-//      → otherwise 403, deterministically.
+//      mode enabled
+//        AND property activated (approved set)
+//        AND record is internal_qa (person × THAT property, CURRENT)
+//        AND authenticated staff session has property/action authority
+//        AND application state is eligible
+//      → otherwise refuse, deterministically and NON-REVEALINGLY.
 //
-//  WHY THIS EXISTS: the current dormant gate is a GLOBAL on/off. Flipping
-//  COMMITMENT_LEDGER_MODE=enabled to prove concurrency would expose both
-//  gated routes across ALL properties and ALL application states before any
-//  scoping exists. The perimeter turns "globally on" into "on only for one
-//  approved property + one controlled internal-QA record + an authorized
-//  operator." A reversible env var does not undo a durable write; the
-//  perimeter prevents the durable write from being reachable in the first
-//  place except inside the controlled set.
+//  ── OPERATOR AUTHORITY (ruling correction, load-bearing) ──────────────
+//  "Authorized operator" is NOT a shared header key. Identity, property
+//  entitlement, and role/action authority come from the AUTHENTICATED STAFF
+//  SESSION already available to the request:
+//    · resolveStaffSession(pool, x-staff-session)  → authenticated user
+//    · resolveStaffIdentity(user_id, property_id)  → server-derived active
+//      assignment at THIS property (state:'resolved' + role), else a "not
+//      entitled" state.
+//  A shared activation secret MAY be an additional Class-2 release control,
+//  but it can NEVER determine identity, property, or role. If a route does
+//  not yet receive canonical operator context, that is a DEPENDENCY, not an
+//  excuse to fall back to a header key — the perimeter fails closed.
 //
-//  TWO LAYERS, both fail-closed, in order:
-//    Layer 1 — MODE (no DB, no side effects, runs FIRST): reuses the
-//      dormant-gate contract. COMMITMENT_LEDGER_MODE must be 'enabled', else
-//      403 LEDGER_DORMANT. This preserves the original "cannot be used"
-//      guarantee even if Layer 2 has a bug.
-//    Layer 2 — PERIMETER (resolves the application, then checks scope): the
-//      application's property must be approved; the application's person must
-//      hold a CURRENT internal_qa classification in that property; the
-//      operator must be authorized; the application must be in an eligible
-//      state for the route. Any miss → 403 with a specific reason.
+//  ── TWO LAYERS, both fail-closed, in order ────────────────────────────
+//    Layer 1 — MODE (no DB, runs FIRST via dormantWriteGuard in the chain).
+//    Layer 2 — PERIMETER (this module): authenticated session → server-
+//      derived entitlement at the application's property → current
+//      internal_qa classification → eligible application state.
 //
-//  ABSENCE IS EXPLICIT (matches 076 + communications_boundary): no current
-//  internal_qa classification row = NOT permitted. Never assume production;
-//  never assume QA. Fail closed on absence and on any DB read failure.
+//  ── PER-PHASE (ruling) ────────────────────────────────────────────────
+//  Classification and entitlement are re-checked on EVERY phase. Phase-1
+//  (countersign) permission does NOT carry into Phase-2 (confirm-term):
+//  each route mounts its own guard and each guard re-reads live state. The
+//  handler additionally revalidates under FOR UPDATE — perimeter is early
+//  admission; the transaction is final authority.
 //
-//  CLASS: Class 2 temporary adapter. Replacement condition: durable
-//  property-level activation capability + the resolved staff-identity/actor
-//  binding become the canonical authority for these routes, at which point
-//  the env-var allowlist and the operator-key check are replaced by
-//  server-derived entitlement. Until then, this is the controlled perimeter.
+//  ── REFUSAL + AUDIT (ruling) ──────────────────────────────────────────
+//  External refusal is STABLE and NON-REVEALING: one opaque 403 that does
+//  not disclose whether the application, person, or classification exists.
+//  Internally we audit the full decision (actor, property, application,
+//  action, decision, reason, timestamp). Secrets are never logged.
+//
+//  ── COMPONENT CLASS (ruling) ──────────────────────────────────────────
+//  Class 1 (PERMANENT): the perimeter LOGIC — consequential writes
+//  restricted by property capability + record eligibility + current
+//  classification + actor authority. Class 2 (temporary CONFIG source): the
+//  env allowlist, the global mode flag, and any extra release secret. Only
+//  the config source changes when durable property-activation lands.
 // ════════════════════════════════════════════════════════════════════
 
 const { resolveMode } = require("./dormant_gate");
+const { resolveStaffSession } = require("./staff_session_service");
+const { resolveStaffIdentity } = require("./staff_identity_resolver");
 
-// Approved activation set — an explicit, comma-separated allowlist of property
-// UUIDs. Absent/empty = NO property is approved (fail closed). A bug cannot
-// accidentally activate a property that is not named here.
-function approvedPropertyIds() {
-  const raw = process.env.ACTIVATION_PROPERTY_IDS || "";
-  return new Set(
-    raw.split(",").map((s) => s.trim()).filter(Boolean)
-  );
+// Class-2 CONFIG source: explicit comma-separated allowlist of activated
+// property UUIDs. Absent/empty/malformed = NO property activated (fail closed).
+function activatedPropertyIds() {
+  const raw = process.env.ACTIVATION_PROPERTY_IDS;
+  if (!raw || typeof raw !== "string") return new Set();
+  return new Set(raw.split(",").map((s) => s.trim()).filter(Boolean));
 }
 
-// The operator-key check the existing operator routes already use. The
-// perimeter requires it explicitly here too — being past the dormant gate is
-// not the same as being an authorized operator. When the durable
-// staff-identity/actor binding lands, this is replaced by server-derived
-// entitlement (see replacement condition above).
-function operatorAuthorized(req) {
-  const provided = req.headers["x-operator-key"];
-  const expected = process.env.OPERATOR_KEY;
-  return !!expected && provided === expected;
+// Single opaque external refusal. Does NOT reveal which condition failed or
+// whether the app/person/classification exists. The reason is audited only.
+function refuse(res) {
+  return res.status(403).json({ error: "not_permitted", receipt: "This action is not permitted." });
 }
 
-// Read the CURRENT internal_qa classification for a person in a property.
-// Fail-closed: returns false on absence OR on any read failure. Mirrors the
-// communications_boundary read pattern (current row = latest, superseded_at is
-// null). We do not assume a column set beyond 076; we check record_class and
-// that the row is current.
-async function personIsInternalQaInProperty(pool, personId, propertyId) {
-  if (!personId || !propertyId) return false;
+// Internal audit line. Records the decision without leaking secrets.
+function audit(entry) {
+  try {
+    console.error("[activation_perimeter] " + JSON.stringify({
+      ts: new Date().toISOString(),
+      actor_user_id: entry.actor_user_id || null,
+      property_id: entry.property_id || null,
+      application_id: entry.application_id || null,
+      action: entry.action || null,
+      decision: entry.decision,
+      reason: entry.reason || null,
+    }));
+  } catch (_e) { /* audit must never throw into the request path */ }
+}
+
+// Current internal_qa classification for a person in a property.
+// { ok, read_failed }. Absence → ok:false. Read error → ok:false, read_failed:true.
+async function currentInternalQa(pool, personId, propertyId) {
+  if (!personId || !propertyId) return { ok: false, read_failed: false };
   try {
     const q = await pool.query(
-      `select record_class
-         from person_property_classifications
-        where person_id = $1
-          and property_id = $2
-          and (superseded_at is null)
-        order by classified_at desc
-        limit 1`,
-      [personId, propertyId]
-    );
-    if (q.rows.length === 0) return false;          // UNCLASSIFIED → not permitted
-    return q.rows[0].record_class === "internal_qa";
+      `select record_class from person_property_classifications
+        where person_id = $1 and property_id = $2 and superseded_at is null limit 1`,
+      [personId, propertyId]);
+    if (q.rows.length === 0) return { ok: false, read_failed: false };
+    return { ok: q.rows[0].record_class === "internal_qa", read_failed: false };
   } catch (_e) {
-    // classification table unavailable / column mismatch → fail closed.
-    return false;
+    return { ok: false, read_failed: true };
   }
 }
 
-// Build the perimeter guard. `loadApplication(pool, id)` returns the
-// application row (or null) so the perimeter can read property_id + person_id
-// + status without duplicating the route's own loader. `eligibleStatuses` is
-// the set of application statuses this route may run against (route-specific).
-//
-// Usage on a route:
-//   const guard = activationPerimeter({
-//     pool,
-//     loadApplication: (pool, id) => getApp-equivalent,
-//     eligibleStatuses: ["accepted_term_required"],   // confirm-term
-//   });
-//   router.post("/applications/:id/confirm-term", dormantWriteGuard, guard, handler);
-//
-// Note: dormantWriteGuard still runs FIRST (Layer 1 in the chain). This guard
-// is Layer 2. Mounting both keeps the no-DB mode check ahead of any DB read.
-function activationPerimeter({ pool, loadApplication, eligibleStatuses }) {
+function activationPerimeter({ pool, loadApplication, eligibleStatuses, action, requiredModule }) {
   const eligible = new Set(eligibleStatuses || []);
+  const ACTION = action || "gated_activation";
+  // ACTION POLICY (ruling caution #2): "assigned here" is NOT "authorized for
+  // this consequential write." Lease-term ownership (countersign / confirm-
+  // term) is governed by the 'leasing' module (teamaccess ALLOWED_MODULES),
+  // owned by the property_manager per migration 047. The perimeter answers
+  // "may THIS actor perform THIS action at THIS property?" — module
+  // entitlement, not mere assignment. Defaults to 'leasing'.
+  const REQUIRED_MODULE = requiredModule || "leasing";
+
   return async function perimeterGuard(req, res, next) {
-    // Layer 1 backstop (defensive): even though dormantWriteGuard should
-    // precede us, re-check the mode with no DB so this guard is safe if
-    // mounted alone.
+    // Layer 1 backstop (no DB): mode must be enabled.
     if (resolveMode() !== "enabled") {
-      return res.status(403).json({
-        error: "commitment_ledger_dormant",
-        code: "LEDGER_DORMANT",
-        receipt: "Activation is dormant. Enabling requires COMMITMENT_LEDGER_MODE=enabled and a separate release decision.",
-      });
+      audit({ action: ACTION, decision: "refused", reason: "mode_dormant" });
+      return refuse(res);
     }
 
-    // authorized operator (explicit — past the mode gate ≠ authorized).
-    if (!operatorAuthorized(req)) {
-      return res.status(403).json({
-        error: "operator_not_authorized",
-        code: "PERIMETER_OPERATOR",
-        receipt: "Not an authorized operator for a gated activation route.",
-      });
+    // AUTHENTICATED STAFF SESSION (identity — NOT a header key).
+    let session = null;
+    try { session = await resolveStaffSession(pool, req.headers["x-staff-session"]); }
+    catch (_e) { session = null; }
+    if (!session || !session.id) {
+      audit({ action: ACTION, decision: "refused", reason: "no_authenticated_session" });
+      return refuse(res);
     }
 
-    // resolve the application to get server-derived property + person + status.
+    // Resolve the application (server-derived property + person + status).
     let app = null;
-    try {
-      app = await loadApplication(pool, req.params.id);
-    } catch (_e) {
-      app = null;
-    }
+    try { app = await loadApplication(pool, req.params.id); }
+    catch (_e) { app = null; }
     if (!app) {
-      return res.status(404).json({ receipt: "No application with that id." });
+      audit({ actor_user_id: session.id, action: ACTION, decision: "refused",
+              reason: "application_not_found", application_id: req.params.id || null });
+      return refuse(res);
     }
 
-    // property must be in the approved activation set.
-    const approved = approvedPropertyIds();
-    if (!approved.has(app.property_id)) {
-      return res.status(403).json({
-        error: "property_not_in_activation_set",
-        code: "PERIMETER_PROPERTY",
-        receipt: "This application's property is not in the approved activation set. Gated routes run only for explicitly approved properties.",
-      });
+    // PROPERTY ACTIVATED? The application's OWN property governs; a
+    // client-supplied property is irrelevant and never consulted.
+    if (!activatedPropertyIds().has(app.property_id)) {
+      audit({ actor_user_id: session.id, property_id: app.property_id, application_id: app.id,
+              action: ACTION, decision: "refused", reason: "property_not_activated" });
+      return refuse(res);
     }
 
-    // the application's person must hold a CURRENT internal_qa classification
-    // in THIS property. Absence = not permitted (fail closed).
-    const isQa = await personIsInternalQaInProperty(pool, app.person_id, app.property_id);
-    if (!isQa) {
-      return res.status(403).json({
-        error: "record_not_internal_qa",
-        code: "PERIMETER_CLASSIFICATION",
-        receipt: "This application's record is not classified internal_qa in this property. Gated routes run only for controlled internal-QA records during activation proof.",
-      });
+    // ACTOR AUTHORITY: server-derived active assignment at the APPLICATION's
+    // property (state:'resolved'). Not the session's claimed property, not a header.
+    let identity = null;
+    try { identity = await resolveStaffIdentity(pool, { user_id: session.id, property_id: app.property_id }); }
+    catch (_e) { identity = null; }
+    if (!identity || identity.state !== "resolved") {
+      audit({ actor_user_id: session.id, property_id: app.property_id, application_id: app.id,
+              action: ACTION, decision: "refused",
+              reason: "actor_not_entitled_at_property:" + (identity ? identity.state : "resolve_failed") });
+      return refuse(res);
     }
 
-    // eligible application state for this specific route.
+    // ── ACTION AUTHORITY (ruling caution #2): assignment ≠ authority for this
+    //    write. Require (a) the session is scoped to the APPLICATION's property
+    //    — a session for another property cannot authorize a write here — and
+    //    (b) the session holds the module that governs this action ('leasing'
+    //    for lease-term countersign/confirm-term). "May this actor do THIS
+    //    action here?", not merely "does this person work here?". ──
+    const sessionModules = Array.isArray(session.allowed_modules) ? session.allowed_modules : [];
+    const propertyScopeOk = session.property_id === app.property_id;
+    const hasModule = sessionModules.includes(REQUIRED_MODULE);
+    if (!propertyScopeOk || !hasModule) {
+      audit({ actor_user_id: session.id, property_id: app.property_id, application_id: app.id,
+              action: ACTION, decision: "refused",
+              reason: !propertyScopeOk
+                ? "session_property_scope_mismatch"
+                : "action_not_authorized:missing_module:" + REQUIRED_MODULE });
+      return refuse(res);
+    }
+
+    // RECORD CLASSIFICATION: current internal_qa for the application's person.
+    // Re-checked every phase. Read failure → refuse, audited distinctly.
+    const cls = await currentInternalQa(pool, app.person_id, app.property_id);
+    if (!cls.ok) {
+      audit({ actor_user_id: session.id, property_id: app.property_id, application_id: app.id,
+              action: ACTION, decision: "refused",
+              reason: cls.read_failed ? "classification_read_failed" : "record_not_internal_qa" });
+      return refuse(res);
+    }
+
+    // ELIGIBLE APPLICATION STATE (final authority is still the handler under lock).
     if (eligible.size > 0 && !eligible.has(app.status)) {
-      return res.status(409).json({
-        error: "application_state_ineligible",
-        code: "PERIMETER_STATE",
-        receipt: `Application status '${app.status}' is not eligible for this route (expected one of: ${[...eligible].join(", ")}).`,
-      });
+      audit({ actor_user_id: session.id, property_id: app.property_id, application_id: app.id,
+              action: ACTION, decision: "refused", reason: "application_state_ineligible:" + app.status });
+      return refuse(res);
     }
 
-    // Perimeter satisfied. Attach the resolved app so the handler can reuse it
-    // (avoids a second load) without changing the handler's own guarantees.
+    // ADMITTED. Attach authenticated actor + resolved app; handler MUST still
+    // revalidate under FOR UPDATE.
+    req._perimeterActor = { user_id: session.id, name: session.name || null,
+                            role: identity.role || null, assignment_id: identity.assignment_id || null,
+                            authorized_module: REQUIRED_MODULE };
     req._perimeterApp = app;
+    audit({ actor_user_id: session.id, property_id: app.property_id, application_id: app.id,
+            action: ACTION, decision: "admitted" });
     return next();
   };
 }
 
-module.exports = {
-  activationPerimeter,
-  approvedPropertyIds,
-  operatorAuthorized,
-  personIsInternalQaInProperty,
-};
+module.exports = { activationPerimeter, activatedPropertyIds, currentInternalQa };
