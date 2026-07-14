@@ -15,7 +15,7 @@
  *
  * USAGE (Render Shell or anywhere with DATABASE_URL + API reachable):
  *   API=https://property-spine-api.onrender.com \
- *   OPERATOR_KEY=$OPERATOR_KEY \
+ *   STAFF_SESSION=<token from establish_qa_staff_session.js> \
  *   APP_ID=<accepted_term_required application id> \
  *   DATABASE_URL="$DATABASE_URL" \
  *   node prove_confirm_term_concurrency.js
@@ -27,12 +27,12 @@
 const { Pool } = require("pg");
 
 const API = process.env.API || "https://property-spine-api.onrender.com";
-const KEY = process.env.OPERATOR_KEY;
+const SESSION = process.env.STAFF_SESSION;  // x-staff-session token from establish_qa_staff_session.js
 const APP_ID = process.env.APP_ID;
 const DB = process.env.DATABASE_URL;
 
-if (!KEY || !APP_ID || !DB) {
-  console.error("Missing env: need OPERATOR_KEY, APP_ID, DATABASE_URL.");
+if (!SESSION || !APP_ID || !DB) {
+  console.error("Missing env: need STAFF_SESSION (x-staff-session token), APP_ID, DATABASE_URL.");
   process.exit(2);
 }
 
@@ -48,7 +48,7 @@ const body = JSON.stringify({
 function fire() {
   return fetch(`${API}/applications/${APP_ID}/confirm-term`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-operator-key": KEY },
+    headers: { "Content-Type": "application/json", "x-staff-session": SESSION },
     body,
   }).then(async (r) => ({ status: r.status, json: await r.json().catch(() => ({})) }));
 }
