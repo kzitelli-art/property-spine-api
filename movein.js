@@ -36,6 +36,9 @@
 module.exports = function movein(deps) {
   const express = require("express");
   const router = express.Router();
+  // Shared effective-possession writer (space_position.js). Effective, space_id-
+  // anchored, idempotent. Optional so a partial deploy fails soft, not at boot.
+  const recordEffectivePossession = deps && deps.recordEffectivePossession;
 
   const { pool, spawnObligationFromEvent, satisfyObligation, completeObligation, deliveryHelper = null } = deps;
   if (!pool) throw new Error("movein module requires a pool");
@@ -311,11 +314,60 @@ module.exports = function movein(deps) {
         } else throw e;
       }
 
-      // possession: the unit is now occupied
+      // ── POSSESSION (locked order: effective event → compatibility cache) ──
+      // 1) Record the EFFECTIVE move_in as a durable, space_id-anchored unit_event
+      //    (the possession primitive). Resolve the lease from the scheduling event
+      //    that spawned this obligation — the same link the delivery hook uses.
+      //    No lease link (legacy/manual move-in) → no space-anchored possession
+      //    event; we DO NOT guess a space. Honest-nothing beats a fabricated bed.
+      // 2) units.occupancy_status is written ONLY as a COMPATIBILITY CACHE
+      //    downstream of the event, so availability.js's verbatim read is
+      //    unbroken during the migration. The event is the truth; the column
+      //    is the cache. Idempotent: recordEffectivePossession no-ops if a live
+      //    effective move_in already exists for (lease, space); the DB partial-
+      //    unique index is the hard backstop for repeat/concurrent approval.
       let unitNote = null;
+      let possessionNote = null;
       if (obligation.unit_id) {
+        // resolve the committing lease from the spawning move_in_scheduled event
+        let leaseForPossession = null;
+        try {
+          const lp = await client.query(
+            `select lease_id from unit_events
+              where spawned_obligation_id = $1 and event_type = 'move_in_scheduled'
+                and lease_id is not null limit 1`, [obligation_id]);
+          leaseForPossession = lp.rows[0] ? lp.rows[0].lease_id : null;
+        } catch (e) { /* fall through to cache-only below */ }
+
+        if (recordEffectivePossession && leaseForPossession) {
+          try {
+            const pr = await recordEffectivePossession(client, {
+              kind: "move_in",
+              lease_id: leaseForPossession,
+              unit_id: obligation.unit_id,
+              property_id: obligation.property_id || null,
+              effective_date: new Date().toISOString().slice(0, 10),
+              actor: approved_by_person_id,
+              source: "rent_ready_approval",
+            });
+            possessionNote = pr.created
+              ? "Effective move_in recorded (space-anchored possession)."
+              : "Move_in already recorded — idempotent no-op.";
+          } catch (e) {
+            // A space that cannot be resolved from the lease on a multi-space
+            // unit is a real gap, not something to paper over. Surface it, do
+            // not silently occupy. The cache poke below still keeps legacy
+            // occupancy behavior intact.
+            possessionNote = "Possession event NOT recorded: " + e.message;
+            console.error("possession event (surfaced):", e.message);
+          }
+        } else if (!leaseForPossession) {
+          possessionNote = "No lease linked to this move-in — legacy/manual path; no space-anchored possession event.";
+        }
+
+        // compatibility cache (downstream of the event, not the source of truth)
         await client.query("update units set occupancy_status='occupied', updated_at=now() where id=$1", [obligation.unit_id]);
-        unitNote = "Unit occupancy → occupied (possession).";
+        unitNote = "Unit occupancy → occupied (compatibility cache; possession truth is the unit_event).";
       }
 
       // ── SLICE D — the ONE thin delivery hook (ruling #2, #3) ─────────
@@ -352,6 +404,7 @@ module.exports = function movein(deps) {
         approved_by_person_id,
         obligation_note: completedNote,
         unit_note: unitNote,
+        possession_note: possessionNote,
         note: "Maintenance prepared, manager approved. The completed obligation is the verified record the unit was rent-ready before move-in.",
       });
     } catch (e) {
