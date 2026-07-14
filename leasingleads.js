@@ -135,14 +135,10 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   }
 
   // ── helpers ──────────────────────────────────────────────────────────
-  function normalizePhone(raw) {
-    if (!raw) return null;
-    const d = String(raw).replace(/\D/g, "");
-    if (d.length === 10) return "+1" + d;
-    if (d.length === 11 && d[0] === "1") return "+" + d;
-    if (String(raw).startsWith("+")) return String(raw).trim();
-    return null;
-  }
+  // Canonical phone normalization is the SHARED module (phone_identity.js) —
+  // one implementation for all identity dedup, not a per-module copy.
+  const { normalizeE164: __normalizeE164 } = require("./phone_identity");
+  function normalizePhone(raw) { return __normalizeE164(raw); }
   function normalizeEmail(raw) {
     if (!raw) return null;
     const e = String(raw).trim().toLowerCase();
@@ -155,21 +151,79 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // the whole portfolio. On create, set lifecycle_status='lead' and stamp
   // first-touch source (acquisition credit). On match, NEVER overwrite source;
   // only backfill blank contact fields. Returns { person, createdPerson }.
+  // ── CANONICAL PERSON RESOLVER (phone-based leasing intake identity) ──────
+  //  ONE door for turning an inbound name/phone/email into a durable person,
+  //  for the LEASING domain (prospect intake). Enforces the one-phone-one-
+  //  person rule that forked before: the bug was deduping on the raw `phone`
+  //  string, so the same human in a different format ("7243098434" vs
+  //  "+17243098434") minted a NEW person. Fix: normalize to a canonical E.164
+  //  and dedup on primary_phone_e164 FIRST.
+  //
+  //  SCOPE NOTE (doctrine): phone is an identity SIGNAL for prospect intake, not
+  //  a universal "same phone = same human everywhere" merge. This resolver
+  //  governs leasing-domain person intake only. The staff-user durable-person
+  //  bridge (staffbridge.js) remains a SEPARATE identity fact and does NOT route
+  //  through here.
+  //
+  //  Lookup order:
+  //    1. canonical primary_phone_e164 (the real identity key)
+  //    2. legacy exact `phone` match (finds old rows written before this key
+  //       existed) — and when found, BACKFILL primary_phone_e164 so the row
+  //       joins the canonical index going forward
+  //    3. email (lowercased)
+  //  On CREATE: write BOTH phone (display/current) AND primary_phone_e164
+  //  (canonical). On MATCH: backfill only what's missing; identity stays put.
   async function resolveOrCreatePerson(client, { name, phone, email, source }) {
+    const canon = normalizePhone(phone); // canonical E.164 or null
+    const emailNorm = normalizeEmail(email);
     let person = null;
-    if (phone) person = (await client.query(`select * from persons where phone=$1 order by created_at limit 1`, [phone])).rows[0] || null;
-    if (!person && email) person = (await client.query(`select * from persons where lower(email)=lower($1) order by created_at limit 1`, [email])).rows[0] || null;
+
+    // 1) canonical key
+    if (canon) {
+      person = (await client.query(
+        `select * from persons where primary_phone_e164=$1 order by created_at limit 1`,
+        [canon])).rows[0] || null;
+    }
+    // 2) legacy phone rows: match where the STORED phone, once normalized to
+    //    E.164, equals our canonical — so a row stored in ANY raw format
+    //    ("7243098888", "724-309-8888", etc.) is found and adopted. We compare
+    //    normalized-to-normalized rather than raw string equality (the original
+    //    bug). Bounded scan: only rows whose digits could match.
+    if (!person && canon) {
+      const tail10 = canon.replace(/\D/g, "").slice(-10);
+      const candidates = (await client.query(
+        `select * from persons
+          where phone is not null and regexp_replace(phone,'\\D','','g') like $1
+          order by created_at`,
+        ["%" + tail10])).rows;
+      person = candidates.find(p => normalizePhone(p.phone) === canon) || null;
+    }
+    // 3) email
+    if (!person && emailNorm) {
+      person = (await client.query(
+        `select * from persons where lower(email)=lower($1) order by created_at limit 1`,
+        [emailNorm])).rows[0] || null;
+    }
+
     if (person) {
-      // backfill only what's missing; identity stays put, source is untouched.
+      // backfill missing fields; CANONICALIZE the identity key if absent.
       await client.query(
-        `update persons set name=coalesce(name,$1), phone=coalesce(phone,$2), email=coalesce(email,$3), updated_at=now() where id=$4`,
-        [name || null, phone, email, person.id]);
+        `update persons
+            set name = coalesce(name,$1),
+                phone = coalesce(phone,$2),
+                email = coalesce(email,$3),
+                primary_phone_e164 = coalesce(primary_phone_e164,$4),
+                updated_at = now()
+          where id=$5`,
+        [name || null, phone || canon || null, emailNorm, canon, person.id]);
       return { person, createdPerson: false };
     }
+
+    // create: write BOTH the display phone and the canonical identity key.
     person = (await client.query(
-      `insert into persons (name, phone, email, lifecycle_status, leasing_stage, source)
-       values ($1,$2,$3,'lead','lead',$4) returning *`,
-      [name || null, phone, email, source || null])).rows[0];
+      `insert into persons (name, phone, email, primary_phone_e164, lifecycle_status, leasing_stage, source)
+       values ($1,$2,$3,$4,'lead','lead',$5) returning *`,
+      [name || null, phone || canon || null, emailNorm, canon, source || null])).rows[0];
     return { person, createdPerson: true };
   }
 
