@@ -40,6 +40,7 @@ module.exports = function applicationsModule(deps) {
   // application with NO offer, behaves exactly as before.
   const ledgerService = deps.ledgerService || null;
   const { dormantWriteGuard } = require("./dormant_gate");  // fail-closed commitment-write gate
+  const { activationPerimeter } = require("./activation_perimeter"); // Step 6: scoped activation perimeter
   const router = express.Router();
 
   const ACTIVATION_TYPE = "lease_activation";
@@ -61,6 +62,25 @@ module.exports = function applicationsModule(deps) {
 
   const getApp = async (q, id) =>
     (await q.query("select * from lease_applications where id=$1", [id])).rows[0];
+
+  // ── ACTIVATION PERIMETER GUARDS (Step 6) ──────────────────────────────
+  // Scoped, fail-closed Layer-2 guards for the two gated tenancy routes.
+  // dormantWriteGuard (Layer 1, no DB) still runs FIRST in each chain; these
+  // add: approved-property + internal_qa-record + authorized-operator +
+  // eligible-application-state. Eligible states are route-specific:
+  //   · countersign  runs on a 'lease_ready' application (approve set this;
+  //     activation gate open, tenant may have signed, not yet accepted/active).
+  //   · confirm-term runs on an application in 'accepted_term_required'.
+  const countersignPerimeter = activationPerimeter({
+    pool,
+    loadApplication: getApp,
+    eligibleStatuses: ["lease_ready"],
+  });
+  const confirmTermPerimeter = activationPerimeter({
+    pool,
+    loadApplication: getApp,
+    eligibleStatuses: ["accepted_term_required"],
+  });
 
   // outstanding required inputs on the activation obligation (the live gate)
   async function outstanding(q, app) {
@@ -282,7 +302,7 @@ module.exports = function applicationsModule(deps) {
   // completes the obligation (which itself refuses on any outstanding
   // input). 'active' is set ONLY here, ONLY after completeObligation
   // succeeds — the single, structural path to an active lease.
-  router.post("/applications/:id/countersign", dormantWriteGuard, async (req, res) => {
+  router.post("/applications/:id/countersign", dormantWriteGuard, countersignPerimeter, async (req, res) => {
     const { countersigned_by = null, note = null } = req.body || {};
     if (!countersigned_by) return res.status(400).json({ receipt: "countersigned_by required — a human must countersign." });
 
@@ -496,7 +516,7 @@ module.exports = function applicationsModule(deps) {
   // second CURRENT tenancy anchor (a lease in 'pending'|'active'|'commercial')
   // for the same application. Amendment / reissue / cancellation is a separate
   // future path; this route creates exactly one anchor or refuses.
-  router.post("/applications/:id/confirm-term", dormantWriteGuard, async (req, res) => {
+  router.post("/applications/:id/confirm-term", dormantWriteGuard, confirmTermPerimeter, async (req, res) => {
     const { start_date = null, end_date = null, confirmed_by = null,
             rent: rentIn = null, security_deposit: depositIn = null } = req.body || {};
     if (!confirmed_by) return res.status(400).json({ receipt: "confirmed_by required — a human confirms the lease term." });
@@ -702,7 +722,7 @@ module.exports = function applicationsModule(deps) {
             module: "leasing", type: "move_in_delivery",
             label: `Deliver unit for move-in — ${app.applicant_name}${app.unit_label ? " · " + app.unit_label : ""}`,
             owner_type: "human", assigned_role: "property_manager",
-            escalates_to_role: "regional_manager",
+            escalates_to_role: "asset_manager",   // 'regional_manager' is NOT in the role_name enum; asset_manager is the tier above property_manager
             status: "open", due_at: start_date,
             priority: dPriority, severity: dSeverity,
             // HARD gates only; resident_instructions_sent + move_in_logistics_considered are
