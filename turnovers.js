@@ -192,6 +192,7 @@ module.exports = function turnovers(deps) {
       // possession ended — it only asserts it when it is true.
       let moveOutNote = null;
       if (recordEffectivePossession && outgoing_lease_id) {
+        await client.query("savepoint sp_moveout");
         try {
           const pr = await recordEffectivePossession(client, {
             kind: "move_out",
@@ -202,8 +203,10 @@ module.exports = function turnovers(deps) {
             actor: null,
             source: "move_out",
           });
+          await client.query("release savepoint sp_moveout");
           moveOutNote = pr.created ? "Effective move_out recorded (verified prior possession)." : "Move_out already recorded — idempotent no-op.";
         } catch (e) {
+          await client.query("rollback to savepoint sp_moveout");
           if (e.code === "NO_POSSESSION_TO_END") {
             // expected for a turn that is not a resident surrender — NOT an error.
             moveOutNote = "Turn recorded; no possession-end event (this lease/space had no live move_in — not a resident surrender).";
