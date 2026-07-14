@@ -213,6 +213,25 @@ module.exports = function leasePacketsModule(deps) {
       { key: "notice", title: "Renewal / Move-out Notice", ack: false, body: [
         cfg.notice_requirement,
       ] },
+      { key: "use", title: "Use & Occupancy", ack: false, body: [
+        "The unit is for residential use only, by the residents and any occupants named on the lease.",
+        "Residents keep the unit clean and in good condition and follow the community rules, which are part of the lease.",
+      ] },
+      { key: "maintenance", title: "Maintenance & Repairs", ack: false, body: [
+        "Report maintenance issues through the resident portal or in writing; in an emergency (fire, gas, flooding, or a crime in progress) call 911 first, then notify the office.",
+        "The owner makes needed repairs with reasonable diligence. Residents are responsible for damage they, their occupants, or their guests cause beyond ordinary wear.",
+      ] },
+      { key: "access", title: "Owner Access", ack: false, body: [
+        "The owner may enter at reasonable times to make repairs, perform maintenance or inspections, or show the unit after a move-out notice, giving notice as required by the lease and law.",
+      ] },
+      { key: "alterations", title: "Alterations & Property", ack: false, body: [
+        "Residents do not alter, paint, re-key, or make structural changes to the unit without the owner's written consent.",
+        "Keys, fobs, fixtures, and appliances provided with the unit are returned in good condition at move-out.",
+      ] },
+      { key: "default", title: "Default & Remedies", ack: false, body: [
+        "Not paying rent or other amounts when due, or breaking the lease or community rules, places the resident in default.",
+        "On default the owner may pursue the remedies allowed by the lease and Pennsylvania law, including late charges and, where applicable, recovery of possession. The specific process and any charges are governed by the lease and applicable law.",
+      ] },
       { key: "ack", title: "Acknowledge Demonstration Terms", ack: true, body: [
         "Acknowledging records that you have reviewed these proposed terms. It is not a signature on the lease and does not create or activate a tenancy.",
         "The complete lease and required addenda — provided separately — will govern. A tenancy begins only when the owner executes the lease through the normal process.",
