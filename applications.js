@@ -74,7 +74,12 @@ module.exports = function applicationsModule(deps) {
   const countersignPerimeter = activationPerimeter({
     pool,
     loadApplication: getApp,
-    eligibleStatuses: ["lease_ready"],
+    // countersign runs AFTER approve (lease_ready) and typically AFTER the
+    // tenant signs (tenant_signed). Both are legitimate pre-countersign states
+    // — the handler is final authority (it re-checks obligation inputs under
+    // lock and refuses if the tenant hasn't signed). The perimeter must not be
+    // stricter than the handler here.
+    eligibleStatuses: ["lease_ready", "tenant_signed"],
     action: "countersign",
     requiredModule: "leasing",
   });
