@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Review Your Lease</title>
+  <title>Lease Terms Review — Demonstration</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -69,20 +69,20 @@
   </style>
 </head>
 <body>
-  <div class="placeholder-bar" id="phBar">PLACEHOLDER PACKET — this is not the real lease. Clause language is provisional pending the approved template.</div>
+  <div class="placeholder-bar" id="phBar">DEMONSTRATION SUMMARY — This is a demonstration summary of proposed lease terms. It is not the complete lease, does not replace the governing lease and required addenda, and does not create or activate a tenancy.</div>
   <main class="shell">
     <header class="top">
       <div>
-        <div class="eyebrow">Lease Packet</div>
-        <h1>Review Your Lease</h1>
-        <div class="sub">Scroll the packet, initial each required section, then sign at the bottom. Your signature records your <b>intent</b> — the lease is not active until management countersigns it.</div>
-        <div class="intent-pill">Signing here = intent · not a binding signature · not active</div>
+        <div class="eyebrow">Demonstration</div>
+        <h1>Lease Terms Review</h1>
+        <div class="sub">Review the proposed terms below and acknowledge each section. This records your review only — it is not a signature on the lease, and a tenancy begins only when the owner executes the complete lease.</div>
+        <div class="intent-pill">Acknowledging = you reviewed these terms · not a signature · does not activate a lease</div>
       </div>
       <div class="summary" id="summary"></div>
     </header>
 
     <article class="paper" id="paper">
-      <h2 id="paperTitle">Residential Lease Packet</h2>
+      <h2 id="paperTitle">Lease Terms Review — Demonstration</h2>
       <div class="addr" id="addr"></div>
       <div id="sections"></div>
       <div class="notice" id="notice"></div>
@@ -94,7 +94,7 @@
       <div class="status" id="progressText">Loading…</div>
       <div class="meter"><div id="meter"></div></div>
       <div id="todos"></div>
-      <button class="submit" id="submitBtn" disabled>Submit for countersign</button>
+      <button class="submit" id="submitBtn" disabled>Acknowledge Demonstration Terms</button>
     </aside>
   </main>
 
@@ -135,8 +135,8 @@
 
     function render(){
       const snap = packet.rendered_snapshot||{}, terms = packet.terms||{};
-      document.getElementById('phBar').style.display = packet.is_placeholder ? 'block' : 'none';
-      document.getElementById('paperTitle').textContent = packet.is_placeholder ? 'Residential Lease Packet (placeholder)' : (snap.title||'Residential Lease Packet');
+      document.getElementById('phBar').style.display = 'block';
+      document.getElementById('paperTitle').textContent = snap.title || 'Lease Terms Review — Demonstration';
       document.getElementById('addr').textContent = snap.subtitle || terms.property_address || '';
       document.getElementById('summary').innerHTML = `
         <div><span>Unit</span><b>${esc(snap.summary?.unit||terms.unit_label||'—')}</b></div>
@@ -164,7 +164,7 @@
       const done=f.completed;
       const action = f.field_type==='signature'?'Sign':(f.field_type==='acknowledgment'?'Acknowledge':'Initial');
       return `<div class="field ${done?'done':''}" id="field-${f.id}">
-        <div><div class="field-title">${esc(f.label)}</div><small>${done?'✓ recorded as intent':action+' required'}</small></div>
+        <div><div class="field-title">${esc(f.label)}</div><small>${done?'✓ acknowledged':action+' required'}</small></div>
         <button ${done?'disabled':''} onclick="completeField('${f.id}','${f.field_type}')">${done?'Done':action}</button>
       </div>`;
     }
@@ -206,7 +206,7 @@
 
     function showSubmitted(){
       const el=document.getElementById('notice');
-      el.innerHTML='<b>Submitted.</b> Your signature is recorded as <b>intent</b>. The lease is now waiting on management countersignature — it is <b>not active yet</b>. You will be notified when management countersigns.';
+      el.innerHTML='<b>Acknowledged.</b> Your review of the demonstration terms is recorded. This does <b>not</b> activate a lease — a tenancy begins only when the owner executes the complete lease and required addenda through the normal process.';
       el.style.display='block';
     }
     function jump(id){document.getElementById('field-'+id)?.scrollIntoView({behavior:'smooth',block:'center'});}
