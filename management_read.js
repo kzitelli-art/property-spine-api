@@ -24,7 +24,7 @@
 module.exports = function managementRead(deps) {
   const express = require("express");
   const router = express.Router();
-  const { pool } = deps;
+  const { pool, spacePosition } = deps;
   if (!pool) throw new Error("management_read requires a pool");
 
   router.get("/properties/:id/management-read", async (req, res) => {
@@ -208,10 +208,48 @@ module.exports = function managementRead(deps) {
       const sevRank = { high:0, watch:1, normal:2 };
       focus.sort((a,b)=> (sevRank[a.severity]-sevRank[b.severity]) || ((b.dollars||0)-(a.dollars||0)));
 
+      // ── CANONICAL SPACE POSITION OVERLAY (Step 5 — existing surface consumes
+      //    the shared read). Surfaces the distinct-fact conflicts the position
+      //    detects (a commenced lease with no possession, a committed future
+      //    over an unfinished turn, possession without a current lease). This is
+      //    OWNED WORK made visible on the rent-roll surface — not a replacement
+      //    of the occupancy math above (that reconciliation is a later slice).
+      //    Fail-soft: a position error must not break the rent roll.
+      // position_status makes "checked, no conflicts" DISTINCT from "couldn't
+      // check" (Fable's fail-soft-not-silent caution). An empty items array is
+      // ONLY meaningful when position_status === "ok". If the overlay fails, the
+      // rent roll still loads but the status says "unavailable" — never a silent
+      // empty array that would falsely imply there are no conflicts.
+      let position_status = "not_computed";
+      let position_exceptions = null;
+      if (spacePosition) {
+        try {
+          const sp = await spacePosition(pool, { property_id: propertyId, as_of: req.query.as_of || null });
+          const flagged = sp.positions.filter(p => p.next_required_action);
+          position_status = "ok";
+          position_exceptions = {
+            as_of: sp.as_of,
+            count: flagged.length,
+            items: flagged.map(p => ({
+              space_id: p.space_id, unit_number: p.unit_number, space_label: p.space_label,
+              issue: p.next_required_action, reason: p.reason,
+              current_lease: !!p.current_lease_position, future_lease: !!p.future_lease_position,
+              possession: !!p.current_possession, readiness: p.physical_readiness,
+            })),
+          };
+        } catch (e) {
+          position_status = "unavailable";
+          position_exceptions = null; // NOT an empty array — absence of a check, not absence of conflicts
+          console.error("space-position overlay (non-fatal, surfaced as unavailable):", e.message);
+        }
+      }
+
       res.json({
         property_id: propertyId,
         has_data: true,
         basis,
+        position_status,
+        position_exceptions,
         unit_label: unitLabel,
         occupancy: {
           current_pct: currentPct,
