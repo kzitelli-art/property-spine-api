@@ -407,7 +407,7 @@ module.exports = function leasePacketsModule(deps) {
       // are delivered separately and GOVERN; this summary does not.
       await client.query(`delete from lease_packet_documents where lease_packet_id=$1`, [pk.id]);
       const docs = [
-        { document_type: "complete_lease",     title: "Complete Lease & Required Addenda (governing — delivered separately)", required_acknowledgment: false },
+        { document_type: "lease_body",         title: "Complete Lease & Required Addenda (governing — delivered separately)", required_acknowledgment: false },
         { document_type: "rental_license",     title: "Rental License",                    required_acknowledgment: true  },
         { document_type: "rental_suitability", title: "Certificate of Rental Suitability", required_acknowledgment: true  },
       ];
