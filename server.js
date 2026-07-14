@@ -3345,6 +3345,18 @@ const __applicationSubmission = applicationSubmissionModule({
 });
 app.use("/", __applicationSubmission);
 
+// ── THE ONE CANONICAL TENANCY-ANCHOR SERVICE (Fable ruling) ──────────────
+// countersign + confirm-term extracted to ONE implementation, built ONCE here
+// from the obligation engine + ledger service, then injected into BOTH route
+// families (applications.js legacy routes AND operator.js /operator/leasing/*
+// adapters). There is exactly one write path; the two route families are entry
+// adapters that mount the SAME dormantWriteGuard + activationPerimeter and call
+// THIS service. No route reimplements the transaction; no internal HTTP hop.
+const __tenancyAnchor = require("./tenancy_anchor_service")({
+  spawnObligationFromEvent, satisfyObligation, completeObligation,
+  ledgerService: __commitmentLedger._service,   // J1: countersign locks the economic schedule
+});
+
 // applications mounted HERE (moved down) so it can close the application_approval
 // gate via the submission service, then spawn activation as before.
 app.use("/", applicationsModule({
@@ -3352,6 +3364,7 @@ app.use("/", applicationsModule({
   submissionService: __applicationSubmission._service,
   conversionService: __leasingConversion._service, // 068: approval is the ONLY creator of signature follow-up work
   ledgerService: __commitmentLedger._service,   // J1: countersign locks the economic schedule
+  tenancyAnchor: __tenancyAnchor,               // the ONE canonical countersign/confirm-term service
 }));
 app.use("/", leasingSchedulingModule({ pool }));
 app.use("/", leasingInteractionsModule({ pool, sms, leasingLifecycle, commBoundary }));
@@ -3403,7 +3416,11 @@ app.use("/", operatorModule({ pool, agentService: agentApp._service,
   applicationInvitations: __applicationSubmission._service,
   // 067 follow-on: the session-authed leasing task queue resolves through the
   // conversion rail's ONE resolveRung service — no module reimplements closing.
-  conversionService: __leasingConversion._service }));
+  conversionService: __leasingConversion._service,
+  // the SAME canonical tenancy-anchor service applications.js gets — the two
+  // /operator/leasing/applications/:id/{countersign,confirm-term} adapters call
+  // it behind dormantWriteGuard + activationPerimeter. One implementation.
+  tenancyAnchor: __tenancyAnchor }));
 
 // ── STAFF IDENTITY BRIDGE (067) — the authorized point-and-confirm workflow:
 // classify accounts, suggest candidates (exact verified email only, never
