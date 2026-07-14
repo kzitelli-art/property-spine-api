@@ -342,6 +342,12 @@ module.exports = function movein(deps) {
         } catch (e) { /* fall through to cache-only below */ }
 
         if (recordEffectivePossession && leaseForPossession) {
+          // SAVEPOINT: the possession write must NEVER poison the approve
+          // transaction. If it errors (schema/constraint/ambiguity), we roll
+          // back to the savepoint, surface the reason, and let the approve
+          // (obligation completion + compatibility cache) proceed. Honest-blank
+          // on possession beats aborting a valid rent-ready approval.
+          await client.query("savepoint sp_possession");
           try {
             const pr = await recordEffectivePossession(client, {
               kind: "move_in",
@@ -352,16 +358,14 @@ module.exports = function movein(deps) {
               actor: approved_by_person_id,
               source: "rent_ready_approval",
             });
+            await client.query("release savepoint sp_possession");
             possessionNote = pr.created
               ? "Effective move_in recorded (space-anchored possession)."
               : "Move_in already recorded — idempotent no-op.";
           } catch (e) {
-            // A space that cannot be resolved from the lease on a multi-space
-            // unit is a real gap, not something to paper over. Surface it, do
-            // not silently occupy. The cache poke below still keeps legacy
-            // occupancy behavior intact.
+            await client.query("rollback to savepoint sp_possession");
             possessionNote = "Possession event NOT recorded: " + e.message;
-            console.error("possession event (surfaced):", e.message);
+            console.error("possession event (surfaced, non-fatal):", e.message);
           }
         } else if (!leaseForPossession) {
           possessionNote = "No lease linked to this move-in — legacy/manual path; no space-anchored possession event.";
