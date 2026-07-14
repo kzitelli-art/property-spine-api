@@ -29,10 +29,10 @@ const pool = new Pool({ connectionString: DB, ssl: DB.includes("neon") ? { rejec
   // 1) staff users with an ACTIVE assignment at Demo Building, plus their
   //    allowed_modules for that property (the action-authority fact).
   const rows = (await pool.query(
-    `select u.id as user_id, u.name, u.role, a.role_title, a.allowed_modules, a.is_active
+    `select u.id as user_id, u.name, u.role, a.role_title, a.allowed_modules, a.active
        from property_team_assignments a
-       join users u on u.id = a.accepted_user_id
-      where a.property_id = $1 and a.is_active = true
+       join users u on u.id = a.user_id
+      where a.property_id = $1 and a.active = true
         and u.is_active = true and u.status = 'active'
       order by ('leasing' = any(a.allowed_modules)) desc, u.created_at`,
     [DEMO])).rows;
