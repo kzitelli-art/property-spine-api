@@ -24,9 +24,11 @@
 //     manager countersigns via applications.js  →  completeObligation  →
 //     only THEN active.
 //
-//   Tenant signature = INTENT (Option A). The captured value is audit
-//   evidence, not a legally-binding signature; PA e-sign enforceability is
-//   a counsel question, unanswered, and the data/UI label it as intent.
+//   Acknowledgment = review/intent only (Option A). The captured value is
+//   audit evidence, NOT a legally-binding signature on the final lease. It
+//   records that the resident reviewed the demonstration terms; the complete
+//   lease and required addenda (delivered separately) govern, and a tenancy
+//   begins only through the governed countersign/activation path.
 //
 //   Injection (server.js), mounted AFTER applications.js so the packet sits
 //   behind the same approved-application record:
@@ -71,60 +73,181 @@ module.exports = function leasePacketsModule(deps) {
     );
   }
 
-  // ─────────────── packet body (PLACEHOLDER until a real template lands) ───────────────
-  // Every clause string here is generic + clearly provisional. No real lease
-  // language, no hardcoded property/entity except inside an explicit 4233
-  // fixture (see fixtureTermsFor4233 below, used only by the test harness).
-  function placeholderSections(terms) {
-    const p = "[PLACEHOLDER — not the real lease. Final clause language pending the approved template.]";
+  // ═══════════════════════════════════════════════════════════════════
+  //  LEASE TERMS REVIEW — DEMONSTRATION
+  //
+  //  This renders Property Spine's OWN plain-language summary of the
+  //  verified property + application facts. It is NOT the NAA lease, not a
+  //  condensed NAA lease, not a governing instrument, and it reproduces no
+  //  NAA clause language, section structure, branding, or appearance. The
+  //  complete lease and required addenda (delivered separately) govern.
+  //
+  //  Interaction: the tenant ACKNOWLEDGES demonstration terms. That records
+  //  review/intent only. It does NOT activate a lease and is not a legal
+  //  signature on the final instrument. Activation remains exclusively the
+  //  governed manager-countersign path in applications.js.
+  // ═══════════════════════════════════════════════════════════════════
+
+  // ── CANONICAL LEASE-CONFIG RESOLVER ─────────────────────────────────
+  //  ONE resolver. Order: (1) durable property.lease_config when it exists;
+  //  (2) the external property-keyed configuration adapter; (3) null.
+  //  There is NO property-ID branch in rendering or business logic — a
+  //  property is a KEY into the config store, and the Demo Building is one
+  //  key exactly as the real Solo property will be one key. Same contract,
+  //  same failure mode. When a property has no configuration, this returns
+  //  null and packet generation FAILS CLOSED (see requireLeaseConfig).
+  function leaseConfigFor(property) {
+    if (property && property.lease_config && typeof property.lease_config === "object") {
+      return { source: "property.lease_config", cfg: property.lease_config };
+    }
+    const ext = property && EXTERNAL_LEASE_CONFIG[property.id];
+    if (ext) return { source: "external_adapter", cfg: ext };
+    return null;
+  }
+
+  // ── EXTERNAL LEASE-CONFIG ADAPTER ───────────────────────────────────
+  //  CLASS 2 — TEMPORARY CONFIGURATION ADAPTER.
+  //  Replacement condition: durable property lease configuration
+  //  (properties.lease_config), OR an approved official lease-provider
+  //  integration, becomes the canonical source. When that lands,
+  //  leaseConfigFor reads it first (already does) and this map is deleted.
+  //
+  //  Each entry is the SAME shape a real property's lease_config row will
+  //  be. The Demo Building entry carries Solo's real, verified fee values
+  //  sourced from Solo's executed lease documents — configuration data, not
+  //  code behavior. A real property added here (or given a lease_config row)
+  //  resolves through the identical path with no code change.
+  const EXTERNAL_LEASE_CONFIG = {
+    // Demo Building (display "Solo on Chestnut") — verified Solo terms.
+    "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe": {
+      landlord_entity: "4233 Chestnut, LLC",
+      rent_payment_location: "the on-site manager's office or the online payment site",
+      application_fee: "50.00",
+      amenity_fee: "300.00",
+      amenity_fee_renewal: "250.00",
+      telecom_fee: "99.00",
+      utility_responsibility: "Resident pays all utilities; utilities are billed and allocated through Conservice.",
+      late_fee: "75.00",
+      // Verified Solo lease term (from Solo's executed lease documents),
+      // NOT rendered as a statutory rule.
+      notice_requirement: "At least 60 days' written notice before the end of the term to renew or move out (per Solo's lease terms).",
+      insurance_note: "The owner does not insure resident personal property or personal injury; renter's insurance is recommended.",
+    },
+  };
+
+  // Required configured terms. Missing ANY of these blocks generation — a
+  // plausible default could produce a materially wrong lease. (notice and
+  // utility are strings; fees are money strings; all must be present.)
+  const REQUIRED_CONFIG_KEYS = [
+    "landlord_entity", "application_fee", "amenity_fee",
+    "utility_responsibility", "late_fee", "notice_requirement",
+  ];
+
+  // Fail-closed validation. Returns { ok, cfg, source } or { ok:false, missing }.
+  // Also treats blank/placeholder application terms (rent, deposit, dates) as
+  // missing — the demo summary must not display an economics blank.
+  function requireLeaseConfig(property, terms) {
+    const resolved = leaseConfigFor(property);
+    const missing = [];
+    if (!resolved) {
+      return { ok: false, missing: ["(no lease configuration for this property)"] , cfg: null };
+    }
+    const cfg = resolved.cfg;
+    for (const k of REQUIRED_CONFIG_KEYS) {
+      const v = cfg[k];
+      if (v == null || String(v).trim() === "") missing.push("config:" + k);
+    }
+    // Application-supplied economics must be real, not blank.
+    const need = {
+      resident_names: terms.resident_names,
+      unit: terms.unit_label || terms.unit_number,
+      monthly_rent: terms.monthly_rent,
+      security_deposit: terms.security_deposit,
+      lease_start_date: terms.lease_start_date,
+      lease_end_date: terms.lease_end_date,
+      property_address: terms.property_address && !/pending/i.test(terms.property_address) ? terms.property_address : "",
+    };
+    for (const [k, v] of Object.entries(need)) {
+      if (v == null || String(v).trim() === "") missing.push("term:" + k);
+    }
+    if (missing.length) return { ok: false, missing, cfg };
+    return { ok: true, cfg, source: resolved.source };
+  }
+
+  const money = (v) => (v != null && String(v).trim() !== "" ? "$" + v : null);
+
+  // Property Spine's OWN plain-language sections. No NAA language/structure.
+  // Every displayed economic value comes from validated application terms or
+  // the canonical config (both already checked by requireLeaseConfig).
+  function demoSummarySections(terms, cfg) {
     return [
-      { key: "parties", title: "Parties & Premises", body: [
-        `Landlord: ${terms.landlord_legal_entity || "[landlord entity pending]"}`,
-        `Resident: ${terms.resident_names || "[resident]"}`,
-        `Premises: ${terms.unit_label || terms.unit_number || "[unit]"}, ${terms.property_address || "[property address pending]"}`,
-        p ] },
-      { key: "term", title: "Lease Term", body: [
-        `Start: ${terms.lease_start_date || "[start date]"}`,
-        `End: ${terms.lease_end_date || "[end date]"}`,
-        p ] },
-      { key: "rent", title: "Rent & Charges", body: [
-        `Monthly rent: ${terms.monthly_rent != null && terms.monthly_rent !== "" ? "$" + terms.monthly_rent : "[rent pending]"}`,
-        p ] },
-      { key: "deposit", title: "Security Deposit", body: [
-        `Security deposit: ${terms.security_deposit != null && terms.security_deposit !== "" ? "$" + terms.security_deposit : "[deposit pending]"}`,
-        p ] },
-      { key: "rules", title: "Resident Responsibilities", body: [ p ] },
-      { key: "access", title: "Maintenance & Owner Access", body: [ p ] },
-      { key: "city_docs", title: "Required City Documents", body: [
-        "Rental License, Certificate of Rental Suitability, and any required lead / handbook notices are tracked with this packet.",
-        "Acknowledgment confirms receipt only.",
-        p ] },
-      { key: "esign", title: "Electronic Signature (Intent)", body: [
-        "Your signature here records your INTENT and submits the packet for management review.",
-        "This is NOT a binding signature and the lease is NOT active until management countersigns it in the system.",
-        p ] },
+      { key: "parties", title: "Parties & Unit", ack: false, body: [
+        `Owner: ${cfg.landlord_entity}.`,
+        `Resident(s): ${terms.resident_names}${terms.guarantor_required ? " (a guarantor is named on this application)" : ""}.`,
+        `Unit: ${terms.unit_label || terms.unit_number}, ${terms.property_address}.`,
+      ] },
+      { key: "term", title: "Lease Dates", ack: true, body: [
+        `Proposed start: ${terms.lease_start_date}.`,
+        `Proposed end: ${terms.lease_end_date}.`,
+      ] },
+      { key: "rent", title: "Monthly Rent", ack: true, body: [
+        `Rent: ${money(terms.monthly_rent)} per month, due in advance on the 1st.`,
+        `Payable at ${cfg.rent_payment_location || "the location stated on the lease"}.`,
+        money(cfg.late_fee) ? `Late fee if rent is not paid on time: ${money(cfg.late_fee)}.` : null,
+      ].filter(Boolean) },
+      { key: "deposit", title: "Security Deposit", ack: true, body: [
+        `Security deposit: ${money(terms.security_deposit)}, due on or before signing the lease.`,
+        "If Pennsylvania's security-deposit disposition timeline applies, an itemized accounting and any refund follow after move-out. The exact handling is governed by the lease and applicable law.",
+      ] },
+      { key: "fees", title: "Move-in Fees", ack: false, body: [
+        money(cfg.application_fee) ? `Application fee (new residents): ${money(cfg.application_fee)}, non-refundable.` : null,
+        money(cfg.amenity_fee) ? `Amenity fee at move-in: ${money(cfg.amenity_fee)}${money(cfg.amenity_fee_renewal) ? ` (${money(cfg.amenity_fee_renewal)} at renewal)` : ""}, non-refundable.` : null,
+        money(cfg.telecom_fee) ? `Telecom / account set-up fee: ${money(cfg.telecom_fee)} at move-in.` : null,
+      ].filter(Boolean) },
+      { key: "utilities", title: "Utilities", ack: false, body: [
+        cfg.utility_responsibility,
+      ] },
+      { key: "insurance", title: "Insurance", ack: false, body: [
+        cfg.insurance_note || "Renter's insurance is recommended; the lease states the owner's limits of liability.",
+      ] },
+      { key: "notice", title: "Renewal / Move-out Notice", ack: false, body: [
+        cfg.notice_requirement,
+      ] },
+      { key: "ack", title: "Acknowledge Demonstration Terms", ack: true, body: [
+        "Acknowledging records that you have reviewed these proposed terms. It is not a signature on the lease and does not create or activate a tenancy.",
+        "The complete lease and required addenda — provided separately — will govern. A tenancy begins only when the owner executes the lease through the normal process.",
+      ] },
     ];
   }
 
-  // tenant required fields: section initials + acknowledgment + ONE signature.
-  // These are INTERNAL evidence. They are NOT obligation inputs.
-  const REQUIRED_FIELDS = [
-    ["initial_term",    "term",     "Lease term",                 "initial"],
-    ["initial_rent",    "rent",     "Rent & charges",             "initial"],
-    ["initial_deposit", "deposit",  "Security deposit",           "initial"],
-    ["initial_rules",   "rules",    "Resident responsibilities",  "initial"],
-    ["initial_access",  "access",   "Maintenance & owner access", "initial"],
-    ["ack_city_docs",   "city_docs","Required city documents",    "acknowledgment"],
-    ["initial_esign",   "esign",    "Electronic signature notice","initial"],
-    ["tenant_signature","esign",    "Resident signature",         "signature"],
-  ];
+  // Acknowledgment fields — review/intent only. NOT obligation inputs, NOT a
+  // legal signature on the final instrument. Guarantor acknowledgment added
+  // when a guarantor is named.
+  function requiredFieldsFor(terms) {
+    const base = [
+      ["ack_term",    "term",    "Lease dates",              "acknowledgment"],
+      ["ack_rent",    "rent",    "Monthly rent",             "acknowledgment"],
+      ["ack_deposit", "deposit", "Security deposit",         "acknowledgment"],
+      ["ack_terms",   "ack",     "Demonstration terms",      "acknowledgment"],
+    ];
+    if (terms.guarantor_required) {
+      base.push(["ack_guarantor", "ack", "Guarantor acknowledgment", "acknowledgment"]);
+    }
+    return base;
+  }
 
-  function buildRendered(terms) {
+  const NOT_THE_LEASE_STATEMENT =
+    "This is a demonstration summary of proposed lease terms. It is not the complete lease, does not replace the governing lease and required addenda, and does not create or activate a tenancy.";
+
+  function buildRendered(terms, cfg) {
     return {
-      title: "Residential Lease Packet (PLACEHOLDER)",
-      is_placeholder: true,
-      subtitle: terms.property_address || "[property address pending]",
+      title: "Lease Terms Review — Demonstration",
+      is_placeholder: false,
+      is_demonstration_summary: true,
+      not_the_lease: NOT_THE_LEASE_STATEMENT,
+      subtitle: terms.property_address || "",
       summary: {
+        landlord_entity: cfg.landlord_entity,
         resident_names: terms.resident_names || "",
         unit: terms.unit_label || terms.unit_number || "",
         lease_start_date: terms.lease_start_date || "",
@@ -133,7 +256,7 @@ module.exports = function leasePacketsModule(deps) {
         security_deposit: terms.security_deposit ?? "",
         guarantor_required: !!terms.guarantor_required,
       },
-      sections: placeholderSections(terms),
+      sections: demoSummarySections(terms, cfg),
     };
   }
 
@@ -157,7 +280,8 @@ module.exports = function leasePacketsModule(deps) {
       id: packet.id,
       status: packet.status,
       is_placeholder: packet.is_placeholder,
-      signature_meaning: "intent_only",   // Option A, surfaced to the UI
+      is_demonstration_summary: true,
+      acknowledgment_meaning: "review_intent_only",   // NOT a signature on the lease
       terms: packet.terms_json,
       rendered_snapshot: packet.rendered_snapshot,
       progress: { completed: done, required: req.length },
@@ -198,6 +322,10 @@ module.exports = function leasePacketsModule(deps) {
       }
 
       // Property identity from the REAL properties row (never hardcoded).
+      // NOTE: when durable properties.lease_config lands, add it to this
+      // SELECT — leaseConfigFor already prefers property.lease_config over the
+      // external adapter. Until then the column does not exist, so we do not
+      // select it (a phantom column would error).
       const prop = (await client.query(
         `select id, name, canonical_key, address from properties where id=$1`,
         [app.property_id])).rows[0] || {};
@@ -230,27 +358,43 @@ module.exports = function leasePacketsModule(deps) {
         guarantor_required: !!app.guarantor_name,
       };
 
-      const rendered = buildRendered(terms);
+      // ── FAIL CLOSED: required lease configuration + real economics ──────
+      // Missing configured fees / utilities / notice, or blank application
+      // economics, BLOCK generation. No generic legal or financial default —
+      // a plausible default could produce a materially wrong document.
+      const check = requireLeaseConfig(prop, terms);
+      if (!check.ok) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "lease_configuration_incomplete",
+          receipt: "Cannot generate the demonstration summary — required lease configuration or application terms are missing. This fails closed rather than showing a plausible default that could be materially wrong.",
+          missing: check.missing,
+        });
+      }
+      const cfg = check.cfg;
+
+      const rendered = buildRendered(terms, cfg);
       const renderedHash = stableHash(rendered);
 
       const pk = (await client.query(
         `insert into lease_packets
            (property_id, application_id, unit_id, status, terms_json,
             rendered_snapshot, rendered_snapshot_hash, is_placeholder)
-         values ($1,$2,$3,'draft',$4,$5,$6, true)
+         values ($1,$2,$3,'draft',$4,$5,$6, false)
          on conflict (application_id, version) do update set
            terms_json = excluded.terms_json,
            rendered_snapshot = excluded.rendered_snapshot,
            rendered_snapshot_hash = excluded.rendered_snapshot_hash,
-           is_placeholder = true,
+           is_placeholder = false,
            updated_at = now()
          returning *`,
         [app.property_id, app.id, terms.unit_id, terms, rendered, renderedHash])).rows[0];
 
       // (re)build fields
       await client.query(`delete from lease_packet_fields where lease_packet_id=$1`, [pk.id]);
-      for (let i = 0; i < REQUIRED_FIELDS.length; i++) {
-        const [fk, sk, label, ft] = REQUIRED_FIELDS[i];
+      const requiredFields = requiredFieldsFor(terms);
+      for (let i = 0; i < requiredFields.length; i++) {
+        const [fk, sk, label, ft] = requiredFields[i];
         const clauseHash = stableHash(rendered.sections.find((s) => s.key === sk) || { sk, label });
         await client.query(
           `insert into lease_packet_fields
@@ -259,12 +403,13 @@ module.exports = function leasePacketsModule(deps) {
           [pk.id, fk, sk, label, ft, clauseHash, i + 1]);
       }
 
-      // (re)build default tracked documents
+      // (re)build tracked documents — the complete lease + required addenda
+      // are delivered separately and GOVERN; this summary does not.
       await client.query(`delete from lease_packet_documents where lease_packet_id=$1`, [pk.id]);
       const docs = [
-        { document_type: "lease_body",         title: "Residential Lease Agreement (placeholder)", required_acknowledgment: false },
-        { document_type: "rental_license",     title: "Rental License",                            required_acknowledgment: true  },
-        { document_type: "rental_suitability", title: "Certificate of Rental Suitability",         required_acknowledgment: true  },
+        { document_type: "complete_lease",     title: "Complete Lease & Required Addenda (governing — delivered separately)", required_acknowledgment: false },
+        { document_type: "rental_license",     title: "Rental License",                    required_acknowledgment: true  },
+        { document_type: "rental_suitability", title: "Certificate of Rental Suitability", required_acknowledgment: true  },
       ];
       for (const d of docs) {
         await client.query(
@@ -275,11 +420,11 @@ module.exports = function leasePacketsModule(deps) {
       }
 
       await audit(client, req, pk.id, "operator", "packet_generated",
-        { application_id: app.id, is_placeholder: true });
+        { application_id: app.id, is_demonstration_summary: true, config_source: check.source });
       await client.query("commit");
       const bundle = await getBundle(pool, pk.id);
       res.json({
-        receipt: `Placeholder lease packet generated for ${terms.resident_names || "applicant"}. NOT a real lease — body is placeholder until the template lands. Send it to capture tenant intent; activation still requires manager countersign via applications.js.`,
+        receipt: `Lease Terms Review (Demonstration) generated for ${terms.resident_names || "applicant"} from verified property + application terms. This is a demonstration summary, not the lease; the complete lease and required addenda govern. Sending it captures the resident's acknowledgment only — activation still requires the manager countersign via applications.js.`,
         packet: publicPacket(bundle),
       });
     } catch (e) {
@@ -319,7 +464,7 @@ module.exports = function leasePacketsModule(deps) {
       if (!pk) return res.status(409).json({ receipt: "Packet not found, already submitted, or voided." });
       await audit(pool, req, pk.id, "operator", "packet_sent", { expires_days: days });
       res.json({
-        receipt: `Tenant link issued (expires in ${days} days). This captures intent only.`,
+        receipt: `Link issued (expires in ${days} days). This captures the resident's acknowledgment of demonstration terms only — not a signature on the lease.`,
         tenant_url: `${BASE_URL}/t/lease/${encodeURIComponent(token)}`,
         status: pk.status,
       });
@@ -333,10 +478,22 @@ module.exports = function leasePacketsModule(deps) {
   // ════════════════════════════════════════════════════════════════
 
   // Serve the tenant HTML at /t/lease/:token (no static serving in server.js).
-  const TENANT_HTML_PATH = require("path").join(__dirname, "public", "tenant_lease_packet.html");
+  // The file currently lives at the repo ROOT (not public/). Resolve to
+  // whichever location actually exists so this cannot silently 404, and log
+  // clearly if it is genuinely missing.
+  const fsMod = require("fs");
+  const pathMod = require("path");
+  const TENANT_HTML_CANDIDATES = [
+    pathMod.join(__dirname, "tenant_lease_packet.html"),
+    pathMod.join(__dirname, "public", "tenant_lease_packet.html"),
+  ];
+  const TENANT_HTML_PATH = TENANT_HTML_CANDIDATES.find((p) => { try { return fsMod.existsSync(p); } catch (_) { return false; } }) || TENANT_HTML_CANDIDATES[0];
+  if (!fsMod.existsSync(TENANT_HTML_PATH)) {
+    console.error("[leasepackets] tenant_lease_packet.html not found at any known path:", TENANT_HTML_CANDIDATES.join(" , "));
+  }
   router.get("/t/lease/:token", (req, res) => {
     res.type("html").sendFile(TENANT_HTML_PATH, (err) => {
-      if (err) res.status(404).send("Lease packet page not found.");
+      if (err) { console.error("[leasepackets] tenant page sendFile failed:", err.message); res.status(404).send("Lease page not found."); }
     });
   });
 
@@ -370,7 +527,7 @@ module.exports = function leasePacketsModule(deps) {
       if (!pk) { await client.query("rollback"); return res.status(404).json({ receipt: "Lease link is invalid, expired, or already submitted." }); }
 
       const value = String(req.body?.value || "").trim();
-      if (!value) { await client.query("rollback"); return res.status(400).json({ receipt: "A value (your initials / signature) is required." }); }
+      if (!value) { await client.query("rollback"); return res.status(400).json({ receipt: "An acknowledgment value is required." }); }
 
       const field = (await client.query(
         `update lease_packet_fields
@@ -424,7 +581,7 @@ module.exports = function leasePacketsModule(deps) {
           order by display_order`, [pk.id])).rows;
       if (incomplete.length) {
         await client.query("rollback");
-        return res.status(409).json({ receipt: "Finish all required initials and the signature before submitting.", outstanding: incomplete });
+        return res.status(409).json({ receipt: "Acknowledge all required sections before submitting.", outstanding: incomplete });
       }
 
       // the application + its activation obligation (the real gate)
@@ -446,7 +603,7 @@ module.exports = function leasePacketsModule(deps) {
           await satisfyObligation(client, {
             obligation_id: app.activation_obligation_id,
             input,
-            proof: { source: "lease_packet", packet_id: pk.id, meaning: "intent_only",
+            proof: { source: "lease_terms_demonstration", packet_id: pk.id, meaning: "acknowledgment_review_intent_only",
                      captured_at: new Date().toISOString(), ip: clientIp(req) },
           });
           satisfied.push(input);
@@ -456,7 +613,7 @@ module.exports = function leasePacketsModule(deps) {
           if (e.code === "NOT_OUTSTANDING") { alreadyDone.push(input); continue; }
           await client.query("rollback");
           console.error("lease-packet submit satisfy:", e);
-          return res.status(409).json({ receipt: "The activation obligation rejected the signature input.", error_code: e.code || null, detail: e.message });
+          return res.status(409).json({ receipt: "The activation obligation rejected the acknowledgment input.", error_code: e.code || null, detail: e.message });
         }
       }
 
@@ -480,14 +637,14 @@ module.exports = function leasePacketsModule(deps) {
         [app.id, !!app.guarantor_name]);
 
       await audit(client, req, pk.id, "tenant", "tenant_submitted",
-        { satisfied_inputs: satisfied, already_satisfied: alreadyDone, meaning: "intent_only" });
+        { satisfied_inputs: satisfied, already_satisfied: alreadyDone, meaning: "acknowledgment_review_intent_only" });
       await client.query("commit");
       const bundle = await getBundle(pool, pk.id);
       res.json({
-        receipt: "Submitted. Your signature is recorded as INTENT and the lease is now waiting on management countersignature. It is NOT active yet.",
+        receipt: "Acknowledged. Your review of the demonstration terms is recorded. This does not activate a lease — a tenancy begins only when the owner executes the complete lease through the normal process.",
         satisfied_obligation_inputs: satisfied,
         application_still_active: false,
-        note: "Activation happens only when a manager countersigns through the application — not here.",
+        note: "Activation happens only when a manager countersigns through the application — not here. This document is a demonstration summary, not the governing lease.",
         packet: publicPacket(bundle),
       });
     } catch (e) {
