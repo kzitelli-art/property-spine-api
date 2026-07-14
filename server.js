@@ -528,15 +528,46 @@ app.post("/persons", async (req, res) => {
       if (u.rows.length === 0) return res.status(404).json({ error: "interested_unit_id not found" });
     }
 
-    const r = await pool.query(
-      `insert into persons
-         (name, email, phone, source, lifecycle_status, leasing_stage, interested_unit_id)
-       values ($1,$2,$3,$4, coalesce($5,'lead'), coalesce($5,'lead'), $6)
-       returning *`,
-      [name ?? null, email ?? null, phone ?? null, source ?? null,
-       lifecycle_status ?? null, interested_unit_id ?? null]
-    );
-    const person = r.rows[0];
+    // CANONICAL IDENTITY: normalize the phone and dedup on primary_phone_e164
+    // (the one-phone-one-person rule). A raw insert here previously minted a
+    // duplicate person for the same human in a different phone format. If a
+    // person with this canonical phone already exists, reuse it (backfilling
+    // the canonical key on legacy rows) rather than creating a second.
+    const { normalizeE164: __normPhone } = require("./phone_identity");
+    const __canon = __normPhone(phone);
+    let person = null;
+    if (__canon) {
+      person = (await pool.query(
+        `select * from persons where primary_phone_e164=$1 order by created_at limit 1`, [__canon])).rows[0] || null;
+      if (!person) {
+        // adopt a legacy row whose STORED phone normalizes to our canonical
+        // (matches any raw stored format), then backfill the canonical key.
+        const __tail10 = __canon.replace(/\D/g, "").slice(-10);
+        const __cands = (await pool.query(
+          `select * from persons where phone is not null and regexp_replace(phone,'\\D','','g') like $1 order by created_at`,
+          ["%" + __tail10])).rows;
+        person = __cands.find(p => __normPhone(p.phone) === __canon) || null;
+        if (person) {
+          await pool.query(`update persons set primary_phone_e164=coalesce(primary_phone_e164,$1), updated_at=now() where id=$2`, [__canon, person.id]);
+        }
+      }
+    }
+    if (person) {
+      // backfill missing contact fields; identity stays put.
+      await pool.query(
+        `update persons set name=coalesce(name,$1), email=coalesce(email,$2), updated_at=now() where id=$3`,
+        [name ?? null, email ?? null, person.id]);
+    } else {
+      const r = await pool.query(
+        `insert into persons
+           (name, email, phone, primary_phone_e164, source, lifecycle_status, leasing_stage, interested_unit_id)
+         values ($1,$2,$3,$4,$5, coalesce($6,'lead'), coalesce($6,'lead'), $7)
+         returning *`,
+        [name ?? null, email ?? null, phone ?? null, __canon, source ?? null,
+         lifecycle_status ?? null, interested_unit_id ?? null]
+      );
+      person = r.rows[0];
+    }
 
     // Write the inquiry as a real EVENT. This is agent-invisible (it spawns
     // no human obligation) but management-visible: it's the first datapoint
