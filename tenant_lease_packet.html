@@ -9,101 +9,155 @@
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     :root{
-      --bg:#0e1116; --panel:#161b23; --paper:#f7f3ea; --ink:#1d2127; --muted:#8a94a6;
-      --line:#262d39; --brass:#c4a052; --green:#5cba78; --red:#e0686d;
-      --serif:'Fraunces',Georgia,serif; --sans:'IBM Plex Sans',system-ui,sans-serif; --mono:'IBM Plex Mono',monospace;
+      --paper:#ffffff; --ink:#17191b; --ink-soft:#33373b; --muted:#6b7178; --faint:#a2a7ac;
+      --line:#e8e6e1; --line-strong:#d5d2cb; --rule:#1f2123;
+      --green:#2f7d46; --green-bg:#f4f9f5; --green-line:#cfe4d4;
+      --red:#a3373c; --red-bg:#fbf3f3;
+      --serif:'Fraunces',Georgia,serif; --sans:'IBM Plex Sans',system-ui,sans-serif; --mono:'IBM Plex Mono',ui-monospace,monospace;
     }
     *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:#fff;font-family:var(--sans)}
-    .placeholder-bar{background:repeating-linear-gradient(45deg,#3a2e12,#3a2e12 14px,#2f250e 14px,#2f250e 28px);
-      border-bottom:1px solid var(--brass);color:#f3dfa0;font-family:var(--mono);font-size:12.5px;
-      letter-spacing:.04em;padding:9px 16px;text-align:center}
-    .shell{max-width:1180px;margin:0 auto;padding:22px 18px 120px;display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:20px}
-    .top{grid-column:1/-1;display:flex;justify-content:space-between;gap:14px;align-items:flex-start;border-bottom:1px solid var(--line);padding-bottom:18px}
-    .eyebrow{color:var(--brass);text-transform:uppercase;letter-spacing:.12em;font-size:11px;font-weight:700;font-family:var(--mono)}
-    h1{margin:6px 0 6px;font-size:30px;font-family:var(--serif);font-weight:600;letter-spacing:-.01em}
-    .sub{color:var(--muted);line-height:1.5;max-width:720px;font-size:14.5px}
-    .intent-pill{display:inline-block;margin-top:10px;background:#2a2113;border:1px solid var(--brass);color:#f0d999;
-      font-family:var(--mono);font-size:11.5px;padding:5px 11px;border-radius:99px}
-    .summary{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px;min-width:280px}
-    .summary div{display:flex;justify-content:space-between;gap:10px;padding:6px 0;font-size:14px;border-bottom:1px solid rgba(255,255,255,.06)}
-    .summary div:last-child{border-bottom:0}
-    .summary span:first-child{color:var(--muted)}
-    .summary b{font-family:var(--mono);font-weight:500}
-    .paper{background:var(--paper);color:var(--ink);border-radius:16px;padding:34px;box-shadow:0 24px 80px rgba(0,0,0,.3)}
-    .paper h2{margin:0 0 4px;font-size:24px;font-family:var(--serif);font-weight:600}
-    .paper .addr{color:#5a5a5a;margin-bottom:22px;font-family:var(--mono);font-size:13px}
-    .section{border-top:1px solid #ddd3c2;padding:22px 0;scroll-margin-top:64px}
-    .section h3{margin:0 0 10px;font-size:18px;font-family:var(--serif);font-weight:600}
-    .section p{margin:8px 0;line-height:1.56;font-size:14.5px}
-    .ph{color:#9a7b2e;font-style:italic;font-size:13px}
-    .field{margin-top:16px;border:1px solid #d6c8ad;background:#fffaf0;border-radius:13px;padding:12px;display:flex;align-items:center;justify-content:space-between;gap:12px}
-    .field.done{background:#edf7ee;border-color:#9bcb9e}
-    .field-title{font-weight:600;font-size:14.5px}
-    .field small{display:block;color:#6a6a6a;margin-top:2px;font-family:var(--mono);font-size:11.5px}
-    button{border:0;border-radius:99px;padding:10px 16px;font-weight:600;font-family:var(--sans);cursor:pointer;background:var(--brass);color:#1a1408}
-    button.secondary{background:#222b39;color:#fff}
-    button:disabled{opacity:.42;cursor:not-allowed}
-    .rail{position:sticky;top:18px;align-self:start;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:16px}
-    .rail h3{margin:0 0 8px;font-family:var(--serif);font-weight:600}
-    .meter{height:8px;background:#222b39;border-radius:99px;overflow:hidden;margin:12px 0}
-    .meter>div{height:100%;background:var(--brass);width:0%;transition:width .25s}
-    .todo{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.07);font-size:13.5px;cursor:pointer}
+    html{-webkit-text-size-adjust:100%}
+    body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+      font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+
+    /* top notice — hairline monospace rule */
+    .demo-note{border-bottom:1px solid var(--line);color:var(--muted);
+      font-family:var(--mono);font-size:11.5px;line-height:1.55;letter-spacing:.01em;
+      padding:11px 0}
+    .demo-note .inner{max-width:660px;margin:0 auto;padding:0 28px}
+    .demo-note b{color:var(--ink);font-weight:500}
+
+    .shell{max-width:660px;margin:0 auto;padding:0 28px 160px}
+
+    /* ── MASTHEAD ── owner/property identity as the document's letterhead ── */
+    .masthead{padding:52px 0 0}
+    .mh-eyebrow{color:var(--faint);text-transform:uppercase;letter-spacing:.22em;
+      font-size:10.5px;font-weight:500;font-family:var(--mono)}
+    .mh-title{margin:16px 0 20px;font-size:40px;line-height:1.02;font-family:var(--serif);
+      font-weight:400;letter-spacing:-.02em}
+    .mh-meta{display:flex;flex-wrap:wrap;gap:4px 34px;padding:18px 0;
+      border-top:1px solid var(--rule);border-bottom:1px solid var(--line)}
+    .mh-meta .item{min-width:0}
+    .mh-meta .k{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+      text-transform:uppercase;color:var(--faint);margin-bottom:4px}
+    .mh-meta .v{font-size:14px;color:var(--ink);font-weight:500}
+    .lede{margin:24px 0 0;color:var(--ink-soft);font-size:15px;line-height:1.62;max-width:58ch}
+    .lede .em{color:var(--ink);font-weight:500}
+
+    /* ── TERMS TABLE ── the money summary as a formal two-column schedule ── */
+    .schedule{margin:40px 0 8px}
+    .schedule-cap{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;
+      text-transform:uppercase;color:var(--muted);margin-bottom:2px}
+    .schedule table{width:100%;border-collapse:collapse;margin-top:10px}
+    .schedule tr{border-bottom:1px solid var(--line)}
+    .schedule tr:first-child{border-top:1px solid var(--rule)}
+    .schedule td{padding:13px 0;vertical-align:baseline;font-size:14.5px}
+    .schedule td.k{color:var(--muted);width:42%}
+    .schedule td.v{text-align:right;font-family:var(--mono);font-weight:500;
+      font-variant-numeric:tabular-nums;letter-spacing:-.01em;color:var(--ink)}
+
+    /* ── BODY — numbered sections, hairline separated ── */
+    .body-head{margin:52px 0 4px;display:flex;align-items:baseline;gap:12px}
+    .body-head .doc-title{font-size:15px;font-family:var(--mono);font-weight:500;
+      text-transform:uppercase;letter-spacing:.14em;color:var(--muted)}
+    .section{border-top:1px solid var(--line);padding:26px 0;scroll-margin-top:20px;
+      display:grid;grid-template-columns:36px 1fr;gap:0 4px}
+    .section:first-of-type{border-top:1px solid var(--rule)}
+    .sec-num{font-family:var(--mono);font-size:13px;color:var(--faint);
+      padding-top:3px;font-variant-numeric:tabular-nums}
+    .sec-body{min-width:0}
+    .section h3{margin:0 0 12px;font-size:19px;font-family:var(--serif);font-weight:400;
+      letter-spacing:-.01em;line-height:1.2}
+    .section p{margin:10px 0;line-height:1.66;font-size:14.5px;color:var(--ink-soft)}
+
+    /* acknowledge row — a hairline row within the section column */
+    .field{margin-top:20px;padding-top:16px;border-top:1px solid var(--line);
+      display:flex;align-items:center;justify-content:space-between;gap:16px}
+    .field-title{font-weight:500;font-size:13.5px}
+    .field small{display:block;color:var(--faint);margin-top:3px;font-family:var(--mono);
+      font-size:10.5px;letter-spacing:.03em;text-transform:uppercase}
+    .field.done .field-title{color:var(--muted)}
+
+    /* buttons — near-black ink, precise */
+    button{border:1px solid var(--ink);border-radius:4px;padding:8px 18px;
+      font-weight:500;font-family:var(--sans);font-size:13px;cursor:pointer;
+      background:var(--ink);color:var(--paper);transition:opacity .15s;letter-spacing:.01em}
+    button:hover{opacity:.82}
+    button:disabled{opacity:.3;cursor:not-allowed}
+    .field.done button{border-color:var(--green-line);background:var(--green-bg);color:var(--green)}
+
+    /* progress — inline schedule of what remains */
+    .progress{margin:44px 0 0;border-top:1px solid var(--rule);padding-top:24px}
+    .progress-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px}
+    .progress-head h3{margin:0;font-size:12px;font-family:var(--mono);font-weight:500;
+      text-transform:uppercase;letter-spacing:.14em;color:var(--muted)}
+    .progress-head .count{font-family:var(--mono);font-size:13px;color:var(--ink);
+      font-variant-numeric:tabular-nums;letter-spacing:.02em}
+    .meter{height:2px;background:var(--line);overflow:hidden;margin-bottom:16px}
+    .meter>div{height:100%;background:var(--ink);width:0%;transition:width .35s ease}
+    .todo{display:flex;align-items:center;gap:13px;padding:10px 0;font-size:13.5px;
+      cursor:pointer;border-bottom:1px solid var(--line)}
     .todo:last-child{border-bottom:0}
-    .dot{width:9px;height:9px;border-radius:99px;background:#586275;flex:none}
+    .dot{width:6px;height:6px;border-radius:50%;background:var(--line-strong);flex:none}
     .todo.done .dot{background:var(--green)}
-    .todo b{font-weight:500;flex:1}
-    .todo span{color:var(--muted);font-size:11px;font-family:var(--mono)}
-    .submit{margin-top:16px;width:100%;padding:13px 16px}
-    .notice{margin-top:18px;padding:14px;border-radius:13px;background:#15251a;border:1px solid #2a4a30;color:#b6edbf;display:none;line-height:1.5}
-    .notice b{color:#dff7e3}
-    .error{margin-top:16px;padding:14px;border-radius:13px;background:#2e1a1f;border:1px solid #6c2d36;color:#ffd5da;display:none}
-    .bottom{display:none;position:fixed;left:0;right:0;bottom:0;padding:12px;background:rgba(14,17,22,.97);border-top:1px solid var(--line);z-index:30}
-    .bottom-inner{display:flex;align-items:center;justify-content:space-between;gap:10px;max-width:900px;margin:0 auto}
-    .status{color:var(--muted);font-size:13.5px;font-family:var(--mono)}
-    @media (max-width:860px){
-      .shell{display:block;padding:14px 12px 108px}
-      .top{display:block}.summary{margin-top:14px}
-      .paper{padding:22px 16px}.rail{display:none}.bottom{display:block}h1{font-size:25px}
+    .todo b{font-weight:400;flex:1;color:var(--ink)}
+    .todo.done b{color:var(--muted)}
+    .todo span{color:var(--faint);font-size:10.5px;font-family:var(--mono);
+      text-transform:uppercase;letter-spacing:.08em}
+    .submit{margin-top:26px;width:100%;padding:14px 16px;font-size:13.5px;border-radius:4px;
+      letter-spacing:.02em}
+
+    .notice{margin-top:24px;padding:18px 20px;border:1px solid var(--green-line);
+      background:var(--green-bg);color:#2a5c3a;line-height:1.62;font-size:14px;display:none}
+    .notice b{color:var(--green)}
+    .error{margin-top:18px;padding:14px 16px;border:1px solid #e4c4c6;
+      background:var(--red-bg);color:var(--red);font-size:14px;display:none}
+
+    /* closing colophon */
+    .colophon{margin-top:40px;padding-top:20px;border-top:1px solid var(--line);
+      font-family:var(--mono);font-size:10.5px;line-height:1.7;color:var(--faint);letter-spacing:.02em}
+
+    @media (max-width:560px){
+      .shell{padding:0 20px 130px}
+      .demo-note .inner{padding:0 20px}
+      .mh-title{font-size:32px}
+      .masthead{padding-top:38px}
+      .mh-meta{gap:14px 24px}
+      .section{grid-template-columns:26px 1fr}
     }
   </style>
 </head>
 <body>
-  <div class="placeholder-bar" id="phBar">DEMONSTRATION SUMMARY — This is a demonstration summary of proposed lease terms. It is not the complete lease, does not replace the governing lease and required addenda, and does not create or activate a tenancy.</div>
+  <div class="demo-note" id="phBar"><div class="inner"><b>Demonstration summary.</b> Proposed lease terms for review — not the complete lease. Acknowledging does not create or activate a tenancy; the complete lease and required addenda govern.</div></div>
   <main class="shell">
-    <header class="top">
-      <div>
-        <div class="eyebrow">Demonstration</div>
-        <h1>Lease Terms Review</h1>
-        <div class="sub">Review the proposed terms below and acknowledge each section. This records your review only — it is not a signature on the lease, and a tenancy begins only when the owner executes the complete lease.</div>
-        <div class="intent-pill">Acknowledging = you reviewed these terms · not a signature · does not activate a lease</div>
-      </div>
-      <div class="summary" id="summary"></div>
+    <header class="masthead">
+      <div class="mh-eyebrow">Lease Terms Review</div>
+      <h1 class="mh-title" id="mhTitle">Proposed Terms</h1>
+      <div class="mh-meta" id="mhMeta"></div>
+      <p class="lede">Review each numbered term and acknowledge it below. This records your review only — <span class="em">it is not a signature on the lease</span>, and a tenancy begins only when the owner executes the complete lease.</p>
     </header>
 
-    <article class="paper" id="paper">
-      <h2 id="paperTitle">Lease Terms Review — Demonstration</h2>
-      <div class="addr" id="addr"></div>
-      <div id="sections"></div>
-      <div class="notice" id="notice"></div>
-      <div class="error" id="error"></div>
-    </article>
+    <div class="schedule" id="schedule"></div>
 
-    <aside class="rail">
-      <h3>Required</h3>
-      <div class="status" id="progressText">Loading…</div>
+    <div class="body-head">
+      <div class="doc-title" id="paperTitle">Terms</div>
+    </div>
+    <div id="sections"></div>
+    <div class="notice" id="notice"></div>
+    <div class="error" id="error"></div>
+
+    <section class="progress">
+      <div class="progress-head">
+        <h3>To acknowledge</h3>
+        <div class="count" id="progressText">Loading…</div>
+      </div>
       <div class="meter"><div id="meter"></div></div>
       <div id="todos"></div>
       <button class="submit" id="submitBtn" disabled>Acknowledge Demonstration Terms</button>
-    </aside>
-  </main>
+    </section>
 
-  <div class="bottom">
-    <div class="bottom-inner">
-      <div class="status" id="mobileStatus">Loading…</div>
-      <button id="nextBtn" class="secondary">Next required</button>
-    </div>
-  </div>
+    <div class="colophon" id="colophon"></div>
+  </main>
 
   <script>
     // token is the LAST path segment of /t/lease/:token
@@ -135,28 +189,63 @@
 
     function render(){
       const snap = packet.rendered_snapshot||{}, terms = packet.terms||{};
-      document.getElementById('phBar').style.display = 'block';
-      document.getElementById('paperTitle').textContent = snap.title || 'Lease Terms Review — Demonstration';
-      document.getElementById('addr').textContent = snap.subtitle || terms.property_address || '';
-      document.getElementById('summary').innerHTML = `
-        <div><span>Unit</span><b>${esc(snap.summary?.unit||terms.unit_label||'—')}</b></div>
-        <div><span>Resident</span><b>${esc(snap.summary?.resident_names||terms.resident_names||'—')}</b></div>
-        <div><span>Term</span><b>${esc((snap.summary?.lease_start_date||'—')+' → '+(snap.summary?.lease_end_date||'—'))}</b></div>
-        <div><span>Rent</span><b>${snap.summary?.monthly_rent?('$'+esc(snap.summary.monthly_rent)):'—'}</b></div>
-        <div><span>Deposit</span><b>${snap.summary?.security_deposit?('$'+esc(snap.summary.security_deposit)):'—'}</b></div>`;
+      const S = snap.summary||{};
+      const propName = terms.property_name || snap.title || 'Proposed Terms';
+      const addr = snap.subtitle || terms.property_address || '';
 
+      // masthead
+      document.getElementById('mhTitle').textContent = propName;
+      const term = (S.lease_start_date||'—') + ' – ' + (S.lease_end_date||'—');
+      const metaItems = [
+        ['Premises', esc(addr || (S.unit ? 'Unit '+S.unit : '—'))],
+        ['Owner', esc(S.landlord_entity||'—')],
+        ['Resident', esc(S.resident_names||terms.resident_names||'—')],
+        ['Term', esc(term)],
+      ];
+      document.getElementById('mhMeta').innerHTML = metaItems.map(
+        ([k,v])=>`<div class="item"><span class="k">${k}</span><span class="v">${v}</span></div>`).join('');
+
+      // schedule (money terms as a formal table)
+      const rows = [];
+      if(S.monthly_rent) rows.push(['Monthly rent', '$'+esc(S.monthly_rent)]);
+      if(S.security_deposit) rows.push(['Security deposit', '$'+esc(S.security_deposit)]);
+      // pull fee/notice figures out of the sections if present
+      const feeSec = (snap.sections||[]).find(s=>s.key==='fees');
+      const noticeSec = (snap.sections||[]).find(s=>s.key==='notice');
+      (feeSec?.body||[]).forEach(line=>{
+        const m = line.match(/^([A-Za-z /()-]+?):?\s*\$?([\d,]+\.\d{2})/);
+        if(m) rows.push([m[1].trim(), '$'+m[2]]);
+      });
+      document.getElementById('schedule').innerHTML = rows.length ? `
+        <div class="schedule-cap">Schedule of terms</div>
+        <table>${rows.map(([k,v])=>`<tr><td class="k">${esc(k)}</td><td class="v">${esc(v)}</td></tr>`).join('')}</table>` : '';
+
+      document.getElementById('paperTitle').textContent = 'Terms';
+
+      // numbered body sections
       const bySection = new Map();
       for(const f of packet.fields||[]){ const l=bySection.get(f.section_key)||[]; l.push(f); bySection.set(f.section_key,l); }
-
+      let n=0;
       const html = (snap.sections||[]).map(sec=>{
+        n++;
         const fields = bySection.get(sec.key)||[];
+        const num = String(n).padStart(2,'0');
         return `<section class="section" id="section-${esc(sec.key)}">
-          <h3>${esc(sec.title)}</h3>
-          ${(sec.body||[]).map(p=>{const ph=/PLACEHOLDER/.test(p);return `<p class="${ph?'ph':''}">${esc(p)}</p>`;}).join('')}
-          ${fields.map(fieldHtml).join('')}
+          <div class="sec-num">${num}</div>
+          <div class="sec-body">
+            <h3>${esc(sec.title)}</h3>
+            ${(sec.body||[]).map(p=>`<p>${esc(p)}</p>`).join('')}
+            ${fields.map(fieldHtml).join('')}
+          </div>
         </section>`;
       }).join('');
       document.getElementById('sections').innerHTML = html;
+
+      // colophon
+      document.getElementById('colophon').textContent =
+        (snap.not_the_lease || 'Demonstration summary — not the complete lease.') +
+        (addr ? '  ·  ' + addr : '');
+
       renderProgress();
     }
 
@@ -164,8 +253,8 @@
       const done=f.completed;
       const action = f.field_type==='signature'?'Sign':(f.field_type==='acknowledgment'?'Acknowledge':'Initial');
       return `<div class="field ${done?'done':''}" id="field-${f.id}">
-        <div><div class="field-title">${esc(f.label)}</div><small>${done?'✓ acknowledged':action+' required'}</small></div>
-        <button ${done?'disabled':''} onclick="completeField('${f.id}','${f.field_type}')">${done?'Done':action}</button>
+        <div><div class="field-title">${esc(f.label)}</div><small>${done?'Acknowledged':action+' to continue'}</small></div>
+        <button ${done?'disabled':''} onclick="completeField('${f.id}','${f.field_type}')">${done?'✓ Done':action}</button>
       </div>`;
     }
 
@@ -173,8 +262,7 @@
       const req=(packet.fields||[]).filter(f=>f.required);
       const done=req.filter(f=>f.completed);
       const pct=req.length?Math.round(done.length/req.length*100):0;
-      document.getElementById('progressText').textContent=`${done.length}/${req.length} complete`;
-      document.getElementById('mobileStatus').textContent=`${done.length}/${req.length} complete`;
+      document.getElementById('progressText').textContent=`${done.length} / ${req.length}`;
       document.getElementById('meter').style.width=pct+'%';
       document.getElementById('todos').innerHTML=req.map(f=>`<div class="todo ${f.completed?'done':''}" onclick="jump('${f.id}')"><i class="dot"></i><b>${esc(f.label)}</b><span>${f.completed?'done':'open'}</span></div>`).join('');
       const submitted = packet.status==='submitted';
@@ -214,8 +302,7 @@
     function showError(m){const el=document.getElementById('error');el.textContent=m;el.style.display='block';}
 
     document.getElementById('submitBtn').addEventListener('click',submitPacket);
-    document.getElementById('nextBtn').addEventListener('click',jumpNext);
-    load().catch(e=>showError(e.receipt||e.error||'Lease packet could not be loaded.'));
+    load().catch(e=>showError(e.receipt||e.error||'This page could not be loaded.'));
   </script>
 </body>
 </html>
