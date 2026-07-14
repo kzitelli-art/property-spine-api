@@ -539,17 +539,34 @@ module.exports = function applicationsModule(deps) {
       }
       const termObligation = oQ.rows[0];
 
-      // ── IDEMPOTENCY GUARD (gate C): refuse a second current tenancy anchor ──
+      // ── IDEMPOTENCY GUARD (gate C): one lease anchor per application, PERIOD ──
+      // The invariant (reviewer correction #1) is one lease per application
+      // REGARDLESS of status — application_id is the provenance of one tenancy
+      // decision; a re-lease comes from a new application or a governed renewal,
+      // never from reusing this application. So this pre-check must match the
+      // unique index `leases_one_anchor_per_application` (any lease on the
+      // application), NOT just live states — otherwise an expired lease would
+      // pass the check and the insert would hit the index with a raw 23505.
+      // Combined with the SELECT ... FOR UPDATE on the application row above,
+      // two concurrent calls serialize and the second returns this controlled
+      // 409 rather than ever throwing.
       const existing = await client.query(
         `select id, lease_status from leases
-          where application_id=$1 and lease_status in ('pending','active','commercial')
-          limit 1`, [app.id]);
+          where application_id=$1
+          order by created_at asc limit 1`, [app.id]);
       if (existing.rows.length > 0) {
         await client.query("rollback");
+        // Convergence contract (reviewer correction #2): the domain fact is
+        // that both callers receive the SAME durable anchor. The replay
+        // response names the winning lease id explicitly and marks itself
+        // idempotent — the status code is secondary to the shared lease_id.
         return res.status(409).json({
-          receipt: "Cannot confirm term — a current lease already exists for this application. Amendment / reissue is a separate path; this route creates exactly one anchor.",
-          existing_lease_id: existing.rows[0].id,
-          existing_lease_status: existing.rows[0].lease_status,
+          error: "term_already_confirmed",
+          lease_id: existing.rows[0].id,
+          lease_status: existing.rows[0].lease_status,
+          idempotent: true,
+          receipt: "Term already confirmed for this application — converging on the existing lease anchor. One application creates exactly one lease; renewal, correction, and replacement are separate governed paths.",
+          existing_lease_id: existing.rows[0].id,     // back-compat alias
         });
       }
 
