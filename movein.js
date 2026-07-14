@@ -341,39 +341,43 @@ module.exports = function movein(deps) {
           leaseForPossession = lp.rows[0] ? lp.rows[0].lease_id : null;
         } catch (e) { /* fall through to cache-only below */ }
 
+        // ── CANONICAL POSSESSION EVENT IS MANDATORY WHEN A LEASE IS LINKED ──
+        // unit_events is the possession source of truth. If a lease is linked,
+        // the effective move_in event MUST be written. It is NOT wrapped in a
+        // savepoint: if it fails, the whole approve fails and rolls back. The
+        // system must never declare a resident moved in (approved + occupied
+        // cache + completed obligation) with no canonical possession event —
+        // that is the split truth this slice exists to eliminate.
+        //
+        // Legacy/manual path (no lease linked) legitimately records no
+        // possession event; only that path proceeds without one.
         if (recordEffectivePossession && leaseForPossession) {
-          // SAVEPOINT: the possession write must NEVER poison the approve
-          // transaction. If it errors (schema/constraint/ambiguity), we roll
-          // back to the savepoint, surface the reason, and let the approve
-          // (obligation completion + compatibility cache) proceed. Honest-blank
-          // on possession beats aborting a valid rent-ready approval.
-          await client.query("savepoint sp_possession");
-          try {
-            const pr = await recordEffectivePossession(client, {
-              kind: "move_in",
-              lease_id: leaseForPossession,
-              unit_id: obligation.unit_id,
-              property_id: obligation.property_id || null,
-              effective_date: new Date().toISOString().slice(0, 10),
-              actor: approved_by_person_id,
-              source: "rent_ready_approval",
-            });
-            await client.query("release savepoint sp_possession");
-            possessionNote = pr.created
-              ? "Effective move_in recorded (space-anchored possession)."
-              : "Move_in already recorded — idempotent no-op.";
-          } catch (e) {
-            await client.query("rollback to savepoint sp_possession");
-            possessionNote = "Possession event NOT recorded: " + e.message;
-            console.error("possession event (surfaced, non-fatal):", e.message);
-          }
-        } else if (!leaseForPossession) {
-          possessionNote = "No lease linked to this move-in — legacy/manual path; no space-anchored possession event.";
-        }
+          // NO try/catch — a failure here propagates and rolls back the approve.
+          const pr = await recordEffectivePossession(client, {
+            kind: "move_in",
+            lease_id: leaseForPossession,
+            unit_id: obligation.unit_id,
+            property_id: obligation.property_id || null,
+            effective_date: new Date().toISOString().slice(0, 10),
+            actor: approved_by_person_id,
+            source: "rent_ready_approval",
+          });
+          possessionNote = pr.created
+            ? "Effective move_in recorded (space-anchored possession)."
+            : "Move_in already recorded — idempotent no-op.";
 
-        // compatibility cache (downstream of the event, not the source of truth)
-        await client.query("update units set occupancy_status='occupied', updated_at=now() where id=$1", [obligation.unit_id]);
-        unitNote = "Unit occupancy → occupied (compatibility cache; possession truth is the unit_event).";
+          // compatibility cache — downstream of the (now-committed-in-txn) event.
+          // Ordered AFTER the mandatory event, per the locked transaction order:
+          // event → cache → obligation → commit.
+          await client.query("update units set occupancy_status='occupied', updated_at=now() where id=$1", [obligation.unit_id]);
+          unitNote = "Unit occupancy → occupied (compatibility cache; possession truth is the unit_event).";
+        } else if (!leaseForPossession) {
+          // Legacy/manual move-in with no lease link: no possession event, and
+          // the cache still reflects legacy occupancy behavior (unchanged).
+          possessionNote = "No lease linked to this move-in — legacy/manual path; no space-anchored possession event.";
+          await client.query("update units set occupancy_status='occupied', updated_at=now() where id=$1", [obligation.unit_id]);
+          unitNote = "Unit occupancy → occupied (legacy path; no possession event).";
+        }
       }
 
       // ── SLICE D — the ONE thin delivery hook (ruling #2, #3) ─────────
