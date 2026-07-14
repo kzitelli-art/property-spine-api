@@ -333,9 +333,11 @@ module.exports = function movein(deps) {
         let leaseForPossession = null;
         try {
           const lp = await client.query(
-            `select lease_id from unit_events
+            `select coalesce(lease_id, (payload->>'lease_id')::uuid) as lease_id
+               from unit_events
               where spawned_obligation_id = $1 and event_type = 'move_in_scheduled'
-                and lease_id is not null limit 1`, [obligation_id]);
+                and (lease_id is not null or (payload->>'lease_id') is not null)
+              limit 1`, [obligation_id]);
           leaseForPossession = lp.rows[0] ? lp.rows[0].lease_id : null;
         } catch (e) { /* fall through to cache-only below */ }
 
@@ -380,9 +382,11 @@ module.exports = function movein(deps) {
       if (deliveryHelper && typeof deliveryHelper.satisfyDeliveryInput === "function") {
         try {
           const linkQ = await client.query(
-            `select lease_id from unit_events
+            `select coalesce(lease_id, (payload->>'lease_id')::uuid) as lease_id
+               from unit_events
               where spawned_obligation_id = $1 and event_type = 'move_in_scheduled'
-                and lease_id is not null limit 1`, [obligation_id]);
+                and (lease_id is not null or (payload->>'lease_id') is not null)
+              limit 1`, [obligation_id]);
           const leaseId = linkQ.rows[0] ? linkQ.rows[0].lease_id : null;
           if (leaseId) {
             const r = await deliveryHelper.satisfyDeliveryInput(client, {
