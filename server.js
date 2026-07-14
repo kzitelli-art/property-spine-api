@@ -26,6 +26,7 @@ const roomOwnersModule = require("./roomowners"); // thin room-owner API over as
 const moneyModule = require("./money");
 const turnoversModule = require("./turnovers");
 const moveinModule = require("./movein");
+const { recordEffectivePossession, spacePosition } = require("./space_position"); // canonical dated space position — shared possession writer + read
 const noticeModule = require("./notice");        // Availability Slice A: resident notice → future supply
 const onboardingModule = require("./onboarding");   // isolated onboarding (takeover) routes
 const onboardingFunnel = require("./onboarding_funnel"); // six-step NOI-goal onboarding funnel (revenue/roles/noi-goal; honest mode)
@@ -3212,11 +3213,22 @@ app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));
 app.use("/", moneyModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, reassignObligation }));
 app.use("/", orgchartModule({ pool }));
 app.use("/", roomOwnersModule({ pool }));
-app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
+app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, recordEffectivePossession }));
 const deliveryHelper = require("./delivery")({ satisfyObligation, completeObligation }); // Slice D shared completion-feed
-app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, deliveryHelper }));
+app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, deliveryHelper, recordEffectivePossession }));
 app.use("/", noticeModule({ pool }));   // Availability Slice A — notice writes unit_events only; no obligation spawns at notice
 app.use("/", require("./availability")({ pool })); // Availability Slice C — read-only forward-supply projection; derives from live tables, writes nothing
+// Canonical dated space position (read-only): GET /properties/:id/space-position?as_of=YYYY-MM-DD
+// One shared truth for current rent roll / forward rent roll / availability — distinct fields, never one status.
+app.get("/properties/:id/space-position", async (req, res) => {
+  try {
+    const out = await spacePosition(pool, { property_id: req.params.id, as_of: req.query.as_of || null });
+    res.json(out);
+  } catch (e) {
+    console.error("space-position error", e);
+    res.status(500).json({ error: e.message });
+  }
+});
 app.use("/", onboardingModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
 // ── ONBOARDING FUNNEL (revenue/roles/NOI-goal; honest mode; only needs pool) ──
 app.use("/api", onboardingFunnel({ pool }));
@@ -3229,7 +3241,7 @@ app.use('/', attributionsModule({ pool }));
 app.use('/api', portfolioModule({ pool }));
 app.use('/', snapshotLoaderModule({ pool, upload }));
 app.use('/', seedEndpointModule({ pool }));
-app.use('/', managementReadModule({ pool }));
+app.use('/', managementReadModule({ pool, spacePosition })); // + canonical space-position overlay (surfaces owned-work conflicts on the rent roll)
 app.use('/', propertySurfaceModule({ pool }));
 app.use('/', plaidModule({ pool }));
 app.use("/", exposureModule({ pool }));
