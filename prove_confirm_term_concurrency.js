@@ -27,7 +27,8 @@
 const { Pool } = require("pg");
 
 const API = process.env.API || "https://property-spine-api.onrender.com";
-const SESSION = process.env.STAFF_SESSION;  // x-staff-session token from establish_qa_staff_session.js
+const SESSION = process.env.STAFF_SESSION;
+const KEY = process.env.OPERATOR_KEY;  // front-door gate (server.js) requires this too
 const APP_ID = process.env.APP_ID;
 const DB = process.env.DATABASE_URL;
 
@@ -48,7 +49,7 @@ const body = JSON.stringify({
 function fire() {
   return fetch(`${API}/applications/${APP_ID}/confirm-term`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-staff-session": SESSION },
+    headers: { "Content-Type": "application/json", "x-staff-session": SESSION, "x-operator-key": KEY },
     body,
   }).then(async (r) => ({ status: r.status, json: await r.json().catch(() => ({})) }));
 }
