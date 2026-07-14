@@ -75,11 +75,15 @@ module.exports = function applicationsModule(deps) {
     pool,
     loadApplication: getApp,
     eligibleStatuses: ["lease_ready"],
+    action: "countersign",
+    requiredModule: "leasing",
   });
   const confirmTermPerimeter = activationPerimeter({
     pool,
     loadApplication: getApp,
     eligibleStatuses: ["accepted_term_required"],
+    action: "confirm_term",
+    requiredModule: "leasing",
   });
 
   // outstanding required inputs on the activation obligation (the live gate)
