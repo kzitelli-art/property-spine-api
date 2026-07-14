@@ -54,7 +54,6 @@
 
 const { resolveMode } = require("./dormant_gate");
 const { resolveStaffSession } = require("./staff_session_service");
-const { resolveStaffIdentity } = require("./staff_identity_resolver");
 
 // Class-2 CONFIG source: explicit comma-separated allowlist of activated
 // property UUIDs. Absent/empty/malformed = NO property activated (fail closed).
@@ -146,24 +145,22 @@ function activationPerimeter({ pool, loadApplication, eligibleStatuses, action, 
       return refuse(res);
     }
 
-    // ACTOR AUTHORITY: server-derived active assignment at the APPLICATION's
-    // property (state:'resolved'). Not the session's claimed property, not a header.
-    let identity = null;
-    try { identity = await resolveStaffIdentity(pool, { user_id: session.id, property_id: app.property_id }); }
-    catch (_e) { identity = null; }
-    if (!identity || identity.state !== "resolved") {
-      audit({ actor_user_id: session.id, property_id: app.property_id, application_id: app.id,
-              action: ACTION, decision: "refused",
-              reason: "actor_not_entitled_at_property:" + (identity ? identity.state : "resolve_failed") });
-      return refuse(res);
-    }
-
-    // ── ACTION AUTHORITY (ruling caution #2): assignment ≠ authority for this
-    //    write. Require (a) the session is scoped to the APPLICATION's property
-    //    — a session for another property cannot authorize a write here — and
-    //    (b) the session holds the module that governs this action ('leasing'
-    //    for lease-term countersign/confirm-term). "May this actor do THIS
-    //    action here?", not merely "does this person work here?". ──
+    // ── ACTOR ENTITLEMENT + ACTION AUTHORITY (from the SESSION). ──
+    // The session ONLY resolves because resolveStaffSession joined an ACTIVE
+    // property_team_assignments row for this user at the session's property —
+    // so a resolved session IS proof of active assignment, and it carries the
+    // live role_title + allowed_modules FROM that same assignment row.
+    // (Do NOT re-check via resolveStaffIdentity: that reads a DIFFERENT table,
+    // 'assignments', keyed by person_id — a user present in
+    // property_team_assignments may have no row there, which would wrongly read
+    // as 'not_assigned_here'. property_team_assignments is the canonical grain
+    // for property-team module authority, and it is what the session validates.)
+    //
+    // Require (a) the session is scoped to the APPLICATION's property — a
+    // session for another property cannot authorize a write here — and (b) the
+    // session holds the module governing this action ('leasing' for lease-term
+    // countersign/confirm-term). "May this actor do THIS action here?", not
+    // merely "does this person work here?".
     const sessionModules = Array.isArray(session.allowed_modules) ? session.allowed_modules : [];
     const propertyScopeOk = session.property_id === app.property_id;
     const hasModule = sessionModules.includes(REQUIRED_MODULE);
@@ -171,7 +168,7 @@ function activationPerimeter({ pool, loadApplication, eligibleStatuses, action, 
       audit({ actor_user_id: session.id, property_id: app.property_id, application_id: app.id,
               action: ACTION, decision: "refused",
               reason: !propertyScopeOk
-                ? "session_property_scope_mismatch"
+                ? "session_property_scope_mismatch:" + session.property_id
                 : "action_not_authorized:missing_module:" + REQUIRED_MODULE });
       return refuse(res);
     }
@@ -196,7 +193,7 @@ function activationPerimeter({ pool, loadApplication, eligibleStatuses, action, 
     // ADMITTED. Attach authenticated actor + resolved app; handler MUST still
     // revalidate under FOR UPDATE.
     req._perimeterActor = { user_id: session.id, name: session.name || null,
-                            role: identity.role || null, assignment_id: identity.assignment_id || null,
+                            role: session.role || null, role_title: session.role_title || null,
                             authorized_module: REQUIRED_MODULE };
     req._perimeterApp = app;
     audit({ actor_user_id: session.id, property_id: app.property_id, application_id: app.id,
