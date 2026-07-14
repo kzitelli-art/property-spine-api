@@ -27,6 +27,7 @@ const leasing = require("./leasingleads")({ pool, anthropic: null, INGEST_MODEL:
 
 let srv, base;
 const track = { properties: [], units: [], slots: [], persons: [], leads: [], convs: [] };
+const DEMO_ID = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe"; // module-scope so cleanup() can use it
 
 async function post(path, body) {
   const res = await fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -42,14 +43,14 @@ async function main() {
   // Demo property: use the CANONICAL demo UUID that /demo/intake resolves by
   // name (production has exactly one). Upsert it; do NOT create a second
   // same-named property (that would fork the name lookup).
-  const DEMO_ID = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
   const propId = DEMO_ID; track.properties.push(propId); // canonical demo id
   await pool.query(`insert into properties (id,name,sms_number) values ($1,$2,$3) on conflict (id) do update set name=excluded.name`, [propId, DEMO_NAME, "+12154452021"]);
-  // clean any leftover demo slots/links so this run controls state exactly
-  await pool.query(`delete from tour_booking_links where property_id=$1`, [propId]).catch(()=>{});
-  await pool.query(`update tour_availability set booked_tour_id=null where property_id=$1`, [propId]).catch(()=>{});
-  await pool.query(`delete from leasing_tours where property_id=$1`, [propId]).catch(()=>{});
-  await pool.query(`delete from tour_availability where property_id=$1`, [propId]).catch(()=>{});
+  // NO property-wide wipe — the demo property holds real prior data (historical
+  // tours, seeded availability). This run creates its OWN isolated unit + slots
+  // and only ever touches those. Any stray D-1 from a previously-crashed run is
+  // cleared narrowly (unique to this test), never the whole property.
+  await pool.query(`delete from tour_availability where property_id=$1 and unit_id in (select id from units where property_id=$1 and unit_number='D-1')`, [propId]).catch(()=>{});
+  await pool.query(`delete from units where property_id=$1 and unit_number='D-1'`, [propId]).catch(()=>{});
   const unitId = uuid(); track.units.push(unitId);
   await pool.query(`insert into units (id,property_id,unit_number,bedrooms,bathrooms,market_rent,occupancy_status) values ($1,$2,'D-1',1,1,1500,'vacant')`, [unitId, propId]);
   // two open slots
@@ -91,8 +92,15 @@ async function main() {
   {
     const replay = await post("/demo/book", { token, slot_id: slot2 }); // even a different slot
     chk("replay of consumed link → returns SAME tour (already_booked), no dup", replay.status === 200 && replay.json.already_booked === true && replay.json.tour_id === bookedTourId, JSON.stringify(replay.json));
-    const n = (await pool.query(`select count(*)::int c from leasing_tours where property_id=$1`, [propId])).rows[0].c;
-    chk("still exactly ONE tour after replay", n === 1, `count=${n}`);
+    // Count ONLY tours for THIS booking's lead — never the whole property (the
+    // demo property legitimately holds prior real tours, e.g. historical ones,
+    // which must not pollute this assertion). The invariant under test is
+    // "replay created no SECOND tour for this booking," so scope to its lead.
+    const n = (await pool.query(
+      `select count(*)::int c from leasing_tours
+        where lead_id = (select lead_id from leasing_tours where id=$1)`,
+      [bookedTourId])).rows[0].c;
+    chk("still exactly ONE tour after replay (scoped to this booking's lead)", n === 1, `count=${n}`);
     // slot2 must remain OPEN (replay did not book it)
     const s2 = (await pool.query(`select status from tour_availability where id=$1`, [slot2])).rows[0];
     chk("replay did NOT book the other slot (slot2 still open)", s2.status === "open", s2.status);
@@ -118,23 +126,37 @@ async function main() {
 }
 
 async function cleanup() {
-  // links + tours + events for our property, then slots, then scaffolding
-  await pool.query(`delete from tour_booking_links where property_id=$1`, [track.properties[0]]).catch(() => {});
-  for (const c of track.convs) {
-    await pool.query(`delete from tour_events where tour_id in (select id from leasing_tours where property_id=$1)`, [track.properties[0]]).catch(() => {});
+  // SCOPED cleanup: only the persons + slots THIS run created. NEVER property-
+  // wide — the demo property legitimately holds real prior data (historical
+  // tours, the seeded availability slots) that must never be touched. Children
+  // first, then parents, to respect foreign keys.
+  const persons = [...new Set(track.persons)];
+  const slots = [...new Set(track.slots)];
+
+  if (persons.length) {
+    const ph = persons.map((_, i) => `$${i + 1}`).join(",");
+    // tour_events / conversions / tours for leads owned by our test persons
+    await pool.query(`delete from tour_events where tour_id in (select t.id from leasing_tours t join leasing_leads l on l.id=t.lead_id where l.person_id in (${ph}))`, persons).catch(() => {});
+    await pool.query(`delete from leasing_conversions where origin_tour_id in (select t.id from leasing_tours t join leasing_leads l on l.id=t.lead_id where l.person_id in (${ph}))`, persons).catch(() => {});
+    await pool.query(`delete from leasing_tours where lead_id in (select id from leasing_leads where person_id in (${ph}))`, persons).catch(() => {});
+    // booking links tied to our persons' leads
+    await pool.query(`delete from tour_booking_links where lead_id in (select id from leasing_leads where person_id in (${ph}))`, persons).catch(() => {});
+    await pool.query(`delete from agent_tour_offers where lead_id in (select id from leasing_leads where person_id in (${ph}))`, persons).catch(() => {});
+    await pool.query(`delete from lead_events where lead_id in (select id from leasing_leads where person_id in (${ph}))`, persons).catch(() => {});
+    await pool.query(`delete from leasing_leads where person_id in (${ph})`, persons).catch(() => {});
+    await pool.query(`delete from comm_events where person_id in (${ph})`, persons).catch(() => {});
+    await pool.query(`delete from conversations where person_id in (${ph})`, persons).catch(() => {});
   }
-  await pool.query(`delete from tour_events where tour_id in (select id from leasing_tours where property_id=$1)`, [track.properties[0]]).catch(() => {});
-  await pool.query(`delete from lead_events where lead_id in (select id from leasing_leads where property_id=$1)`, [track.properties[0]]).catch(() => {});
-  await pool.query(`update tour_availability set booked_tour_id=null where property_id=$1`, [track.properties[0]]).catch(() => {});
-  await pool.query(`delete from leasing_tours where property_id=$1`, [track.properties[0]]).catch(() => {});
-  await pool.query(`delete from tour_availability where property_id=$1`, [track.properties[0]]).catch(() => {});
-  await pool.query(`delete from agent_tour_offers where property_id=$1`, [track.properties[0]]).catch(() => {});
-  await pool.query(`delete from leasing_leads where property_id=$1`, [track.properties[0]]).catch(() => {});
-  await pool.query(`delete from comm_events where property_id=$1`, [track.properties[0]]).catch(() => {});
-  await pool.query(`delete from conversations where property_id=$1`, [track.properties[0]]).catch(() => {});
-  for (const p of track.persons) await pool.query(`delete from persons where id=$1`, [p]).catch(() => {});
-  await pool.query(`delete from units where property_id=$1`, [track.properties[0]]).catch(() => {});
-  // canonical demo property is a shared fixture; not deleted
-  console.log("  cleanup complete.");
+  // reset + remove ONLY the slots this run created (never the seeded ones)
+  if (slots.length) {
+    const ph = slots.map((_, i) => `$${i + 1}`).join(",");
+    await pool.query(`update tour_availability set booked_tour_id=null where id in (${ph})`, slots).catch(() => {});
+    await pool.query(`delete from tour_availability where id in (${ph})`, slots).catch(() => {});
+  }
+  for (const p of persons) await pool.query(`delete from persons where id=$1`, [p]).catch(() => {});
+  // the D-1 unit this run created (unique to the test)
+  await pool.query(`delete from units where property_id=$1 and unit_number='D-1'`, [DEMO_ID]).catch(() => {});
+  // canonical demo property + seeded slots are shared fixtures; never deleted
+  console.log("  cleanup complete (scoped to this run's data only).");
 }
 main().catch(async e => { console.error("ROUTE PROOF ERROR:", e); try { if (srv) srv.close(); await cleanup(); } catch (_) {} try { await pool.end(); } catch (_) {} process.exit(1); });
