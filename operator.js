@@ -39,6 +39,21 @@ module.exports = function operatorModule(deps) {
   const { pool, agentService, conversionService = null, leasingTourService = null, applicationInvitations = null } = deps;
   const { rankTurnPriority } = require("./turn_priority"); // shared Turn-Priority ranking (slice 1)
   const { buildReviewList, buildReviewDetail } = require("./application_review"); // application review reads (slice 2)
+  // ── THE ONE CANONICAL TENANCY-ANCHOR SERVICE (Fable ruling) ──────────
+  // The SAME countersign + confirm-term implementation applications.js calls.
+  // Injected from server.js (built once from the obligation engine). The two
+  // new /operator/leasing/applications/:id/* routes below are ENTRY ADAPTERS
+  // over this service — session-authed, server-derived actor — never a second
+  // implementation. Absent (older server.js) → those two routes fail closed 503.
+  const tenancyAnchor = deps.tenancyAnchor || null;
+  // The activation perimeter + dormant gate — mounted as ROUTE middleware on the
+  // two adapter routes, IDENTICALLY to the legacy applications.js routes, so the
+  // operator door goes through the exact same authority (mode → authenticated
+  // session → property-activated → leasing-module entitlement → session-property
+  // == app-property → current internal_qa → eligible state). The perimeter is the
+  // authority boundary; the shared service is transaction-only.
+  const { dormantWriteGuard } = require("./dormant_gate");
+  const { activationPerimeter } = require("./activation_perimeter");
   if (!pool) throw new Error("operator.js requires { pool }");
   const router = require("express").Router();
 
@@ -2037,6 +2052,134 @@ module.exports = function operatorModule(deps) {
       return res.status(500).json({ error: "LEASING_CONDITION_FAILED",
         receipt: "The leasing condition read failed. Retry; if it persists the read is unavailable." });
     }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  //  TENANCY-ANCHOR OPERATOR ADAPTERS (Fable ruling — the operator seam)
+  //
+  //  POST /operator/leasing/applications/:id/countersign
+  //  POST /operator/leasing/applications/:id/confirm-term
+  //
+  //  These are ENTRY ADAPTERS over the ONE canonical tenancy-anchor service
+  //  (tenancy_anchor_service.js) — the exact same implementation the legacy
+  //  /applications/:id/* routes call. They add NOTHING to the write; they add
+  //  the operator SESSION model so the frontend reaches the canonical write
+  //  the same way it reaches every other Leasing action, instead of the
+  //  client-side device journal it uses today.
+  //
+  //  AUTHORITY (identical to the legacy routes, per the ruling):
+  //    dormantWriteGuard (Layer 1, no DB)
+  //      → activationPerimeter (Layer 2): authenticated x-staff-session,
+  //        property-activated, leasing-module entitlement, session-property ==
+  //        application-property, current internal_qa, eligible application
+  //        status. The perimeter is the authority boundary; it attaches the
+  //        server-derived actor (req._perimeterActor). The handler opens the
+  //        transaction and the SERVICE is final authority under FOR UPDATE.
+  //
+  //  ACTOR (the one operator-facing improvement the ruling allows — adapt
+  //  ACCESS, never the write): the attestation is SERVER-DERIVED from the
+  //  authenticated session (req._perimeterActor.name), never a body string.
+  //  The J1 economics lock needs a real PERSON id (countersigned_by_person_id);
+  //  we resolve the session user → its bridged person only when required. If a
+  //  bound offer needs it and it can't be resolved, the service fails closed
+  //  honestly (unchanged behavior).
+  //
+  //  loadApplication for the perimeter = the same one-row read applications.js
+  //  uses; the perimeter derives property/person/status from the app row.
+  // ══════════════════════════════════════════════════════════════════
+  const _getAppForPerimeter = async (q, id) =>
+    (await q.query("select * from lease_applications where id=$1", [id])).rows[0];
+
+  const operatorCountersignPerimeter = activationPerimeter({
+    pool,
+    loadApplication: _getAppForPerimeter,
+    // countersign runs after approve (lease_ready) and typically after the tenant
+    // signs (tenant_signed) — both legitimate pre-countersign states. The service
+    // is final authority (re-checks obligation inputs under lock). Perimeter must
+    // not be stricter than the handler; matches applications.js exactly.
+    eligibleStatuses: ["lease_ready", "tenant_signed"],
+    action: "countersign",
+    requiredModule: "leasing",
+  });
+  const operatorConfirmTermPerimeter = activationPerimeter({
+    pool,
+    loadApplication: _getAppForPerimeter,
+    eligibleStatuses: ["accepted_term_required"],
+    action: "confirm_term",
+    requiredModule: "leasing",
+  });
+
+  // Resolve the authenticated session USER → its bridged PERSON id, if the
+  // deliberate staff-user↔person bridge has one. Returns null otherwise (the
+  // service then fails closed only if a bound offer actually requires it — the
+  // internal_qa demo path carries no offer and never needs it).
+  async function resolveActorPersonId(userId, propertyId) {
+    if (!userId) return null;
+    try {
+      const idn = await staffIdentity.resolveStaffIdentity(pool, { user_id: userId, property_id: propertyId });
+      return (idn && idn.state === "resolved" && idn.person_id) ? idn.person_id : null;
+    } catch (_) { return null; }
+  }
+
+  router.post("/operator/leasing/applications/:id/countersign", dormantWriteGuard, operatorCountersignPerimeter, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!tenancyAnchor || typeof tenancyAnchor.countersignService !== "function") {
+      return res.status(503).json({ receipt: "Countersign service not wired on this deploy (tenancyAnchor missing). Deploy tenancy_anchor_service.js + the updated server.js together." });
+    }
+    // SERVER-DERIVED actor (never the body). The perimeter already authorized
+    // and attached the authenticated staff identity.
+    const actor = req._perimeterActor || {};
+    const app = req._perimeterApp || {};
+    const countersignedByName = actor.name || (actor.user_id ? `staff:${actor.user_id}` : null);
+    // person id for the J1 economics lock — resolved from the session user only
+    // if the bridge has one; the service decides whether it's actually required.
+    const countersignedByPersonId = await resolveActorPersonId(actor.user_id, app.property_id);
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await tenancyAnchor.countersignService(client, {
+        applicationId: req.params.id,
+        countersigned_by: countersignedByName,              // SERVER-DERIVED attestation
+        note: (req.body && req.body.note) || null,
+        countersigned_by_person_id: countersignedByPersonId, // SERVER-DERIVED person (or null)
+      });
+      await client.query("commit");
+      return res.json(out);
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      if (e.svc) return res.status(e.http).json(e.body);
+      console.error("operator countersign:", e);
+      return res.status(500).json({ receipt: "Could not countersign.", error: e.message });
+    } finally { client.release(); }
+  });
+
+  router.post("/operator/leasing/applications/:id/confirm-term", dormantWriteGuard, operatorConfirmTermPerimeter, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!tenancyAnchor || typeof tenancyAnchor.confirmTermService !== "function") {
+      return res.status(503).json({ receipt: "Confirm-term service not wired on this deploy (tenancyAnchor missing). Deploy tenancy_anchor_service.js + the updated server.js together." });
+    }
+    const actor = req._perimeterActor || {};
+    const confirmedByName = actor.name || (actor.user_id ? `staff:${actor.user_id}` : null);
+    const b = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await tenancyAnchor.confirmTermService(client, {
+        applicationId: req.params.id,
+        start_date: b.start_date || null,       // structured dates: the operator form supplies these
+        end_date: b.end_date || null,
+        confirmed_by: confirmedByName,          // SERVER-DERIVED attestation (never a body name)
+        rent: b.rent != null ? b.rent : null,
+        security_deposit: b.security_deposit != null ? b.security_deposit : null,
+      });
+      await client.query("commit");
+      return res.json(out);
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      if (e.svc) return res.status(e.http).json(e.body);
+      console.error("operator confirm-term:", e);
+      return res.status(500).json({ receipt: "Could not confirm the lease term.", error: e.message });
+    } finally { client.release(); }
   });
 
   router._internal = { resolveSession, requireOperator, scopedConversation, scopedFact, normalizeFactBody, insertActiveFact, assertDraftInScope, DEMO_MODE, leasingLifecycle };
