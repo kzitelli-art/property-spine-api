@@ -21,6 +21,9 @@
 // ════════════════════════════════════════════════════════════════════
 
 module.exports = function turnovers(deps) {
+  // Shared effective-possession writer (space_position.js). Records the effective
+  // move_out that ENDS possession, space_id-anchored. Optional for soft partial deploy.
+  const recordEffectivePossession = deps && deps.recordEffectivePossession;
   const express = require("express");
   const { rankTurnPriority } = require("./turn_priority"); // ONE ranking source (shared w/ operator route)
   const router = express.Router();
@@ -178,6 +181,42 @@ module.exports = function turnovers(deps) {
       // 4) occupancy flips to vacant (tenant leaving). The unit is NOT yet
       //    rentable — that's what the turn resolves. Occupancy and rentable
       //    readiness are separate axes (the four-axis model).
+      // ── POSSESSION END — recorded ONLY on a genuine resident surrender ──────
+      // A turnover beginning is NOT automatically possession ending. This route
+      // records an effective move_out unit_event ONLY when the named lease was
+      // actually in possession (a live effective move_in exists for its space).
+      // A turn with no lease, or for a unit nobody currently possesses, records
+      // NO move_out — and that is CORRECT, not a failure. The possession writer
+      // refuses to encode a false surrender (NO_POSSESSION_TO_END). This route
+      // is the move-out TRANSACTION; it is not the sole authority that a
+      // possession ended — it only asserts it when it is true.
+      let moveOutNote = null;
+      if (recordEffectivePossession && outgoing_lease_id) {
+        try {
+          const pr = await recordEffectivePossession(client, {
+            kind: "move_out",
+            lease_id: outgoing_lease_id,
+            unit_id,
+            property_id: unit.property_id,
+            effective_date: new Date().toISOString().slice(0, 10),
+            actor: null,
+            source: "move_out",
+          });
+          moveOutNote = pr.created ? "Effective move_out recorded (verified prior possession)." : "Move_out already recorded — idempotent no-op.";
+        } catch (e) {
+          if (e.code === "NO_POSSESSION_TO_END") {
+            // expected for a turn that is not a resident surrender — NOT an error.
+            moveOutNote = "Turn recorded; no possession-end event (this lease/space had no live move_in — not a resident surrender).";
+          } else {
+            moveOutNote = "Move_out event NOT recorded: " + e.message;
+            console.error("move_out event (surfaced):", e.message);
+          }
+        }
+      } else if (!outgoing_lease_id) {
+        moveOutNote = "No outgoing_lease_id — turn only; no possession-end event.";
+      }
+
+      // compatibility cache (downstream of the event, not the source of truth)
       await client.query(
         "update units set occupancy_status='vacant', updated_at=now() where id=$1",
         [unit_id]
@@ -188,6 +227,7 @@ module.exports = function turnovers(deps) {
       res.status(201).json({
         turnover,
         event,
+        move_out_note: moveOutNote,
         obligation,
         unit: updatedUnit.rows[0],
         routed_role: route.assigned_role,
