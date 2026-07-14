@@ -62,15 +62,35 @@ module.exports = function desksModule({ pool }) {
   }
 
   // ── shared fact reads ────────────────────────────────────────────────
+  // Occupancy delegates to THE neutral, grain-aware occupancy primitive
+  // (leasing_occupancy_facts.occupancyByBasis) — the SAME implementation the
+  // session-scoped /operator/leasing/condition endpoint uses, WITHOUT this
+  // longstanding desk builder depending on the newer endpoint aggregate. This
+  // also makes the desk reads grain-correct for bed/space properties. The return
+  // shape keeps this module's two consumers working (total_units/occupied_units),
+  // plus the richer grain-aware fields incl. the canonical unit_noun.
+  const { occupancyByBasis } = require("./leasing_occupancy_facts.js");
   async function occupancyFacts(propertyId) {
-    const r = (await pool.query(
-      `select
-         (select count(*)::int from units where property_id = $1) as total_units,
-         (select count(distinct s.unit_id)::int
-            from leases l join spaces s on s.id = l.space_id
-           where l.property_id = $1 and l.lease_status = 'active') as occupied_units`,
-      [propertyId])).rows[0];
-    return r;
+    const o = await occupancyByBasis(pool, propertyId);
+    if (o.status === 'unavailable') {
+      // Unknown/absent leasing_basis → honest unavailable, never a zero/unit guess.
+      // Consumers check total_units>0; null makes them render the unavailable state.
+      return { total_units: null, occupied_units: null, basis: null,
+               unit_noun: null, unavailable_reason: o.reason };
+    }
+    return {
+      // back-compat fields — now grain-correct: on a space/bed property these are
+      // the rentable/occupied SPACE counts, so the ratio is right for beds too.
+      total_units: o.rentable_count,
+      occupied_units: o.occupied_count,
+      // richer canonical fields
+      basis: o.basis,
+      unit_noun: o.unit_noun,          // "units" | "spaces" | "beds"
+      rentable: o.rentable_count,
+      occupied: o.occupied_count,
+      occupancy_ratio: o.occupancy_ratio,
+      occupancy_pct: o.occupancy_pct,
+    };
   }
 
   async function maintenanceFacts(propertyId) {
@@ -162,7 +182,7 @@ module.exports = function desksModule({ pool }) {
       occupancy = o.total_units > 0
         ? { status: "ok", value: o.occupied_units / o.total_units,
             label: pct(o.occupied_units / o.total_units) + " occupied",
-            note: `${o.occupied_units} of ${o.total_units} units carry an active lease — lease-based, not a confirmed-status walk` }
+            note: `${o.occupied_units} of ${o.total_units} ${o.unit_noun || 'units'} carry an active lease — lease-based, not a confirmed-status walk` }
         : unavailable("no units on file for this property yet");
     } catch (e) { occupancy = unavailable(e.message); }
 
