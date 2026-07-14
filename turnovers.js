@@ -192,7 +192,18 @@ module.exports = function turnovers(deps) {
       // possession ended — it only asserts it when it is true.
       let moveOutNote = null;
       if (recordEffectivePossession && outgoing_lease_id) {
+        // ── MOVE_OUT EVENT IS MANDATORY WHEN IT APPLIES ──────────────────
+        // unit_events is the possession source of truth. Two distinct outcomes:
+        //   · NO_POSSESSION_TO_END — the guard fired: this lease/space had no
+        //     live move_in, so this turn is NOT a resident surrender. That is
+        //     EXPECTED, not an error; the turn proceeds with no possession event.
+        //   · any OTHER error (schema/constraint) — a real failure. It is NOT
+        //     swallowed: it propagates and rolls back the whole move-out, so we
+        //     never vacate the cache + open a turn while the canonical move_out
+        //     event failed to write. (Symmetric with move-in's mandatory rule.)
+        // A savepoint isolates ONLY the expected NO_POSSESSION_TO_END refusal.
         await client.query("savepoint sp_moveout");
+        let possessionEndApplies = true;
         try {
           const pr = await recordEffectivePossession(client, {
             kind: "move_out",
@@ -206,13 +217,16 @@ module.exports = function turnovers(deps) {
           await client.query("release savepoint sp_moveout");
           moveOutNote = pr.created ? "Effective move_out recorded (verified prior possession)." : "Move_out already recorded — idempotent no-op.";
         } catch (e) {
-          await client.query("rollback to savepoint sp_moveout");
           if (e.code === "NO_POSSESSION_TO_END") {
-            // expected for a turn that is not a resident surrender — NOT an error.
+            // EXPECTED refusal — roll back only this event, proceed with the turn.
+            await client.query("rollback to savepoint sp_moveout");
+            possessionEndApplies = false;
             moveOutNote = "Turn recorded; no possession-end event (this lease/space had no live move_in — not a resident surrender).";
           } else {
-            moveOutNote = "Move_out event NOT recorded: " + e.message;
-            console.error("move_out event (surfaced):", e.message);
+            // REAL failure — do NOT swallow. Let it propagate and roll back the
+            // whole move-out. (Release the savepoint name first is unnecessary;
+            // the throw aborts the outer transaction.)
+            throw e;
           }
         }
       } else if (!outgoing_lease_id) {
