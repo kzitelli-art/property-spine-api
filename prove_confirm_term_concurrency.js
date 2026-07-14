@@ -72,7 +72,9 @@ function fire() {
       where related_id=$1 and related_type='lease_application' and type='term_required'`,
     [APP_ID])).rows;
   const events = (await pool.query(
-    `select type, count(*)::int c from events where related_id=$1 group by type order by type`,
+    `select type, count(*)::int c from events
+      where person_id = (select person_id from lease_applications where id=$1)
+      group by type order by type`,
     [APP_ID])).rows;
 
   let pass = true;
