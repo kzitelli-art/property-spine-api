@@ -2019,6 +2019,26 @@ module.exports = function operatorModule(deps) {
     }
   });
 
+  // ── LEASING CONDITION (Step 2 strip) — READ-ONLY, SESSION-SCOPED ──────────
+  //  A THIN session-authorized wrapper around the ONE canonical facts builder
+  //  (leasing_condition_facts.js). Property is SERVER-DERIVED from the session
+  //  (req.operator.property_id) — the browser never supplies it; x-staff-session
+  //  is enforced by requireOperator (401 on invalid/expired) +
+  //  requireLeasingModuleAccess (403 without the module). No business logic
+  //  lives here — the calculation is shared so it cannot drift from other views.
+  const { leasingConditionFacts } = require("./leasing_condition_facts.js");
+  router.get("/operator/leasing/condition", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const facts = await leasingConditionFacts(pool, req.operator.property_id);  // session scope only
+      return res.json(facts);
+    } catch (e) {
+      console.error("operator leasing-condition error", e);
+      return res.status(500).json({ error: "LEASING_CONDITION_FAILED",
+        receipt: "The leasing condition read failed. Retry; if it persists the read is unavailable." });
+    }
+  });
+
   router._internal = { resolveSession, requireOperator, scopedConversation, scopedFact, normalizeFactBody, insertActiveFact, assertDraftInScope, DEMO_MODE, leasingLifecycle };
   return router;
 };
