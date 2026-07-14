@@ -112,7 +112,7 @@ async function recordEffectivePossession(client, {
   const payload = { lease_id, resolved_from: space_id_hint ? "hint" : (lease.space_id ? "lease.space_id" : "whole_unit_sole_space") };
   const ins = await client.query(
     `insert into unit_events (unit_id, property_id, event_type, effective_date, payload, source, status, lease_id, space_id)
-     values ($1,$2,$3,$4,$5,$6,'effective',$7,$8) returning *`,
+     values ($1,$2,$3,$4,$5,$6,'actioned',$7,$8) returning *`,
     [resolvedUnit, resolvedProperty, kind, effective_date, JSON.stringify(payload), source || "possession", lease_id, space_id]
   );
   return { event: ins.rows[0], created: true, idempotent: false, space_id };
