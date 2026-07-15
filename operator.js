@@ -569,7 +569,26 @@ module.exports = function operatorModule(deps) {
            from agent_facts where property_id=$1 and status='active' order by fact_key asc`,
         [req.operator.property_id]
       )).rows;
-      return res.json({ ...state, facts, vitals });
+      // BL-3: the opened relationship must be able to render its TRUE lifecycle
+      // state without inferring closure from disappearance elsewhere. Reuse the
+      // SAME PROJECTION_CTE the queue derives commercial_state/closure from —
+      // one canonical derivation, never a second copy. A null row here (rare
+      // eligibility-boundary edge case shared with the queue) degrades to
+      // honest nulls, never a crash.
+      const proj = (await pool.query(
+        PROJECTION_CTE + `
+        select commercial_state, closure_reason, closure_note, closure_actor_id,
+               closure_actor_name, closure_occurred_at, closure_recorded_at
+        from projected where conversation_id=$2`,
+        [req.operator.property_id, req.params.conversationId]
+      )).rows[0] || null;
+      const commercial_state = proj ? proj.commercial_state : null;
+      const closure = (proj && proj.commercial_state === "closed_not_fit")
+        ? { reason_code: proj.closure_reason, reason_note: proj.closure_note,
+            actor_id: proj.closure_actor_id, actor_name: proj.closure_actor_name,
+            occurred_at: proj.closure_occurred_at, recorded_at: proj.closure_recorded_at }
+        : null;
+      return res.json({ ...state, facts, vitals, commercial_state, closure });
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
   });
 
@@ -670,6 +689,13 @@ module.exports = function operatorModule(deps) {
 
   const QUEUE_LIMIT = 50;
   const ACTIVE_STATES = ["new", "active"];
+  // BL-3: an EXPLICIT, separate closed-state contract — never merged into the
+  // active universe. The active tabs' query is untouched; scope=closed is a
+  // distinct, validated branch of the SAME canonical endpoint (one service,
+  // no second copy of the routing precedence), requested only when the
+  // Closed tab is opened.
+  const CLOSED_STATES = ["closed_not_fit"];
+  const QUEUE_SCOPES = { active: ACTIVE_STATES, closed: CLOSED_STATES };
 
   // The proven queue_projection_v1 logic, parameterized by property ($1). One row per
   // ELIGIBLE conversation (open lead, not applied/leased/lost, conversation open).
@@ -701,8 +727,16 @@ module.exports = function operatorModule(deps) {
       from leasing_lead_lifecycle_events group by conversation_id
     ),
     close_reason as (
-      select distinct on (e.conversation_id) e.conversation_id, e.reason_code
-      from leasing_lead_lifecycle_events e where e.event_type='closed_not_fit'
+      -- BL-3: the durable closure event is the SOURCE for all closure metadata
+      -- surfaced anywhere (queue row, detail contract, Person Card history) —
+      -- one derivation, no second copy. actor_name resolved here so every
+      -- consumer gets a display-ready name, never a bare id to re-resolve.
+      select distinct on (e.conversation_id) e.conversation_id, e.reason_code,
+             e.reason_note, e.actor_id, e.occurred_at as closed_at, e.recorded_at as closed_recorded_at,
+             cu.name as closed_by_name
+      from leasing_lead_lifecycle_events e
+      left join users cu on cu.id = e.actor_id
+      where e.event_type='closed_not_fit'
       order by e.conversation_id, e.event_sequence desc
     ),
     live_tour as (
@@ -768,6 +802,9 @@ module.exports = function operatorModule(deps) {
         greatest(coalesce(qi.at,'epoch'::timestamptz), coalesce(ao.at,'epoch'::timestamptz),
                  coalesce(c.last_message_at,'epoch'::timestamptz)) as last_meaningful_activity_at,
         lt.tour_id, lt.tour_status, cr.reason_code as closure_reason,
+        cr.reason_note as closure_note, cr.actor_id as closure_actor_id,
+        cr.closed_by_name as closure_actor_name, cr.closed_at as closure_occurred_at,
+        cr.closed_recorded_at as closure_recorded_at,
         (qi.at is not null and (qo.at is null or qi.at >= qo.at)) as inbound_unanswered,
         (li.close_seq is not null and (li.reopen_seq is null or li.reopen_seq < li.close_seq)) as is_closed,
         (lt.conversation_id is not null) as is_booked,
@@ -854,6 +891,11 @@ module.exports = function operatorModule(deps) {
     res.set("Cache-Control", "no-store");
     try {
       const propertyId = req.operator.property_id;
+      // BL-3: an explicit, validated scope — 'active' (default, unchanged
+      // behavior) or 'closed'. Anything else falls back to 'active' rather
+      // than erroring, so a malformed param can never leak the wrong universe.
+      const scope = Object.prototype.hasOwnProperty.call(QUEUE_SCOPES, req.query.scope) ? req.query.scope : "active";
+      const STATES = QUEUE_SCOPES[scope];
       const limit = Math.min(Number(req.query.limit) || QUEUE_LIMIT, QUEUE_LIMIT);
       const beforeTs = req.query.before_activity_at || null;
       const beforeId = req.query.before_id || null;
@@ -882,13 +924,13 @@ module.exports = function operatorModule(deps) {
         from projected
         where commercial_state = any($2::text[])
         group by control_bucket`,
-        [propertyId, ACTIVE_STATES]
+        [propertyId, STATES]
       )).rows;
       const buckets = { needs_you: 0, you_own: 0, ai_working: 0, waiting_on_prospect: 0, exception: 0 };
       for (const b of bucketRows) { if (Object.prototype.hasOwnProperty.call(buckets, b.control_bucket)) buckets[b.control_bucket] = b.n; }
       counts.buckets = buckets;
 
-      const params = [propertyId, ACTIVE_STATES];
+      const params = [propertyId, STATES];
       let cursorClause = "";
       if (beforeTs) {
         params.push(beforeTs);
@@ -902,7 +944,8 @@ module.exports = function operatorModule(deps) {
         select conversation_id, person_id, person_name, lead_status,
                commercial_state, waiting_on, control_mode, delivery_state,
                last_inbound_at, last_delivered_outbound_at, last_meaningful_activity_at,
-               tour_id, tour_status, closure_reason, outreach_attempts,
+               tour_id, tour_status, closure_reason, closure_note, closure_actor_id,
+               closure_actor_name, closure_occurred_at, closure_recorded_at, outreach_attempts,
                control_bucket, bucket_reason_code, derivation
         from projected
         -- CONTROL BOARD universe: new/active only. A booked_tour conversation
@@ -935,7 +978,7 @@ module.exports = function operatorModule(deps) {
 
       return res.json({
         property_id: propertyId, as_of: asOf, projection_version: "queue_projection_v1",
-        counts, sources, today, conversations: rows, next_cursor: nextCursor, limit,
+        scope, counts, sources, today, conversations: rows, next_cursor: nextCursor, limit,
       });
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
   });
@@ -1311,6 +1354,38 @@ module.exports = function operatorModule(deps) {
           entries.sort((a, b) => new Date(a.occurred_at) - new Date(b.occurred_at));
         }
       } catch (_) { /* table/columns may differ — card degrades to no application band */ }
+
+      // BL-3 item 4: the closed_not_fit lifecycle event is durable, attributed
+      // relationship truth — it belongs in History like every other domain
+      // event, keyed to the SAME source table the queue/detail derive from
+      // (one truth, three readers). Included whenever ANY conversation for
+      // this person+property was closed, even if not the one currently open.
+      try {
+        const closures = (await client.query(
+          `select e.conversation_id, e.reason_code, e.reason_note, e.actor_id,
+                  e.occurred_at, e.recorded_at, cu.name as actor_name
+             from leasing_lead_lifecycle_events e
+             join conversations c on c.id = e.conversation_id
+             left join users cu on cu.id = e.actor_id
+            where c.person_id=$1 and c.property_id=$2 and e.event_type='closed_not_fit'
+            order by e.occurred_at asc`,
+          [personId, propertyId]
+        )).rows;
+        for (const cl of closures) {
+          const who = cl.actor_name || "Staff";
+          const readableReason = String(cl.reason_code || "").replace(/_/g, " ");
+          entries.push({
+            occurred_at: cl.occurred_at, recorded_at: cl.recorded_at,
+            source: "conversation", verb: "closed_not_fit",
+            actor: { id: cl.actor_id || null, name: who, kind: "user" },
+            summary: `${who} closed the conversation — not a fit${readableReason ? ` (${readableReason})` : ""}`,
+            claim_strength: "proven",
+            detail: { conversation_id: cl.conversation_id, reason_code: cl.reason_code || null, reason_note: cl.reason_note || null },
+            supersedes: null,
+          });
+        }
+        if (closures.length) entries.sort((a, b) => new Date(a.occurred_at) - new Date(b.occurred_at));
+      } catch (_) { /* table/columns may differ — card degrades to History without closure entries, never a crash */ }
 
       const recent = msgs.slice(-8).map((m) => ({
         direction: m.direction, body: m.body, at: m.occurred_at,
