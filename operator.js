@@ -1896,6 +1896,18 @@ module.exports = function operatorModule(deps) {
     if (!applicationInvitations || !applicationInvitations.createPreparedInvitation) {
       return res.status(503).json({ error: "invitation service not wired." });
     }
+    // FIX-FORWARD (applicant-link origin): the applicant URL is built from the
+    // EXPLICIT configured public origin — never the request host, never a
+    // client-side origin. If the origin is not configured, FAIL CLOSED before
+    // creating anything: a durable invitation whose link cannot be built would
+    // be a plausible-but-broken artifact. (Semantic debt, recorded: APP_BASE_URL
+    // is a generic app-url var already used for /t/ public links; it should
+    // eventually become an explicitly named public-origin configuration.)
+    const APPLICANT_ORIGIN = String(process.env.APP_BASE_URL || "").replace(/\/+$/, "");
+    if (!APPLICANT_ORIGIN) {
+      return res.status(503).json({ error: "applicant_link_origin_not_configured",
+        receipt: "APP_BASE_URL is not set. Refusing to create an invitation whose applicant link cannot be built." });
+    }
     const unit_id = req.body && req.body.unit_id || null;
     if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
     // REVALIDATE at send time: a unit attached earlier may have become
@@ -1916,10 +1928,10 @@ module.exports = function operatorModule(deps) {
         created_by_user_id: req.operator.id,               // server-derived actor
       });
       await client.query("commit");
-      // the applicant URL, server-derived from this request's own host — the
-      // client never guesses an origin. Raw token appears only here, once.
-      const proto = req.headers["x-forwarded-proto"] || req.protocol || "https";
-      out.link = `${proto}://${req.get("host")}/t/application/${out.token}`;
+      // the applicant URL, built from the EXPLICIT configured public origin
+      // (validated fail-closed at the top of this route) — never the request
+      // host. Raw token appears only here, once.
+      out.link = `${APPLICANT_ORIGIN}/t/application/${out.token}`;
       return res.json(out);
     } catch (e) {
       await client.query("rollback").catch(() => {});
