@@ -112,7 +112,12 @@ module.exports = function leasingLifecycleService(deps) {
         [conversationId, conv.property_id, seq, actorUserId || null, reasonCode, reasonNote || null, idem]
       )).rows[0];
       if (!row) throw httpErr(409, "Duplicate close (idempotency key already used).");
-      return { ok: true, event: row };
+      // FIX-FORWARD (BL-3): a plain-language receipt, matching the house pattern
+      // every other proven write returns (completeTour, attestApplicationSent).
+      // The client displays this verbatim rather than inventing success language
+      // client-side for a fact only the server can confirm.
+      const readableReason = String(reasonCode).replace(/_/g, " ");
+      return { ok: true, event: row, receipt: `Closed — not a fit (${readableReason}).` };
     });
   }
 
