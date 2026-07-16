@@ -36,7 +36,10 @@ const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the O
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 
 module.exports = function operatorModule(deps) {
-  const { pool, agentService, conversionService = null, leasingTourService = null, applicationInvitations = null } = deps;
+  const {
+    pool, agentService, conversionService = null, leasingTourService = null,
+    applicationInvitations = null, interactionsService = null,
+  } = deps;
   const { rankTurnPriority } = require("./turn_priority"); // shared Turn-Priority ranking (slice 1)
   const { buildReviewList, buildReviewDetail } = require("./application_review"); // application review reads (slice 2)
   // ── THE ONE CANONICAL TENANCY-ANCHOR SERVICE (Fable ruling) ──────────
@@ -563,6 +566,20 @@ module.exports = function operatorModule(deps) {
         vitals = await prospectVitals(client, { personId: conv.person_id, propertyId: req.operator.property_id });
       } finally { client.release(); }
       const state = await agentService.getConversationStateService({ conversationId: req.params.conversationId });
+      // Human attribution belongs on the communication itself. The shared agent
+      // service returns sent_by_user_id; this operator projection resolves the
+      // display name without changing the canonical comm_event.
+      if (Array.isArray(state.messages) && state.messages.length) {
+        const senderIds = [...new Set(state.messages.map(m => m.sent_by_user_id).filter(Boolean))];
+        const senderRows = senderIds.length
+          ? (await pool.query("select id, name from users where id = any($1::uuid[])", [senderIds])).rows
+          : [];
+        const senderName = new Map(senderRows.map(u => [u.id, u.name]));
+        state.messages = state.messages.map(m => ({
+          ...m,
+          sender_name: m.sent_by_user_id ? (senderName.get(m.sent_by_user_id) || null) : null,
+        }));
+      }
       // also include this property's facts so the page shows what the agent may use
       const facts = (await pool.query(
         `select id, fact_key, category, rendered_text, source_type, confirmed_at, effective_until, status
@@ -590,6 +607,60 @@ module.exports = function operatorModule(deps) {
         : null;
       return res.json({ ...state, facts, vitals, commercial_state, closure });
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
+  });
+
+  // POST /operator/leasing/conversations/:conversationId/reply
+  // The Person Card's human-text door. This is a THIN staff-session adapter over
+  // leasinginteractions.recordOutboundText — the one interaction ledger + the
+  // one communications boundary. The browser supplies only body text. Property,
+  // person, recipient, and actor are all server-derived and scope-verified.
+  router.post("/operator/leasing/conversations/:conversationId/reply", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const body = (req.body && typeof req.body.body === "string") ? req.body.body.trim() : "";
+    if (!body) return res.status(400).json({ error: "Write a message first." });
+    if (body.length > 1500) return res.status(400).json({ error: "Message is too long (1500 characters maximum)." });
+    if (!interactionsService || typeof interactionsService.recordOutboundText !== "function") {
+      return res.status(503).json({ error: "The canonical communications service is unavailable." });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const conv = await scopedConversation(client, req.params.conversationId, req.operator.property_id);
+
+      // A soft-closed relationship is terminal until a deliberate reopen. The
+      // conversation row remains open by design, so enforce lifecycle truth here.
+      const life = (await client.query(
+        `select max(event_sequence) filter (where event_type='closed_not_fit') as close_seq,
+                max(event_sequence) filter (where event_type='reopened') as reopen_seq
+           from leasing_lead_lifecycle_events
+          where conversation_id=$1`, [conv.id]
+      )).rows[0] || {};
+      if (life.close_seq != null && (life.reopen_seq == null || Number(life.reopen_seq) < Number(life.close_seq))) {
+        const e = httpErr(409, "Reopen the relationship before sending another message.");
+        throw e;
+      }
+
+      const person = (await client.query(
+        "select primary_phone_e164 from persons where id=$1", [conv.person_id]
+      )).rows[0];
+      if (!person || !person.primary_phone_e164) throw httpErr(409, "This person has no verified text number.");
+
+      const out = await interactionsService.recordOutboundText(client, {
+        person_id: conv.person_id,
+        property_id: req.operator.property_id,
+        body,
+        actor_user_id: req.operator.id,
+        to: person.primary_phone_e164,
+      });
+      await client.query("commit");
+      return res.json({
+        receipt: out.sent ? "Message sent and recorded." : `Message recorded but not delivered (${out.provider_status}).`,
+        ...out,
+      });
+    } catch (e) {
+      await client.query("rollback");
+      return res.status(e.httpStatus || e.http || 500).json({ error: e.publicMessage || e.message });
+    } finally { client.release(); }
   });
 
   // POST /operator/agent-drafts/:draftId/send — SCOPE-VERIFIED, actor=session user.
@@ -1078,21 +1149,33 @@ module.exports = function operatorModule(deps) {
       const entries = [];
 
       // ── conversation → message entries ─────────────────────────────
+      const conversation = (await client.query(
+        `select c.id, c.status, ats.mode
+           from conversations c
+           left join agent_thread_state ats on ats.conversation_id=c.id
+          where c.person_id=$1 and c.property_id=$2
+          order by c.created_at desc limit 1`,
+        [personId, propertyId])).rows[0] || null;
       const msgs = (await client.query(
-        `select ce.id, ce.direction, ce.sender_role, ce.body, ce.occurred_at
+        `select ce.id, ce.conversation_id, ce.direction, ce.sender_role, ce.body,
+                ce.occurred_at, ce.provider_status, ce.sent_by_user_id,
+                su.name as sent_by_name
            from comm_events ce
+           left join users su on su.id=ce.sent_by_user_id
           where ce.person_id=$1 and ce.property_id=$2
           order by ce.occurred_at asc limit 200`,
         [personId, propertyId])).rows;
       for (const m of msgs) {
-        const who = m.direction === "inbound" ? (p.name || "Prospect") : (m.sender_role || "Property");
+        const who = m.direction === "inbound"
+          ? (p.name || "Prospect")
+          : (m.sent_by_name || (m.sender_role === "ai" ? "AI leasing agent" : "Property team"));
         entries.push({
           occurred_at: m.occurred_at, recorded_at: m.occurred_at,
           source: "conversation", verb: "sent",
-          actor: { id: null, name: who, kind: m.direction === "inbound" ? "person" : "user" },
+          actor: { id: m.sent_by_user_id || null, name: who, kind: m.direction === "inbound" ? "person" : "user" },
           summary: `${who} sent: ${String(m.body || "").slice(0, 140)}`,
           claim_strength: "proven",
-          detail: { direction: m.direction, body: m.body },
+          detail: { conversation_id: m.conversation_id, direction: m.direction, body: m.body, provider_status: m.provider_status || null },
           supersedes: null,
         });
       }
@@ -1395,8 +1478,10 @@ module.exports = function operatorModule(deps) {
       return res.json({
         person: { id: p.id, name: p.name },
         property_id: propertyId,
+        conversation_id: conversation ? conversation.id : null,
+        conversation: conversation ? { id: conversation.id, status: conversation.status, mode: conversation.mode || "ai_active" } : null,
         stage,                                 // 'prospect' | 'applicant' — drives the card badge
-        relationship: { vitals, recent_messages: recent },
+        relationship: { vitals, recent_messages: recent, conversation_id: conversation ? conversation.id : null },
         application,                           // compact Application band, or null (honestly not applied yet)
         next,                                  // empty array = honestly nothing pending
         history: entries,                      // occurred_at ASC; empty = honestly nothing yet

@@ -3367,7 +3367,10 @@ app.use("/", applicationsModule({
   tenancyAnchor: __tenancyAnchor,               // the ONE canonical countersign/confirm-term service
 }));
 app.use("/", leasingSchedulingModule({ pool }));
-app.use("/", leasingInteractionsModule({ pool, sms, leasingLifecycle, commBoundary }));
+// Build the interaction ledger ONCE. The legacy operator-key routes and the
+// staff-session Person Card adapter both call this same service instance.
+const __leasingInteractions = leasingInteractionsModule({ pool, sms, leasingLifecycle, commBoundary });
+app.use("/", __leasingInteractions);
 
 // ── Skyline ride-along shadow import (migration 050). Three-state phone identity
 //    (new -> preview lead · known -> intent task, never a new lead · no/invalid ->
@@ -3417,6 +3420,9 @@ app.use("/", operatorModule({ pool, agentService: agentApp._service,
   // 067 follow-on: the session-authed leasing task queue resolves through the
   // conversion rail's ONE resolveRung service — no module reimplements closing.
   conversionService: __leasingConversion._service,
+  // The ONE interaction ledger / communications-boundary service. The Person
+  // Card reply route is only a session-scoped adapter over this implementation.
+  interactionsService: __leasingInteractions._service,
   // the SAME canonical tenancy-anchor service applications.js gets — the two
   // /operator/leasing/applications/:id/{countersign,confirm-term} adapters call
   // it behind dormantWriteGuard + activationPerimeter. One implementation.
