@@ -38,11 +38,11 @@ const CONFIGS = {
     key: "solo",
     property_key: "4233-CHESTNUT",
     property_match: ["solo", "4233"],
-    source_file: "4233 - SOLO II - Workpapers - 06.2026 - FINAL.xlsx",
+    source_file: "4233 Chestnut - Monthly Report - 2026 06.pdf",
     source_as_of_date: "2026-06-30",
     leasing_model: "unit",
     confidence: "confirmed",
-    badge: "SOURCED SNAPSHOT · Solo rent roll 06/30/2026 · reconciled to June monthly report",
+    badge: "SOURCED SNAPSHOT · Solo rent roll 06/30/2026",
     cols: { unit:0, unit_type:1, sqft:2, resident_id:3, name:4, market:5,
             actual:6, deposit:7, other:8, move_in:9, lease_to:10,
             move_out:11, balance:12 },
@@ -53,6 +53,7 @@ const CONFIGS = {
 
 const NON_REVENUE = /^(vacant|model|down|offline)$/i;
 const OCCUPIED_STATUSES = new Set(["current", "occupied", "notice", "commercial"]);
+const IMPORT_ROLES = new Set(["admin", "owner", "manager", "property_manager", "leasing_manager"]);
 
 function num(v) {
   if (v == null || v === "") return null;
@@ -493,24 +494,309 @@ function availabilityProjection(rows, positions, asOf) {
   return out.sort((a,b) => String(a.unit_number).localeCompare(String(b.unit_number), undefined, {numeric:true}));
 }
 
-async function readLatestSnapshot(pool, propertyId, asOf = null) {
+
+
+async function loadLedgerSnapshot(pool, inputRows, options = {}) {
+  const rows = (Array.isArray(inputRows) ? inputRows : []).map(normalizeRow).filter(r => r.unit_number);
+  if (!rows.length) return { error:"no_rows" };
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const propertyId = options.targetPropertyId ||
+      (options.propertyConfig ? await resolveProperty(client, options.propertyConfig) : null);
+    if (!propertyId) { await client.query("rollback"); return { error:"property_not_found", property:"session_scoped" }; }
+    const sourceFile = options.sourceFile || "Rent roll ledger export";
+    const sourceAsOfDate = dt(options.sourceAsOfDate);
+    if (!sourceAsOfDate) { await client.query("rollback"); return { error:"valid_source_as_of_date_required" }; }
+    const prior = await client.query(
+      `select id from import_batches
+        where property_id=$1 and source_type='rent_roll_ledger'
+          and source_file=$2 and source_as_of_date=$3 and status='committed'
+        order by loaded_at desc limit 1`, [propertyId, sourceFile, sourceAsOfDate]
+    );
+    if (prior.rows.length && !options.force) {
+      await client.query("rollback");
+      return { ok:true, idempotent:true, already_loaded:true, property_id:propertyId,
+               import_batch_id:prior.rows[0].id, source_file:sourceFile,
+               source_as_of_date:sourceAsOfDate, parsed_rows:rows.length };
+    }
+    const batch = (await client.query(
+      `insert into import_batches
+         (property_id, source_type, source_file, source_as_of_date,
+          leasing_model, confidence, status, notes)
+       values ($1,'rent_roll_ledger',$2,$3,$4,$5,'parsed',$6) returning id`,
+      [propertyId, sourceFile, sourceAsOfDate, options.leasingModel || "unit",
+       options.confidence || "confirmed",
+       options.notes || `Dated rent-roll ledger evidence; ${rows.length} normalized rows. No person or lease records fabricated.`]
+    )).rows[0];
+    const batchId=batch.id, unitCache=new Map(), spaceCache=new Map();
+    const counts={source_rows:0,units_created:0,units_reused:0,spaces_created:0,spaces_reused:0,current_rows:0,future_rows:0};
+    for (const row of rows) {
+      counts.source_rows++; if(row.section==='future') counts.future_rows++; else counts.current_rows++;
+      let unitId=unitCache.get(row.unit_number);
+      if(!unitId){
+        const q=await client.query("select id from units where property_id=$1 and unit_number=$2 limit 1",[propertyId,row.unit_number]);
+        if(q.rows.length){ unitId=q.rows[0].id; counts.units_reused++; await client.query(
+          `update units set square_feet=coalesce($3,square_feet),market_rent=coalesce($4,market_rent),
+             import_batch_id=$5,source_type='rent_roll_ledger',source_as_of_date=$6,confidence=$7
+           where id=$1 and property_id=$2`,[unitId,propertyId,row.sqft,row.market_rent,batchId,sourceAsOfDate,options.confidence||'confirmed']);
+        }else{
+          unitId=(await client.query(
+            `insert into units (property_id,unit_number,square_feet,market_rent,import_batch_id,source_type,source_as_of_date,confidence)
+             values ($1,$2,$3,$4,$5,'rent_roll_ledger',$6,$7) returning id`,
+            [propertyId,row.unit_number,row.sqft,row.market_rent,batchId,sourceAsOfDate,options.confidence||'confirmed'])).rows[0].id; counts.units_created++;
+        }
+        unitCache.set(row.unit_number,unitId);
+      }
+      const label="(whole unit)", sk=`${unitId}|${label}`; let spaceId=spaceCache.get(sk);
+      if(!spaceId){
+        const q=await client.query("select id from spaces where unit_id=$1 and space_label=$2 limit 1",[unitId,label]);
+        if(q.rows.length){spaceId=q.rows[0].id;counts.spaces_reused++;}
+        else{spaceId=(await client.query(
+          `insert into spaces (unit_id,space_label,import_batch_id,source_type,source_as_of_date,confidence)
+           values ($1,$2,$3,'rent_roll_ledger',$4,$5) returning id`,
+          [unitId,label,batchId,sourceAsOfDate,options.confidence||'confirmed'])).rows[0].id;counts.spaces_created++;}
+        spaceCache.set(sk,spaceId);
+      }
+      await client.query(
+        `insert into import_source_rows (import_batch_id,row_index,raw,produced_unit_id,produced_space_id,produced_person_id,produced_lease_id,parse_note)
+         values ($1,$2,$3,$4,$5,null,null,$6)`,
+        [batchId,row.row_index,JSON.stringify(row),unitId,spaceId,row.section==='future'?'future ledger row — evidence only':'current ledger row — evidence only']
+      );
+    }
+    await client.query("update import_batches set status='committed',updated_at=now() where id=$1",[batchId]);
+    await client.query("commit");
+    return {ok:true,property_id:propertyId,import_batch_id:batchId,source_type:'rent_roll_ledger',source_file:sourceFile,source_as_of_date:sourceAsOfDate,loaded:counts};
+  } catch(e){
+    await client.query("rollback"); console.error("rent-roll ledger load error:",e); return {error:"ledger_load_failed",detail:e.message};
+  } finally { client.release(); }
+}
+
+function validateReconciliation(doc) {
+  const errors = [];
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
+    return { ok:false, errors:["reconciliation_document_required"], unit_rows:0, exceptions:0 };
+  }
+  if (!doc.property) errors.push("property_metadata_required");
+  if (!dt(doc.as_of)) errors.push("valid_as_of_date_required");
+  if (!Array.isArray(doc.unit_truth) || !doc.unit_truth.length) errors.push("unit_truth_required");
+  const units = Array.isArray(doc.unit_truth) ? doc.unit_truth : [];
+  if (units.length > 5000) errors.push("too_many_unit_truth_rows");
+  const seen = new Set();
+  for (const row of units) {
+    const unit = String(row && row.Unit || "").trim();
+    if (!unit) { errors.push("unit_number_required"); break; }
+    if (seen.has(unit)) { errors.push(`duplicate_unit:${unit}`); break; }
+    seen.add(unit);
+  }
+  const statedInventory = Number(doc.inventory && doc.inventory.residential_units);
+  if (Number.isFinite(statedInventory) && units.length && statedInventory !== units.length) errors.push("inventory_unit_count_mismatch");
+  const committed = Number(doc.september_1 && doc.september_1.committed_units);
+  if (Number.isFinite(committed) && units.length && (committed < 0 || committed > units.length)) errors.push("invalid_september_1_commitment_count");
+  if (Array.isArray(doc.projection_matrix) && units.length && doc.projection_matrix.length !== units.length) errors.push("projection_matrix_unit_count_mismatch");
+  if (Array.isArray(doc.horizons)) {
+    for (const h of doc.horizons) {
+      if (!dt(h && h.date)) { errors.push("invalid_horizon_date"); break; }
+    }
+  }
+  return { ok:errors.length === 0, errors, unit_rows:units.length,
+           exceptions:Array.isArray(doc.exceptions) ? doc.exceptions.length : 0 };
+}
+
+function validReconciliation(doc) {
+  return validateReconciliation(doc).ok;
+}
+
+function reconciliationRows(doc) {
+  if (!validReconciliation(doc)) return [];
+  return doc.unit_truth.map((u, i) => {
+    const state = String(u["Current State"] || "").toLowerCase();
+    const status = state === "vacant" ? "vacant" : state === "model" ? "model" :
+      state === "down" ? "down" : state === "commercial" ? "commercial" :
+      String(u["Expiration Disposition"] || "").toLowerCase() === "notice" ? "notice" : "current";
+    return normalizeRow({
+      row_index:i + 1,
+      unit_number:u.Unit,
+      unit_type:u["Unit Type"],
+      sqft:u.SF,
+      name:u["Current Resident"],
+      resident_id:null,
+      resident_raw:u["Current Resident"] || status,
+      status,
+      market_rent:null,
+      actual_rent:u["Current Rent"],
+      move_in:null,
+      lease_from:null,
+      lease_to:u["Current Lease End"],
+      move_out:u["Expected Move-Out"],
+      balance:0,
+      section:"current",
+      is_commercial:false,
+    }, i);
+  });
+}
+
+function reconciliationAvailability(doc, asOf) {
+  if (!validReconciliation(doc)) return [];
+  const asOfDate = dt(asOf) || dt(doc.as_of);
+  return doc.unit_truth.map(u => {
+    const unit = String(u.Unit || "");
+    const currentState = String(u["Current State"] || "").toLowerCase();
+    const position = String(u["Sep. 1 Position"] || "");
+    const proof = String(u["Proof Level"] || "");
+    const targetReady = dt(u["Target Ready"]);
+    const expectedVacate = dt(u["Expected Vacate"] || u["Expected Move-Out"]);
+    const committed = /signed|renewal|future lease|current/i.test(position) &&
+      !/unresolved|uncovered|pipeline/i.test(position);
+    const pipeline = /pipeline/i.test(position) || Boolean(u["Pipeline Status"]);
+    const nonRevenue = currentState === "model" || currentState === "down";
+    const vacantNow = currentState === "vacant";
+    const readyNow = !targetReady || !asOfDate || targetReady <= asOfDate;
+    const marketableNow = vacantNow && !committed && !pipeline && !nonRevenue && readyNow;
+    let state = "occupied";
+    if (nonRevenue) state = currentState;
+    else if (pipeline) state = "pipeline_pending";
+    else if (vacantNow && committed) state = "vacant_committed";
+    else if (vacantNow && marketableNow) state = "vacant_marketable";
+    else if (vacantNow) state = "vacant_readiness_pending";
+    else if (String(u["Expiration Disposition"] || "").toLowerCase() === "notice" && !committed) state = "notice_uncommitted";
+    else if (String(u["Expiration Disposition"] || "").toLowerCase() === "unresolved") state = "renewal_unresolved";
+    return {
+      unit_number:unit,
+      unit_type:u["Unit Type"] || null,
+      current_status:currentState || "unknown",
+      current_resident:u["Current Resident"] || null,
+      market_rent:null,
+      actual_rent:Number(u["Current Rent"] || 0),
+      lease_end:dt(u["Current Lease End"]),
+      move_out:expectedVacate,
+      future_commitments:committed ? [{
+        resident_name:u["Sep. 1 Resident"] || u["Current Resident"] || null,
+        start_date:dt(u["Term Start"]),
+        end_date:dt(u["Term End"]),
+        rent:Number(u["Sep. 1 Rent"] || 0),
+        proof_level:proof || null,
+      }] : [],
+      committed,
+      contractual_open_now:vacantNow && !committed,
+      contractual_open_forward:/notice/i.test(String(u["Expiration Disposition"] || "")) && !committed,
+      physical_readiness:u["Readiness / Turn"] || (targetReady ? (readyNow ? "ready" : "scheduled") : "unknown"),
+      possession_status:vacantNow ? "possessed" : "occupied",
+      availability_state:state,
+      available_from:targetReady || expectedVacate || null,
+      marketable_now:marketableNow,
+      next_required_action:u["Next Required Action"] || null,
+      position_reason:position || null,
+      proof_level:proof || null,
+      exception:u["Exception / Reconciliation Note"] || null,
+    };
+  }).sort((a,b) => String(a.unit_number).localeCompare(String(b.unit_number), undefined, {numeric:true}));
+}
+
+async function readLatestReconciliation(pool, propertyId) {
   const batch = (await pool.query(
     `select id, source_type, source_file, source_as_of_date, leasing_model,
             confidence, status, loaded_at, notes
        from import_batches
-      where property_id=$1 and status='committed' and source_type='historical_snapshot'
+      where property_id=$1 and status='committed' and source_type='rent_roll_reconciliation'
       order by source_as_of_date desc nulls last, loaded_at desc limit 1`,
     [propertyId]
   )).rows[0];
-  if (!batch) return { property_id:propertyId, has_data:false, source:null, rows:[], availability:[],
+  if (!batch) return null;
+  const row = (await pool.query(
+    `select raw from import_source_rows
+      where import_batch_id=$1 and parse_note='rent_roll_truth_reconciliation_document'
+      order by row_index limit 1`, [batch.id]
+  )).rows[0];
+  const raw = row && row.raw;
+  const document = raw && raw.payload ? raw.payload : raw;
+  if (!validReconciliation(document)) return null;
+  return { batch, document };
+}
+
+async function loadReconciliation(pool, document, options = {}) {
+  if (!validReconciliation(document)) return { error:"invalid_reconciliation_document" };
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    const propertyId = options.targetPropertyId ||
+      (options.propertyConfig ? await resolveProperty(client, options.propertyConfig) : null);
+    if (!propertyId) { await client.query("rollback"); return { error:"property_not_found", property:"session_scoped" }; }
+    const sourceFile = options.sourceFile || `Rent-roll truth reconciliation ${document.as_of}.json`;
+    const sourceAsOfDate = dt(options.sourceAsOfDate || document.as_of);
+    if (!sourceAsOfDate) { await client.query("rollback"); return { error:"valid_source_as_of_date_required" }; }
+    const prior = await client.query(
+      `select id from import_batches
+        where property_id=$1 and source_type='rent_roll_reconciliation'
+          and source_file=$2 and source_as_of_date=$3 and status='committed'
+        order by loaded_at desc limit 1`,
+      [propertyId, sourceFile, sourceAsOfDate]
+    );
+    if (prior.rows.length && !options.force) {
+      await client.query("rollback");
+      return { ok:true, idempotent:true, already_loaded:true, property_id:propertyId,
+               import_batch_id:prior.rows[0].id, source_file:sourceFile,
+               source_as_of_date:sourceAsOfDate, unit_rows:document.unit_truth.length };
+    }
+    const summary = document.september_1 || {};
+    const batch = (await client.query(
+      `insert into import_batches
+         (property_id, source_type, source_file, source_as_of_date,
+          leasing_model, confidence, status, notes)
+       values ($1,'rent_roll_reconciliation',$2,$3,'unit','reconciled','parsed',$4) returning id`,
+      [propertyId, sourceFile, sourceAsOfDate,
+       `Reconciled unit timeline; ${document.unit_truth.length} units; September 1 committed ${summary.committed_units || 0}; imported by ${options.actorId || "operator"}.`]
+    )).rows[0];
+    await client.query(
+      `insert into import_source_rows
+         (import_batch_id, row_index, raw, produced_unit_id, produced_space_id,
+          produced_person_id, produced_lease_id, parse_note)
+       values ($1,1,$2,null,null,null,null,'rent_roll_truth_reconciliation_document')`,
+      [batch.id, JSON.stringify({ kind:"rent_roll_truth_reconciliation", payload:document })]
+    );
+    await client.query("update import_batches set status='committed', updated_at=now() where id=$1", [batch.id]);
+    await client.query("commit");
+    return { ok:true, property_id:propertyId, import_batch_id:batch.id,
+             source_type:"rent_roll_reconciliation", source_file:sourceFile,
+             source_as_of_date:sourceAsOfDate, unit_rows:document.unit_truth.length,
+             exceptions:Array.isArray(document.exceptions) ? document.exceptions.length : 0 };
+  } catch (e) {
+    await client.query("rollback");
+    console.error("rent-roll reconciliation load error:", e);
+    return { error:"reconciliation_load_failed", detail:e.message };
+  } finally {
+    client.release();
+  }
+}
+
+
+async function readLatestSnapshot(pool, propertyId, asOf = null) {
+  const reconciliation = await readLatestReconciliation(pool, propertyId);
+  const batch = (await pool.query(
+    `select id, source_type, source_file, source_as_of_date, leasing_model,
+            confidence, status, loaded_at, notes
+       from import_batches
+      where property_id=$1 and status='committed' and source_type in ('rent_roll_ledger','historical_snapshot')
+      order by case when source_type='rent_roll_ledger' then 0 else 1 end, source_as_of_date desc nulls last, loaded_at desc limit 1`,
+    [propertyId]
+  )).rows[0];
+  if (!batch && !reconciliation) return { property_id:propertyId, has_data:false, source:null, rows:[], availability:[],
                        receipt:"No sourced rent roll has been imported for this property." };
 
-  const sourceRows = (await pool.query(
-    `select row_index, raw, parse_note from import_source_rows
-      where import_batch_id=$1 order by row_index`, [batch.id]
-  )).rows;
-  const rows = sourceRows.map((r,i) => normalizeRow(r.raw || {}, i));
-  const effectiveAsOf = asOf || (batch.source_as_of_date ? String(batch.source_as_of_date).slice(0,10) : new Date().toISOString().slice(0,10));
+  let rows = [];
+  if (batch) {
+    const sourceRows = (await pool.query(
+      `select row_index, raw, parse_note from import_source_rows
+        where import_batch_id=$1 order by row_index`, [batch.id]
+    )).rows;
+    rows = sourceRows.map((r,i) => normalizeRow(r.raw || {}, i));
+  } else if (reconciliation) {
+    rows = reconciliationRows(reconciliation.document);
+  }
+
+  const doc = reconciliation && reconciliation.document;
+  const effectiveAsOf = dt(asOf) || (doc && dt(doc.as_of)) ||
+    (batch && batch.source_as_of_date ? dt(batch.source_as_of_date) : new Date().toISOString().slice(0,10));
   let positionStatus = "unavailable", positions = [];
   try {
     const sp = await spacePosition(pool, { property_id:propertyId, as_of:effectiveAsOf });
@@ -519,16 +805,63 @@ async function readLatestSnapshot(pool, propertyId, asOf = null) {
   } catch (e) {
     console.error("rent-roll space-position overlay unavailable:", e.message);
   }
+
   const summary = summarizeRows(rows);
-  const availability = availabilityProjection(rows, positions, effectiveAsOf);
+  let availability = availabilityProjection(rows, positions, effectiveAsOf);
+  if (doc) {
+    const inv = doc.inventory || {};
+    summary.inventory = Number(inv.residential_units || summary.inventory || 0);
+    summary.current_rows = summary.inventory;
+    summary.occupied = Number(inv.current_occupied || 0);
+    summary.vacant = Number(inv.current_vacant || 0);
+    summary.model = Number(inv.model || 0);
+    summary.down = Number(inv.down || 0);
+    summary.non_revenue = summary.model + summary.down;
+    summary.current_occupancy_pct = inv.current_occupancy_pct == null ? null : Math.round(Number(inv.current_occupancy_pct) * 10000) / 100;
+    const revenueInventory = Math.max(0, summary.inventory - summary.non_revenue);
+    summary.leasable_occupancy_pct = revenueInventory ? Math.round(summary.occupied / revenueInventory * 10000) / 100 : null;
+    summary.reconciled = true;
+    summary.reconciliation_as_of = dt(doc.as_of);
+    summary.ledger_cut = dt(doc.ledger_cut);
+    const commercialRows = rows.filter(r => r.section !== "future" && r.is_commercial);
+    const commercialOccupied = commercialRows.filter(r => OCCUPIED_STATUSES.has(r.status));
+    const commercialCurrentRent = commercialOccupied.reduce((n,r) => n + Number(r.actual_rent || 0), 0);
+    summary.residential_inventory = summary.inventory;
+    summary.commercial_spaces = commercialRows.length;
+    summary.total_property_positions = summary.inventory + commercialRows.length;
+    summary.residential_occupied = summary.occupied;
+    summary.commercial_occupied = commercialOccupied.length;
+    summary.total_occupied_positions = summary.occupied + commercialOccupied.length;
+    summary.current_contract_rent_residential = Number(doc.september_1 && doc.september_1.current_occupied_monthly_rent || 0);
+    summary.current_contract_rent_commercial = commercialCurrentRent;
+    summary.current_contract_rent_property = summary.current_contract_rent_residential + commercialCurrentRent;
+    const sep = doc.september_1 || null;
+    summary.september_1 = sep ? {
+      ...sep,
+      commercial_committed_spaces:commercialOccupied.length,
+      commercial_scheduled_contract_rent:commercialCurrentRent,
+      property_scheduled_gross_contract_rent:Number(sep.scheduled_gross_contract_rent || 0) + commercialCurrentRent,
+    } : null;
+    availability = reconciliationAvailability(doc, effectiveAsOf);
+  }
   summary.uncommitted_vacant = availability.filter(a => a.current_status === "vacant" && !a.committed).length;
-  summary.uncommitted_notice = availability.filter(a => a.current_status === "notice" && !a.committed).length;
+  summary.uncommitted_notice = availability.filter(a => a.availability_state === "notice_uncommitted").length;
   summary.marketable_now = availability.filter(a => a.marketable_now).length;
 
-  return {
-    property_id:propertyId,
-    has_data:true,
-    source:{
+  const source = doc ? {
+      import_batch_id:reconciliation.batch.id,
+      type:reconciliation.batch.source_type,
+      file:reconciliation.batch.source_file,
+      as_of:dt(doc.as_of),
+      ledger_cut:dt(doc.ledger_cut),
+      leasing_model:"unit",
+      confidence:"reconciled",
+      loaded_at:reconciliation.batch.loaded_at,
+      truth_status:"reconciled_unit_timeline",
+      baseline_import_batch_id:batch ? batch.id : null,
+      baseline_file:batch ? batch.source_file : null,
+      baseline_as_of:batch && batch.source_as_of_date ? dt(batch.source_as_of_date) : null,
+    } : {
       import_batch_id:batch.id,
       type:batch.source_type,
       file:batch.source_file,
@@ -537,11 +870,17 @@ async function readLatestSnapshot(pool, propertyId, asOf = null) {
       confidence:batch.confidence,
       loaded_at:batch.loaded_at,
       truth_status:"sourced_snapshot",
-    },
+    };
+
+  return {
+    property_id:propertyId,
+    has_data:true,
+    source,
     position_status:positionStatus,
     summary,
     rows,
     availability,
+    reconciliation:doc || null,
   };
 }
 
@@ -597,6 +936,72 @@ module.exports = function snapshotLoader(deps) {
     }
   });
 
+  // Canonical signed-in import: property authority comes only from the session.
+  // No client property id is accepted. This imports sourced baseline truth; it does
+  // not write to Yardi or dispatch communications.
+  router.post("/operator/rent-roll/import", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const role = String(req.operator.role || "").toLowerCase();
+    if (!IMPORT_ROLES.has(role)) return res.status(403).json({ error:"Your role cannot import a rent roll." });
+    const body = req.body || {};
+    const reconciliation = body.reconciliation || (validReconciliation(body) ? body : null);
+    const hasRows = Array.isArray(body.rows) && body.rows.length > 0;
+    if (!hasRows && !reconciliation) return res.status(400).json({ error:"rows_or_reconciliation_required" });
+    if (hasRows && body.rows.length > 5000) return res.status(413).json({ error:"too_many_rows" });
+    const sourceAsOfDate = hasRows ? dt(body.baseline_source_as_of_date || body.ledger_cut || body.source_as_of_date) : null;
+    if (hasRows && !sourceAsOfDate) return res.status(400).json({ error:"valid_baseline_source_as_of_date_required" });
+    const reconciliationCheck = reconciliation ? validateReconciliation(reconciliation) :
+      { ok:true, errors:[], unit_rows:0, exceptions:0 };
+    if (!reconciliationCheck.ok) return res.status(400).json({
+      error:"invalid_reconciliation_document", details:reconciliationCheck.errors,
+    });
+    if (body.dry_run) return res.status(200).json({
+      ok:true,
+      receipt:"Rent-roll truth package validated; no records were committed.",
+      validated:{
+        baseline_rows:hasRows ? body.rows.length : 0,
+        baseline_source_as_of_date:sourceAsOfDate,
+        reconciliation_units:reconciliationCheck.unit_rows,
+        reconciliation_exceptions:reconciliationCheck.exceptions,
+      },
+    });
+
+    let baselineOut = null, reconciliationOut = null;
+    if (hasRows) {
+      // The operator import records dated ledger evidence only. It deliberately does
+      // not manufacture durable people or canonical leases from names in a report.
+      // Identity and lease objects enter through their own governed services.
+      baselineOut = await loadLedgerSnapshot(pool, body.rows, {
+        targetPropertyId:req.operator.property_id,
+        sourceFile:body.baseline_source_file || body.source_file || "Rent roll ledger export",
+        sourceAsOfDate:body.baseline_source_as_of_date || body.ledger_cut || body.source_as_of_date,
+        leasingModel:body.leasing_model || "unit",
+        confidence:body.confidence || "confirmed",
+        notes:`Session-scoped dated ledger evidence imported by user ${req.operator.id}. No person or lease records fabricated; no Yardi write.`,
+        force:Boolean(body.force),
+      });
+      if (baselineOut.error) return res.status(baselineOut.error === "property_not_found" ? 404 : 400).json(baselineOut);
+    }
+    if (reconciliation) {
+      reconciliationOut = await loadReconciliation(pool, reconciliation, {
+        targetPropertyId:req.operator.property_id,
+        sourceFile:body.source_file || `Rent-roll truth reconciliation ${reconciliation.as_of}.json`,
+        sourceAsOfDate:body.source_as_of_date || reconciliation.as_of,
+        actorId:req.operator.id,
+        force:Boolean(body.force),
+      });
+      if (reconciliationOut.error) return res.status(reconciliationOut.error === "property_not_found" ? 404 : 400).json(reconciliationOut);
+    }
+    const alreadyLoaded = Boolean((!baselineOut || baselineOut.already_loaded) && (!reconciliationOut || reconciliationOut.already_loaded));
+    return res.status(alreadyLoaded ? 200 : 201).json({
+      receipt:alreadyLoaded ? "This rent-roll truth package was already loaded; no duplicate records were created." :
+        "Rent-roll baseline and reconciled unit timeline imported. Management and Leasing now read one dated truth projection.",
+      ok:true,
+      baseline:baselineOut,
+      reconciliation:reconciliationOut,
+    });
+  });
+
   // Canonical signed-in read: one source for current roll, forward roll,
   // delinquency, and Leasing availability. Live empty/failure stays honest.
   router.get("/operator/rent-roll", requireOperator, async (req, res) => {
@@ -634,6 +1039,7 @@ module.exports = function snapshotLoader(deps) {
     loadSnapshot:(cfg, rows, options)=>loadSnapshot(pool, cfg, rows, options),
     readLatestSnapshot:(propertyId, asOf)=>readLatestSnapshot(pool, propertyId, asOf),
     parseXlsx, parseResident, normalizeRow, summarizeRows, availabilityProjection,
+    loadLedgerSnapshot, loadReconciliation, readLatestReconciliation, reconciliationRows, reconciliationAvailability, validateReconciliation, validReconciliation,
     num, dt, CONFIGS,
   };
   return router;
@@ -645,3 +1051,11 @@ module.exports.summarizeRows = summarizeRows;
 module.exports.availabilityProjection = availabilityProjection;
 module.exports.loadSnapshot = loadSnapshot;
 module.exports.readLatestSnapshot = readLatestSnapshot;
+module.exports.loadLedgerSnapshot = loadLedgerSnapshot;
+module.exports.loadReconciliation = loadReconciliation;
+module.exports.readLatestReconciliation = readLatestReconciliation;
+module.exports.reconciliationAvailability = reconciliationAvailability;
+module.exports.validateReconciliation = validateReconciliation;
+module.exports.validReconciliation = validReconciliation;
+
+module.exports.reconciliationRows = reconciliationRows;
