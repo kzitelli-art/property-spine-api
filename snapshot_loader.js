@@ -743,9 +743,10 @@ async function loadReconciliation(pool, document, options = {}) {
       `insert into import_batches
          (property_id, source_type, source_file, source_as_of_date,
           leasing_model, confidence, status, notes)
-       values ($1,'rent_roll_reconciliation',$2,$3,'unit','reconciled','parsed',$4) returning id`,
+       values ($1,'rent_roll_reconciliation',$2,$3,'unit',$5,'parsed',$4) returning id`,
       [propertyId, sourceFile, sourceAsOfDate,
-       `Reconciled unit timeline; ${document.unit_truth.length} units; September 1 committed ${summary.committed_units || 0}; imported by ${options.actorId || "operator"}.`]
+       `Reconciled unit timeline; ${document.unit_truth.length} units; September 1 committed ${summary.committed_units || 0}; imported by ${options.actorId || "operator"}.`,
+       options.confidence || "manually_reviewed"]
     )).rows[0];
     await client.query(
       `insert into import_source_rows
@@ -855,7 +856,7 @@ async function readLatestSnapshot(pool, propertyId, asOf = null) {
       as_of:dt(doc.as_of),
       ledger_cut:dt(doc.ledger_cut),
       leasing_model:"unit",
-      confidence:"reconciled",
+      confidence:reconciliation.batch.confidence || "manually_reviewed",
       loaded_at:reconciliation.batch.loaded_at,
       truth_status:"reconciled_unit_timeline",
       baseline_import_batch_id:batch ? batch.id : null,
