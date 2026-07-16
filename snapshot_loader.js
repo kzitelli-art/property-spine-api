@@ -38,11 +38,11 @@ const CONFIGS = {
     key: "solo",
     property_key: "4233-CHESTNUT",
     property_match: ["solo", "4233"],
-    source_file: "4233 Chestnut - Monthly Report - 2026 06.pdf",
+    source_file: "4233 - SOLO II - Workpapers - 06.2026 - FINAL.xlsx",
     source_as_of_date: "2026-06-30",
     leasing_model: "unit",
     confidence: "confirmed",
-    badge: "SOURCED SNAPSHOT · Solo rent roll 06/30/2026",
+    badge: "SOURCED SNAPSHOT · Solo rent roll 06/30/2026 · reconciled to June monthly report",
     cols: { unit:0, unit_type:1, sqft:2, resident_id:3, name:4, market:5,
             actual:6, deposit:7, other:8, move_in:9, lease_to:10,
             move_out:11, balance:12 },
@@ -53,7 +53,6 @@ const CONFIGS = {
 
 const NON_REVENUE = /^(vacant|model|down|offline)$/i;
 const OCCUPIED_STATUSES = new Set(["current", "occupied", "notice", "commercial"]);
-const IMPORT_ROLES = new Set(["admin", "owner", "manager", "property_manager", "leasing_manager"]);
 
 function num(v) {
   if (v == null || v === "") return null;
@@ -596,33 +595,6 @@ module.exports = function snapshotLoader(deps) {
     } catch (e) {
       return res.status(500).json({ error:"endpoint_failed", detail:e.message });
     }
-  });
-
-  // Canonical signed-in import: property authority comes only from the session.
-  // No client property id is accepted. This imports sourced baseline truth; it does
-  // not write to Yardi or dispatch communications.
-  router.post("/operator/rent-roll/import", requireOperator, async (req, res) => {
-    res.set("Cache-Control", "no-store");
-    const role = String(req.operator.role || "").toLowerCase();
-    if (!IMPORT_ROLES.has(role)) return res.status(403).json({ error:"Your role cannot import a rent roll." });
-    const body = req.body || {};
-    if (!Array.isArray(body.rows) || !body.rows.length) return res.status(400).json({ error:"rows_required" });
-    if (body.rows.length > 5000) return res.status(413).json({ error:"too_many_rows" });
-    const cfg = { ...CONFIGS.solo, leasing_model:body.leasing_model || "unit" };
-    const out = await loadSnapshot(pool, cfg, body.rows, {
-      targetPropertyId:req.operator.property_id,
-      sourceFile:body.source_file || cfg.source_file,
-      sourceAsOfDate:body.source_as_of_date || cfg.source_as_of_date,
-      sourceLabel:body.source_label || cfg.badge,
-      confidence:body.confidence || "confirmed",
-      notes:`Session-scoped sourced rent-roll import by user ${req.operator.id}. QA activity remains separately classified; no Yardi write.`,
-      dryRun:Boolean(body.dry_run),
-    });
-    if (out.error) return res.status(out.error === "property_not_found" ? 404 : 400).json(out);
-    return res.status(body.dry_run ? 200 : (out.already_loaded ? 200 : 201)).json({
-      receipt:out.already_loaded ? "This sourced rent roll was already loaded; no duplicate records were created." : "Sourced rent roll imported. Management and Leasing now read the same property-scoped projection.",
-      ...out,
-    });
   });
 
   // Canonical signed-in read: one source for current roll, forward roll,
