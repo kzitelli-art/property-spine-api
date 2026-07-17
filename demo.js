@@ -30,7 +30,7 @@ const CHECKPOINT_FROM = {
 };
 
 module.exports = function demoModule(deps) {
-  const { pool, submissionService } = deps;
+  const { pool, submissionService, applicationsService = null } = deps;
   if (!pool) throw new Error("demo.js requires { pool }");
   if (!submissionService) throw new Error("demo.js requires { submissionService } (= applicationSubmissionModule(...)._service)");
 
@@ -336,8 +336,18 @@ module.exports = function demoModule(deps) {
         )).rows[0];
         if (!app) throw httpErr(404, "Application record missing.");
 
-        await submissionService.closeApprovalGate(client, {
-          app, by_user_id: attempt.manager_user_id, decision: "approved",
+        // R3 (v3): demo approve calls the ONE canonical approveApplication —
+        // which itself closes the application_approval gate AND creates the
+        // terms_review birth obligation. The demo previously closed the gate
+        // only (a quiet parallel-path divergence, Rule 10); now demo approve
+        // IS real approve. Fail closed if the service isn't wired.
+        if (!applicationsService || typeof applicationsService.approveApplication !== "function") {
+          throw httpErr(503, "Approve service not wired (applicationsService). Deploy applications.js + server.js together.");
+        }
+        await applicationsService.approveApplication(client, {
+          applicationId: app.id,
+          approvedByNote: "demo manager",
+          actorUserId: attempt.manager_user_id,
         });
 
         await appendEvent(client, attempt.id, {
