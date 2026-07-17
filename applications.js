@@ -52,13 +52,18 @@ module.exports = function applicationsModule(deps) {
   const { activationPerimeter } = require("./activation_perimeter"); // Step 6: scoped activation perimeter
   const router = express.Router();
 
-  const ACTIVATION_TYPE = "lease_activation";
-  const COUNTERSIGN = "manager_countersign";
-
-  // signatures that gate activation, given whether a guarantor is on the app
-  const tenantInputs = (hasGuarantor) =>
-    ["applicant_signature", ...(hasGuarantor ? ["guarantor_signature"] : [])];
-  const activationInputs = (hasGuarantor) => [...tenantInputs(hasGuarantor), COUNTERSIGN];
+  // ── v3 TERMS-REVIEW CORRECTION (the birth event) ─────────────────────
+  // Approval creates a TERMS_REVIEW obligation whose ONLY required input is
+  // the resident's acknowledgment of the proposed terms. It carries NO
+  // signature inputs and NO countersign input, because:
+  //     reviewed demonstration terms ≠ signed governing lease.
+  // The old blended vocabulary below is HISTORICAL — retained so existing
+  // rows read honestly (§9). Nothing in this file creates it anymore, and no
+  // new code may derive current authority from it.
+  const TERMS_REVIEW_TYPE = "terms_review";
+  const TERMS_INPUT = "terms_acknowledged";
+  // HISTORICAL (read-only vocabulary for pre-v3 rows):
+  const ACTIVATION_TYPE = "lease_activation"; // eslint-disable-line no-unused-vars
 
   async function recordEvent(client, { property_id, person_id = null, unit_id = null, type, note }) {
     const r = await client.query(
@@ -100,45 +105,101 @@ module.exports = function applicationsModule(deps) {
     requiredModule: "leasing",
   });
 
-  // outstanding required inputs on the activation obligation (the live gate)
+  // outstanding required inputs on the live gate. v3: the terms_review gate is
+  // the current birth event; the activation gate is legacy (pre-v3 rows only).
+  // Also loads the CURRENT packet (latest non-superseded — §5: never merely
+  // highest version) so the application_next resolver can speak with truth.
   async function outstanding(q, app) {
-    if (!app.activation_obligation_id) return null;
-    const o = (await q.query("select required_inputs, status from obligations where id=$1",
-      [app.activation_obligation_id])).rows[0];
-    return o ? { remaining: o.required_inputs || [], obligation_status: o.status } : null;
+    let gate = null;
+    if (app.terms_review_obligation_id) {
+      const o = (await q.query("select required_inputs, status from obligations where id=$1",
+        [app.terms_review_obligation_id])).rows[0];
+      if (o) gate = { remaining: o.required_inputs || [], obligation_status: o.status, gate_kind: "terms_review" };
+    } else if (app.activation_obligation_id) {
+      const o = (await q.query("select required_inputs, status from obligations where id=$1",
+        [app.activation_obligation_id])).rows[0];
+      if (o) gate = { remaining: o.required_inputs || [], obligation_status: o.status, gate_kind: "legacy_activation" };
+    }
+    if (!gate) return null;
+    try {
+      const pk = (await q.query(
+        `select id, version, status from lease_packets
+          where application_id=$1 and superseded_at is null
+          order by version desc limit 1`, [app.id])).rows[0];
+      gate.packet = pk || null;
+    } catch (_) { gate.packet = null; } // packet read is enrichment, never fatal
+    return gate;
   }
 
-  function nextAction(app, rem) {
-    switch (app.status) {
-      case "submitted": return "Approve the application (clears it to a lease packet).";
-      case "lease_ready": return "Awaiting applicant" + (app.guarantor_name ? " / guarantor" : "") + " signature.";
-      case "tenant_signed": return "Tenant signed — manager must COUNTERSIGN to activate. Not active yet.";
-      case "active": return "Lease active. Tenant file open.";
-      case "declined": return "Declined.";
-      case "withdrawn": return "Withdrawn.";
-      default: return "Submit the application.";
+  // ── application_next — THE server-authored lifecycle resolver (§7) ──────
+  // The Person Card and every queue consume THIS; no frontend computes the
+  // lifecycle, and no reader derives execution readiness from raw status
+  // (lease_ready is explicitly NON-AUTHORITATIVE, §3).
+  function applicationNext(app, gate) {
+    const pk = gate && gate.packet;
+    const gateClosed = gate && ["complete", "completed"].includes(gate.obligation_status);
+    const base = { source_type: "lease_application", source_id: app.id,
+                   obligation_id: (gate && gate.gate_kind === "terms_review") ? app.terms_review_obligation_id : null,
+                   packet_id: pk ? pk.id : null, blocked_reason: null };
+    if (app.status === "active") return { ...base, action_code: "active", label: "Lease active. Tenant file open." };
+    if (["declined", "withdrawn", "expired"].includes(app.status)) return { ...base, action_code: "closed", label: "Application closed (" + app.status + ")." };
+    if (app.status === "accepted_term_required") return { ...base, action_code: "confirm_term", label: "Company accepted — confirm the lease term." };
+    if (app.status === "submitted") return { ...base, action_code: "approve", label: "Approve the application." };
+    if (!gate) return { ...base, action_code: "review_application", label: "Submit the application." };
+    if (gate.gate_kind === "legacy_activation") {
+      // Pre-v3 row. Its blended gate cannot pass the corrected countersign
+      // without real execution proof — the honest next is the same dead-end.
+      return { ...base, action_code: "executed_lease_required",
+               label: "Executed lease required. (Legacy activation gate — a terms acknowledgment is not an executed lease.)" };
+    }
+    if (gateClosed) return { ...base, action_code: "executed_lease_required", label: "Executed lease required." };
+    if (pk && ["sent", "in_progress"].includes(pk.status)) return { ...base, action_code: "awaiting_acknowledgment", label: "Awaiting the resident's terms acknowledgment." };
+    if (pk && pk.status === "submitted") return { ...base, action_code: "executed_lease_required", label: "Executed lease required." };
+    return { ...base, action_code: "send_terms_for_review", label: "Send terms for review." };
+  }
+
+  // Derived operating position (§3) — so no reader quietly recreates the old
+  // status equivalence from lease_ready.
+  function applicationPosition(app, gate) {
+    const next = applicationNext(app, gate);
+    switch (next.action_code) {
+      case "active": return "active";
+      case "closed": return "closed_" + app.status;
+      case "confirm_term": return "accepted_term_required";
+      case "approve": case "review_application": return "pre_approval";
+      case "send_terms_for_review": return "approved_terms_pending";
+      case "awaiting_acknowledgment": return "approved_awaiting_acknowledgment";
+      case "executed_lease_required":
+        return (gate && gate.gate_kind === "legacy_activation") ? "legacy_pre_execution" : "terms_acknowledged_execution_required";
+      default: return "pre_approval";
     }
   }
 
-  const shape = (app, gate) => ({
-    id: app.id,
-    property_id: app.property_id,
-    unit_id: app.unit_id,
-    person_id: app.person_id,
-    status: app.status,
-    applicant_name: app.applicant_name,
-    unit_label: app.unit_label,
-    rent: app.rent == null ? null : Number(app.rent),
-    deposit: app.deposit == null ? null : Number(app.deposit),
-    guarantor_name: app.guarantor_name,
-    applicant_signed_at: app.applicant_signed_at,
-    guarantor_signed_at: app.guarantor_signed_at,
-    countersigned_at: app.countersigned_at,
-    activated_at: app.activated_at,
-    activation_obligation_id: app.activation_obligation_id,
-    outstanding_inputs: gate ? gate.remaining : null,
-    next_action: nextAction(app, gate ? gate.remaining : []),
-  });
+  const shape = (app, gate) => {
+    const next = applicationNext(app, gate);
+    return {
+      id: app.id,
+      property_id: app.property_id,
+      unit_id: app.unit_id,
+      person_id: app.person_id,
+      status: app.status,               // NON-AUTHORITATIVE (§3) — position + next below are the truth
+      application_position: applicationPosition(app, gate),
+      application_next: next,
+      applicant_name: app.applicant_name,
+      unit_label: app.unit_label,
+      rent: app.rent == null ? null : Number(app.rent),
+      deposit: app.deposit == null ? null : Number(app.deposit),
+      guarantor_name: app.guarantor_name,
+      applicant_signed_at: app.applicant_signed_at,     // historical evidence (pre-v3 rows)
+      guarantor_signed_at: app.guarantor_signed_at,     // historical evidence (pre-v3 rows)
+      countersigned_at: app.countersigned_at,
+      activated_at: app.activated_at,
+      activation_obligation_id: app.activation_obligation_id,     // legacy link, read-only
+      terms_review_obligation_id: app.terms_review_obligation_id, // v3 birth link
+      outstanding_inputs: gate ? gate.remaining : null,
+      next_action: next.label, // back-compat display — SAME resolver, one truth
+    };
+  };
 
   // ─────────────── create (intake record) ───────────────
   router.post("/properties/:propertyId/applications", async (req, res) => {
@@ -175,79 +236,104 @@ module.exports = function applicationsModule(deps) {
   // ─────────────── approve → spawn the activation obligation ───────────────
   // Approval clears the application to a lease packet AND opens the binding
   // gate: applicant (+ guarantor) signature, then manager countersign.
+  // ── THE CANONICAL APPROVE SERVICE (v3 birth event; R3: one service, all
+  //    adapters — legacy key route, /operator route, demo orchestration).
+  //    Approval creates a TERMS_REVIEW obligation (input: terms_acknowledged),
+  //    owned by the approval role. It creates NO lease_activation gate, NO
+  //    signature inputs, NO countersign input. Status stays 'lease_ready'
+  //    (existing vocabulary, §3 non-authoritative). Approve is DURABLE
+  //    independent of packet generation (§4: joined, not fused).
+  function appErr(status, receipt, extra = {}) {
+    const e = new Error(receipt); e.httpStatus = status; e.body = { receipt, ...extra }; return e;
+  }
+  async function approveApplication(client, { applicationId, approvedByNote = null, actorUserId = null }) {
+    const app = await getApp(client, applicationId);
+    if (!app) throw appErr(404, "No application with that id.");
+    // Idempotency FIRST (before the status refusal): a re-approve of an
+    // already-approved application deserves the controlled idempotent 409
+    // with its gate ids — not a raw status complaint. EITHER vocabulary
+    // counts as approved: pre-v3 historical gate (§9) or v3 terms gate.
+    if (app.terms_review_obligation_id || app.activation_obligation_id) {
+      throw appErr(409, "Application already approved.", {
+        idempotent: true,
+        terms_review_obligation_id: app.terms_review_obligation_id || null,
+        activation_obligation_id: app.activation_obligation_id || null,
+      });
+    }
+    if (!["submitted", "approved"].includes(app.status)) {
+      throw appErr(409, `Cannot approve from status '${app.status}'.`);
+    }
+
+    const evId = await recordEvent(client, { property_id: app.property_id, person_id: app.person_id, unit_id: app.unit_id,
+      type: "application_approved", note: `Application approved${approvedByNote ? " by " + approvedByNote : ""}` });
+
+    // Close the leasing_manager application_approval gate (born at submission)
+    // in THIS transaction. Guarded: the legacy direct-create path has no gate.
+    if (app.approval_obligation_id && submissionService && submissionService.closeApprovalGate) {
+      try {
+        await submissionService.closeApprovalGate(client, { app, by_user_id: actorUserId || null, decision: "approved" });
+      } catch (e) { /* gate already closed or not rail-linked — non-fatal */ }
+    }
+
+    // THE BIRTH EVENT. Owner = the approval role (read from the rail's own
+    // config where available — never a second hardcoded comparison).
+    const ownerRole = (submissionService && typeof submissionService.approvalGateRole === "function")
+      ? submissionService.approvalGateRole() : "leasing_manager";
+    const obligation = await spawnObligationFromEvent(client, {
+      property_id: app.property_id,
+      person_id: app.person_id,
+      unit_id: app.unit_id,
+      source_event_id: evId,
+      related_id: app.id,
+      related_type: "lease_application",
+      module: "applications",
+      type: TERMS_REVIEW_TYPE,
+      label: `Review proposed terms — ${app.applicant_name}${app.unit_label ? " · " + app.unit_label : ""}`,
+      owner_type: "human",
+      assigned_role: ownerRole,
+      escalates_to_role: "asset_manager",
+      status: "open",
+      priority: "normal",
+      severity: "normal",
+      required_inputs: [TERMS_INPUT],
+    });
+
+    const upd = await client.query(
+      `update lease_applications set status='lease_ready', terms_review_obligation_id=$1, updated_at=now()
+         where id=$2 returning *`,
+      [obligation.id, app.id]
+    );
+
+    // v3 followup: approval is the ONLY authorized cause of the terms-review
+    // chase (R1: new rung, never the historical signature rung — a chase for
+    // an acknowledgment must not be recorded as a chase for a signature).
+    if (app.conversion_id && conversionService && conversionService.ensureTermsReviewFollowup) {
+      await conversionService.ensureTermsReviewFollowup(client, { conversion_id: app.conversion_id });
+    }
+
+    return { application: upd.rows[0], obligation };
+  }
+
+  // Legacy key-gated adapter (Class 2 door — coarse operator-key authority;
+  // the role-walled adapter lives at /operator/leasing/.../approve).
   router.post("/applications/:id/approve", async (req, res) => {
-    const { approved_by = null, note = null } = req.body || {};
+    const { approved_by = null } = req.body || {};
     const client = await pool.connect();
     try {
       await client.query("begin");
-      const app = await getApp(client, req.params.id);
-      if (!app) { await client.query("rollback"); return res.status(404).json({ receipt: "No application with that id." }); }
-      if (!["submitted", "approved"].includes(app.status)) {
-        await client.query("rollback");
-        return res.status(409).json({ receipt: `Cannot approve from status '${app.status}'.` });
-      }
-      if (app.activation_obligation_id) {
-        await client.query("rollback");
-        return res.status(409).json({ receipt: "Application already approved — activation obligation exists." });
-      }
-
-      const evId = await recordEvent(client, { property_id: app.property_id, person_id: app.person_id, unit_id: app.unit_id,
-        type: "application_approved", note: `Application approved${approved_by ? " by " + approved_by : ""}` });
-
-      // Close the leasing_manager application_approval gate (born at submission)
-      // in THIS transaction — the manager's decision is made. The rail records
-      // kept/missed timeliness; this approval is the disposition. Only the
-      // submission-backed flow has the gate; the legacy direct-create path may
-      // not, so this is guarded.
-      if (app.approval_obligation_id && submissionService && submissionService.closeApprovalGate) {
-        try {
-          await submissionService.closeApprovalGate(client, { app, by_user_id: null, decision: "approved" });
-        } catch (e) { /* gate already closed or not rail-linked — non-fatal */ }
-      }
-
-      const hasGuarantor = !!app.guarantor_name;
-      const obligation = await spawnObligationFromEvent(client, {
-        property_id: app.property_id,
-        person_id: app.person_id,
-        unit_id: app.unit_id,
-        source_event_id: evId,
-        related_id: app.id,
-        related_type: "lease_application",
-        module: "applications",
-        type: ACTIVATION_TYPE,
-        label: `Activate lease — ${app.applicant_name}${app.unit_label ? " · " + app.unit_label : ""}`,
-        owner_type: "human",
-        assigned_role: "property_manager",   // the role that countersigns/activates
-        status: "open",
-        priority: "normal",
-        severity: "normal",
-        required_inputs: activationInputs(hasGuarantor),
-      });
-
-      const upd = await client.query(
-        `update lease_applications set status='lease_ready', activation_obligation_id=$1, updated_at=now()
-           where id=$2 returning *`,
-        [obligation.id, app.id]
-      );
-
-      // 051 doctrine, domain-locked + self-verifying: APPROVAL is the only
-      // authorized cause of signature-chasing work. The creator re-reads the
-      // application's post-approval status in THIS transaction (written just
-      // above) and the DB's unique index makes double-creation impossible.
-      if (app.conversion_id && conversionService && conversionService.ensureLeaseSignatureFollowup) {
-        await conversionService.ensureLeaseSignatureFollowup(client, { conversion_id: app.conversion_id });
-      }
-
+      const out = await approveApplication(client, {
+        applicationId: req.params.id, approvedByNote: approved_by, actorUserId: null });
       await client.query("commit");
-      const gate = await outstanding(pool, upd.rows[0]);
+      const gate = await outstanding(pool, out.application);
       res.json({
-        receipt: `Approved. Lease packet ready for ${app.applicant_name}. Awaiting signatures, then manager countersign.`,
-        application: shape(upd.rows[0], gate),
-        activation_obligation_id: obligation.id,
-        required_before_active: activationInputs(hasGuarantor),
+        receipt: `Approved. Terms-review packet next for ${out.application.applicant_name}. The resident acknowledges proposed terms; an executed lease is a separate, later fact.`,
+        application: shape(out.application, gate),
+        terms_review_obligation_id: out.obligation.id,
+        terms_review_required_input: [TERMS_INPUT],
       });
     } catch (e) {
       await client.query("rollback");
+      if (e.httpStatus) return res.status(e.httpStatus).json(e.body);
       console.error("application approve:", e);
       res.status(500).json({ receipt: "Could not approve the application.", error: e.message });
     } finally { client.release(); }
@@ -258,60 +344,21 @@ module.exports = function applicationsModule(deps) {
   // activation obligation. When the tenant side is fully signed, status
   // becomes 'tenant_signed' — but the lease is NOT active. Countersign is
   // still outstanding. This is the legal control made explicit.
+  // ─────────────── sign — RETIRED (v3 terms-review correction) ───────────
+  // This route recorded a "signature" by satisfying applicant_signature /
+  // guarantor_signature on the blended activation gate — the exact semantic
+  // equivalence v3 removes: reviewed demonstration terms ≠ signed governing
+  // lease. There is no signature system today, so there is no honest thing
+  // for this route to record. 410 Gone (not 404): callers deserve the reason.
+  // Classification: Class 4 — delete-on-cleanup; kept as an explaining stub
+  // one release so old harnesses fail loudly with the truth.
   router.post("/applications/:id/sign", async (req, res) => {
-    const { party, signature = null, signed_by = null } = req.body || {};
-    if (!["applicant", "guarantor"].includes(party))
-      return res.status(400).json({ receipt: "party must be 'applicant' or 'guarantor'." });
-
-    const client = await pool.connect();
-    try {
-      await client.query("begin");
-      const app = await getApp(client, req.params.id);
-      if (!app) { await client.query("rollback"); return res.status(404).json({ receipt: "No application with that id." }); }
-      if (!app.activation_obligation_id || !["lease_ready", "tenant_signed"].includes(app.status)) {
-        await client.query("rollback");
-        return res.status(409).json({ receipt: `Nothing to sign — application is '${app.status}', not an open lease packet.` });
-      }
-
-      const input = `${party}_signature`;
-      try {
-        await satisfyObligation(client, { obligation_id: app.activation_obligation_id, input,
-          proof: { signature, signed_by } });
-      } catch (e) {
-        if (e.code === "NOT_OUTSTANDING") {
-          await client.query("rollback");
-          return res.status(409).json({ receipt: `${party} signature is not required or already recorded on this application.` });
-        }
-        throw e;
-      }
-
-      // stamp the signature time; if tenant side is now complete, mark tenant_signed
-      const col = party === "applicant" ? "applicant_signed_at" : "guarantor_signed_at";
-      const o = (await client.query("select required_inputs from obligations where id=$1", [app.activation_obligation_id])).rows[0];
-      const remaining = o.required_inputs || [];
-      const tenantDone = !remaining.includes("applicant_signature") &&
-                         (!app.guarantor_name || !remaining.includes("guarantor_signature"));
-      const newStatus = tenantDone ? "tenant_signed" : app.status;
-
-      const upd = await client.query(
-        `update lease_applications set ${col}=now(), status=$1, updated_at=now() where id=$2 returning *`,
-        [newStatus, app.id]
-      );
-
-      await client.query("commit");
-      const gate = await outstanding(pool, upd.rows[0]);
-      res.json({
-        receipt: tenantDone
-          ? `${party} signed. Tenant side complete — NOT active. Manager countersign required to activate.`
-          : `${party} signed. Still awaiting remaining signature(s) before countersign.`,
-        application: shape(upd.rows[0], gate),
-        still_outstanding: gate ? gate.remaining : [],
-      });
-    } catch (e) {
-      await client.query("rollback");
-      console.error("application sign:", e);
-      res.status(500).json({ receipt: "Could not record the signature.", error: e.message });
-    } finally { client.release(); }
+    return res.status(410).json({
+      receipt: "Retired. A terms acknowledgment is not a signature, and no lease-execution system exists yet. " +
+               "The resident acknowledges proposed terms via the terms-review packet (/t/lease). " +
+               "Lease execution arrives with the Executed Lease build (Path B).",
+      error: "sign_route_retired",
+    });
   });
 
   // ─────────────── countersign → activate (THE WALL) ───────────────
@@ -408,15 +455,27 @@ module.exports = function applicationsModule(deps) {
   router.get("/properties/:propertyId/applications", async (req, res) => {
     try {
       const rows = (await pool.query(
-        `select la.*, o.required_inputs as gate_inputs, o.status as gate_status
+        `select la.*, o.required_inputs as gate_inputs, o.status as gate_status,
+                (case when la.terms_review_obligation_id is not null then 'terms_review'
+                      when la.activation_obligation_id  is not null then 'legacy_activation' end) as gate_kind,
+                pk.id as pk_id, pk.version as pk_version, pk.status as pk_status
            from lease_applications la
-           left join obligations o on o.id = la.activation_obligation_id
+           left join obligations o
+             on o.id = coalesce(la.terms_review_obligation_id, la.activation_obligation_id)
+           left join lateral (
+             select id, version, status from lease_packets
+              where application_id = la.id and superseded_at is null
+              order by version desc limit 1
+           ) pk on true
           where la.property_id = $1
           order by la.created_at desc`,
         [req.params.propertyId]
       )).rows;
       const applications = rows.map((r) =>
-        shape(r, r.activation_obligation_id ? { remaining: r.gate_inputs || [], obligation_status: r.gate_status } : null));
+        shape(r, r.gate_kind
+          ? { remaining: r.gate_inputs || [], obligation_status: r.gate_status, gate_kind: r.gate_kind,
+              packet: r.pk_id ? { id: r.pk_id, version: r.pk_version, status: r.pk_status } : null }
+          : null));
       const pending = applications.filter((a) => !["active", "declined", "withdrawn"].includes(a.status)).length;
       res.json({ property_id: req.params.propertyId, count: applications.length, pending, applications });
     } catch (e) {
@@ -436,6 +495,10 @@ module.exports = function applicationsModule(deps) {
       res.status(500).json({ receipt: "Could not load the application.", error: e.message });
     }
   });
+
+  // The canonical service layer — the operator adapter (operator.js) and demo
+  // orchestration (demo.js) call THESE, never a second implementation (R3).
+  router._service = { approveApplication, applicationNext, applicationPosition, outstanding, shape, getApp, TERMS_REVIEW_TYPE, TERMS_INPUT };
 
   return router;
 };
