@@ -689,7 +689,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       if (!_rateOk(_demoRate.ip, ip, 10, 10 * 60 * 1000)) {
         return res.status(429).json({ receipt: "Too many requests — please wait a few minutes." });
       }
-      if (!_rateOk(_demoRate.phone, phone, 3, 10 * 60 * 1000)) {
+      if (!_rateOk(_demoRate.phone, phone, 20, 10 * 60 * 1000)) {
         return res.status(429).json({ receipt: "That number just signed up — the manager workspace already has your inquiry." });
       }
 
@@ -710,14 +710,31 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       );
 
       // ── the ONE canonical intake, constrained ──
+      //  attempt_sms is env-gated: DEMO_INTAKE_LIVE_SMS=true turns this door into
+      //  a LIVE-texting door (for real end-to-end testing from a real phone).
+      //  Absent/false → the original boardroom behavior (prepared, never sent) is
+      //  preserved exactly. The actual send still passes through the comms boundary
+      //  (mode + production classification + opted_in consent), so turning this on
+      //  is necessary-but-not-sufficient — SMS_SEND_MODE and activation still gate it.
+      const _demoLiveSms = String(process.env.DEMO_INTAKE_LIVE_SMS || "").toLowerCase() === "true";
+      //  Consent for this controlled door: honor an explicit consent field if the
+      //  form sends one (any of the names extractConsentSignal knows); otherwise,
+      //  when live SMS is deliberately enabled, submission through this gated demo
+      //  door is itself the opt-in (the operator turned the door on knowingly).
+      //  When live SMS is OFF, no consent is asserted (nothing sends anyway).
+      const _formConsent = (b.sms_consent ?? b.text_consent ?? b.consent ?? b.tcpa_consent ?? b.agreed_to_texts ?? b.opt_in ?? b.opted_in);
+      const _consentForDemo = _formConsent !== undefined ? _formConsent : (_demoLiveSms ? "yes" : undefined);
+
       const out = await intakeProspect({
         property_id: prop.id,                    // server-derived, never from the browser
         name: name, phone: phone,
         source: DEMO_INTAKE_SOURCE,              // person first-touch + lead source tag
-        attempt_sms: false,                      // prepared, never claimed sent
+        attempt_sms: _demoLiveSms,               // env-gated: live only when DEMO_INTAKE_LIVE_SMS=true
+        sms_consent: _consentForDemo,            // drives activation (production + opted_in) when present
         response_channel: "demo_browser",
         raw_payload: {
           channel: "demo_public_intake", idempotency_key: b.idempotency_key || null,
+          sms_consent: _consentForDemo || null,
           // stated preference captured AT THE SOURCE (first-party, not inferred):
           // a YYYY-MM within the next 12 months, or 'flexible'. Anything else → null.
           desired_move_month: (function (v) {
