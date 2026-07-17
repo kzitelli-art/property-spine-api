@@ -3,26 +3,28 @@
 // collector (NOT an activation engine).
 //
 //   What this module IS:
-//     • the tenant-facing surface: one scrolling lease packet, inline
-//       initials, a final signature.
-//     • on final tenant submit, it satisfies the SINGLE tenant input
-//       ("applicant_signature") on the application's EXISTING activation
-//       obligation — the one applications.js already spawned at approve.
+//     • the tenant-facing surface: one scrolling terms-review packet, inline
+//       acknowledgments, a final acknowledgment.
+//     • on final tenant submit (v3), it satisfies the SINGLE input
+//       ("terms_acknowledged") on the application's terms_review obligation
+//       — the one applications.js spawned at approve — and completes that
+//       obligation in the SAME transaction (§5b atomicity). Nothing else.
 //
 //   What this module is NOT, and structurally cannot be:
-//     • it has NO countersign route. Manager countersign + activation is
-//       applications.js, exclusively.
-//     • it NEVER writes lease_applications.status. It cannot set 'active'.
-//       There is no SQL in this file that touches that column.
-//     • it does NOT call completeObligation. Completing the activation
-//       obligation (the gate) is the countersign path's job.
+//     • it has NO countersign route. Company acceptance is the tenancy
+//       anchor's job, and countersign fails closed until real lease
+//       execution exists (execution_evidence.js — Path B).
+//     • it NEVER writes lease_applications.status. There is no SQL in this
+//       file that touches that column.
+//     • it NEVER satisfies a signature input. reviewed demonstration terms
+//       ≠ signed governing lease — that equivalence is the retired bug.
 //
-//   The seam, exactly:
-//     tenant initials/signs  →  packet reaches 'submitted'  →
-//     satisfyObligation(applicant_signature [+ guarantor_signature])  →
-//     application is STILL not active (countersign input remains)  →
-//     manager countersigns via applications.js  →  completeObligation  →
-//     only THEN active.
+//   The seam, exactly (v3):
+//     resident acknowledges  →  packet reaches 'submitted'  →
+//     satisfyObligation(terms_acknowledged) + completeObligation, atomically →
+//     application_next = "Executed lease required"  →  FULL STOP.
+//     Lease execution, countersign, tenancy: Path B, behind the execution
+//     seam. This module cannot reach any of it.
 //
 //   Acknowledgment = review/intent only (Option A). The captured value is
 //   audit evidence, NOT a legally-binding signature on the final lease. It
@@ -42,9 +44,9 @@ const express = require("express");
 const crypto = require("crypto");
 
 module.exports = function leasePacketsModule(deps) {
-  const { pool, satisfyObligation } = deps;
-  if (typeof satisfyObligation !== "function") {
-    throw new Error("leasePacketsModule requires { satisfyObligation } — the shared engine helper. Refusing to run a parallel signature path.");
+  const { pool, satisfyObligation, completeObligation } = deps;
+  if (typeof satisfyObligation !== "function" || typeof completeObligation !== "function") {
+    throw new Error("leasePacketsModule requires { satisfyObligation, completeObligation } — the shared engine helpers. v3: submit satisfies AND completes the terms_review obligation in one transaction (§5b atomicity). Refusing to run a parallel path.");
   }
   const router = express.Router();
   router.use(express.json({ limit: "2mb" }));
@@ -333,11 +335,14 @@ module.exports = function leasePacketsModule(deps) {
         `select * from lease_applications where id=$1`, [req.params.id])).rows[0];
       if (!app) { await client.query("rollback"); return res.status(404).json({ receipt: "No application with that id." }); }
 
-      // Packet is only meaningful once the application is approved (the
-      // activation obligation exists). Guard on that, not on guessed status.
-      if (!app.activation_obligation_id || !["lease_ready", "tenant_signed", "approved"].includes(app.status)) {
+      // Packet is only meaningful once the application is approved. v3: the
+      // terms_review gate is the birth event; a pre-v3 row proves approval
+      // via its historical activation gate. Guard on the gate, never on a
+      // guessed status (lease_ready is non-authoritative, §3).
+      if ((!app.terms_review_obligation_id && !app.activation_obligation_id) ||
+          !["lease_ready", "tenant_signed", "approved"].includes(app.status)) {
         await client.query("rollback");
-        return res.status(409).json({ receipt: `Application is '${app.status}' with no open activation gate — approve it first.`, status: app.status });
+        return res.status(409).json({ receipt: `Application is '${app.status}' with no open approval gate — approve it first.`, status: app.status });
       }
 
       // Property identity from the REAL properties row (never hardcoded).
@@ -395,19 +400,70 @@ module.exports = function leasePacketsModule(deps) {
       const rendered = buildRendered(terms, cfg);
       const renderedHash = stableHash(rendered);
 
-      const pk = (await client.query(
-        `insert into lease_packets
-           (property_id, application_id, unit_id, status, terms_json,
-            rendered_snapshot, rendered_snapshot_hash, is_placeholder)
-         values ($1,$2,$3,'draft',$4,$5,$6, false)
-         on conflict (application_id, version) do update set
-           terms_json = excluded.terms_json,
-           rendered_snapshot = excluded.rendered_snapshot,
-           rendered_snapshot_hash = excluded.rendered_snapshot_hash,
-           is_placeholder = false,
-           updated_at = now()
-         returning *`,
-        [app.property_id, app.id, terms.unit_id, terms, rendered, renderedHash])).rows[0];
+      // ── §5 PACKET IMMUTABILITY & VERSION POLICY ─────────────────────────
+      // "Current packet" = the latest NON-SUPERSEDED version — never merely
+      // the highest number. The link between what the resident saw, what they
+      // acknowledged, and when, is evidence; evidence does not mutate.
+      //   no packet                  → create draft version 1
+      //   draft, never sent          → regenerate IN PLACE (+ audit event)
+      //   sent / in_progress         → IMMUTABLE. Explicit create_new_version
+      //                                → new draft version, supersedes prior
+      //                                  (prior snapshot/fields/audit RETAINED)
+      //   submitted                  → frozen acknowledgment evidence. No
+      //                                regen, no supersession in v3 — a term
+      //                                change after acknowledgment is Path-B
+      //                                correction territory, not an overwrite.
+      //   voided                     → a fresh version may be created
+      const current = (await client.query(
+        `select * from lease_packets
+          where application_id=$1 and superseded_at is null
+          order by version desc limit 1 for update`, [app.id])).rows[0] || null;
+
+      let pk;
+      if (current && current.status === "submitted") {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "packet_immutable",
+          receipt: "This packet was acknowledged — it is frozen evidence. Terms changes after acknowledgment are a governed correction (Path B), never a regeneration.",
+          packet_id: current.id, version: current.version, status: current.status,
+        });
+      }
+      if (current && ["sent", "in_progress"].includes(current.status) && !(req.body && req.body.create_new_version === true)) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "packet_immutable",
+          receipt: "This packet was already sent — it will not be silently regenerated. To issue changed terms, pass create_new_version: true; the prior version is retained and superseded, never overwritten.",
+          packet_id: current.id, version: current.version, status: current.status,
+        });
+      }
+
+      if (current && current.status === "draft") {
+        // regenerate IN PLACE — allowed for a never-sent draft, audited.
+        pk = (await client.query(
+          `update lease_packets
+              set terms_json=$2, rendered_snapshot=$3, rendered_snapshot_hash=$4,
+                  is_placeholder=false, updated_at=now()
+            where id=$1 returning *`,
+          [current.id, terms, rendered, renderedHash])).rows[0];
+        await audit(client, req, pk.id, "system", "draft_regenerated",
+          { rendered_snapshot_hash: renderedHash });
+      } else {
+        const newVersion = current ? Number(current.version) + 1 : 1;
+        const supersedes = (current && ["sent", "in_progress"].includes(current.status)) ? current.id : null;
+        pk = (await client.query(
+          `insert into lease_packets
+             (property_id, application_id, unit_id, version, status, terms_json,
+              rendered_snapshot, rendered_snapshot_hash, is_placeholder, supersedes_packet_id)
+           values ($1,$2,$3,$4,'draft',$5,$6,$7,false,$8)
+           returning *`,
+          [app.property_id, app.id, terms.unit_id, newVersion, terms, rendered, renderedHash, supersedes])).rows[0];
+        if (supersedes) {
+          await client.query(
+            `update lease_packets set superseded_at=now(), updated_at=now() where id=$1`, [supersedes]);
+          await audit(client, req, pk.id, "system", "version_superseded_prior",
+            { superseded_packet_id: supersedes, new_version: newVersion });
+        }
+      }
 
       // (re)build fields
       await client.query(`delete from lease_packet_fields where lease_packet_id=$1`, [pk.id]);
@@ -573,14 +629,14 @@ module.exports = function leasePacketsModule(deps) {
     } finally { client.release(); }
   });
 
-  // ─────────────── TENANT FINAL SUBMIT — THE SEAM ───────────────
-  //  When every required tenant field is complete, this satisfies the SINGLE
-  //  tenant input ("applicant_signature", + "guarantor_signature" if the app
-  //  has a guarantor) on the application's EXISTING activation obligation,
-  //  via the shared satisfyObligation helper. It then marks the packet
-  //  'submitted'. It does NOT complete the obligation. It does NOT set the
-  //  application active. The countersign input remains outstanding — the
-  //  application stays not-active until applications.js countersign runs.
+  // ─────────────── TENANT FINAL SUBMIT — THE SEAM (v3) ───────────────
+  //  When every required field is complete, this satisfies the SINGLE input
+  //  ("terms_acknowledged") on the application's terms_review obligation and
+  //  COMPLETES that obligation in the same transaction (§5b atomic; resident
+  //  supplies the input, the system records completion). It marks the packet
+  //  'submitted'. It touches nothing else: no signature inputs, no status,
+  //  no lease, no tenancy, no occupancy. application_next then reads
+  //  "Executed lease required" — the honest dead-end until Path B.
   router.post("/t/lease/:token/submit", async (req, res) => {
     const client = await pool.connect();
     try {
@@ -603,67 +659,103 @@ module.exports = function leasePacketsModule(deps) {
         return res.status(409).json({ receipt: "Acknowledge all required sections before submitting.", outstanding: incomplete });
       }
 
-      // the application + its activation obligation (the real gate)
+      // ── v3: the application + its TERMS_REVIEW obligation ───────────────
+      // This route closes exactly ONE input: terms_acknowledged, on the
+      // terms_review obligation. It satisfies NO signature input, creates NO
+      // lease, promotes NO tenant, changes NO status/classification/occupancy.
       const app = (await client.query(
         `select * from lease_applications where id=$1`, [pk.application_id])).rows[0];
-      if (!app || !app.activation_obligation_id) {
+      if (!app) {
         await client.query("rollback");
-        return res.status(409).json({ receipt: "This application has no open activation gate — nothing to feed. (Was it approved?)" });
+        return res.status(409).json({ receipt: "Application record missing for this packet." });
+      }
+      if (!app.terms_review_obligation_id) {
+        // A pre-v3 packet on a legacy blended-gate application. Feeding a
+        // terms acknowledgment into signature inputs is the exact false
+        // equivalence this build removes — refuse honestly, never satisfy.
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "legacy_application_pre_terms_review",
+          receipt: "This application predates the terms-review correction. Its acknowledgment path is retired — a terms acknowledgment is not a signature. Contact the office; a current terms-review packet can be issued under the corrected flow.",
+        });
       }
 
-      // satisfy the tenant-side input(s) on the EXISTING obligation.
-      // applicant_signature always; guarantor_signature only if the app has a
-      // guarantor (mirrors applications.js's tenantInputs()).
-      const toSatisfy = ["applicant_signature", ...(app.guarantor_name ? ["guarantor_signature"] : [])];
+      // §5b — the FROZEN ACKNOWLEDGMENT EVIDENCE. The resident supplies the
+      // input; the system records completion (Rule 7: ownership of the
+      // terms_review work ≠ who satisfied it — never the manager).
+      const fieldRows = (await client.query(
+        `select field_key, clause_hash from lease_packet_fields
+          where lease_packet_id=$1 and required=true order by display_order`, [pk.id])).rows;
+      const evidence = {
+        application_id: app.id,
+        terms_review_obligation_id: app.terms_review_obligation_id,
+        lease_packet_id: pk.id,
+        packet_version: pk.version,
+        rendered_snapshot_hash: pk.rendered_snapshot_hash,
+        completed_field_hashes: fieldRows.map((f) => ({ field_key: f.field_key, clause_hash: f.clause_hash })),
+        acknowledgment_meaning: "review_intent_only",
+        token_hash_ref: pk.tenant_token_hash,
+        person_id: app.person_id || null,
+        occurred_at: new Date().toISOString(),
+        recorded_at: new Date().toISOString(),
+        ip: clientIp(req),
+        user_agent: (req.headers && req.headers["user-agent"]) || null,
+        source: "lease_terms_demonstration",
+      };
+
       const satisfied = [];
       const alreadyDone = [];
-      for (const input of toSatisfy) {
-        try {
-          await satisfyObligation(client, {
-            obligation_id: app.activation_obligation_id,
-            input,
-            proof: { source: "lease_terms_demonstration", packet_id: pk.id, meaning: "acknowledgment_review_intent_only",
-                     captured_at: new Date().toISOString(), ip: clientIp(req) },
-          });
-          satisfied.push(input);
-        } catch (e) {
-          // NOT_OUTSTANDING = it was already satisfied earlier — that's fine,
-          // idempotent. Any other engine error is real: roll back and surface.
-          if (e.code === "NOT_OUTSTANDING") { alreadyDone.push(input); continue; }
+      try {
+        await satisfyObligation(client, {
+          obligation_id: app.terms_review_obligation_id,
+          input: "terms_acknowledged",
+          proof: evidence,
+        });
+        satisfied.push("terms_acknowledged");
+      } catch (e) {
+        if (e.code === "NOT_OUTSTANDING") { alreadyDone.push("terms_acknowledged"); }
+        else {
           await client.query("rollback");
           console.error("lease-packet submit satisfy:", e);
-          return res.status(409).json({ receipt: "The activation obligation rejected the acknowledgment input.", error_code: e.code || null, detail: e.message });
+          return res.status(409).json({ receipt: "The terms-review obligation rejected the acknowledgment input.", error_code: e.code || null, detail: e.message });
+        }
+      }
+      // Atomic (§5b): completion rides the SAME transaction as the evidence
+      // write and packet state — no partial acknowledgment state exists.
+      // completed_by null = system-recorded; the resident's identity lives in
+      // the proof, never as a staff completion actor.
+      try {
+        await completeObligation(client, { obligation_id: app.terms_review_obligation_id, completed_by: null });
+      } catch (e) {
+        if (e.code !== "ALREADY_COMPLETE" && e.code !== "INPUTS_OUTSTANDING") throw e;
+        if (e.code === "INPUTS_OUTSTANDING") {
+          await client.query("rollback");
+          return res.status(409).json({ receipt: "The terms-review obligation has other outstanding inputs — this should not happen (its only input is terms_acknowledged). Investigate before retrying.", outstanding: e.outstanding_inputs });
         }
       }
 
-      // mark the packet submitted — its terminal state. NOT 'active'.
+      // mark the packet submitted — its terminal state. Application status,
+      // classification, leases, tenancy, occupancy: ALL untouched (§3).
       await client.query(
         `update lease_packets
             set status='submitted', tenant_submitted_at = coalesce(tenant_submitted_at, now()), updated_at=now()
           where id=$1`, [pk.id]);
 
-      // mirror tenant signature time onto the application row for the operator
-      // Gate's existing display — WITHOUT touching status. (status stays
-      // whatever applications.js set; activation is owned there.)
-      // Also let applications.js's own status logic flip to 'tenant_signed'
-      // on its next read; here we only stamp the timestamp, never 'active'.
-      await client.query(
-        `update lease_applications
-            set applicant_signed_at = coalesce(applicant_signed_at, now()),
-                guarantor_signed_at = case when $2 then coalesce(guarantor_signed_at, now()) else guarantor_signed_at end,
-                updated_at = now()
-          where id=$1`,
-        [app.id, !!app.guarantor_name]);
+      // v3: NO stamping of applicant_signed_at/guarantor_signed_at — those
+      // columns are signature evidence, and this was never a signature. The
+      // acknowledgment's time lives where it belongs: lease_packets.
+      // tenant_submitted_at + the frozen §5b evidence on the obligation.
 
       await audit(client, req, pk.id, "tenant", "tenant_submitted",
-        { satisfied_inputs: satisfied, already_satisfied: alreadyDone, meaning: "acknowledgment_review_intent_only" });
+        { satisfied_inputs: satisfied, already_satisfied: alreadyDone, meaning: "review_intent_only",
+          terms_review_obligation_id: app.terms_review_obligation_id });
       await client.query("commit");
       const bundle = await getBundle(pool, pk.id);
       res.json({
-        receipt: "Acknowledged. Your review of the demonstration terms is recorded. This does not activate a lease — a tenancy begins only when the owner executes the complete lease through the normal process.",
+        receipt: "Acknowledged. Your review of the proposed terms is recorded. This does not sign or activate a lease — a tenancy begins only when the governing lease is executed and the owner accepts through the normal process.",
         satisfied_obligation_inputs: satisfied,
-        application_still_active: false,
-        note: "Activation happens only when a manager countersigns through the application — not here. This document is a demonstration summary, not the governing lease.",
+        application_next: "Executed lease required",
+        note: "This document is a demonstration summary of proposed terms, not the governing lease. Nothing further happens until a real lease execution exists.",
         packet: publicPacket(bundle),
       });
     } catch (e) {
