@@ -234,6 +234,46 @@ module.exports = function agentModule(deps) {
     return { system, messages: msgs.filter(m => m.content && m.content.trim()) };
   }
 
+  // ── POST-BOOKING GOAL SHIFT ────────────────────────────────────────────────
+  //  Once a prospect has an UPCOMING booked tour, the conversation's objective is
+  //  no longer "earn a tour" — it's "be their helpful point of contact until they
+  //  come in." This returns a system-prompt ADDENDUM (appended after buildMessages,
+  //  same pattern as the selection_failed note) when this conversation's lead holds
+  //  a tour with a live status ('scheduled','confirmed_by_prospect','checked_in')
+  //  scheduled for now-or-later. Returns "" when there's no such tour, so the
+  //  default earn-a-tour framing stands. A completed/cancelled/past tour does NOT
+  //  count — if they toured and want to come again, earning another is fine.
+  async function upcomingTourAddendum(conversation_id) {
+    if (!conversation_id) return "";
+    try {
+      // conversation → its lead(s) (same person+property) → any live upcoming tour.
+      const row = (await pool.query(
+        `select t.scheduled_for
+           from conversations c
+           join leasing_leads l
+             on l.person_id = c.person_id and l.property_id = c.property_id
+           join leasing_tours t
+             on t.lead_id = l.id
+          where c.id = $1
+            and t.status in ('scheduled','confirmed_by_prospect','checked_in')
+            and t.scheduled_for >= (now() - interval '2 hours')
+          order by t.scheduled_for asc
+          limit 1`,
+        [conversation_id])).rows[0];
+      if (!row) return "";
+      return `\n\n═══ THEY ARE ALREADY BOOKED — SHIFT YOUR GOAL ═══\n` +
+        `This prospect ALREADY HAS A TOUR SCHEDULED. Do NOT ask them to book a tour, do NOT ` +
+        `push to schedule, and do NOT call any tour-scheduling tool. Your job now is simply to be ` +
+        `their helpful point of contact: answer their questions about the unit, the building, the ` +
+        `neighborhood, parking, pets, what to expect at the tour, next steps, and anything else on ` +
+        `their mind — same warm, short, human texting voice. If they want to change or cancel their ` +
+        `tour time, tell them you'll have someone from the team help with that. Only if THEY bring up ` +
+        `wanting a different or additional time should scheduling come up at all.`;
+    } catch (_) {
+      return ""; // never let a lookup failure change behavior — default framing stands.
+    }
+  }
+
   // Stage-A persona, revision stage-a-v3: warm, human, and BRIEF. The agent earns a
   // tour by making the prospect feel heard and building genuine interest over the
   // conversation — NOT by asking for the tour on every message. Conversational first,
@@ -510,6 +550,11 @@ module.exports = function agentModule(deps) {
             finally { c.release(); }
           })());
           const built = buildMessages({ persona: PERSONA, facts: ctx.facts, unit: ctx.unit, history, propertyName: propName });
+          // If they already have an upcoming tour, shift the goal from earn-a-tour
+          // to be-their-contact (and below, tour tools are withheld).
+          const _tourAddendum = await upcomingTourAddendum(tx1.conversation_id);
+          built.system += _tourAddendum;
+          const _alreadyBooked = _tourAddendum !== "";
           if (tx1.selection_failed) {
             built.system += `\nIMPORTANT: the prospect just tried to choose Unit ${tx1.selection_failed.unit_number}, but it is NO LONGER AVAILABLE (it was taken after being offered). Apologize briefly, say so plainly, and offer to look for current alternatives (you may use the find_available_units tool). Never pretend it is still available.`;
           }
@@ -542,7 +587,8 @@ module.exports = function agentModule(deps) {
           const bookingEnabled = !!(leasingBookingService
             && typeof leasingBookingService.bookTourIntoSlot === "function"
             && typeof leasingBookingService.propertyAgentBookingEnabled === "function"
-            && leasingBookingService.propertyAgentBookingEnabled(tx1.property_id));
+            && leasingBookingService.propertyAgentBookingEnabled(tx1.property_id))
+            && !_alreadyBooked;  // they already have an upcoming tour → withhold tour tools
 
           // Read the REAL open slots (property operating tz). readOfferableSlots
           // returns NULL when the property's operating tz is UNCONFIGURED — in
@@ -1300,6 +1346,7 @@ module.exports = function agentModule(deps) {
           try { propName = (await c2.query("select coalesce(display_name, name) as name from properties where id=$1", [prep.property_id])).rows[0]?.name || null; }
           finally { c2.release(); }
           const built = buildMessages({ persona: PERSONA, facts: ctx.facts, unit: ctx.unit, history, propertyName: propName });
+          built.system += await upcomingTourAddendum(prep.conv.id);
           const r = await anthropic.messages.create({ model: MODEL, max_tokens: 320, system: built.system, messages: built.messages });
           providerReqId = (r && r.id) || null;
           generated = (r.content || []).filter(x => x.type === "text").map(x => x.text).join("").trim();
