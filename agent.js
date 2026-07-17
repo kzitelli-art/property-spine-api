@@ -53,6 +53,47 @@ module.exports = function agentModule(deps) {
   }
   function sha(obj) { return crypto.createHash("sha256").update(JSON.stringify(obj)).digest("hex"); }
 
+  // ── TOOL-LOOP MESSAGE-ASSEMBLY SAFETY ──────────────────────────────────────
+  // THE INVARIANT THIS PROTECTS: every `tool_use` block in an assistant turn MUST
+  // be immediately followed by a `tool_result` for that exact id in the next
+  // (user) message, or the Anthropic API 400s the ENTIRE request
+  // ("'tool_use' ids were found without 'tool_result' blocks"). Historically the
+  // loop paired only the ONE tool it recognized (inventory OR offer OR book), so
+  // when the model emitted a SECOND tool_use in the same turn (narrate + call,
+  // or chain offer→book) the extra tool_use went unpaired → 400 → generation
+  // threw → run 'failed' → silent AI. These two helpers make the pairing
+  // COMPLETE and let the loop detect an unresolved chain. Pure; no I/O.
+
+  // Does this assistant content array contain any tool_use block?
+  function hasToolUse(content) {
+    return Array.isArray(content) && content.some(x => x && x.type === "tool_use");
+  }
+
+  // Build the tool_result content array that pairs EVERY tool_use in `content`.
+  // `executed` is a Map<tool_use_id, resultText> for the tool(s) we actually ran;
+  // any OTHER tool_use in the same turn gets a benign, honest stub result so the
+  // request is well-formed. Nothing is invented for the prospect — a stub result
+  // just tells the model that tool wasn't run this turn.
+  function pairAllToolResults(content, executed) {
+    const out = [];
+    for (const blk of (content || [])) {
+      if (!blk || blk.type !== "tool_use") continue;
+      const id = blk.id;
+      if (executed && executed.has(id)) {
+        out.push({ type: "tool_result", tool_use_id: id, content: executed.get(id) });
+      } else {
+        // An extra/unhandled tool_use from the same turn. Pair it so the request
+        // is valid; tell the model it wasn't executed so it resolves to text.
+        out.push({
+          type: "tool_result",
+          tool_use_id: id,
+          content: JSON.stringify({ note: "This tool was not run this turn. Reply to the prospect in plain text now." }),
+        });
+      }
+    }
+    return out;
+  }
+
   // The demo manager: SERVER-DERIVED identity. Never trust a client-supplied user_id.
   // Reuses the seeded leasing_manager (demo.js seed creates demo-manager@propertyspine.internal).
   async function demoManagerUserId(client) {
@@ -705,7 +746,7 @@ module.exports = function agentModule(deps) {
               messages: [
                 ...built.messages,
                 { role: "assistant", content: r.content },
-                { role: "user", content: [{ type: "tool_result", tool_use_id: invUse.id, content: toolResultText }] },
+                { role: "user", content: pairAllToolResults(r.content, new Map([[invUse.id, toolResultText]])) },
               ],
               tools: activeTools,
             });
@@ -751,7 +792,7 @@ module.exports = function agentModule(deps) {
               messages: [
                 ...built.messages,
                 { role: "assistant", content: r.content },
-                { role: "user", content: [{ type: "tool_result", tool_use_id: offerUse.id, content: offerResult }] },
+                { role: "user", content: pairAllToolResults(r.content, new Map([[offerUse.id, offerResult]])) },
               ],
               tools: activeTools,
             });
@@ -841,12 +882,42 @@ module.exports = function agentModule(deps) {
               messages: [
                 ...built.messages,
                 { role: "assistant", content: r.content },
-                { role: "user", content: [{ type: "tool_result", tool_use_id: bookUse.id, content: bookToolResult }] },
+                { role: "user", content: pairAllToolResults(r.content, new Map([[bookUse.id, bookToolResult]])) },
               ],
               tools: activeTools,
             });
             providerReqId = (r && r.id) || providerReqId;
           }
+
+          // ── TERMINATE ON TEXT ──────────────────────────────────────────────
+          // After the tool round, the model's latest response `r` may STILL
+          // contain a tool_use — it chained (offer→book), or called a fresh tool
+          // in response to the tool_result. If we stopped here, `generated` would
+          // be empty (no text block) → the run fails as no_text → silent AI; and
+          // the unpaired tool_use would break replay. So: while `r` holds any
+          // tool_use, pair ALL of its tool_uses and ask AGAIN — the last such
+          // call is made WITHOUT tools, forcing a text-only turn. Bounded so a
+          // pathological chain still resolves to plain text rather than looping.
+          // We do NOT re-run governed side-effects here (offer/book already fired
+          // in the branch above with full authority checks); these follow-ups are
+          // purely to land a clean, dispatchable text reply. Each extra tool_use
+          // is answered with a benign "not run — reply in text" stub, so the model
+          // is nudged to talk, never to invent an unexecuted tool's outcome.
+          let _termGuard = 0;
+          while (hasToolUse(r.content) && _termGuard < 3) {
+            _termGuard++;
+            const lastRound = _termGuard >= 2; // final attempt: strip tools entirely
+            const priorAssistant = { role: "assistant", content: r.content };
+            const results = pairAllToolResults(r.content, new Map()); // none executed here → all benign stubs
+            const createArgs = {
+              model: MODEL, max_tokens: 320, system: built.system,
+              messages: [...built.messages, priorAssistant, { role: "user", content: results }],
+            };
+            if (!lastRound) createArgs.tools = activeTools; // give one more chance to use a tool, then hard-stop
+            r = await anthropic.messages.create(createArgs);
+            providerReqId = (r && r.id) || providerReqId;
+          }
+
           generated = (r.content || []).filter(x => x.type === "text").map(x => x.text).join("").trim();
         } else {
           genErr = "no_model_client";
@@ -1415,5 +1486,9 @@ module.exports = function agentModule(deps) {
     regenerateDraftService, resolveConversationByPair,
     processInbound,
   };
+  // TEST-ONLY (Class 3, inert at runtime): exposes the pure tool-loop message-
+  // assembly helpers so the proof harness exercises the REAL functions, not a
+  // copy. No route, no side effect — safe to ship, used only by prove_*.js.
+  router.__test__ = { pairAllToolResults, hasToolUse };
   return router;
 };
