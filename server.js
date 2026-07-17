@@ -3206,7 +3206,7 @@ app.post("/ingest/:runId/approve", async (req, res) => {
 app.use("/", maintenanceModule({ pool, spawnObligationFromEvent }));
 // applications module mounted lower (after the conversion + submission services exist,
 // so /approve can close the leasing_manager application_approval gate). See below.
-app.use("/", leasePacketsModule({ pool, satisfyObligation }));
+app.use("/", leasePacketsModule({ pool, satisfyObligation, completeObligation })); // v3: submit completes terms_review atomically (§5b)
 // ── DOWN UNITS MODULE (isolated; same injection pattern) ──
 app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));
 // ── ORG CHART MODULE (isolated; same injection pattern) ──
@@ -3352,20 +3352,31 @@ app.use("/", __applicationSubmission);
 // adapters). There is exactly one write path; the two route families are entry
 // adapters that mount the SAME dormantWriteGuard + activationPerimeter and call
 // THIS service. No route reimplements the transaction; no internal HTTP hop.
+// v3 EXECUTION SEAM — the ONLY door for "a governing lease was executed."
+// Always-null in v3 (no execution system exists), so countersign fails closed
+// with 409 executed_lease_required for EVERY caller. Path B replaces the
+// resolver body, never its position. NEVER accept execution proof from a body.
+const __executionEvidence = require("./execution_evidence")();
+
 const __tenancyAnchor = require("./tenancy_anchor_service")({
   spawnObligationFromEvent, satisfyObligation, completeObligation,
   ledgerService: __commitmentLedger._service,   // J1: countersign locks the economic schedule
+  executionEvidence: __executionEvidence,       // v3: the corrected wall's first requirement
 });
 
-// applications mounted HERE (moved down) so it can close the application_approval
-// gate via the submission service, then spawn activation as before.
-app.use("/", applicationsModule({
+// applications mounted HERE (moved down) so approve can close the
+// application_approval gate via the submission service, then create the v3
+// terms_review birth obligation (NOT the retired blended activation gate).
+// Instance captured: operator.js and demo.js call THIS service — one
+// approveApplication, three entry doors (R3).
+const __applications = applicationsModule({
   pool, spawnObligationFromEvent, satisfyObligation, completeObligation,
   submissionService: __applicationSubmission._service,
-  conversionService: __leasingConversion._service, // 068: approval is the ONLY creator of signature follow-up work
+  conversionService: __leasingConversion._service, // v3: approval is the ONLY creator of terms-review follow-up work
   ledgerService: __commitmentLedger._service,   // J1: countersign locks the economic schedule
   tenancyAnchor: __tenancyAnchor,               // the ONE canonical countersign/confirm-term service
-}));
+});
+app.use("/", __applications);
 app.use("/", leasingSchedulingModule({ pool }));
 // Build the interaction ledger ONCE. The legacy operator-key routes and the
 // staff-session Person Card adapter both call this same service instance.
@@ -3383,7 +3394,8 @@ app.use("/", leasingShadowImportModule({ pool }));
 //    application-approve. Owns NO domain truth; calls the application submission SERVICE
 //    inside its own transaction and appends an append-only demo_event. ──
 const demoModule = require("./demo");
-app.use("/", demoModule({ pool, submissionService: __applicationSubmission._service }));
+app.use("/", demoModule({ pool, submissionService: __applicationSubmission._service,
+  applicationsService: __applications._service })); // R3: demo approve calls the ONE canonical approveApplication
 
 // ── Rehearsal reset (demo-only). Empties the live boardroom Conversations queue by
 //    closing every boardroom_demo conversation through the canonical close service —
@@ -3426,7 +3438,10 @@ app.use("/", operatorModule({ pool, agentService: agentApp._service,
   // the SAME canonical tenancy-anchor service applications.js gets — the two
   // /operator/leasing/applications/:id/{countersign,confirm-term} adapters call
   // it behind dormantWriteGuard + activationPerimeter. One implementation.
-  tenancyAnchor: __tenancyAnchor }));
+  tenancyAnchor: __tenancyAnchor,
+  // v3: the walled operator approve adapter calls the ONE canonical
+  // approveApplication service (R3) — never a second implementation.
+  applicationsService: __applications._service }));
 
 // ── STAFF IDENTITY BRIDGE (067) — the authorized point-and-confirm workflow:
 // classify accounts, suggest candidates (exact verified email only, never
