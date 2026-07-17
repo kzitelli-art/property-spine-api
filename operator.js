@@ -215,7 +215,12 @@ module.exports = function operatorModule(deps) {
       const p = (await pool.query("select coalesce(display_name, name) as name from properties where id=$1", [o.property_id])).rows[0];
       propertyName = p ? p.name : null;
     } catch (_) { /* honest null beats a failed handshake */ }
-    return res.json({ id: o.id, name: o.name, role: o.role, property_id: o.property_id, property_name: propertyName });
+    // allowed_modules is LIVE on req.operator from the shared resolveSession
+    // (same source the leasing-module gate reads). Forwarding it here makes
+    // /operator/me the AUTHORITATIVE module source the shell needs on every
+    // boot path — closing the Runtime Map session-contract gap. Array always
+    // (never null) so the client can trust it as truth, not guess from a token.
+    return res.json({ id: o.id, name: o.name, role: o.role, property_id: o.property_id, property_name: propertyName, allowed_modules: Array.isArray(o.allowed_modules) ? o.allowed_modules : [] });
   });
 
   // ── property-scope verification helpers (used by every read/write below) ──
