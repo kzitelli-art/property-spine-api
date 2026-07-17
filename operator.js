@@ -39,6 +39,10 @@ module.exports = function operatorModule(deps) {
   const {
     pool, agentService, conversionService = null, leasingTourService = null,
     applicationInvitations = null, interactionsService = null,
+    // v3 (R3): the ONE canonical approveApplication service from applications.js
+    // — the walled operator approve adapter below calls THIS, never a second
+    // implementation. Absent (older server.js) → the route fails closed 503.
+    applicationsService = null,
   } = deps;
   const { rankTurnPriority } = require("./turn_priority"); // shared Turn-Priority ranking (slice 1)
   const { buildReviewList, buildReviewDetail } = require("./application_review"); // application review reads (slice 2)
@@ -793,7 +797,7 @@ module.exports = function operatorModule(deps) {
           select 1 from leasing_conversions lc
           join leasing_conversion_obligations flo on flo.conversion_id = lc.id
           where lc.person_id = c.person_id and lc.property_id = c.property_id
-            and flo.rung in ('applicant_followup','lease_signature_followup')
+            and flo.rung in ('applicant_followup','lease_signature_followup','terms_review_followup')
         )
     ),
     life as (
@@ -2266,6 +2270,76 @@ module.exports = function operatorModule(deps) {
   // ══════════════════════════════════════════════════════════════════
   const _getAppForPerimeter = async (q, id) =>
     (await q.query("select * from lease_applications where id=$1", [id])).rows[0];
+
+  // ══════════════════════════════════════════════════════════════════
+  //  OPERATOR APPROVE (v3 §4) — the walled adapter over the ONE canonical
+  //  approveApplication service. Authority is NOT merely the leasing module:
+  //  the approval gate belongs to a ROLE (leasing_manager — read from the
+  //  obligation row itself, never re-hardcoded here). Eligible iff the
+  //  authenticated operator:
+  //    · OWNS the approval obligation (assigned_user_id), or
+  //    · holds the obligation's own required role (live role_title / role
+  //      from the resolved session — server truth, not the browser), or
+  //    · carries the explicit governed override (can_manage_roles).
+  //  Application with NO approval gate (legacy direct-create): override only.
+  //  Refusals are OPAQUE ({error:"not_permitted"}) with a full stderr audit —
+  //  same posture as the activation perimeter. Actor is req.operator.id.
+  // ══════════════════════════════════════════════════════════════════
+  router.post("/operator/leasing/applications/:id/approve", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!applicationsService || typeof applicationsService.approveApplication !== "function") {
+      return res.status(503).json({ receipt: "Approve service not wired on this deploy (applicationsService missing). Deploy applications.js + the updated server.js together." });
+    }
+    const op = req.operator;
+    const refuse = (reason, appRow) => {
+      console.error("[operator-approve refused]", JSON.stringify({
+        reason, user_id: op.id, session_property: op.property_id,
+        application_id: req.params.id, application_property: appRow ? appRow.property_id : null,
+        role: op.role || null, role_title: op.role_title || null, at: new Date().toISOString(),
+      }));
+      return res.status(403).json({ error: "not_permitted" });
+    };
+    const client = await pool.connect();
+    try {
+      const app = await _getAppForPerimeter(client, req.params.id);
+      if (!app) { return res.status(404).json({ receipt: "No application with that id." }); }
+      // PROPERTY WALL — the session's property must match the application's.
+      if (app.property_id !== op.property_id) { return refuse("property_mismatch", app); }
+      // OBLIGATION-OWNERSHIP AUTHORITY — the gate's own row is the source of
+      // the required role; this route performs no independent role literal.
+      let eligible = op.can_manage_roles === true; // explicit governed override
+      if (!eligible && app.approval_obligation_id) {
+        const ob = (await client.query(
+          "select assigned_role, assigned_user_id from obligations where id=$1",
+          [app.approval_obligation_id])).rows[0];
+        if (ob) {
+          eligible = (ob.assigned_user_id && ob.assigned_user_id === op.id) ||
+                     (ob.assigned_role && (ob.assigned_role === op.role_title || ob.assigned_role === op.role));
+        }
+      }
+      if (!eligible) { return refuse(app.approval_obligation_id ? "not_gate_eligible" : "no_gate_and_no_override", app); }
+
+      await client.query("begin");
+      const out = await applicationsService.approveApplication(client, {
+        applicationId: req.params.id,
+        approvedByNote: op.name || `staff:${op.id}`,   // SERVER-DERIVED attestation
+        actorUserId: op.id,                            // SERVER-DERIVED actor
+      });
+      await client.query("commit");
+      const gate = await applicationsService.outstanding(pool, out.application);
+      return res.json({
+        receipt: `Approved. Terms-review next for ${out.application.applicant_name}. The resident acknowledges proposed terms; an executed lease is a separate, later fact.`,
+        application: applicationsService.shape(out.application, gate),
+        terms_review_obligation_id: out.obligation.id,
+      });
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      if (e.httpStatus) return res.status(e.httpStatus).json(e.body);
+      console.error("operator approve error", e);
+      return res.status(500).json({ receipt: "Could not approve the application.", error: e.message });
+    } finally { client.release(); }
+  });
+
 
   const operatorCountersignPerimeter = activationPerimeter({
     pool,
