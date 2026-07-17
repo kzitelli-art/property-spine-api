@@ -51,6 +51,12 @@ module.exports = function tenancyAnchorService(deps) {
     satisfyObligation,
     completeObligation,
     ledgerService = null,
+    // v3 EXECUTION SEAM (§8-C/§10): the ONLY door for "a governing lease was
+    // actually executed." Injected from server.js; NEVER a body-suppliable
+    // argument. v3's implementation always returns null → countersign fails
+    // closed with 409 executed_lease_required. Path B replaces the resolver
+    // body, never its position in the chain.
+    executionEvidence = null,
   } = deps || {};
 
   if (typeof spawnObligationFromEvent !== "function" ||
@@ -67,10 +73,13 @@ module.exports = function tenancyAnchorService(deps) {
     e.svc = true; e.http = status; e.body = body; return e;
   }
 
-  // ── constants + helpers (lifted from applications.js, unchanged) ──
+  // ── constants + helpers (lifted from applications.js) ──
+  // COUNTERSIGN survives: when Path B produces real execution evidence, a
+  // LEGACY blended gate (pre-v3 row) is closed by satisfying this input.
+  // The signature vocabulary (tenantInputs) is GONE from this contract —
+  // v3: a terms acknowledgment is not a signature, and this service no
+  // longer reads, requires, or trusts applicant/guarantor signature inputs.
   const COUNTERSIGN = "manager_countersign";
-  const tenantInputs = (hasGuarantor) =>
-    ["applicant_signature", ...(hasGuarantor ? ["guarantor_signature"] : [])];
 
   async function recordEvent(client, { property_id, person_id = null, unit_id = null, type, note }) {
     const r = await client.query(
@@ -147,39 +156,52 @@ module.exports = function tenancyAnchorService(deps) {
 
     const app = await getApp(client, applicationId);
     if (!app) throw svcErr(404, { receipt: "No application with that id." });
-    if (!app.activation_obligation_id) {
-      throw svcErr(409, { receipt: "Application is not approved — no activation gate to countersign." });
+    // Approval proof — EITHER vocabulary (§9): a v3 row carries the terms
+    // gate; a pre-v3 row carries its historical blended gate. Neither is
+    // execution proof; both merely prove an approval happened.
+    if (!app.terms_review_obligation_id && !app.activation_obligation_id) {
+      throw svcErr(409, { receipt: "Application is not approved — nothing to countersign." });
     }
     if (app.status === "active") {
       throw svcErr(409, { receipt: "Lease is already active." });
     }
 
-    const oQ = await client.query("select * from obligations where id=$1 for update", [app.activation_obligation_id]);
-    const obligation = oQ.rows[0];
-    const remaining = obligation.required_inputs || [];
-
-    // HARD GATE: tenant must have signed before the company countersigns.
-    const tenantLeft = tenantInputs(!!app.guarantor_name).filter((i) => remaining.includes(i));
-    if (tenantLeft.length > 0) {
+    // ── THE WALL, CORRECTED (v3 §8-C) ─────────────────────────────────
+    // First substantive requirement: VERIFIED LEASE EXECUTION, resolved
+    // server-side through the injected seam. A terms acknowledgment, a
+    // satisfied obligation input, a packet submission, a body-supplied
+    // object — none of these reach this check. No caller can supply it.
+    if (!executionEvidence || typeof executionEvidence.resolveVerifiedExecution !== "function") {
+      throw svcErr(503, { receipt: "Execution-evidence resolver not wired on this deploy. Deploy execution_evidence.js + the updated server.js together." });
+    }
+    const execution = await executionEvidence.resolveVerifiedExecution(client, applicationId);
+    if (!execution) {
       throw svcErr(409, {
-        receipt: "Cannot countersign — the tenant side has not signed yet. Tenant signature is intent; the company is not bound until they sign first.",
-        tenant_signatures_outstanding: tenantLeft,
+        error: "executed_lease_required",
+        receipt: "Cannot countersign yet. A terms acknowledgment is not an executed lease. Record verified lease execution before company acceptance.",
       });
     }
 
-    // satisfy the countersign, then complete (the engine refuses on any leftover input)
-    try {
-      await satisfyObligation(client, { obligation_id: obligation.id, input: COUNTERSIGN,
-        proof: { countersigned_by, note } });
-    } catch (e) { if (e.code !== "NOT_OUTSTANDING") throw e; }
-
-    try {
-      await completeObligation(client, { obligation_id: obligation.id, completed_by: countersigned_by });
-    } catch (e) {
-      if (e.code === "INPUTS_OUTSTANDING") {
-        throw svcErr(409, { receipt: "Cannot activate — required inputs still outstanding.", outstanding: e.outstanding_inputs });
+    // ── Path B territory (unreachable in v3: the resolver above returns
+    //    null until a governed execution system exists). When real execution
+    //    evidence arrives: a LEGACY blended gate is closed here by satisfying
+    //    its countersign input; a v3 row has no activation gate to close —
+    //    execution's own activation obligation (Path B) governs it.
+    if (app.activation_obligation_id) {
+      const oQ = await client.query("select * from obligations where id=$1 for update", [app.activation_obligation_id]);
+      const obligation = oQ.rows[0];
+      try {
+        await satisfyObligation(client, { obligation_id: obligation.id, input: COUNTERSIGN,
+          proof: { countersigned_by, note, execution_evidence_ref: execution.id || null } });
+      } catch (e) { if (e.code !== "NOT_OUTSTANDING") throw e; }
+      try {
+        await completeObligation(client, { obligation_id: obligation.id, completed_by: countersigned_by });
+      } catch (e) {
+        if (e.code === "INPUTS_OUTSTANDING") {
+          throw svcErr(409, { receipt: "Cannot activate — required inputs still outstanding.", outstanding: e.outstanding_inputs });
+        }
+        if (e.code !== "ALREADY_COMPLETE") throw e;
       }
-      if (e.code !== "ALREADY_COMPLETE") throw e;
     }
 
     // ── J1: THE COUNTERSIGN LOCK (Commitment Ledger, 063) ─────────────
