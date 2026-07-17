@@ -139,6 +139,44 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // one implementation for all identity dedup, not a per-module copy.
   const { normalizeE164: __normalizeE164 } = require("./phone_identity");
   function normalizePhone(raw) { return __normalizeE164(raw); }
+
+  // ── PROSPECT ACTIVATION (Path A) ──────────────────────────────────────
+  //  A permanent CAPABILITY allowlist: only properties whose id is listed in
+  //  PROSPECT_ACTIVATION_PROPERTY_IDS may have a web-form prospect promoted to
+  //  a 'production' classification + 'opted_in' consent at intake — the two
+  //  facts communications_boundary.js requires for a customer_care autonomous
+  //  send. Absent/empty env = today's behavior (no promotion; a bug cannot
+  //  accidentally activate an unlisted property, e.g. real Solo). This is
+  //  config (Class 2), NOT a property-id branch in business logic — the code
+  //  path is identical for every property; the allowlist is data.
+  const PROSPECT_ACTIVATION_PROPERTY_IDS = new Set(
+    String(process.env.PROSPECT_ACTIVATION_PROPERTY_IDS || "")
+      .split(",").map(s => s.trim()).filter(Boolean)
+  );
+  function propertyIsActivated(propertyId) {
+    return PROSPECT_ACTIVATION_PROPERTY_IDS.has(String(propertyId));
+  }
+  //  Consent read defensively across the field names a web form might send.
+  //  Truthy boolean, or a string in {"yes","true","on","1","checked"}, counts
+  //  as consent. Anything else (including absent) = NO consent signal → the
+  //  person is still captured as a lead, but stays un-textable (honest). No
+  //  form change is required if consent is already collected under any of
+  //  these names; a miss shows in the Render log line below as
+  //  "activated but NO consent signal" and is a one-line field-name add.
+  function extractConsentSignal(body) {
+    const raw = body || {};
+    const candidates = [
+      raw.sms_consent, raw.text_consent, raw.consent, raw.tcpa_consent,
+      raw.agreed_to_texts, raw.agree_to_texts, raw.opt_in, raw.opted_in,
+      (raw.raw_payload || {}).sms_consent, (raw.raw_payload || {}).consent,
+      (raw.raw_payload || {}).agreed_to_texts,
+    ];
+    for (const c of candidates) {
+      if (c === true || c === 1) return true;
+      if (typeof c === "string" && ["yes","true","on","1","checked"].includes(c.trim().toLowerCase())) return true;
+    }
+    return false;
+  }
   function normalizeEmail(raw) {
     if (!raw) return null;
     const e = String(raw).trim().toLowerCase();
@@ -400,6 +438,38 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         leadId: lead.id, type: "lead_received", actorType: "prospect", actorId: person.id,
         metadata: { source: sourceName, repeat: reusedOpportunity },
       });
+
+      // ── PROSPECT ACTIVATION (Path A) — write the two facts the comms boundary
+      //    requires for a customer_care autonomous send, IFF this property is on
+      //    the capability allowlist AND the form carried a consent signal. Both
+      //    writes are INSIDE this transaction (reclassify accepts our client), so
+      //    activation is atomic with the person/lead — a lead is never left
+      //    half-activated. Append-only (reclassify supersedes prior class; consent
+      //    upserts the one canonical row). Unlisted property or no consent → skip
+      //    entirely (honest: captured, not textable). A STOP later still lands in
+      //    contact_preferences and overrides this, exactly as the boundary expects.
+      const _activated = propertyIsActivated(propertyId);
+      const _consentSignal = extractConsentSignal(b);
+      if (_activated && _consentSignal) {
+        await commBoundary.reclassify(
+          { person_id: person.id, property_id: propertyId, record_class: "production",
+            actor_user_id: null, reason: "canonical_web_intake" },
+          client
+        );
+        await client.query(
+          `insert into contact_preferences (person_id, channel, consent_state, source, updated_at)
+           values ($1, 'text', 'opted_in', 'canonical_intake', now())
+           on conflict (person_id, channel)
+           do update set consent_state = 'opted_in', source = 'canonical_intake', updated_at = now()`,
+          [person.id]
+        );
+        console.log(`[intake] activated prospect person=${person.id} property=${propertyId} lead=${lead.id} (production + opted_in)`);
+      } else if (_activated && !_consentSignal) {
+        // Property IS activated but the form sent no recognized consent field —
+        // the person is captured but stays un-textable. This log line is the
+        // signal that a consent field-name may need adding to extractConsentSignal.
+        console.log(`[intake] activated property but NO consent signal person=${person.id} property=${propertyId} lead=${lead.id} — captured, not textable`);
+      }
 
       // ── THREAD IT (memo §2.2: never an orphaned event). The conversation-queue
       //    projection inner-joins conversations — without this row an intake lead is
