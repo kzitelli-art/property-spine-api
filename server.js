@@ -192,6 +192,12 @@ async function spawnObligationFromEvent(client, spec) {
     // Additive: other callers omit these and get nulls, exactly as before.
     assigned_user_id = null, ownership_origin = null, owner_eligibility_state = null,
     parent_obligation_id = null,
+    // DEDUPE KEY (086): operational_escalation writes set this to a stable
+    // sha256(inbound_event_id + normalized_reason) so a retry / concurrent
+    // double converges (unique partial index), while two DIFFERENT tasks in
+    // one inbound get different keys and both persist. All other callers omit
+    // it → null → unchanged (the index is partial on non-null).
+    dedupe_key = null,
   } = spec;
 
   // Postgres text[] literal, e.g. {tour_feedback} or {closeout_proof}
@@ -204,15 +210,15 @@ async function spawnObligationFromEvent(client, spec) {
         owner_type, assigned_role, escalates_to_role,
         status, due_at, priority, severity, required_inputs,
         related_id, related_type,
-        assigned_user_id, ownership_origin, owner_eligibility_state, parent_obligation_id)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+        assigned_user_id, ownership_origin, owner_eligibility_state, parent_obligation_id, dedupe_key)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
      returning *`,
     [property_id, person_id, unit_id,
      source_event_id, module, type, label,
      owner_type, assigned_role, escalates_to_role,
      status, due_at, priority, severity, inputsLiteral,
      related_id, related_type,
-     assigned_user_id, ownership_origin, owner_eligibility_state, parent_obligation_id]
+     assigned_user_id, ownership_origin, owner_eligibility_state, parent_obligation_id, dedupe_key]
   );
   return r.rows[0];
 }
