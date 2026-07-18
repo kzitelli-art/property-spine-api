@@ -988,7 +988,7 @@ Reply with ONLY the message text.`;
           const invUse = (r.content || []).find(x => x.type === "tool_use" && x.name === "find_available_units");
           const offerUse = (r.content || []).find(x => x.type === "tool_use" && x.name === "offer_tour_slots");
           const bookUse = (r.content || []).find(x => x.type === "tool_use" && x.name === "book_tour");
-          const escUse = (r.content || []).find(x => x.type === "tool_use" && x.name === "create_staff_obligation");
+          const escUses = (r.content || []).filter(x => x.type === "tool_use" && x.name === "create_staff_obligation");
 
           if (invUse) {
             const qc = await pool.connect();
@@ -1154,114 +1154,118 @@ Reply with ONLY the message text.`;
               tools: activeTools,
             });
             providerReqId = (r && r.id) || providerReqId;
-          } else if (escUse) {
+          } else if (escUses.length) {
             // ── OPERATIONAL ESCALATION WRITE (Slice 1) ─────────────────────
             // A human must DO work before the agent can answer. Create a staff
             // obligation through the SAME canonical service the inbound path
             // already uses (spawnObligationFromEvent) — no new table, no
             // parallel path. The AI keeps the conversation (no [[HANDOFF]]).
             //
+            // MULTI-TASK: one inbound may name SEVERAL distinct jobs ("confirm
+            // readiness AND check parking") → the model emits ONE
+            // create_staff_obligation per task in the SAME turn. We loop EVERY
+            // such block, writing one obligation each, and pair ALL their results
+            // back. (A single .find() would drop the 2nd task — the exact bug B3
+            // caught.) The tour path stays single-call by nature; escalations do not.
+            //
             // IDEMPOTENCY (guardrail 2), reason-keyed so it does NOT collapse
-            // two DIFFERENT tasks: the durable anchor is the canonical inbound
-            // comm_event id (tx1.inbound_id — present on EVERY door, SMS or not,
-            // so no null collision) COMBINED with a normalized hash of the task
-            // reason. dedupe_key = sha256(inbound_id + ':' + norm(reason)).
+            // two DIFFERENT tasks: dedupe_key = sha256(inbound_id + ':' + norm(reason)).
             //   • same inbound + same task (retry / concurrent double) → same
             //     key → unique index (086) converges: 23505 loser resolves to
             //     the existing row, never a duplicate, never a 500.
-            //   • same inbound + a DIFFERENT task ("confirm readiness AND check
-            //     parking") → different reason → different key → a SECOND,
-            //     distinct obligation. The DB never treats two real tasks as one.
+            //   • same inbound + a DIFFERENT task → different reason → different
+            //     key → a SECOND distinct obligation. The DB never merges two real tasks.
             //
-            // OWNERSHIP LADDER (guardrail 1) — the tool result licenses only the
-            // language the row can honestly support:
-            //   • role only (assigned_role, no assigned_user_id) → "sent to the
-            //     leasing team" (routed, not yet accepted).
-            //   • named user accepted (assigned_user_id) → "the team is working on it".
-            //   • real due_at → a specific follow-up time may be stated.
+            // OWNERSHIP LADDER (guardrail 1) — each result licenses only the
+            // language its row supports: routed (role) < accepted (user) < timed (due_at).
             // Slice 1 writes role-only, so the honest default is "sent to the team".
-            const escReason = (escUse.input && String(escUse.input.reason || "").trim()) || "operational check requested by prospect";
-            const normReason = escReason.toLowerCase().replace(/\s+/g, " ").trim();
-            const escDedupeKey = tx1.inbound_id
-              ? crypto.createHash("sha256").update(`${tx1.inbound_id}:${normReason}`).digest("hex")
-              : null;
-            let escOb = null, escErr = null;
-            try {
-              const ec = await pool.connect();
-              try {
-                await ec.query("begin");
-                // Converge on an existing obligation for THIS inbound+task (idempotent replay).
-                const existing = escDedupeKey
-                  ? (await ec.query(
-                      `select * from obligations where dedupe_key = $1 and type = 'operational_escalation' limit 1`,
-                      [escDedupeKey]
-                    )).rows[0]
-                  : null;
-                if (existing) {
-                  escOb = existing;
-                } else {
-                  escOb = await spawnObligationFromEvent(ec, {
-                    property_id: tx1.property_id, person_id: tx1.person_id, unit_id: tx1.unit_id || null,
-                    // source_event_id stays NULL: its FK points at the domain-events
-                    // table, which a comm_events id does not satisfy — the two working
-                    // inbound writes above (human_thread_reply, agent_review) also pass
-                    // null. Idempotency is carried by dedupe_key, which is DERIVED from
-                    // tx1.inbound_id via one-way hash (sufficient to converge retries;
-                    // NOT an inspectable audit link back to the comm_event — that would
-                    // be a separate, later concern, out of scope for Slice 1).
-                    source_event_id: null,
-                    module: "agent", type: "operational_escalation",
-                    label: escReason.slice(0, 240),
-                    owner_type: "human", assigned_role: "leasing_manager",
-                    dedupe_key: escDedupeKey,
-                  });
-                }
-                await ec.query("commit");
-              } catch (e) {
-                try { await ec.query("rollback"); } catch (_) {}
-                // 23505 = concurrent double on the SAME inbound+task → resolve existing.
-                if (e && e.code === "23505" && escDedupeKey) {
-                  const ex = (await pool.query(
-                    `select * from obligations where dedupe_key=$1 and type='operational_escalation' limit 1`,
-                    [escDedupeKey]
-                  )).rows[0];
-                  if (ex) escOb = ex;
-                }
-                if (!escOb) { escErr = e; console.error("[agent/inbound] escalation write failed:", e.message); }
-              } finally { ec.release(); }
-            } catch (e) { escErr = e; console.error("[agent/inbound] escalation connect failed:", e.message); }
+            const escResults = new Map(); // tool_use_id -> result JSON string
 
-            // OWNER-GATED tool result on the three-tier ladder. The model may
-            // only claim what the row supports: routed (role) < accepted (user)
-            // < timed (due_at). Never fabricate a stronger tier.
-            const escWritten = !!(escOb && escOb.status === "open");
-            const escAccepted = !!(escOb && escOb.assigned_user_id);   // a named human accepted
-            const escRouted = !!(escOb && escOb.assigned_role);        // routed to a role
-            const escToolResult = escWritten
-              ? JSON.stringify({
-                  created: true,
-                  ownership: escAccepted ? "accepted" : (escRouted ? "routed" : "unassigned"),
-                  due_at: escOb.due_at || null,
-                  note: escOb.due_at
-                    ? "The work is on the team and has a due time. You MAY say the team is working on it and you'll follow up by that time. Keep the conversation — do NOT hand off. One short warm message."
-                    : escAccepted
-                      ? "A teammate has this. You MAY say the team is working on it. Do NOT promise a specific time (no due time yet). Keep the conversation — do NOT hand off. One short warm message."
-                      : escRouted
-                        ? "This is SENT to the leasing team (routed, not yet accepted). Say you've sent it to the team and you'll follow up — do NOT say someone is already working on it and do NOT promise a specific time. Keep the conversation — do NOT hand off. One short warm message."
-                        : "The work is recorded but not yet owned. Say you've flagged it for the team and you'll follow up. Do NOT promise a time. Keep the conversation — do NOT hand off. One short warm message.",
-                })
-              : JSON.stringify({
-                  created: false,
-                  ownership: "none",
-                  note: "The work could NOT be put on the team. Do NOT claim anyone is on it and do NOT promise a follow-up. Tell the prospect honestly that you're checking on it. Keep the conversation — do NOT hand off.",
-                });
+            // Write one obligation for a single tool block; return its result JSON.
+            async function writeOneEscalation(reasonRaw) {
+              const escReason = String(reasonRaw || "").trim() || "operational check requested by prospect";
+              const normReason = escReason.toLowerCase().replace(/\s+/g, " ").trim();
+              const escDedupeKey = tx1.inbound_id
+                ? crypto.createHash("sha256").update(`${tx1.inbound_id}:${normReason}`).digest("hex")
+                : null;
+              let escOb = null;
+              try {
+                const ec = await pool.connect();
+                try {
+                  await ec.query("begin");
+                  const existing = escDedupeKey
+                    ? (await ec.query(
+                        `select * from obligations where dedupe_key = $1 and type = 'operational_escalation' limit 1`,
+                        [escDedupeKey]
+                      )).rows[0]
+                    : null;
+                  if (existing) {
+                    escOb = existing;
+                  } else {
+                    escOb = await spawnObligationFromEvent(ec, {
+                      property_id: tx1.property_id, person_id: tx1.person_id, unit_id: tx1.unit_id || null,
+                      // source_event_id stays NULL: its FK points at the domain-events
+                      // table, which a comm_events id does not satisfy — the two working
+                      // inbound writes above also pass null. Idempotency is carried by
+                      // dedupe_key, DERIVED from tx1.inbound_id via one-way hash (enough
+                      // to converge retries; NOT an inspectable audit link — out of
+                      // scope for Slice 1).
+                      source_event_id: null,
+                      module: "agent", type: "operational_escalation",
+                      label: escReason.slice(0, 240),
+                      owner_type: "human", assigned_role: "leasing_manager",
+                      dedupe_key: escDedupeKey,
+                    });
+                  }
+                  await ec.query("commit");
+                } catch (e) {
+                  try { await ec.query("rollback"); } catch (_) {}
+                  if (e && e.code === "23505" && escDedupeKey) {
+                    const ex = (await pool.query(
+                      `select * from obligations where dedupe_key=$1 and type='operational_escalation' limit 1`,
+                      [escDedupeKey]
+                    )).rows[0];
+                    if (ex) escOb = ex;
+                  }
+                  if (!escOb) console.error("[agent/inbound] escalation write failed:", e.message);
+                } finally { ec.release(); }
+              } catch (e) { console.error("[agent/inbound] escalation connect failed:", e.message); }
+
+              const escWritten = !!(escOb && escOb.status === "open");
+              const escAccepted = !!(escOb && escOb.assigned_user_id);
+              const escRouted = !!(escOb && escOb.assigned_role);
+              return escWritten
+                ? JSON.stringify({
+                    created: true,
+                    ownership: escAccepted ? "accepted" : (escRouted ? "routed" : "unassigned"),
+                    due_at: escOb.due_at || null,
+                    note: escOb.due_at
+                      ? "The work is on the team and has a due time. You MAY say the team is working on it and you'll follow up by that time. Keep the conversation — do NOT hand off. One short warm message."
+                      : escAccepted
+                        ? "A teammate has this. You MAY say the team is working on it. Do NOT promise a specific time (no due time yet). Keep the conversation — do NOT hand off. One short warm message."
+                        : escRouted
+                          ? "This is SENT to the leasing team (routed, not yet accepted). Say you've sent it to the team and you'll follow up — do NOT say someone is already working on it and do NOT promise a specific time. Keep the conversation — do NOT hand off. One short warm message."
+                          : "The work is recorded but not yet owned. Say you've flagged it for the team and you'll follow up. Do NOT promise a time. Keep the conversation — do NOT hand off. One short warm message.",
+                  })
+                : JSON.stringify({
+                    created: false,
+                    ownership: "none",
+                    note: "The work could NOT be put on the team. Do NOT claim anyone is on it and do NOT promise a follow-up. Tell the prospect honestly that you're checking on it. Keep the conversation — do NOT hand off.",
+                  });
+            }
+
+            // Process EVERY escalation tool block this turn (multi-task safe).
+            for (const eu of escUses) {
+              const reason = eu.input && eu.input.reason;
+              escResults.set(eu.id, await writeOneEscalation(reason));
+            }
 
             r = await anthropic.messages.create({
               model: MODEL, max_tokens: 320, system: built.system,
               messages: [
                 ...built.messages,
                 { role: "assistant", content: r.content },
-                { role: "user", content: pairAllToolResults(r.content, new Map([[escUse.id, escToolResult]])) },
+                { role: "user", content: pairAllToolResults(r.content, escResults) },
               ],
               tools: activeTools,
             });
