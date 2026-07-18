@@ -79,7 +79,7 @@ async function makeFixture(client, { property_id, assigned_role = "leasing_manag
       ok("role_authority basis", r.authority_basis === "role_authority", r.authority_basis);
     }
     {
-      const f = await makeFixture(client, { property_id: PROPERTY_A, assigned_role: "regional_director", person_id: PERSON });
+      const f = await makeFixture(client, { property_id: PROPERTY_A, assigned_role: "property_manager", person_id: PERSON });
       const actor = { ...opMgr(PROPERTY_A), role: "leasing_agent", role_title: "leasing_agent", can_manage_roles: true };
       const r = await confirmProposedTerms(client, { application_id: f.app_id, ...TERMS, idempotency_key: "k-override", actor });
       ok("managed_role_override basis", r.authority_basis === "managed_role_override", r.authority_basis);
@@ -108,7 +108,8 @@ async function makeFixture(client, { property_id, assigned_role = "leasing_manag
     console.log("\nP6/P7 concession");
     {
       const f = await makeFixture(client, { property_id: PROPERTY_A, person_id: PERSON });
-      await client.query(`insert into lease_economic_schedules (property_id, application_id, status, locked_at) values ($1,$2,'locked', now())`, [PROPERTY_A, f.app_id]);
+      const space = (await client.query(`select id from spaces where property_id=$1 limit 1`, [PROPERTY_A])).rows[0];
+      await client.query(`insert into lease_economic_schedules (property_id, application_id, space_id, status, locked_at) values ($1,$2,$3,'locked', now())`, [PROPERTY_A, f.app_id, space.id]);
       await expectThrow("P6 locked schedule → economics_conflict", "economics_conflict",
         () => confirmProposedTerms(client, { application_id: f.app_id, ...TERMS, idempotency_key: "k-sched", actor: opMgr(PROPERTY_A) }));
     }
