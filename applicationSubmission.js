@@ -42,7 +42,7 @@ function digestToken(raw) {
 }
 
 module.exports = function applicationSubmissionModule(deps) {
-  const { pool, spawnObligationFromEvent, completeObligation, conversionService, commBoundary = null } = deps;
+  const { pool, spawnObligationFromEvent, completeObligation, conversionService, commBoundary = null, applicationInputAuthority = null } = deps;
   const router = express.Router();
 
   // operator gate — shared key. LEGACY: this shared-key gate and the routes under
@@ -295,9 +295,12 @@ module.exports = function applicationSubmissionModule(deps) {
     };
   }
 
-  router.post("/leasing/application-invitations", requireOperator, (req, res) => tx(async (client) => {
-    return await createPreparedInvitation(client, req.body || {});
-  }, res));
+  // RETIRED (v2.5-r1 Corr 1): shared-key invitation doors bypass actor identity,
+  // property authority, and module entitlement. The governed door is the
+  // staff-session /operator/ adapter. Services remain internal.
+  router.post("/leasing/application-invitations", requireOperator, (req, res) => {
+    return res.status(410).json({ error: "retired", receipt: "This route is retired. Application links are prepared through the staff-session operator surface, against the exact prepare commitment." });
+  });
 
 
   // ── CANONICAL SERVICE (funnel-flow 3a): createAndDispatchApplicationInvitation ──
@@ -455,14 +458,8 @@ module.exports = function applicationSubmissionModule(deps) {
   }
 
   // 1b) CREATE + DISPATCH — the governed one-call path (operator-gated).
-  router.post("/leasing/application-invitations/dispatch", requireOperator, async (req, res) => {
-    try {
-      const out = await createAndDispatchApplicationInvitation(req.body || {});
-      const code = out.dispatched ? 200 : 409;
-      return res.status(out.reason === "boundary_not_wired" || out.reason === "public_apply_base_url_not_configured" ? 503 : code).json(out);
-    } catch (e) {
-      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
-    }
+  router.post("/leasing/application-invitations/dispatch", requireOperator, (req, res) => {
+    return res.status(410).json({ error: "retired", receipt: "This route is retired. Provider dispatch runs through the staff-session operator surface in the same action that prepares the link." });
   });
 
   // 2) MARK SENT — the SEND attestation. This is an authenticated, auditable
@@ -602,32 +599,16 @@ module.exports = function applicationSubmissionModule(deps) {
     };
   }
 
-  router.post("/leasing/application-invitations/:id/mark-sent", requireOperator, (req, res) => tx(async (client) => {
-    return await attestInvitationSent(client, Object.assign({ invitation_id: req.params.id }, req.body || {}));
-  }, res));
+  router.post("/leasing/application-invitations/:id/mark-sent", requireOperator, (req, res) => {
+    return res.status(410).json({ error: "retired", receipt: "This route is retired. Sends are attested through the staff-session operator surface (finalize), which closes the exact send commitment." });
+  });
 
   // 2b) REVOKE — a CORRECTION fact (e.g. wrong number, sent in error). Does NOT
   //     rewrite the original send record; stamps a separate revocation. A revoked
   //     invitation can no longer be consumed.
-  router.post("/leasing/application-invitations/:id/revoke", requireOperator, (req, res) => tx(async (client) => {
-    const { revoked_by_user_id = null, reason = null } = req.body || {};
-    const inv = (await client.query("select * from application_invitations where id=$1 for update", [req.params.id])).rows[0];
-    if (!inv) throw httpErr(404, "No invitation with that id.");
-    if (inv.status === "consumed") throw httpErr(409, "Cannot revoke a consumed invitation (the application already exists).");
-    if (inv.status === "revoked") throw httpErr(409, "Invitation already revoked.");
-    await recordEvent(client, {
-      property_id: inv.property_id, person_id: inv.person_id, unit_id: inv.unit_id,
-      type: "application_link_revoked",
-      note: `Application invitation revoked${reason ? " — " + reason : ""}`,
-    });
-    const upd = (await client.query(
-      `update application_invitations
-          set status='revoked', revoked_by_user_id=$1, revoked_at=now(), revoked_reason=$2, updated_at=now()
-        where id=$3 returning *`,
-      [revoked_by_user_id, reason, inv.id]
-    )).rows[0];
-    return { receipt: "Invitation revoked (correction fact recorded; original send record preserved).", invitation_id: upd.id, status: upd.status };
-  }, res));
+  router.post("/leasing/application-invitations/:id/revoke", requireOperator, (req, res) => {
+    return res.status(410).json({ error: "retired", receipt: "This route is retired. Revocation runs through the staff-session operator surface, which reconciles dispatch state before any correction." });
+  });
 
   // 3) PUBLIC SUBMIT — invitation-bound. The applicant submits against a live
   //    valid token. Resolves identity/conversion FROM the token, runs the
@@ -1113,6 +1094,529 @@ boot();
     return out;
   }
 
-  router._service = { sendApplication, createAndDispatchApplicationInvitation, createPreparedInvitation, attestInvitationSent, submitApplicationService, closeApprovalGate, spawnApprovalGate, approvalGateRole, resolveTenantContext };
+  // ════════════════════════════════════════════════════════════════════
+  //  APPLICATION LINK LIFECYCLE (v2.5-r1) — prepare / send / correct
+  //
+  //  The correction gate NEVER touches the wire. It classifies durable DB
+  //  evidence only, and every state-changing correction RE-CLASSIFIES UNDER
+  //  the invitation FOR UPDATE lock (never acts on an unlocked preliminary
+  //  read). Provider Phase 1 takes the same lock before binding
+  //  dispatch_comm_event_id. Whichever transaction wins the lock controls
+  //  the result — no revoked-before-send fiction, no duplicate text.
+  // ════════════════════════════════════════════════════════════════════
+  const SENT_STATUSES = ["manually_sent", "provider_dispatched"];
+  const ACTIVE_STATUSES = ["prepared", "manually_sent", "provider_dispatched"];
+
+  function requireInputAuthority() {
+    if (!applicationInputAuthority) throw httpErr(500, "application input authority not wired.");
+    return applicationInputAuthority;
+  }
+
+  // ── shared DB-only classifier (works on an already-loaded invitation row) ──
+  async function classifyDispatch(q, inv) {
+    if (!inv.dispatch_comm_event_id) return { state: "no_attempt", comm_event_id: null };
+    const evt = (await q.query(
+      "select id, sms_sid, sms_status from comm_events where id=$1",
+      [inv.dispatch_comm_event_id])).rows[0];
+    if (!evt) return { state: "indeterminate", comm_event_id: inv.dispatch_comm_event_id };
+    if (evt.sms_sid) return { state: "accepted", comm_event_id: evt.id, sms_sid: evt.sms_sid };
+    if (["refused", "failed"].includes(evt.sms_status || "")) {
+      return { state: "refused", comm_event_id: evt.id, sms_status: evt.sms_status };
+    }
+    return { state: "indeterminate", comm_event_id: evt.id };
+  }
+
+  // pool-level READ — never sends, never locks, never mutates
+  async function inspectDispatchState(invitation_id) {
+    const inv = (await pool.query(
+      "select * from application_invitations where id=$1", [invitation_id])).rows[0];
+    if (!inv) throw httpErr(404, "No invitation with that id.");
+    const cls = await classifyDispatch(pool, inv);
+    return { invitation_id, status: inv.status, ...cls };
+  }
+
+  // the exact open send child for an invitation (locked when for_update)
+  async function openSendChild(client, invitation_id, { for_update = false } = {}) {
+    return (await client.query(
+      `select * from obligations
+        where related_type='application_invitation' and related_id=$1
+          and type='send_application_link' and status='open'
+        limit 1 ${for_update ? "for update" : ""}`, [invitation_id])).rows[0] || null;
+  }
+
+  // ── PREPARE composite: the exact-obligation door ──────────────────────
+  //  Locks the EXACT prepare child, verifies everything a stale client could
+  //  have wrong, revalidates the unit, creates the invitation (one-active
+  //  index guards duplicates), closes the prepare child through the input
+  //  authority, opens the invitation-specific send child. Parent untouched,
+  //  stage NOT advanced.
+  async function prepareApplicationLinkForObligation(client, {
+    prepare_obligation_id, unit_id = null, expires_at = null,
+    actor_user_id, unitOfferable = null,
+  }) {
+    if (!prepare_obligation_id) throw httpErr(400, "prepare_obligation_id is required.");
+    if (!actor_user_id) throw httpErr(400, "actor_user_id is required.");
+    const ob = (await client.query(
+      "select * from obligations where id=$1 for update", [prepare_obligation_id])).rows[0];
+    if (!ob) throw httpErr(404, "No obligation with that id.");
+    if (ob.type !== "prepare_application_link" || ob.related_type !== "leasing_conversion") {
+      throw httpErr(409, "That obligation is not a prepare-application-link commitment.");
+    }
+    if (ob.status !== "open") throw httpErr(409, "That prepare commitment is no longer open — refresh and use the current action.");
+    if (!ob.parent_obligation_id) throw httpErr(500, "prepare child has no parent linkage — data fault.");
+    const conversion_id = ob.related_id;
+    const conv = (await client.query(
+      "select * from leasing_conversions where id=$1 for update", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+
+    // authority on the child: owner or role coverage (server-derived)
+    const basis = await conversionService.resolveSendActionBasis(client, {
+      actor_user_id, property_id: conv.property_id, stored_owner_user_id: ob.assigned_user_id,
+    });
+    if (!basis.allowed) throw httpErr(403, "You are not the owner of this commitment and hold no covering role for it.");
+
+    const nonterminal = (await client.query(
+      `select 1 from lease_applications where conversion_id=$1
+        and status not in ('denied','declined','withdrawn') limit 1`, [conversion_id])).rows[0];
+    if (nonterminal) throw httpErr(409, "A live application already exists on this conversation.");
+
+    // unit revalidation AT preparation (eligibility check, not a hold)
+    if (unit_id && unitOfferable) {
+      const ok = await unitOfferable(client, { property_id: conv.property_id, unit_id });
+      if (!ok || ok.offerable === false) {
+        throw httpErr(409, `That unit is no longer offerable${ok && ok.reason ? ` (${ok.reason})` : ""}. Choose a current unit.`);
+      }
+    }
+
+    let made;
+    try {
+      made = await createPreparedInvitation(client, {
+        conversion_id, person_id: conv.person_id, property_id: conv.property_id,
+        unit_id, expires_at, created_by_user_id: actor_user_id,
+      });
+    } catch (e) {
+      if (e && e.code === "23505") {
+        throw httpErr(409, "An active invitation already exists for this conversation — regenerate or revoke it instead of preparing another.");
+      }
+      throw e;
+    }
+
+    // close the prepare child through the RESERVED input authority (structured proof)
+    const currentIntent = (await client.query(
+      `select ai.id from application_intents ai where ai.conversion_id=$1
+          and not exists (select 1 from application_intents s where s.supersedes_intent_id=ai.id)
+        order by ai.recorded_at desc limit 1`, [conversion_id])).rows[0];
+    await requireInputAuthority().satisfyApplicationInput(client, {
+      obligation_id: prepare_obligation_id,
+      input_code: "application_invitation_prepared",
+      invitation_id: made.invitation_id,
+      intent_id: currentIntent ? currentIntent.id : null,
+      parent_obligation_id: ob.parent_obligation_id,
+      unit_id, actor_user_id,
+      expected_invitation_status: "prepared",
+    });
+    await client.query(
+      "update obligations set resolution_code='satisfied' where id=$1 and status='complete'",
+      [prepare_obligation_id]);
+
+    const sendChild = await conversionService.openSendObligationOnPrepare(client, {
+      invitation_id: made.invitation_id, conversion_id,
+      parent_obligation_id: ob.parent_obligation_id,
+      candidate_owner_user_ids: [ob.assigned_user_id, actor_user_id],
+    });
+
+    return {
+      receipt: "Application link prepared. Copy it and send it through the real channel, then attest the send — the follow-up stays open until the link is actually sent.",
+      invitation_id: made.invitation_id, token: made.token,
+      send_obligation_id: sendChild.id,
+      parent_obligation_id: ob.parent_obligation_id,
+      conversion_id, prepared_by_basis: basis.basis,
+    };
+  }
+
+  // ── FINALIZE: the ONE final-send transaction (manual + provider) ──────
+  //  r1: PERFORMS the sent-state transition itself under the locks. Never
+  //  called with a pre-written sent status. Idempotent on matching evidence;
+  //  conflicting evidence → controlled 409 (one authoritative send fact).
+  async function finalizeInvitationSent(client, {
+    invitation_id, send_obligation_id, dispatch_source,
+    actor_user_id = null, provider_message_id = null,
+    recipient_snapshot = null, channel = null, note = null,
+  }) {
+    if (!["manual", "provider"].includes(dispatch_source)) {
+      throw httpErr(400, "dispatch_source must be 'manual' or 'provider'.");
+    }
+    const inv = (await client.query(
+      "select * from application_invitations where id=$1 for update", [invitation_id])).rows[0];
+    if (!inv) throw httpErr(404, "No invitation with that id.");
+    const child = (await client.query(
+      "select * from obligations where id=$1 for update", [send_obligation_id])).rows[0];
+    if (!child || child.type !== "send_application_link" || child.related_id !== invitation_id) {
+      throw httpErr(409, "That obligation is not the send commitment for this invitation.");
+    }
+    if (!child.parent_obligation_id) throw httpErr(500, "send child has no parent linkage — data fault.");
+
+    // idempotent vs conflict on an already-sent invitation
+    if (SENT_STATUSES.includes(inv.status)) {
+      const sameSource = (dispatch_source === "provider") === (inv.status === "provider_dispatched");
+      const sameEvidence = dispatch_source === "provider"
+        ? (inv.provider_message_id && provider_message_id && inv.provider_message_id === provider_message_id)
+        : (inv.status === "manually_sent");
+      if (sameSource && sameEvidence && child.status === "complete" && child.resolution_code === "satisfied") {
+        return { finalized: false, idempotent: true, invitation_id, status: inv.status,
+                 receipt: "Already finalized — the send fact stands; nothing re-run." };
+      }
+      throw httpErr(409, `Invitation already carries a ${inv.status} send fact with different evidence — one authoritative send fact wins; record a correction instead.`);
+    }
+    if (inv.status !== "prepared") {
+      throw httpErr(409, `Invitation is '${inv.status}' — a send cannot be finalized from that state.`);
+    }
+    if (child.status !== "open") throw httpErr(409, "The send commitment is not open.");
+
+    // authority + evidence
+    let basisWord = null;
+    if (dispatch_source === "manual") {
+      if (!actor_user_id) throw httpErr(400, "manual send requires the attesting user.");
+      if (!["sms", "email", "other"].includes(channel || "")) {
+        throw httpErr(400, "channel must be 'sms', 'email', or 'other'.");
+      }
+      if ((channel === "sms" || channel === "email") && !recipient_snapshot) {
+        throw httpErr(400, `manual ${channel} send requires recipient_snapshot (the destination as sent).`);
+      }
+      const basis = await conversionService.resolveSendActionBasis(client, {
+        actor_user_id, property_id: inv.property_id, stored_owner_user_id: child.assigned_user_id,
+      });
+      if (!basis.allowed) throw httpErr(403, "You are not the owner of this send commitment and hold no covering role for it.");
+      basisWord = basis.basis;
+    } else {
+      if (!provider_message_id) throw httpErr(400, "provider finalization requires provider_message_id (the accepted transport evidence).");
+    }
+
+    // r1: THE TRANSITION HAPPENS HERE, under the locks
+    if (dispatch_source === "manual") {
+      await client.query(
+        `update application_invitations
+            set status='manually_sent', dispatch_source='manual', channel=$1,
+                recipient_snapshot=$2, sent_by_user_id=$3, sent_at=now(),
+                sent_note=$4, updated_at=now()
+          where id=$5`,
+        [channel, recipient_snapshot, actor_user_id, note, invitation_id]);
+    } else {
+      await client.query(
+        `update application_invitations
+            set status='provider_dispatched', dispatch_source='provider', channel='sms',
+                provider_message_id=$1, sent_by_user_id=$2, sent_at=now(),
+                sent_note=$3, updated_at=now()
+          where id=$4`,
+        [provider_message_id, actor_user_id, note, invitation_id]);
+    }
+
+    // structured proof + reserved-input satisfaction + child completion
+    await requireInputAuthority().satisfyApplicationInput(client, {
+      obligation_id: send_obligation_id,
+      input_code: "application_invitation_sent",
+      invitation_id,
+      parent_obligation_id: child.parent_obligation_id,
+      unit_id: inv.unit_id || null, actor_user_id,
+      expected_invitation_status: dispatch_source === "manual" ? "manually_sent" : "provider_dispatched",
+    });
+    await client.query(
+      "update obligations set resolution_code='satisfied' where id=$1 and status='complete'",
+      [send_obligation_id]);
+
+    // close the EXACT parent through the RAIL (write-once). Rail basis
+    // vocabulary: 'coverage' only when an identified human closes a parent
+    // rung they don't own; owner/service closes resolve without a basis.
+    const parentLink = (await client.query(
+      "select owner_user_id from leasing_conversion_obligations where obligation_id=$1",
+      [child.parent_obligation_id])).rows[0];
+    const closerOwnsParent = actor_user_id != null && parentLink && parentLink.owner_user_id != null
+      && String(parentLink.owner_user_id) === String(actor_user_id);
+    await conversionService.closeParentViaRail(client, {
+      parent_obligation_id: child.parent_obligation_id,
+      by_user_id: actor_user_id,
+      resolution_basis: (actor_user_id != null && !closerOwnsParent) ? "coverage" : null,
+      proof: { application_invitation_sent: invitation_id, dispatch_source,
+               provider_message_id: provider_message_id || undefined },
+    });
+    if (inv.conversion_id) {
+      await conversionService.ensureApplicantFollowup(client, { conversion_id: inv.conversion_id });
+    }
+    return {
+      finalized: true, invitation_id,
+      status: dispatch_source === "manual" ? "manually_sent" : "provider_dispatched",
+      send_obligation_id, parent_obligation_id: child.parent_obligation_id,
+      receipt: dispatch_source === "manual"
+        ? "Send attested. The post-tour follow-up is closed and the applicant follow-up is open."
+        : "Application link dispatched (transport accepted). Follow-up advanced to applicant.",
+    };
+  }
+
+  // ── LOST-TOKEN regeneration (correction/drain; not birth-gated) ───────
+  async function regenerateInvitation(client, { invitation_id, actor_user_id }) {
+    if (!actor_user_id) throw httpErr(400, "actor_user_id is required.");
+    const inv = (await client.query(
+      "select * from application_invitations where id=$1 for update", [invitation_id])).rows[0];
+    if (!inv) throw httpErr(404, "No invitation with that id.");
+    if (inv.status !== "prepared") {
+      throw httpErr(409, `Only a 'prepared' invitation can be regenerated (this one is '${inv.status}').`);
+    }
+    // RE-CLASSIFY UNDER THE LOCK — a bound dispatch changes everything
+    const cls = await classifyDispatch(client, inv);
+    if (cls.state === "accepted") throw httpErr(409, "This link was already accepted by the provider — reconcile the send first (it cannot be regenerated as unsent).");
+    if (cls.state === "indeterminate") throw httpErr(409, "A dispatch attempt for this link is unresolved — reconciliation is required before any correction. No resend will be attempted automatically.");
+    if (cls.state === "refused") throw httpErr(409, "The dispatch was refused — use the refusal correction, then prepare a fresh link.");
+    const child = await openSendChild(client, invitation_id, { for_update: true });
+    if (!child) throw httpErr(409, "No open send commitment for this invitation — regeneration does not apply.");
+    if (inv.lease_application_id) throw httpErr(409, "An application already exists on this invitation.");
+
+    // revoke old FIRST (one-active-invitation index), supersede its child,
+    // then create the replacement + its send child under the SAME parent.
+    await client.query(
+      `update application_invitations
+          set status='revoked', revoked_by_user_id=$1, revoked_at=now(),
+              revoked_reason='superseded_lost_token', updated_at=now()
+        where id=$2`, [actor_user_id, invitation_id]);
+    await conversionService.terminateChildObligation(client, {
+      obligation_id: child.id, resolution_code: "superseded", by_user_id: actor_user_id });
+
+    const made = await createPreparedInvitation(client, {
+      conversion_id: inv.conversion_id, person_id: inv.person_id,
+      property_id: inv.property_id, unit_id: inv.unit_id,
+      expires_at: inv.expires_at, created_by_user_id: actor_user_id,
+    });
+    await client.query(
+      "update application_invitations set superseded_by_invitation_id=$1, updated_at=now() where id=$2",
+      [made.invitation_id, invitation_id]);
+    const newChild = await conversionService.openSendObligationOnPrepare(client, {
+      invitation_id: made.invitation_id, conversion_id: inv.conversion_id,
+      parent_obligation_id: child.parent_obligation_id,
+      candidate_owner_user_ids: [child.assigned_user_id, actor_user_id],
+    });
+    return {
+      receipt: "Fresh link generated. The old link is dead — nothing already sent will work twice.",
+      invitation_id: made.invitation_id, token: made.token,
+      send_obligation_id: newChild.id, parent_obligation_id: child.parent_obligation_id,
+      superseded_invitation_id: invitation_id,
+    };
+  }
+
+  // ── EXPIRY (branched pre-send / post-send; classification under lock) ──
+  async function expireInvitationService(client, { invitation_id, actor_user_id = null }) {
+    const inv = (await client.query(
+      "select * from application_invitations where id=$1 for update", [invitation_id])).rows[0];
+    if (!inv) throw httpErr(404, "No invitation with that id.");
+    if (!ACTIVE_STATUSES.includes(inv.status)) {
+      throw httpErr(409, `Invitation is '${inv.status}' — expiry applies to active invitations.`);
+    }
+    if (!inv.expires_at || new Date(inv.expires_at) > new Date()) {
+      throw httpErr(409, "This invitation has not passed its expiry time.");
+    }
+    if (inv.status === "prepared") {
+      const cls = await classifyDispatch(client, inv); // UNDER the lock
+      if (cls.state === "accepted") throw httpErr(409, "This link was accepted by the provider — reconcile the send first; post-send expiry then applies.");
+      if (cls.state === "indeterminate") throw httpErr(409, "A dispatch attempt is unresolved — reconciliation is required before expiry. No resend will be attempted.");
+      // no_attempt (or durably refused) → branch A: pre-send expiry
+      await client.query(
+        "update application_invitations set status='expired', updated_at=now() where id=$1",
+        [invitation_id]);
+      const child = await openSendChild(client, invitation_id, { for_update: true });
+      if (child) {
+        await conversionService.terminateChildObligation(client, {
+          obligation_id: child.id,
+          resolution_code: cls.state === "refused" ? "dispatch_refused" : "expired",
+          by_user_id: actor_user_id });
+      }
+      return { expired: true, branch: "pre_send", invitation_id,
+               receipt: "Link expired before any send. The post-tour follow-up stays open — prepare a fresh link when ready." };
+    }
+    // branch B: post-send — invitation only; send fact, child, parent, stage untouched
+    await client.query(
+      "update application_invitations set status='expired', updated_at=now() where id=$1",
+      [invitation_id]);
+    return { expired: true, branch: "post_send", invitation_id,
+             receipt: "Sent link expired. The send fact stands; the applicant follow-up is unchanged. A replacement link is applicant-stage work." };
+  }
+
+  // ── REVOCATION (branched by state; classification under lock) ─────────
+  async function revokeInvitationCorrection(client, { invitation_id, actor_user_id, reason = null }) {
+    if (!actor_user_id) throw httpErr(400, "actor_user_id is required.");
+    const inv = (await client.query(
+      "select * from application_invitations where id=$1 for update", [invitation_id])).rows[0];
+    if (!inv) throw httpErr(404, "No invitation with that id.");
+    if (inv.status === "consumed") throw httpErr(409, "This link was already used to open an application — it cannot be revoked; work the application instead.");
+    if (["revoked", "expired"].includes(inv.status)) {
+      return { revoked: false, idempotent: true, invitation_id, status: inv.status };
+    }
+    if (inv.status === "prepared") {
+      const cls = await classifyDispatch(client, inv); // UNDER the lock (M34)
+      if (cls.state === "accepted") throw httpErr(409, "This link was accepted by the provider — reconcile the send first; the revoke then applies as a post-send correction.");
+      if (cls.state === "indeterminate") throw httpErr(409, "A dispatch attempt is unresolved — reconciliation is required before revoking. No resend will be attempted.");
+      await client.query(
+        `update application_invitations
+            set status='revoked', revoked_by_user_id=$1, revoked_at=now(),
+                revoked_reason=$2, updated_at=now()
+          where id=$3`,
+        [actor_user_id, reason || (cls.state === "refused" ? "dispatch_refused" : "operator_revoked"), invitation_id]);
+      const child = await openSendChild(client, invitation_id, { for_update: true });
+      if (child) {
+        await conversionService.terminateChildObligation(client, {
+          obligation_id: child.id,
+          resolution_code: cls.state === "refused" ? "dispatch_refused" : "revoked",
+          by_user_id: actor_user_id });
+      }
+      return { revoked: true, branch: "pre_send", invitation_id,
+               resolution: cls.state === "refused" ? "dispatch_refused" : "revoked",
+               receipt: "Link revoked before any send. The post-tour follow-up stays open — retry is available." };
+    }
+    // sent states: post-send correction — the send fact is history, not fiction
+    await client.query(
+      `update application_invitations
+          set status='revoked', revoked_by_user_id=$1, revoked_at=now(),
+              revoked_reason=$2, updated_at=now()
+        where id=$3`,
+      [actor_user_id, reason || "post_send_correction", invitation_id]);
+    return { revoked: true, branch: "post_send", invitation_id,
+             receipt: "Sent link revoked as a correction. The original send fact, the completed follow-up, and the applicant stage all stand." };
+  }
+
+  // ── RECONCILE-THEN-CORRECT orchestrator (pool-level; SHORT txns; NEVER sends) ──
+  async function reconcileCorrection({ invitation_id, requested_action, actor_user_id, reason = null }) {
+    if (!["revoke", "expire"].includes(requested_action)) {
+      throw httpErr(400, "requested_action must be 'revoke' or 'expire'.");
+    }
+    // txn 1: classify UNDER the lock; if not accepted, perform the correction
+    // in this same locked transaction (the services re-classify internally).
+    const first = await runTx(async (client) => {
+      const inv = (await client.query(
+        "select * from application_invitations where id=$1 for update", [invitation_id])).rows[0];
+      if (!inv) throw httpErr(404, "No invitation with that id.");
+      if (inv.status !== "prepared") return { path: "direct" };
+      const cls = await classifyDispatch(client, inv);
+      if (cls.state === "accepted") return { path: "reconcile_first", sms_sid: cls.sms_sid };
+      return { path: "direct" }; // no_attempt / refused / indeterminate — services enforce
+    });
+
+    if (first.path === "reconcile_first") {
+      // the send already happened on the wire — record it (its OWN locked txn,
+      // pure DB), then apply the requested action with post-send semantics.
+      await runTx(async (client) => {
+        const child = await openSendChild(client, invitation_id, { for_update: true });
+        if (child) {
+          await finalizeInvitationSent(client, {
+            invitation_id, send_obligation_id: child.id,
+            dispatch_source: "provider", provider_message_id: first.sms_sid,
+            actor_user_id: actor_user_id || null,
+            note: "Reconciled: provider acceptance recorded during correction.",
+          });
+        }
+      });
+    }
+    // the requested action re-locks and applies (post-send semantics if reconciled)
+    return runTx(async (client) => {
+      return requested_action === "revoke"
+        ? revokeInvitationCorrection(client, { invitation_id, actor_user_id, reason })
+        : expireInvitationService(client, { invitation_id, actor_user_id });
+    });
+  }
+
+  // ── RETRY with the dispatch gate (prior invitation must be provably unsent) ──
+  async function beginRetryWithDispatchGate(client, { parent_obligation_id, prior_invitation_id, prior_send_obligation_id, by_user_id = null }) {
+    const prior = (await client.query(
+      "select * from application_invitations where id=$1 for update", [prior_invitation_id])).rows[0];
+    if (!prior) throw httpErr(404, "No prior invitation with that id.");
+    const cls = await classifyDispatch(client, prior);
+    if (cls.state === "accepted") throw httpErr(409, "The prior link was accepted by the provider — it was sent; retry would create a duplicate. Reconcile the send instead.");
+    if (cls.state === "indeterminate") throw httpErr(409, "The prior dispatch is unresolved — reconciliation is required before retry. No resend will be attempted.");
+    return conversionService.beginApplicationLinkRetry(client, {
+      parent_obligation_id, prior_invitation_id, prior_send_obligation_id, by_user_id });
+  }
+
+  // ── PROVIDER DISPATCH of a just-prepared link (three phases, lock invariant) ──
+  //  Phase 1 takes the invitation FOR UPDATE, REVERIFIES prepared + open send
+  //  child + no prior dispatch binding, composes the body from the raw token
+  //  the caller still holds, and binds dispatch_comm_event_id. Phase 2 is the
+  //  ONE wire gate. Phase 3 finalizes; refusal takes the correction path.
+  async function dispatchPreparedLinkProvider({ invitation_id, raw_token, actor_user_id = null, message_prefix = "" }) {
+    if (!commBoundary) throw httpErr(409, "Communications boundary is not wired — provider dispatch is unavailable; send manually and attest.");
+    if (!raw_token) throw httpErr(400, "raw_token is required (provider dispatch happens in the same action that prepared the link).");
+    const base = (process.env.PUBLIC_APPLY_BASE_URL || "").trim().replace(/\/$/, "");
+    if (!base) throw httpErr(409, "PUBLIC_APPLY_BASE_URL is not configured — provider dispatch is unavailable.");
+
+    // Phase 1 (txn): LOCK + REVERIFY + bind the save-first comm_event
+    const made = await runTx(async (client) => {
+      const inv = (await client.query(
+        "select * from application_invitations where id=$1 for update", [invitation_id])).rows[0];
+      if (!inv) throw httpErr(404, "No invitation with that id.");
+      if (inv.status !== "prepared") throw httpErr(409, `Invitation is '${inv.status}' — dispatch requires a prepared link (a correction may have won the race).`);
+      if (digestToken(raw_token) !== inv.token_digest) throw httpErr(403, "That token does not match this invitation.");
+      if (inv.dispatch_comm_event_id) throw httpErr(409, "A dispatch attempt is already bound to this link — reconcile it; no second attempt will be made automatically.");
+      const child = await openSendChild(client, invitation_id, { for_update: true });
+      if (!child) throw httpErr(409, "No open send commitment for this invitation — dispatch does not apply.");
+      const per = (await client.query("select id, phone from persons where id=$1", [inv.person_id])).rows[0];
+      const url = `${base}/t/application/${raw_token}`;
+      const body = `${message_prefix ? message_prefix + " " : ""}Here's your secure application link: ${url}`;
+      const evt = (await client.query(
+        `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification, sender_role, sent_by_user_id)
+         values ($1,$2,$3,null,'text','outbound',$4,'leasing','agent',$5) returning id`,
+        [inv.property_id, inv.person_id, inv.unit_id, body, actor_user_id])).rows[0];
+      await client.query(
+        "update application_invitations set dispatch_comm_event_id=$1, updated_at=now() where id=$2",
+        [evt.id, invitation_id]);
+      return { inv, child, body, evt_id: evt.id, phone: per ? per.phone : null };
+    });
+
+    if (!made.phone) {
+      // refusal correction (its own txn, re-locking; classification will read 'refused' once stamped)
+      await runTx(async (client) => {
+        await client.query("update comm_events set sms_status='refused', sms_error='no_phone_on_person' where id=$1", [made.evt_id]);
+        await revokeInvitationCorrection(client, { invitation_id, actor_user_id: actor_user_id || made.inv.created_by_user_id, reason: "dispatch refused: no_phone_on_person" });
+      });
+      return { dispatched: false, reason: "no_phone_on_person", invitation_id, status: "revoked",
+               receipt: "Dispatch refused — the person has no phone on file. The link is revoked; the follow-up stays open for a fresh attempt." };
+    }
+
+    // Phase 2: the ONE wire gate (outside any txn)
+    const wire = await commBoundary.sendPropertySms({
+      property_id: made.inv.property_id, recipient: made.phone, body: made.body,
+      purpose: "application_link", person_id: made.inv.person_id,
+      eventId: made.evt_id, actor_user_id,
+    });
+
+    if (!wire.sent) {
+      await runTx(async (client) => {
+        // durable refusal evidence FIRST (idempotent with the boundary's own
+        // stamp) so the under-lock classification reads 'refused', not
+        // 'indeterminate' — this path witnessed the refusal first-hand.
+        await client.query(
+          "update comm_events set sms_status=coalesce(sms_status,'refused'), sms_error=coalesce(sms_error,$1) where id=$2 and sms_sid is null",
+          [String(wire.reason || "gate_refused"), made.evt_id]);
+        await revokeInvitationCorrection(client, { invitation_id, actor_user_id: actor_user_id || made.inv.created_by_user_id, reason: `dispatch refused by communications gate: ${wire.reason}` });
+      });
+      return { dispatched: false, reason: wire.reason, invitation_id, status: "revoked",
+               receipt: `Dispatch refused (${wire.reason}). The link is revoked; the follow-up stays open — retry is available.` };
+    }
+
+    // Phase 3 (txn): finalize — the transition + closures happen HERE
+    const fin = await runTx(async (client) => {
+      return finalizeInvitationSent(client, {
+        invitation_id, send_obligation_id: made.child.id,
+        dispatch_source: "provider", provider_message_id: wire.sid,
+        actor_user_id,
+      });
+    });
+    return { dispatched: true, ...fin };
+  }
+
+  router._service = {
+    sendApplication, createAndDispatchApplicationInvitation, createPreparedInvitation,
+    attestInvitationSent, submitApplicationService, closeApprovalGate, spawnApprovalGate,
+    approvalGateRole, resolveTenantContext,
+    // v2.5-r1 application-link lifecycle
+    inspectDispatchState, prepareApplicationLinkForObligation, finalizeInvitationSent,
+    regenerateInvitation, expireInvitationService, revokeInvitationCorrection,
+    reconcileCorrection, beginRetryWithDispatchGate, dispatchPreparedLinkProvider,
+  };
+
   return router;
 };
