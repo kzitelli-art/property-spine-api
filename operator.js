@@ -2060,46 +2060,116 @@ module.exports = function operatorModule(deps) {
     return { offerable: true, state: space.availability_state, space };
   }
 
+    // ══════════════════════════════════════════════════════════════════
+  //  APPLICATION LINK — GOVERNED STAFF-SESSION DOORS (v2.5-r1)
+  //
+  //  BIRTH (new intent / first preparation / provider send-at-prepare) is
+  //  activation-gated: kill switch + property allowlist + the person's
+  //  CURRENT internal_qa classification + this authenticated session.
+  //  DRAIN/CORRECTION (finalize, revoke, expire, regenerate, retry) works
+  //  when birth is disabled — but always property-authed via the session.
+  //  Every correction re-classifies dispatch state UNDER the invitation
+  //  lock inside the services; these adapters add no business logic.
+  // ══════════════════════════════════════════════════════════════════
+  async function applicationBirthGate(req, person_id) {
+    if (String(process.env.APPLICATION_INTENT_PREPARE_ENABLED || "").toLowerCase() !== "true") {
+      return { ok: false, status: 503, error: "application_intent_disabled",
+               receipt: "Application-link birth is not enabled in this environment." };
+    }
+    const allow = String(process.env.APPLICATION_INTENT_PROPERTY_IDS || "")
+      .split(",").map((s) => s.trim()).filter(Boolean);
+    if (!allow.includes(String(req.operator.property_id))) {
+      return { ok: false, status: 403, error: "property_not_activated",
+               receipt: "This property is not activated for application-link birth." };
+    }
+    if (person_id) {
+      const cls = (await pool.query(
+        `select record_class from person_property_classifications
+          where person_id=$1 and property_id=$2 and superseded_at is null
+          order by classified_at desc limit 1`,
+        [person_id, req.operator.property_id])).rows[0];
+      if (!cls || cls.record_class !== "internal_qa") {
+        return { ok: false, status: 403, error: "person_not_internal_qa",
+                 receipt: "During controlled activation, application-link birth is limited to internal QA records." };
+      }
+    }
+    return { ok: true };
+  }
+
+  function svcGuard(res, fn) {
+    if (!applicationInvitations || !applicationInvitations[fn]) {
+      res.status(503).json({ error: "invitation service not wired." });
+      return false;
+    }
+    return true;
+  }
+
+  // 1) RECORD INTENT (birth) — spawns the prepare child under the exact parent.
+  router.post("/operator/leasing/application-intent", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!conversionService || !conversionService.recordApplicationIntent) {
+      return res.status(503).json({ error: "conversion service not wired." });
+    }
+    const { conversion_id, idempotency_key, evidence_type = null, evidence_ref = null } = req.body || {};
+    if (!conversion_id) return res.status(400).json({ error: "conversion_id is required." });
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const conv = (await client.query(
+        "select id, property_id, person_id from leasing_conversions where id=$1", [conversion_id])).rows[0];
+      if (!conv) { await client.query("rollback"); return res.status(404).json({ error: "conversion not found." }); }
+      if (String(conv.property_id) !== String(req.operator.property_id)) {
+        await client.query("rollback"); return res.status(403).json({ error: "Not in your property scope." });
+      }
+      const gate = await applicationBirthGate(req, conv.person_id);
+      if (!gate.ok) { await client.query("rollback"); return res.status(gate.status).json(gate); }
+      const out = await conversionService.recordApplicationIntent(client, {
+        conversion_id, source: "operator_recorded",
+        recorded_by_user_id: req.operator.id,            // server-derived actor
+        idempotency_key: idempotency_key || null,
+        evidence_type, evidence_ref,
+      });
+      await client.query("commit");
+      return res.json({ recorded: out.recorded, intent_id: out.intent ? out.intent.id : null,
+        prepare_obligation_id: out.obligation.id, parent_obligation_id: out.obligation.parent_obligation_id,
+        receipt: out.recorded ? "Intent recorded — the prepare commitment is open under the post-tour follow-up."
+                              : "Already recorded — the existing prepare commitment stands." });
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    } finally { client.release(); }
+  });
+
+  // 2) PREPARE (birth) — against the EXACT prepare commitment. Raw token once.
   router.post("/operator/leasing/application-invitations", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
-    if (!applicationInvitations || !applicationInvitations.createPreparedInvitation) {
-      return res.status(503).json({ error: "invitation service not wired." });
-    }
-    // FIX-FORWARD (applicant-link origin): the applicant URL is built from the
-    // EXPLICIT configured public origin — never the request host, never a
-    // client-side origin. If the origin is not configured, FAIL CLOSED before
-    // creating anything: a durable invitation whose link cannot be built would
-    // be a plausible-but-broken artifact. (Semantic debt, recorded: APP_BASE_URL
-    // is a generic app-url var already used for /t/ public links; it should
-    // eventually become an explicitly named public-origin configuration.)
+    if (!svcGuard(res, "prepareApplicationLinkForObligation")) return;
     const APPLICANT_ORIGIN = String(process.env.APP_BASE_URL || "").replace(/\/+$/, "");
     if (!APPLICANT_ORIGIN) {
       return res.status(503).json({ error: "applicant_link_origin_not_configured",
         receipt: "APP_BASE_URL is not set. Refusing to create an invitation whose applicant link cannot be built." });
     }
-    const unit_id = req.body && req.body.unit_id || null;
+    const { prepare_obligation_id, unit_id, expires_at = null, intended_move_in = null } = req.body || {};
+    if (!prepare_obligation_id) return res.status(400).json({ error: "prepare_obligation_id is required — prepare acts on the exact open commitment." });
     if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
-    // REVALIDATE at send time: a unit attached earlier may have become
-    // unavailable/committed. Only offerable units may receive an application.
-    const chk = await unitOfferableState(req.operator.property_id, unit_id, (req.body && req.body.intended_move_in) || null);
-    if (!chk.offerable) {
-      return res.status(409).json({ error: "unit_not_offerable", reason: chk.reason,
-        state: chk.state || null, receipt: "That unit can no longer be offered. Choose a currently leaseable unit." });
-    }
     const client = await pool.connect();
     try {
       await client.query("begin");
-      const out = await applicationInvitations.createPreparedInvitation(client, {
-        property_id: req.operator.property_id,             // session scope, not body
-        person_id: req.body && req.body.person_id || null,
-        unit_id: unit_id,
-        conversion_id: req.body && req.body.conversion_id || null,
-        created_by_user_id: req.operator.id,               // server-derived actor
+      const ob = (await client.query(
+        "select id, property_id, person_id from obligations where id=$1", [prepare_obligation_id])).rows[0];
+      if (!ob) { await client.query("rollback"); return res.status(404).json({ error: "No obligation with that id." }); }
+      if (String(ob.property_id) !== String(req.operator.property_id)) {
+        await client.query("rollback"); return res.status(403).json({ error: "Not in your property scope." });
+      }
+      const gate = await applicationBirthGate(req, ob.person_id);
+      if (!gate.ok) { await client.query("rollback"); return res.status(gate.status).json(gate); }
+      const out = await applicationInvitations.prepareApplicationLinkForObligation(client, {
+        prepare_obligation_id, unit_id, expires_at,
+        actor_user_id: req.operator.id,
+        unitOfferable: async (_c, { property_id, unit_id }) =>
+          unitOfferableState(property_id, unit_id, intended_move_in),
       });
       await client.query("commit");
-      // the applicant URL, built from the EXPLICIT configured public origin
-      // (validated fail-closed at the top of this route) — never the request
-      // host. Raw token appears only here, once.
       out.link = `${APPLICANT_ORIGIN}/t/application/${out.token}`;
       return res.json(out);
     } catch (e) {
@@ -2108,31 +2178,71 @@ module.exports = function operatorModule(deps) {
     } finally { client.release(); }
   });
 
+  // 3) PROVIDER SEND (birth) — prepare + text in ONE operator action.
+  //    Phase 1 re-locks + reverifies inside the service (M34).
+  router.post("/operator/leasing/application-invitations/send", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!svcGuard(res, "dispatchPreparedLinkProvider")) return;
+    const { prepare_obligation_id, unit_id, expires_at = null, intended_move_in = null, message_prefix = "" } = req.body || {};
+    if (!prepare_obligation_id) return res.status(400).json({ error: "prepare_obligation_id is required." });
+    if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
+    const client = await pool.connect();
+    let prepared;
+    try {
+      await client.query("begin");
+      const ob = (await client.query(
+        "select id, property_id, person_id from obligations where id=$1", [prepare_obligation_id])).rows[0];
+      if (!ob) { await client.query("rollback"); return res.status(404).json({ error: "No obligation with that id." }); }
+      if (String(ob.property_id) !== String(req.operator.property_id)) {
+        await client.query("rollback"); return res.status(403).json({ error: "Not in your property scope." });
+      }
+      const gate = await applicationBirthGate(req, ob.person_id);
+      if (!gate.ok) { await client.query("rollback"); return res.status(gate.status).json(gate); }
+      prepared = await applicationInvitations.prepareApplicationLinkForObligation(client, {
+        prepare_obligation_id, unit_id, expires_at,
+        actor_user_id: req.operator.id,
+        unitOfferable: async (_c, { property_id, unit_id }) =>
+          unitOfferableState(property_id, unit_id, intended_move_in),
+      });
+      await client.query("commit");
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      client.release();
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    }
+    client.release();
+    try {
+      const out = await applicationInvitations.dispatchPreparedLinkProvider({
+        invitation_id: prepared.invitation_id, raw_token: prepared.token,
+        actor_user_id: req.operator.id, message_prefix,
+      });
+      return res.status(out.dispatched ? 200 : 409).json(out);
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message,
+        invitation_id: prepared.invitation_id,
+        receipt: "The link was prepared but dispatch did not complete — its state is recorded; use the correction actions." });
+    }
+  });
+
+  // 4) FINALIZE MANUAL SEND (drain) — the one final-send transaction.
   router.post("/operator/leasing/application-invitations/:id/sent", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
-    if (!applicationInvitations || !applicationInvitations.attestInvitationSent) {
-      return res.status(503).json({ error: "invitation service not wired." });
-    }
+    if (!svcGuard(res, "finalizeInvitationSent")) return;
+    const { send_obligation_id, channel, recipient_snapshot = null, note = null } = req.body || {};
+    if (!send_obligation_id) return res.status(400).json({ error: "send_obligation_id is required — attestation closes the exact send commitment." });
     const client = await pool.connect();
     try {
       await client.query("begin");
-      // PROPERTY WALL: the invitation must belong to the session's property.
-      // Server-derived sent_by_user_id alone is not enough — an operator must
-      // not attest a send on another property's invitation.
       const inv = (await client.query(
         "select id, property_id from application_invitations where id=$1", [req.params.id])).rows[0];
       if (!inv) { await client.query("rollback"); return res.status(404).json({ error: "No invitation with that id." }); }
       if (String(inv.property_id) !== String(req.operator.property_id)) {
-        await client.query("rollback");
-        return res.status(403).json({ error: "Not in your property scope." });
+        await client.query("rollback"); return res.status(403).json({ error: "Not in your property scope." });
       }
-      const out = await applicationInvitations.attestInvitationSent(client, {
-        invitation_id: req.params.id,
-        dispatch_source: "manual",
-        // preserve the ACTUAL channel + recipient the operator reports.
-        channel: (req.body && req.body.channel) || "other",
-        recipient_snapshot: (req.body && req.body.recipient_snapshot) || null,
-        sent_by_user_id: req.operator.id,                  // server-derived — who attests
+      const out = await applicationInvitations.finalizeInvitationSent(client, {
+        invitation_id: req.params.id, send_obligation_id,
+        dispatch_source: "manual", channel, recipient_snapshot, note,
+        actor_user_id: req.operator.id,
       });
       await client.query("commit");
       return res.json(out);
@@ -2142,57 +2252,113 @@ module.exports = function operatorModule(deps) {
     } finally { client.release(); }
   });
 
-  // ONE-TAP SEND (real SMS). The atomic business action behind the Post-Tour
-  // "Send application" button: server revalidates the unit against canonical
-  // availability, dispatches the link over SMS through the ONE comms boundary
-  // (Twilio), records the provider SID, and — ONLY on provider acceptance —
-  // advances the opportunity to Applicants via the ONE shared transition helper.
-  // Dispatch failure ⇒ NO rung advance; honest error for the UI's Retry.
-  // Operator + property are server-derived from the session; unit is required.
-  router.post("/operator/leasing/application-invitations/send", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+  // 5) REVOKE / 6) EXPIRE (corrections) — reconcile dispatch state FIRST.
+  async function correctionRoute(req, res, requested_action) {
     res.set("Cache-Control", "no-store");
-    if (!applicationInvitations || !applicationInvitations.sendApplication) {
-      return res.status(503).json({ error: "send service not wired." });
-    }
-    const property_id = req.operator.property_id;
-    const person_id = (req.body && req.body.person_id) || null;
-    const unit_id = (req.body && req.body.unit_id) || null;
-    const conversion_id = (req.body && req.body.conversion_id) || null;
-    if (!person_id) return res.status(400).json({ error: "person_id is required." });
-    if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
-
-    // REVALIDATE at the moment of dispatch — the unit (attached or just picked)
-    // may have become unavailable after the picker loaded. Reject honestly.
-    // (Route-level because it uses the availability projection; the business
-    //  operation itself is one call below.)
-    const chk = await unitOfferableState(property_id, unit_id, (req.body && req.body.intended_move_in) || null);
-    if (!chk.offerable) {
-      return res.status(409).json({ error: "unit_not_offerable", reason: chk.reason, state: chk.state || null,
-        receipt: "That unit can no longer be offered. Choose a currently leaseable unit." });
-    }
-
-    // THE ONE OPERATION — guard double-tap, dispatch, advance. Actor + property
-    // server-derived. The route never sees the internal steps.
-    let out;
+    if (!svcGuard(res, "reconcileCorrection")) return;
     try {
-      out = await applicationInvitations.sendApplication({
-        property_id, person_id, unit_id, conversion_id, created_by_user_id: req.operator.id });
+      const inv = (await pool.query(
+        "select id, property_id from application_invitations where id=$1", [req.params.id])).rows[0];
+      if (!inv) return res.status(404).json({ error: "No invitation with that id." });
+      if (String(inv.property_id) !== String(req.operator.property_id)) {
+        return res.status(403).json({ error: "Not in your property scope." });
+      }
+      const out = await applicationInvitations.reconcileCorrection({
+        invitation_id: req.params.id, requested_action,
+        actor_user_id: req.operator.id, reason: (req.body && req.body.reason) || null,
+      });
+      return res.json(out);
     } catch (e) {
       return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
     }
-    if (!out || !out.sent) {
-      const code = (out && (out.reason === "boundary_not_wired" || out.reason === "public_apply_base_url_not_configured")) ? 503 : 409;
-      return res.status(code).json({ error: out ? out.reason : "dispatch_failed",
-        receipt: (out && out.receipt) || "The application couldn't be sent. Try again.",
-        retry_requires_new_invitation: !!(out && out.retry_requires_new_invitation) });
+  }
+  router.post("/operator/leasing/application-invitations/:id/revoke", requireOperator, requireLeasingModuleAccess,
+    (req, res) => correctionRoute(req, res, "revoke"));
+  router.post("/operator/leasing/application-invitations/:id/expire", requireOperator, requireLeasingModuleAccess,
+    (req, res) => correctionRoute(req, res, "expire"));
+
+  // 7) REGENERATE (lost-token correction; drain).
+  router.post("/operator/leasing/application-invitations/:id/regenerate", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!svcGuard(res, "regenerateInvitation")) return;
+    const APPLICANT_ORIGIN = String(process.env.APP_BASE_URL || "").replace(/\/+$/, "");
+    if (!APPLICANT_ORIGIN) {
+      return res.status(503).json({ error: "applicant_link_origin_not_configured" });
     }
-    return res.json({
-      sent: true, idempotent: !!out.idempotent, invitation_id: out.invitation_id, status: out.status,
-      provider_message_id: out.provider_message_id || null,
-      applicant_followup: out.applicant_followup || null,
-      receipt: out.receipt || "Application sent.",
-    });
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const inv = (await client.query(
+        "select id, property_id from application_invitations where id=$1", [req.params.id])).rows[0];
+      if (!inv) { await client.query("rollback"); return res.status(404).json({ error: "No invitation with that id." }); }
+      if (String(inv.property_id) !== String(req.operator.property_id)) {
+        await client.query("rollback"); return res.status(403).json({ error: "Not in your property scope." });
+      }
+      const out = await applicationInvitations.regenerateInvitation(client, {
+        invitation_id: req.params.id, actor_user_id: req.operator.id,
+      });
+      await client.query("commit");
+      out.link = `${APPLICANT_ORIGIN}/t/application/${out.token}`;
+      return res.json(out);
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    } finally { client.release(); }
   });
+
+  // 8) RETRY (correction) — restores a REAL prepare child under the same parent.
+  router.post("/operator/leasing/application-link-retry", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!svcGuard(res, "beginRetryWithDispatchGate")) return;
+    const { parent_obligation_id, prior_invitation_id, prior_send_obligation_id } = req.body || {};
+    if (!parent_obligation_id || !prior_invitation_id || !prior_send_obligation_id) {
+      return res.status(400).json({ error: "parent_obligation_id, prior_invitation_id, and prior_send_obligation_id are required." });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const parent = (await client.query(
+        "select id, property_id from obligations where id=$1", [parent_obligation_id])).rows[0];
+      if (!parent) { await client.query("rollback"); return res.status(404).json({ error: "No obligation with that id." }); }
+      if (String(parent.property_id) !== String(req.operator.property_id)) {
+        await client.query("rollback"); return res.status(403).json({ error: "Not in your property scope." });
+      }
+      const out = await applicationInvitations.beginRetryWithDispatchGate(client, {
+        parent_obligation_id, prior_invitation_id, prior_send_obligation_id,
+        by_user_id: req.operator.id,
+      });
+      await client.query("commit");
+      return res.json({ retry_child_obligation_id: out.retry_child.id,
+        parent_obligation_id, intent_id: out.intent_id,
+        receipt: "A fresh prepare commitment is open under the same post-tour follow-up." });
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    } finally { client.release(); }
+  });
+
+  // 9) APPLICATION NEXT (read) — the rooted projection; the browser derives nothing.
+  router.get("/operator/leasing/application-next", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!conversionService || !conversionService.resolveApplicationNext) {
+      return res.status(503).json({ error: "conversion service not wired." });
+    }
+    const conversion_id = req.query && req.query.conversion_id;
+    if (!conversion_id) return res.status(400).json({ error: "conversion_id is required." });
+    try {
+      const conv = (await pool.query(
+        "select id, property_id from leasing_conversions where id=$1", [conversion_id])).rows[0];
+      if (!conv) return res.status(404).json({ error: "conversion not found." });
+      if (String(conv.property_id) !== String(req.operator.property_id)) {
+        return res.status(403).json({ error: "Not in your property scope." });
+      }
+      const next = await conversionService.resolveApplicationNext(pool, { conversion_id });
+      return res.json({ application_next: next });
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    }
+  });
+
 
   // LEASEABLE UNITS for the send-application selector. Session-gated, read-only,
   // over the EXISTING availability projection (availability.js readAvailability)
