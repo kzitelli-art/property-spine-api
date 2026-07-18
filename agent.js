@@ -283,16 +283,19 @@ THE GOAL
 
 Answer the prospect, understand what matters to them, keep momentum, and get them into the building when there is real interest. You are trying to make something happen for them without inventing facts or becoming pushy.
 
-THE FOUR MOVES
+THE FIVE MOVES
 
 Every inbound gets a reply.
 
 1. ANSWER: The fact is verified. Answer it directly.
 2. REDIRECT: The question asks for a subjective safety, demographic, or steering judgment. Pivot to practical facts or objective public sources.
-3. DEFER: The fact is not verified. Say you are checking the exact answer, then keep the conversation moving.
-4. HANDOFF: The prospect is frustrated, explicitly wants a person, requests an accommodation, reports an emergency, or raises a direct legal or discrimination complaint. Say you are getting the team involved and add this exact tag on its own line:
+3. DEFER: The fact is not verified but YOU could find it yourself (look it up, check live data). Say you are checking the exact answer, then keep the conversation moving. No one else needs to do anything.
+4. ESCALATE: A HUMAN must DO something before you can answer — confirm a unit's readiness or move-in date, accelerate a turn, verify parking availability, get an exception or waiver decision, or check an operating fact only staff can confirm. Call the create_staff_obligation tool to put that work on the team. You KEEP the conversation. Do NOT emit a handoff tag — this is not a handoff. Match your words to what the tool tells you: if it says the work was SENT to the team, say you've sent it to the team and will follow up; only say the team is actively working on it if the tool confirms that; only give a specific follow-up time if the tool returns a real due time.
+5. HANDOFF: The prospect is frustrated, explicitly wants a person, requests an accommodation, reports an emergency, or raises a direct legal or discrimination complaint. This is when a PERSON must take over the CONVERSATION itself. Say you are getting the team involved and add this exact tag on its own line:
 
 [[HANDOFF: short reason]]
+
+The line between ESCALATE and HANDOFF: ESCALATE means staff has WORK to do while you keep talking. HANDOFF means a human must OWN the conversation. Readiness checks, turns, and exceptions are ESCALATE, never HANDOFF.
 
 GROUNDING
 
@@ -436,11 +439,13 @@ For "What kind of people live there?":
 
 HANDOFFS AND PROMISES
 
-A normal unknown fact is a DEFER, not a handoff.
+A normal unknown fact you could find yourself is a DEFER, not a handoff.
 
-Bring in a person only for the handoff conditions above.
+If a HUMAN must do work before you can answer (readiness, a turn, an exception, an operating check only staff can confirm), that is an ESCALATE: call create_staff_obligation, then KEEP the conversation. It is not a handoff — do not emit the tag.
 
-Do not promise "I'll call in two hours" or "someone will reach out shortly" unless a real obligation with an owner and due time was created.
+Bring in a person to OWN the conversation (a HANDOFF) only for the handoff conditions above.
+
+Do not promise "I'll call in two hours" or "someone will reach out shortly" unless a real obligation with an owner and due time was created. You only know an obligation was created when the create_staff_obligation tool returns success — never claim it before that. When the tool says the work was SENT to the team, say you've sent it and will follow up; say the team is actively working on it only if the tool confirms that; state a specific time only if the tool returned a real due time.
 
 If the obligation exists, say the team is being brought in.
 
@@ -946,10 +951,32 @@ Reply with ONLY the message text.`;
           // Capped to bound latency and cost on an SMS reply. Class 1 primitive.
           const AREA_KNOWLEDGE_TOOL = { type: "web_search_20250305", name: "web_search", max_uses: 3 };
 
+          // ── OPERATIONAL ESCALATION (Slice 1) ───────────────────────────
+          // When a HUMAN must DO something before the agent can answer —
+          // confirm readiness/move-in date, accelerate a turn, verify parking,
+          // get an exception/waiver, check a staff-only operating fact — the
+          // model calls this to put real WORK on the team. This is NOT a
+          // handoff: the AI keeps the conversation. The service write (below)
+          // is the sole authority that the work is owned; the model may only
+          // tell the prospect "the team is on it" AFTER the tool returns owned,
+          // and may only state a time if the tool returns a real due time.
+          // Always exposed — an escalation need can arise in any conversation.
+          const ESCALATE_TOOL = {
+            name: "create_staff_obligation",
+            description: "Put real WORK on the leasing team when a HUMAN must DO something before you can answer — confirm a unit's readiness or move-in date, accelerate a turnover, verify parking availability, get an exception or waiver decision, or check an operating fact only staff can confirm. This does NOT hand off the conversation — you keep talking to the prospect. Do NOT call this for a fact you could look up yourself (that's a plain answer/defer), and do NOT call this for frustration, a request for a person, an accommodation, an emergency, or a legal/discrimination complaint (those are a handoff, not this). After this returns, you may tell the prospect the team is on it — but ONLY a specific time if the result includes a due time.",
+            input_schema: {
+              type: "object",
+              properties: {
+                reason: { type: "string", description: "short plain-language description of the work the team must do, e.g. 'confirm unit 214 can be ready for Sunday move-in'" },
+              },
+              required: ["reason"],
+            },
+          };
+
           const activeTools = (bookingUsable
             ? [INVENTORY_TOOL, OFFER_TOUR_SLOTS_TOOL, BOOK_TOUR_TOOL]
             : [INVENTORY_TOOL]
-          ).concat([AREA_KNOWLEDGE_TOOL]);
+          ).concat([ESCALATE_TOOL, AREA_KNOWLEDGE_TOOL]);
 
           let r = await anthropic.messages.create({
             model: MODEL, max_tokens: 320, system: built.system, messages: built.messages,
@@ -961,6 +988,7 @@ Reply with ONLY the message text.`;
           const invUse = (r.content || []).find(x => x.type === "tool_use" && x.name === "find_available_units");
           const offerUse = (r.content || []).find(x => x.type === "tool_use" && x.name === "offer_tour_slots");
           const bookUse = (r.content || []).find(x => x.type === "tool_use" && x.name === "book_tour");
+          const escUse = (r.content || []).find(x => x.type === "tool_use" && x.name === "create_staff_obligation");
 
           if (invUse) {
             const qc = await pool.connect();
@@ -1126,9 +1154,112 @@ Reply with ONLY the message text.`;
               tools: activeTools,
             });
             providerReqId = (r && r.id) || providerReqId;
-          }
+          } else if (escUse) {
+            // ── OPERATIONAL ESCALATION WRITE (Slice 1) ─────────────────────
+            // A human must DO work before the agent can answer. Create a staff
+            // obligation through the SAME canonical service the inbound path
+            // already uses (spawnObligationFromEvent) — no new table, no
+            // parallel path. The AI keeps the conversation (no [[HANDOFF]]).
+            //
+            // IDEMPOTENCY (guardrail 2), reason-keyed so it does NOT collapse
+            // two DIFFERENT tasks: the durable anchor is the canonical inbound
+            // comm_event id (tx1.inbound_id — present on EVERY door, SMS or not,
+            // so no null collision) COMBINED with a normalized hash of the task
+            // reason. dedupe_key = sha256(inbound_id + ':' + norm(reason)).
+            //   • same inbound + same task (retry / concurrent double) → same
+            //     key → unique index (086) converges: 23505 loser resolves to
+            //     the existing row, never a duplicate, never a 500.
+            //   • same inbound + a DIFFERENT task ("confirm readiness AND check
+            //     parking") → different reason → different key → a SECOND,
+            //     distinct obligation. The DB never treats two real tasks as one.
+            //
+            // OWNERSHIP LADDER (guardrail 1) — the tool result licenses only the
+            // language the row can honestly support:
+            //   • role only (assigned_role, no assigned_user_id) → "sent to the
+            //     leasing team" (routed, not yet accepted).
+            //   • named user accepted (assigned_user_id) → "the team is working on it".
+            //   • real due_at → a specific follow-up time may be stated.
+            // Slice 1 writes role-only, so the honest default is "sent to the team".
+            const escReason = (escUse.input && String(escUse.input.reason || "").trim()) || "operational check requested by prospect";
+            const normReason = escReason.toLowerCase().replace(/\s+/g, " ").trim();
+            const escDedupeKey = tx1.inbound_id
+              ? crypto.createHash("sha256").update(`${tx1.inbound_id}:${normReason}`).digest("hex")
+              : null;
+            let escOb = null, escErr = null;
+            try {
+              const ec = await pool.connect();
+              try {
+                await ec.query("begin");
+                // Converge on an existing obligation for THIS inbound+task (idempotent replay).
+                const existing = escDedupeKey
+                  ? (await ec.query(
+                      `select * from obligations where dedupe_key = $1 and type = 'operational_escalation' limit 1`,
+                      [escDedupeKey]
+                    )).rows[0]
+                  : null;
+                if (existing) {
+                  escOb = existing;
+                } else {
+                  escOb = await spawnObligationFromEvent(ec, {
+                    property_id: tx1.property_id, person_id: tx1.person_id, unit_id: tx1.unit_id || null,
+                    source_event_id: tx1.inbound_id || null,
+                    module: "agent", type: "operational_escalation",
+                    label: escReason.slice(0, 240),
+                    owner_type: "human", assigned_role: "leasing_manager",
+                    dedupe_key: escDedupeKey,
+                  });
+                }
+                await ec.query("commit");
+              } catch (e) {
+                try { await ec.query("rollback"); } catch (_) {}
+                // 23505 = concurrent double on the SAME inbound+task → resolve existing.
+                if (e && e.code === "23505" && escDedupeKey) {
+                  const ex = (await pool.query(
+                    `select * from obligations where dedupe_key=$1 and type='operational_escalation' limit 1`,
+                    [escDedupeKey]
+                  )).rows[0];
+                  if (ex) escOb = ex;
+                }
+                if (!escOb) { escErr = e; console.error("[agent/inbound] escalation write failed:", e.message); }
+              } finally { ec.release(); }
+            } catch (e) { escErr = e; console.error("[agent/inbound] escalation connect failed:", e.message); }
 
-          // ── TERMINATE ON TEXT ──────────────────────────────────────────────
+            // OWNER-GATED tool result on the three-tier ladder. The model may
+            // only claim what the row supports: routed (role) < accepted (user)
+            // < timed (due_at). Never fabricate a stronger tier.
+            const escWritten = !!(escOb && escOb.status === "open");
+            const escAccepted = !!(escOb && escOb.assigned_user_id);   // a named human accepted
+            const escRouted = !!(escOb && escOb.assigned_role);        // routed to a role
+            const escToolResult = escWritten
+              ? JSON.stringify({
+                  created: true,
+                  ownership: escAccepted ? "accepted" : (escRouted ? "routed" : "unassigned"),
+                  due_at: escOb.due_at || null,
+                  note: escOb.due_at
+                    ? "The work is on the team and has a due time. You MAY say the team is working on it and you'll follow up by that time. Keep the conversation — do NOT hand off. One short warm message."
+                    : escAccepted
+                      ? "A teammate has this. You MAY say the team is working on it. Do NOT promise a specific time (no due time yet). Keep the conversation — do NOT hand off. One short warm message."
+                      : escRouted
+                        ? "This is SENT to the leasing team (routed, not yet accepted). Say you've sent it to the team and you'll follow up — do NOT say someone is already working on it and do NOT promise a specific time. Keep the conversation — do NOT hand off. One short warm message."
+                        : "The work is recorded but not yet owned. Say you've flagged it for the team and you'll follow up. Do NOT promise a time. Keep the conversation — do NOT hand off. One short warm message.",
+                })
+              : JSON.stringify({
+                  created: false,
+                  ownership: "none",
+                  note: "The work could NOT be put on the team. Do NOT claim anyone is on it and do NOT promise a follow-up. Tell the prospect honestly that you're checking on it. Keep the conversation — do NOT hand off.",
+                });
+
+            r = await anthropic.messages.create({
+              model: MODEL, max_tokens: 320, system: built.system,
+              messages: [
+                ...built.messages,
+                { role: "assistant", content: r.content },
+                { role: "user", content: pairAllToolResults(r.content, new Map([[escUse.id, escToolResult]])) },
+              ],
+              tools: activeTools,
+            });
+            providerReqId = (r && r.id) || providerReqId;
+          }
           // After the tool round, the model's latest response `r` may STILL
           // contain a tool_use — it chained (offer→book), or called a fresh tool
           // in response to the tool_result. If we stopped here, `generated` would
