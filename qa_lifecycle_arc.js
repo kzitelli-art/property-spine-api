@@ -84,7 +84,19 @@ function halt(step, status, json) {
     await pool.end();
     process.exit(1);
   }
-  const authed = { "x-staff-session": STAFF_SESSION };
+  // Two operator-auth regimes cross this arc: the leasingleads.js routes
+  // (book, complete) still use the LEGACY shared OPERATOR_KEY (x-operator-key);
+  // the operator.js application-intent route uses the CANONICAL per-user
+  // session (x-staff-session). Send both so each route finds what it needs.
+  // (The legacy→canonical consolidation is a separate, known seam — not this arc.)
+  const OPERATOR_KEY = process.env.OPERATOR_KEY || "";
+  if (!OPERATOR_KEY) {
+    console.error("\n✗ No OPERATOR_KEY in env. The leasingleads book/complete routes need x-operator-key.");
+    console.error("  It's already set in Render — run with it in scope:");
+    console.error("  OPERATOR_KEY=\"$OPERATOR_KEY\" STAFF_SESSION=\"<token>\" node qa_lifecycle_arc.js");
+    await pool.end(); process.exit(1);
+  }
+  const authed = { "x-staff-session": STAFF_SESSION, "x-operator-key": OPERATOR_KEY };
 
   // ── STEP 1: INTAKE ────────────────────────────────────────────────
   console.log("\n[1/5] intake → POST /leasing/intake");
