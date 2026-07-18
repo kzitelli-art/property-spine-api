@@ -103,7 +103,7 @@ async function main() {
     chk("A. exactly one operational_escalation obligation", obs.length === 1, `count=${obs.length}`);
     chk("A. obligation routed to a role (assigned_role present)", obs[0] && !!obs[0].assigned_role, obs[0] && JSON.stringify(obs[0].assigned_role));
     chk("A. obligation NOT falsely marked accepted (assigned_user_id null in slice 1)", obs[0] && !obs[0].assigned_user_id, obs[0] && String(obs[0].assigned_user_id));
-    chk("A. obligation linked to source inbound event", obs[0] && !!obs[0].source_event_id, obs[0] && String(obs[0].source_event_id));
+    chk("A. obligation linked to inbound via dedupe_key", obs[0] && !!obs[0].dedupe_key, obs[0] && String(obs[0].dedupe_key));
     chk("A. obligation status open", obs[0] && obs[0].status === "open", obs[0] && obs[0].status);
     const draft = await latestDraft(pid);
     chk("A. reply contains NO [[HANDOFF]] tag", !/\[\[HANDOFF/i.test(draft), draft.slice(0, 80));
