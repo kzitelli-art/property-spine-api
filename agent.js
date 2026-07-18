@@ -1202,7 +1202,12 @@ Reply with ONLY the message text.`;
                 } else {
                   escOb = await spawnObligationFromEvent(ec, {
                     property_id: tx1.property_id, person_id: tx1.person_id, unit_id: tx1.unit_id || null,
-                    source_event_id: tx1.inbound_id || null,
+                    // source_event_id stays NULL: its FK points at the domain-events
+                    // table, which a comm_events id does not satisfy — the two working
+                    // inbound writes above (human_thread_reply, agent_review) also pass
+                    // null. The inbound linkage is carried by dedupe_key (which embeds
+                    // tx1.inbound_id) and person_id, not by this column.
+                    source_event_id: null,
                     module: "agent", type: "operational_escalation",
                     label: escReason.slice(0, 240),
                     owner_type: "human", assigned_role: "leasing_manager",
