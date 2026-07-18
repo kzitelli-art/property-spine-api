@@ -3529,5 +3529,25 @@ app.use("/", staffBridgeModule({ pool }));
 const factsSeedModule = require("./facts-seed");
 app.use("/", factsSeedModule({ pool }));
 
+// ── DEMO SLOT AUTO-SEED (fail-soft, boot-time) ───────────────────────
+// Keeps the Demo Building's tour_availability populated so the SMS/agent
+// booking flow always has real open slots to book into — without a manual
+// re-seed before every demo and without a separate cron scheduler that can
+// silently stop. Missing-only inserts (never wholesale-skips), DST-correct
+// local wall-clock. NEVER awaited into the boot critical path and NEVER
+// throws into boot: a seed failure logs a warning and the API still starts.
+// CLASS 4 — delete-on-real-activation scaffolding: retires with
+// seed_demo_slots.js when real staff-calendar availability feeds
+// tour_availability. Gated to demo runtime only.
+if (process.env.DEMO_MODE === "true") {
+  const { seedDemoSlots } = require("./seeds/seed_demo_slots");
+  seedDemoSlots(pool, { days: 7 })
+    .then((r) => {
+      if (r.skipped) console.warn(`[slots] boot seed skipped: ${r.reason}`);
+      else console.log(`[slots] boot seed: +${r.created} new, ${r.existed} existed, ${r.openCount} open future slot(s)`);
+    })
+    .catch((err) => console.warn(`[slots] boot seed error (ignored, API still starting): ${err.message}`));
+}
+
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Property Spine API listening on ${port}`));
