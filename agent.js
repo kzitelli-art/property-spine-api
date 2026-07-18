@@ -1205,8 +1205,10 @@ Reply with ONLY the message text.`;
                     // source_event_id stays NULL: its FK points at the domain-events
                     // table, which a comm_events id does not satisfy — the two working
                     // inbound writes above (human_thread_reply, agent_review) also pass
-                    // null. The inbound linkage is carried by dedupe_key (which embeds
-                    // tx1.inbound_id) and person_id, not by this column.
+                    // null. Idempotency is carried by dedupe_key, which is DERIVED from
+                    // tx1.inbound_id via one-way hash (sufficient to converge retries;
+                    // NOT an inspectable audit link back to the comm_event — that would
+                    // be a separate, later concern, out of scope for Slice 1).
                     source_event_id: null,
                     module: "agent", type: "operational_escalation",
                     label: escReason.slice(0, 240),
