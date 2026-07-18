@@ -689,6 +689,274 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     return { ensured: true, link: spawned.link };
   }
 
+  // ════════════════════════════════════════════════════════════════════
+  //  APPLICATION INTENT → PREPARE CHILD → SEND CHILD (v2.5-r1 frozen brief)
+  //
+  //  tour_followup is the DURABLE PARENT (rung-linked; closes only on actual
+  //  send, via the rail). prepare_application_link and send_application_link
+  //  are NON-RUNG child obligations carrying parent_obligation_id = the EXACT
+  //  parent. The send child is invitation-specific (related_type=
+  //  'application_invitation'). "Applicant" begins on send, never on intent.
+  // ════════════════════════════════════════════════════════════════════
+  const INTENT_SOURCES = ["post_tour_outcome", "operator_recorded"]; // prospect_request deferred
+  const CHILD_PREPARE = "prepare_application_link";
+  const CHILD_SEND    = "send_application_link";
+
+  // the EXACT open tour_followup parent for a conversation — by rung link,
+  // never "latest open by heuristic" at close time (close uses the child's
+  // stored parent_obligation_id; this lookup is only for CREATION time).
+  async function openTourFollowupParent(client, conversion_id) {
+    return (await client.query(
+      `select lco.obligation_id, lco.owner_user_id, o.status
+         from leasing_conversion_obligations lco
+         join obligations o on o.id = lco.obligation_id
+        where lco.conversion_id = $1 and lco.rung = 'tour_followup'
+          and lco.outcome is null and o.status = 'open'
+        order by lco.created_at desc limit 1`,
+      [conversion_id])).rows[0] || null;
+  }
+
+  // durable-ownership spawn wrapper: ownership + parent linkage stored AT
+  // INSERT through the extended canonical spawn helper (the 084 biconditional
+  // CHECK enforces this — a post-insert update would be rejected).
+  async function spawnChildWithOwnership(client, spec, owned, origin) {
+    const hasOwner = !!(owned && owned.owner);
+    return spawnObligationFromEvent(client, Object.assign({}, spec, {
+      assigned_user_id: hasOwner ? owned.owner : null,
+      ownership_origin: origin,
+      owner_eligibility_state: hasOwner ? (owned.basis || "eligible_assignment") : "unassigned",
+    }));
+  }
+
+  // THE ONLY AUTHORIZED CAUSE of the prepare child. Human-confirmed intent,
+  // recorder ≠ subject, idempotent on server-generated source_identity.
+  async function recordApplicationIntent(client, {
+    conversion_id, source, recorded_by_user_id,
+    source_person_id = null, evidence_type = null, evidence_ref = null,
+    idempotency_key = null, tour_outcome_event_id = null,
+  }) {
+    if (!conversion_id) throw httpErr(400, "conversion_id is required.");
+    if (!INTENT_SOURCES.includes(source)) {
+      throw httpErr(400, `source must be one of: ${INTENT_SOURCES.join(", ")}.`);
+    }
+    if (!recorded_by_user_id) {
+      throw httpErr(400, "recorded_by_user_id is required — an AI recommendation cannot spawn this obligation.");
+    }
+    const conv = (await client.query(
+      "select * from leasing_conversions where id=$1 for update", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+
+    // pre-application only: a nonterminal application refuses new intent
+    const nonterminal = (await client.query(
+      `select 1 from lease_applications where conversion_id=$1
+        and status not in ('denied','declined','withdrawn') limit 1`, [conversion_id])).rows[0];
+    if (nonterminal) throw httpErr(409, "This conversation already has a live application — prepare-application intent does not apply.");
+
+    // server-generated source_identity (a browser key alone is never authoritative)
+    let source_identity;
+    if (source === "post_tour_outcome") {
+      if (!tour_outcome_event_id) throw httpErr(400, "post_tour_outcome intent requires tour_outcome_event_id.");
+      source_identity = `post_tour_outcome:${tour_outcome_event_id}`;
+    } else {
+      if (!idempotency_key) throw httpErr(400, "operator_recorded intent requires an idempotency_key.");
+      source_identity = `operator_recorded:${conv.property_id}:${conversion_id}:${recorded_by_user_id}:${idempotency_key}`;
+    }
+
+    // idempotent return of the existing intent + open child
+    const priorIntent = (await client.query(
+      `select * from application_intents where property_id=$1 and source=$2 and source_identity=$3`,
+      [conv.property_id, source, source_identity])).rows[0];
+    const openChild = (await client.query(
+      `select * from obligations where related_type='leasing_conversion' and related_id=$1
+        and type=$2 and status='open' limit 1`, [conversion_id, CHILD_PREPARE])).rows[0];
+    if (priorIntent && openChild) return { recorded: false, intent: priorIntent, obligation: openChild };
+    if (openChild) return { recorded: false, intent: priorIntent || null, obligation: openChild };
+
+    // the EXACT parent must exist and be open — intent is post-tour work
+    const parent = await openTourFollowupParent(client, conversion_id);
+    if (!parent) throw httpErr(409, "No open tour follow-up commitment on this conversation — application intent is post-tour work.");
+
+    const subject = source_person_id || conv.person_id;
+    const evId = (await client.query(
+      `insert into events (property_id, person_id, type, note)
+       values ($1,$2,'application_intent_confirmed',$3) returning id`,
+      [conv.property_id, subject,
+       `Application intent confirmed (${source}) — recorded by user ${recorded_by_user_id}`])).rows[0].id;
+
+    const intent = (await client.query(
+      `insert into application_intents
+         (property_id, conversion_id, person_id, parent_tour_followup_obligation_id,
+          source, source_identity, recorded_by_user_id, evidence_type, evidence_ref, event_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+       on conflict (property_id, source, source_identity) do nothing
+       returning *`,
+      [conv.property_id, conversion_id, subject, parent.obligation_id,
+       source, source_identity, recorded_by_user_id, evidence_type, evidence_ref, evId])).rows[0]
+      || (await client.query(
+        `select * from application_intents where property_id=$1 and source=$2 and source_identity=$3`,
+        [conv.property_id, source, source_identity])).rows[0];
+
+    // ownership: inherit the exact parent owner IF still eligible; else current
+    // conversation-owner candidates; else honest UNASSIGNED.
+    const owned = await eligibleOwner(client, conv.property_id,
+      [parent.owner_user_id, conv.conversation_owner_user_id]);
+    const child = await spawnChildWithOwnership(client, {
+      property_id: conv.property_id, person_id: conv.person_id,
+      source_event_id: evId, module: "leasing", type: CHILD_PREPARE,
+      label: `Prepare application link — ${await personName(client, conv.person_id)}`,
+      owner_type: "human", status: "open",
+      required_inputs: ["application_invitation_prepared"],
+      related_id: conversion_id, related_type: "leasing_conversion",
+      parent_obligation_id: parent.obligation_id,
+    }, owned, "intent_spawn");
+    return { recorded: true, intent, obligation: child, owner_basis: owned.owner ? owned.basis : "unassigned" };
+  }
+
+  // open the invitation-specific send child at prepare time (owner resolved+stored NOW)
+  async function openSendObligationOnPrepare(client, { invitation_id, conversion_id, parent_obligation_id, candidate_owner_user_ids = [] }) {
+    const conv = (await client.query("select * from leasing_conversions where id=$1", [conversion_id])).rows[0];
+    if (!conv) throw httpErr(404, "conversion not found.");
+    const owned = await eligibleOwner(client, conv.property_id, candidate_owner_user_ids.concat([conv.conversation_owner_user_id]));
+    const child = await spawnChildWithOwnership(client, {
+      property_id: conv.property_id, person_id: conv.person_id,
+      module: "leasing", type: CHILD_SEND,
+      label: `Send application link — ${await personName(client, conv.person_id)}`,
+      owner_type: "human", status: "open",
+      required_inputs: ["application_invitation_sent"],
+      related_id: invitation_id, related_type: "application_invitation",
+      parent_obligation_id,
+    }, owned, "prepare_spawn");
+    return child;
+  }
+
+  // governed TERMINATION of a child (superseded/revoked/dispatch_refused/expired):
+  // terminal but NOT satisfied-as-fact — never satisfies the reserved input.
+  async function terminateChildObligation(client, { obligation_id, resolution_code, by_user_id = null }) {
+    if (!["superseded","revoked","dispatch_refused","expired"].includes(resolution_code)) {
+      throw httpErr(400, `invalid termination resolution_code "${resolution_code}".`);
+    }
+    const r = await client.query(
+      `update obligations set status='complete', resolution_code=$2, completed_at=now(), updated_at=now()
+        where id=$1 and status='open' returning *`, [obligation_id, resolution_code]);
+    return r.rows[0] || null; // null = already terminal (idempotent no-op)
+  }
+
+  // coverage authority (v2.4 Corr 3 — owner | role_coverage ONLY; server-derived)
+  async function resolveSendActionBasis(client, { actor_user_id, property_id, stored_owner_user_id }) {
+    if (!actor_user_id) return { allowed: false, reason: "no_actor" };
+    if (stored_owner_user_id && actor_user_id === stored_owner_user_id) {
+      return { allowed: true, basis: "owner" };
+    }
+    const pta = (await client.query(
+      `select role_title, allowed_modules from property_team_assignments
+        where user_id=$1 and property_id=$2 and active=true limit 1`,
+      [actor_user_id, property_id])).rows[0];
+    if (pta && ["leasing_manager","property_manager"].includes(pta.role_title)
+        && (pta.allowed_modules || []).includes("leasing")) {
+      return { allowed: true, basis: "role_coverage" };
+    }
+    return { allowed: false, reason: "not_owner_no_role_coverage" };
+  }
+
+  // close the EXACT parent via the RAIL authority (never generic complete)
+  async function closeParentViaRail(client, { parent_obligation_id, by_user_id, resolution_basis, proof }) {
+    return resolveRung(client, {
+      obligation_id: parent_obligation_id, result: "completed",
+      suppress_next: true, by_user_id, resolution_basis, proof,
+    });
+  }
+
+  // CORRECTION: restore real owed work after revoked/dispatch_refused/expired.
+  // Creates a NEW prepare child under the SAME parent + SAME current intent.
+  // No new intent, no invitation. (Dispatch-state gating happens in the
+  // invitation service BEFORE this is called.)
+  async function beginApplicationLinkRetry(client, { parent_obligation_id, prior_invitation_id, prior_send_obligation_id, by_user_id = null }) {
+    const parent = (await client.query(
+      `select o.*, lco.conversion_id from obligations o
+         join leasing_conversion_obligations lco on lco.obligation_id = o.id
+        where o.id=$1 for update of o`, [parent_obligation_id])).rows[0];
+    if (!parent || parent.status !== "open") throw httpErr(409, "The post-tour commitment is not open — retry is not available.");
+    const conversion_id = parent.conversion_id;
+
+    const priorInv = (await client.query(
+      "select * from application_invitations where id=$1", [prior_invitation_id])).rows[0];
+    if (!priorInv || ["prepared","manually_sent","provider_dispatched"].includes(priorInv.status)) {
+      throw httpErr(409, "The prior invitation is still active — retry applies only after it is inactive.");
+    }
+    const priorChild = (await client.query(
+      "select * from obligations where id=$1", [prior_send_obligation_id])).rows[0];
+    if (!priorChild || priorChild.status !== "complete"
+        || !["revoked","dispatch_refused","expired"].includes(priorChild.resolution_code)) {
+      throw httpErr(409, "The prior send obligation is not terminal with a retry-eligible resolution.");
+    }
+    const activeInv = (await client.query(
+      `select 1 from application_invitations where conversion_id=$1
+        and status in ('prepared','manually_sent','provider_dispatched') limit 1`, [conversion_id])).rows[0];
+    if (activeInv) throw httpErr(409, "An active invitation exists — retry is not available.");
+    const openChild = (await client.query(
+      `select 1 from obligations where status='open' and
+        ((related_type='leasing_conversion' and related_id=$1 and type=$2)
+         or (related_type='application_invitation' and type=$3
+             and related_id in (select id from application_invitations where conversion_id=$1)))
+        limit 1`, [conversion_id, CHILD_PREPARE, CHILD_SEND])).rows[0];
+    if (openChild) throw httpErr(409, "Open prepare/send work already exists — retry would duplicate it.");
+    const nonterminal = (await client.query(
+      `select 1 from lease_applications where conversion_id=$1
+        and status not in ('denied','declined','withdrawn') limit 1`, [conversion_id])).rows[0];
+    if (nonterminal) throw httpErr(409, "A live application exists — retry does not apply.");
+
+    const currentIntent = (await client.query(
+      `select ai.* from application_intents ai
+        where ai.conversion_id=$1
+          and not exists (select 1 from application_intents s where s.supersedes_intent_id = ai.id)
+        order by ai.recorded_at desc limit 1`, [conversion_id])).rows[0];
+    if (!currentIntent) throw httpErr(409, "No current application intent — record intent first.");
+
+    const conv = (await client.query("select * from leasing_conversions where id=$1", [conversion_id])).rows[0];
+    const owned = await eligibleOwner(client, conv.property_id,
+      [parent.assigned_user_id, conv.conversation_owner_user_id]);
+    const child = await spawnChildWithOwnership(client, {
+      property_id: conv.property_id, person_id: conv.person_id,
+      module: "leasing", type: CHILD_PREPARE,
+      label: `Prepare application link (retry) — ${await personName(client, conv.person_id)}`,
+      owner_type: "human", status: "open",
+      required_inputs: ["application_invitation_prepared"],
+      related_id: conversion_id, related_type: "leasing_conversion",
+      parent_obligation_id,
+    }, owned, "retry_correction");
+    return { retry_child: child, intent_id: currentIntent.id };
+  }
+
+  // NEXT precedence (send > prepare > parent) — the rooted projection row
+  async function resolveApplicationNext(client, { conversion_id }) {
+    const send = (await client.query(
+      `select o.*, ai.id as invitation_id from obligations o
+         join application_invitations ai on ai.id = o.related_id and o.related_type='application_invitation'
+        where ai.conversion_id=$1 and o.type=$2 and o.status='open'
+        order by o.created_at desc limit 1`, [conversion_id, CHILD_SEND])).rows[0];
+    if (send) return {
+      action_code: CHILD_SEND, label: "Send the application link",
+      root_obligation_id: send.parent_obligation_id, active_child_obligation_id: send.id,
+      invitation_id: send.invitation_id, send_obligation_id: send.id,
+      parent_obligation_id: send.parent_obligation_id, token_recoverable: false,
+    };
+    const prep = (await client.query(
+      `select * from obligations where related_type='leasing_conversion' and related_id=$1
+        and type=$2 and status='open' order by created_at desc limit 1`, [conversion_id, CHILD_PREPARE])).rows[0];
+    if (prep) return {
+      action_code: CHILD_PREPARE, label: "Prepare application link",
+      root_obligation_id: prep.parent_obligation_id, active_child_obligation_id: prep.id,
+      prepare_obligation_id: prep.id, conversion_id,
+      parent_obligation_id: prep.parent_obligation_id,
+    };
+    const parent = await openTourFollowupParent(client, conversion_id);
+    if (parent) return {
+      action_code: "tour_followup", label: "Post-tour follow-up",
+      root_obligation_id: parent.obligation_id, active_child_obligation_id: null,
+    };
+    return null;
+  }
+
   // Add a separate decision/operating GATE that coexists with the conversation.
   async function addGate(client, { conversion_id, rung, owner_user_id = null }) {
     const cfg = RUNG[rung];
@@ -803,6 +1071,9 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     createConversionFromTour, handoffConversation, flagHandoffRequired,
     resolveRung, addGate, advanceToRung, readConversion, spawnRung, ensureApplicantFollowup, ensureLeaseSignatureFollowup, RUNG, CONVERSATION_RUNGS,
     assessReopenability, reopenRung, changeDueTime, reassignTask,
+    recordApplicationIntent, openSendObligationOnPrepare, terminateChildObligation,
+    resolveSendActionBasis, closeParentViaRail, beginApplicationLinkRetry,
+    resolveApplicationNext, openTourFollowupParent,
   };
   // Expose the single-door service alongside the router so the tour-outcome
   // seam (leasingleads /complete) opens the conversion rail through THIS
