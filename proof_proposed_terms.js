@@ -30,7 +30,7 @@ async function expectThrow(name, code, fn) {
   catch (e) { ok(name, e.code === code, `expected ${code}, got ${e.code || e.message}`); }
 }
 const TERMS = { rent: 1850, security_deposit: 1850, lease_start_date: "2026-09-01", lease_end_date: "2027-09-01", concession_status: "none" };
-const FAKE_USER = "11111111-1111-1111-1111-111111111111";
+const FAKE_USER = "e9a7659f-ee1a-4bde-9e0c-02c6632ff066"; // real QA operator user (obligations.assigned_user_id has a FK to users)
 const opMgr = (property_id) => ({ user_id: FAKE_USER, property_id, role: "leasing_manager", role_title: "leasing_manager", can_manage_roles: false });
 
 async function makeFixture(client, { property_id, assigned_role = "leasing_manager", assigned_user_id = null, name_col, person_id }) {
