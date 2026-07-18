@@ -187,6 +187,11 @@ async function spawnObligationFromEvent(client, spec) {
     // callers that don't pass them get null (prior behavior); callers that do
     // (turnover, down_units) can now find their obligation by the link.
     related_id = null, related_type = null,
+    // DURABLE OWNERSHIP AT INSERT (v2.5-r1 Corr 3): the two application-link
+    // child types carry ownership from birth (biconditional CHECK in 084).
+    // Additive: other callers omit these and get nulls, exactly as before.
+    assigned_user_id = null, ownership_origin = null, owner_eligibility_state = null,
+    parent_obligation_id = null,
   } = spec;
 
   // Postgres text[] literal, e.g. {tour_feedback} or {closeout_proof}
@@ -198,14 +203,16 @@ async function spawnObligationFromEvent(client, spec) {
         source_event_id, module, type, label,
         owner_type, assigned_role, escalates_to_role,
         status, due_at, priority, severity, required_inputs,
-        related_id, related_type)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+        related_id, related_type,
+        assigned_user_id, ownership_origin, owner_eligibility_state, parent_obligation_id)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
      returning *`,
     [property_id, person_id, unit_id,
      source_event_id, module, type, label,
      owner_type, assigned_role, escalates_to_role,
      status, due_at, priority, severity, inputsLiteral,
-     related_id, related_type]
+     related_id, related_type,
+     assigned_user_id, ownership_origin, owner_eligibility_state, parent_obligation_id]
   );
   return r.rows[0];
 }
@@ -238,8 +245,20 @@ function obligationError(code, message, extra = {}) {
 
 // Satisfy ONE required input: record proof as a durable event, remove the
 // input from required_inputs. Returns { obligation, satisfied_input, remaining }.
-async function satisfyObligation(client, { obligation_id, input, proof = null }) {
+//
+// RESERVED INPUTS (v2.5-r1): the two application-invitation proof codes may be
+// satisfied ONLY by the application input authority (a module-private
+// capability created once below and injected into the invitation service).
+// The generic path CATEGORICALLY refuses them — no argument can override.
+const RESERVED_APPLICATION_INPUTS = ["application_invitation_prepared", "application_invitation_sent"];
+const __APP_INPUT_CAPABILITY = Symbol("application_input_authority");
+
+async function satisfyObligation(client, { obligation_id, input, proof = null, __capability = null }) {
   if (!input) throw obligationError("BAD_INPUT", "input is required (which required input this satisfies)");
+  if (RESERVED_APPLICATION_INPUTS.includes(input) && __capability !== __APP_INPUT_CAPABILITY) {
+    throw obligationError("RESERVED_INPUT",
+      `"${input}" is a reserved invitation-proof input — it can only be satisfied by the canonical invitation service against verified invitation state.`);
+  }
 
   const o = await client.query("select * from obligations where id=$1 for update", [obligation_id]);
   if (o.rows.length === 0) throw obligationError("NOT_FOUND", "obligation not found");
@@ -3339,9 +3358,60 @@ app.use("/", __leasingLeads); // instance captured: its ONE tour-completion serv
 // ── APPLICATION SUBMISSION SLICE (invitation front + shared submit service +
 //    deny + gated approval→signature). Shares the conversion rail's service layer. ──
 const applicationSubmissionModule = require("./applicationSubmission");
+
+// ── APPLICATION INPUT AUTHORITY (v2.5-r1) ──────────────────────────────
+// The ONE satisfier of the two reserved invitation-proof inputs. Mirrors the
+// conversion closure authority pattern: created once here, injected only into
+// the invitation service. Verifies authoritative invitation state under the
+// caller's transaction, writes the FIRST-CLASS proof row (obligation_input_proofs
+// — not JSON-in-note), then satisfies via the private capability and completes.
+function createApplicationInputAuthority() {
+  async function satisfyApplicationInput(client, {
+    obligation_id, input_code, invitation_id,
+    intent_id = null, parent_obligation_id = null, unit_id = null,
+    actor_user_id = null, expected_invitation_status,
+  }) {
+    if (!RESERVED_APPLICATION_INPUTS.includes(input_code)) {
+      throw obligationError("BAD_INPUT", `"${input_code}" is not a reserved application input.`);
+    }
+    const inv = (await client.query(
+      "select id, status from application_invitations where id=$1", [invitation_id])).rows[0];
+    if (!inv) throw obligationError("NOT_FOUND", "invitation not found for input proof.");
+    const okStatus = input_code === "application_invitation_prepared"
+      ? inv.status === "prepared"
+      : ["manually_sent", "provider_dispatched"].includes(inv.status);
+    if (!okStatus || (expected_invitation_status && inv.status !== expected_invitation_status)) {
+      throw obligationError("STATE", `invitation state '${inv.status}' does not prove '${input_code}'.`);
+    }
+    const evId = (await client.query(
+      `insert into events (property_id, person_id, unit_id, type, note)
+       select o.property_id, o.person_id, $2, 'input_satisfied:' || $3,
+              $3 || ' proven by invitation ' || $4::text
+         from obligations o where o.id=$1 returning id`,
+      [obligation_id, unit_id, input_code, invitation_id])).rows[0].id;
+    await client.query(
+      `insert into obligation_input_proofs
+         (obligation_id, input_code, intent_id, invitation_id, parent_obligation_id,
+          unit_id, actor_user_id, event_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8)
+       on conflict (obligation_id, input_code) do nothing`,
+      [obligation_id, input_code, intent_id, invitation_id, parent_obligation_id,
+       unit_id, actor_user_id, evId]);
+    await satisfyObligation(client, {
+      obligation_id, input: input_code,
+      proof: { invitation_id, proof_event_id: evId },
+      __capability: __APP_INPUT_CAPABILITY,
+    });
+    return completeObligation(client, { obligation_id, completed_by: actor_user_id });
+  }
+  return { satisfyApplicationInput };
+}
+const __applicationInputAuthority = createApplicationInputAuthority();
+
 const __applicationSubmission = applicationSubmissionModule({
   pool, spawnObligationFromEvent, completeObligation,
   conversionService: __leasingConversion._service, commBoundary,
+  applicationInputAuthority: __applicationInputAuthority,
 });
 app.use("/", __applicationSubmission);
 
