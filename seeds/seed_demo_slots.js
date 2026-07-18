@@ -10,35 +10,39 @@
 //     (America/New_York for the Demo Building), so "10am/2pm/4pm" mean 10am/
 //     2pm/4pm LOCAL, not UTC.
 //
-//  CLASS: delete-on-real-activation scaffolding. Real availability will come
-//  from staff calendars / an external scheduler feeding tour_availability; this
-//  is demo inventory so the SMS booking flow has something real to book into.
+//  SHAPE (this refactor):
+//   • The primitive is the EXPORTED function seedDemoSlots(pool, { days }).
+//     It takes a caller-owned pool and NEVER creates or ends one. server.js
+//     calls it fail-soft at boot so demo slots exist as a property of the app
+//     being up — no manual re-seed, no separate cron scheduler to silently die.
+//   • The CLI wrapper (bottom) is a thin convenience so
+//     `node seeds/seed_demo_slots.js --days 7` still works by hand. It owns its
+//     own pool + process exit; the function does not.
 //
-//  RUN:  DATABASE_URL="<db>" node seed_demo_slots.js
-//        DATABASE_URL="<db>" node seed_demo_slots.js --days 5
+//  CLASS: delete-on-real-activation scaffolding (Class 4). Real availability
+//  will come from staff calendars / an external scheduler feeding
+//  tour_availability; this is demo inventory so the SMS booking flow has
+//  something real to book into. The EXPORTED function and the boot-time call
+//  retire together when real availability lands.
+//
+//  RUN (by hand):  DATABASE_URL="<db>" node seeds/seed_demo_slots.js
+//                  DATABASE_URL="<db>" node seeds/seed_demo_slots.js --days 7
 // ════════════════════════════════════════════════════════════════════
 const { Pool } = require("pg");
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const DEMO_PROPERTY_ID = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
 const TZ = "America/New_York";       // Demo Building operating timezone
 const HOURS_LOCAL = [10, 14, 16];    // 10:00, 14:00, 16:00 LOCAL
 const SLOT_MINUTES = 30;
-const DAYS = (() => {
-  const i = process.argv.indexOf("--days");
-  return i >= 0 && process.argv[i + 1] ? Math.max(1, parseInt(process.argv[i + 1])) : 5;
-})();
 
 // Compute the UTC instant for a given local wall-clock (Y-M-D H:M) in TZ.
 // Uses the offset TZ has AT that instant (handles DST) by formatting a probe.
 function localWallClockToUtc(year, month, day, hour, minute) {
-  // start from a naive UTC guess, then correct by the zone offset at that guess
   const guess = new Date(Date.UTC(year, month - 1, day, hour, minute));
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", hour12: false,
   }).formatToParts(guess).reduce((a, p) => (a[p.type] = p.value, a), {});
-  // what wall-clock did the guess render as, in TZ?
   const rendered = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour % 24, +parts.minute);
   const wanted = Date.UTC(year, month - 1, day, hour, minute);
   const offsetMs = rendered - wanted; // how far TZ is ahead of UTC at this instant
@@ -49,7 +53,6 @@ function localWallClockToUtc(year, month, day, hour, minute) {
 function nextBusinessDays(n) {
   const out = [];
   const now = new Date();
-  // work in TZ-local calendar terms
   let cursor = new Date(now.getTime());
   let added = 0;
   while (added < n) {
@@ -65,14 +68,22 @@ function nextBusinessDays(n) {
   return out;
 }
 
-async function main() {
-  // confirm the property exists (fail honest, never seed a phantom property)
-  const prop = (await pool.query(`select id, name from properties where id=$1`, [DEMO_PROPERTY_ID])).rows[0];
-  if (!prop) { console.error(`Property ${DEMO_PROPERTY_ID} not found. Aborting — nothing seeded.`); await pool.end(); process.exit(1); }
+// ── THE PRIMITIVE ────────────────────────────────────────────────────
+//  Caller owns the pool. Never creates one, never ends one, never calls
+//  process.exit. Returns a receipt object. Fail-honest: if the Demo
+//  Building property is absent, it seeds NOTHING and returns skipped:true
+//  rather than fabricating a phantom property.
+async function seedDemoSlots(pool, opts = {}) {
+  const days = Math.max(1, parseInt(opts.days, 10) || 5);
 
-  const days = nextBusinessDays(DAYS);
+  const prop = (await pool.query(`select id, name from properties where id=$1`, [DEMO_PROPERTY_ID])).rows[0];
+  if (!prop) {
+    return { skipped: true, reason: `Property ${DEMO_PROPERTY_ID} not found`, created: 0, existed: 0, openCount: 0, days };
+  }
+
+  const businessDays = nextBusinessDays(days);
   let created = 0, existed = 0;
-  for (const d of days) {
+  for (const d of businessDays) {
     for (const h of HOURS_LOCAL) {
       const starts = localWallClockToUtc(d.year, d.month, d.day, h, 0);
       const ends = new Date(starts.getTime() + SLOT_MINUTES * 60 * 1000);
@@ -92,19 +103,34 @@ async function main() {
     }
   }
 
-  // show the resulting open future slots (in property tz) as a receipt
   const open = (await pool.query(
     `select starts_at from tour_availability
       where property_id=$1 and status='open' and starts_at > now()
       order by starts_at`, [DEMO_PROPERTY_ID])).rows;
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: TZ, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-  });
-  console.log(`\nSeed complete for ${prop.name}:`);
-  console.log(`  created ${created} new slot(s), ${existed} already existed.`);
-  console.log(`  ${open.length} open future slot(s) now (property local time, ${TZ}):`);
-  for (const s of open) console.log(`    - ${fmt.format(new Date(s.starts_at))}`);
-  await pool.end();
+
+  return { skipped: false, property: prop.name, created, existed, openCount: open.length, days, openSlots: open.map(s => s.starts_at) };
 }
 
-main().catch(e => { console.error("seed error:", e); process.exit(1); });
+module.exports = { seedDemoSlots, DEMO_PROPERTY_ID, TZ };
+
+// ── CLI WRAPPER (thin convenience; owns its own pool + exit) ──────────
+if (require.main === module) {
+  const i = process.argv.indexOf("--days");
+  const days = i >= 0 && process.argv[i + 1] ? Math.max(1, parseInt(process.argv[i + 1], 10)) : 5;
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  seedDemoSlots(pool, { days })
+    .then((r) => {
+      if (r.skipped) { console.error(`Aborted — nothing seeded: ${r.reason}`); process.exitCode = 1; }
+      else {
+        const fmt = new Intl.DateTimeFormat("en-US", {
+          timeZone: TZ, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+        });
+        console.log(`\nSeed complete for ${r.property}:`);
+        console.log(`  created ${r.created} new slot(s), ${r.existed} already existed.`);
+        console.log(`  ${r.openCount} open future slot(s) now (property local time, ${TZ}):`);
+        for (const s of r.openSlots) console.log(`    - ${fmt.format(new Date(s))}`);
+      }
+    })
+    .catch((e) => { console.error("seed error:", e); process.exitCode = 1; })
+    .finally(() => pool.end());
+}
