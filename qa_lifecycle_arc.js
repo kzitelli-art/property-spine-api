@@ -90,7 +90,7 @@ function halt(step, status, json) {
   console.log("\n[1/5] intake → POST /leasing/intake");
   const intake = await call("POST", "/leasing/intake", {
     headers: { "x-intake-secret": INTAKE_SECRET },
-    body: { property_id: PROPERTY_ID, phone: QA_PHONE, name: QA_NAME, attempt_sms: false },
+    body: { property_id: PROPERTY_ID, phone: QA_PHONE, name: QA_NAME, source: "boardroom_demo", attempt_sms: false },
   });
   if (!ok(intake.status)) halt("intake", intake.status, intake.json);
   const { person_id, lead_id, conversation_id } = intake.json;
