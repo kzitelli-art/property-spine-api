@@ -1496,6 +1496,38 @@ Reply with ONLY the message text.`;
         }
       }
 
+      // ── HANDOFF ACK DISPATCH (no-silence flag model) ─────────────────
+      // A requires_handoff draft is created 'ready' with a correct pre-approved
+      // acknowledgment ("Yep, I'll get someone from the team on this") but the
+      // safe-only perimeter above deliberately does NOT send it — which left the
+      // prospect in SILENCE after asking for a person. That is the bug we saw in
+      // the log (a 'ready', never-'dispatched' handoff row).
+      // Fix: send that ONE acknowledgment. This is the FLAG, not the AI taking
+      // over — it tells the prospect a human is coming while the human obligation
+      // (already born in TX1) is what actually routes the work. Send-once only:
+      // gated on the same auto-dispatch perimeter env, and the draft's own
+      // 'ready'→'dispatched' status guard (in sendDraftService) makes a repeat
+      // impossible. No further AI replies happen after this — the no-silent-
+      // re-entry rule still holds on subsequent inbounds.
+      if (result && result.ok && result.draft_id && result.policy_decision === "requires_handoff") {
+        const perim = (process.env.AGENT_AUTO_DISPATCH_PROPERTY_IDS || "")
+          .split(",").map(s => s.trim()).filter(Boolean);
+        if (perim.includes(String(tx1.property_id))) {
+          try {
+            const ackOut = await sendDraftService({ draftId: result.draft_id, auto: true });
+            result.auto_dispatched = true;
+            result.handoff_ack_sent = true;
+            result.outbound_comm_event_id = ackOut.outbound_comm_event_id;
+            result.sms = ackOut.sms;
+          } catch (e) {
+            // If the ack can't send, the draft stays 'ready' for a human — still
+            // no silence risk beyond what review already covers. Never throw.
+            result.handoff_ack_sent = false;
+            result.auto_dispatch_reason = e.publicMessage || e.message;
+          }
+        }
+      }
+
       // ── SLICE 2 hook: capture volunteered prospect facts, fire-and-forget. ──
       // AFTER the draft transaction (never inside it), non-blocking, fail-soft:
       // a capture failure can never delay or break the reply loop.
