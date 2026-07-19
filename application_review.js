@@ -88,10 +88,26 @@ async function loadScopedApp(client, applicationId, propertyId) {
 }
 
 async function latestPacket(client, applicationId) {
+  // The canonical "current packet": newest non-superseded version. This must mean
+  // the same thing everywhere it is read.
   const q = await client.query(
-    `select id, terms_json, status, is_placeholder, updated_at
-       from lease_packets where application_id = $1
-      order by updated_at desc limit 1`, [applicationId]);
+    `select id, terms_json, status, is_placeholder, version,
+            proposed_terms_confirmation_id, issued_at, sent_at, superseded_at, updated_at
+       from lease_packets
+      where application_id = $1 and superseded_at is null
+      order by version desc limit 1`, [applicationId]);
+  return q.rows[0] || null;
+}
+
+// The application's current proposed-terms confirmation (the governed economics
+// authorship). Read in the same coherent path as the packet so the operator
+// screen never shows a confirmation/packet mismatch mid-write.
+async function currentConfirmation(client, app) {
+  if (!app.proposed_terms_confirmation_id) return null;
+  const q = await client.query(
+    `select id, source, created_at, actor_user_id
+       from application_proposed_terms_confirmations where id = $1`,
+    [app.proposed_terms_confirmation_id]);
   return q.rows[0] || null;
 }
 
@@ -143,6 +159,11 @@ async function buildReviewDetail(client, applicationId, propertyId) {
   const packet = await latestPacket(client, app.id);
   const currency = packetCurrency(app, packet);
   const concession = await concessionDetail(client, app);
+  const confirmation = await currentConfirmation(client, app);
+  // lineage: does the current packet's confirmation match the application's
+  // current confirmation? (a stale packet points at a superseded confirmation)
+  const lineageMatches = !!(packet && confirmation &&
+    String(packet.proposed_terms_confirmation_id) === String(confirmation.id));
   return {
     application_id: app.id,
     applicant: { name: app.applicant_name || null, person_id: app.person_id || null },
@@ -155,9 +176,29 @@ async function buildReviewDetail(client, applicationId, propertyId) {
     },
     completeness: { complete: verdict.complete, missing: verdict.missing },
     concession,
+    // GOVERNED ECONOMICS AUTHORSHIP — the read side of the proposed-terms primitive.
+    // null until management confirms. NEVER exposes token/idempotency/audit internals.
+    proposed_terms_confirmation: confirmation ? {
+      id: confirmation.id,
+      source: confirmation.source,                 // 'operator_proposed_terms'
+      confirmed_at: confirmation.created_at || null,
+      confirmed_by: confirmation.actor_user_id || null,
+    } : null,
     packet: {
-      status: currency.status, drifted_fields: currency.drifted_fields,
+      // currency_status = drift of persisted snapshot vs current columns
+      // (not_generated | current | stale) — DISTINCT from lifecycle_status.
+      currency_status: currency.status, drifted_fields: currency.drifted_fields,
+      status: currency.status, // DEPRECATED alias — existing review renderer reads .status as currency; do not use in new code
       is_placeholder: packet ? !!packet.is_placeholder : null,
+      // lifecycle_status = the packet's real state (draft | sent | tenant_in_progress
+      // | submitted | voided) — the field the Issue step keys on.
+      id: packet ? packet.id : null,
+      lifecycle_status: packet ? packet.status : null,
+      version: packet ? packet.version : null,
+      proposed_terms_confirmation_id: packet ? packet.proposed_terms_confirmation_id : null,
+      lineage_matches_current_confirmation: lineageMatches,
+      issued_at: packet ? packet.issued_at || null : null,
+      sent_at: packet ? packet.sent_at || null : null,
       note: currency.status === "stale" ? "Packet stale — regenerate before countersign."
         : currency.status === "not_generated" ? "Lease packet not generated yet. It will use the canonical application terms."
         : "Lease packet uses canonical application terms.",
