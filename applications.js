@@ -153,7 +153,7 @@ module.exports = function applicationsModule(deps) {
                label: "Executed lease required. (Legacy activation gate — a terms acknowledgment is not an executed lease.)" };
     }
     if (gateClosed) return { ...base, action_code: "executed_lease_required", label: "Executed lease required." };
-    if (pk && ["sent", "in_progress"].includes(pk.status)) return { ...base, action_code: "awaiting_acknowledgment", label: "Awaiting the resident's terms acknowledgment." };
+    if (pk && ["sent", "in_progress", "tenant_in_progress"].includes(pk.status)) return { ...base, action_code: "awaiting_acknowledgment", label: "Awaiting the resident's terms acknowledgment." };
     if (pk && pk.status === "submitted") return { ...base, action_code: "executed_lease_required", label: "Executed lease required." };
     return { ...base, action_code: "send_terms_for_review", label: "Send terms for review." };
   }
