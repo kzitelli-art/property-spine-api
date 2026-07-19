@@ -24,7 +24,7 @@
 
 const crypto = require("crypto");
 
-const PROMPT_REVISION = "stage-a-v5"; // v5: SOLO master rewrite — four moves (answer/redirect/defer/handoff), no-silence, dash-strip, §7 persona, tight pre-gate
+const PROMPT_REVISION = "stage-a-v6"; // v6: tour-pressure suppression (no consecutive asks, wait 2 exchanges, no-on-decline), sell-lived-experience, conversational-local; dead PERSONA constant removed. v5: SOLO master rewrite — moves, no-silence, dash-strip, §7 persona, tight pre-gate
 const POLICY_REVISION = "stage-a-v1";
 
 module.exports = function agentModule(deps) {
@@ -267,7 +267,7 @@ module.exports = function agentModule(deps) {
   // ── build the model context in STRICT AUTHORITY ORDER ──────────────────────
   // (1) safety/fair-housing rules (2) curated facts (3) live unit truth
   // (4) thread history (5) persona. Lead messages are UNTRUSTED content.
-  function buildMessages({ persona, facts, unit, history, propertyName }) {
+  function buildMessages({ facts, unit, history, propertyName }) {
     const factLines = facts.length
       ? facts.map(f => `- ${f.fact_key} (${f.category}; source: ${f.source}): ${f.rendered_text}`).join("\n")
       : "(no curated facts are on file for this property)";
@@ -306,6 +306,8 @@ Never guess from general leasing knowledge.
 Use the APPROVED SOLO PROFILE only for stable building facts.
 
 Use web search for current local questions such as grocery stores, restaurants, transit time, walking distance, and nearby services.
+
+For a local question, give one or two concrete, current recommendations, then ask one natural preference question. Do not dump a neighborhood guide, and do not immediately pivot to a tour.
 
 If sources conflict, do not pick the convenient answer. Say you are checking the exact current fact.
 
@@ -369,6 +371,10 @@ Do not ask for the same information twice.
 
 When recommending a unit, explain why it matches what they told you.
 
+LIVED EXPERIENCE
+
+When a prospect tells you how they live, connect the apartment and the building's shared spaces to that life. Explain realistic use and tradeoffs, do not just list amenities. Working from home, entertaining, needing quiet, wanting people around: show how the apartment plus the lounges, study rooms, recreation areas, coworking, or roof deck actually fit that, and be honest about what the layout does and does not do. One or two sentences, not a sales speech.
+
 TOURS
 
 Keep the tour path open whenever the prospect has active interest or asks about availability, price, layout, or timing.
@@ -383,7 +389,13 @@ Do not call it "someone else's apartment."
 
 Say "a comparable layout" or "a unit we can show."
 
-If the prospect clearly declines or says to stop asking, stop asking and keep answering normally.
+Do not push. Concretely:
+- Never ask for a tour in two messages in a row.
+- Do not tack a tour ask onto every neighborhood or lifestyle answer. Answer the question on its own first.
+- If you invited them to tour and they did not take it up, wait at least two more substantive exchanges before inviting again.
+- A tour naturally follows real fit, availability, or serious timing interest, not every reply.
+
+If the prospect clearly declines or says to stop asking, stop asking and keep answering normally. Do not raise touring again until the prospect reopens it.
 
 MOVE-IN SPEED
 
@@ -562,16 +574,6 @@ Reply with ONLY the message text.`;
   // tour by making the prospect feel heard and building genuine interest over the
   // conversation — NOT by asking for the tour on every message. Conversational first,
   // directional second.
-  const PERSONA =
-    "A sharp, friendly human leasing person who knows this building and this city and texts like a " +
-    "real person — short, direct, casual, contractions, a little personality. Not a bot, not a " +
-    "brochure, not a compliance robot. You answer what was actually asked, plainly and without " +
-    "ceremony. You're confident about the neighborhood (grocery, food, transit, parks, what it's " +
-    "like to live around here) and you check when you're unsure rather than dodging. You're strict " +
-    "about building specifics — rent, fees, availability, policies come only from verified data, " +
-    "never invented. You work toward a tour by being someone worth texting with, not by pushing " +
-    "every message, and you hand off anything sensitive to a person.";
-
   // ════════════════════════════════════════════════════════════════════════
   //  THE LOOP
   // ════════════════════════════════════════════════════════════════════════
@@ -834,7 +836,7 @@ Reply with ONLY the message text.`;
             try { return (await c.query("select coalesce(display_name, name) as name from properties where id=$1", [tx1.property_id])).rows[0]?.name || null; }
             finally { c.release(); }
           })());
-          const built = buildMessages({ persona: PERSONA, facts: ctx.facts, unit: ctx.unit, history, propertyName: propName });
+          const built = buildMessages({ facts: ctx.facts, unit: ctx.unit, history, propertyName: propName });
           // If they already have an upcoming tour, shift the goal from earn-a-tour
           // to be-their-contact (and below, tour tools are withheld).
           const _tourAddendum = await upcomingTourAddendum(tx1.conversation_id);
@@ -1854,7 +1856,7 @@ Reply with ONLY the message text.`;
           let propName;
           try { propName = (await c2.query("select coalesce(display_name, name) as name from properties where id=$1", [prep.property_id])).rows[0]?.name || null; }
           finally { c2.release(); }
-          const built = buildMessages({ persona: PERSONA, facts: ctx.facts, unit: ctx.unit, history, propertyName: propName });
+          const built = buildMessages({ facts: ctx.facts, unit: ctx.unit, history, propertyName: propName });
           built.system += await upcomingTourAddendum(prep.conv.id);
           const r = await anthropic.messages.create({ model: MODEL, max_tokens: 320, system: built.system, messages: built.messages });
           providerReqId = (r && r.id) || null;
