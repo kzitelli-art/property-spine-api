@@ -114,11 +114,15 @@ async function main() {
   console.log("\n\u2500\u2500\u2500 T5. ESCALATE / HANDOFF regression guard \u2500\u2500\u2500");
   {
     const pidE = await newProspect("T5 Escalate");
-    const re = await say(pidE, "can I actually move in this Sunday?");
+    // Give the specific up front so escalation is deterministic — a vague "can I
+    // move in Sunday?" legitimately makes the model ask "which unit?" first
+    // (gathering the specific before creating meaningful staff work), which is
+    // correct behavior, not a miss. A real prospect naming a unit is the trigger.
+    await say(pidE, "I'm interested in unit 214, the studio.");
+    const re = await say(pidE, "can that unit actually be ready for me to move in this Sunday?");
     console.log(`     escalate reply: ${re}`);
-    const convE = await convOf(pidE);
     const escRows = (await pool.query(`select 1 from obligations where person_id=$1 and type='operational_escalation'`, [pidE])).rows.length;
-    chk("T5. readiness question created an operational_escalation obligation", escRows >= 1, `rows=${escRows}`);
+    chk("T5. readiness question (unit known) created an operational_escalation obligation", escRows >= 1, `rows=${escRows}`);
     chk("T5. escalate reply did NOT emit a raw [[HANDOFF]] tag", !/\[\[HANDOFF/i.test(re), re.slice(0, 60));
 
     const pidH = await newProspect("T5 Handoff");
