@@ -40,6 +40,10 @@ module.exports = function operatorModule(deps) {
   const {
     pool, agentService, conversionService = null, leasingTourService = null,
     applicationInvitations = null, interactionsService = null,
+    // Part 5: the two canonical packet services (leasepackets.js). The
+    // session-gated packet adapters below call generate/issue; absent (older
+    // server.js) → those routes fail closed 503. No packet logic is reproduced here.
+    leasePacketService = null,
     // v3 (R3): the ONE canonical approveApplication service from applications.js
     // — the walled operator approve adapter below calls THIS, never a second
     // implementation. Absent (older server.js) → the route fails closed 503.
@@ -100,6 +104,12 @@ module.exports = function operatorModule(deps) {
     // EVERY request; returns live role/modules. Legacy raw tokens honored
     // only inside the 14-day sunset (staff_session_service).
     return staffSessions.resolveStaffSession(pool, req.headers["x-staff-session"]);
+  }
+
+  // client IP for audit attribution. Express trust-proxy is already configured
+  // server-side, so req.ip reflects the proxy policy — do not hand-parse XFF.
+  function clientIp(req) {
+    return req.ip || (req.socket && req.socket.remoteAddress) || null;
   }
 
   // middleware: require a valid session; attach req.operator = { id, ..., property_id }
@@ -2552,6 +2562,124 @@ module.exports = function operatorModule(deps) {
       if (e.httpStatus) return res.status(e.httpStatus).json({ error: e.code || "refused" });
       console.error("operator proposed-terms error", e);
       return res.status(500).json({ error: "internal", receipt: "Could not confirm proposed terms." });
+    } finally { client.release(); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  //  PART 5 — GOVERNED PACKET ADAPTERS  (the ONLY live packet write doors)
+  //
+  //  These are thin session-gated adapters over the two canonical packet
+  //  services (leasepackets.js._service). They construct the actor EXCLUSIVELY
+  //  from req.operator, own the transaction, and reproduce NO authority,
+  //  generation, or issuance logic. The legacy coarse-key routes
+  //  (POST /applications/:id/lease-packet, POST /lease-packets/:id/send) now
+  //  return 410 — this is their governed replacement.
+  //
+  //  Generation economics come ONLY from a governed operator-confirmed
+  //  proposed-terms record; applicant-authored economics cannot reach a packet.
+  //  The issue door mints a tenant link ONCE — it does NOT send a text.
+  // ══════════════════════════════════════════════════════════════════
+
+  // Generate the terms-review packet from the governed confirmation.
+  router.post("/operator/leasing/applications/:id/lease-packet", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!leasePacketService || typeof leasePacketService.generateTermsReviewPacket !== "function") {
+      return res.status(503).json({ receipt: "Packet generation is not wired on this deploy (leasePacketService missing)." });
+    }
+    const op = req.operator;
+    // server-derived actor context — the browser supplies NONE of this.
+    const actor = {
+      user_id: op.id,
+      property_id: op.property_id,
+      role: op.role,
+      role_title: op.role_title,
+      can_manage_roles: op.can_manage_roles === true,
+    };
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await leasePacketService.generateTermsReviewPacket(client, {
+        application_id: req.params.id,
+        actor,
+        audit_context: { ip: clientIp(req), user_agent: req.headers["user-agent"] || null },
+      });
+      await client.query("commit");
+      return res.json({
+        receipt: out.idempotent
+          ? "Lease Terms Review already generated (idempotent) — the existing draft was returned unchanged."
+          : "Lease Terms Review generated from the confirmed proposed terms. This is a demonstration summary for resident review, not an executed lease.",
+        idempotent: out.idempotent,
+        packet_id: out.packet.id,
+        version: out.packet.version,
+        status: out.packet.status,
+        proposed_terms_confirmation_id: out.packet.proposed_terms_confirmation_id,
+      });
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      // typed service errors: e.httpStatus + e.code (+ safe message). Property/
+      // authority refusals stay opaque (same posture as approve): code only.
+      if (e.httpStatus) {
+        const body = { error: e.code || "refused" };
+        if (e.code !== "property_mismatch" && e.code !== "not_authorized_for_packet") body.receipt = e.message;
+        return res.status(e.httpStatus).json(body);
+      }
+      console.error("operator lease-packet generate error", e);
+      return res.status(500).json({ error: "internal", receipt: "Could not generate the terms-review packet." });
+    } finally { client.release(); }
+  });
+
+  // Issue the one-time tenant review link. Mints a URL; does NOT send a text.
+  router.post("/operator/leasing/lease-packets/:id/send", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!leasePacketService || typeof leasePacketService.issueTermsReviewPacketLink !== "function") {
+      return res.status(503).json({ receipt: "Packet issuance is not wired on this deploy (leasePacketService missing)." });
+    }
+    const op = req.operator;
+    const b = req.body || {};
+    const actor = {
+      user_id: op.id,
+      property_id: op.property_id,
+      role: op.role,
+      role_title: op.role_title,
+      can_manage_roles: op.can_manage_roles === true,
+    };
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await leasePacketService.issueTermsReviewPacketLink(client, {
+        packet_id: req.params.id,
+        actor,
+        expires_days: b.expires_days,
+        idempotency_key: b.idempotency_key,
+        audit_context: { ip: clientIp(req), user_agent: req.headers["user-agent"] || null },
+      });
+      await client.query("commit");
+      if (out.already_issued) {
+        return res.json({
+          receipt: "Terms-review link already issued — the original link stands and was not replaced.",
+          already_issued: true,
+          token_recoverable: false,
+          packet_id: out.packet.id,
+          status: out.packet.status,
+        });
+      }
+      return res.json({
+        receipt: "Terms-review link issued. This creates the governed resident link and records that issuance; it does not send a text.",
+        already_issued: false,
+        token_recoverable: true,
+        tenant_url: out.tenant_url,
+        packet_id: out.packet.id,
+        status: out.packet.status,
+      });
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      if (e.httpStatus) {
+        const body = { error: e.code || "refused" };
+        if (e.code !== "property_mismatch" && e.code !== "not_authorized_for_packet") body.receipt = e.message;
+        return res.status(e.httpStatus).json(body);
+      }
+      console.error("operator lease-packet send error", e);
+      return res.status(500).json({ error: "internal", receipt: "Could not issue the terms-review link." });
     } finally { client.release(); }
   });
 
