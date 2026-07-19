@@ -34,6 +34,7 @@
 const crypto = require("crypto");
 const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
+const proposedTerms = require("./proposed_terms_service"); // Part 3: governed proposed-terms confirmation (Part 2 service)
 
 module.exports = function operatorModule(deps) {
   const {
@@ -2506,6 +2507,53 @@ module.exports = function operatorModule(deps) {
     } finally { client.release(); }
   });
 
+
+  // POST /operator/leasing/applications/:id/proposed-terms
+  // Records the governed "management confirmed these proposed economics for
+  // resident review" fact. Changes no status, creates no lease, satisfies no
+  // terms-review input. Opaque refusal on authority/property (audited server-side).
+  router.post("/operator/leasing/applications/:id/proposed-terms", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    const op = req.operator;
+    const b = req.body || {};
+    // server-derived actor context — the browser supplies NONE of this.
+    const actor = {
+      user_id: op.id,
+      property_id: op.property_id,
+      role: op.role,
+      role_title: op.role_title,
+      can_manage_roles: op.can_manage_roles,
+    };
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await proposedTerms.confirmProposedTerms(client, {
+        application_id: req.params.id,
+        rent: b.rent,
+        security_deposit: b.security_deposit,
+        lease_start_date: b.lease_start_date,
+        lease_end_date: b.lease_end_date,
+        concession_status: b.concession_status,
+        idempotency_key: b.idempotency_key,
+        actor,
+      });
+      await client.query("commit");
+      return res.json({
+        receipt: out.idempotent
+          ? "Proposed terms already confirmed (idempotent) — nothing changed."
+          : "Proposed terms confirmed for resident review. This is a proposal, not an executed lease.",
+        idempotent: out.idempotent,
+        confirmation_id: out.confirmation_id,
+        authority_basis: out.authority_basis,
+        supersedes_confirmation_id: out.supersedes_confirmation_id || null,
+      });
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      // service throws typed errors: e.httpStatus + e.code (+ message). Map to HTTP.
+      if (e.httpStatus) return res.status(e.httpStatus).json({ error: e.code || "refused" });
+      console.error("operator proposed-terms error", e);
+      return res.status(500).json({ error: "internal", receipt: "Could not confirm proposed terms." });
+    } finally { client.release(); }
+  });
 
   const operatorCountersignPerimeter = activationPerimeter({
     pool,
