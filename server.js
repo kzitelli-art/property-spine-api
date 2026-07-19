@@ -3231,7 +3231,8 @@ app.post("/ingest/:runId/approve", async (req, res) => {
 app.use("/", maintenanceModule({ pool, spawnObligationFromEvent }));
 // applications module mounted lower (after the conversion + submission services exist,
 // so /approve can close the leasing_manager application_approval gate). See below.
-app.use("/", leasePacketsModule({ pool, satisfyObligation, completeObligation })); // v3: submit completes terms_review atomically (§5b)
+const __leasePackets = leasePacketsModule({ pool, satisfyObligation, completeObligation }); // v3: submit completes terms_review atomically (§5b)
+app.use("/", __leasePackets); // instance captured: its two packet services (generate/issue) are handed to the operator door below (Part 5)
 // ── DOWN UNITS MODULE (isolated; same injection pattern) ──
 app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));
 // ── ORG CHART MODULE (isolated; same injection pattern) ──
@@ -3502,6 +3503,9 @@ app.use("/", require("./operator_session_bootstrap")({ pool })); // BRICK ONE: P
 const operatorModule = require("./operator");
 app.use("/", operatorModule({ pool, agentService: agentApp._service,
   leasingTourService: __leasingLeads._service, // the ONE completion service (leasingleads.js) — session door calls the same tx
+  // the two canonical packet services (leasepackets.js) — the session-gated
+  // operator adapters (Part 5) call generate/issue; no duplicate packet logic.
+  leasePacketService: __leasePackets._service,
   // the invitation service (applicationSubmission) — the session-gated operator
   // route calls its create/attest services; no duplicate invitation logic.
   applicationInvitations: __applicationSubmission._service,
