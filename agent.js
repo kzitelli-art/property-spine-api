@@ -1298,6 +1298,7 @@ Reply with ONLY the message text.`;
           }
 
           generated = (r.content || []).filter(x => x.type === "text").map(x => x.text).join("").trim();
+          if (!generated) console.error("[agent/diag] EMPTY GENERATION", JSON.stringify({ stop_reason: r.stop_reason, block_types: (r.content || []).map(x => x.type), usage: r.usage || null }));
         } else {
           genErr = "no_model_client";
         }
@@ -1889,6 +1890,7 @@ Reply with ONLY the message text.`;
           const r = await anthropic.messages.create({ model: MODEL, max_tokens: 320, system: built.system, messages: built.messages });
           providerReqId = (r && r.id) || null;
           generated = (r.content || []).filter(x => x.type === "text").map(x => x.text).join("").trim();
+          if (!generated) console.error("[agent/diag] EMPTY GENERATION", JSON.stringify({ stop_reason: r.stop_reason, block_types: (r.content || []).map(x => x.type), usage: r.usage || null }));
         } else { genErr = "no_model_client"; }
       } catch (e) { genErr = (e && e.message) || "generation_failed"; }
 
