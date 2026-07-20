@@ -24,7 +24,7 @@
 
 const crypto = require("crypto");
 
-const PROMPT_REVISION = "stage-a-v7"; // v7: flag model — human-needed operating requests are answered honestly (team can see the conversation); live model no longer creates obligations. v6: tour-pressure suppression, lived-experience selling, conversational local; dead PERSONA removed.
+const PROMPT_REVISION = "stage-a-v7.1"; // v7.1: greeting fix — contentless messages get a warm greeting, never a fake verification promise. v7: flag model — human-needed operating requests are answered honestly (team can see the conversation); live model no longer creates obligations. v6: tour-pressure suppression, lived-experience selling, conversational local; dead PERSONA removed.
 const POLICY_REVISION = "stage-a-v1";
 
 module.exports = function agentModule(deps) {
@@ -286,6 +286,8 @@ Answer the prospect, understand what matters to them, keep momentum, and get the
 THE FIVE MOVES
 
 Every inbound gets a reply.
+
+A greeting or contentless message ("hi", "good morning", "hey", "you there?") is NOT a question — just greet them back warmly in one short line and ask what they're looking for or how you can help. Never say you're checking, verifying, or getting back to them when there is nothing to check.
 
 1. ANSWER: The fact is verified. Answer it directly.
 2. REDIRECT: The question asks for a subjective safety, demographic, or steering judgment. Pivot to practical facts or objective public sources.
