@@ -479,20 +479,14 @@ module.exports = function communicationsBoundary({ pool, sms }) {
     );
   }
 
-  // Phone → E.164, matching leasingleads.normalizePhone (the SAME shape a lead
-  // is stored in at creation). Used ONLY to match an open lead by normalized
-  // phone; returns null when the input can't be normalized (null never matches
-  // a stored phone, so a bad input simply fails the lead tier — never a false
-  // match). Twilio's own `From` is already E.164; this covers leads that may
-  // have been stored raw.
-  function normalizeE164(raw) {
-    if (!raw) return null;
-    const d = String(raw).replace(/\D/g, "");
-    if (d.length === 10) return "+1" + d;
-    if (d.length === 11 && d[0] === "1") return "+" + d;
-    if (String(raw).startsWith("+")) return String(raw).trim();
-    return null;
-  }
+  // Phone → E.164: the SHARED canonical normalizer from phone_identity.js —
+  // the same function the duplicate-person identity fix standardized on. The
+  // previous local copy here was a byte-identical duplicate (verified before
+  // removal); importing the shared one removes the parallel implementation the
+  // comms-boundary spec forbids. Returns null when the input can't be
+  // normalized (null never matches a stored phone, so a bad input simply fails
+  // the tier — never a false match). Twilio's own `From` is already E.164.
+  const { normalizeE164 } = require("./phone_identity");
 
   async function resolveInboundSmsContext({ To, From, MessageSid, body = null }, clientArg = null) {
     const q = clientArg || pool;
@@ -542,7 +536,15 @@ module.exports = function communicationsBoundary({ pool, sms }) {
     //   · zero eligible, or >1 distinct eligible person, at either tier  → needs_human
     // Never a silent pick between two different humans, never a merge.
     //
-    // TIER 1 — active resident (unchanged query; the tenant door's contract).
+    // TIER 1 — active resident. Matches the CANONICAL identity field
+    // (primary_phone_e164 — the durable leasing phone identity), the legacy
+    // raw `phone` exactly, or a bounded last-ten-digits fallback for legacy
+    // formatted rows like "(724) 309-8434". The fallback compares digits only
+    // and requires a full 10-digit tail, so it cannot false-match short or
+    // malformed values. Ambiguity discipline below is unchanged: >1 distinct
+    // person still refuses.
+    const fromNorm = normalizeE164(From);
+    const fromTail = String(From).replace(/\D/g, "").slice(-10);
     const residents = (await q.query(
       `select distinct per.id, per.name, per.phone
          from persons per
@@ -550,8 +552,10 @@ module.exports = function communicationsBoundary({ pool, sms }) {
                       and per.id = any(l.tenant_ids)
          join tenant_invites ti on ti.person_id = per.id and ti.property_id = $1
                       and ti.status = 'used'
-        where per.phone = $2`,
-      [prop.id, From]
+        where per.primary_phone_e164 = $2
+           or per.phone = $3
+           or (length($4) = 10 and right(regexp_replace(coalesce(per.phone,''), '\\D', '', 'g'), 10) = $4)`,
+      [prop.id, fromNorm || From, From, fromTail]
     )).rows;
 
     // TIER 2 — open leasing lead. Matched by NORMALIZED phone (E.164) so a lead
@@ -565,14 +569,16 @@ module.exports = function communicationsBoundary({ pool, sms }) {
     // resident-vs-different-person-lead CONFLICT is detected rather than hidden
     // by resident precedence. A person may hold leads across properties; here
     // we count only this-property, non-terminal leads for this phone.
-    const fromNorm = normalizeE164(From);
     const leads = (await q.query(
       `select distinct per.id, per.name, per.phone
          from persons per
          join leasing_leads ll on ll.person_id = per.id and ll.property_id = $1
         where ll.status not in ('leased','lost')
-          and (per.phone = $2 or per.phone = $3)`,
-      [prop.id, From, fromNorm]
+          and (per.primary_phone_e164 = $2
+               or per.phone = $3
+               or per.phone = $4
+               or (length($5) = 10 and right(regexp_replace(coalesce(per.phone,''), '\\D', '', 'g'), 10) = $5))`,
+      [prop.id, fromNorm || From, From, fromNorm, fromTail]
     )).rows;
 
     // Distinct durable persons across BOTH tiers, keyed by person id.
