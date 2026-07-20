@@ -154,7 +154,7 @@ async function buildReviewList(client, propertyId) {
 }
 
 // Build the DETAIL payload for one scoped application (or a scope error).
-async function buildReviewDetail(client, applicationId, propertyId) {
+async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
   const { app } = await loadScopedApp(client, applicationId, propertyId);
   if (!app) return { notInScope: true };
   const verdict = await applicationTermsComplete(app, client);
@@ -165,11 +165,42 @@ async function buildReviewDetail(client, applicationId, propertyId) {
   const confirmation = await loadConfirmation(client, app);
   const lineageMatches = !!(packet && confirmation &&
     String(packet.proposed_terms_confirmation_id) === String(confirmation.id));
+
+  // ── Slice 1: server-authored next action (composition seam) ─────────────
+  // operator.js passes { loadGate, resolveNext } from applicationsService —
+  // the ONE canonical lifecycle resolver. This projection loads the facts;
+  // the resolver interprets them. No lifecycle branching lives in this file,
+  // and this file never requires the applications router. When the resolvers
+  // are not wired (older server.js), next_action is an honest null — the
+  // browser must not guess in its place.
+  let next_action = null;
+  if (resolvers && typeof resolvers.resolveNext === "function") {
+    let gate = null;
+    if (typeof resolvers.loadGate === "function") {
+      // Single-read invariant: hand the one packet we already loaded to the gate
+      // loader so it does NOT issue a second lease_packets query. The resolver
+      // and the rendered detail therefore see the exact same current packet.
+      try { gate = await resolvers.loadGate(client, app, { packet }); }
+      catch (e) { console.error("application-review loadGate failed (non-fatal):", e.message); gate = null; }
+    }
+    try {
+      next_action = resolvers.resolveNext(app, gate, {
+        confirmation,
+        packet,
+        currency_status: currency.status,
+        lineage_matches_current_confirmation: packet ? lineageMatches : null,
+      });
+    } catch (e) {
+      console.error("application-review resolveNext failed (non-fatal):", e.message);
+      next_action = null;
+    }
+  }
   return {
     application_id: app.id,
     applicant: { name: app.applicant_name || null, person_id: app.person_id || null },
     unit: { unit_id: app.unit_id || null, unit_label: app.unit_label || null },
     status: app.status,
+    next_action, // Slice 1: the server-authored operating instruction (null when resolver unwired)
     terms: {
       lease_start_date: nDate(terms.lease_start_date), lease_end_date: nDate(terms.lease_end_date),
       rent: nNum(terms.rent), deposit: nNum(terms.deposit),
