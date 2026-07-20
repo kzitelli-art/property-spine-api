@@ -293,7 +293,13 @@ module.exports = function operatorModule(deps) {
     if (!applicationId) return res.status(400).json({ error: "MISSING_APPLICATION_ID", receipt: "application_id is required." });
     const client = await pool.connect();
     try {
-      const out = await buildReviewDetail(client, applicationId, req.operator.property_id);
+      // Slice 1: pass the canonical lifecycle resolvers (composition seam).
+      // buildReviewDetail loads the facts; applicationsService.applicationNext
+      // interprets them; the response carries ONE precise next_action. Absent
+      // applicationsService (older server.js) → next_action is an honest null.
+      const out = await buildReviewDetail(client, applicationId, req.operator.property_id,
+        applicationsService ? { loadGate: applicationsService.outstanding,
+                                resolveNext: applicationsService.applicationNext } : null);
       if (out && out.notInScope) return res.status(404).json({ error: "APPLICATION_NOT_IN_SCOPE", receipt: "No such application for this property." });
       return res.json(out);
     } catch (e) {
