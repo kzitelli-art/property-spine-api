@@ -24,7 +24,7 @@
 
 const crypto = require("crypto");
 
-const PROMPT_REVISION = "stage-a-v6"; // v6: tour-pressure suppression (no consecutive asks, wait 2 exchanges, no-on-decline), sell-lived-experience, conversational-local; dead PERSONA constant removed. v5: SOLO master rewrite — moves, no-silence, dash-strip, §7 persona, tight pre-gate
+const PROMPT_REVISION = "stage-a-v7"; // v7: flag model — human-needed operating requests are answered honestly (team can see the conversation); live model no longer creates obligations. v6: tour-pressure suppression, lived-experience selling, conversational local; dead PERSONA removed.
 const POLICY_REVISION = "stage-a-v1";
 
 module.exports = function agentModule(deps) {
@@ -290,12 +290,12 @@ Every inbound gets a reply.
 1. ANSWER: The fact is verified. Answer it directly.
 2. REDIRECT: The question asks for a subjective safety, demographic, or steering judgment. Pivot to practical facts or objective public sources.
 3. DEFER: The fact is not verified but YOU could find it yourself (look it up, check live data). Say you are checking the exact answer, then keep the conversation moving. No one else needs to do anything.
-4. ESCALATE: A HUMAN must DO something before you can answer — confirm a unit's readiness or move-in date, accelerate a turn, verify parking availability, get an exception or waiver decision, or check an operating fact only staff can confirm. Call the create_staff_obligation tool to put that work on the team. You KEEP the conversation. Do NOT emit a handoff tag — this is not a handoff. Match your words to what the tool tells you: if it says the work was SENT to the team, say you've sent it to the team and will follow up; only say the team is actively working on it if the tool confirms that; only give a specific follow-up time if the tool returns a real due time.
+4. FLAG: A HUMAN must handle something before you can answer — confirm a unit's readiness or move-in date, accelerate a turn, verify parking availability, decide an exception or waiver, or check an operating fact only staff can confirm. Tell the prospect honestly that this needs the team and that the team can see your conversation — then KEEP the conversation. Do NOT claim you filed, flagged, or submitted anything, do NOT claim someone is already working on it, do NOT promise an outcome or a response time. Do NOT emit a handoff tag — this is not a handoff.
 5. HANDOFF: The prospect is frustrated, explicitly wants a person, requests an accommodation, reports an emergency, or raises a direct legal or discrimination complaint. This is when a PERSON must take over the CONVERSATION itself. Say you are getting the team involved and add this exact tag on its own line:
 
 [[HANDOFF: short reason]]
 
-The line between ESCALATE and HANDOFF: ESCALATE means staff has WORK to do while you keep talking. HANDOFF means a human must OWN the conversation. Readiness checks, turns, and exceptions are ESCALATE, never HANDOFF.
+The line between FLAG and HANDOFF: FLAG means the request needs the team while you keep talking. HANDOFF means a human must OWN the conversation. Readiness checks, turns, exceptions, and staff-only operating checks are FLAG, never HANDOFF.
 
 GROUNDING
 
@@ -453,15 +453,11 @@ HANDOFFS AND PROMISES
 
 A normal unknown fact you could find yourself is a DEFER, not a handoff.
 
-If a HUMAN must do work before you can answer (readiness, a turn, an exception, an operating check only staff can confirm), that is an ESCALATE: call create_staff_obligation, then KEEP the conversation. It is not a handoff — do not emit the tag.
+If a HUMAN must review or handle something before you can answer (readiness, a turn, an exception, or a staff-only operating check), that is a FLAG: say honestly that it needs the team and the team can see your conversation, then KEEP the conversation. It is not a handoff — do not emit the tag.
 
 Bring in a person to OWN the conversation (a HANDOFF) only for the handoff conditions above.
 
-Do not promise "I'll call in two hours" or "someone will reach out shortly" unless a real obligation with an owner and due time was created. You only know an obligation was created when the create_staff_obligation tool returns success — never claim it before that. When the tool says the work was SENT to the team, say you've sent it and will follow up; say the team is actively working on it only if the tool confirms that; state a specific time only if the tool returned a real due time.
-
-If the obligation exists, say the team is being brought in.
-
-If it does not, say you are checking now.
+For a FLAG, never claim you filed or submitted anything, that a named person has it, that someone is already working on it, that an exception is approved, or that the team will respond by a particular time. The team reads conversations; a human decides what action or task is needed. The AI does not create or own that task.
 
 CORRECTIONS
 
@@ -953,16 +949,14 @@ Reply with ONLY the message text.`;
           // Capped to bound latency and cost on an SMS reply. Class 1 primitive.
           const AREA_KNOWLEDGE_TOOL = { type: "web_search_20250305", name: "web_search", max_uses: 3 };
 
-          // ── OPERATIONAL ESCALATION (Slice 1) ───────────────────────────
-          // When a HUMAN must DO something before the agent can answer —
-          // confirm readiness/move-in date, accelerate a turn, verify parking,
-          // get an exception/waiver, check a staff-only operating fact — the
-          // model calls this to put real WORK on the team. This is NOT a
-          // handoff: the AI keeps the conversation. The service write (below)
-          // is the sole authority that the work is owned; the model may only
-          // tell the prospect "the team is on it" AFTER the tool returns owned,
-          // and may only state a time if the tool returns a real due time.
-          // Always exposed — an escalation need can arise in any conversation.
+          // ── DORMANT OPERATIONAL ESCALATION PLUMBING (Slice 1) ──────────
+          // The governed obligation-writing tool remains implemented and proven
+          // (prove_escalate_move.js), but the live model no longer receives it.
+          // Under the flag model, a human-needed request stays visible in the
+          // conversation a human can read, and a human decides whether to create
+          // or own an actual task. Keeping this definition and its handler
+          // avoids risky teardown and preserves the plumbing for a future
+          // explicitly governed entry point.
           const ESCALATE_TOOL = {
             name: "create_staff_obligation",
             description: "Put real WORK on the leasing team when a HUMAN must DO something before you can answer — confirm a unit's readiness or move-in date, accelerate a turnover, verify parking availability, get an exception or waiver decision, or check an operating fact only staff can confirm. This does NOT hand off the conversation — you keep talking to the prospect. Do NOT call this for a fact you could look up yourself (that's a plain answer/defer), and do NOT call this for frustration, a request for a person, an accommodation, an emergency, or a legal/discrimination complaint (those are a handoff, not this). After this returns, you may tell the prospect the team is on it — but ONLY a specific time if the result includes a due time.",
@@ -978,7 +972,7 @@ Reply with ONLY the message text.`;
           const activeTools = (bookingUsable
             ? [INVENTORY_TOOL, OFFER_TOUR_SLOTS_TOOL, BOOK_TOUR_TOOL]
             : [INVENTORY_TOOL]
-          ).concat([ESCALATE_TOOL, AREA_KNOWLEDGE_TOOL]);
+          ).concat([AREA_KNOWLEDGE_TOOL]);
 
           let r = await anthropic.messages.create({
             model: MODEL, max_tokens: 320, system: built.system, messages: built.messages,
