@@ -524,7 +524,11 @@ Reply with ONLY the message text.`;
     for (const h of history) {
       msgs.push({ role: h.direction === "inbound" ? "user" : "assistant", content: h.body || "" });
     }
-    // ensure the array ends on the latest inbound (it will, since we just wrote it)
+    // The array ends on the latest inbound because history is the NEWEST 40
+    // events re-sorted chronologically (a first-40 window silently pinned long
+    // threads to their oldest messages once they crossed 40 events — the new
+    // inbound fell outside the window, the array ended on an old assistant turn,
+    // and the API treated it as a completed prefill → near-empty end_turn).
     return { system, messages: msgs.filter(m => m.content && m.content.trim()) };
   }
 
@@ -816,9 +820,11 @@ Reply with ONLY the message text.`;
         let history;
         try {
           history = (await client1.query(
-            `select direction, body from comm_events
-              where conversation_id=$1 and channel='text' and body is not null
-              order by occurred_at asc nulls last, id asc limit 40`,
+            `select direction, body from (
+               select direction, body, occurred_at, id from comm_events
+                where conversation_id=$1 and channel='text' and body is not null
+                order by occurred_at desc nulls last, id desc limit 40
+             ) t order by occurred_at asc nulls last, id asc`,
             [tx1.conversation_id]
           )).rows;
         } finally { client1.release(); }
@@ -1873,7 +1879,7 @@ Reply with ONLY the message text.`;
         let history;
         try {
           history = (await c1.query(
-            `select direction, body from comm_events where conversation_id=$1 and channel='text' and body is not null order by occurred_at asc nulls last, id asc limit 40`,
+            `select direction, body from (select direction, body, occurred_at, id from comm_events where conversation_id=$1 and channel='text' and body is not null order by occurred_at desc nulls last, id desc limit 40) t order by occurred_at asc nulls last, id asc`,
             [prep.conv.id]
           )).rows;
         } finally { c1.release(); }
