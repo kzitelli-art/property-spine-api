@@ -109,7 +109,7 @@ module.exports = function applicationsModule(deps) {
   // the current birth event; the activation gate is legacy (pre-v3 rows only).
   // Also loads the CURRENT packet (latest non-superseded — §5: never merely
   // highest version) so the application_next resolver can speak with truth.
-  async function outstanding(q, app) {
+  async function outstanding(q, app, opts) {
     let gate = null;
     if (app.terms_review_obligation_id) {
       const o = (await q.query("select required_inputs, status from obligations where id=$1",
@@ -121,6 +121,16 @@ module.exports = function applicationsModule(deps) {
       if (o) gate = { remaining: o.required_inputs || [], obligation_status: o.status, gate_kind: "legacy_activation" };
     }
     if (!gate) return null;
+    // Slice 1 — single-read invariant. If the caller already loaded the current
+    // non-superseded packet (Application Review does, for currency/lineage), it
+    // passes it in via opts.packet so the SAME row drives both the projection and
+    // this gate — no second lease_packets read, no chance the resolver and the
+    // rendered detail observe different "current" packets under a concurrent
+    // generation/issuance. Standalone callers omit opts and this self-loads.
+    if (opts && Object.prototype.hasOwnProperty.call(opts, "packet")) {
+      gate.packet = opts.packet || null;
+      return gate;
+    }
     try {
       const pk = (await q.query(
         `select id, version, status from lease_packets
@@ -135,34 +145,161 @@ module.exports = function applicationsModule(deps) {
   // The Person Card and every queue consume THIS; no frontend computes the
   // lifecycle, and no reader derives execution readiness from raw status
   // (lease_ready is explicitly NON-AUTHORITATIVE, §3).
-  function applicationNext(app, gate) {
-    const pk = gate && gate.packet;
+  //
+  // SLICE 1 — NEXT-ACTION AUTHORITY. The resolver now accepts an OPTIONAL
+  // third argument: the richer review facts Application Review already loads.
+  //     applicationNext(app, gate, {
+  //       confirmation,                          // current proposed-terms confirmation row | null
+  //       packet,                                // current non-superseded packet row | null
+  //       currency_status,                       // 'not_generated' | 'current' | 'stale'
+  //       lineage_matches_current_confirmation,  // true only when packet.proposed_terms_confirmation_id === confirmation.id
+  //     })
+  // WITH review facts, the old catch-all "send_terms_for_review" refines into
+  // one precise action per stage. WITHOUT them (every existing two-arg caller)
+  // action_code values are unchanged — except ONE deliberate drift fix noted
+  // at PK_AWAITING below. Additive fields on every return:
+  //     code         — canonical name going forward (same value as action_code)
+  //     group_code   — the pre-slice broad vocabulary; existing consumers may
+  //                    keep switching on this until deliberately migrated
+  //     state        — 'available' | 'blocked' | 'waiting' | 'complete'
+  //     blocker_code — why the KNOWN next action cannot run right now (else null)
+  // "What is next" (code) and "why it is blocked" (blocker_code) are separate
+  // facts and must never collapse. Actor permission is NOT a lifecycle state:
+  // it stays in the authenticated write-route guards. This resolver is a PURE
+  // interpreter of already-loaded facts — no queries — and it is a read
+  // projection, not authorization: every write route still revalidates status,
+  // gate, packet, lineage, property scope, and operator authority inside its
+  // own transaction at execution time.
+  //
+  // ONE LIFECYCLE VOCABULARY (drift kill): the packet-status names below are
+  // the single normalization point. 'tenant_in_progress' (the packet column's
+  // own vocabulary) previously fell through to "send_terms_for_review" here —
+  // a wrong answer for an already-sent packet. It now correctly reads as
+  // awaiting acknowledgment in BOTH modes. That is the one intentional
+  // legacy-mode behavior change in this slice.
+  const PK_AWAITING = ["sent", "in_progress", "tenant_in_progress"];
+
+  function applicationNext(app, gate, review) {
+    const rv = review || null;
+    // Review's packet is authoritative when review facts are provided (it is
+    // loaded by the same canonical non-superseded/version-desc rule as the
+    // gate's enrichment, but carries the full lifecycle/lineage columns).
+    const pk = (rv && rv.packet !== undefined) ? rv.packet : (gate && gate.packet);
     const gateClosed = gate && ["complete", "completed"].includes(gate.obligation_status);
     const base = { source_type: "lease_application", source_id: app.id,
                    obligation_id: (gate && gate.gate_kind === "terms_review") ? app.terms_review_obligation_id : null,
                    packet_id: pk ? pk.id : null, blocked_reason: null };
-    if (app.status === "active") return { ...base, action_code: "active", label: "Lease active. Tenant file open." };
-    if (["declined", "withdrawn", "expired"].includes(app.status)) return { ...base, action_code: "closed", label: "Application closed (" + app.status + ")." };
-    if (app.status === "accepted_term_required") return { ...base, action_code: "confirm_term", label: "Company accepted — confirm the lease term." };
-    if (app.status === "submitted") return { ...base, action_code: "approve", label: "Approve the application." };
-    if (!gate) return { ...base, action_code: "review_application", label: "Submit the application." };
+    // #2 — action_code stays the LEGACY contract for any consumer (including
+    // ones outside this repo the grep can't see). `code` is the new precise
+    // value; `action_code`/`group_code` carry the pre-slice value. For every
+    // legacy two-arg return these three are the same string; for a refined
+    // three-arg return, `code` is precise while action_code/group_code stay the
+    // broad legacy value (passed via extra.group_code). Nothing outside the new
+    // panel silently changes.
+    const out = (code, label, extra) => {
+      const e = extra || {};
+      const legacy = (e.group_code !== undefined) ? e.group_code : code;
+      return {
+        ...base, label,
+        code, action_code: legacy, group_code: legacy,
+        state: "available", blocker_code: null, warning_code: null,
+        ...e,
+        // action_code is ALWAYS the legacy value even if extra tried to set code-ish fields
+        action_code: legacy, group_code: legacy,
+      };
+    };
+    if (app.status === "active") return out("active", "Lease active. Tenant file open.", { state: "complete" });
+    if (["declined", "withdrawn", "expired"].includes(app.status)) return out("closed", "Application closed (" + app.status + ").", { state: "complete" });
+    if (app.status === "accepted_term_required") return out("confirm_term", "Company accepted — confirm the lease term.");
+    if (app.status === "submitted") {
+      return rv
+        ? out("approve_application", "Approve the application.", { group_code: "approve" })
+        : out("approve", "Approve the application.");
+    }
+    if (!gate) return out("review_application", "Submit the application.");
     if (gate.gate_kind === "legacy_activation") {
       // Pre-v3 row. Its blended gate cannot pass the corrected countersign
       // without real execution proof — the honest next is the same dead-end.
-      return { ...base, action_code: "executed_lease_required",
-               label: "Executed lease required. (Legacy activation gate — a terms acknowledgment is not an executed lease.)" };
+      return out("executed_lease_required",
+        "Executed lease required. (Legacy activation gate — a terms acknowledgment is not an executed lease.)");
     }
-    if (gateClosed) return { ...base, action_code: "executed_lease_required", label: "Executed lease required." };
-    if (pk && ["sent", "in_progress"].includes(pk.status)) return { ...base, action_code: "awaiting_acknowledgment", label: "Awaiting the resident's terms acknowledgment." };
-    if (pk && pk.status === "submitted") return { ...base, action_code: "executed_lease_required", label: "Executed lease required." };
-    return { ...base, action_code: "send_terms_for_review", label: "Send terms for review." };
+    if (gateClosed) return out("executed_lease_required", "Executed lease required.");
+    if (pk && PK_AWAITING.includes(pk.status)) {
+      // Already issued. Nothing is pending, so there is NO blocker — the resident
+      // is being awaited regardless of packet metadata. But if review facts show
+      // the issued packet's lineage/currency is off, that is a real anomaly on
+      // completed work: surface it as a WARNING (not a blocker — no pending
+      // action is being prevented). #3.
+      let warning = null;
+      if (rv) {
+        if (rv.lineage_matches_current_confirmation !== true) {
+          warning = (pk.proposed_terms_confirmation_id == null)
+            ? "issued_packet_lineage_unproven" : "issued_packet_confirmation_mismatch";
+        } else if (rv.currency_status === "stale") {
+          warning = "issued_packet_stale";
+        }
+      }
+      return rv
+        ? out("await_resident_acknowledgment", "Awaiting the resident's terms acknowledgment.",
+              { group_code: "awaiting_acknowledgment", state: "waiting", warning_code: warning })
+        : out("awaiting_acknowledgment", "Awaiting the resident's terms acknowledgment.", { state: "waiting" });
+    }
+    if (pk && pk.status === "submitted") return out("executed_lease_required", "Executed lease required.");
+
+    // ── the middle of the flow (the old single catch-all) ─────────────────
+    if (!rv) return out("send_terms_for_review", "Send terms for review."); // legacy two-arg: unchanged
+
+    const G = { group_code: "send_terms_for_review" };
+    const conf = rv.confirmation || null;
+    if (!conf && !pk) return out("confirm_proposed_terms", "Confirm the proposed terms.", G);
+    if (!conf && pk) {
+      // A packet with no current confirmation is a contradiction under v3
+      // governance. The truthful missing thing IS the confirmation — but
+      // confirming is locked by the existing packet, so this is a governed-
+      // correction case, never a normal next step.
+      return out("confirm_proposed_terms", "Confirm the proposed terms.",
+        { ...G, state: "blocked", blocker_code: "inconsistent_application_state" });
+    }
+    if (conf && !pk) return out("generate_terms_review_packet", "Generate the terms-review packet.", G);
+
+    // conf && pk. #2 — ONLY a real draft is issuable. A voided/unknown/future
+    // packet status must NEVER fall through to an Issue action. These are
+    // governed-correction states: the honest next is to regenerate, blocked
+    // with an explicit reason. (Note: 'sent'/'tenant_in_progress'/'submitted'
+    // packets are already handled above — this reaches only draft-or-other.)
+    if (pk.status === "voided") {
+      return out("generate_terms_review_packet", "Regenerate the terms-review packet (prior packet voided).",
+        { ...G, state: "blocked", blocker_code: "packet_voided" });
+    }
+    if (pk.status !== "draft") {
+      return out("generate_terms_review_packet", "Regenerate the terms-review packet.",
+        { ...G, state: "blocked", blocker_code: "packet_status_not_issuable" });
+    }
+
+    // A real draft packet. Blocker precedence: integrity (lineage) before
+    // freshness (currency). A historical packet with NULL lineage is NOT
+    // treated as a match — it is honestly unproven (§ do not weaken walls).
+    if (rv.lineage_matches_current_confirmation !== true) {
+      return out("issue_terms_review_link", "Issue the terms-review link.",
+        { ...G, state: "blocked",
+          blocker_code: (pk.proposed_terms_confirmation_id == null)
+            ? "packet_lineage_unproven" : "packet_confirmation_mismatch" });
+    }
+    if (rv.currency_status === "stale") {
+      return out("issue_terms_review_link", "Issue the terms-review link.",
+        { ...G, state: "blocked", blocker_code: "packet_stale" });
+    }
+    return out("issue_terms_review_link", "Issue the terms-review link.", G);
   }
 
   // Derived operating position (§3) — so no reader quietly recreates the old
   // status equivalence from lease_ready.
+  // Slice 1: switch on group_code first — for every existing two-arg call
+  // group_code === action_code (identical behavior); if a refined next is
+  // ever passed through, the precise middle codes still map to their group.
   function applicationPosition(app, gate) {
     const next = applicationNext(app, gate);
-    switch (next.action_code) {
+    switch (next.group_code || next.action_code) {
       case "active": return "active";
       case "closed": return "closed_" + app.status;
       case "confirm_term": return "accepted_term_required";
