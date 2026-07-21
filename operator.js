@@ -48,6 +48,7 @@ module.exports = function operatorModule(deps) {
   } = deps;
   const { rankTurnPriority } = require("./turn_priority"); // shared Turn-Priority ranking (slice 1)
   const { buildReviewList, buildReviewDetail } = require("./application_review"); // application review reads (slice 2)
+  const { loadLeasingDesk } = require("./leasing_desk_loader"); // Leasing Desk composition (one repeatable-read snapshot)
   // ── THE ONE CANONICAL TENANCY-ANCHOR SERVICE (Fable ruling) ──────────
   // The SAME countersign + confirm-term implementation applications.js calls.
   // Injected from server.js (built once from the obligation engine). The two
@@ -275,6 +276,37 @@ module.exports = function operatorModule(deps) {
   //    terms, completeness, concession (governed dated lines if structured), and
   //    packet currency (not_generated | current | stale — drift is real because
   //    lease_packets.terms_json is persisted). Property SERVER-DERIVED; each
+  // ── THE LEASING DESK ────────────────────────────────────────────────────
+  // ONE read-only projection backing the operator Leasing home. NO
+  // dormantWriteGuard: the read grants no write authority; every button's POST
+  // enforces its own perimeter downstream. Property scope is SERVER-DERIVED
+  // (req.operator.property_id, never client input). The loader composes
+  // applications + follow-ups + recently-closed inside ONE repeatable-read
+  // snapshot; a failure is ONE honest unavailable contract with no legacy or
+  // fixture fallback.
+  router.get("/operator/leasing/desk", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const desk = await loadLeasingDesk(
+        {
+          pool,
+          applicationReview: { buildReviewList, buildReviewDetail },
+          applicationsService,
+          conversionService,
+          staffIdentity,
+        },
+        req.operator.property_id
+      );
+      return res.json(desk);
+    } catch (e) {
+      console.error("leasing desk error", e);
+      return res.status(503).json({
+        error: "LEASING_DESK_UNAVAILABLE",
+        receipt: "The Leasing desk could not be loaded. Retry; if it persists the desk service is unavailable.",
+      });
+    }
+  });
+
   //    application verified to belong to the operator's property. NO write controls.
   router.get("/operator/leasing/applications-review", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
