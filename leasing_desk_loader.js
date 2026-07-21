@@ -200,20 +200,27 @@ async function loadFollowupRows(client, propertyId, deps) {
 // Closed leasing obligations in the window, with reopenability resolved through
 // the ALREADY-client-aware assessReopenability(client, …). Read-only.
 const CLOSED_SQL = `
-  select o.id as obligation_id, lco.conversion_id, c.property_id,
-         p.id as person_id, p.name as person_name,
-         o.label, lco.outcome as resolution, lco.resolution_basis,
-         o.resolved_at as closed_at, ru.name as closed_by_name
+  select o.id as obligation_id,
+         lco.conversion_id,
+         c.property_id,
+         p.id as person_id,
+         p.name as person_name,
+         o.label,
+         lco.outcome,
+         lco.resolution,
+         lco.resolution_basis,
+         lco.closed_at,
+         ru.name as closed_by_name
     from leasing_conversion_obligations lco
     join obligations o         on o.id = lco.obligation_id
     join leasing_conversions c on c.id = lco.conversion_id
     join persons p             on p.id = c.person_id
-    left join users ru         on ru.id = lco.resolved_by_user_id
+    left join users ru         on ru.id = lco.closed_by_user_id
    where c.property_id = $1
      and lco.outcome is not null
-     and o.resolved_at is not null
-     and o.resolved_at >= now() - ($2 || ' hours')::interval
-   order by o.resolved_at desc`;
+     and lco.closed_at is not null
+     and lco.closed_at >= now() - ($2 || ' hours')::interval
+   order by lco.closed_at desc`;
 
 async function loadRecentlyClosed(client, propertyId, windowHours, deps) {
   const { conversionService } = deps;
