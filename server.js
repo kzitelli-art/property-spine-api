@@ -3231,7 +3231,8 @@ app.post("/ingest/:runId/approve", async (req, res) => {
 app.use("/", maintenanceModule({ pool, spawnObligationFromEvent }));
 // applications module mounted lower (after the conversion + submission services exist,
 // so /approve can close the leasing_manager application_approval gate). See below.
-app.use("/", leasePacketsModule({ pool, satisfyObligation, completeObligation })); // v3: submit completes terms_review atomically (§5b)
+const __leasePackets = leasePacketsModule({ pool, satisfyObligation, completeObligation });
+app.use("/", __leasePackets); // ONE packet service instance; legacy + operator doors share _service
 // ── DOWN UNITS MODULE (isolated; same injection pattern) ──
 app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));
 // ── ORG CHART MODULE (isolated; same injection pattern) ──
@@ -3517,7 +3518,8 @@ app.use("/", operatorModule({ pool, agentService: agentApp._service,
   tenancyAnchor: __tenancyAnchor,
   // v3: the walled operator approve adapter calls the ONE canonical
   // approveApplication service (R3) — never a second implementation.
-  applicationsService: __applications._service }));
+  applicationsService: __applications._service,
+  leasePacketsService: __leasePackets._service }));
 
 // ── STAFF IDENTITY BRIDGE (067) — the authorized point-and-confirm workflow:
 // classify accounts, suggest candidates (exact verified email only, never
