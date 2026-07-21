@@ -44,6 +44,7 @@ module.exports = function operatorModule(deps) {
     // — the walled operator approve adapter below calls THIS, never a second
     // implementation. Absent (older server.js) → the route fails closed 503.
     applicationsService = null,
+    leasePacketsService = null,
   } = deps;
   const { rankTurnPriority } = require("./turn_priority"); // shared Turn-Priority ranking (slice 1)
   const { buildReviewList, buildReviewDetail } = require("./application_review"); // application review reads (slice 2)
@@ -2580,6 +2581,41 @@ module.exports = function operatorModule(deps) {
     requiredModule: "leasing",
   });
 
+  const _getAppForPacketPerimeter = async (q, packetId) =>
+    (await q.query(
+      `select la.*
+         from lease_packets pk
+         join lease_applications la on la.id=pk.application_id
+        where pk.id=$1 and pk.superseded_at is null`,
+      [packetId]
+    )).rows[0];
+
+  const operatorGeneratePacketPerimeter = activationPerimeter({
+    pool,
+    loadApplication: _getAppForPerimeter,
+    eligibleStatuses: ["lease_ready", "tenant_signed", "approved"],
+    action: "generate_lease_packet",
+    requiredModule: "leasing",
+  });
+
+  const operatorIssuePacketPerimeter = activationPerimeter({
+    pool,
+    loadApplication: _getAppForPacketPerimeter,
+    eligibleStatuses: ["lease_ready", "tenant_signed", "approved"],
+    action: "issue_lease_packet_link",
+    requiredModule: "leasing",
+  });
+
+  function operatorPacketAuditContext(req) {
+    const f = req.headers && req.headers["x-forwarded-for"];
+    return {
+      ip_address: typeof f === "string" && f.length
+        ? f.split(",")[0].trim()
+        : (req.ip || null),
+      user_agent: (req.headers && req.headers["user-agent"]) || null,
+    };
+  }
+
   // Resolve the authenticated session USER → its bridged PERSON id, if the
   // deliberate staff-user↔person bridge has one. Returns null otherwise (the
   // service then fails closed only if a bound offer actually requires it — the
@@ -2591,6 +2627,102 @@ module.exports = function operatorModule(deps) {
       return (idn && idn.state === "resolved" && idn.person_id) ? idn.person_id : null;
     } catch (_) { return null; }
   }
+
+  // LEASE-PACKET OPERATOR ADAPTERS — staff-session doors over
+  // leasepackets.js's one canonical service.
+  router.post(
+    "/operator/leasing/applications/:id/lease-packet",
+    dormantWriteGuard,
+    requireOperator,
+    requireLeasingModuleAccess,
+    operatorGeneratePacketPerimeter,
+    async (req, res) => {
+      res.set("Cache-Control", "no-store");
+      if (!leasePacketsService ||
+          typeof leasePacketsService.generateLeasePacket !== "function") {
+        return res.status(503).json({
+          receipt: "Lease-packet generation is not wired on this deploy. Deploy leasepackets.js, operator.js, and server.js together.",
+        });
+      }
+      const op = req.operator;
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const out = await leasePacketsService.generateLeasePacket(client, {
+          applicationId: req.params.id,
+          actorUserId: op.id,
+          expectedPropertyId: op.property_id,
+          createNewVersion: !!(req.body && req.body.create_new_version === true),
+          auditContext: operatorPacketAuditContext(req),
+        });
+        await client.query("commit");
+        return res.json(out);
+      } catch (e) {
+        await client.query("rollback").catch(() => {});
+        if (e && e.httpStatus) {
+          return res.status(e.httpStatus).json(e.body || {
+            error: e.code || "packet_write_refused",
+            receipt: e.message,
+          });
+        }
+        console.error("operator lease-packet generate:", e);
+        return res.status(500).json({
+          error: "internal",
+          receipt: "Could not generate the lease packet.",
+        });
+      } finally {
+        client.release();
+      }
+    }
+  );
+
+  router.post(
+    "/operator/leasing/lease-packets/:id/send",
+    dormantWriteGuard,
+    requireOperator,
+    requireLeasingModuleAccess,
+    operatorIssuePacketPerimeter,
+    async (req, res) => {
+      res.set("Cache-Control", "no-store");
+      if (!leasePacketsService ||
+          typeof leasePacketsService.issueLeasePacketLink !== "function") {
+        return res.status(503).json({
+          receipt: "Lease-packet issue is not wired on this deploy. Deploy leasepackets.js, operator.js, and server.js together.",
+        });
+      }
+      const op = req.operator;
+      const b = req.body || {};
+      const client = await pool.connect();
+      try {
+        await client.query("begin");
+        const out = await leasePacketsService.issueLeasePacketLink(client, {
+          packetId: req.params.id,
+          expiresDays: b.expires_days != null ? b.expires_days : 14,
+          idempotencyKey: b.idempotency_key || null,
+          actorUserId: op.id,
+          expectedPropertyId: op.property_id,
+          auditContext: operatorPacketAuditContext(req),
+        });
+        await client.query("commit");
+        return res.json(out);
+      } catch (e) {
+        await client.query("rollback").catch(() => {});
+        if (e && e.httpStatus) {
+          return res.status(e.httpStatus).json(e.body || {
+            error: e.code || "packet_write_refused",
+            receipt: e.message,
+          });
+        }
+        console.error("operator lease-packet issue:", e);
+        return res.status(500).json({
+          error: "internal",
+          receipt: "Could not issue the lease packet.",
+        });
+      } finally {
+        client.release();
+      }
+    }
+  );
 
   router.post("/operator/leasing/applications/:id/countersign", dormantWriteGuard, operatorCountersignPerimeter, async (req, res) => {
     res.set("Cache-Control", "no-store");
