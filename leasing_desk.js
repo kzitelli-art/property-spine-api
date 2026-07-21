@@ -143,11 +143,15 @@ function normalizeFollowupAction(row) {
   const code = valueOrNull(row.next_move_code);
 
   if (code === "send_application") {
+    const conversionId = valueOrNull(row.conversion_id);
+    if (!conversionId) {
+      throw new Error("send_application requires conversion_id.");
+    }
     return {
       code: "send_application",
       label: valueOrNull(row.next_move_label) || "Send application",
       kind: "task_write",
-      target: { type: "obligation", id: row.obligation_id },
+      target: { type: "conversion", id: conversionId },
     };
   }
 
