@@ -66,13 +66,57 @@ module.exports = function leasePacketsModule(deps) {
     return req.ip || null;
   };
 
-  async function audit(q, req, packetId, actorRole, eventType, eventJson = {}) {
+  function requestAuditContext(req) {
+    if (!req) return { ip_address: null, user_agent: null };
+    return {
+      ip_address: clientIp(req),
+      user_agent: (req.headers && req.headers["user-agent"]) || null,
+    };
+  }
+
+  function normalizeAuditContext(source) {
+    if (!source) return { ip_address: null, user_agent: null };
+    if (Object.prototype.hasOwnProperty.call(source, "ip_address") ||
+        Object.prototype.hasOwnProperty.call(source, "user_agent")) {
+      return {
+        ip_address: source.ip_address || null,
+        user_agent: source.user_agent || null,
+      };
+    }
+    return requestAuditContext(source);
+  }
+
+  async function audit(q, source, packetId, actorRole, eventType, eventJson = {}) {
+    const ctx = normalizeAuditContext(source);
     await q.query(
       `insert into lease_packet_audit_events
          (lease_packet_id, actor_role, event_type, event_json, ip_address, user_agent)
        values ($1,$2,$3,$4,$5,$6)`,
-      [packetId, actorRole, eventType, eventJson, clientIp(req), req.headers["user-agent"] || null]
+      [packetId, actorRole, eventType, eventJson, ctx.ip_address, ctx.user_agent]
     );
+  }
+
+  function packetError(httpStatus, code, receipt, extra = {}) {
+    const e = new Error(receipt);
+    e.httpStatus = httpStatus;
+    e.code = code;
+    e.body = { error: code, receipt, ...extra };
+    return e;
+  }
+
+  function sendPacketError(res, e, logLabel, fallbackReceipt) {
+    if (e && e.httpStatus) {
+      return res.status(e.httpStatus).json(e.body || {
+        error: e.code || "packet_write_refused",
+        receipt: e.message,
+      });
+    }
+    console.error(logLabel, e);
+    return res.status(500).json({
+      error: "internal",
+      receipt: fallbackReceipt,
+      detail: e && e.message ? e.message : null,
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════════
@@ -299,7 +343,14 @@ module.exports = function leasePacketsModule(deps) {
     const done = req.filter((f) => f.completed).length;
     return {
       id: packet.id,
+      property_id: packet.property_id,
+      application_id: packet.application_id,
+      unit_id: packet.unit_id,
+      version: packet.version,
       status: packet.status,
+      proposed_terms_confirmation_id: packet.proposed_terms_confirmation_id || null,
+      sent_at: packet.sent_at || null,
+      tenant_token_expires_at: packet.tenant_token_expires_at || null,
       is_placeholder: packet.is_placeholder,
       is_demonstration_summary: true,
       acknowledgment_meaning: "review_intent_only",   // NOT a signature on the lease
@@ -324,227 +375,403 @@ module.exports = function leasePacketsModule(deps) {
   //  OPERATOR ROUTES  (global gate applies — no local auth here)
   // ════════════════════════════════════════════════════════════════
 
-  // Generate a packet from an approved/lease_ready application.
-  // Terms come ONLY from live lease_applications columns + the properties
-  // row. No imagined columns. No hardcoded 4233 defaults.
+  // ── CANONICAL PACKET WRITE SERVICE ─────────────────────────────────
+  // One implementation, two operator doors:
+  //   • legacy OPERATOR_KEY routes below
+  //   • staff-session /operator/leasing/* adapters in operator.js
+
+  async function generateLeasePacket(client, {
+    applicationId,
+    actorUserId = null,
+    expectedPropertyId = null,
+    createNewVersion = false,
+    auditContext = null,
+  }) {
+    if (!applicationId) {
+      throw packetError(400, "application_id_required", "An application id is required.");
+    }
+
+    const app = (await client.query(
+      `select * from lease_applications where id=$1 for update`,
+      [applicationId]
+    )).rows[0];
+    if (!app) {
+      throw packetError(404, "application_not_found", "No application with that id.");
+    }
+    if (expectedPropertyId && String(app.property_id) !== String(expectedPropertyId)) {
+      throw packetError(403, "not_permitted", "This action is not permitted.");
+    }
+    if ((!app.terms_review_obligation_id && !app.activation_obligation_id) ||
+        !["lease_ready", "tenant_signed", "approved"].includes(app.status)) {
+      throw packetError(
+        409,
+        "application_not_approved",
+        `Application is '${app.status}' with no open approval gate — approve it first.`,
+        { status: app.status }
+      );
+    }
+
+    const confirmationId = app.proposed_terms_confirmation_id || null;
+    if (!confirmationId) {
+      throw packetError(
+        409,
+        "no_current_proposed_terms_confirmation",
+        "Confirm the proposed terms before generating the resident review packet."
+      );
+    }
+    const confirmation = (await client.query(
+      `select id, source, rent, security_deposit, lease_start_date, lease_end_date,
+              concession_status, actor_user_id, created_at
+         from application_proposed_terms_confirmations
+        where id=$1`,
+      [confirmationId]
+    )).rows[0];
+    if (!confirmation) {
+      throw packetError(
+        409,
+        "no_current_proposed_terms_confirmation",
+        "The application's current proposed-terms confirmation is missing."
+      );
+    }
+
+    const prop = (await client.query(
+      `select id, name, canonical_key, address from properties where id=$1`,
+      [app.property_id]
+    )).rows[0] || {};
+
+    let unitLabel = app.unit_label || "";
+    if (!unitLabel && app.unit_id) {
+      const u = (await client.query(
+        `select unit_number from units where id=$1`,
+        [app.unit_id]
+      )).rows[0];
+      unitLabel = (u && u.unit_number) || "";
+    }
+
+    const captured = app.captured || {};
+    const terms = {
+      property_address: prop.address || captured.property_address || "[property address pending]",
+      landlord_legal_entity: captured.landlord_legal_entity || "[landlord entity pending — supply on the property record]",
+      property_name: prop.name || "",
+      resident_names: app.applicant_name || captured.resident_names || "",
+      unit_id: app.unit_id || null,
+      unit_label: unitLabel,
+      unit_number: unitLabel,
+      monthly_rent: confirmation.rent != null ? confirmation.rent : "",
+      security_deposit: confirmation.security_deposit != null ? confirmation.security_deposit : "",
+      lease_start_date: confirmation.lease_start_date || "",
+      lease_end_date: confirmation.lease_end_date || "",
+      concession_status: confirmation.concession_status || "unknown",
+      guarantor_required: !!app.guarantor_name,
+    };
+
+    const check = requireLeaseConfig(prop, terms);
+    if (!check.ok) {
+      throw packetError(
+        409,
+        "lease_configuration_incomplete",
+        "Cannot generate the demonstration summary — required lease configuration or confirmed terms are missing. This fails closed rather than showing a plausible default that could be materially wrong.",
+        { missing: check.missing }
+      );
+    }
+
+    const rendered = buildRendered(terms, check.cfg);
+    const renderedHash = stableHash(rendered);
+    const current = (await client.query(
+      `select * from lease_packets
+        where application_id=$1 and superseded_at is null
+        order by version desc limit 1 for update`,
+      [app.id]
+    )).rows[0] || null;
+
+    if (current && current.status === "submitted") {
+      throw packetError(
+        409,
+        "packet_immutable",
+        "This packet was acknowledged — it is frozen evidence. Terms changes after acknowledgment are a governed correction (Path B), never a regeneration.",
+        { packet_id: current.id, version: current.version, status: current.status }
+      );
+    }
+    if (current && ["sent", "in_progress", "tenant_in_progress"].includes(current.status) && !createNewVersion) {
+      throw packetError(
+        409,
+        "packet_immutable",
+        "This packet was already issued — it will not be silently regenerated. Create a governed new version to issue changed terms; the prior version remains evidence.",
+        { packet_id: current.id, version: current.version, status: current.status }
+      );
+    }
+
+    let pk;
+    if (current && current.status === "draft") {
+      pk = (await client.query(
+        `update lease_packets
+            set terms_json=$2, rendered_snapshot=$3, rendered_snapshot_hash=$4,
+                proposed_terms_confirmation_id=$5,
+                is_placeholder=false, updated_at=now()
+          where id=$1 returning *`,
+        [current.id, terms, rendered, renderedHash, confirmation.id]
+      )).rows[0];
+      await audit(client, auditContext, pk.id, "system", "draft_regenerated", {
+        rendered_snapshot_hash: renderedHash,
+        proposed_terms_confirmation_id: confirmation.id,
+        actor_user_id: actorUserId,
+      });
+    } else {
+      const newVersion = current ? Number(current.version) + 1 : 1;
+      const supersedes = current &&
+        ["sent", "in_progress", "tenant_in_progress"].includes(current.status)
+        ? current.id : null;
+      pk = (await client.query(
+        `insert into lease_packets
+           (property_id, application_id, unit_id, version, status, terms_json,
+            rendered_snapshot, rendered_snapshot_hash, is_placeholder,
+            supersedes_packet_id, proposed_terms_confirmation_id)
+         values ($1,$2,$3,$4,'draft',$5,$6,$7,false,$8,$9)
+         returning *`,
+        [
+          app.property_id, app.id, terms.unit_id, newVersion, terms,
+          rendered, renderedHash, supersedes, confirmation.id,
+        ]
+      )).rows[0];
+      if (supersedes) {
+        await client.query(
+          `update lease_packets
+              set superseded_at=now(), updated_at=now()
+            where id=$1`,
+          [supersedes]
+        );
+        await audit(client, auditContext, pk.id, "system", "version_superseded_prior", {
+          superseded_packet_id: supersedes,
+          new_version: newVersion,
+          proposed_terms_confirmation_id: confirmation.id,
+          actor_user_id: actorUserId,
+        });
+      }
+    }
+
+    await client.query(`delete from lease_packet_fields where lease_packet_id=$1`, [pk.id]);
+    const requiredFields = requiredFieldsFor(terms);
+    for (let i = 0; i < requiredFields.length; i++) {
+      const [fk, sk, label, ft] = requiredFields[i];
+      const clauseHash = stableHash(
+        rendered.sections.find((s) => s.key === sk) || { sk, label }
+      );
+      await client.query(
+        `insert into lease_packet_fields
+           (lease_packet_id, field_key, section_key, label, field_type,
+            signer_role, required, clause_hash, display_order)
+         values ($1,$2,$3,$4,$5,'tenant',true,$6,$7)`,
+        [pk.id, fk, sk, label, ft, clauseHash, i + 1]
+      );
+    }
+
+    await client.query(`delete from lease_packet_documents where lease_packet_id=$1`, [pk.id]);
+    const docs = [
+      { document_type: "lease_body", title: "Complete Lease & Required Addenda (governing — delivered separately)", required_acknowledgment: false },
+      { document_type: "rental_license", title: "Rental License", required_acknowledgment: true },
+      { document_type: "rental_suitability", title: "Certificate of Rental Suitability", required_acknowledgment: true },
+    ];
+    for (const d of docs) {
+      await client.query(
+        `insert into lease_packet_documents
+           (lease_packet_id, document_type, title, required_acknowledgment)
+         values ($1,$2,$3,$4)`,
+        [pk.id, d.document_type, d.title, d.required_acknowledgment]
+      );
+    }
+
+    await audit(client, auditContext, pk.id, "operator", "packet_generated", {
+      application_id: app.id,
+      proposed_terms_confirmation_id: confirmation.id,
+      actor_user_id: actorUserId,
+      is_demonstration_summary: true,
+      config_source: check.source,
+    });
+
+    const bundle = await getBundle(client, pk.id);
+    return {
+      receipt: `Lease Terms Review (Demonstration) generated for ${terms.resident_names || "applicant"} from the current confirmed proposed terms. This is a demonstration summary, not the lease; the complete lease and required addenda govern.`,
+      packet: publicPacket(bundle),
+    };
+  }
+
+  async function issueLeasePacketLink(client, {
+    packetId,
+    expiresDays = 14,
+    idempotencyKey = null,
+    actorUserId = null,
+    expectedPropertyId = null,
+    auditContext = null,
+  }) {
+    if (!packetId) {
+      throw packetError(400, "packet_id_required", "A packet id is required.");
+    }
+
+    const row = (await client.query(
+      `select pk.*,
+              la.property_id as application_property_id,
+              la.status as application_status,
+              la.proposed_terms_confirmation_id as current_confirmation_id
+         from lease_packets pk
+         join lease_applications la on la.id=pk.application_id
+        where pk.id=$1
+        for update of pk, la`,
+      [packetId]
+    )).rows[0];
+    if (!row) {
+      throw packetError(404, "packet_not_found", "No lease packet with that id.");
+    }
+    if (expectedPropertyId &&
+        (String(row.property_id) !== String(expectedPropertyId) ||
+         String(row.application_property_id) !== String(expectedPropertyId))) {
+      throw packetError(403, "not_permitted", "This action is not permitted.");
+    }
+    if (row.superseded_at) {
+      throw packetError(
+        409,
+        "packet_superseded",
+        "This packet has been superseded and cannot be issued.",
+        { packet_id: row.id, status: row.status }
+      );
+    }
+
+    if (["sent", "in_progress", "tenant_in_progress"].includes(row.status)) {
+      return {
+        receipt: "The resident review link was already issued. No new token was created.",
+        already_issued: true,
+        tenant_url: null,
+        packet_id: row.id,
+        status: row.status,
+      };
+    }
+    if (row.status !== "draft") {
+      throw packetError(
+        409,
+        "packet_not_issuable",
+        `Packet is '${row.status}' and cannot be issued.`,
+        { packet_id: row.id, status: row.status }
+      );
+    }
+    if (!row.current_confirmation_id) {
+      throw packetError(
+        409,
+        "no_current_proposed_terms_confirmation",
+        "The application has no current proposed-terms confirmation."
+      );
+    }
+    if (!row.proposed_terms_confirmation_id) {
+      throw packetError(
+        409,
+        "packet_lineage_unproven",
+        "This draft is not bound to a proposed-terms confirmation. Regenerate it before issue."
+      );
+    }
+    if (String(row.proposed_terms_confirmation_id) !== String(row.current_confirmation_id)) {
+      throw packetError(
+        409,
+        "packet_confirmation_mismatch",
+        "This draft was generated from an older proposed-terms confirmation. Regenerate it before issue."
+      );
+    }
+    if (!["lease_ready", "tenant_signed", "approved"].includes(row.application_status)) {
+      throw packetError(
+        409,
+        "application_not_issuable",
+        `Application is '${row.application_status}' and the packet cannot be issued.`,
+        { status: row.application_status }
+      );
+    }
+
+    const days = Number(expiresDays);
+    if (!Number.isFinite(days) || days <= 0) {
+      throw packetError(400, "invalid_expiry", "expires_days must be a positive number.");
+    }
+
+    const token = makeToken();
+    const tokenHash = sha256(token);
+    const pk = (await client.query(
+      `update lease_packets
+          set status='sent',
+              tenant_token_hash=$2,
+              tenant_token_expires_at=now() + ($3 || ' days')::interval,
+              sent_at=coalesce(sent_at,now()),
+              updated_at=now()
+        where id=$1 and status='draft' and superseded_at is null
+        returning *`,
+      [row.id, tokenHash, days]
+    )).rows[0];
+    if (!pk) {
+      throw packetError(
+        409,
+        "packet_not_issuable",
+        "The packet changed before issue. Reload and try again."
+      );
+    }
+
+    await audit(client, auditContext, pk.id, "operator", "packet_sent", {
+      expires_days: days,
+      idempotency_key: idempotencyKey || null,
+      actor_user_id: actorUserId,
+      proposed_terms_confirmation_id: pk.proposed_terms_confirmation_id || null,
+    });
+
+    return {
+      receipt: `Link issued (expires in ${days} days). This captures the resident's acknowledgment of demonstration terms only — not a signature on the lease.`,
+      already_issued: false,
+      tenant_url: `${BASE_URL}/t/lease/${encodeURIComponent(token)}`,
+      packet_id: pk.id,
+      status: pk.status,
+    };
+  }
+
   router.post("/applications/:id/lease-packet", async (req, res) => {
     const client = await pool.connect();
     try {
       await client.query("begin");
-      const app = (await client.query(
-        `select * from lease_applications where id=$1`, [req.params.id])).rows[0];
-      if (!app) { await client.query("rollback"); return res.status(404).json({ receipt: "No application with that id." }); }
-
-      // Packet is only meaningful once the application is approved. v3: the
-      // terms_review gate is the birth event; a pre-v3 row proves approval
-      // via its historical activation gate. Guard on the gate, never on a
-      // guessed status (lease_ready is non-authoritative, §3).
-      if ((!app.terms_review_obligation_id && !app.activation_obligation_id) ||
-          !["lease_ready", "tenant_signed", "approved"].includes(app.status)) {
-        await client.query("rollback");
-        return res.status(409).json({ receipt: `Application is '${app.status}' with no open approval gate — approve it first.`, status: app.status });
-      }
-
-      // Property identity from the REAL properties row (never hardcoded).
-      // NOTE: when durable properties.lease_config lands, add it to this
-      // SELECT — leaseConfigFor already prefers property.lease_config over the
-      // external adapter. Until then the column does not exist, so we do not
-      // select it (a phantom column would error).
-      const prop = (await client.query(
-        `select id, name, canonical_key, address from properties where id=$1`,
-        [app.property_id])).rows[0] || {};
-
-      // unit label, if the app links a unit
-      let unitLabel = app.unit_label || "";
-      if (!unitLabel && app.unit_id) {
-        const u = (await client.query(`select unit_number from units where id=$1`, [app.unit_id])).rows[0];
-        unitLabel = u?.unit_number || "";
-      }
-
-      const captured = app.captured || {};
-      const terms = {
-        // identity — from properties row + captured, NOT hardcoded
-        property_address: prop.address || captured.property_address || "[property address pending]",
-        landlord_legal_entity: captured.landlord_legal_entity || "[landlord entity pending — supply on the property record]",
-        property_name: prop.name || "",
-        // resident / unit — live columns only
-        resident_names: app.applicant_name || captured.resident_names || "",
-        unit_id: app.unit_id || null,
-        unit_label: unitLabel,
-        unit_number: unitLabel,
-        // money / term — STRUCTURED live columns only (Build A). captured is NO LONGER
-        // an operating source for dates; it remains audit/fallback display only.
-        monthly_rent: app.rent != null ? app.rent : "",
-        security_deposit: app.deposit != null ? app.deposit : "",
-        lease_start_date: app.lease_start_date || "",   // structured column (075), not captured
-        lease_end_date: app.lease_end_date || "",       // structured column (075), not captured
-        concession_status: app.concession_status || "unknown",
-        guarantor_required: !!app.guarantor_name,
-      };
-
-      // ── FAIL CLOSED: required lease configuration + real economics ──────
-      // Missing configured fees / utilities / notice, or blank application
-      // economics, BLOCK generation. No generic legal or financial default —
-      // a plausible default could produce a materially wrong document.
-      const check = requireLeaseConfig(prop, terms);
-      if (!check.ok) {
-        await client.query("rollback");
-        return res.status(409).json({
-          error: "lease_configuration_incomplete",
-          receipt: "Cannot generate the demonstration summary — required lease configuration or application terms are missing. This fails closed rather than showing a plausible default that could be materially wrong.",
-          missing: check.missing,
-        });
-      }
-      const cfg = check.cfg;
-
-      const rendered = buildRendered(terms, cfg);
-      const renderedHash = stableHash(rendered);
-
-      // ── §5 PACKET IMMUTABILITY & VERSION POLICY ─────────────────────────
-      // "Current packet" = the latest NON-SUPERSEDED version — never merely
-      // the highest number. The link between what the resident saw, what they
-      // acknowledged, and when, is evidence; evidence does not mutate.
-      //   no packet                  → create draft version 1
-      //   draft, never sent          → regenerate IN PLACE (+ audit event)
-      //   sent / in_progress         → IMMUTABLE. Explicit create_new_version
-      //                                → new draft version, supersedes prior
-      //                                  (prior snapshot/fields/audit RETAINED)
-      //   submitted                  → frozen acknowledgment evidence. No
-      //                                regen, no supersession in v3 — a term
-      //                                change after acknowledgment is Path-B
-      //                                correction territory, not an overwrite.
-      //   voided                     → a fresh version may be created
-      const current = (await client.query(
-        `select * from lease_packets
-          where application_id=$1 and superseded_at is null
-          order by version desc limit 1 for update`, [app.id])).rows[0] || null;
-
-      let pk;
-      if (current && current.status === "submitted") {
-        await client.query("rollback");
-        return res.status(409).json({
-          error: "packet_immutable",
-          receipt: "This packet was acknowledged — it is frozen evidence. Terms changes after acknowledgment are a governed correction (Path B), never a regeneration.",
-          packet_id: current.id, version: current.version, status: current.status,
-        });
-      }
-      if (current && ["sent", "in_progress"].includes(current.status) && !(req.body && req.body.create_new_version === true)) {
-        await client.query("rollback");
-        return res.status(409).json({
-          error: "packet_immutable",
-          receipt: "This packet was already sent — it will not be silently regenerated. To issue changed terms, pass create_new_version: true; the prior version is retained and superseded, never overwritten.",
-          packet_id: current.id, version: current.version, status: current.status,
-        });
-      }
-
-      if (current && current.status === "draft") {
-        // regenerate IN PLACE — allowed for a never-sent draft, audited.
-        pk = (await client.query(
-          `update lease_packets
-              set terms_json=$2, rendered_snapshot=$3, rendered_snapshot_hash=$4,
-                  is_placeholder=false, updated_at=now()
-            where id=$1 returning *`,
-          [current.id, terms, rendered, renderedHash])).rows[0];
-        await audit(client, req, pk.id, "system", "draft_regenerated",
-          { rendered_snapshot_hash: renderedHash });
-      } else {
-        const newVersion = current ? Number(current.version) + 1 : 1;
-        const supersedes = (current && ["sent", "in_progress"].includes(current.status)) ? current.id : null;
-        pk = (await client.query(
-          `insert into lease_packets
-             (property_id, application_id, unit_id, version, status, terms_json,
-              rendered_snapshot, rendered_snapshot_hash, is_placeholder, supersedes_packet_id)
-           values ($1,$2,$3,$4,'draft',$5,$6,$7,false,$8)
-           returning *`,
-          [app.property_id, app.id, terms.unit_id, newVersion, terms, rendered, renderedHash, supersedes])).rows[0];
-        if (supersedes) {
-          await client.query(
-            `update lease_packets set superseded_at=now(), updated_at=now() where id=$1`, [supersedes]);
-          await audit(client, req, pk.id, "system", "version_superseded_prior",
-            { superseded_packet_id: supersedes, new_version: newVersion });
-        }
-      }
-
-      // (re)build fields
-      await client.query(`delete from lease_packet_fields where lease_packet_id=$1`, [pk.id]);
-      const requiredFields = requiredFieldsFor(terms);
-      for (let i = 0; i < requiredFields.length; i++) {
-        const [fk, sk, label, ft] = requiredFields[i];
-        const clauseHash = stableHash(rendered.sections.find((s) => s.key === sk) || { sk, label });
-        await client.query(
-          `insert into lease_packet_fields
-             (lease_packet_id, field_key, section_key, label, field_type, signer_role, required, clause_hash, display_order)
-           values ($1,$2,$3,$4,$5,'tenant',true,$6,$7)`,
-          [pk.id, fk, sk, label, ft, clauseHash, i + 1]);
-      }
-
-      // (re)build tracked documents — the complete lease + required addenda
-      // are delivered separately and GOVERN; this summary does not.
-      await client.query(`delete from lease_packet_documents where lease_packet_id=$1`, [pk.id]);
-      const docs = [
-        { document_type: "lease_body",         title: "Complete Lease & Required Addenda (governing — delivered separately)", required_acknowledgment: false },
-        { document_type: "rental_license",     title: "Rental License",                    required_acknowledgment: true  },
-        { document_type: "rental_suitability", title: "Certificate of Rental Suitability", required_acknowledgment: true  },
-      ];
-      for (const d of docs) {
-        await client.query(
-          `insert into lease_packet_documents
-             (lease_packet_id, document_type, title, required_acknowledgment)
-           values ($1,$2,$3,$4)`,
-          [pk.id, d.document_type, d.title, d.required_acknowledgment]);
-      }
-
-      await audit(client, req, pk.id, "operator", "packet_generated",
-        { application_id: app.id, is_demonstration_summary: true, config_source: check.source });
-      await client.query("commit");
-      const bundle = await getBundle(pool, pk.id);
-      res.json({
-        receipt: `Lease Terms Review (Demonstration) generated for ${terms.resident_names || "applicant"} from verified property + application terms. This is a demonstration summary, not the lease; the complete lease and required addenda govern. Sending it captures the resident's acknowledgment only — activation still requires the manager countersign via applications.js.`,
-        packet: publicPacket(bundle),
+      const out = await generateLeasePacket(client, {
+        applicationId: req.params.id,
+        actorUserId: null,
+        createNewVersion: !!(req.body && req.body.create_new_version === true),
+        auditContext: requestAuditContext(req),
       });
+      await client.query("commit");
+      return res.json(out);
     } catch (e) {
       await client.query("rollback").catch(() => {});
-      console.error("lease-packet generate:", e);
-      res.status(500).json({ receipt: "Could not generate the lease packet.", error: e.message });
-    } finally { client.release(); }
+      return sendPacketError(res, e, "lease-packet generate:", "Could not generate the lease packet.");
+    } finally {
+      client.release();
+    }
   });
 
-  // Read a packet (operator).
   router.get("/lease-packets/:id", async (req, res) => {
     try {
       const bundle = await getBundle(pool, req.params.id);
       if (!bundle) return res.status(404).json({ receipt: "No lease packet with that id." });
-      res.json({ packet: publicPacket(bundle) });
+      return res.json({ packet: publicPacket(bundle) });
     } catch (e) {
-      res.status(500).json({ receipt: "Could not read the lease packet.", error: e.message });
+      return res.status(500).json({ receipt: "Could not read the lease packet.", error: e.message });
     }
   });
 
-  // Send / issue a tenant link. Returns the raw token URL ONCE.
   router.post("/lease-packets/:id/send", async (req, res) => {
+    const client = await pool.connect();
     try {
-      const token = makeToken();
-      const tokenHash = sha256(token);
-      const days = Number(req.body?.expires_days || 14);
-      const pk = (await pool.query(
-        `update lease_packets
-            set status = case when status='draft' then 'sent' else status end,
-                tenant_token_hash = $2,
-                tenant_token_expires_at = now() + ($3 || ' days')::interval,
-                sent_at = coalesce(sent_at, now()),
-                updated_at = now()
-          where id=$1 and status not in ('submitted','voided')
-          returning *`,
-        [req.params.id, tokenHash, days])).rows[0];
-      if (!pk) return res.status(409).json({ receipt: "Packet not found, already submitted, or voided." });
-      await audit(pool, req, pk.id, "operator", "packet_sent", { expires_days: days });
-      res.json({
-        receipt: `Link issued (expires in ${days} days). This captures the resident's acknowledgment of demonstration terms only — not a signature on the lease.`,
-        tenant_url: `${BASE_URL}/t/lease/${encodeURIComponent(token)}`,
-        status: pk.status,
+      await client.query("begin");
+      const out = await issueLeasePacketLink(client, {
+        packetId: req.params.id,
+        expiresDays: req.body && req.body.expires_days != null ? req.body.expires_days : 14,
+        idempotencyKey: (req.body && req.body.idempotency_key) || null,
+        actorUserId: null,
+        auditContext: requestAuditContext(req),
       });
+      await client.query("commit");
+      return res.json(out);
     } catch (e) {
-      res.status(500).json({ receipt: "Could not send the lease packet.", error: e.message });
+      await client.query("rollback").catch(() => {});
+      return sendPacketError(res, e, "lease-packet issue:", "Could not issue the lease packet.");
+    } finally {
+      client.release();
     }
   });
 
@@ -765,5 +992,11 @@ module.exports = function leasePacketsModule(deps) {
     } finally { client.release(); }
   });
 
+  router._service = Object.freeze({
+    generateLeasePacket,
+    issueLeasePacketLink,
+    getBundle,
+    publicPacket,
+  });
   return router;
 };
