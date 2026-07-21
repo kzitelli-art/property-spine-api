@@ -1,3 +1,9 @@
+// TENANT APPLICATION V2 DROP-IN
+// Source anchor: kzitelli-art/property-spine-api main
+// applicationSubmission.js blob 6aa2c47753329874c7442793a580a405ba87f148.
+// Backend lifecycle/services retained; the tenant page and V2-scoped validation
+// are the intentional changes.
+//
 // =============================================================
 // applicationSubmission.js — the SHARED submission service + the
 // invitation front of the application chain. Real infrastructure:
@@ -610,6 +616,72 @@ module.exports = function applicationSubmissionModule(deps) {
     return res.status(410).json({ error: "retired", receipt: "This route is retired. Revocation runs through the staff-session operator surface, which reconciles dispatch state before any correction." });
   });
 
+  // Tenant V2 validation is intentionally scoped by the form-version marker,
+  // so legacy/import callers keep their existing contract. The browser improves
+  // usability; this server check remains the authority for accepted structure.
+  function validateTenantV2Capture(captured) {
+    if (!captured || captured.application_form_version !== "tenant_v2") return;
+    const fail = (message) => { throw httpErr(400, message); };
+    const requiredText = (value, label, max = 300) => {
+      const s = value == null ? "" : String(value).trim();
+      if (!s) fail(`${label} is required.`);
+      if (s.length > max) fail(`${label} is too long.`);
+      return s;
+    };
+    const optionalText = (value, label, max = 1000) => {
+      if (value == null || value === "") return null;
+      const s = String(value).trim();
+      if (s.length > max) fail(`${label} is too long.`);
+      return s || null;
+    };
+    const oneOf = (value, allowed, label) => {
+      if (!allowed.includes(value)) fail(`${label} is invalid.`);
+    };
+    const validDate = (value) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) return false;
+      const [year, month, day] = String(value).split("-").map(Number);
+      const d = new Date(Date.UTC(year, month - 1, day));
+      return d.getUTCFullYear() === year && d.getUTCMonth() === month - 1 && d.getUTCDate() === day;
+    };
+
+    requiredText(captured.date_of_birth, "Date of birth", 10);
+    if (!validDate(captured.date_of_birth) || new Date(captured.date_of_birth + "T00:00:00Z") >= new Date()) {
+      fail("Date of birth must be a valid date in the past.");
+    }
+    const email = requiredText(captured.email, "Email", 254);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) fail("Email is invalid.");
+    const phone = requiredText(captured.phone, "Phone", 40);
+    if (phone.replace(/\D/g, "").length < 10) fail("Phone is invalid.");
+
+    const address = captured.address || {};
+    requiredText(address.line1, "Street address", 200);
+    optionalText(address.line2, "Address line 2", 100);
+    requiredText(address.city, "City", 100);
+    if (!/^[A-Za-z]{2}$/.test(String(address.state || ""))) fail("State must be a two-letter abbreviation.");
+    if (!/^\d{5}(-\d{4})?$/.test(String(address.postal_code || ""))) fail("ZIP code is invalid.");
+    if (!/^\d{4}-\d{2}$/.test(String(captured.current_since || ""))) fail("Current residence start month is invalid.");
+    oneOf(captured.housing_status, ["rent", "own", "other"], "Current housing");
+
+    oneOf(captured.income_status, ["employed", "self_employed", "student", "retired", "not_working", "other"], "Income situation");
+    if (captured.income_amount == null || !Number.isFinite(Number(captured.income_amount)) || Number(captured.income_amount) < 0) {
+      fail("Income amount is invalid.");
+    }
+    oneOf(captured.income_frequency, ["monthly", "annual", "weekly", "biweekly"], "Income frequency");
+    optionalText(captured.employer, "Employer", 200);
+    optionalText(captured.job_title, "Job title", 200);
+    optionalText(captured.income_notes, "Income notes", 2000);
+
+    if (!validDate(captured.desired_move_in)) fail("Preferred move-in date is invalid.");
+    oneOf(captured.move_flexibility, ["exact", "plus_minus_7", "plus_minus_30", "flexible"], "Move-in flexibility");
+    const occupants = Number(captured.occupants);
+    if (!Number.isInteger(occupants) || occupants < 1 || occupants > 20) fail("Occupant count is invalid.");
+    oneOf(captured.has_pets, ["yes", "no"], "Pets or assistance animals");
+    oneOf(captured.guarantor_needed, ["yes", "no", "unsure"], "Guarantor selection");
+    optionalText(captured.household_names, "Other adult occupants", 2000);
+    optionalText(captured.pets, "Pets or assistance animals", 2000);
+    optionalText(captured.additional_notes, "Additional notes", 3000);
+  }
+
   // 3) PUBLIC SUBMIT — invitation-bound. The applicant submits against a live
   //    valid token. Resolves identity/conversion FROM the token, runs the
   //    shared submission service, marks the invitation consumed. Idempotent:
@@ -618,6 +690,7 @@ module.exports = function applicationSubmissionModule(deps) {
     const { token, applicant_name = null, rent = null, deposit = null,
             guarantor_name = null, captured = {} } = req.body || {};
     if (!token) throw httpErr(400, "token is required.");
+    validateTenantV2Capture(captured);
 
     // look up by DIGEST — the raw token is never stored. `for update` row-locks
     // the invitation so concurrent submits serialize on it (double-tap safety).
@@ -847,186 +920,869 @@ module.exports = function applicationSubmissionModule(deps) {
     return await resolveTenantContext(client, req.params.token);
   }, res));
 
-  // The mobile application page. Self-contained inline HTML (no file dependency).
-  // It reads /context, prefills, collects only missing info in short sections,
-  // and POSTs to the existing /applications/submit-public.
+  // Tenant-facing rental application V2. Self-contained, mobile-first, and
+  // contract-compatible with /applications/submit-public. All property, unit,
+  // person, and lifecycle authority remains server-derived from the invitation.
   router.get("/t/application/:token", (req, res) => {
     const token = String(req.params.token).replace(/[^A-Za-z0-9_\-]/g, "");
-    res.set("Content-Type", "text/html").send(`<!DOCTYPE html>
-<html lang="en"><head>
-<meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Apply</title>
-<style>
-  :root{ --ink:#0b0b0b; --line:#e6e5e0; --muted:#8a8a84; --brass:#9a6b1f; --good:#1d6b54; --bad:#b23b2e; --bg:#faf9f6; }
-  *{ box-sizing:border-box; }
-  body{ margin:0; font-family:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,system-ui,sans-serif; color:var(--ink); background:var(--bg); -webkit-font-smoothing:antialiased; }
-  .wrap{ max-width:520px; margin:0 auto; min-height:100vh; background:#fff; }
-  header{ padding:34px 22px 22px; border-bottom:1px solid var(--line); }
-  .kicker{ font-family:'IBM Plex Mono',monospace; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:0 0 8px; }
-  h1{ font-family:Fraunces,Georgia,serif; font-weight:600; font-size:30px; line-height:1.1; margin:0; }
-  .sub{ font-size:15px; color:var(--muted); margin:6px 0 0; }
-  main{ padding:22px; }
-  .prog{ display:flex; gap:6px; margin:0 0 22px; }
-  .prog i{ height:3px; flex:1; background:var(--line); border-radius:2px; }
-  .prog i.on{ background:var(--ink); }
-  .sec{ display:none; }
-  .sec.on{ display:block; }
-  .sec h2{ font-family:Fraunces,Georgia,serif; font-weight:600; font-size:20px; margin:0 0 4px; }
-  .sec p.hint{ font-size:13px; color:var(--muted); margin:0 0 18px; }
-  label{ display:block; font-size:13px; font-weight:600; margin:16px 0 6px; }
-  input,select{ width:100%; font:inherit; font-size:16px; padding:13px 14px; border:1px solid var(--line); border-radius:11px; background:#fff; color:var(--ink); }
-  input:focus,select:focus{ outline:none; border-color:#2563a8; }
-  .row2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-  .known{ background:var(--bg); border:1px solid var(--line); border-radius:11px; padding:12px 14px; font-size:14px; margin:0 0 6px; }
-  .known b{ font-weight:600; } .known span{ color:var(--muted); }
-  .cta{ appearance:none; border:none; width:100%; background:var(--ink); color:#fff; font:inherit; font-size:16px; font-weight:600; padding:15px; border-radius:12px; margin-top:26px; cursor:pointer; }
-  .cta[disabled]{ opacity:.4; cursor:default; }
-  .back{ appearance:none; border:none; background:none; color:var(--muted); font:inherit; font-size:14px; padding:14px 0 0; cursor:pointer; }
-  .review dl{ margin:0; } .review .rr{ display:flex; justify-content:space-between; gap:14px; padding:11px 0; border-bottom:1px solid var(--line); font-size:14px; }
-  .review .rr span{ color:var(--muted); } .review .rr b{ font-weight:600; text-align:right; }
-  .msg{ padding:40px 24px; text-align:center; }
-  .msg .ic{ font-size:40px; } .msg h1{ margin:14px 0 8px; } .msg p{ color:var(--muted); font-size:15px; }
-  .foot{ font-size:12px; color:var(--muted); text-align:center; padding:18px 22px 30px; }
-</style></head>
-<body><div class="wrap" id="app"><div class="msg"><p>Loading…</p></div></div>
+    res.set({
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Pragma": "no-cache",
+      "Referrer-Policy": "no-referrer",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY",
+      "Content-Security-Policy": "default-src 'none'; connect-src 'self'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+    }).send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="color-scheme" content="light"/>
+  <title>Rental application</title>
+  <style>
+    :root{
+      --ink:#171714;--muted:#69675f;--faint:#918d84;--line:#ddd8ce;
+      --soft:#f5f2eb;--paper:#fff;--canvas:#eeece6;--warm:#f8f3e9;
+      --green:#245b47;--red:#9c3026;--blue:#1e5c91;
+    }
+    *{box-sizing:border-box}
+    html{background:var(--canvas)}
+    body{
+      margin:0;background:var(--canvas);color:var(--ink);
+      font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      -webkit-font-smoothing:antialiased;
+    }
+    button,input,select,textarea{font:inherit}
+    button{cursor:pointer}
+    .shell{
+      max-width:1120px;min-height:100vh;margin:0 auto;background:var(--paper);
+      display:grid;grid-template-columns:340px minmax(0,1fr);
+    }
+    .rail{
+      position:sticky;top:0;height:100vh;padding:42px 34px;
+      display:flex;flex-direction:column;background:#171714;color:#fff;
+    }
+    .brand{font-size:12px;font-weight:750;letter-spacing:.16em;text-transform:uppercase;opacity:.72}
+    .property-card{margin-top:56px}
+    .eyebrow{font-size:11px;font-weight:750;letter-spacing:.13em;text-transform:uppercase;color:#b7b1a5}
+    .property-card h1{
+      margin:12px 0 10px;font-family:Georgia,serif;font-size:38px;
+      font-weight:500;line-height:1.03;letter-spacing:-.035em;
+    }
+    .property-card p{margin:0;color:#c9c4b9;font-size:14px;line-height:1.55}
+    .unit-pill{
+      display:inline-flex;margin-top:20px;padding:9px 13px;border:1px solid rgba(255,255,255,.22);
+      border-radius:999px;font-size:13px;font-weight:700;
+    }
+    .rail-note{margin-top:auto;padding-top:22px;border-top:1px solid rgba(255,255,255,.14);color:#bdb8ad;font-size:12px;line-height:1.6}
+    .rail-note strong{display:block;margin-bottom:6px;color:#fff}
+    .main{min-width:0;padding:38px 56px 56px}
+    .topbar{display:flex;align-items:center;justify-content:space-between;gap:20px;margin-bottom:34px}
+    .step-label{font-size:12px;font-weight:750;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+    .save-state{font-size:12px;color:var(--faint)}
+    .progress{display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-bottom:42px}
+    .progress span{height:4px;border-radius:999px;background:#e8e4db}
+    .progress span.on{background:var(--ink)}
+    .screen{display:none;max-width:720px}
+    .screen.on{display:block}
+    .screen h2{
+      margin:0 0 10px;font-family:Georgia,serif;font-size:38px;
+      font-weight:500;line-height:1.08;letter-spacing:-.035em;
+    }
+    .lede{max-width:650px;margin:0 0 30px;color:var(--muted);font-size:15px;line-height:1.6}
+    .info-card{margin-bottom:26px;padding:20px 22px;border:1px solid var(--line);border-radius:18px;background:var(--warm)}
+    .info-card h3{margin:0 0 9px;font-size:14px}
+    .info-card p,.info-card li{color:#555248;font-size:13px;line-height:1.55}
+    .info-card ul{margin:8px 0 0;padding-left:18px}
+    .intro-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:28px}
+    .intro-tile{padding:18px;border:1px solid var(--line);border-radius:16px}
+    .intro-tile strong{display:block;margin-bottom:5px;font-size:13px}
+    .intro-tile span{color:var(--muted);font-size:12px;line-height:1.5}
+    .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px 20px}
+    .field{min-width:0}
+    .field.full{grid-column:1/-1}
+    .field label,.legend{display:block;margin-bottom:7px;font-size:13px;font-weight:750}
+    .hint{margin:-2px 0 8px;color:var(--muted);font-size:12px;line-height:1.45}
+    input,select,textarea{
+      width:100%;padding:13px 14px;border:1px solid #c9c5bb;border-radius:11px;
+      background:#fff;color:var(--ink);font-size:16px;line-height:1.25;
+    }
+    textarea{min-height:88px;resize:vertical}
+    input:focus,select:focus,textarea:focus{outline:3px solid rgba(30,92,145,.16);border-color:var(--blue)}
+    .input-wrap{position:relative}
+    .currency input{padding-left:32px}
+    .currency:before{content:"$";position:absolute;left:14px;top:13px;color:var(--muted);font-weight:700}
+    fieldset{margin:0;padding:0;border:0}
+    .date-parts{display:flex;align-items:flex-end;gap:10px}
+    .date-parts .month{width:180px}.date-parts .day{width:88px}.date-parts .year{width:120px}
+    .date-parts label{margin-bottom:5px;color:var(--muted);font-size:11px;font-weight:700}
+    .choice-row{display:flex;flex-wrap:wrap;gap:9px}
+    .choice{position:relative}
+    .choice input{position:absolute;opacity:0;pointer-events:none}
+    .choice label{
+      display:block;margin:0;padding:10px 14px;border:1px solid #c9c5bb;
+      border-radius:999px;background:#fff;font-size:13px;font-weight:700;
+    }
+    .choice input:focus+label{outline:3px solid rgba(30,92,145,.16);border-color:var(--blue)}
+    .choice input:checked+label{border-color:var(--ink);background:var(--ink);color:#fff}
+    .conditional{display:none}
+    .conditional.on{display:block}
+    .divider{margin:30px 0;border:0;border-top:1px solid var(--line)}
+    .error-summary{display:none;margin-bottom:24px;padding:15px 16px;border:1px solid #dfb7b1;border-left:5px solid var(--red);border-radius:12px;background:#fff2f0}
+    .error-summary.on{display:block}
+    .error-summary h3{margin:0 0 7px;color:var(--red);font-size:14px}
+    .error-summary ul{margin:0;padding-left:18px}
+    .error-summary a{color:var(--red);font-size:13px;font-weight:650}
+    .field.error input,.field.error select,.field.error textarea,.field.error .date-parts input,.field.error .date-parts select{border-color:var(--red);background:#fff8f7}
+    .error-text{display:none;margin-top:6px;color:var(--red);font-size:12px;font-weight:650}
+    .field.error .error-text{display:block}
+    .actions{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:36px;padding-top:24px;border-top:1px solid var(--line)}
+    .primary{min-width:146px;padding:13px 22px;border:0;border-radius:999px;background:var(--ink);color:#fff;font-size:14px;font-weight:750}
+    .primary:hover{background:#30302b}
+    .primary:disabled{cursor:default;opacity:.45}
+    .secondary{padding:12px 0;border:0;background:transparent;color:var(--muted);font-size:14px;font-weight:700}
+    .review-section{margin-bottom:16px;overflow:hidden;border:1px solid var(--line);border-radius:16px}
+    .review-head{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;background:var(--soft)}
+    .review-head h3{margin:0;font-size:13px}
+    .edit{border:0;background:transparent;color:var(--blue);font-size:12px;font-weight:750}
+    .review-body{padding:6px 16px}
+    .review-row{display:grid;grid-template-columns:190px 1fr;gap:18px;padding:10px 0;border-top:1px solid #ece8df;font-size:13px}
+    .review-row:first-child{border-top:0}
+    .review-row span{color:var(--muted)}
+    .review-row b{font-weight:650;overflow-wrap:anywhere}
+    .attest{display:flex;align-items:flex-start;gap:10px;margin-top:20px;padding:15px 16px;border:1px solid var(--line);border-radius:14px}
+    .attest input{width:18px;height:18px;margin:1px 0 0}
+    .attest label{margin:0;font-size:13px;font-weight:600;line-height:1.5}
+    .privacy{margin-top:14px;color:var(--muted);font-size:12px;line-height:1.55}
+    .message{max-width:620px;margin:0 auto;padding:90px 30px;text-align:center}
+    .message-mark{display:grid;width:58px;height:58px;margin:0 auto 20px;place-items:center;border-radius:50%;background:#e8f1ec;color:var(--green);font-size:28px}
+    .message h2{margin:0 0 10px;font-family:Georgia,serif;font-size:38px;font-weight:500}
+    .message p{color:var(--muted);line-height:1.6}
+    .server-error{display:none;margin-top:16px;padding:13px 14px;border:1px solid #dfb7b1;border-radius:11px;background:#fff2f0;color:var(--red);font-size:13px;line-height:1.45}
+    .server-error.on{display:block}
+    @media(max-width:800px){
+      .shell{display:block}
+      .rail{position:static;height:auto;padding:26px 22px 24px}
+      .property-card{margin-top:24px}
+      .property-card h1{font-size:30px}
+      .rail-note{display:none}
+      .main{padding:24px 20px 42px}
+      .topbar{margin-bottom:22px}
+      .progress{margin-bottom:30px}
+      .screen h2{font-size:32px}
+      .form-grid,.intro-grid{grid-template-columns:1fr}
+      .field.full{grid-column:auto}
+      .date-parts .month{flex:1;min-width:0}
+      .review-row{grid-template-columns:1fr;gap:4px}
+      .actions{position:sticky;bottom:0;z-index:5;margin-right:-20px;margin-left:-20px;padding:16px 20px;border-top:1px solid var(--line);background:rgba(255,255,255,.96)}
+    }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside class="rail">
+    <div class="brand">Property Spine</div>
+    <div class="property-card">
+      <div class="eyebrow">Rental application</div>
+      <h1 id="propertyName">Your next home</h1>
+      <p>A secure application prepared for you by the leasing team.</p>
+      <div class="unit-pill" id="unitPill">Application</div>
+    </div>
+    <div class="rail-note">
+      <strong>Private by design</strong>
+      This form does not run a credit or background check. If screening is needed,
+      you will receive a separate disclosure and authorization.
+    </div>
+  </aside>
+
+  <main class="main" id="main">
+    <div class="topbar">
+      <div class="step-label" id="stepLabel">Before you begin</div>
+      <div class="save-state">Secure application</div>
+    </div>
+    <div class="progress" id="progress" aria-label="Application progress">
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <div id="errorSummary" class="error-summary" tabindex="-1" aria-live="assertive">
+      <h3>Check the information below</h3>
+      <ul></ul>
+    </div>
+
+    <section class="screen on" data-step="0">
+      <h2>A straightforward application.</h2>
+      <p class="lede">We have already connected this form to the property and unit you selected. Confirm your information, tell us about your housing and income, then review everything before submitting.</p>
+      <div class="info-card">
+        <h3>What you will need</h3>
+        <ul>
+          <li>Your current address and approximate move-in date</li>
+          <li>Income information from any lawful sources you want considered</li>
+          <li>The names of everyone who will live in the home</li>
+        </ul>
+      </div>
+      <div class="intro-grid">
+        <div class="intro-tile"><strong>No fee in this step</strong><span>You will see any future fee or screening request before agreeing to it.</span></div>
+        <div class="intro-tile"><strong>About 6 minutes</strong><span>You can review every answer before anything is submitted.</span></div>
+        <div class="intro-tile"><strong>Exact unit</strong><span>This application is linked to the unit shown on this page.</span></div>
+        <div class="intro-tile"><strong>Human review</strong><span>Submitting is not an approval or a lease. The leasing team reviews it next.</span></div>
+      </div>
+      <div class="actions"><span></span><button class="primary" type="button" data-next>Start application</button></div>
+    </section>
+
+    <section class="screen" data-step="1">
+      <h2>About you</h2>
+      <p class="lede">Use your legal name and the contact information where the leasing team can reach you.</p>
+      <div class="form-grid">
+        <div class="field full" data-field="legal_name">
+          <label for="legal_name">Full legal name</label>
+          <input id="legal_name" autocomplete="name"/>
+          <div class="error-text"></div>
+        </div>
+        <div class="field full" data-field="date_of_birth">
+          <fieldset>
+            <legend class="legend">Date of birth</legend>
+            <div class="hint">For example: March 31 1990</div>
+            <div class="date-parts">
+              <div class="month">
+                <label for="dob_month">Month</label>
+                <select id="dob_month" autocomplete="bday-month">
+                  <option value="">Month</option>
+                  <option value="01">January</option><option value="02">February</option>
+                  <option value="03">March</option><option value="04">April</option>
+                  <option value="05">May</option><option value="06">June</option>
+                  <option value="07">July</option><option value="08">August</option>
+                  <option value="09">September</option><option value="10">October</option>
+                  <option value="11">November</option><option value="12">December</option>
+                </select>
+              </div>
+              <div class="day"><label for="dob_day">Day</label><input id="dob_day" inputmode="numeric" autocomplete="bday-day" maxlength="2"/></div>
+              <div class="year"><label for="dob_year">Year</label><input id="dob_year" inputmode="numeric" autocomplete="bday-year" maxlength="4"/></div>
+            </div>
+          </fieldset>
+          <div class="error-text"></div>
+        </div>
+        <div class="field" data-field="email">
+          <label for="email">Email</label>
+          <input id="email" type="email" autocomplete="email" inputmode="email"/>
+          <div class="error-text"></div>
+        </div>
+        <div class="field" data-field="phone">
+          <label for="phone">Mobile phone</label>
+          <input id="phone" type="tel" autocomplete="tel" inputmode="tel"/>
+          <div class="error-text"></div>
+        </div>
+      </div>
+      <div class="actions"><button class="secondary" type="button" data-back>Back</button><button class="primary" type="button" data-next>Continue</button></div>
+    </section>
+
+    <section class="screen" data-step="2">
+      <h2>Your current home</h2>
+      <p class="lede">Residence history helps the leasing team verify the application without asking you to repeat information later.</p>
+      <div class="form-grid">
+        <div class="field full" data-field="address_line1">
+          <label for="address_line1">Street address</label>
+          <input id="address_line1" autocomplete="address-line1"/>
+          <div class="error-text"></div>
+        </div>
+        <div class="field full">
+          <label for="address_line2">Apartment, unit, or floor <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+          <input id="address_line2" autocomplete="address-line2"/>
+        </div>
+        <div class="field" data-field="city">
+          <label for="city">City</label>
+          <input id="city" autocomplete="address-level2"/>
+          <div class="error-text"></div>
+        </div>
+        <div class="field" data-field="state">
+          <label for="state">State</label>
+          <input id="state" autocomplete="address-level1" maxlength="2" style="text-transform:uppercase"/>
+          <div class="error-text"></div>
+        </div>
+        <div class="field" data-field="postal_code">
+          <label for="postal_code">ZIP code</label>
+          <input id="postal_code" autocomplete="postal-code" inputmode="numeric" maxlength="10"/>
+          <div class="error-text"></div>
+        </div>
+        <div class="field" data-field="current_since">
+          <label for="current_since">Living there since</label>
+          <input id="current_since" type="month"/>
+          <div class="error-text"></div>
+        </div>
+        <div class="field full" data-field="housing_status">
+          <fieldset>
+            <legend class="legend">Current housing</legend>
+            <div class="choice-row">
+              <div class="choice"><input type="radio" name="housing_status" id="hs_rent" value="rent"/><label for="hs_rent">Rent</label></div>
+              <div class="choice"><input type="radio" name="housing_status" id="hs_own" value="own"/><label for="hs_own">Own</label></div>
+              <div class="choice"><input type="radio" name="housing_status" id="hs_other" value="other"/><label for="hs_other">Other</label></div>
+            </div>
+          </fieldset>
+          <div class="error-text"></div>
+        </div>
+        <div class="field">
+          <label for="housing_payment">Monthly housing payment <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+          <div class="input-wrap currency"><input id="housing_payment" inputmode="decimal"/></div>
+        </div>
+        <div class="field">
+          <label for="landlord_contact">Landlord or property contact <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+          <input id="landlord_contact" placeholder="Name, phone, or email"/>
+        </div>
+      </div>
+      <div id="priorResidence" class="conditional">
+        <hr class="divider"/>
+        <h3 style="margin:0 0 7px;font-family:Georgia,serif;font-size:24px;font-weight:500">Previous address</h3>
+        <p class="hint">Because you have lived at your current address for less than two years.</p>
+        <div class="form-grid">
+          <div class="field full"><label for="prior_address">Previous street address</label><input id="prior_address"/></div>
+          <div class="field"><label for="prior_city">City</label><input id="prior_city"/></div>
+          <div class="field"><label for="prior_state">State</label><input id="prior_state" maxlength="2"/></div>
+          <div class="field"><label for="prior_postal">ZIP code</label><input id="prior_postal" inputmode="numeric"/></div>
+          <div class="field"><label for="prior_landlord_contact">Previous landlord contact <span style="font-weight:400;color:var(--muted)">(optional)</span></label><input id="prior_landlord_contact"/></div>
+        </div>
+      </div>
+      <div class="actions"><button class="secondary" type="button" data-back>Back</button><button class="primary" type="button" data-next>Continue</button></div>
+    </section>
+
+    <section class="screen" data-step="3">
+      <h2>Income</h2>
+      <p class="lede">Include employment, self-employment, benefits, assistance, support, or any other lawful income you want considered.</p>
+      <div class="info-card"><p style="margin:0">This form asks for the amount and only enough context to verify it later. Supporting documents are not uploaded here.</p></div>
+      <div class="form-grid">
+        <div class="field full" data-field="income_status">
+          <label for="income_status">Primary income situation</label>
+          <select id="income_status">
+            <option value="">Choose one</option>
+            <option value="employed">Employed</option>
+            <option value="self_employed">Self-employed</option>
+            <option value="student">Student</option>
+            <option value="retired">Retired</option>
+            <option value="not_working">Not currently working</option>
+            <option value="other">Other</option>
+          </select>
+          <div class="error-text"></div>
+        </div>
+        <div id="employmentFields" class="conditional full" style="grid-column:1/-1">
+          <div class="form-grid">
+            <div class="field"><label for="employer">Employer or business</label><input id="employer" autocomplete="organization"/></div>
+            <div class="field"><label for="job_title">Job title or type of work</label><input id="job_title" autocomplete="organization-title"/></div>
+            <div class="field"><label for="employment_start">Working there since <span style="font-weight:400;color:var(--muted)">(optional)</span></label><input id="employment_start" type="month"/></div>
+          </div>
+        </div>
+        <div class="field" data-field="income_amount">
+          <label for="income_amount">Gross income before taxes</label>
+          <div class="input-wrap currency"><input id="income_amount" inputmode="decimal"/></div>
+          <div class="error-text"></div>
+        </div>
+        <div class="field" data-field="income_frequency">
+          <label for="income_frequency">How often?</label>
+          <select id="income_frequency">
+            <option value="">Choose one</option>
+            <option value="monthly">Per month</option>
+            <option value="annual">Per year</option>
+            <option value="weekly">Per week</option>
+            <option value="biweekly">Every two weeks</option>
+          </select>
+          <div class="error-text"></div>
+        </div>
+        <div class="field">
+          <label for="additional_income">Additional lawful income <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+          <div class="input-wrap currency"><input id="additional_income" inputmode="decimal"/></div>
+        </div>
+        <div class="field">
+          <label for="additional_income_frequency">How often? <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+          <select id="additional_income_frequency">
+            <option value="">Choose one</option>
+            <option value="monthly">Per month</option>
+            <option value="annual">Per year</option>
+            <option value="weekly">Per week</option>
+            <option value="biweekly">Every two weeks</option>
+          </select>
+        </div>
+        <div class="field full">
+          <label for="income_notes">Income notes <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+          <textarea id="income_notes" placeholder="Anything the leasing team should know about how this income can be verified."></textarea>
+        </div>
+      </div>
+      <div class="actions"><button class="secondary" type="button" data-back>Back</button><button class="primary" type="button" data-next>Continue</button></div>
+    </section>
+
+    <section class="screen" data-step="4">
+      <h2>Household and move-in</h2>
+      <p class="lede">Tell us who will live in the home and when you would like to move.</p>
+      <div id="moveMonthHint" class="info-card" style="display:none"><p style="margin:0"></p></div>
+      <div class="form-grid">
+        <div class="field" data-field="desired_move_in">
+          <label for="desired_move_in">Preferred move-in date</label>
+          <input id="desired_move_in" type="date"/>
+          <div class="error-text"></div>
+        </div>
+        <div class="field" data-field="move_flexibility">
+          <label for="move_flexibility">Date flexibility</label>
+          <select id="move_flexibility">
+            <option value="">Choose one</option>
+            <option value="exact">That date is important</option>
+            <option value="plus_minus_7">Within about one week</option>
+            <option value="plus_minus_30">Within about one month</option>
+            <option value="flexible">Flexible</option>
+          </select>
+          <div class="error-text"></div>
+        </div>
+        <div class="field" data-field="occupants">
+          <label for="occupants">Total number of occupants</label>
+          <input id="occupants" type="number" inputmode="numeric" min="1" max="20"/>
+          <div class="error-text"></div>
+        </div>
+        <div class="field full">
+          <label for="household_names">Other adult occupants <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+          <textarea id="household_names" placeholder="Names only. The leasing team will explain whether each adult needs a separate application."></textarea>
+        </div>
+        <div class="field full" data-field="has_pets">
+          <fieldset>
+            <legend class="legend">Pets or assistance animals?</legend>
+            <div class="choice-row">
+              <div class="choice"><input type="radio" name="has_pets" id="pets_no" value="no"/><label for="pets_no">No</label></div>
+              <div class="choice"><input type="radio" name="has_pets" id="pets_yes" value="yes"/><label for="pets_yes">Yes</label></div>
+            </div>
+          </fieldset>
+          <div class="error-text"></div>
+        </div>
+        <div id="petFields" class="conditional full" style="grid-column:1/-1">
+          <div class="field full">
+            <label for="pets_description">Tell us about them</label>
+            <textarea id="pets_description" placeholder="Number and type. Do not include disability or medical information."></textarea>
+          </div>
+        </div>
+        <div class="field full" data-field="guarantor_needed">
+          <fieldset>
+            <legend class="legend">Will you use a guarantor or co-signer?</legend>
+            <div class="choice-row">
+              <div class="choice"><input type="radio" name="guarantor_needed" id="guarantor_no" value="no"/><label for="guarantor_no">No</label></div>
+              <div class="choice"><input type="radio" name="guarantor_needed" id="guarantor_yes" value="yes"/><label for="guarantor_yes">Yes</label></div>
+              <div class="choice"><input type="radio" name="guarantor_needed" id="guarantor_unsure" value="unsure"/><label for="guarantor_unsure">Not sure</label></div>
+            </div>
+          </fieldset>
+          <div class="error-text"></div>
+        </div>
+        <div id="guarantorFields" class="conditional full" style="grid-column:1/-1">
+          <div class="field"><label for="guarantor_name">Guarantor's name</label><input id="guarantor_name"/></div>
+        </div>
+        <div class="field full">
+          <label for="vehicles">Vehicles <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+          <input id="vehicles" placeholder="Number of vehicles"/>
+        </div>
+        <div class="field full">
+          <label for="additional_notes">Anything else the leasing team should know? <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+          <textarea id="additional_notes"></textarea>
+        </div>
+      </div>
+      <div class="actions"><button class="secondary" type="button" data-back>Back</button><button class="primary" type="button" data-next>Review</button></div>
+    </section>
+
+    <section class="screen" data-step="5">
+      <h2>Review your application</h2>
+      <p class="lede">Nothing is submitted until you select the confirmation and press Submit application.</p>
+      <div id="review"></div>
+      <div class="attest">
+        <input id="certify" type="checkbox"/>
+        <label for="certify">I certify that the information in this application is complete and accurate to the best of my knowledge.</label>
+      </div>
+      <p class="privacy">Submitting this application is not an approval, a screening authorization, or a lease. The leasing team will contact you about the next step.</p>
+      <div id="serverError" class="server-error" role="alert"></div>
+      <div class="actions"><button class="secondary" type="button" data-back>Back</button><button class="primary" id="submitButton" type="button">Submit application</button></div>
+    </section>
+  </main>
+</div>
+
 <script>
-const TOKEN = ${JSON.stringify(token)};
-const el = (h)=>{ const d=document.createElement('div'); d.innerHTML=h.trim(); return d.firstChild; };
-const esc = (s)=> String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const app = document.getElementById('app');
-let CTX=null, STEP=0;
-const STATE = { legal_name:'', date_of_birth:'', email:'', phone:'', current_address:'',
-                employer:'', job_title:'', monthly_income:'', occupants:'', pets:'', desired_move_in:'' };
-
-function screenMsg(ic,title,body){ app.innerHTML=''; app.appendChild(el(
-  '<div class="msg"><div class="ic">'+ic+'</div><h1>'+esc(title)+'</h1><p>'+esc(body)+'</p></div>')); }
-
-async function boot(){
-  try{
-    const r = await fetch('/t/application/'+encodeURIComponent(TOKEN)+'/context');
-    CTX = await r.json();
-  }catch(e){ return screenMsg('!','Something went wrong',"Please try again, or contact the leasing office."); }
-  if(!CTX || CTX.state!=='open'){
-    const m = {
-      invalid:['This link isn’t valid', CTX&&CTX.receipt],
-      revoked:['Link revoked', CTX&&CTX.receipt],
-      expired:['Link expired', CTX&&CTX.receipt],
-      not_sent:['Not active yet', CTX&&CTX.receipt],
-      already_submitted:['Already submitted', CTX&&CTX.receipt],
-      unavailable:['Unavailable', CTX&&CTX.receipt],
-    }[(CTX&&CTX.state)||'unavailable'] || ['Unavailable','Please contact the leasing office.'];
-    return screenMsg(CTX&&CTX.state==='already_submitted'?'✓':'—', m[0], m[1]||'Please contact the leasing office.');
-  }
-  // prefill from what Spine already knows
-  if(CTX.person){ STATE.legal_name=CTX.person.name||''; STATE.email=CTX.person.email||''; STATE.phone=CTX.person.phone||''; }
-  if(CTX.prefill && CTX.prefill.move_month) STATE.desired_move_in = CTX.prefill.move_month;
-  render();
-}
-
-function progress(){ let s=''; for(let i=0;i<4;i++) s+='<i class="'+(i<=STEP?'on':'')+'"></i>'; return s; }
-
-function render(){
-  if(STEP>=4) return renderReview();
-  const unit = CTX.unit_label ? ('Unit '+esc(CTX.unit_label)) : 'Your application';
-  const prop = CTX.property_name ? esc(CTX.property_name) : '';
-  const secs = [aboutSec, incomeSec, householdSec][STEP] ? [aboutSec, incomeSec, householdSec][STEP]() : reviewSec();
-  app.innerHTML='';
-  app.appendChild(el(
-    '<div><header><p class="kicker">Apply for '+unit+'</p><h1>'+prop+'</h1>'+
-    (STEP===0?'<p class="sub">A few quick details. We’ve filled in what we already know.</p>':'')+
-    '</header><main><div class="prog">'+progress()+'</div>'+secs+'</main>'+
-    '<div class="foot">Your information is sent securely to the leasing team.</div></div>'));
-  wire();
-}
-
-function fld(label,key,type,ph,extra){ return '<label>'+esc(label)+'</label><input id="f_'+key+'" type="'+(type||'text')+'" placeholder="'+esc(ph||'')+'" value="'+esc(STATE[key]||'')+'" '+(extra||'')+'/>'; }
-
-function aboutSec(){
-  const known = CTX.person && (CTX.person.name||CTX.person.phone||CTX.person.email)
-    ? '<div class="known"><b>'+esc(CTX.person.name||'You')+'</b> '+
-      (CTX.person.phone?'· <span>'+esc(CTX.person.phone)+'</span> ':'')+
-      (CTX.person.email?'· <span>'+esc(CTX.person.email)+'</span>':'')+'</div>' : '';
-  return '<section class="sec on"><h2>About you</h2><p class="hint">Confirm your details.</p>'+known+
-    fld('Legal name','legal_name','text','Full legal name')+
-    fld('Date of birth','date_of_birth','date','')+
-    fld('Email','email','email','you@email.com')+
-    fld('Phone','phone','tel','')+
-    fld('Current address','current_address','text','Street, city, state')+
-    '<button class="cta" id="next">Continue</button></section>';
-}
-function incomeSec(){
-  return '<section class="sec on"><h2>Employment & income</h2><p class="hint">Where you work and what you earn.</p>'+
-    fld('Employer','employer','text','Company name')+
-    fld('Job title','job_title','text','')+
-    fld('Monthly income (before taxes)','monthly_income','number','$ / month')+
-    '<button class="cta" id="next">Continue</button>'+
-    '<button class="back" id="back">‹ Back</button></section>';
-}
-function householdSec(){
-  return '<section class="sec on"><h2>Household & move-in</h2><p class="hint">Who’s moving in and when.</p>'+
-    '<div class="row2"><div>'+fld('Occupants','occupants','number','# people')+'</div>'+
-    '<div>'+fld('Pets','pets','text','None, or describe')+'</div></div>'+
-    fld('Intended move-in','desired_move_in','text','e.g. 2026-09 or flexible')+
-    '<button class="cta" id="next">Review</button>'+
-    '<button class="back" id="back">‹ Back</button></section>';
-}
-function reviewSec(){ return ''; }
-
-function renderReview(){
-  const rows = [
-    ['Applying for', CTX.unit_label?('Unit '+CTX.unit_label):'—'],
-    ['Property', CTX.property_name||'—'],
-    ['Legal name', STATE.legal_name], ['Date of birth', STATE.date_of_birth],
-    ['Email', STATE.email], ['Phone', STATE.phone], ['Current address', STATE.current_address],
-    ['Employer', STATE.employer], ['Job title', STATE.job_title],
-    ['Monthly income', STATE.monthly_income?('$'+Number(STATE.monthly_income).toLocaleString()):''],
-    ['Occupants', STATE.occupants], ['Pets', STATE.pets], ['Intended move-in', STATE.desired_move_in],
-  ];
-  const body = rows.map(r=>'<div class="rr"><span>'+esc(r[0])+'</span><b>'+(r[1]?esc(r[1]):'<span>—</span>')+'</b></div>').join('');
-  app.innerHTML='';
-  app.appendChild(el(
-    '<div><header><p class="kicker">Review & submit</p><h1>Almost done</h1>'+
-    '<p class="sub">Check everything, then submit your application.</p></header>'+
-    '<main><div class="prog">'+progress()+'</div><div class="review sec on"><dl>'+body+'</dl>'+
-    '<button class="cta" id="submit">Submit application</button>'+
-    '<button class="back" id="back">‹ Back</button></div></main>'+
-    '<div class="foot">By submitting, you confirm this information is accurate.</div></div>'));
-  document.getElementById('back').onclick=()=>{ STEP=2; render(); };
-  document.getElementById('submit').onclick=submit;
-}
-
-function grab(){ ['legal_name','date_of_birth','email','phone','current_address','employer','job_title','monthly_income','occupants','pets','desired_move_in'].forEach(k=>{ const n=document.getElementById('f_'+k); if(n) STATE[k]=n.value; }); }
-
-function wire(){
-  const nx=document.getElementById('next'); if(nx) nx.onclick=()=>{ grab(); STEP++; render(); };
-  const bk=document.getElementById('back'); if(bk) bk.onclick=()=>{ grab(); STEP--; render(); };
-}
-
-async function submit(){
-  const btn=document.getElementById('submit'); btn.disabled=true; btn.textContent='Submitting…';
-  const captured = {
-    date_of_birth:STATE.date_of_birth||null, email:STATE.email||null, phone:STATE.phone||null,
-    current_address:STATE.current_address||null, employer:STATE.employer||null, job_title:STATE.job_title||null,
-    monthly_income:STATE.monthly_income||null, occupants:STATE.occupants||null, pets:STATE.pets||null,
-    desired_move_in:STATE.desired_move_in||null,
+(function(){
+  "use strict";
+  var TOKEN = ${JSON.stringify(token)};
+  var CTX = null;
+  var step = 0;
+  var stepNames = ["Before you begin","Your information","Residence","Income","Household","Review"];
+  var state = {
+    legal_name:"",dob_month:"",dob_day:"",dob_year:"",email:"",phone:"",
+    address_line1:"",address_line2:"",city:"",state_code:"",postal_code:"",
+    current_since:"",housing_status:"",housing_payment:"",landlord_contact:"",
+    prior_address:"",prior_city:"",prior_state:"",prior_postal:"",prior_landlord_contact:"",
+    income_status:"",employer:"",job_title:"",employment_start:"",
+    income_amount:"",income_frequency:"",additional_income:"",additional_income_frequency:"",
+    income_notes:"",desired_move_in:"",move_flexibility:"",occupants:"",
+    household_names:"",has_pets:"",pets_description:"",guarantor_needed:"",
+    guarantor_name:"",vehicles:"",additional_notes:""
   };
-  try{
-    const r = await fetch('/applications/submit-public', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ token:TOKEN, applicant_name:STATE.legal_name||null, captured }),
-    });
-    const out = await r.json();
-    if(!r.ok){ btn.disabled=false; btn.textContent='Submit application';
-      return screenMsg('—','Could not submit', (out&&out.receipt)||'Please try again.'); }
-    screenMsg('✓','Application submitted', "Thanks — the leasing team has your application and will follow up.");
-  }catch(e){ btn.disabled=false; btn.textContent='Submit application';
-    screenMsg('—','Could not submit',"Please check your connection and try again."); }
-}
+  var STORAGE_KEY = "ps_tenant_application_v2_"+TOKEN;
 
-boot();
-</script>
-</body></html>`);
+  function restoreDraft(){
+    try{
+      var saved=JSON.parse(sessionStorage.getItem(STORAGE_KEY)||"null");
+      if(!saved||typeof saved!=="object") return;
+      Object.keys(state).forEach(function(key){
+        if(Object.prototype.hasOwnProperty.call(saved,key) && saved[key]!=null) state[key]=String(saved[key]);
+      });
+    }catch(_){}
+  }
+  function persistDraft(){
+    try{sessionStorage.setItem(STORAGE_KEY,JSON.stringify(state));}catch(_){}
+  }
+  function clearDraft(){
+    try{sessionStorage.removeItem(STORAGE_KEY);}catch(_){}
+  }
+
+  function byId(id){ return document.getElementById(id); }
+  function esc(value){
+    return String(value == null ? "" : value).replace(/[&<>"']/g,function(ch){
+      return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch];
+    });
+  }
+  function radioValue(name){
+    var node = document.querySelector('input[name="'+name+'"]:checked');
+    return node ? node.value : "";
+  }
+  function setRadio(name,value){
+    if(!value) return;
+    var node = document.querySelector('input[name="'+name+'"][value="'+value+'"]');
+    if(node) node.checked = true;
+  }
+  function normalizeMoney(value){
+    var n = Number(String(value || "").replace(/[$,\s]/g,""));
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+  function monthlyAmount(amount,frequency){
+    var n = normalizeMoney(amount);
+    if(n == null) return null;
+    if(frequency === "annual") return Math.round((n/12)*100)/100;
+    if(frequency === "weekly") return Math.round((n*52/12)*100)/100;
+    if(frequency === "biweekly") return Math.round((n*26/12)*100)/100;
+    return n;
+  }
+  function isoDob(){
+    if(!state.dob_month || !state.dob_day || !state.dob_year) return "";
+    var day = String(state.dob_day).padStart(2,"0");
+    return state.dob_year+"-"+state.dob_month+"-"+day;
+  }
+  function validDob(){
+    var iso = isoDob();
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
+    var parts = iso.split("-").map(Number);
+    var date = new Date(Date.UTC(parts[0],parts[1]-1,parts[2]));
+    if(date.getUTCFullYear()!==parts[0] || date.getUTCMonth()!==parts[1]-1 || date.getUTCDate()!==parts[2]) return false;
+    var today = new Date();
+    return date < today && parts[0] >= 1900;
+  }
+  function currentAddress(){
+    return [state.address_line1,state.address_line2,state.city,state.state_code,state.postal_code].filter(Boolean).join(", ");
+  }
+  function monthsAtCurrent(){
+    if(!state.current_since || !/^\d{4}-\d{2}$/.test(state.current_since)) return null;
+    var p = state.current_since.split("-").map(Number);
+    var now = new Date();
+    return (now.getFullYear()-p[0])*12 + ((now.getMonth()+1)-p[1]);
+  }
+  function capture(){
+    var ids = [
+      "legal_name","dob_month","dob_day","dob_year","email","phone",
+      "address_line1","address_line2","city","postal_code","current_since",
+      "housing_payment","landlord_contact","prior_address","prior_city","prior_state",
+      "prior_postal","prior_landlord_contact","income_status","employer","job_title",
+      "employment_start","income_amount","income_frequency","additional_income",
+      "additional_income_frequency","income_notes","desired_move_in","move_flexibility",
+      "occupants","household_names","pets_description","guarantor_name","vehicles",
+      "additional_notes"
+    ];
+    ids.forEach(function(id){ var node=byId(id); if(node) state[id]=node.value.trim(); });
+    state.state_code = (byId("state").value || "").trim().toUpperCase();
+    state.housing_status = radioValue("housing_status");
+    state.has_pets = radioValue("has_pets");
+    state.guarantor_needed = radioValue("guarantor_needed");
+    persistDraft();
+  }
+  function hydrate(){
+    Object.keys(state).forEach(function(key){
+      var id = key === "state_code" ? "state" : key;
+      var node = byId(id);
+      if(node && node.type !== "radio") node.value = state[key] || "";
+    });
+    setRadio("housing_status",state.housing_status);
+    setRadio("has_pets",state.has_pets);
+    setRadio("guarantor_needed",state.guarantor_needed);
+    updateConditionals();
+  }
+  function updateConditionals(){
+    var months = monthsAtCurrent();
+    byId("priorResidence").classList.toggle("on",months != null && months < 24);
+    byId("employmentFields").classList.toggle("on",state.income_status === "employed" || state.income_status === "self_employed");
+    byId("petFields").classList.toggle("on",state.has_pets === "yes");
+    byId("guarantorFields").classList.toggle("on",state.guarantor_needed === "yes");
+  }
+  function clearErrors(){
+    document.querySelectorAll(".field.error").forEach(function(node){
+      node.classList.remove("error");
+      var text = node.querySelector(".error-text");
+      if(text) text.textContent = "";
+    });
+    var summary = byId("errorSummary");
+    summary.classList.remove("on");
+    summary.querySelector("ul").innerHTML = "";
+  }
+  function fieldError(key,message,focusId){
+    var wrap = document.querySelector('[data-field="'+key+'"]');
+    if(wrap){
+      wrap.classList.add("error");
+      var text = wrap.querySelector(".error-text");
+      if(text) text.textContent = message;
+    }
+    return {key:key,message:message,focusId:focusId || key};
+  }
+  function validateStep(which){
+    capture();
+    clearErrors();
+    var errors = [];
+    if(which === 1){
+      if(!state.legal_name) errors.push(fieldError("legal_name","Enter your full legal name."));
+      if(!validDob()) errors.push(fieldError("date_of_birth","Enter a valid date of birth.","dob_month"));
+      if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(state.email)) errors.push(fieldError("email","Enter a valid email address."));
+      if(state.phone.replace(/\D/g,"").length < 10) errors.push(fieldError("phone","Enter a valid phone number."));
+    }
+    if(which === 2){
+      if(!state.address_line1) errors.push(fieldError("address_line1","Enter your street address."));
+      if(!state.city) errors.push(fieldError("city","Enter your city."));
+      if(!/^[A-Za-z]{2}$/.test(state.state_code)) errors.push(fieldError("state","Enter a two-letter state abbreviation.","state"));
+      if(!/^\d{5}(-\d{4})?$/.test(state.postal_code)) errors.push(fieldError("postal_code","Enter a valid ZIP code."));
+      if(!/^\d{4}-\d{2}$/.test(state.current_since)) errors.push(fieldError("current_since","Enter the month and year you moved in."));
+      if(!state.housing_status) errors.push(fieldError("housing_status","Choose your current housing situation.","hs_rent"));
+    }
+    if(which === 3){
+      if(!state.income_status) errors.push(fieldError("income_status","Choose your primary income situation."));
+      if(normalizeMoney(state.income_amount) == null) errors.push(fieldError("income_amount","Enter your gross income amount."));
+      if(!state.income_frequency) errors.push(fieldError("income_frequency","Choose how often you receive this income."));
+    }
+    if(which === 4){
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(state.desired_move_in)) errors.push(fieldError("desired_move_in","Choose a preferred move-in date."));
+      if(!state.move_flexibility) errors.push(fieldError("move_flexibility","Choose how flexible the move-in date is."));
+      var occ = Number(state.occupants);
+      if(!Number.isInteger(occ) || occ < 1 || occ > 20) errors.push(fieldError("occupants","Enter the total number of occupants."));
+      if(!state.has_pets) errors.push(fieldError("has_pets","Choose yes or no.","pets_no"));
+      if(!state.guarantor_needed) errors.push(fieldError("guarantor_needed","Choose yes, no, or not sure.","guarantor_no"));
+    }
+    if(errors.length){
+      var list = byId("errorSummary").querySelector("ul");
+      errors.forEach(function(error){
+        var li=document.createElement("li");
+        var a=document.createElement("a");
+        a.href="#"+error.focusId;
+        a.textContent=error.message;
+        a.onclick=function(event){
+          event.preventDefault();
+          var target=byId(error.focusId);
+          if(target) target.focus();
+        };
+        li.appendChild(a);list.appendChild(li);
+      });
+      byId("errorSummary").classList.add("on");
+      byId("errorSummary").focus();
+      return false;
+    }
+    return true;
+  }
+  function showStep(next){
+    step = Math.max(0,Math.min(5,next));
+    document.querySelectorAll(".screen").forEach(function(node){
+      node.classList.toggle("on",Number(node.getAttribute("data-step"))===step);
+    });
+    byId("stepLabel").textContent = stepNames[step];
+    document.querySelectorAll("#progress span").forEach(function(node,index){
+      node.classList.toggle("on",index < Math.max(1,step));
+    });
+    byId("errorSummary").classList.remove("on");
+    if(step===5) renderReview();
+    window.scrollTo(0,0);
+    var heading=document.querySelector('.screen.on h2');
+    if(heading){heading.setAttribute("tabindex","-1");heading.focus();}
+  }
+  function display(value,fallback){
+    return value ? esc(value) : esc(fallback || "Not provided");
+  }
+  function moneyDisplay(amount,frequency){
+    var n=normalizeMoney(amount);
+    if(n==null) return "Not provided";
+    var label={annual:"per year",monthly:"per month",weekly:"per week",biweekly:"every two weeks"}[frequency] || "";
+    return "$"+n.toLocaleString()+ (label ? " "+label : "");
+  }
+  function row(label,value){
+    return '<div class="review-row"><span>'+esc(label)+'</span><b>'+display(value)+'</b></div>';
+  }
+  function section(title,editStep,body){
+    return '<section class="review-section"><div class="review-head"><h3>'+esc(title)+'</h3><button class="edit" type="button" data-edit="'+editStep+'">Edit</button></div><div class="review-body">'+body+'</div></section>';
+  }
+  function renderReview(){
+    capture();
+    var dob=isoDob();
+    var residence=currentAddress();
+    var pets=state.has_pets==="yes" ? (state.pets_description || "Yes") : "No";
+    var guarantor=state.guarantor_needed==="yes" ? (state.guarantor_name || "Yes") : (state.guarantor_needed==="unsure" ? "Not sure" : "No");
+    var html="";
+    html+=section("Applicant",1,
+      row("Legal name",state.legal_name)+row("Date of birth",dob)+row("Email",state.email)+row("Phone",state.phone));
+    html+=section("Residence",2,
+      row("Current address",residence)+row("Living there since",state.current_since)+row("Housing",state.housing_status)+row("Monthly payment",state.housing_payment ? "$"+state.housing_payment : ""));
+    html+=section("Income",3,
+      row("Situation",state.income_status)+row("Employer or business",state.employer)+row("Job title or work",state.job_title)+
+      row("Primary income",moneyDisplay(state.income_amount,state.income_frequency))+
+      row("Additional income",state.additional_income ? moneyDisplay(state.additional_income,state.additional_income_frequency) : ""));
+    html+=section("Household and move-in",4,
+      row("Preferred move-in",state.desired_move_in)+row("Date flexibility",state.move_flexibility)+
+      row("Total occupants",state.occupants)+row("Other adult occupants",state.household_names)+
+      row("Pets or assistance animals",pets)+row("Guarantor or co-signer",guarantor)+row("Vehicles",state.vehicles));
+    byId("review").innerHTML=html;
+    document.querySelectorAll("[data-edit]").forEach(function(button){
+      button.onclick=function(){showStep(Number(button.getAttribute("data-edit")));};
+    });
+  }
+  function capturedPayload(){
+    var primaryMonthly=monthlyAmount(state.income_amount,state.income_frequency);
+    var additionalMonthly=monthlyAmount(state.additional_income,state.additional_income_frequency);
+    return {
+      application_form_version:"tenant_v2",
+      date_of_birth:isoDob(),
+      email:state.email||null,
+      phone:state.phone||null,
+      current_address:currentAddress()||null,
+      address:{
+        line1:state.address_line1||null,line2:state.address_line2||null,
+        city:state.city||null,state:state.state_code||null,postal_code:state.postal_code||null
+      },
+      current_since:state.current_since||null,
+      housing_status:state.housing_status||null,
+      housing_payment:normalizeMoney(state.housing_payment),
+      landlord_contact:state.landlord_contact||null,
+      prior_residence:monthsAtCurrent()!=null && monthsAtCurrent()<24 ? {
+        address:state.prior_address||null,city:state.prior_city||null,
+        state:state.prior_state||null,postal_code:state.prior_postal||null,
+        landlord_contact:state.prior_landlord_contact||null
+      } : null,
+      income_status:state.income_status||null,
+      employer:state.employer||null,
+      job_title:state.job_title||null,
+      employment_start:state.employment_start||null,
+      income_amount:normalizeMoney(state.income_amount),
+      income_frequency:state.income_frequency||null,
+      monthly_income:primaryMonthly,
+      additional_income_amount:normalizeMoney(state.additional_income),
+      additional_income_frequency:state.additional_income_frequency||null,
+      total_monthly_income:(primaryMonthly||0)+(additionalMonthly||0),
+      income_notes:state.income_notes||null,
+      desired_move_in:state.desired_move_in||null,
+      move_flexibility:state.move_flexibility||null,
+      occupants:Number(state.occupants)||null,
+      household_names:state.household_names||null,
+      has_pets:state.has_pets||null,
+      pets:state.has_pets==="yes" ? (state.pets_description||"Yes") : "None",
+      guarantor_needed:state.guarantor_needed||null,
+      vehicles:state.vehicles||null,
+      additional_notes:state.additional_notes||null
+    };
+  }
+  async function submit(){
+    capture();
+    var error=byId("serverError");
+    error.classList.remove("on");
+    if(!byId("certify").checked){
+      error.textContent="Confirm that the information is complete and accurate before submitting.";
+      error.classList.add("on");
+      byId("certify").focus();
+      return;
+    }
+    var button=byId("submitButton");
+    button.disabled=true;button.textContent="Submitting…";
+    try{
+      var response=await fetch("/applications/submit-public",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          token:TOKEN,
+          applicant_name:state.legal_name||null,
+          guarantor_name:state.guarantor_needed==="yes" ? (state.guarantor_name||null) : null,
+          captured:capturedPayload()
+        })
+      });
+      var out=await response.json().catch(function(){return null;});
+      if(!response.ok){
+        button.disabled=false;button.textContent="Submit application";
+        error.textContent=(out&&out.receipt)||"The application could not be submitted. Please try again.";
+        error.classList.add("on");
+        return;
+      }
+      clearDraft();
+      byId("main").innerHTML='<div class="message"><div class="message-mark">✓</div><h2>Application submitted</h2><p>The leasing team has your application. Submitting is not an approval or a lease; they will contact you about the next step.</p></div>';
+    }catch(e){
+      button.disabled=false;button.textContent="Submit application";
+      error.textContent="Please check your connection and try again.";
+      error.classList.add("on");
+    }
+  }
+  async function boot(){
+    try{
+      var response=await fetch("/t/application/"+encodeURIComponent(TOKEN)+"/context",{cache:"no-store"});
+      CTX=await response.json();
+    }catch(e){
+      byId("main").innerHTML='<div class="message"><h2>Could not open the application</h2><p>Please try again or contact the leasing office.</p></div>';
+      return;
+    }
+    if(!CTX || CTX.state!=="open"){
+      var messages={
+        invalid:["This link is not valid",CTX&&CTX.receipt],
+        revoked:["This link was revoked",CTX&&CTX.receipt],
+        expired:["This link expired",CTX&&CTX.receipt],
+        not_sent:["This link is not active yet",CTX&&CTX.receipt],
+        already_submitted:["Application already submitted",CTX&&CTX.receipt],
+        unavailable:["Application unavailable",CTX&&CTX.receipt]
+      };
+      var chosen=messages[(CTX&&CTX.state)||"unavailable"]||messages.unavailable;
+      byId("main").innerHTML='<div class="message"><h2>'+esc(chosen[0])+'</h2><p>'+esc(chosen[1]||"Contact the leasing office.")+'</p></div>';
+      return;
+    }
+    byId("propertyName").textContent=CTX.property_name||"Rental application";
+    byId("unitPill").textContent=CTX.unit_label ? "Unit "+CTX.unit_label : "Rental application";
+    if(CTX.person){
+      state.legal_name=CTX.person.name||"";
+      state.email=CTX.person.email||"";
+      state.phone=CTX.person.phone||"";
+    }
+    if(CTX.prefill&&CTX.prefill.move_month){
+      var hint=byId("moveMonthHint");
+      hint.style.display="block";
+      hint.querySelector("p").textContent="You previously discussed a move around "+CTX.prefill.move_month+". Choose the specific date that works best.";
+    }
+    restoreDraft();
+    var today=new Date();
+    var localToday=new Date(today.getTime()-today.getTimezoneOffset()*60000).toISOString().slice(0,10);
+    byId("desired_move_in").min=localToday;
+    hydrate();
+    showStep(0);
+  }
+
+  document.addEventListener("click",function(event){
+    var next=event.target.closest("[data-next]");
+    if(next){
+      if(step>0 && step<5 && !validateStep(step)) return;
+      showStep(step+1);
+      return;
+    }
+    var back=event.target.closest("[data-back]");
+    if(back){capture();showStep(step-1);}
   });
+  document.addEventListener("change",function(event){
+    if(event.target.matches("input,select,textarea")){capture();updateConditionals();}
+  });
+  byId("submitButton").addEventListener("click",submit);
+  boot();
+})();
+</script>
+</body>
+</html>`);
+  });
+
 
   // ══════════════════════════════════════════════════════════════════
   //  sendApplication — THE ONE canonical business operation.
