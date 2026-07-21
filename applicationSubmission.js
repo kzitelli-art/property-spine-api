@@ -1765,6 +1765,7 @@ module.exports = function applicationSubmissionModule(deps) {
   document.addEventListener("click",function(event){
     var next=event.target.closest("[data-next]");
     if(next){
+      capture();
       if(step>0 && step<5 && !validateStep(step)) return;
       showStep(step+1);
       return;
