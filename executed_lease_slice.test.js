@@ -41,6 +41,9 @@ ok("blockers refuse with 409 activation_blocked", /error: "activation_blocked"/.
 ok("refusal happens BEFORE the lease insert",
   ct.indexOf('error: "activation_blocked"') < ct.indexOf("insert into leases"));
 ok("fails closed 503 when the service is unwired", /Executed-lease service not wired/.test(ct));
+ok("back-fills executed_lease_records.lease_id (arms the amendment boundary)",
+  /update executed_lease_records set lease_id=\$1 where id=\$2/.test(ct) &&
+  ct.indexOf('update executed_lease_records set lease_id') > ct.indexOf('insert into leases'));
 
 console.log("\n3. Exact premises (by-bed defect fixed)");
 ok("space comes from the executed record", /const spaceId = executed\.space_id/.test(ct));
