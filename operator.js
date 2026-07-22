@@ -61,6 +61,9 @@ module.exports = function operatorModule(deps) {
   // uses; server.js builds it once. Absent (older server.js) → the keys-ready
   // door below fails closed 503. Never a second implementation here.
   const deliveryHelper = deps.deliveryHelper || null;
+  // migration 088: the canonical executed-lease intake + admission service.
+  // Absent (older server.js) → the verify door fails closed 503.
+  const executedLease = deps.executedLease || null;
   // The activation perimeter + dormant gate — mounted as ROUTE middleware on the
   // two adapter routes, IDENTICALLY to the legacy applications.js routes, so the
   // operator door goes through the exact same authority (mode → authenticated
@@ -2958,37 +2961,78 @@ module.exports = function operatorModule(deps) {
     }
   );
 
-  router.post("/operator/leasing/applications/:id/countersign", dormantWriteGuard, operatorCountersignPerimeter, async (req, res) => {
+  //  RETIRED (088). "Countersign" described a company signing ceremony that
+  //  does not exist: the wall in front of it always required an ALREADY
+  //  executed lease. One operator action replaces it — Verify Executed Lease
+  //  — which records the governing document and attempts admission in the
+  //  same command. A 410 tombstone, never a silent alias.
+  router.post("/operator/leasing/applications/:id/countersign", async (req, res) => {
+    return res.status(410).json({
+      error: "countersign_retired",
+      receipt: "Retired. There is no company countersignature step: the lease is already executed " +
+               "before Property Spine sees it. Use POST /operator/leasing/applications/:id/executed-lease/verify " +
+               "to record the governing lease, then confirm the term.",
+      replacement: "/operator/leasing/applications/:id/executed-lease/verify",
+    });
+  });
+
+  //  VERIFY EXECUTED LEASE — one operator action, two internal phases.
+  //    Phase 1 records the governing evidence and PERSISTS regardless.
+  //    Phase 2 attempts operational admission; a conflict is a verdict,
+  //    not a failure, so this returns 200 with activation_status:'blocked'.
+  //  Classification: Class 1 permanent primitive.
+  router.post("/operator/leasing/applications/:id/executed-lease/verify", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
-    if (!tenancyAnchor || typeof tenancyAnchor.countersignService !== "function") {
-      return res.status(503).json({ receipt: "Countersign service not wired on this deploy (tenancyAnchor missing). Deploy tenancy_anchor_service.js + the updated server.js together." });
+    if (!executedLease || typeof executedLease.verifyExecutedLease !== "function") {
+      return res.status(503).json({ receipt: "Executed-lease intake is not wired on this deploy. Deploy executed_lease_service.js, operator.js and server.js together." });
     }
-    // SERVER-DERIVED actor (never the body). The perimeter already authorized
-    // and attached the authenticated staff identity.
-    const actor = req._perimeterActor || {};
-    const app = req._perimeterApp || {};
-    const countersignedByName = actor.name || (actor.user_id ? `staff:${actor.user_id}` : null);
-    // person id for the J1 economics lock — resolved from the session user only
-    // if the bridge has one; the service decides whether it's actually required.
-    const countersignedByPersonId = await resolveActorPersonId(actor.user_id, app.property_id);
+    const b = req.body || {};
     const client = await pool.connect();
     try {
       await client.query("begin");
-      const out = await tenancyAnchor.countersignService(client, {
-        applicationId: req.params.id,
-        countersigned_by: countersignedByName,              // SERVER-DERIVED attestation
-        note: (req.body && req.body.note) || null,
-        countersigned_by_person_id: countersignedByPersonId, // SERVER-DERIVED person (or null)
-      });
+      // PROPERTY WALL: the application must belong to the session's property.
+      const aq = await client.query(
+        "select id, property_id from lease_applications where id=$1", [req.params.id]);
+      const app = aq.rows[0];
+      if (!app) { await client.query("rollback"); return res.status(404).json({ receipt: "No application with that id." }); }
+      if (String(app.property_id) !== String(req.operator.property_id)) {
+        await client.query("rollback");
+        return res.status(403).json({ receipt: "That application belongs to a different property." });
+      }
+      const out = await executedLease.verifyExecutedLease(client, {
+        application_id: req.params.id,
+        space_id: b.space_id || null,
+        rent: b.rent, security_deposit: b.security_deposit,
+        lease_start_date: b.lease_start_date, lease_end_date: b.lease_end_date,
+        concession_status: b.concession_status || "none",
+        concession_schedule_id: b.concession_schedule_id || null,
+        document_reference: b.document_reference || null,
+        document_sha256: b.document_sha256 || null,
+        provider_name: b.provider_name || null,
+        provider_document_id: b.provider_document_id || null,
+        provider_version_id: b.provider_version_id || null,
+        document_version: b.document_version || 1,
+        executed_at: b.executed_at, effective_date: b.effective_date || null,
+        signers: b.signers, execution_channel: b.execution_channel,
+        // SERVER-DERIVED: the verifying staff user is never a body value.
+        verified_by_user_id: req.operator.id,
+        supersedes_record_id: b.supersedes_record_id || null,
+        idempotency_key: b.idempotency_key || null,
+      }, { spawnObligationFromEvent: deps.spawnObligationFromEvent || null });
       await client.query("commit");
+      // 200 even when activation is blocked: the requested fact — recording
+      // the executed lease — succeeded.
       return res.json(out);
     } catch (e) {
       await client.query("rollback").catch(() => {});
+      if (e.httpStatus) return res.status(e.httpStatus).json({ error: e.code, receipt: e.message, ...(e.extra || {}) });
       if (e.svc) return res.status(e.http).json(e.body);
-      console.error("operator countersign:", e);
-      return res.status(500).json({ receipt: "Could not countersign.", error: e.message });
+      console.error("operator verify executed lease:", e);
+      return res.status(500).json({ receipt: "Could not record the executed lease.", error: e.message });
     } finally { client.release(); }
   });
+
+  // eslint-disable-next-line no-unreachable
 
   router.post("/operator/leasing/applications/:id/confirm-term", dormantWriteGuard, operatorConfirmTermPerimeter, async (req, res) => {
     res.set("Cache-Control", "no-store");
@@ -3001,13 +3045,13 @@ module.exports = function operatorModule(deps) {
     const client = await pool.connect();
     try {
       await client.query("begin");
+      // GOVERNING VALUES ARE NOT ACCEPTED FROM THE BROWSER (088). rent,
+      // dates, deposit and premises come from the verified executed lease.
+      // The body carries the command only; `b` is deliberately unused here.
       const out = await tenancyAnchor.confirmTermService(client, {
         applicationId: req.params.id,
-        start_date: b.start_date || null,       // structured dates: the operator form supplies these
-        end_date: b.end_date || null,
         confirmed_by: confirmedByName,          // SERVER-DERIVED attestation (never a body name)
-        rent: b.rent != null ? b.rent : null,
-        security_deposit: b.security_deposit != null ? b.security_deposit : null,
+        confirmed_by_user_id: actor.user_id || null,
       });
       await client.query("commit");
       return res.json(out);
