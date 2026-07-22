@@ -1139,27 +1139,10 @@ module.exports = function applicationSubmissionModule(deps) {
           <div class="error-text"></div>
         </div>
         <div class="field full" data-field="date_of_birth">
-          <fieldset>
-            <legend class="legend">Date of birth</legend>
-            <div class="hint">For example: March 31 1990</div>
-            <div class="date-parts">
-              <div class="month">
-                <label for="dob_month">Month</label>
-                <select id="dob_month" autocomplete="bday-month">
-                  <option value="">Month</option>
-                  <option value="01">January</option><option value="02">February</option>
-                  <option value="03">March</option><option value="04">April</option>
-                  <option value="05">May</option><option value="06">June</option>
-                  <option value="07">July</option><option value="08">August</option>
-                  <option value="09">September</option><option value="10">October</option>
-                  <option value="11">November</option><option value="12">December</option>
-                </select>
-              </div>
-              <div class="day"><label for="dob_day">Day</label><input id="dob_day" inputmode="numeric" autocomplete="bday-day" maxlength="2"/></div>
-              <div class="year"><label for="dob_year">Year</label><input id="dob_year" inputmode="numeric" autocomplete="bday-year" maxlength="4"/></div>
-            </div>
-          </fieldset>
-          <div class="error-text"></div>
+          <label for="dob_input">Date of birth</label>
+          <div class="hint">Enter 8 digits. For example: 04 / 30 / 1988</div>
+          <input id="dob_input" type="text" inputmode="numeric" autocomplete="bday" placeholder="MM / DD / YYYY" maxlength="14" aria-describedby="dob_hint"/>
+          <div id="dob_hint" class="error-text"></div>
         </div>
         <div class="field" data-field="email">
           <label for="email">Email</label>
@@ -1401,7 +1384,7 @@ module.exports = function applicationSubmissionModule(deps) {
   var step = 0;
   var stepNames = ["Before you begin","Your information","Residence","Income","Household","Review"];
   var state = {
-    legal_name:"",dob_month:"",dob_day:"",dob_year:"",email:"",phone:"",
+    legal_name:"",dob_input:"",email:"",phone:"",
     address_line1:"",address_line2:"",city:"",state_code:"",postal_code:"",
     current_since:"",housing_status:"",housing_payment:"",landlord_contact:"",
     prior_address:"",prior_city:"",prior_state:"",prior_postal:"",prior_landlord_contact:"",
@@ -1420,6 +1403,9 @@ module.exports = function applicationSubmissionModule(deps) {
       Object.keys(state).forEach(function(key){
         if(Object.prototype.hasOwnProperty.call(saved,key) && saved[key]!=null) state[key]=String(saved[key]);
       });
+      if(!state.dob_input && saved.dob_month && saved.dob_day && saved.dob_year){
+        state.dob_input=String(saved.dob_month).padStart(2,"0")+" / "+String(saved.dob_day).padStart(2,"0")+" / "+String(saved.dob_year);
+      }
     }catch(_){}
   }
   function persistDraft(){
@@ -1456,19 +1442,39 @@ module.exports = function applicationSubmissionModule(deps) {
     if(frequency === "biweekly") return Math.round((n*26/12)*100)/100;
     return n;
   }
+  function dobParts(){
+    var raw=String(state.dob_input||"").trim();
+    if(!raw) return null;
+    var iso=raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if(iso) return {year:Number(iso[1]),month:Number(iso[2]),day:Number(iso[3])};
+    var separated=raw.split(/\D+/).filter(Boolean);
+    if(separated.length===3 && separated[2].length===4){
+      return {month:Number(separated[0]),day:Number(separated[1]),year:Number(separated[2])};
+    }
+    var digits=raw.replace(/\D/g,"");
+    if(digits.length!==8) return null;
+    return {month:Number(digits.slice(0,2)),day:Number(digits.slice(2,4)),year:Number(digits.slice(4,8))};
+  }
   function isoDob(){
-    if(!state.dob_month || !state.dob_day || !state.dob_year) return "";
-    var day = String(state.dob_day).padStart(2,"0");
-    return state.dob_year+"-"+state.dob_month+"-"+day;
+    var parts=dobParts();
+    if(!parts) return "";
+    return String(parts.year).padStart(4,"0")+"-"+String(parts.month).padStart(2,"0")+"-"+String(parts.day).padStart(2,"0");
   }
   function validDob(){
-    var iso = isoDob();
-    if(!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
-    var parts = iso.split("-").map(Number);
-    var date = new Date(Date.UTC(parts[0],parts[1]-1,parts[2]));
-    if(date.getUTCFullYear()!==parts[0] || date.getUTCMonth()!==parts[1]-1 || date.getUTCDate()!==parts[2]) return false;
-    var today = new Date();
-    return date < today && parts[0] >= 1900;
+    var parts=dobParts();
+    if(!parts || parts.year<1900 || parts.month<1 || parts.month>12 || parts.day<1 || parts.day>31) return false;
+    var date=new Date(Date.UTC(parts.year,parts.month-1,parts.day));
+    if(date.getUTCFullYear()!==parts.year || date.getUTCMonth()!==parts.month-1 || date.getUTCDate()!==parts.day) return false;
+    return date < new Date();
+  }
+  function formatDobInput(value){
+    var raw=String(value||"");
+    var iso=raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    if(iso) return String(iso[2]).padStart(2,"0")+" / "+String(iso[3]).padStart(2,"0")+" / "+iso[1];
+    var digits=raw.replace(/\D/g,"").slice(0,8);
+    if(digits.length<=2) return digits;
+    if(digits.length<=4) return digits.slice(0,2)+" / "+digits.slice(2);
+    return digits.slice(0,2)+" / "+digits.slice(2,4)+" / "+digits.slice(4);
   }
   function currentAddress(){
     return [state.address_line1,state.address_line2,state.city,state.state_code,state.postal_code].filter(Boolean).join(", ");
@@ -1481,7 +1487,7 @@ module.exports = function applicationSubmissionModule(deps) {
   }
   function capture(){
     var ids = [
-      "legal_name","dob_month","dob_day","dob_year","email","phone",
+      "legal_name","dob_input","email","phone",
       "address_line1","address_line2","city","postal_code","current_since",
       "housing_payment","landlord_contact","prior_address","prior_city","prior_state",
       "prior_postal","prior_landlord_contact","income_status","employer","job_title",
@@ -1540,7 +1546,7 @@ module.exports = function applicationSubmissionModule(deps) {
     var errors = [];
     if(which === 1){
       if(!state.legal_name) errors.push(fieldError("legal_name","Enter your full legal name."));
-      if(!validDob()) errors.push(fieldError("date_of_birth","Enter a valid date of birth.","dob_month"));
+      if(!validDob()) errors.push(fieldError("date_of_birth","Enter your date of birth as MM / DD / YYYY.","dob_input"));
       if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(state.email)) errors.push(fieldError("email","Enter a valid email address."));
       if(state.phone.replace(/\D/g,"").length < 10) errors.push(fieldError("phone","Enter a valid phone number."));
     }
@@ -1772,6 +1778,14 @@ module.exports = function applicationSubmissionModule(deps) {
     }
     var back=event.target.closest("[data-back]");
     if(back){capture();showStep(step-1);}
+  });
+  document.addEventListener("input",function(event){
+    if(event.target && event.target.id==="dob_input"){
+      var formatted=formatDobInput(event.target.value);
+      if(event.target.value!==formatted) event.target.value=formatted;
+      state.dob_input=event.target.value;
+      persistDraft();
+    }
   });
   document.addEventListener("change",function(event){
     if(event.target.matches("input,select,textarea")){capture();updateConditionals();}
