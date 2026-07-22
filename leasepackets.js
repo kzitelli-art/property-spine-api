@@ -794,6 +794,29 @@ module.exports = function leasePacketsModule(deps) {
     console.error("[leasepackets] tenant_lease_packet.html not found at any known path:", TENANT_HTML_CANDIDATES.join(" , "));
   }
   router.get("/t/lease/:token", (req, res) => {
+    // The acknowledgment token is carried IN THE URL. Without no-referrer,
+    // every outbound request from this page leaks a live credential in the
+    // Referer header. Without no-store, a resident's proposed terms persist
+    // in shared caches. Without frame-ancestors, the Acknowledge button can
+    // be clickjacked. Same posture as the applicant page.
+    res.set({
+      "Cache-Control": "no-store",
+      "Pragma": "no-cache",
+      "Referrer-Policy": "no-referrer",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY",
+      "Content-Security-Policy": [
+        "default-src 'none'",
+        "connect-src 'self'",
+        "script-src 'unsafe-inline'",
+        "style-src 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src https://fonts.gstatic.com",
+        "img-src 'self' data:",
+        "base-uri 'none'",
+        "form-action 'none'",
+        "frame-ancestors 'none'",
+      ].join("; "),
+    });
     res.type("html").sendFile(TENANT_HTML_PATH, (err) => {
       if (err) { console.error("[leasepackets] tenant page sendFile failed:", err.message); res.status(404).send("Lease page not found."); }
     });
