@@ -925,6 +925,7 @@ module.exports = function applicationSubmissionModule(deps) {
   // person, and lifecycle authority remains server-derived from the invitation.
   router.get("/t/application/:token", (req, res) => {
     const token = String(req.params.token).replace(/[^A-Za-z0-9_\-]/g, "");
+    const dobMax = new Date().toISOString().slice(0, 10);
     res.set({
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
@@ -975,6 +976,7 @@ module.exports = function applicationSubmissionModule(deps) {
       display:inline-flex;margin-top:20px;padding:9px 13px;border:1px solid rgba(255,255,255,.22);
       border-radius:999px;font-size:13px;font-weight:700;
     }
+    .unit-note{margin:14px 0 0;color:#a8a49a;font-size:12.5px;line-height:1.55}
     .rail-note{margin-top:auto;padding-top:22px;border-top:1px solid rgba(255,255,255,.14);color:#bdb8ad;font-size:12px;line-height:1.6}
     .rail-note strong{display:block;margin-bottom:6px;color:#fff}
     .main{min-width:0;padding:38px 56px 56px}
@@ -1088,6 +1090,7 @@ module.exports = function applicationSubmissionModule(deps) {
       <h1 id="propertyName">Your next home</h1>
       <p>A secure application prepared for you by the leasing team.</p>
       <div class="unit-pill" id="unitPill">Application</div>
+      <p class="unit-note">The leasing team will confirm the final unit details and terms before lease preparation.</p>
     </div>
     <div class="rail-note">
       <strong>Private by design</strong>
@@ -1140,8 +1143,7 @@ module.exports = function applicationSubmissionModule(deps) {
         </div>
         <div class="field full" data-field="date_of_birth">
           <label for="dob_input">Date of birth</label>
-          <div class="hint">Enter 8 digits. For example: 04 / 30 / 1988</div>
-          <input id="dob_input" type="text" inputmode="numeric" autocomplete="bday" placeholder="MM / DD / YYYY" maxlength="14" aria-describedby="dob_hint"/>
+          <input id="dob_input" type="date" autocomplete="bday" max="${dobMax}" aria-describedby="dob_hint"/>
           <div id="dob_hint" class="error-text"></div>
         </div>
         <div class="field" data-field="email">
@@ -1404,7 +1406,11 @@ module.exports = function applicationSubmissionModule(deps) {
         if(Object.prototype.hasOwnProperty.call(saved,key) && saved[key]!=null) state[key]=String(saved[key]);
       });
       if(!state.dob_input && saved.dob_month && saved.dob_day && saved.dob_year){
-        state.dob_input=String(saved.dob_month).padStart(2,"0")+" / "+String(saved.dob_day).padStart(2,"0")+" / "+String(saved.dob_year);
+        state.dob_input=String(saved.dob_year).padStart(4,"0")+"-"+String(saved.dob_month).padStart(2,"0")+"-"+String(saved.dob_day).padStart(2,"0");
+      }
+      // any legacy slashed draft becomes ISO, or the native date input drops it
+      if(state.dob_input && !/^\\d{4}-\\d{2}-\\d{2}$/.test(state.dob_input)){
+        state.dob_input=isoDob();
       }
     }catch(_){}
   }
@@ -1431,7 +1437,7 @@ module.exports = function applicationSubmissionModule(deps) {
     if(node) node.checked = true;
   }
   function normalizeMoney(value){
-    var n = Number(String(value || "").replace(/[$,\s]/g,""));
+    var n = Number(String(value || "").replace(/[$,\\s]/g,""));
     return Number.isFinite(n) && n >= 0 ? n : null;
   }
   function monthlyAmount(amount,frequency){
@@ -1445,13 +1451,13 @@ module.exports = function applicationSubmissionModule(deps) {
   function dobParts(){
     var raw=String(state.dob_input||"").trim();
     if(!raw) return null;
-    var iso=raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    var iso=raw.match(/^(\\d{4})-(\\d{1,2})-(\\d{1,2})$/);
     if(iso) return {year:Number(iso[1]),month:Number(iso[2]),day:Number(iso[3])};
-    var separated=raw.split(/\D+/).filter(Boolean);
+    var separated=raw.split(/\\D+/).filter(Boolean);
     if(separated.length===3 && separated[2].length===4){
       return {month:Number(separated[0]),day:Number(separated[1]),year:Number(separated[2])};
     }
-    var digits=raw.replace(/\D/g,"");
+    var digits=raw.replace(/\\D/g,"");
     if(digits.length!==8) return null;
     return {month:Number(digits.slice(0,2)),day:Number(digits.slice(2,4)),year:Number(digits.slice(4,8))};
   }
@@ -1467,20 +1473,11 @@ module.exports = function applicationSubmissionModule(deps) {
     if(date.getUTCFullYear()!==parts.year || date.getUTCMonth()!==parts.month-1 || date.getUTCDate()!==parts.day) return false;
     return date < new Date();
   }
-  function formatDobInput(value){
-    var raw=String(value||"");
-    var iso=raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-    if(iso) return String(iso[2]).padStart(2,"0")+" / "+String(iso[3]).padStart(2,"0")+" / "+iso[1];
-    var digits=raw.replace(/\D/g,"").slice(0,8);
-    if(digits.length<=2) return digits;
-    if(digits.length<=4) return digits.slice(0,2)+" / "+digits.slice(2);
-    return digits.slice(0,2)+" / "+digits.slice(2,4)+" / "+digits.slice(4);
-  }
   function currentAddress(){
     return [state.address_line1,state.address_line2,state.city,state.state_code,state.postal_code].filter(Boolean).join(", ");
   }
   function monthsAtCurrent(){
-    if(!state.current_since || !/^\d{4}-\d{2}$/.test(state.current_since)) return null;
+    if(!state.current_since || !/^\\d{4}-\\d{2}$/.test(state.current_since)) return null;
     var p = state.current_since.split("-").map(Number);
     var now = new Date();
     return (now.getFullYear()-p[0])*12 + ((now.getMonth()+1)-p[1]);
@@ -1546,16 +1543,16 @@ module.exports = function applicationSubmissionModule(deps) {
     var errors = [];
     if(which === 1){
       if(!state.legal_name) errors.push(fieldError("legal_name","Enter your full legal name."));
-      if(!validDob()) errors.push(fieldError("date_of_birth","Enter your date of birth as MM / DD / YYYY.","dob_input"));
-      if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(state.email)) errors.push(fieldError("email","Enter a valid email address."));
-      if(state.phone.replace(/\D/g,"").length < 10) errors.push(fieldError("phone","Enter a valid phone number."));
+      if(!validDob()) errors.push(fieldError("date_of_birth","Enter your date of birth.","dob_input"));
+      if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(state.email)) errors.push(fieldError("email","Enter a valid email address."));
+      if(state.phone.replace(/\\D/g,"").length < 10) errors.push(fieldError("phone","Enter a valid phone number."));
     }
     if(which === 2){
       if(!state.address_line1) errors.push(fieldError("address_line1","Enter your street address."));
       if(!state.city) errors.push(fieldError("city","Enter your city."));
       if(!/^[A-Za-z]{2}$/.test(state.state_code)) errors.push(fieldError("state","Enter a two-letter state abbreviation.","state"));
-      if(!/^\d{5}(-\d{4})?$/.test(state.postal_code)) errors.push(fieldError("postal_code","Enter a valid ZIP code."));
-      if(!/^\d{4}-\d{2}$/.test(state.current_since)) errors.push(fieldError("current_since","Enter the month and year you moved in."));
+      if(!/^\\d{5}(-\\d{4})?$/.test(state.postal_code)) errors.push(fieldError("postal_code","Enter a valid ZIP code."));
+      if(!/^\\d{4}-\\d{2}$/.test(state.current_since)) errors.push(fieldError("current_since","Enter the month and year you moved in."));
       if(!state.housing_status) errors.push(fieldError("housing_status","Choose your current housing situation.","hs_rent"));
     }
     if(which === 3){
@@ -1564,7 +1561,7 @@ module.exports = function applicationSubmissionModule(deps) {
       if(!state.income_frequency) errors.push(fieldError("income_frequency","Choose how often you receive this income."));
     }
     if(which === 4){
-      if(!/^\d{4}-\d{2}-\d{2}$/.test(state.desired_move_in)) errors.push(fieldError("desired_move_in","Choose a preferred move-in date."));
+      if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(state.desired_move_in)) errors.push(fieldError("desired_move_in","Choose a preferred move-in date."));
       if(!state.move_flexibility) errors.push(fieldError("move_flexibility","Choose how flexible the move-in date is."));
       var occ = Number(state.occupants);
       if(!Number.isInteger(occ) || occ < 1 || occ > 20) errors.push(fieldError("occupants","Enter the total number of occupants."));
@@ -1780,12 +1777,7 @@ module.exports = function applicationSubmissionModule(deps) {
     if(back){capture();showStep(step-1);}
   });
   document.addEventListener("input",function(event){
-    if(event.target && event.target.id==="dob_input"){
-      var formatted=formatDobInput(event.target.value);
-      if(event.target.value!==formatted) event.target.value=formatted;
-      state.dob_input=event.target.value;
-      persistDraft();
-    }
+    if(event.target && event.target.matches("input,select,textarea")){capture();}
   });
   document.addEventListener("change",function(event){
     if(event.target.matches("input,select,textarea")){capture();updateConditionals();}
