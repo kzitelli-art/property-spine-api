@@ -57,6 +57,11 @@ module.exports = function tenancyAnchorService(deps) {
     // closed with 409 executed_lease_required. Path B replaces the resolver
     // body, never its position in the chain.
     executionEvidence = null,
+    // migration 088: the canonical executed-lease service. confirm-term calls
+    // computeAdmissionBlockers + recordAdmissionEvaluation to RECOMPUTE from
+    // live sources inside its own transaction — a stored verdict is a
+    // projection, never authorization.
+    executedLease = null,
   } = deps || {};
 
   if (typeof spawnObligationFromEvent !== "function" ||
@@ -151,221 +156,27 @@ module.exports = function tenancyAnchorService(deps) {
   //                                    offer is bound (J1 economics lock)
   //  returns the success JSON body (the route wraps it in res.json()).
   // ══════════════════════════════════════════════════════════════════
-  async function countersignService(client, { applicationId, countersigned_by = null, note = null, countersigned_by_person_id = null }) {
-    if (!countersigned_by) throw svcErr(400, { receipt: "countersigned_by required — a human must countersign." });
+  // ── countersignService: RETIRED (migration 088) ─────────────────────
+  //  It required an executed lease and then performed a second "acceptance"
+  //  — an internal architecture step leaking into the operator workflow as a
+  //  ceremony that does not exist in the real world. Its legitimate work
+  //  (open term confirmation) moved into executed_lease_service's admission
+  //  phase; its illegitimate work ("locked economics win") was removed.
+  //  The operator flow is now: Verify Executed Lease → Confirm Term.
+  //  No alias is kept: an unlabelled compatibility shim with no removal
+  //  condition is the exact stop-sign pattern the doctrine names.
 
-    const app = await getApp(client, applicationId);
-    if (!app) throw svcErr(404, { receipt: "No application with that id." });
-    // Approval proof — EITHER vocabulary (§9): a v3 row carries the terms
-    // gate; a pre-v3 row carries its historical blended gate. Neither is
-    // execution proof; both merely prove an approval happened.
-    if (!app.terms_review_obligation_id && !app.activation_obligation_id) {
-      throw svcErr(409, { receipt: "Application is not approved — nothing to countersign." });
-    }
-    if (app.status === "active") {
-      throw svcErr(409, { receipt: "Lease is already active." });
-    }
 
-    // ── THE WALL, CORRECTED (v3 §8-C) ─────────────────────────────────
-    // First substantive requirement: VERIFIED LEASE EXECUTION, resolved
-    // server-side through the injected seam. A terms acknowledgment, a
-    // satisfied obligation input, a packet submission, a body-supplied
-    // object — none of these reach this check. No caller can supply it.
-    if (!executionEvidence || typeof executionEvidence.resolveVerifiedExecution !== "function") {
-      throw svcErr(503, { receipt: "Execution-evidence resolver not wired on this deploy. Deploy execution_evidence.js + the updated server.js together." });
-    }
-    const execution = await executionEvidence.resolveVerifiedExecution(client, applicationId);
-    if (!execution) {
-      throw svcErr(409, {
-        error: "executed_lease_required",
-        receipt: "Cannot countersign yet. A terms acknowledgment is not an executed lease. Record verified lease execution before company acceptance.",
-      });
-    }
-
-    // ── Path B territory (unreachable in v3: the resolver above returns
-    //    null until a governed execution system exists). When real execution
-    //    evidence arrives: a LEGACY blended gate is closed here by satisfying
-    //    its countersign input; a v3 row has no activation gate to close —
-    //    execution's own activation obligation (Path B) governs it.
-    if (app.activation_obligation_id) {
-      const oQ = await client.query("select * from obligations where id=$1 for update", [app.activation_obligation_id]);
-      const obligation = oQ.rows[0];
-      try {
-        await satisfyObligation(client, { obligation_id: obligation.id, input: COUNTERSIGN,
-          proof: { countersigned_by, note, execution_evidence_ref: execution.id || null } });
-      } catch (e) { if (e.code !== "NOT_OUTSTANDING") throw e; }
-      try {
-        await completeObligation(client, { obligation_id: obligation.id, completed_by: countersigned_by });
-      } catch (e) {
-        if (e.code === "INPUTS_OUTSTANDING") {
-          throw svcErr(409, { receipt: "Cannot activate — required inputs still outstanding.", outstanding: e.outstanding_inputs });
-        }
-        if (e.code !== "ALREADY_COMPLETE") throw e;
-      }
-    }
-
-    // ── J1: THE COUNTERSIGN LOCK (Commitment Ledger, 063) ─────────────
-    // If an eligible lease offer is bound to this application, its dated
-    // economic schedule locks HERE, in this same transaction — the lease
-    // and its committed economics activate together or not at all.
-    //   · no ledger service / no offer → exactly the prior behavior.
-    //   · offer present but the calendar contract (month placement) is
-    //     not filled yet → REFUSE the countersign honestly rather than
-    //     activate a lease whose committed economics can't be recorded.
-    if (ledgerService && ledgerService.findEligibleOfferForApplication) {
-      const offers = await ledgerService.findEligibleOfferForApplication(client, app.id);
-      if (offers && offers.length > 0) {
-        const offer = offers[0];
-        // D10: the lock is attributed to the COUNTERSIGNER, a real person
-        // row — the free-text countersigned_by name is not enough when
-        // committed economics are being locked. Fail-closed, never faked.
-        if (!countersigned_by_person_id) {
-          throw svcErr(409, {
-            receipt: "Cannot countersign — this application carries a lease offer, so the lock needs countersigned_by_person_id (the actual countersigning person). Committed economics are never attributed to a name string.",
-            offer_id: offer.id,
-          });
-        }
-        let lines;
-        // Scoped offer (an eligibility class, not a quoted slot): the
-        // lease chooses the room. Resolve the application's unit to its
-        // '(whole unit)' space; an application with NO unit cannot lock
-        // a scoped offer — refuse honestly, never guess a room.
-        let resolvedSpaceId = null;
-        if (!offer.space_id) {
-          if (!app.unit_id) {
-            throw svcErr(409, {
-              receipt: "Cannot countersign — the lease offer is scoped (no exact unit quoted) and this application has no unit selected. Select the unit first; an offer never holds a room, the lease chooses one.",
-              offer_id: offer.id,
-            });
-          }
-          const sp = await client.query(
-            `select id from spaces where unit_id = $1 order by created_at limit 1`, [app.unit_id]);
-          if (sp.rowCount === 0) {
-            throw svcErr(409, { receipt: "Cannot countersign — the application's unit has no space record.", offer_id: offer.id });
-          }
-          resolvedSpaceId = sp.rows[0].id;
-        }
-        try {
-          lines = ledgerService.computeScheduleLines(offer);
-        } catch (e) {
-          if (e.code === "CALENDAR_CONTRACT_MISSING") {
-            throw svcErr(409, {
-              receipt: "Cannot countersign yet — this application carries a lease offer, but the calendar contract (concession month placement) is not configured. The lease cannot activate with its committed economics unrecorded.",
-              offer_id: offer.id,
-            });
-          }
-          throw e;
-        }
-        const locked = await ledgerService.lockLeaseEconomics(client, {
-          application_id: app.id, offer_id: offer.id, lines,
-          locked_by_person_id: countersigned_by_person_id,
-          resolved_space_id: resolvedSpaceId,
-        });
-        void locked;
-      }
-    }
-
-    // ── TWO-PHASE COUNTERSIGN (COUNTERSIGN_TENANCY_ANCHOR.md §2-3) ────
-    // Countersign RECORDS ACCEPTANCE. It does NOT create the tenancy.
-    // There is no canonical lease term at this moment (the offer carries a
-    // duration, not dated start/end; computeScheduleLines is a stub). An
-    // active application / tenant person with no describable term is a
-    // poisoned truth, so we STOP here:
-    //   · status → accepted_term_required   (accepted, term not yet pinned)
-    //   · spawn a term_required obligation pointing at the APPLICATION
-    //     (no lease exists yet: related_type='lease_application')
-    //   · NO activated_at, NO 'active', NO tenant promotion, NO leases row.
-    // The economics lock above (J1) already ran if an offer existed — the
-    // committed schedule is preserved, application-linked, and will gain its
-    // lease_id in Phase 2. Phase 2 (confirm-term) is the ONLY path that
-    // creates the pending lease and promotes application + person.
-    const upd = await client.query(
-      `update lease_applications
-          set status='accepted_term_required', countersigned_at=now(), updated_at=now()
-        where id=$1 returning *`,
-      [app.id]
-    );
-
-    // spawn the term_required obligation — the owned work that unblocks the
-    // tenancy. It is NOT an error state; it is the product surfacing the
-    // missing decision. Assigned to the manager; completed by Phase 2.
-    const trEvId = await recordEvent(client, {
-      property_id: app.property_id, person_id: app.person_id, unit_id: app.unit_id,
-      type: "countersign_accepted_term_required",
-      note: `Countersign accepted — lease term required before activation (${app.applicant_name})`,
-    });
-    let termObligation = null;
-    try {
-      termObligation = await spawnObligationFromEvent(client, {
-        property_id: app.property_id,
-        person_id: app.person_id,
-        unit_id: app.unit_id,
-        source_event_id: trEvId,
-        related_id: app.id,
-        related_type: "lease_application",
-        module: "applications",
-        type: "term_required",
-        label: `Confirm lease term — ${app.applicant_name}${app.unit_label ? " · " + app.unit_label : ""}`,
-        owner_type: "human",
-        assigned_role: "property_manager",
-        status: "open",
-        priority: "high",
-        severity: "normal",
-        required_inputs: ["lease_term_confirmation"],
-      });
-    } catch (e) {
-      // idempotency belt: if a term_required obligation already exists for
-      // this application (re-countersign), do not stack a second one.
-      if (e.code === "23505") {
-        const ex = await client.query(
-          `select id from obligations
-            where related_id=$1 and related_type='lease_application'
-              and type='term_required' and status in ('open','in_progress')
-            order by created_at desc limit 1`, [app.id]);
-        termObligation = ex.rows[0] || null;
-      } else { throw e; }
-    }
-
-    return {
-      receipt: `Countersign accepted — ${app.applicant_name}. Acceptance is recorded; the lease is NOT active yet. Confirm the lease term (start and end dates) to activate the tenancy.`,
-      phase: "accepted_term_required",
-      term_required_obligation_id: termObligation ? termObligation.id : null,
-      next_action: "POST /operator/leasing/applications/:applicationId/confirm-term",
-      application: shape(upd.rows[0], { remaining: ["lease_term_confirmation"], obligation_status: "open" }),
-    };
-  }
-
-  // ══════════════════════════════════════════════════════════════════
-  //  CONFIRM-TERM — Phase 2 (the tenancy anchor). Creates the pending
-  //  lease, promotes application → active + person → tenant, EXACTLY once.
-  //
-  //  Faithful lift of POST /applications/:id/confirm-term. Preconditions
-  //  the ROUTE enforced: dormantWriteGuard + activationPerimeter with
-  //  eligibleStatuses=['accepted_term_required']. Idempotency + concurrency
-  //  are enforced HERE under FOR UPDATE (route-agnostic): one lease anchor
-  //  per application, period; two concurrent callers serialize → one 200 /
-  //  one lease / one controlled 409, never a raw 23505.
-  //
-  //  Date validation is business logic (a term with no duration is not a
-  //  term), so it lives HERE — both route families get identical rules.
-  //
-  //  inputs: { applicationId, start_date, end_date, confirmed_by, rent, security_deposit }
-  //  returns the success JSON body (route wraps in res.json()).
-  // ══════════════════════════════════════════════════════════════════
-  async function confirmTermService(client, { applicationId, start_date = null, end_date = null,
-    confirmed_by = null, rent: rentIn = null, security_deposit: depositIn = null }) {
+  //  GOVERNING VALUES COME FROM THE VERIFIED EXECUTED LEASE — NOT THE BODY.
+  //  rent, dates, deposit and premises are read from the executed_lease_records
+  //  row. The browser supplies the command and the confirming human, nothing
+  //  that governs. It therefore cannot assert a term, a premises, or a match.
+  async function confirmTermService(client, { applicationId, confirmed_by = null,
+    confirmed_by_user_id = null }) {
 
     if (!confirmed_by) throw svcErr(400, { receipt: "confirmed_by required — a human confirms the lease term." });
-    // STRUCTURED dates only — never a fallback string.
-    if (!start_date || !end_date) {
-      throw svcErr(400, { receipt: "start_date and end_date are required (YYYY-MM-DD). Captured free-text dates may seed the form but cannot confirm the term." });
-    }
-    const sd = new Date(start_date), ed = new Date(end_date);
-    if (isNaN(sd.getTime()) || isNaN(ed.getTime())) {
-      throw svcErr(400, { receipt: "start_date / end_date must be valid dates (YYYY-MM-DD)." });
-    }
-    if (ed <= sd) {
-      throw svcErr(400, { receipt: "end_date must be after start_date — a term with no duration is not a term." });
+    if (!executedLease || typeof executedLease.computeAdmissionBlockers !== "function") {
+      throw svcErr(503, { receipt: "Executed-lease service not wired on this deploy. Deploy executed_lease_service.js + the updated server.js together." });
     }
 
     const app = (await client.query("select * from lease_applications where id=$1 for update", [applicationId])).rows[0];
@@ -374,7 +185,7 @@ module.exports = function tenancyAnchorService(deps) {
     // must be in the accepted-term-required state (Phase 1 output)
     if (app.status !== "accepted_term_required") {
       throw svcErr(409, {
-        receipt: `Cannot confirm term — application status is '${app.status}', not accepted_term_required. Term confirmation follows countersign acceptance.`,
+        receipt: `Cannot confirm term — this application is not yet at term confirmation (status '${app.status}'). Verify the executed lease first.`,
       });
     }
 
@@ -417,47 +228,48 @@ module.exports = function tenancyAnchorService(deps) {
       });
     }
 
-    // ── resolve space_id (server-side, never client-nominated) ──
-    // the application's unit → its '(whole unit)' space (first by creation).
-    if (!app.unit_id) {
-      throw svcErr(409, { receipt: "Cannot confirm term — the application has no unit selected. A lease chooses a room; select the unit first." });
+    // ── RECOMPUTE ADMISSION FROM LIVE SOURCES (never the stored verdict) ──
+    // A stored 'admitted' can go stale: an offer may lock, a confirmation may
+    // supersede, the record may be voided or superseded between verification
+    // and confirmation. Recompute inside THIS transaction, then write the
+    // evaluation to the append-only history under the confirm_term context.
+    const adm = await executedLease.computeAdmissionBlockers(client, { application_id: app.id });
+    await executedLease.recordAdmissionEvaluation(client, {
+      record: adm.record, application_id: app.id, blockers: adm.blockers, sources: adm.sources,
+      evaluation_context: "confirm_term", evaluated_by_user_id: confirmed_by_user_id || null,
+    });
+    if (adm.blockers.length > 0) {
+      throw svcErr(409, {
+        error: "activation_blocked",
+        blockers: adm.blockers,
+        sources_compared: adm.sources,
+        receipt: "Cannot confirm term — the verified executed lease conflicts with a governed source (" +
+                 adm.blockers.map(b => b.code).join(", ") + "). The executed lease stands; " +
+                 "resolve the conflict with a correction, amendment, or superseding verified record.",
+      });
     }
-    const sp = await client.query(
-      `select id from spaces where unit_id=$1 order by created_at asc limit 1`, [app.unit_id]);
-    if (sp.rows.length === 0) {
-      throw svcErr(409, { receipt: "Cannot confirm term — the application's unit has no space record." });
-    }
-    const spaceId = sp.rows[0].id;
+    const executed = adm.record;
 
-    // ── SOURCE-RANK rent/deposit (ruling gate B): locked economics win ──
-    // If a locked economic schedule exists for this application, its base_rent
-    // is authoritative; the application's rent/deposit only SEED. A conflict is
-    // reported, never silently overwritten.
-    let rent = rentIn != null ? Number(rentIn) : (app.rent != null ? Number(app.rent) : null);
-    let security_deposit = depositIn != null ? Number(depositIn) : (app.deposit != null ? Number(app.deposit) : null);
-    let rent_source = rentIn != null ? "caller_confirmed" : (app.rent != null ? "application_seed" : "unset");
-    let economics_conflict = null;
+    // ── PREMISES: the EXACT space the executed lease names ──
+    // Previously this resolved the application's unit to its first space by
+    // creation date — correct for whole-unit leases, arbitrary for by-bed.
+    // The executed document names the premises; we no longer guess.
+    const spaceId = executed.space_id;
+
+    // ── GOVERNING TERMS: from the executed lease. GATE B IS RETIRED. ──
+    // "Locked economics win" is gone. A locked offer that disagrees with the
+    // executed document is a BLOCKER (recomputed above), never an override:
+    // an internal offer record cannot silently rewrite what was signed.
+    const rent = Number(executed.rent);
+    const security_deposit = Number(executed.security_deposit);
+    const start_date = executed.lease_start_date;
+    const end_date = executed.lease_end_date;
+    const rent_source = "verified_executed_lease";
+    const economics_conflict = null;   // a conflict never reaches this line
     const schedQ = await client.query(
       `select id from lease_economic_schedules where application_id=$1 and status='locked' order by created_at desc limit 1`,
       [app.id]);
     const schedule = schedQ.rows[0] || null;
-    if (schedule) {
-      // authoritative base_rent = sum of base_rent lines' first month, best-effort:
-      // read the base_rent line amount (recurring). If it disagrees with the
-      // resolved rent, surface it rather than pick silently.
-      const brQ = await client.query(
-        `select amount from lease_economic_lines
-          where schedule_id=$1 and line_type='base_rent'
-          order by effective_month asc limit 1`, [schedule.id]);
-      if (brQ.rows.length > 0) {
-        const lockedRent = Number(brQ.rows[0].amount);
-        if (rent != null && Math.abs(lockedRent - rent) > 0.001) {
-          economics_conflict = { application_or_caller_rent: rent, locked_economics_rent: lockedRent, resolved: lockedRent };
-        }
-        rent = lockedRent;               // locked economics WIN
-        rent_source = "locked_economics";
-      }
-    }
 
     // ── create the PENDING lease — the tenancy anchor ──
     const tenantIds = app.person_id ? [app.person_id] : [];
@@ -577,5 +389,5 @@ module.exports = function tenancyAnchorService(deps) {
     };
   }
 
-  return { countersignService, confirmTermService, _internal: { svcErr, shape, getApp, outstanding } };
+  return { confirmTermService, _internal: { svcErr, shape, getApp, outstanding } };
 };
