@@ -281,6 +281,15 @@ module.exports = function tenancyAnchorService(deps) {
       [app.property_id, spaceId, tenantIds, rent, start_date, end_date, security_deposit, app.id]
     )).rows[0];
 
+    // ── BACK-FILL THE EVIDENCE → LEASE LINK ──────────────────────────
+    // The post-confirmation boundary depends on this: voidExecutedLease and
+    // supersession refuse with lease_amendment_required only when the record
+    // carries a lease_id. Without this write, the basis of a standing lease
+    // could be voided out from under it.
+    await client.query(
+      `update executed_lease_records set lease_id=$1 where id=$2`,
+      [lease.id, executed.id]);
+
     // ── link economics → the lease (fills the 071 handle) ──
     let economics_linked = false;
     if (schedule) {
