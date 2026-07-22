@@ -59,8 +59,14 @@ const stubComplete = async (_c, { obligation_id }) => {
   if (store.row.status === "complete") { const e = new Error("done"); e.code = "ALREADY_COMPLETE"; throw e; }
   store.row.status = "complete";
 };
+// 089: delivery cannot complete before a real possession event. The stub
+// answers the possession lookup; tests flip it to prove both sides.
+let POSSESSION = null;   // null = keys never handed over
 const stubClient = {
   query: async (sql, params) => {
+    if (/from unit_events/.test(sql)) {
+      return { rows: POSSESSION ? [POSSESSION] : [] };
+    }
     if (/from obligations/.test(sql)) {
       const open = store.row && ["open", "in_progress"].includes(store.row.status)
         && store.row.related_id === params[0];
@@ -91,19 +97,33 @@ const stubClient = {
   r = await helper.satisfyDeliveryInput(stubClient, { lease_id: "LEASE-1", input_key: "keys_access_ready", source: "operator_keys_ready" });
   ok("the PM action satisfies keys_access_ready", r.satisfied === true);
 
-  // now completion succeeds
+  // 089 RULING: clearing the gates is no longer sufficient. Preparation and
+  // handoff are different truths — delivery cannot complete until an
+  // authenticated human actually handed over keys.
+  POSSESSION = null;
+  r = await helper.completeDeliveryIfReady(stubClient, { lease_id: "LEASE-1" });
+  ok("all gates cleared but NO possession → refuses (089)",
+    r.completed === false && r.reason === "possession_outstanding" &&
+    (r.remaining || []).includes("keys_handed_over"));
+  ok("…and the obligation stays open", store.row.status === "open");
+
+  // keys handed over → a real possession event exists
+  POSSESSION = { id: "ue-1", space_id: "sp-1", effective_date: "2026-07-22" };
   r = await helper.completeDeliveryIfReady(stubClient, { lease_id: "LEASE-1", completed_by: "PM-1" });
-  ok("all gates cleared → delivery completes", r.completed === true && r.obligation_id === "OB-1");
+  ok("gates cleared + possession recorded → delivery completes",
+    r.completed === true && r.obligation_id === "OB-1" && r.possession_event_id === "ue-1");
   ok("obligation left in complete state", store.row.status === "complete");
 
   // replay safety: the obligation is closed, so a re-fire is a clean no-op
   r = await helper.satisfyDeliveryInput(stubClient, { lease_id: "LEASE-1", input_key: "keys_access_ready" });
   ok("replay after completion is a safe no-op", r.noop === true);
+  POSSESSION = null;
   r = await helper.completeDeliveryIfReady(stubClient, { lease_id: "LEASE-1" });
   ok("re-complete after completion is a safe no-op", r.completed === false && r.noop === true);
 
   // idempotency mid-flight: same input twice
   store.reset(["unit_ready", "keys_access_ready"]);
+  POSSESSION = null;
   await helper.satisfyDeliveryInput(stubClient, { lease_id: "LEASE-1", input_key: "keys_access_ready" });
   r = await helper.satisfyDeliveryInput(stubClient, { lease_id: "LEASE-1", input_key: "keys_access_ready" });
   ok("double-tap on the same input is idempotent", r.noop === true && /not outstanding/.test(r.reason));
