@@ -161,6 +161,29 @@ async function spacePosition(pool, { property_id, as_of = null }) {
     [property_id]
   )).rows;
 
+  // ── tenant identity resolution (one batch; the read surfaces WHO) ─────
+  // tenant_ids were always pulled with the lease facts and then dropped
+  // before the payload. The person IS the bridge between the unit-keyed
+  // rent roll and the person-keyed lifecycle — surface them. Names come
+  // from persons in one batch query; a missing person renders as an
+  // honest null name, never an invented one.
+  const allTenantIds = new Set();
+  for (const r of rows) {
+    for (const l of (r.leases || [])) {
+      for (const tid of (l.tenant_ids || [])) if (tid) allTenantIds.add(String(tid));
+    }
+  }
+  const personName = new Map();
+  if (allTenantIds.size > 0) {
+    const pq = await pool.query(
+      "select id, name from persons where id = any($1::uuid[])",
+      [[...allTenantIds]]);
+    for (const p of pq.rows) personName.set(String(p.id), p.name || null);
+  }
+  const tenantsOf = (lease) => (lease.tenant_ids || []).filter(Boolean).map(tid => ({
+    person_id: tid, name: personName.has(String(tid)) ? personName.get(String(tid)) : null,
+  }));
+
   const positions = rows.map(r => {
     const leases = r.leases || [];
     const valid = leases.filter(leaseIsValid);
@@ -208,8 +231,8 @@ async function spacePosition(pool, { property_id, as_of = null }) {
 
     return {
       space_id: r.space_id, unit_id: r.unit_id, unit_number: r.unit_number, space_label: r.space_label,
-      current_lease_position: current ? { lease_id: current.id, start_date: current.start_date, end_date: current.end_date, rent: current.rent } : null,
-      future_lease_position: future ? { lease_id: future.id, start_date: future.start_date, rent: future.rent } : null,
+      current_lease_position: current ? { lease_id: current.id, start_date: current.start_date, end_date: current.end_date, rent: current.rent, tenants: tenantsOf(current) } : null,
+      future_lease_position: future ? { lease_id: future.id, start_date: future.start_date, end_date: future.end_date || null, rent: future.rent, tenants: tenantsOf(future) } : null,
       current_possession: possessed ? { since: lastIn.effective_date } : null,
       physical_readiness: turning ? "turning" : "ready",
       availability_state,
