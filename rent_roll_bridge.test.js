@@ -79,7 +79,7 @@ function makePool({ breakSpaces = false } = {}) {
         if (breakSpaces) throw new Error("simulated spaces outage");
         return { rows: JSON.parse(JSON.stringify(SPACE_ROWS)) };
       }
-      if (/from persons where id = any/.test(s)) {
+      if (/from persons where id\s*=\s*any/.test(s)) {
         const ids = params[0] || [];
         const known = { [P_MARLOW]: "Marlow Reyes", [P_RIVER]: "River Chen" }; // P_GHOST deliberately absent
         return { rows: ids.filter((i) => known[i]).map((i) => ({ id: i, name: known[i] })) };
