@@ -171,7 +171,7 @@
       if(!id){ id=(crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random()); sessionStorage.setItem(k,id); }
       return id;
     }
-    function esc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+    function esc(s){return String(s??'').replace(/[&<>"'`]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c]));}
 
     async function api(path, options={}){
       const res = await fetch(path, { ...options, headers:{'Content-Type':'application/json', ...(options.headers||{})} });
@@ -252,9 +252,9 @@
     function fieldHtml(f){
       const done=f.completed;
       const action = f.field_type==='signature'?'Sign':(f.field_type==='acknowledgment'?'Acknowledge':'Initial');
-      return `<div class="field ${done?'done':''}" id="field-${f.id}">
+      return `<div class="field ${done?'done':''}" id="field-${esc(f.id)}">
         <div><div class="field-title">${esc(f.label)}</div><small>${done?'Acknowledged':action+' to continue'}</small></div>
-        <button ${done?'disabled':''} onclick="completeField('${f.id}','${f.field_type}')">${done?'✓ Done':action}</button>
+        <button ${done?'disabled':''} data-complete="${esc(f.id)}" data-ftype="${esc(f.field_type)}">${done?'✓ Done':action}</button>
       </div>`;
     }
 
@@ -264,7 +264,7 @@
       const pct=req.length?Math.round(done.length/req.length*100):0;
       document.getElementById('progressText').textContent=`${done.length} / ${req.length}`;
       document.getElementById('meter').style.width=pct+'%';
-      document.getElementById('todos').innerHTML=req.map(f=>`<div class="todo ${f.completed?'done':''}" onclick="jump('${f.id}')"><i class="dot"></i><b>${esc(f.label)}</b><span>${f.completed?'done':'open'}</span></div>`).join('');
+      document.getElementById('todos').innerHTML=req.map(f=>`<div class="todo ${f.completed?'done':''}" data-jump="${esc(f.id)}"><i class="dot"></i><b>${esc(f.label)}</b><span>${f.completed?'done':'open'}</span></div>`).join('');
       const submitted = packet.status==='submitted';
       document.getElementById('submitBtn').disabled = done.length!==req.length || submitted;
       if(submitted) showSubmitted();
@@ -301,6 +301,12 @@
     function jumpNext(){const n=(packet.fields||[]).find(f=>f.required&&!f.completed); if(n)jump(n.id); else document.getElementById('submitBtn')?.scrollIntoView({behavior:'smooth',block:'center'});}
     function showError(m){const el=document.getElementById('error');el.textContent=m;el.style.display='block';}
 
+    document.addEventListener('click',function(ev){
+      const c=ev.target.closest('[data-complete]');
+      if(c && !c.disabled){ completeField(c.dataset.complete, c.dataset.ftype); return; }
+      const j=ev.target.closest('[data-jump]');
+      if(j){ jump(j.dataset.jump); }
+    });
     document.getElementById('submitBtn').addEventListener('click',submitPacket);
     load().catch(e=>showError(e.receipt||e.error||'This page could not be loaded.'));
   </script>
