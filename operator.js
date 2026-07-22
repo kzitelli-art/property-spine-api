@@ -57,6 +57,10 @@ module.exports = function operatorModule(deps) {
   // over this service — session-authed, server-derived actor — never a second
   // implementation. Absent (older server.js) → those two routes fail closed 503.
   const tenancyAnchor = deps.tenancyAnchor || null;
+  // Slice D completion feed (delivery.js) — the SAME helper instance movein.js
+  // uses; server.js builds it once. Absent (older server.js) → the keys-ready
+  // door below fails closed 503. Never a second implementation here.
+  const deliveryHelper = deps.deliveryHelper || null;
   // The activation perimeter + dormant gate — mounted as ROUTE middleware on the
   // two adapter routes, IDENTICALLY to the legacy applications.js routes, so the
   // operator door goes through the exact same authority (mode → authenticated
@@ -2794,6 +2798,69 @@ module.exports = function operatorModule(deps) {
       return (idn && idn.state === "resolved" && idn.person_id) ? idn.person_id : null;
     } catch (_) { return null; }
   }
+
+  // ── MOVE-IN DELIVERY: the PM keys/access attestation (Slice D closure) ──
+  //  The move_in_delivery obligation is born at confirm-term with two hard
+  //  gates: unit_ready (fed by maintenance readiness approval in movein.js)
+  //  and keys_access_ready. delivery.js anticipated "a PM action" as the
+  //  second feeder; this door IS that action. Without it the delivery
+  //  promise can never close — an obligation nobody can act on violates
+  //  the accountability rule. Drain-flow door: session-authed, no birth
+  //  gate (it completes existing work; it creates none).
+  //  Classification: Class 1 permanent primitive.
+  router.post("/operator/leasing/leases/:leaseId/delivery/keys-ready", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!deliveryHelper || typeof deliveryHelper.satisfyDeliveryInput !== "function") {
+      return res.status(503).json({ receipt: "Delivery helper is not wired on this deploy. Deploy delivery.js, operator.js, and server.js together." });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      // THE WALL: the lease must belong to the session's property. The
+      // browser asserts nothing; the row decides.
+      const lq = await client.query("select id, property_id from leases where id=$1", [req.params.leaseId]);
+      const lease = lq.rows[0];
+      if (!lease) { await client.query("rollback"); return res.status(404).json({ receipt: "No lease with that id." }); }
+      if (String(lease.property_id) !== String(req.operator.property_id)) {
+        await client.query("rollback");
+        return res.status(403).json({ receipt: "That lease belongs to a different property." });
+      }
+      const actorPersonId = await resolveActorPersonId(req.operator.id, req.operator.property_id);
+      const fed = await deliveryHelper.satisfyDeliveryInput(client, {
+        lease_id: lease.id, input_key: "keys_access_ready",
+        source: "operator_keys_ready", actor: req.operator.id,
+        timestamp: new Date().toISOString(),
+      });
+      if (fed.noop && fed.reason === "no open move_in_delivery obligation") {
+        await client.query("rollback");
+        return res.status(404).json({ receipt: "No open move-in delivery obligation for this lease. Either it was already completed, or the term has not been confirmed yet." });
+      }
+      const closed = await deliveryHelper.completeDeliveryIfReady(client, {
+        lease_id: lease.id, completed_by: actorPersonId || req.operator.id,
+      });
+      await client.query("commit");
+      // plain-language receipt: what happened, the id, what happens next
+      const receipt = closed.completed
+        ? "Keys and access confirmed. All delivery gates cleared — the move-in delivery promise is COMPLETE."
+        : fed.satisfied
+          ? `Keys and access confirmed. Delivery not yet complete — remaining gate(s): ${(closed.remaining || []).join(", ") || "unknown"}. The unit_ready gate clears when maintenance readiness is approved.`
+          : "Keys and access were already confirmed. " + (closed.reason === "hard gates remain"
+              ? `Remaining gate(s): ${(closed.remaining || []).join(", ")}.`
+              : "Nothing further to do.");
+      return res.json({
+        receipt,
+        lease_id: lease.id,
+        obligation_id: fed.obligation_id || closed.obligation_id || null,
+        keys_access_ready: fed.satisfied ? "satisfied_now" : "already_satisfied",
+        delivery_complete: !!closed.completed,
+        remaining_gates: closed.remaining || [],
+      });
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      console.error("operator delivery keys-ready:", e);
+      return res.status(500).json({ receipt: "Could not record keys/access readiness.", error: e.message });
+    } finally { client.release(); }
+  });
 
   // LEASE-PACKET OPERATOR ADAPTERS — staff-session doors over
   // leasepackets.js's one canonical service.
