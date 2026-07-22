@@ -504,33 +504,18 @@ module.exports = function applicationsModule(deps) {
   // completes the obligation (which itself refuses on any outstanding
   // input). 'active' is set ONLY here, ONLY after completeObligation
   // succeeds — the single, structural path to an active lease.
-  router.post("/applications/:id/countersign", dormantWriteGuard, countersignPerimeter, async (req, res) => {
-    // THIN ADAPTER over the ONE canonical countersign service. This route's job
-    // is authority (the two guards above) + transaction lifecycle; the write
-    // body lives in tenancy_anchor_service.js so this legacy door and the new
-    // /operator/leasing/* door share exactly one implementation.
-    if (!tenancyAnchor || typeof tenancyAnchor.countersignService !== "function") {
-      return res.status(503).json({ receipt: "Countersign service not wired on this deploy (tenancyAnchor missing). Deploy tenancy_anchor_service.js + the updated server.js together." });
-    }
-    const b = req.body || {};
-    const client = await pool.connect();
-    try {
-      await client.query("begin");
-      const out = await tenancyAnchor.countersignService(client, {
-        applicationId: req.params.id,
-        countersigned_by: b.countersigned_by || null,          // legacy attestation (name string)
-        note: b.note || null,
-        countersigned_by_person_id: b.countersigned_by_person_id || null,
-      });
-      await client.query("commit");
-      return res.json(out);
-    } catch (e) {
-      await client.query("rollback").catch(() => {});
-      // svcErr carries the exact { http, body } the route should send.
-      if (e.svc) return res.status(e.http).json(e.body);
-      console.error("application countersign:", e);
-      return res.status(500).json({ receipt: "Could not countersign.", error: e.message });
-    } finally { client.release(); }
+  //  RETIRED (088). There is no company countersignature step — the lease is
+  //  already executed before Property Spine sees it. Recording the governing
+  //  document IS the operator action, and it opens term confirmation itself.
+  router.post("/applications/:id/countersign", async (req, res) => {
+    return res.status(410).json({
+      error: "countersign_retired",
+      receipt: "Retired. A countersignature is not a step Property Spine performs: the lease is " +
+               "executed by the parties before it is recorded here. Use the operator door " +
+               "POST /operator/leasing/applications/:id/executed-lease/verify to record the " +
+               "governing lease, then confirm the term.",
+      replacement: "/operator/leasing/applications/:id/executed-lease/verify",
+    });
   });
 
   // ─────────────── PHASE 2 — TERM CONFIRMATION (the tenancy anchor) ─────
@@ -570,13 +555,11 @@ module.exports = function applicationsModule(deps) {
     const client = await pool.connect();
     try {
       await client.query("begin");
+      // GOVERNING VALUES ARE NOT ACCEPTED FROM THE BODY (088): rent, dates,
+      // deposit and premises come from the verified executed lease.
       const out = await tenancyAnchor.confirmTermService(client, {
         applicationId: req.params.id,
-        start_date: b.start_date || null,
-        end_date: b.end_date || null,
         confirmed_by: b.confirmed_by || null,
-        rent: b.rent != null ? b.rent : null,
-        security_deposit: b.security_deposit != null ? b.security_deposit : null,
       });
       await client.query("commit");
       return res.json(out);
