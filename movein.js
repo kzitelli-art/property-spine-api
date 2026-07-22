@@ -1,481 +1,556 @@
-// ════════════════════════════════════════════════════════════════════
-//  MOVE-IN READINESS MODULE — movein.js
+// ═══════════════════════════════════════════════════════════════════════════
+// movein.js — MOVE-IN READINESS, ECONOMIC TENANCY, AND KEY HANDOFF
 //
-//  The operating truth this captures: a tenant is scheduled to move in —
-//  PROVE the unit is ready before they take possession. Not "move-in admin."
-//  The big failure this prevents: tenant arrives, unit isn't ready.
+// Permanent distinctions:
+//   confirmed lease + exact charges + applied funds → economic tenancy active
+//   maintenance readiness                            → unit_ready
+//   PM preparation                                  → keys_access_ready
+//   authenticated human hands over access           → physical possession
 //
-//  THE FLOW:
-//    1. POST /units/:id/schedule-move-in  → writes a unit_events row
-//       (move_in_scheduled + date). NO obligation yet — a move-in 60 days out
-//       should not clutter the obligation queue.
-//    2. POST /unit-events/process-due     → finds scheduled move-ins inside the
-//       readiness window (default 7 days) and spawns ONE obligation each.
-//       Idempotent: flips the event to 'actioned' + records spawned_obligation_id
-//       so it can never double-spawn. (No cron in this system — this is the
-//       read-time trigger, same pattern as the delinquency check.)
-//    3. The obligation is MAINTENANCE-owned (they do the readiness work),
-//       escalates to property_manager. Required inputs:
-//         readiness_checklist, appliances_checked, unit_condition_photos,
-//         keys_access_ready   (the operational gates — maintenance proves them)
-//         rent_ready_approval (the FINAL gate — the accountable PM approves)
-//    4. POST /movein/:obligationId/satisfy  → maintenance clears an operational
-//       gate via the SHARED satisfyObligation helper.
-//    5. POST /movein/:obligationId/approve  → the accountable PM (or PM fallback)
-//       gives rent_ready_approval. HARD RULE: refused until all 4 operational
-//       gates are satisfied. You cannot approve a unit nobody prepared.
-//    6. Completing the obligation flips unit occupancy → occupied (possession).
-//
-//  Maintenance prepares. Manager approves. That's the whole feature.
-//
-//  Mount in server.js (two lines):
-//    const moveinModule = require("./movein");
-//    app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation }));
-// ════════════════════════════════════════════════════════════════════
+// Maintenance never activates tenancy, never claims possession, and never
+// supplies the handoff actor. A late key pickup is a normal active-tenancy state.
+// ═══════════════════════════════════════════════════════════════════════════
+
+"use strict";
+
+const staffSessions = require("./staff_session_service");
+const economicTenancy = require("./economic_tenancy_service");
 
 module.exports = function movein(deps) {
   const express = require("express");
   const router = express.Router();
-  // Shared effective-possession writer (space_position.js). Effective, space_id-
-  // anchored, idempotent. Optional so a partial deploy fails soft, not at boot.
-  const recordEffectivePossession = deps && deps.recordEffectivePossession;
-
-  const { pool, spawnObligationFromEvent, satisfyObligation, completeObligation, deliveryHelper = null } = deps;
+  const {
+    pool,
+    spawnObligationFromEvent,
+    satisfyObligation,
+    completeObligation,
+    deliveryHelper = null,
+    recordEffectivePossession = null,
+  } = deps || {};
   if (!pool) throw new Error("movein module requires a pool");
+  if (typeof spawnObligationFromEvent !== "function" ||
+      typeof satisfyObligation !== "function" ||
+      typeof completeObligation !== "function") {
+    throw new Error("movein module requires obligation helpers");
+  }
 
-  // operational gates maintenance must prove, in order of a natural walk
-  const OPERATIONAL_GATES = ["readiness_checklist", "appliances_checked", "unit_condition_photos", "keys_access_ready"];
-  // the final human sign-off (accountable PM). Gated behind the operational ones.
+  const OPERATIONAL_GATES = ["readiness_checklist", "appliances_checked", "unit_condition_photos"];
   const APPROVAL_GATE = "rent_ready_approval";
   const ALL_INPUTS = [...OPERATIONAL_GATES, APPROVAL_GATE];
-
-  // default: spawn the readiness obligation when a move-in is within N days.
-  // 7 gives maintenance time to discover + fix issues. Tunable per call.
   const DEFAULT_WINDOW_DAYS = 7;
 
-  // org-chart role → obligations role_name enum (same bridge turnover uses)
-  function mapRole(orgRole) {
-    const map = { property_manager:"property_manager", maintenance:"maintenance",
-      leasing:"leasing_agent", bookkeeper:"accountant", asset_manager:"asset_manager", owner:"owner" };
-    return map[orgRole] || "property_manager";
+  const httpError = (status, code, receipt, extra = {}) => {
+    const e = new Error(receipt);
+    e.httpStatus = status;
+    e.publicBody = { error: code, receipt, ...extra };
+    return e;
+  };
+  const sendError = (res, e) => {
+    if (e && e.service && e.body) return res.status(e.http || 500).json(e.body);
+    if (e && e.publicBody) return res.status(e.httpStatus || 500).json(e.publicBody);
+    console.error("movein error", e);
+    return res.status(500).json({ error: "MOVE_IN_FAILED", receipt: "The move-in action failed. No success was recorded." });
+  };
+  const ymd = (value) => {
+    if (!value) return null;
+    const d = value instanceof Date ? value : new Date(value);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  };
+
+  function moduleAllowed(operator, accepted) {
+    const modules = Array.isArray(operator && operator.allowed_modules) ? operator.allowed_modules : [];
+    if (accepted.some((m) => modules.includes(m))) return true;
+    const role = String(operator && (operator.role_title || operator.role) || "").toLowerCase().replace(/[^a-z0-9]+/g, "_");
+    const roleDomains = new Set();
+    if (role.includes("leasing")) roleDomains.add("leasing");
+    if (role.includes("maintenance")) roleDomains.add("maintenance");
+    if (role.includes("property_manager") || role.includes("manager") || role.includes("asset_manager") || role.includes("owner")) roleDomains.add("management");
+    if (role.includes("front_desk") || role.includes("concierge")) roleDomains.add("front_desk");
+    return accepted.some((m) => roleDomains.has(m));
   }
 
-  // resolve the accountable PM (for escalation + who may approve). Falls back
-  // to property_manager role string if no accountable owner is set.
-  async function resolveApprover(client, property_id) {
-    const prop = await client.query("select accountable_assignment_id from properties where id=$1", [property_id]);
-    const accId = prop.rows[0] ? prop.rows[0].accountable_assignment_id : null;
-    if (accId) {
-      const acc = await client.query("select role from assignments where id=$1 and is_active=true", [accId]);
-      if (acc.rows.length) return mapRole(acc.rows[0].role);
+  function requireOperator(acceptedModules = ["leasing", "maintenance", "management"]) {
+    return async function moveInOperatorGate(req, res, next) {
+      try {
+        const operator = await staffSessions.resolveStaffSession(pool, req.headers["x-staff-session"]);
+        if (!operator) return res.status(401).json({ error: "NO_OPERATOR_SESSION", receipt: "No valid operator session. Sign in." });
+        if (!moduleAllowed(operator, acceptedModules)) {
+          return res.status(403).json({ error: "MODULE_NOT_AUTHORIZED", receipt: "Your current property assignment does not authorize this move-in action." });
+        }
+        req.operator = operator;
+        return next();
+      } catch (e) {
+        console.error("move-in session resolution failed", e);
+        return res.status(500).json({ error: "SESSION_RESOLUTION_FAILED", receipt: "The operator session could not be resolved." });
+      }
+    };
+  }
+
+  async function scopedLease(client, leaseId, propertyId, { forUpdate = false } = {}) {
+    const q = await client.query(
+      `select l.*, s.unit_id, u.unit_number, u.property_id as unit_property_id,
+              (l.tenant_ids)[1] as primary_person_id
+         from leases l
+         join spaces s on s.id=l.space_id
+         join units u on u.id=s.unit_id
+        where l.id=$1
+        ${forUpdate ? "for update of l" : ""}`,
+      [leaseId]
+    );
+    const lease = q.rows[0] || null;
+    if (!lease) throw httpError(404, "LEASE_NOT_FOUND", "Lease not found.");
+    if (lease.property_id !== propertyId || lease.unit_property_id !== propertyId) {
+      throw httpError(403, "LEASE_OUT_OF_SCOPE", "That lease is outside your property scope.");
     }
-    return "property_manager";
+    return lease;
   }
 
-  // ════════════════════════════════════════════════════════════════
-  //  SCHEDULE A MOVE-IN  —  POST /units/:id/schedule-move-in
-  //  Body: { move_in_date (required), tenant_name?, lease_id?, rent? }
-  //  Writes a unit_events row. NO obligation — that waits for the window.
-  // ════════════════════════════════════════════════════════════════
+  async function scopedReadinessObligation(client, obligationId, propertyId, { forUpdate = false } = {}) {
+    const q = await client.query(
+      `select * from obligations where id=$1 ${forUpdate ? "for update" : ""}`,
+      [obligationId]
+    );
+    const obligation = q.rows[0] || null;
+    if (!obligation) throw httpError(404, "OBLIGATION_NOT_FOUND", "Move-in readiness obligation not found.");
+    if (obligation.property_id !== propertyId) throw httpError(403, "OBLIGATION_OUT_OF_SCOPE", "That obligation is outside your property scope.");
+    if (obligation.module !== "movein" || obligation.type !== "readiness") {
+      throw httpError(409, "NOT_READINESS_OBLIGATION", "That obligation is not a move-in readiness record.");
+    }
+    return obligation;
+  }
+
+  async function resolveApproverRole(client, propertyId) {
+    const prop = await client.query("select accountable_assignment_id from properties where id=$1", [propertyId]);
+    const assignmentId = prop.rows[0] && prop.rows[0].accountable_assignment_id;
+    if (!assignmentId) return "property_manager";
+    const assignment = await client.query("select role from assignments where id=$1 and is_active=true", [assignmentId]);
+    const role = assignment.rows[0] && assignment.rows[0].role;
+    const map = {
+      property_manager: "property_manager", maintenance: "maintenance", leasing: "leasing_agent",
+      bookkeeper: "accountant", asset_manager: "asset_manager", owner: "owner",
+    };
+    return map[role] || "property_manager";
+  }
+
+  async function processDue(client, { propertyId = null, windowDays = DEFAULT_WINDOW_DAYS }) {
+    const days = Number.isFinite(Number(windowDays)) ? Number(windowDays) : DEFAULT_WINDOW_DAYS;
+    const params = [days];
+    let scope = "";
+    if (propertyId) { params.push(propertyId); scope = ` and ue.property_id=$${params.length}`; }
+    const due = await client.query(
+      `select ue.*, u.unit_number
+         from unit_events ue
+         join units u on u.id=ue.unit_id
+        where ue.event_type='move_in_scheduled'
+          and ue.status='scheduled'
+          and ue.effective_date <= current_date + ($1 || ' days')::interval
+          ${scope}
+        for update of ue`,
+      params
+    );
+    const spawned = [];
+    for (const event of due.rows) {
+      const existing = await client.query(
+        `select id from obligations
+          where related_id=$1 and related_type='unit_event'
+            and module='movein' and type='readiness'
+            and status in ('open','in_progress','complete') limit 1`,
+        [event.id]
+      );
+      if (existing.rows.length) {
+        await client.query("update unit_events set status='actioned', spawned_obligation_id=coalesce(spawned_obligation_id,$1), updated_at=now() where id=$2", [existing.rows[0].id, event.id]);
+        continue;
+      }
+      const approver = await resolveApproverRole(client, event.property_id);
+      const obligation = await spawnObligationFromEvent(client, {
+        property_id: event.property_id,
+        unit_id: event.unit_id,
+        source_event_id: null,
+        related_id: event.id,
+        related_type: "unit_event",
+        module: "movein",
+        type: "readiness",
+        label: `Prepare unit for move-in${event.unit_number ? " — " + event.unit_number : ""}`,
+        assigned_role: "maintenance",
+        escalates_to_role: approver,
+        status: "open",
+        priority: "normal",
+        severity: "normal",
+        due_at: event.effective_date ? new Date(event.effective_date) : null,
+        required_inputs: ALL_INPUTS,
+      });
+      await client.query("update unit_events set status='actioned', spawned_obligation_id=$1, updated_at=now() where id=$2", [obligation.id, event.id]);
+      spawned.push({
+        unit_event_id: event.id,
+        unit_id: event.unit_id,
+        unit_number: event.unit_number,
+        move_in_date: event.effective_date,
+        obligation_id: obligation.id,
+        assigned_role: "maintenance",
+        approver_role: approver,
+      });
+    }
+    return { window_days: days, processed: spawned.length, spawned };
+  }
+
+  async function satisfyReadiness(client, { obligation, gate, proof, actorUserId = null, actorName = null }) {
+    if (!OPERATIONAL_GATES.includes(gate)) {
+      throw httpError(400, "BAD_READINESS_GATE", "gate must be one of the operational readiness gates.", { allowed: OPERATIONAL_GATES });
+    }
+    let idempotent = false;
+    try {
+      await satisfyObligation(client, {
+        obligation_id: obligation.id,
+        input: gate,
+        proof: { ...(proof && typeof proof === "object" ? proof : {}), actor_user_id: actorUserId, actor_name: actorName, recorded_at: new Date().toISOString() },
+      });
+    } catch (e) {
+      if (e.code === "NOT_OUTSTANDING") idempotent = true;
+      else throw e;
+    }
+    const current = (await client.query("select required_inputs from obligations where id=$1", [obligation.id])).rows[0];
+    const outstanding = current && Array.isArray(current.required_inputs) ? current.required_inputs : [];
+    return {
+      satisfied_gate: gate,
+      idempotent,
+      operational_gates_outstanding: OPERATIONAL_GATES.filter((g) => outstanding.includes(g)),
+      ready_for_approval: OPERATIONAL_GATES.every((g) => !outstanding.includes(g)),
+    };
+  }
+
+  async function approveReadiness(client, { obligation, operator, note = null }) {
+    const outstanding = Array.isArray(obligation.required_inputs) ? obligation.required_inputs : [];
+    const opsLeft = OPERATIONAL_GATES.filter((g) => outstanding.includes(g));
+    if (opsLeft.length) {
+      throw httpError(409, "READINESS_INCOMPLETE", "Unit readiness cannot be approved until maintenance completes the operational checks.", { operational_gates_outstanding: opsLeft });
+    }
+    try {
+      await satisfyObligation(client, {
+        obligation_id: obligation.id,
+        input: APPROVAL_GATE,
+        proof: { approved_by_user_id: operator.id, approved_by_name: operator.name, note, approved_at: new Date().toISOString() },
+      });
+    } catch (e) {
+      if (e.code !== "NOT_OUTSTANDING") throw e;
+    }
+    try {
+      await completeObligation(client, { obligation_id: obligation.id, completed_by: operator.id });
+    } catch (e) {
+      if (e.code !== "ALREADY_COMPLETE") throw e;
+    }
+
+    const eventLink = await client.query(
+      `select coalesce(lease_id,(payload->>'lease_id')::uuid) as lease_id
+         from unit_events
+        where spawned_obligation_id=$1 and event_type='move_in_scheduled'
+          and (lease_id is not null or payload->>'lease_id' is not null)
+        limit 1`,
+      [obligation.id]
+    );
+    const leaseId = eventLink.rows[0] && eventLink.rows[0].lease_id;
+    let delivery = null;
+    if (leaseId && deliveryHelper && typeof deliveryHelper.satisfyDeliveryInput === "function") {
+      delivery = await deliveryHelper.satisfyDeliveryInput(client, {
+        lease_id: leaseId,
+        input_key: "unit_ready",
+        source: "rent_ready_approval",
+        source_obligation_id: obligation.id,
+        actor: operator.id,
+        timestamp: new Date().toISOString(),
+        proof_extra: { actor_name: operator.name },
+      });
+    }
+    await client.query(
+      `insert into events (property_id, unit_id, type, note)
+       values ($1,$2,'move_in_readiness_approved',$3)`,
+      [obligation.property_id, obligation.unit_id,
+       `Unit readiness approved by ${operator.name || operator.id}. This proves physical readiness only; it does not activate tenancy or record possession.`]
+    );
+    return {
+      approved: true,
+      readiness_obligation_id: obligation.id,
+      approved_by_user_id: operator.id,
+      unit_ready_fed_to_delivery: !!(delivery && delivery.satisfied),
+      receipt: "Unit readiness approved. No tenancy or possession state changed.",
+    };
+  }
+
+  // ── SESSION-AUTHENTICATED CANONICAL OPERATOR ROUTES ─────────────────────
+
+  router.get("/operator/leasing/leases/:leaseId/move-in-state", requireOperator(["leasing", "management", "maintenance"]), async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const client = await pool.connect();
+    try {
+      await scopedLease(client, req.params.leaseId, req.operator.property_id);
+      return res.json(await economicTenancy.composeMoveInState(client, req.params.leaseId));
+    } catch (e) { return sendError(res, e); }
+    finally { client.release(); }
+  });
+
+  router.post("/operator/leasing/leases/:leaseId/move-in-charges/confirm", requireOperator(["leasing", "management"]), async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      await scopedLease(client, req.params.leaseId, req.operator.property_id, { forUpdate: true });
+      const body = req.body || {};
+      const result = await economicTenancy.confirmMoveInChargeSet(client, {
+        lease_id: req.params.leaseId,
+        first_period_amount: body.first_period_amount,
+        first_period_start: body.first_period_start,
+        first_period_end: body.first_period_end,
+        required_fees: Object.prototype.hasOwnProperty.call(body, "required_fees") ? body.required_fees : null,
+        confirmed_by_user_id: req.operator.id,
+        calculation_note: body.calculation_note,
+        idempotency_key: body.idempotency_key || req.get("idempotency-key") || null,
+      });
+      await client.query("commit");
+      return res.json({
+        receipt: "Move-in charge set confirmed from the governing lease. Charges are claims until payments are applied.",
+        ...result,
+      });
+    } catch (e) { try { await client.query("rollback"); } catch (_) {} return sendError(res, e); }
+    finally { client.release(); }
+  });
+
+  router.post("/operator/leasing/leases/:leaseId/activate-tenancy", requireOperator(["leasing", "management"]), async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      await scopedLease(client, req.params.leaseId, req.operator.property_id, { forUpdate: true });
+      const result = await economicTenancy.attemptEconomicTenancyActivation(client, {
+        lease_id: req.params.leaseId,
+        activated_by_user_id: req.operator.id,
+        actor_name: req.operator.name,
+        source: "operator_move_in",
+      });
+      await client.query("commit");
+      return res.json(result);
+    } catch (e) { try { await client.query("rollback"); } catch (_) {} return sendError(res, e); }
+    finally { client.release(); }
+  });
+
+  router.post("/operator/leasing/move-ins/process-due", requireOperator(["leasing", "management", "maintenance"]), async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const result = await processDue(client, { propertyId: req.operator.property_id, windowDays: req.body && req.body.window_days });
+      await client.query("commit");
+      return res.json({ ...result, property_id: req.operator.property_id });
+    } catch (e) { try { await client.query("rollback"); } catch (_) {} return sendError(res, e); }
+    finally { client.release(); }
+  });
+
+  router.post("/operator/leasing/move-in-readiness/:obligationId/satisfy", requireOperator(["maintenance", "management"]), async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const obligation = await scopedReadinessObligation(client, req.params.obligationId, req.operator.property_id, { forUpdate: true });
+      const result = await satisfyReadiness(client, {
+        obligation,
+        gate: req.body && req.body.gate,
+        proof: req.body && req.body.proof,
+        actorUserId: req.operator.id,
+        actorName: req.operator.name,
+      });
+      await client.query("commit");
+      return res.json(result);
+    } catch (e) { try { await client.query("rollback"); } catch (_) {} return sendError(res, e); }
+    finally { client.release(); }
+  });
+
+  router.post("/operator/leasing/move-in-readiness/:obligationId/approve", requireOperator(["management", "leasing"]), async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const obligation = await scopedReadinessObligation(client, req.params.obligationId, req.operator.property_id, { forUpdate: true });
+      const result = await approveReadiness(client, { obligation, operator: req.operator, note: req.body && req.body.note });
+      await client.query("commit");
+      return res.json(result);
+    } catch (e) { try { await client.query("rollback"); } catch (_) {} return sendError(res, e); }
+    finally { client.release(); }
+  });
+
+  router.post("/operator/leasing/leases/:leaseId/delivery/keys-handed-over", requireOperator(["leasing", "management", "front_desk"]), async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!recordEffectivePossession || !deliveryHelper) {
+      return res.status(503).json({ error: "MOVE_IN_SERVICES_NOT_WIRED", receipt: "Possession services are not wired on this deploy." });
+    }
+    const body = req.body || {};
+    const recipientName = String(body.recipient_name || "").trim();
+    const recipientType = String(body.recipient_type || "resident").trim();
+    if (!recipientName) return res.status(400).json({ error: "RECIPIENT_REQUIRED", receipt: "recipient_name is required for the key handoff record." });
+    if (!["resident", "authorized_representative"].includes(recipientType)) {
+      return res.status(400).json({ error: "BAD_RECIPIENT_TYPE", receipt: "recipient_type must be resident or authorized_representative." });
+    }
+    const accessItems = Array.isArray(body.access_items) ? body.access_items.map((x) => String(x).trim()).filter(Boolean).slice(0, 25) : [];
+
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const lease = await scopedLease(client, req.params.leaseId, req.operator.property_id, { forUpdate: true });
+      if (String(lease.lease_status).toLowerCase() !== "active") {
+        throw httpError(409, "TENANCY_NOT_ACTIVE", "Keys cannot be handed over until economic tenancy is active.");
+      }
+      const today = (await client.query("select current_date::text as today")).rows[0].today;
+      if (ymd(lease.start_date) > today) {
+        throw httpError(409, "EARLY_POSSESSION_BLOCKED", "Keys cannot be handed over before the governing lease start date.", { lease_start_date: ymd(lease.start_date), today });
+      }
+      const funds = await economicTenancy.readMoveInFunds(client, lease.id);
+      if (!funds.cleared) {
+        throw httpError(409, "MOVE_IN_FUNDS_OUTSTANDING", "Keys cannot be handed over while required move-in funds are outstanding.", { funds });
+      }
+      const delivery = await deliveryHelper.findOpenDelivery(client, lease.id);
+      if (!delivery) {
+        const possession = await deliveryHelper.hasEffectivePossession(client, lease.id);
+        if (possession) {
+          await client.query("commit");
+          return res.json({ idempotent: true, possession_event_id: possession.id, receipt: "Keys handoff was already recorded." });
+        }
+        throw httpError(409, "DELIVERY_OBLIGATION_MISSING", "No open move-in delivery obligation exists for this lease.");
+      }
+      const outstanding = Array.isArray(delivery.required_inputs) ? delivery.required_inputs : [];
+      if (outstanding.includes("unit_ready") || outstanding.includes("keys_access_ready")) {
+        throw httpError(409, "DELIVERY_NOT_READY", "Keys cannot be handed over until the unit and access preparation gates are complete.", { outstanding_inputs: outstanding });
+      }
+
+      const handoffAt = body.handed_over_at ? new Date(body.handed_over_at) : new Date();
+      if (Number.isNaN(handoffAt.getTime())) throw httpError(400, "BAD_HANDOFF_TIME", "handed_over_at must be a valid timestamp when provided.");
+      if (handoffAt > new Date(Date.now() + 5 * 60 * 1000)) throw httpError(400, "HANDOFF_IN_FUTURE", "The handoff time cannot be in the future.");
+      if (ymd(handoffAt) < ymd(lease.start_date)) throw httpError(409, "EARLY_POSSESSION_BLOCKED", "The handoff time cannot precede the lease start date.");
+
+      const possession = await recordEffectivePossession(client, {
+        kind: "move_in",
+        lease_id: lease.id,
+        unit_id: lease.unit_id,
+        property_id: lease.property_id,
+        effective_date: ymd(handoffAt),
+        actor: req.operator.id,
+        source: "keys_handed_over",
+        space_id_hint: lease.space_id,
+        details: {
+          actor_user_id: req.operator.id,
+          actor_name: req.operator.name,
+          recipient_name: recipientName,
+          recipient_type: recipientType,
+          handed_over_at: handoffAt.toISOString(),
+          access_items: accessItems,
+          note: body.note ? String(body.note).slice(0, 1000) : null,
+        },
+      });
+      const completion = await deliveryHelper.completeDeliveryIfReady(client, { lease_id: lease.id, completed_by: req.operator.id });
+      if (!completion.completed && !["already complete"].includes(completion.reason)) {
+        throw httpError(409, "DELIVERY_NOT_COMPLETED", "Possession was recorded, but the delivery obligation could not complete.", { delivery: completion });
+      }
+      await client.query("commit");
+      return res.json({
+        receipt: `Keys/access handed to ${recipientName}. Physical possession recorded; economic tenancy was already active.`,
+        possession_event_id: possession.event.id,
+        possession_idempotent: possession.idempotent === true,
+        delivery_obligation_id: completion.obligation_id,
+        delivery_completed: completion.completed === true || completion.reason === "already complete",
+        actor_user_id: req.operator.id,
+        recipient: { name: recipientName, type: recipientType },
+      });
+    } catch (e) { try { await client.query("rollback"); } catch (_) {} return sendError(res, e); }
+    finally { client.release(); }
+  });
+
+  // ── LEGACY/OPERATIONS ROUTES ────────────────────────────────────────────
+  // Kept for existing external operations. The old body-authored approval is
+  // tombstoned because it conflated readiness with possession and identity.
+
   router.post("/units/:id/schedule-move-in", async (req, res) => {
-    const unit_id = req.params.id;
     const { move_in_date, tenant_name = null, lease_id = null, rent = null } = req.body || {};
     if (!move_in_date) return res.status(400).json({ error: "move_in_date is required (YYYY-MM-DD)" });
-
     const client = await pool.connect();
     try {
       await client.query("begin");
-      const uQ = await client.query("select id, property_id, unit_number from units where id=$1", [unit_id]);
-      if (uQ.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "unit not found" }); }
-      const unit = uQ.rows[0];
-
-      // guard: don't stack two scheduled move-ins on the same unit
-      const dup = await client.query(
+      const unit = (await client.query("select id, property_id, unit_number from units where id=$1", [req.params.id])).rows[0];
+      if (!unit) throw httpError(404, "UNIT_NOT_FOUND", "Unit not found.");
+      const duplicate = await client.query(
         `select id from unit_events where unit_id=$1 and event_type='move_in_scheduled' and status='scheduled' limit 1`,
-        [unit_id]
+        [unit.id]
       );
-      if (dup.rows.length) {
-        await client.query("rollback");
-        return res.status(409).json({ error: "this unit already has a scheduled move-in", unit_event_id: dup.rows[0].id });
-      }
-
-      const payload = {};
-      if (tenant_name) payload.tenant_name = tenant_name;
-      if (lease_id) payload.lease_id = lease_id;
-      if (rent != null) payload.rent = rent;
-
-      const ins = await client.query(
-        `insert into unit_events (unit_id, property_id, event_type, effective_date, payload, source, status)
-         values ($1,$2,'move_in_scheduled',$3,$4,'manual','scheduled') returning *`,
-        [unit_id, unit.property_id, move_in_date, JSON.stringify(payload)]
-      );
-
+      if (duplicate.rows.length) throw httpError(409, "MOVE_IN_ALREADY_SCHEDULED", "This unit already has a scheduled move-in.", { unit_event_id: duplicate.rows[0].id });
+      const payload = { ...(tenant_name ? { tenant_name } : {}), ...(lease_id ? { lease_id } : {}), ...(rent != null ? { rent } : {}) };
+      const row = (await client.query(
+        `insert into unit_events (unit_id,property_id,event_type,effective_date,payload,source,status,lease_id)
+         values ($1,$2,'move_in_scheduled',$3,$4,'manual','scheduled',$5) returning *`,
+        [unit.id, unit.property_id, move_in_date, JSON.stringify(payload), lease_id]
+      )).rows[0];
       await client.query("commit");
-      res.status(201).json({
-        unit_event: ins.rows[0],
-        note: "Move-in scheduled. No obligation yet — it spawns when the date enters the readiness window (default 7 days). Run POST /unit-events/process-due to spawn due ones.",
-      });
-    } catch (e) {
-      await client.query("rollback");
-      console.error("schedule-move-in error", e);
-      res.status(500).json({ error: e.message });
-    } finally {
-      client.release();
-    }
+      return res.status(201).json({ unit_event: row, note: "Move-in scheduled. Readiness work spawns when it enters the operating window." });
+    } catch (e) { try { await client.query("rollback"); } catch (_) {} return sendError(res, e); }
+    finally { client.release(); }
   });
 
-  // ════════════════════════════════════════════════════════════════
-  //  PROCESS DUE EVENTS  —  POST /unit-events/process-due
-  //  Body: { window_days?, property_id? }
-  //  Finds scheduled move_in_scheduled events whose date is within window_days
-  //  from now, spawns a maintenance-owned readiness obligation for each, flips
-  //  the event to 'actioned' + records spawned_obligation_id. IDEMPOTENT:
-  //  only 'scheduled' events are picked up; once actioned they're skipped.
-  // ════════════════════════════════════════════════════════════════
   router.post("/unit-events/process-due", async (req, res) => {
-    const window_days = Number.isFinite(Number(req.body?.window_days)) ? Number(req.body.window_days) : DEFAULT_WINDOW_DAYS;
-    const property_id = req.body?.property_id || null;
-
     const client = await pool.connect();
     try {
       await client.query("begin");
-
-      // due = scheduled move-ins whose effective_date is on/before (today + window)
-      const vals = [window_days];
-      let scope = "";
-      if (property_id) { vals.push(property_id); scope = ` and ue.property_id = $${vals.length}`; }
-
-      const due = await client.query(
-        `select ue.*, u.unit_number, u.property_id as unit_property_id
-           from unit_events ue
-           join units u on u.id = ue.unit_id
-          where ue.event_type='move_in_scheduled'
-            and ue.status='scheduled'
-            and ue.effective_date <= (current_date + ($1 || ' days')::interval)
-            ${scope}
-          for update of ue`,
-        vals
-      );
-
-      const spawned = [];
-      for (const ev of due.rows) {
-        const approver = await resolveApprover(client, ev.property_id);
-
-        const obligation = await spawnObligationFromEvent(client, {
-          property_id: ev.property_id,
-          unit_id: ev.unit_id,
-          source_event_id: null,            // unit_events isn't the events table; link via related_id
-          related_id: ev.id,
-          related_type: "unit_event",
-          module: "movein",
-          type: "readiness",
-          label: `Prepare unit for move-in${ev.unit_number ? " — " + ev.unit_number : ""}`,
-          owner_type: "human",
-          assigned_role: "maintenance",     // maintenance owns the physical readiness work
-          escalates_to_role: approver,      // accountable PM (or PM fallback)
-          status: "open",
-          priority: "normal",               // planned work — not an emergency
-          severity: "normal",
-          due_at: ev.effective_date ? new Date(ev.effective_date) : null,
-          required_inputs: ALL_INPUTS,
-        });
-
-        // flip the event to actioned + record the link (idempotency anchor)
-        await client.query(
-          `update unit_events set status='actioned', spawned_obligation_id=$1, updated_at=now() where id=$2`,
-          [obligation.id, ev.id]
-        );
-
-        spawned.push({ unit_event_id: ev.id, unit_id: ev.unit_id, unit_number: ev.unit_number,
-          move_in_date: ev.effective_date, obligation_id: obligation.id, assigned_role: "maintenance", approver_role: approver });
-      }
-
+      const result = await processDue(client, { propertyId: req.body && req.body.property_id || null, windowDays: req.body && req.body.window_days });
       await client.query("commit");
-      res.json({
-        window_days,
-        processed: spawned.length,
-        spawned,
-        note: spawned.length
-          ? "Spawned move-in readiness obligations for due move-ins. Maintenance proves the operational gates; the accountable PM gives rent_ready_approval (gated behind them)."
-          : "No move-ins due within the window. Far-future move-ins stay out of the obligation queue.",
-      });
-    } catch (e) {
-      await client.query("rollback");
-      console.error("process-due error", e);
-      res.status(500).json({ error: e.message });
-    } finally {
-      client.release();
-    }
+      return res.json(result);
+    } catch (e) { try { await client.query("rollback"); } catch (_) {} return sendError(res, e); }
+    finally { client.release(); }
   });
 
-  // ════════════════════════════════════════════════════════════════
-  //  SATISFY AN OPERATIONAL GATE  —  POST /movein/:obligationId/satisfy
-  //  Body: { gate, proof? }   gate ∈ the 4 operational gates (NOT the approval)
-  //  Maintenance clears readiness work via the SHARED satisfyObligation helper.
-  // ════════════════════════════════════════════════════════════════
   router.post("/movein/:obligationId/satisfy", async (req, res) => {
-    const obligation_id = req.params.obligationId;
-    const { gate, proof = null } = req.body || {};
-    if (!OPERATIONAL_GATES.includes(gate)) {
-      return res.status(400).json({ error: "gate must be one of the operational gates", allowed: OPERATIONAL_GATES,
-        note: "rent_ready_approval is given via POST /movein/:obligationId/approve, not here." });
-    }
-
     const client = await pool.connect();
     try {
       await client.query("begin");
-      let note = null;
-      try {
-        await satisfyObligation(client, { obligation_id, input: gate, proof });
-        note = `Operational gate "${gate}" satisfied.`;
-      } catch (e) {
-        if (e.code === "NOT_FOUND") { await client.query("rollback"); return res.status(404).json({ error: "obligation not found" }); }
-        if (e.code === "NOT_OUTSTANDING") note = `"${gate}" was already satisfied.`;
-        else throw e;
-      }
+      const obligation = (await client.query("select * from obligations where id=$1 for update", [req.params.obligationId])).rows[0];
+      if (!obligation) throw httpError(404, "OBLIGATION_NOT_FOUND", "Move-in readiness obligation not found.");
+      const result = await satisfyReadiness(client, { obligation, gate: req.body && req.body.gate, proof: req.body && req.body.proof });
       await client.query("commit");
-
-      const o = await pool.query("select required_inputs from obligations where id=$1", [obligation_id]);
-      const outstanding = o.rows[0] ? o.rows[0].required_inputs : [];
-      const opsLeft = OPERATIONAL_GATES.filter(g => outstanding.includes(g));
-      res.json({
-        satisfied_gate: gate,
-        note,
-        operational_gates_outstanding: opsLeft,
-        ready_for_approval: opsLeft.length === 0,
-        approval_note: opsLeft.length === 0
-          ? "All operational gates done. The accountable PM can now give rent_ready_approval."
-          : `${opsLeft.length} operational gate(s) still outstanding before approval can be given.`,
-      });
-    } catch (e) {
-      await client.query("rollback");
-      console.error("movein satisfy error", e);
-      res.status(500).json({ error: e.message });
-    } finally {
-      client.release();
-    }
+      return res.json(result);
+    } catch (e) { try { await client.query("rollback"); } catch (_) {} return sendError(res, e); }
+    finally { client.release(); }
   });
 
-  // ════════════════════════════════════════════════════════════════
-  //  RENT-READY APPROVAL  —  POST /movein/:obligationId/approve
-  //  Body: { approved_by_person_id (required), note? }
-  //  The accountable PM's final sign-off. HARD RULE: refused (409) until all
-  //  4 operational gates are satisfied — you cannot approve a unit nobody
-  //  prepared. On approval: satisfies rent_ready_approval, completes the
-  //  obligation (shared helper), flips unit occupancy → occupied.
-  // ════════════════════════════════════════════════════════════════
-  router.post("/movein/:obligationId/approve", async (req, res) => {
-    const obligation_id = req.params.obligationId;
-    const { approved_by_person_id, note: approvalNote = null } = req.body || {};
-    if (!approved_by_person_id) {
-      return res.status(400).json({ error: "approved_by_person_id required — a human must approve rent-ready" });
-    }
+  router.post("/movein/:obligationId/approve", (_req, res) => res.status(410).json({
+    error: "LEGACY_MOVE_IN_APPROVAL_RETIRED",
+    receipt: "This route was retired because it accepted a body-supplied actor and conflated readiness with possession. Use the session-authenticated readiness approval and Keys Handed Over actions.",
+    replacements: {
+      readiness: "/operator/leasing/move-in-readiness/:obligationId/approve",
+      possession: "/operator/leasing/leases/:leaseId/delivery/keys-handed-over",
+    },
+  }));
 
-    const client = await pool.connect();
-    try {
-      await client.query("begin");
-
-      const oQ = await client.query("select * from obligations where id=$1 for update", [obligation_id]);
-      if (oQ.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "obligation not found" }); }
-      const obligation = oQ.rows[0];
-      const outstanding = obligation.required_inputs || [];
-
-      // HARD GATE: every operational gate must be done before approval.
-      const opsLeft = OPERATIONAL_GATES.filter(g => outstanding.includes(g));
-      if (opsLeft.length > 0) {
-        await client.query("rollback");
-        return res.status(409).json({
-          error: "cannot give rent-ready approval — operational readiness not complete",
-          operational_gates_outstanding: opsLeft,
-          hint: "maintenance must satisfy these first via POST /movein/:obligationId/satisfy",
-        });
-      }
-
-      // satisfy the approval gate (shared helper), then complete
-      try {
-        await satisfyObligation(client, {
-          obligation_id, input: APPROVAL_GATE,
-          proof: { approved_by_person_id, note: approvalNote },
-        });
-      } catch (e) {
-        if (e.code !== "NOT_OUTSTANDING") throw e; // already approved → fine, fall through to complete
-      }
-
-      let completedNote = null;
-      try {
-        await completeObligation(client, { obligation_id, completed_by: approved_by_person_id });
-        completedNote = "Move-in readiness obligation COMPLETE — verified record that the unit was ready before possession.";
-      } catch (e) {
-        if (e.code === "ALREADY_COMPLETE") completedNote = "Obligation was already complete.";
-        else if (e.code === "INPUTS_OUTSTANDING") {
-          // shouldn't happen — we just satisfied the last input — but surface honestly
-          await client.query("rollback");
-          return res.status(409).json({ error: "unexpected outstanding inputs after approval", outstanding: e.outstanding_inputs });
-        } else throw e;
-      }
-
-      // ── POSSESSION (locked order: effective event → compatibility cache) ──
-      // 1) Record the EFFECTIVE move_in as a durable, space_id-anchored unit_event
-      //    (the possession primitive). Resolve the lease from the scheduling event
-      //    that spawned this obligation — the same link the delivery hook uses.
-      //    No lease link (legacy/manual move-in) → no space-anchored possession
-      //    event; we DO NOT guess a space. Honest-nothing beats a fabricated bed.
-      // 2) units.occupancy_status is written ONLY as a COMPATIBILITY CACHE
-      //    downstream of the event, so availability.js's verbatim read is
-      //    unbroken during the migration. The event is the truth; the column
-      //    is the cache. Idempotent: recordEffectivePossession no-ops if a live
-      //    effective move_in already exists for (lease, space); the DB partial-
-      //    unique index is the hard backstop for repeat/concurrent approval.
-      let unitNote = null;
-      let possessionNote = null;
-      if (obligation.unit_id) {
-        // resolve the committing lease from the spawning move_in_scheduled event
-        let leaseForPossession = null;
-        try {
-          const lp = await client.query(
-            `select coalesce(lease_id, (payload->>'lease_id')::uuid) as lease_id
-               from unit_events
-              where spawned_obligation_id = $1 and event_type = 'move_in_scheduled'
-                and (lease_id is not null or (payload->>'lease_id') is not null)
-              limit 1`, [obligation_id]);
-          leaseForPossession = lp.rows[0] ? lp.rows[0].lease_id : null;
-        } catch (e) { /* fall through to cache-only below */ }
-
-        // ── CANONICAL POSSESSION EVENT IS MANDATORY WHEN A LEASE IS LINKED ──
-        // unit_events is the possession source of truth. If a lease is linked,
-        // the effective move_in event MUST be written. It is NOT wrapped in a
-        // savepoint: if it fails, the whole approve fails and rolls back. The
-        // system must never declare a resident moved in (approved + occupied
-        // cache + completed obligation) with no canonical possession event —
-        // that is the split truth this slice exists to eliminate.
-        //
-        // Legacy/manual path (no lease linked) legitimately records no
-        // possession event; only that path proceeds without one.
-        if (recordEffectivePossession && leaseForPossession) {
-          // NO try/catch — a failure here propagates and rolls back the approve.
-          const pr = await recordEffectivePossession(client, {
-            kind: "move_in",
-            lease_id: leaseForPossession,
-            unit_id: obligation.unit_id,
-            property_id: obligation.property_id || null,
-            effective_date: new Date().toISOString().slice(0, 10),
-            actor: approved_by_person_id,
-            source: "rent_ready_approval",
-          });
-          possessionNote = pr.created
-            ? "Effective move_in recorded (space-anchored possession)."
-            : "Move_in already recorded — idempotent no-op.";
-
-          // compatibility cache — downstream of the (now-committed-in-txn) event.
-          // Ordered AFTER the mandatory event, per the locked transaction order:
-          // event → cache → obligation → commit.
-          await client.query("update units set occupancy_status='occupied', updated_at=now() where id=$1", [obligation.unit_id]);
-          unitNote = "Unit occupancy → occupied (compatibility cache; possession truth is the unit_event).";
-        } else if (!leaseForPossession) {
-          // Legacy/manual move-in with no lease link: no possession event, and
-          // the cache still reflects legacy occupancy behavior (unchanged).
-          possessionNote = "No lease linked to this move-in — legacy/manual path; no space-anchored possession event.";
-          await client.query("update units set occupancy_status='occupied', updated_at=now() where id=$1", [obligation.unit_id]);
-          unitNote = "Unit occupancy → occupied (legacy path; no possession event).";
-        }
-      }
-
-      // ── SLICE D — the ONE thin delivery hook (ruling #2, #3) ─────────
-      // Resolve the lease through the move_in_scheduled event THAT SPAWNED
-      // this readiness obligation (movein.js records spawned_obligation_id),
-      // then feed unit_ready into the PM-owned move_in_delivery obligation via
-      // the shared helper. NO-OP for legacy/manual move-ins with no lease link.
-      // Does NOT mutate occupancy (that happened above, legacy, unchanged).
-      let deliveryNote = null;
-      if (deliveryHelper && typeof deliveryHelper.satisfyDeliveryInput === "function") {
-        try {
-          const linkQ = await client.query(
-            `select coalesce(lease_id, (payload->>'lease_id')::uuid) as lease_id
-               from unit_events
-              where spawned_obligation_id = $1 and event_type = 'move_in_scheduled'
-                and (lease_id is not null or (payload->>'lease_id') is not null)
-              limit 1`, [obligation_id]);
-          const leaseId = linkQ.rows[0] ? linkQ.rows[0].lease_id : null;
-          if (leaseId) {
-            const r = await deliveryHelper.satisfyDeliveryInput(client, {
-              lease_id: leaseId, input_key: "unit_ready", source: "rent_ready_approval",
-              source_obligation_id: obligation_id, actor: approved_by_person_id, timestamp: new Date().toISOString(),
-            });
-            if (r && r.satisfied) deliveryNote = "Delivery input unit_ready satisfied from readiness approval.";
-            // if not satisfied (legacy / already satisfied / no delivery obligation) → silent, non-fatal
-          }
-        } catch (e) {
-          // the delivery feed must NEVER break the readiness approval flow.
-          console.error("delivery hook (non-fatal):", e.message);
-        }
-      }
-
-      await client.query("commit");
-      res.json({
-        approved: true,
-        approved_by_person_id,
-        obligation_note: completedNote,
-        unit_note: unitNote,
-        possession_note: possessionNote,
-        note: "Maintenance prepared, manager approved. The completed obligation is the verified record the unit was rent-ready before move-in.",
-      });
-    } catch (e) {
-      await client.query("rollback");
-      console.error("movein approve error", e);
-      res.status(500).json({ error: e.message });
-    } finally {
-      client.release();
-    }
-  });
-
-  // ════════════════════════════════════════════════════════════════
-  //  BOARD  —  GET /move-ins   (?property_id=  ?window_days=)
-  //  Upcoming scheduled move-ins + their readiness obligation state.
-  // ════════════════════════════════════════════════════════════════
   router.get("/move-ins", async (req, res) => {
-    const { property_id } = req.query;
     try {
-      const vals = [];
+      const values = [];
       const where = ["ue.event_type='move_in_scheduled'"];
-      if (property_id) { vals.push(property_id); where.push(`ue.property_id = $${vals.length}`); }
-
-      const r = await pool.query(
-        `select ue.*, u.unit_number,
-                o.id as obligation_id, o.status as obligation_status,
+      if (req.query.property_id) { values.push(req.query.property_id); where.push(`ue.property_id=$${values.length}`); }
+      const rows = (await pool.query(
+        `select ue.*, u.unit_number, o.id as obligation_id, o.status as obligation_status,
                 o.required_inputs as obligation_outstanding, o.assigned_role, o.escalates_to_role
            from unit_events ue
-           join units u on u.id = ue.unit_id
-           left join obligations o on o.id = ue.spawned_obligation_id
+           join units u on u.id=ue.unit_id
+           left join obligations o on o.id=ue.spawned_obligation_id
           where ${where.join(" and ")}
-          order by ue.effective_date asc`,
-        vals
-      );
-
-      const move_ins = r.rows.map(ue => {
-        const outstanding = ue.obligation_outstanding || [];
-        const opsLeft = OPERATIONAL_GATES.filter(g => outstanding.includes(g));
-        return {
-          unit_event_id: ue.id, unit_id: ue.unit_id, unit_number: ue.unit_number,
-          property_id: ue.property_id, move_in_date: ue.effective_date,
-          payload: ue.payload, event_status: ue.status,
-          obligation_id: ue.obligation_id, obligation_status: ue.obligation_status,
-          assigned_role: ue.assigned_role, escalates_to_role: ue.escalates_to_role,
-          operational_gates_outstanding: opsLeft,
-          awaiting_approval: ue.obligation_id && opsLeft.length === 0 && outstanding.includes(APPROVAL_GATE),
-        };
+          order by ue.effective_date`, values
+      )).rows;
+      return res.json({
+        count: rows.length,
+        move_ins: rows.map((row) => ({
+          unit_event_id: row.id,
+          unit_id: row.unit_id,
+          unit_number: row.unit_number,
+          property_id: row.property_id,
+          lease_id: row.lease_id || (row.payload && row.payload.lease_id) || null,
+          move_in_date: row.effective_date,
+          event_status: row.status,
+          obligation_id: row.obligation_id,
+          obligation_status: row.obligation_status,
+          accountable_role: row.escalates_to_role,
+          operational_gates_outstanding: OPERATIONAL_GATES.filter((g) => (row.obligation_outstanding || []).includes(g)),
+          awaiting_readiness_approval: !!row.obligation_id && OPERATIONAL_GATES.every((g) => !(row.obligation_outstanding || []).includes(g)) && (row.obligation_outstanding || []).includes(APPROVAL_GATE),
+        })),
       });
-
-      res.json({
-        count: move_ins.length,
-        scheduled: move_ins.filter(m => m.event_status === "scheduled").length,
-        in_readiness: move_ins.filter(m => m.event_status === "actioned" && m.obligation_status !== "complete").length,
-        ready_complete: move_ins.filter(m => m.obligation_status === "complete").length,
-        move_ins,
-      });
-    } catch (e) {
-      console.error("move-ins board error", e);
-      res.status(500).json({ error: e.message });
-    }
+    } catch (e) { return sendError(res, e); }
   });
 
   return router;
