@@ -807,6 +807,61 @@ async function readLatestSnapshot(pool, propertyId, asOf = null) {
     console.error("rent-roll space-position overlay unavailable:", e.message);
   }
 
+  // ── THE PERSON→RENT-ROLL BRIDGE (per-row canonical overlay) ──────────
+  if (positions.length > 0) {
+    const byUnit = new Map();
+    for (const p of positions) {
+      const key = String(p.unit_number || "").trim();
+      if (!key) continue;
+      if (!byUnit.has(key)) byUnit.set(key, []);
+      byUnit.get(key).push(p);
+    }
+    for (const row of rows) {
+      const key = String(row.unit_number || "").trim();
+      const unitPositions = key ? (byUnit.get(key) || []) : [];
+      // a unit earns an overlay only when canonical truth exists on it
+      const bearing = unitPositions.filter(p =>
+        p.current_lease_position || p.future_lease_position || p.current_possession);
+      if (bearing.length === 0) continue;
+      const pos = bearing[0]; // by-unit model: one space per unit; extras noted below
+      const cur = pos.current_lease_position || null;
+      const fwd = pos.future_lease_position || null;
+
+      // disagreement is surfaced, never resolved silently
+      const conflicts = [];
+      if (cur && cur.rent != null && row.actual_rent != null &&
+          Math.abs(Number(cur.rent) - Number(row.actual_rent)) > 0.005) {
+        conflicts.push({ field: "rent", reconciliation: Number(row.actual_rent), canonical: Number(cur.rent) });
+      }
+      if (cur && (row.status === "vacant" || row.status === "model" || row.status === "down")) {
+        conflicts.push({ field: "status", reconciliation: row.status, canonical: "current_lease_present" });
+      }
+      if (!cur && pos.current_possession && row.status === "vacant") {
+        conflicts.push({ field: "status", reconciliation: "vacant", canonical: "possession_without_current_lease" });
+      }
+
+      row.canonical = {
+        as_of: effectiveAsOf,
+        space_id: pos.space_id,
+        current: cur,                                 // lease_id · dates · rent · tenants[]
+        forward: fwd,                                 // lease intent only — NEVER current occupancy
+        possession: pos.current_possession || null,   // { since } from the effective move_in event
+        availability_state: pos.availability_state,
+        next_required_action: pos.next_required_action || null,
+        reason: pos.reason || null,
+        conflicts,
+        additional_spaces: bearing.length > 1 ? bearing.length - 1 : 0,
+      };
+      // the app's person-keyed doorways key on person_id; current tenant
+      // wins, forward tenant otherwise. Reconciliation-only rows keep null.
+      const firstTenant =
+        (cur && cur.tenants && cur.tenants[0]) ||
+        (fwd && fwd.tenants && fwd.tenants[0]) || null;
+      if (firstTenant && row.person_id == null) row.person_id = firstTenant.person_id;
+      if (firstTenant && firstTenant.name && row.name == null) row.name = firstTenant.name;
+    }
+  }
+
   const summary = summarizeRows(rows);
   let availability = availabilityProjection(rows, positions, effectiveAsOf);
   if (doc) {
@@ -845,6 +900,9 @@ async function readLatestSnapshot(pool, propertyId, asOf = null) {
     } : null;
     availability = reconciliationAvailability(doc, effectiveAsOf);
   }
+  summary.canonical_rows = rows.filter(r => r.canonical).length;
+  summary.canonical_forward_rows = rows.filter(r => r.canonical && r.canonical.forward).length;
+  summary.canonical_conflict_rows = rows.filter(r => r.canonical && r.canonical.conflicts.length > 0).length;
   summary.uncommitted_vacant = availability.filter(a => a.current_status === "vacant" && !a.committed).length;
   summary.uncommitted_notice = availability.filter(a => a.availability_state === "notice_uncommitted").length;
   summary.marketable_now = availability.filter(a => a.marketable_now).length;
