@@ -1,249 +1,300 @@
 // ═══════════════════════════════════════════════════════════════════════════
-//  space_position.js — CANONICAL DATED SPACE POSITION
+// space_position.js — CANONICAL DATED SPACE POSITION
 //
-//  Two exports:
-//   1. recordEffectivePossession(client, {...})  — the shared possession-event
-//      writer used by BOTH move-in approval and move-out. Effective, space_id-
-//      anchored, idempotent (DB invariant backstop + supersede-not-duplicate).
-//   2. spacePosition(pool, { property_id, as_of })  — the server-authored dated
-//      position per space, assembled from contractual DATES + possession events
-//      + readiness + notice/turn, emitting distinct fields (never one status).
+// Contractual tenancy and physical possession are separate axes:
+//   active/commercial lease + dates spanning as_of = current economic tenancy
+//   pending lease + dates spanning as_of           = activation pending
+//   effective move_in without later move_out       = physical possession
 //
-//  DOCTRINE (Fable-locked, v4 spec):
-//   · "current" is DATE-DERIVED, never a stored 'active', never a move-in side
-//     effect. lease_status = legal operativeness only; the date window is derived.
-//   · "valid lease" = executed/application-linked, NO cancellation/termination/
-//     rescission/superseding-correction fact. Validity is checked BEFORE dates.
-//   · possession = effective move_in with no superseding move_out, per (lease,space).
-//   · occupancy_status is a COMPATIBILITY CACHE downstream of the event, not truth.
-//   · conflicts (committed future over open possession / unfinished turn / a
-//     commenced lease with no possession) surface as DISTINCT fields + a
-//     next_required_action — never a silently chosen status.
+// A pending lease is never promoted into current rent-roll truth merely because
+// its start date arrived. Required move-in funds must first activate the lease.
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Facts that make a lease NOT valid for position purposes. lease_status carries
-// legal operativeness; these are the non-current terminal/void meanings. Dates
-// are only consulted for leases that pass this gate.
-const INVALID_LEASE_STATUSES = new Set(["cancelled", "terminated", "rescinded", "void", "expired"]);
+"use strict";
 
+const TERMINAL_LEASE_STATUSES = new Set([
+  "cancelled", "terminated", "rescinded", "void", "expired", "superseded",
+]);
+const CURRENT_ECONOMIC_STATUSES = new Set(["active", "commercial"]);
+
+function normalizedStatus(lease) {
+  return String(lease && lease.lease_status || "").toLowerCase();
+}
 function leaseIsValid(lease) {
-  if (!lease) return false;
-  const st = (lease.lease_status || "").toLowerCase();
-  if (INVALID_LEASE_STATUSES.has(st)) return false;
-  // a superseding correction is modeled as a status too (superseded); exclude it.
-  if (st === "superseded") return false;
-  return true;
+  return !!lease && !TERMINAL_LEASE_STATUSES.has(normalizedStatus(lease));
+}
+function datesSpan(lease, asOf) {
+  return !!(lease && lease.start_date && lease.start_date <= asOf && (!lease.end_date || lease.end_date >= asOf));
+}
+function isFuture(lease, asOf) {
+  return !!(lease && lease.start_date && lease.start_date > asOf);
+}
+function tenantList(lease, personNames) {
+  return (lease.tenant_ids || []).filter(Boolean).map((person_id) => ({
+    person_id,
+    name: personNames.has(String(person_id)) ? personNames.get(String(person_id)) : null,
+  }));
 }
 
-// ── 1. SHARED EFFECTIVE-POSSESSION WRITER ──────────────────────────────────
-// kind: 'move_in' | 'move_out'. Resolves the authoritative space from the lease
-// (the lease commits a specific bed); whole-unit leases carry the unit's sole
-// space. Idempotent: the DB partial-unique index guarantees one live effective
-// event per (lease, space); a correction supersedes the prior, never inserts a
-// competing effective row. Caller owns the transaction (client, mid-txn).
 async function recordEffectivePossession(client, {
-  kind, lease_id, unit_id, property_id, effective_date, actor, source, space_id_hint = null,
+  kind,
+  lease_id,
+  unit_id = null,
+  property_id = null,
+  effective_date,
+  actor = null,
+  source = null,
+  space_id_hint = null,
+  details = null,
 }) {
-  if (kind !== "move_in" && kind !== "move_out") {
+  if (!client || typeof client.query !== "function") throw new Error("recordEffectivePossession requires a database client");
+  if (!['move_in', 'move_out'].includes(kind)) {
     throw Object.assign(new Error("kind must be move_in or move_out"), { code: "BAD_KIND" });
   }
   if (!lease_id) throw Object.assign(new Error("lease_id required for effective possession"), { code: "NO_LEASE" });
+  if (!effective_date) throw Object.assign(new Error("effective_date required for effective possession"), { code: "NO_EFFECTIVE_DATE" });
 
-  // Resolve space: explicit hint (verified) → lease.space_id → whole-unit sole space.
-  let space_id = null;
-  const leaseQ = await client.query("select id, space_id, property_id from leases where id=$1", [lease_id]);
+  const leaseQ = await client.query(
+    `select l.id, l.space_id, l.property_id, l.start_date, l.end_date, l.lease_status,
+            s.unit_id as lease_unit_id, u.property_id as space_property_id
+       from leases l
+       left join spaces s on s.id=l.space_id
+       left join units u on u.id=s.unit_id
+      where l.id=$1`,
+    [lease_id]
+  );
   if (leaseQ.rows.length === 0) throw Object.assign(new Error("lease not found"), { code: "NO_LEASE" });
   const lease = leaseQ.rows[0];
-  const resolvedProperty = property_id || lease.property_id;
 
-  if (space_id_hint) {
-    const okS = await client.query(
-      "select id, unit_id from spaces where id=$1", [space_id_hint]);
-    if (okS.rows.length === 0) throw Object.assign(new Error("space_id_hint not found"), { code: "BAD_SPACE" });
-    space_id = space_id_hint;
-  } else if (lease.space_id) {
-    space_id = lease.space_id;
-  } else if (unit_id) {
-    const oneSpace = await client.query(
-      "select id from spaces where unit_id=$1", [unit_id]);
-    if (oneSpace.rows.length === 1) space_id = oneSpace.rows[0].id;
-    else throw Object.assign(new Error("cannot resolve space: lease has no space_id and unit is not single-space"), { code: "AMBIGUOUS_SPACE" });
-  } else {
-    throw Object.assign(new Error("cannot resolve space for possession event"), { code: "AMBIGUOUS_SPACE" });
+  let space_id = space_id_hint || lease.space_id || null;
+  if (!space_id && unit_id) {
+    const one = await client.query("select id from spaces where unit_id=$1 order by created_at", [unit_id]);
+    if (one.rows.length !== 1) {
+      throw Object.assign(new Error("cannot resolve space: lease has no space_id and unit is not single-space"), { code: "AMBIGUOUS_SPACE" });
+    }
+    space_id = one.rows[0].id;
+  }
+  if (!space_id) throw Object.assign(new Error("cannot resolve space for possession event"), { code: "AMBIGUOUS_SPACE" });
+
+  const spaceQ = await client.query(
+    `select s.id, s.unit_id, u.property_id
+       from spaces s join units u on u.id=s.unit_id
+      where s.id=$1`,
+    [space_id]
+  );
+  if (spaceQ.rows.length === 0) throw Object.assign(new Error("space not found"), { code: "BAD_SPACE" });
+  const space = spaceQ.rows[0];
+  const resolvedProperty = property_id || lease.property_id || space.property_id;
+  const resolvedUnit = unit_id || space.unit_id;
+
+  if (lease.space_id && lease.space_id !== space_id) {
+    throw Object.assign(new Error("possession space differs from the governing lease"), { code: "SPACE_MISMATCH" });
+  }
+  if (resolvedUnit !== space.unit_id) {
+    throw Object.assign(new Error("possession unit differs from the governing space"), { code: "UNIT_MISMATCH" });
+  }
+  if (resolvedProperty !== space.property_id || (lease.property_id && lease.property_id !== space.property_id)) {
+    throw Object.assign(new Error("possession space is outside the lease/property wall"), { code: "PROPERTY_MISMATCH" });
   }
 
-  const resolvedUnit = unit_id || (await client.query(
-    "select unit_id from spaces where id=$1", [space_id])).rows[0]?.unit_id;
-
-  // POSSESSION MUST EXIST BEFORE IT CAN END (Fable #1): a move_out is only a
-  // truthful fact when there is a LIVE effective move_in for this (lease, space).
-  // A turnover created for a unit nobody currently possesses (a turn that is not
-  // a resident surrender, or a lease that never took possession) must NOT encode
-  // a canonical move_out. Refuse, honestly — do not write a false fact.
   if (kind === "move_out") {
-    const heldQ = await client.query(
+    const held = await client.query(
       `select 1 from unit_events
         where lease_id=$1 and space_id=$2 and event_type='move_in'
-          and status not in ('superseded','cancelled') limit 1`,
+          and status not in ('superseded','cancelled')
+          and not exists (
+            select 1 from unit_events o
+             where o.lease_id=$1 and o.space_id=$2 and o.event_type='move_out'
+               and o.status not in ('superseded','cancelled')
+          )
+        limit 1`,
       [lease_id, space_id]
     );
-    if (heldQ.rows.length === 0) {
-      throw Object.assign(
-        new Error("no live move_in for this lease+space — a move_out cannot end possession that was never recorded"),
-        { code: "NO_POSSESSION_TO_END" }
-      );
+    if (held.rows.length === 0) {
+      throw Object.assign(new Error("no live move_in for this lease+space — move_out cannot end possession that was never recorded"), { code: "NO_POSSESSION_TO_END" });
     }
   }
 
-  // Idempotency: is there already a LIVE effective event of this kind for
-  // (lease, space)? If so, no-op (return it). This makes repeat/concurrent
-  // approval safe above the DB index (which is the hard backstop).
   const existing = await client.query(
     `select * from unit_events
       where lease_id=$1 and space_id=$2 and event_type=$3
         and status not in ('superseded','cancelled')
-      limit 1`,
+      order by created_at desc limit 1`,
     [lease_id, space_id, kind]
   );
   if (existing.rows.length) {
     return { event: existing.rows[0], created: false, idempotent: true, space_id };
   }
 
-  const payload = { lease_id, resolved_from: space_id_hint ? "hint" : (lease.space_id ? "lease.space_id" : "whole_unit_sole_space") };
-  const ins = await client.query(
-    `insert into unit_events (unit_id, property_id, event_type, effective_date, payload, source, status, lease_id, space_id)
-     values ($1,$2,$3,$4,$5,$6,'actioned',$7,$8) returning *`,
+  const payload = {
+    lease_id,
+    resolved_from: space_id_hint ? "explicit_space" : (lease.space_id ? "lease.space_id" : "whole_unit_sole_space"),
+    actor,
+    ...(details && typeof details === "object" ? details : {}),
+  };
+  const inserted = await client.query(
+    `insert into unit_events
+       (unit_id, property_id, event_type, effective_date, payload, source, status, lease_id, space_id)
+     values ($1,$2,$3,$4,$5,$6,'actioned',$7,$8)
+     returning *`,
     [resolvedUnit, resolvedProperty, kind, effective_date, JSON.stringify(payload), source || "possession", lease_id, space_id]
   );
-  return { event: ins.rows[0], created: true, idempotent: false, space_id };
+  return { event: inserted.rows[0], created: true, idempotent: false, space_id };
 }
 
-// ── 2. DATED SPACE POSITION (server-authored read) ─────────────────────────
-// One row per SPACE. Distinct fields; the renderer displays, never re-derives.
 async function spacePosition(pool, { property_id, as_of = null }) {
+  if (!property_id) throw new Error("property_id required");
   const asOf = as_of || new Date().toISOString().slice(0, 10);
-
-  // Pull every space + the lease facts + possession events + turn/notice state.
-  // Leases are pulled WITH status so validity is applied in JS (INVALID set),
-  // then current-vs-forward is a pure DATE test on the valid ones.
   const rows = (await pool.query(
     `select
-        s.id                as space_id,
+        s.id as space_id,
         s.unit_id,
         u.unit_number,
         s.space_label,
-        -- all leases on this space (valid-or-not; filtered in JS)
         (select json_agg(json_build_object(
             'id', l.id, 'lease_status', l.lease_status,
             'start_date', l.start_date, 'end_date', l.end_date,
-            'rent', l.rent, 'tenant_ids', l.tenant_ids))
-           from leases l where l.space_id = s.id)          as leases,
-        -- live effective possession events on this space
+            'rent', l.rent, 'tenant_ids', l.tenant_ids,
+            'economic_tenancy_activated_at', l.economic_tenancy_activated_at)
+           order by l.start_date, l.created_at)
+           from leases l where l.space_id=s.id) as leases,
         (select json_agg(json_build_object(
-            'event_type', ue.event_type, 'effective_date', ue.effective_date, 'status', ue.status)
-            order by ue.effective_date)
+            'event_type', ue.event_type, 'effective_date', ue.effective_date,
+            'created_at', ue.created_at, 'status', ue.status,
+            'payload', ue.payload, 'source', ue.source)
+           order by ue.effective_date, ue.created_at)
            from unit_events ue
-          where ue.space_id = s.id
+          where ue.space_id=s.id
             and ue.event_type in ('move_in','move_out')
-            and ue.status not in ('superseded','cancelled'))  as possession_events,
-        -- open notice on this space (scheduled intent)
+            and ue.status not in ('superseded','cancelled')) as possession_events,
         (select ue.effective_date from unit_events ue
-          where ue.space_id = s.id and ue.event_type='notice_given'
+          where ue.space_id=s.id and ue.event_type='notice_given'
             and ue.status='scheduled' order by ue.effective_date desc limit 1) as notice_date,
-        -- open turn on the unit
         (select t.status from turnovers t
-          where t.unit_id = u.id and t.status='in_progress' limit 1)          as turn_status,
-        u.occupancy_status                                                     as compat_occupancy
+          where t.unit_id=u.id and t.status='in_progress' limit 1) as turn_status,
+        u.occupancy_status as compat_occupancy
       from spaces s
-      join units u on u.id = s.unit_id
-     where u.property_id = $1
+      join units u on u.id=s.unit_id
+     where u.property_id=$1
      order by u.unit_number, s.space_label`,
     [property_id]
   )).rows;
 
-  // ── tenant identity resolution (one batch; the read surfaces WHO) ─────
-  // tenant_ids were always pulled with the lease facts and then dropped
-  // before the payload. The person IS the bridge between the unit-keyed
-  // rent roll and the person-keyed lifecycle — surface them. Names come
-  // from persons in one batch query; a missing person renders as an
-  // honest null name, never an invented one.
-  const allTenantIds = new Set();
-  for (const r of rows) {
-    for (const l of (r.leases || [])) {
-      for (const tid of (l.tenant_ids || [])) if (tid) allTenantIds.add(String(tid));
+  const tenantIds = new Set();
+  for (const row of rows) {
+    for (const lease of row.leases || []) {
+      for (const id of lease.tenant_ids || []) if (id) tenantIds.add(String(id));
     }
   }
-  const personName = new Map();
-  if (allTenantIds.size > 0) {
-    const pq = await pool.query(
-      "select id, name from persons where id = any($1::uuid[])",
-      [[...allTenantIds]]);
-    for (const p of pq.rows) personName.set(String(p.id), p.name || null);
+  const personNames = new Map();
+  if (tenantIds.size) {
+    const people = await pool.query("select id, name from persons where id=any($1::uuid[])", [[...tenantIds]]);
+    for (const p of people.rows) personNames.set(String(p.id), p.name || null);
   }
-  const tenantsOf = (lease) => (lease.tenant_ids || []).filter(Boolean).map(tid => ({
-    person_id: tid, name: personName.has(String(tid)) ? personName.get(String(tid)) : null,
-  }));
 
-  const positions = rows.map(r => {
-    const leases = r.leases || [];
-    const valid = leases.filter(leaseIsValid);
+  const positions = rows.map((row) => {
+    const leases = (row.leases || []).filter(leaseIsValid);
+    const current = leases.find((lease) => CURRENT_ECONOMIC_STATUSES.has(normalizedStatus(lease)) && datesSpan(lease, asOf)) || null;
+    const activationPending = leases.find((lease) => normalizedStatus(lease) === "pending" && datesSpan(lease, asOf)) || null;
+    const future = leases.find((lease) => isFuture(lease, asOf)) || null;
 
-    // current contractual position: valid lease, start<=asOf<=end
-    const current = valid.find(l =>
-      l.start_date && l.start_date <= asOf &&
-      (!l.end_date || l.end_date >= asOf));
-    // future contractual position: valid lease, start>asOf
-    const future = valid.find(l => l.start_date && l.start_date > asOf);
+    const events = row.possession_events || [];
+    const ins = events.filter((e) => e.event_type === "move_in");
+    const outs = events.filter((e) => e.event_type === "move_out");
+    const lastIn = ins.length ? ins[ins.length - 1] : null;
+    const lastOut = outs.length ? outs[outs.length - 1] : null;
+    const possessed = !!lastIn && (!lastOut || lastOut.effective_date < lastIn.effective_date ||
+      (lastOut.effective_date === lastIn.effective_date && String(lastOut.created_at) < String(lastIn.created_at)));
+    const turning = row.turn_status === "in_progress";
 
-    // possession: live effective move_in with no later move_out
-    const pe = r.possession_events || [];
-    const lastIn = [...pe].filter(e => e.event_type === "move_in").pop();
-    const lastOut = [...pe].filter(e => e.event_type === "move_out").pop();
-    const possessed = !!lastIn && (!lastOut || lastOut.effective_date < lastIn.effective_date);
+    let availability_state = "unavailable";
+    let available_from = null;
+    if (current) {
+      availability_state = row.notice_date ? "on_notice" : "unavailable";
+      available_from = row.notice_date || null;
+    } else if (activationPending) {
+      availability_state = "committed_activation_pending";
+    } else if (possessed) {
+      availability_state = "unavailable";
+    } else if (turning) {
+      availability_state = "vacant_turning";
+    } else if (future) {
+      availability_state = "committed_future";
+      available_from = future.start_date;
+    } else {
+      availability_state = "ready_now";
+      available_from = asOf;
+    }
 
-    // readiness
-    const turning = r.turn_status === "in_progress";
-
-    // availability (aligned with availability.js precedence, position-scoped)
-    let availability_state, available_from = null;
-    if (!current && !possessed && turning) { availability_state = "vacant_turning"; }
-    else if (!current && future) { availability_state = "committed_future"; available_from = future.start_date; }
-    else if (!current && !possessed) { availability_state = "ready_now"; available_from = asOf; }
-    else if (current && r.notice_date) { availability_state = "on_notice"; available_from = r.notice_date; }
-    else { availability_state = "unavailable"; }
-
-    // conflicts → next_required_action (never a silent status)
-    let next_required_action = null, reason = null;
-    if (current && !possessed) {
-      // commenced lease, no possession — rent owed, keys/readiness unresolved
+    let next_required_action = null;
+    let reason = null;
+    if (activationPending) {
+      next_required_action = "economic_tenancy_activation_required";
+      reason = `Lease commenced ${activationPending.start_date}, but economic tenancy is not active — confirm and collect required move-in charges before current rent-roll activation.`;
+    } else if (current && !possessed) {
       next_required_action = "possession_outstanding";
-      reason = `Lease commenced ${current.start_date} but no move-in recorded — resident owes rent while possession is unresolved.`;
+      reason = `Lease is active from ${current.start_date}; resident is current on the rent-roll axis, but keys/access handoff has not been recorded.`;
     } else if (future && possessed) {
       next_required_action = "review_early_possession";
-      reason = `Possession recorded before the committed lease start ${future.start_date}.`;
+      reason = `Possession was recorded before the committed lease start ${future.start_date}.`;
     } else if (future && turning) {
       next_required_action = "turn_before_committed_start";
-      reason = `Committed for ${future.start_date} but the unit turn is still in progress.`;
-    } else if (!current && !future && possessed) {
+      reason = `Committed for ${future.start_date}, but the unit turn is still in progress.`;
+    } else if (!current && !activationPending && !future && possessed) {
       next_required_action = "possession_without_current_lease";
-      reason = `Someone is in possession with no valid current lease on the space.`;
+      reason = "Someone is in possession with no active current lease on the space.";
     }
 
+    const shapeLease = (lease) => lease ? {
+      lease_id: lease.id,
+      lease_status: lease.lease_status,
+      start_date: lease.start_date,
+      end_date: lease.end_date || null,
+      rent: lease.rent == null ? null : Number(lease.rent),
+      tenants: tenantList(lease, personNames),
+    } : null;
+
     return {
-      space_id: r.space_id, unit_id: r.unit_id, unit_number: r.unit_number, space_label: r.space_label,
-      current_lease_position: current ? { lease_id: current.id, start_date: current.start_date, end_date: current.end_date, rent: current.rent, tenants: tenantsOf(current) } : null,
-      future_lease_position: future ? { lease_id: future.id, start_date: future.start_date, end_date: future.end_date || null, rent: future.rent, tenants: tenantsOf(future) } : null,
-      current_possession: possessed ? { since: lastIn.effective_date } : null,
+      space_id: row.space_id,
+      unit_id: row.unit_id,
+      unit_number: row.unit_number,
+      space_label: row.space_label,
+      current_lease_position: shapeLease(current),
+      activation_pending_lease_position: shapeLease(activationPending),
+      future_lease_position: shapeLease(future),
+      current_possession: possessed ? {
+        since: lastIn.effective_date,
+        event_recorded_at: lastIn.created_at,
+        source: lastIn.source || null,
+        details: lastIn.payload || {},
+      } : null,
+      economic_tenancy_state: current ? "active" : activationPending ? "activation_pending" : future ? "forward" : "none",
+      possession_state: possessed ? "delivered" : "pending",
       physical_readiness: turning ? "turning" : "ready",
       availability_state,
       available_from,
       reason,
       next_required_action,
-      _compat_occupancy: r.compat_occupancy, // visibility into the cache during migration
+      _compat_occupancy: row.compat_occupancy,
     };
   });
 
-  return { as_of: asOf, property_id, count: positions.length, positions };
+  return {
+    property_id,
+    as_of: asOf,
+    count: positions.length,
+    positions,
+    summary: {
+      current_economic_tenancies: positions.filter((p) => !!p.current_lease_position).length,
+      activation_pending: positions.filter((p) => !!p.activation_pending_lease_position).length,
+      possession_pending: positions.filter((p) => !!p.current_lease_position && !p.current_possession).length,
+      possessed: positions.filter((p) => !!p.current_possession).length,
+    },
+  };
 }
 
-module.exports = { recordEffectivePossession, spacePosition, leaseIsValid, INVALID_LEASE_STATUSES };
+module.exports = {
+  recordEffectivePossession,
+  spacePosition,
+  _internal: { leaseIsValid, datesSpan, normalizedStatus, CURRENT_ECONOMIC_STATUSES },
+};
