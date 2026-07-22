@@ -3437,16 +3437,21 @@ app.use("/", __applicationSubmission);
 // adapters). There is exactly one write path; the two route families are entry
 // adapters that mount the SAME dormantWriteGuard + activationPerimeter and call
 // THIS service. No route reimplements the transaction; no internal HTTP hop.
-// v3 EXECUTION SEAM — the ONLY door for "a governing lease was executed."
-// Always-null in v3 (no execution system exists), so countersign fails closed
-// with 409 executed_lease_required for EVERY caller. Path B replaces the
-// resolver body, never its position. NEVER accept execution proof from a body.
+// EXECUTION SEAM (Path B implemented, migration 088). The ONLY door for
+// "a governing lease was actually executed" is a verified executed_lease_records
+// row, written by the canonical intake service behind its own activation gate.
+// The resolver takes (client, applicationId) and nothing else — no body value
+// can ever assert execution.
+const __executedLease = require("./executed_lease_service");
 const __executionEvidence = require("./execution_evidence")();
 
 const __tenancyAnchor = require("./tenancy_anchor_service")({
   spawnObligationFromEvent, satisfyObligation, completeObligation,
-  ledgerService: __commitmentLedger._service,   // J1: countersign locks the economic schedule
-  executionEvidence: __executionEvidence,       // v3: the corrected wall's first requirement
+  ledgerService: __commitmentLedger._service,
+  executionEvidence: __executionEvidence,
+  // 088: confirm-term RECOMPUTES admission from live sources through this
+  // service rather than trusting the stored verdict.
+  executedLease: __executedLease,
 });
 
 // applications mounted HERE (moved down) so approve can close the
@@ -3527,6 +3532,10 @@ app.use("/", operatorModule({ pool, agentService: agentApp._service,
   // v3: the walled operator approve adapter calls the ONE canonical
   // approveApplication service (R3) — never a second implementation.
   applicationsService: __applications._service,
+  // 088: the canonical executed-lease intake + admission service. The verify
+  // door calls it; confirm-term recomputes admission through it.
+  executedLease: __executedLease,
+  spawnObligationFromEvent,
   // Slice D completion feed — the SAME deliveryHelper instance movein.js uses
   // (built once at the movein mount). The operator keys-ready door is the PM
   // action delivery.js anticipated; without this injection it fails closed 503.
