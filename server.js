@@ -117,7 +117,15 @@ app.use(express.json({ limit: "1mb" }));  // body-size cap — stops oversized p
 // run after this and check the SAME key — redundant but harmless; slated
 // for removal in a later cleanup, not worth a 3-file deploy today.
 const OPERATOR_KEY = process.env.OPERATOR_KEY;
-const PUBLIC_EXACT = new Set(["/health", "/leasing/intake", "/communications/inbound-sms"]); // these carry their OWN auth (intake-secret / Twilio signature) — webhooks can't send an operator key
+const PUBLIC_EXACT = new Set([
+  "/health", "/leasing/intake", "/communications/inbound-sms",
+  // The applicant's browser POSTs here from the public /t/application page.
+  // It carries its OWN auth — the invitation token, digest-matched and
+  // row-locked inside the route; invalid/expired/never-sent tokens fail
+  // closed. Discovered the first time a real applicant reached submit:
+  // the page was public, the submit it calls was behind the key gate.
+  "/applications/submit-public",
+]); // every entry carries its OWN auth (intake-secret / Twilio signature / invitation token) — these callers can't send an operator key
 // NOTE: "/agent/" is public ONLY for the two-phone browser DEMO (synthetic data,
 // operator-controlled). The agent operates on real records and proposes outbound
 // messages — so before any REAL lead touches this, "/agent/" MUST be removed from
@@ -3519,6 +3527,10 @@ app.use("/", operatorModule({ pool, agentService: agentApp._service,
   // v3: the walled operator approve adapter calls the ONE canonical
   // approveApplication service (R3) — never a second implementation.
   applicationsService: __applications._service,
+  // Slice D completion feed — the SAME deliveryHelper instance movein.js uses
+  // (built once at the movein mount). The operator keys-ready door is the PM
+  // action delivery.js anticipated; without this injection it fails closed 503.
+  deliveryHelper,
   leasePacketsService: __leasePackets._service }));
 
 // ── STAFF IDENTITY BRIDGE (067) — the authorized point-and-confirm workflow:
