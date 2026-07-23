@@ -315,10 +315,16 @@ async function verifyExecutedLease(client, {
 //  caller's transaction commits Phase 1's evidence alongside a durable
 //  blocked state. Only genuine failures propagate and roll back.
 // ════════════════════════════════════════════════════════════════════
-// ── 2a. PURE COMPUTE — no writes, no side effects ───────────────────
+// ── 2a. READ-ONLY EVALUATION — no writes; transaction lock allowed ───
 //  Separated deliberately: confirm-term must RECOMPUTE blockers inside
 //  its own transaction rather than trust a stored verdict, and it must
 //  do so without spawning obligations or moving application state.
+//
+//  This read acquires a row lock on the exact spaces.id before checking
+//  overlapping leases. That lock is not a business-state write; it is the
+//  serialization boundary that makes "one space, one tenancy" true under
+//  concurrent confirm-term attempts. The caller must keep the transaction
+//  open through any resulting lease insert and commit.
 async function computeAdmissionBlockers(client, { application_id }) {
   const app = (await client.query(
     "select * from lease_applications where id=$1", [application_id])).rows[0];
@@ -385,8 +391,12 @@ async function computeAdmissionBlockers(client, { application_id }) {
   }
 
   // ── 2. premises — object identity, not economics ──
+  // Lock the canonical leased atom before the overlap read. Confirm-term
+  // calls this evaluator and performs its lease insert in the SAME
+  // transaction, so competing confirmations on one space serialize: the
+  // second waiter resumes after the first commit and sees the new lease.
   const sp = (await client.query(
-    "select id, unit_id from spaces where id=$1", [record.space_id])).rows[0];
+    "select id, unit_id from spaces where id=$1 for update", [record.space_id])).rows[0];
   sources.executed_unit_id = sp ? sp.unit_id : null;
   sources.application_unit_id = app.unit_id || null;
   if (!sp) {
@@ -395,6 +405,47 @@ async function computeAdmissionBlockers(client, { application_id }) {
     blockers.push({ code: "premises_conflict",
       detail: "The executed lease's premises are not in the unit this application named.",
       application_unit_id: app.unit_id, executed_space_id: record.space_id, executed_unit_id: sp.unit_id });
+  }
+
+  // ── 2b. OVERLAPPING OPERATIVE LEASE — one space, one tenancy ────────
+  //  The same doctrine as the wall itself: evidence may be RECORDED
+  //  (verify never refuses on this), but confirm-term may not CREATE a
+  //  competing tenancy on a space that already has an operative lease
+  //  overlapping these dates. 'pending' counts as operative here — two
+  //  uncommenced commitments on one space is already a double-booking.
+  //  The exact lease born from THIS executed record is excluded so a
+  //  post-confirm re-evaluation does not conflict with itself. Excluding by
+  //  application_id would be too broad: a stale or duplicate lease carrying
+  //  the same application must still surface as a conflict. Before confirm-
+  //  term record.lease_id is null, so nothing is excluded.
+  const overlap = await client.query(
+    `select id, lease_status, start_date, end_date, tenant_ids
+       from leases
+      where space_id = $1
+        and ($2::uuid is null or id <> $2::uuid)
+        and lease_status not in
+            ('cancelled','terminated','rescinded','void','expired','superseded')
+        and daterange(start_date, end_date, '[]')
+            && daterange($3::date, $4::date, '[]')
+      order by start_date asc`,
+    [record.space_id, record.lease_id || null,
+     record.lease_start_date, record.lease_end_date]);
+  sources.overlap_check = {
+    space_id: record.space_id,
+    range: [record.lease_start_date, record.lease_end_date],
+    excluded_self_lease_id: record.lease_id || null,
+    competing_leases_found: overlap.rows.length,
+  };
+  if (overlap.rows.length > 0) {
+    blockers.push({ code: "overlapping_operative_lease",
+      detail: "An operative lease already occupies this space for overlapping dates. " +
+              "The executed evidence stands; a competing tenancy will not be created. " +
+              "Resolve the existing lease (terminate, supersede, or correct its dates) first.",
+      competing: overlap.rows.map(l => ({
+        lease_id: l.id, lease_status: l.lease_status,
+        start_date: l.start_date, end_date: l.end_date,
+        tenant_ids: l.tenant_ids || [],
+      })) });
   }
 
   // ── 3. locked offer — DETECTS a discrepancy; never decides the numbers ──
