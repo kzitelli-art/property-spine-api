@@ -204,8 +204,16 @@ async function loadExecutedLease(client, app) {
 
 // The one primary action an operator should take next on this application,
 // as far as the execution seam is concerned. Honest about all three states.
-function executionPrimaryAction(app, exec) {
+function executionPrimaryAction(app, exec, leaseId) {
   if (!exec || exec.unavailable) return null;
+  // A lease already exists for this application: confirm-term has run and the
+  // tenancy anchor is created. Offering it again authors an action the server
+  // will refuse. The next work is move-in, which the move-in read authors.
+  if (leaseId) {
+    return { action: "term_confirmed", label: "Term Confirmed",
+      reason: "The lease term is confirmed and the tenancy anchor exists. Move-in work continues below.",
+      method: null, endpoint: null };
+  }
   if (!exec.present) {
     return { action: "verify_executed_lease", label: "Verify Executed Lease",
       reason: "No governing executed lease has been recorded for this application yet.",
@@ -308,7 +316,7 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
     // 088: the execution seam, always visible — absent, verified+admitted,
     // or verified+blocked with its reasons and one clear primary action.
     executed_lease,
-    execution_primary_action: executionPrimaryAction(app, executed_lease),
+    execution_primary_action: executionPrimaryAction(app, executed_lease, lease_id),
     // lease-keyed surfaces (move-in state) hang off this; null until confirm-term
     lease_id,
     unit_spaces,
