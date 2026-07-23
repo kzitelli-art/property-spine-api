@@ -380,7 +380,8 @@ async function composeMoveInState(client, leaseId) {
         and status not in ('superseded','cancelled')
       order by effective_date desc, created_at desc limit 1`, [lease.id, lease.space_id]
   )).rows[0] || null;
-  const outstanding = delivery && Array.isArray(delivery.required_inputs) ? delivery.required_inputs : [];
+  const deliveryOpen = !!(delivery && ["open", "in_progress"].includes(String(delivery.status || "").toLowerCase()));
+  const outstanding = deliveryOpen && Array.isArray(delivery.required_inputs) ? delivery.required_inputs : [];
   const leaseActive = String(lease.lease_status).toLowerCase() === "active";
   const started = ymd(lease.start_date) <= today;
 
@@ -403,6 +404,9 @@ async function composeMoveInState(client, leaseId) {
   } else if (possession) {
     state = "possession_delivered";
     primaryAction = { code: "view_completed_move_in", label: "View Completed Move-In", method: null, endpoint: null };
+  } else if (!deliveryOpen) {
+    state = "delivery_obligation_missing";
+    primaryAction = { code: "review_delivery_gap", label: "Review Delivery Gap", method: null, endpoint: null };
   } else if (outstanding.includes("unit_ready")) {
     state = "unit_not_ready";
     primaryAction = { code: "complete_unit_readiness", label: "Complete Unit Readiness", method: null, endpoint: null };
@@ -431,7 +435,7 @@ async function composeMoveInState(client, leaseId) {
     } : null,
     funds,
     delivery: delivery ? {
-      obligation_id: delivery.id, status: delivery.status,
+      obligation_id: delivery.id, status: delivery.status, open: deliveryOpen,
       accountable_role: delivery.assigned_role,
       outstanding_inputs: outstanding,
       unit_ready: !outstanding.includes("unit_ready"),
@@ -443,6 +447,7 @@ async function composeMoveInState(client, leaseId) {
       ...(!leaseActive && funds.state === "charge_set_missing" ? [{ code: "move_in_charge_set_missing" }] : []),
       ...(!leaseActive && funds.state === "funds_outstanding" ? [{ code: "move_in_funds_outstanding", amount: funds.total_outstanding }] : []),
       ...(leaseActive && !funds.cleared ? [{ code: "move_in_funds_reversed_or_reopened", amount: funds.total_outstanding }] : []),
+      ...(leaseActive && !possession && !deliveryOpen ? [{ code: "delivery_obligation_missing", latest_delivery_status: delivery ? delivery.status : null }] : []),
       ...(leaseActive && outstanding.includes("unit_ready") ? [{ code: "unit_not_ready" }] : []),
       ...(leaseActive && outstanding.includes("keys_access_ready") ? [{ code: "keys_not_ready" }] : []),
     ],
