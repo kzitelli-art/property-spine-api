@@ -246,6 +246,19 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
         order by created_at desc limit 1`, [app.id]);
     lease_id = lq.rows[0] ? lq.rows[0].id : null;
   } catch (e) { lease_id = null; }
+
+  // 088 verify form: the premises picker needs the SPACES inside the
+  // application's unit — the canonical leaseable atom is spaces.id, and the
+  // browser must never guess it. Honest empty list when no unit is chosen.
+  let unit_spaces = [];
+  if (app.unit_id) {
+    try {
+      const sq = await client.query(
+        `select id as space_id, coalesce(space_label, '(whole unit)') as space_label
+           from spaces where unit_id = $1 order by created_at asc`, [app.unit_id]);
+      unit_spaces = sq.rows;
+    } catch (e) { unit_spaces = []; }
+  }
   const lineageMatches = !!(packet && confirmation &&
     String(packet.proposed_terms_confirmation_id) === String(confirmation.id));
 
@@ -290,6 +303,7 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
     execution_primary_action: executionPrimaryAction(executed_lease),
     // lease-keyed surfaces (move-in state) hang off this; null until confirm-term
     lease_id,
+    unit_spaces,
     terms: {
       lease_start_date: nDate(terms.lease_start_date), lease_end_date: nDate(terms.lease_end_date),
       rent: nNum(terms.rent), deposit: nNum(terms.deposit),
