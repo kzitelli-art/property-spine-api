@@ -126,7 +126,7 @@ function mainBlocker(complete, missing, currency) {
     }[first] || first;
     return "Terms incomplete — " + label;
   }
-  if (currency && currency.status === "stale") return "Packet stale — regenerate before countersign";
+  if (currency && currency.status === "stale") return "Packet stale — regenerate before resident review";
   if (currency && currency.status === "not_generated") return "Terms complete — packet not generated yet";
   return "Ready — terms complete, packet current";
 }
@@ -204,23 +204,31 @@ async function loadExecutedLease(client, app) {
 
 // The one primary action an operator should take next on this application,
 // as far as the execution seam is concerned. Honest about all three states.
-function executionPrimaryAction(exec) {
+function executionPrimaryAction(app, exec) {
   if (!exec || exec.unavailable) return null;
   if (!exec.present) {
     return { action: "verify_executed_lease", label: "Verify Executed Lease",
-      reason: "No governing executed lease has been recorded for this application yet." };
+      reason: "No governing executed lease has been recorded for this application yet.",
+      method: "POST",
+      endpoint: `/operator/leasing/applications/${app.id}/executed-lease/verify` };
   }
   if (exec.activation_status === "blocked") {
     return { action: "review_conflict", label: "Review Conflict",
       reason: "The executed lease is recorded and stands, but operational activation is blocked.",
+      method: null,
+      endpoint: null,
       blockers: exec.blockers.map((b) => b.code) };
   }
   if (exec.activation_status === "admitted") {
     return { action: "confirm_term", label: "Confirm Term",
-      reason: "The executed lease is verified and admitted. Confirm the term to create the lease and begin move-in work." };
+      reason: "The executed lease is verified and admitted. Confirm the term to create the lease and begin move-in work.",
+      method: "POST",
+      endpoint: `/operator/leasing/applications/${app.id}/confirm-term` };
   }
   return { action: "verify_executed_lease", label: "Verify Executed Lease",
-    reason: "The executed lease has been recorded but not yet evaluated for activation." };
+    reason: "The executed lease has been recorded but not yet evaluated for activation.",
+    method: "POST",
+    endpoint: `/operator/leasing/applications/${app.id}/executed-lease/verify` };
 }
 
 async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
@@ -300,7 +308,7 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
     // 088: the execution seam, always visible — absent, verified+admitted,
     // or verified+blocked with its reasons and one clear primary action.
     executed_lease,
-    execution_primary_action: executionPrimaryAction(executed_lease),
+    execution_primary_action: executionPrimaryAction(app, executed_lease),
     // lease-keyed surfaces (move-in state) hang off this; null until confirm-term
     lease_id,
     unit_spaces,
@@ -337,7 +345,7 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
       voided_at: packet ? (packet.voided_at || null) : null,
       drifted_fields: currency.drifted_fields,
       is_placeholder: packet ? !!packet.is_placeholder : null,
-      note: currency.status === "stale" ? "Packet stale — regenerate before countersign."
+      note: currency.status === "stale" ? "Packet stale — regenerate before resident review."
         : currency.status === "not_generated" ? "Lease packet not generated yet. It will use the canonical application terms."
         : "Lease packet uses canonical application terms.",
     },
