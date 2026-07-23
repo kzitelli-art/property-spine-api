@@ -233,6 +233,19 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
   const concession = await concessionDetail(client, app);
   const confirmation = await loadConfirmation(client, app);
   const executed_lease = await loadExecutedLease(client, app);
+
+  // 089: the lease this application produced, if confirm-term has run. The
+  // move-in operating read is lease-keyed, so without this the operator app has
+  // no way to reach it. Honest null before a lease exists.
+  let lease_id = null;
+  try {
+    const lq = await client.query(
+      `select id from leases
+        where application_id = $1
+          and lease_status not in ('cancelled','rescinded','void','superseded')
+        order by created_at desc limit 1`, [app.id]);
+    lease_id = lq.rows[0] ? lq.rows[0].id : null;
+  } catch (e) { lease_id = null; }
   const lineageMatches = !!(packet && confirmation &&
     String(packet.proposed_terms_confirmation_id) === String(confirmation.id));
 
@@ -275,6 +288,8 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
     // or verified+blocked with its reasons and one clear primary action.
     executed_lease,
     execution_primary_action: executionPrimaryAction(executed_lease),
+    // lease-keyed surfaces (move-in state) hang off this; null until confirm-term
+    lease_id,
     terms: {
       lease_start_date: nDate(terms.lease_start_date), lease_end_date: nDate(terms.lease_end_date),
       rent: nNum(terms.rent), deposit: nNum(terms.deposit),
