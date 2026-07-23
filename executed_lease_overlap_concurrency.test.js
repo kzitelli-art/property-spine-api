@@ -156,14 +156,17 @@ async function setup(admin) {
        (application_id,status,proposed_terms_confirmation_id)
      values ($1,'submitted',$3), ($2,'submitted',$4)`,
     [ids.appA, ids.appB, ids.confA, ids.confB]);
+  // ids.property is deliberately NOT passed: the mirror executed_lease_records
+  // table carries no property_id column, and Postgres refuses a parameter the
+  // statement never references ("could not determine data type of parameter $6").
   await admin.query(
     `insert into ${qSchema}.executed_lease_records
        (id, application_id, record_state, normalization_version, payload_hash,
         space_id, lease_id, rent, security_deposit, lease_start_date,
         lease_end_date, concession_status)
-     values ($1,$3,'verified',1,$5,$7,null,1850,1850,'2026-08-01','2027-07-31','none'),
-            ($2,$4,'verified',1,$5,$7,null,1850,1850,'2026-08-01','2027-07-31','none')`,
-    [ids.recA, ids.recB, ids.appA, ids.appB, hash, ids.property, ids.space]);
+     values ($1,$3,'verified',1,$5,$6,null,1850,1850,'2026-08-01','2027-07-31','none'),
+            ($2,$4,'verified',1,$5,$6,null,1850,1850,'2026-08-01','2027-07-31','none')`,
+    [ids.recA, ids.recB, ids.appA, ids.appB, hash, ids.space]);
 }
 
 async function setSearchPath(client) {
