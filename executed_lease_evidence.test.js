@@ -19,6 +19,7 @@ const ACK = { id: "conf-1", rent: "1850.00", security_deposit: "1850.00",
   lease_start_date: "2026-08-01", lease_end_date: "2027-07-31",
   concession_status: "none", payload_hash: null };
 let LOCKED_OFFER_RENT = null;   // null = no locked offer
+let OVERLAPS = [];              // competing operative leases on the space
 
 function stubClient(overrides = {}) {
   const o = { appUnit: UNIT, spaceUnit: UNIT, spaceProp: PROP, ...overrides };
@@ -44,6 +45,7 @@ function stubClient(overrides = {}) {
     if (/from application_proposed_terms_confirmations/.test(s)) return { rows: [ACK] };
     if (/select id, unit_id from spaces where id=\$1/.test(s))
       return { rows: [{ id: SPACE, unit_id: o.spaceUnit }] };
+    if (/from leases[\s\S]*daterange/.test(s)) return { rows: OVERLAPS };
     if (/from lease_economic_schedules/.test(s))
       return { rows: LOCKED_OFFER_RENT == null ? [] : [{ id: "sched-1" }] };
     if (/from lease_economic_lines/.test(s))
@@ -229,6 +231,33 @@ ACK.payload_hash = normalizeAndHash({ rent: 1850, security_deposit: 1850,
   v = await svc.verifyExecutedLease(stubClient(), base(), DEPS);
   ok("agreeing locked offer → admitted", v.activation_status === "admitted");
   LOCKED_OFFER_RENT = null;
+
+  console.log("\n10b. Overlapping operative lease (one space, one tenancy)");
+  store.records = []; store.appStatus = "approved"; store.obligations = []; store.evaluations = [];
+  LOCKED_OFFER_RENT = null;
+  OVERLAPS = [{ id: "L-OTHER", lease_status: "pending",
+    start_date: "2026-09-01", end_date: "2027-08-31", tenant_ids: ["p-other"] }];
+  v = await svc.verifyExecutedLease(stubClient(), { ...base(), idempotency_key: "ov-1" }, DEPS);
+  ok("evidence still RECORDED despite the overlap", !!v.record_id && v.record_state === "verified");
+  ok("…activation blocked with overlapping_operative_lease",
+    v.activation_status === "blocked" && v.blockers.some(b => b.code === "overlapping_operative_lease"));
+  ok("…competing lease surfaced with status, dates and tenants",
+    v.blockers.find(b => b.code === "overlapping_operative_lease")
+      .competing.some(c => c.lease_id === "L-OTHER" && c.lease_status === "pending"));
+  ok("…term_required NOT opened", store.obligations.length === 0 && store.appStatus === "approved");
+  ok("…sources record the overlap check ran",
+    store.evaluations[0].sources_compared.overlap_check.competing_leases_found === 1);
+  // confirm-term recomputes through the same function — prove the pure path blocks too
+  let oc = await svc.computeAdmissionBlockers(stubClient(), { application_id: APP });
+  ok("confirm-term's recompute sees the same blocker",
+    oc.blockers.some(b => b.code === "overlapping_operative_lease"));
+  // the conflict clears (competing lease terminated) → the SAME record
+  // re-evaluates through the idempotent path; no second record is born
+  OVERLAPS = [];
+  v = await svc.verifyExecutedLease(stubClient(), { ...base(), idempotency_key: "ov-1" }, DEPS);
+  ok("overlap cleared → idempotent re-evaluation admits, no new record",
+    v.idempotent === true && v.activation_status === "admitted" && store.records.length === 1);
+  OVERLAPS = [];
 
   console.log("\n11. Append-only admission history (requirement 2)");
   store.records = []; store.appStatus = "approved"; store.obligations = []; store.evaluations = [];
