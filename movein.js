@@ -15,6 +15,7 @@
 
 const staffSessions = require("./staff_session_service");
 const economicTenancy = require("./economic_tenancy_service");
+const moveInQueue = require("./move_in_queue");
 
 module.exports = function movein(deps) {
   const express = require("express");
@@ -276,6 +277,29 @@ module.exports = function movein(deps) {
   }
 
   // ── SESSION-AUTHENTICATED CANONICAL OPERATOR ROUTES ─────────────────────
+
+
+  // PROPERTY SPINE MOVE-IN QUEUE ROUTE v1
+  // One property-scoped read projection over composeMoveInState. This route
+  // authors no move-in transition and accepts no browser-supplied property id.
+  router.get("/operator/leasing/move-ins", requireOperator(["leasing", "management", "maintenance"]), async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const client = await pool.connect();
+    try {
+      await client.query("begin isolation level repeatable read read only");
+      const result = await moveInQueue.readMoveInQueue(client, {
+        propertyId: req.operator.property_id,
+        windowDays: req.query && req.query.window_days,
+        limit: req.query && req.query.limit,
+        includeCompleted: String(req.query && req.query.include_completed || "").toLowerCase() === "true",
+      });
+      await client.query("commit");
+      return res.json(result);
+    } catch (e) {
+      try { await client.query("rollback"); } catch (_) {}
+      return sendError(res, e);
+    } finally { client.release(); }
+  });
 
   router.get("/operator/leasing/leases/:leaseId/move-in-state", requireOperator(["leasing", "management", "maintenance"]), async (req, res) => {
     res.set("Cache-Control", "no-store");
