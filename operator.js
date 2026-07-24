@@ -1621,6 +1621,11 @@ module.exports = function operatorModule(deps) {
     try {
       // "Today" is the PROPERTY'S OPERATIONAL DAY — resolved, never assumed.
       const PROPERTY_TZ = resolvePropertyOperatingTimeZone(req.operator.property_id);
+      // Day window, clamped. 0 = today only (the historical default, so every
+      // existing caller behaves exactly as before); 30 is the ceiling so a
+      // client cannot ask the board for an unbounded range.
+      const _wd = Number.parseInt(req.query.days, 10);
+      const WINDOW_DAYS = Number.isFinite(_wd) ? Math.min(Math.max(_wd, 0), 30) : 0;
       if (!PROPERTY_TZ) {
         return res.status(422).json({
           error: "PROPERTY_TIMEZONE_UNCONFIGURED",
@@ -1683,7 +1688,14 @@ module.exports = function operatorModule(deps) {
             left join tour_availability av on av.id = t.slot_id
             left join proj on proj.conversation_id = c.id
            where t.property_id=$1
-             and (t.scheduled_for at time zone $2)::date = (now() at time zone $2)::date
+             -- Windowed day range in the PROPERTY's operating timezone. days=0
+             -- (the default) is exactly the previous today-only behaviour, so
+             -- every existing caller is unchanged. days=6 gives the week ahead.
+             -- Parameterised rather than forked into a second endpoint: two
+             -- tour reads would drift, and the board must have one meaning.
+             and (t.scheduled_for at time zone $2)::date
+                   between (now() at time zone $2)::date
+                       and ((now() at time zone $2)::date + ($4::int))
              and t.status in ('scheduled','confirmed_by_prospect','checked_in')
         ),
         routed as (
@@ -1712,8 +1724,13 @@ module.exports = function operatorModule(deps) {
             when 'answer_before_tour'       then 'reply'
             else 'open_tour' end as primary_action_key
         from final
-        order by scheduled_for`, [req.operator.property_id, PROPERTY_TZ, GRACE_MINUTES]);
-      return res.json({ receipt: `${r.rows.length} active tour(s) on the board today.`, property_id: req.operator.property_id, tours: r.rows });
+        order by scheduled_for`, [req.operator.property_id, PROPERTY_TZ, GRACE_MINUTES, WINDOW_DAYS]);
+      const _dayLabel = WINDOW_DAYS === 0 ? "today" : `over the next ${WINDOW_DAYS + 1} days`;
+      return res.json({
+        receipt: `${r.rows.length} active tour(s) on the board ${_dayLabel}.`,
+        property_id: req.operator.property_id,
+        window_days: WINDOW_DAYS,
+        tours: r.rows });
     } catch (e) { console.error("operator tours today:", e); return res.status(500).json({ receipt: "Could not load today's tours.", error: e.message }); }
   });
 
