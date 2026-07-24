@@ -187,6 +187,26 @@ async function loadFollowupRows(client, propertyId, deps) {
   const { staffIdentity } = deps;
   const rows = (await client.query(FOLLOWUP_SQL, [propertyId])).rows;
 
+  // ── CAPABILITY, EVALUATED ONCE PER PAGE ───────────────────────────
+  // Ask the SAME evaluator the write route asks, so a Send button that the
+  // server would refuse arrives already disabled with its reason instead of
+  // being discovered by pressing it. One batched query for the whole board,
+  // not one per row — the fetch shape differs from the route's, the decision
+  // does not.
+  //
+  // Fail-soft on purpose: if capability cannot be evaluated the rows are
+  // returned WITHOUT a verdict, and the normalizer leaves the action as it
+  // was. A capability read that breaks must not blank the desk — an absent
+  // verdict is honestly unknown, never a silent denial.
+  let capabilityByPerson = null;
+  try {
+    const capability = require("./capability");
+    capabilityByPerson = await capability.evaluateApplicationLinkBirthBatch(client, {
+      property_id: propertyId,
+      person_ids: rows.map((r) => r.person_id).filter(Boolean),
+    });
+  } catch (_) { capabilityByPerson = null; }
+
   // ONE resolver read per DISTINCT owner, on CLIENT (in-snapshot).
   const ownerIds = [...new Set(rows.map((r) => r.owner_user_id).filter(Boolean))];
   const basisByOwner = {};
@@ -198,6 +218,12 @@ async function loadFollowupRows(client, propertyId, deps) {
   }
 
   return rows.map((r) => ({
+    // The server-authored verdict for the one action this row can offer.
+    // null = not evaluated (see fail-soft above), which the normalizer
+    // treats as "no opinion", never as a denial.
+    send_application_capability: capabilityByPerson
+      ? (capabilityByPerson.get(r.person_id ? String(r.person_id) : null) || null)
+      : null,
     obligation_id: r.obligation_id,
     conversion_id: r.conversion_id,
     origin_tour_id: r.origin_tour_id || null,
