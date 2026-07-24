@@ -81,6 +81,37 @@ async function seedDemoSlots(pool, opts = {}) {
     return { skipped: true, reason: `Property ${DEMO_PROPERTY_ID} not found`, created: 0, existed: 0, openCount: 0, days };
   }
 
+  // ── BIRTH GUARD — a slot is never born without a host ───────────────
+  // This seeder wrote `null` for leasing_agent_id, and bookTourIntoSlot
+  // faithfully copies whatever the slot carries. Every demo tour ever booked
+  // was therefore hostless by construction: the board correctly showed
+  // "Needs a host" on records that could never have had one. Nothing
+  // downstream was broken; the fact was simply never written.
+  //
+  // The host is RESOLVED, never hardcoded — through the same canonical
+  // resolver the operator's owner selector reads, so a seeded slot carries
+  // the same kind of ownership a real staff calendar would. If the property
+  // has no eligible leasing staff, this seeds NOTHING and says why: a tour
+  // slot at a property nobody can host is not availability, it is a promise
+  // with no one behind it. Honest blank beats confident wrong.
+  let hostUserId = null;
+  try {
+    const staffIdentity = require("../staff_identity_resolver.js");
+    const client = await pool.connect();
+    try {
+      const eligible = await staffIdentity.listEligibleStaff(client, DEMO_PROPERTY_ID);
+      hostUserId = (eligible && eligible[0] && eligible[0].id) || null;
+    } finally { client.release(); }
+  } catch (e) {
+    return { skipped: true, reason: `staff resolver unavailable (${e.message})`,
+             created: 0, existed: 0, openCount: 0, days };
+  }
+  if (!hostUserId) {
+    return { skipped: true,
+             reason: "no eligible leasing staff at this property — refusing to seed hostless slots",
+             created: 0, existed: 0, openCount: 0, days };
+  }
+
   const businessDays = nextBusinessDays(days);
   let created = 0, existed = 0;
   for (const d of businessDays) {
@@ -97,8 +128,8 @@ async function seedDemoSlots(pool, opts = {}) {
 
       await pool.query(
         `insert into tour_availability (property_id, unit_id, leasing_agent_id, starts_at, ends_at, capacity, status)
-         values ($1, null, null, $2, $3, 1, 'open')`,
-        [DEMO_PROPERTY_ID, starts.toISOString(), ends.toISOString()]);
+         values ($1, null, $4, $2, $3, 1, 'open')`,
+        [DEMO_PROPERTY_ID, starts.toISOString(), ends.toISOString(), hostUserId]);
       created++;
     }
   }
