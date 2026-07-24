@@ -70,6 +70,20 @@ async function loadApplicationRows(client, propertyId, deps) {
       );
       if (detail && !detail.notInScope) {
         next_action = detail.next_action || null;
+        const execution = detail.execution_primary_action || null;
+        if (next_action && next_action.code === "executed_lease_required" && execution && execution.action) {
+          next_action = {
+            ...next_action,
+            code: execution.action,
+            label: execution.label || next_action.label,
+            state: execution.action === "term_confirmed"
+              ? "complete"
+              : execution.action === "review_conflict"
+                ? "blocked"
+                : "available",
+            blocker_code: execution.action === "review_conflict" ? "executed_lease_conflict" : null,
+          };
+        }
         // Prefer detail-level identity when present; fall back to the summary.
         unit_label = (detail.unit_label != null ? detail.unit_label : unit_label);
         applicant_name = (detail.applicant_name != null ? detail.applicant_name : applicant_name);
@@ -174,6 +188,7 @@ async function loadFollowupRows(client, propertyId, deps) {
   return rows.map((r) => ({
     obligation_id: r.obligation_id,
     conversion_id: r.conversion_id,
+    origin_tour_id: r.origin_tour_id || null,
     application_id: r.application_id || null,
     person_id: r.person_id,
     person_name: r.person_name,
