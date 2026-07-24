@@ -1605,6 +1605,10 @@ module.exports = function operatorModule(deps) {
   //  truth leasingleads.js uses for agent tour-offer local times. An
   //  UNCONFIGURED property gets an honest null (never an invented day).
   const { resolvePropertyOperatingTimeZone } = require("./property_timezone");
+  // The board's DAY CONTRACT — offsets, clamping, and the SQL fragments that
+  // enforce them. Shared with tours_conveyor.test.js so the harness exercises
+  // the real predicate rather than a re-typed copy. (tour_window.js)
+  const TW = require("./tour_window");
 
   // ══════════════════════════════════════════════════════════════════
   //  LIVE TOUR SURFACE (session door) — the reads/writes that let the
@@ -1621,11 +1625,28 @@ module.exports = function operatorModule(deps) {
     try {
       // "Today" is the PROPERTY'S OPERATIONAL DAY — resolved, never assumed.
       const PROPERTY_TZ = resolvePropertyOperatingTimeZone(req.operator.property_id);
-      // Day window, clamped. 0 = today only (the historical default, so every
-      // existing caller behaves exactly as before); 30 is the ceiling so a
-      // client cannot ask the board for an unbounded range.
-      const _wd = Number.parseInt(req.query.days, 10);
-      const WINDOW_DAYS = Number.isFinite(_wd) ? Math.min(Math.max(_wd, 0), 30) : 0;
+      // ── DAY WINDOW (the conveyor) ───────────────────────────────────
+      // The board reads a RANGE of operating days, not just forward from
+      // today. Offsets are relative to the property's today, resolved
+      // server-side; the caller never supplies a date, because what
+      // "today" means here is property truth, not browser truth.
+      //
+      //   (nothing)        → today only          — every existing caller
+      //   ?days=6          → today .. today+6    — legacy, unchanged
+      //   ?from=-1&to=0    → yesterday .. today
+      //   ?from=-7&to=-1   → last week, no today
+      //
+      // A reversed or over-wide window FAILS rather than being quietly
+      // reinterpreted: returning days the caller did not ask for is the
+      // same lie as returning a fixture.
+      const WIN = TW.resolveTourWindow(req.query);
+      if (WIN.error) {
+        return res.status(400).json({ error: WIN.error.code, receipt: WIN.error.receipt });
+      }
+      const FROM_OFFSET = WIN.fromOffset;
+      const TO_OFFSET = WIN.toOffset;
+      const INCLUDE_TERMINAL = WIN.includeTerminal;
+      const WINDOW_DAYS = TO_OFFSET;   // legacy echo, preserved for existing readers
       if (!PROPERTY_TZ) {
         return res.status(422).json({
           error: "PROPERTY_TIMEZONE_UNCONFIGURED",
@@ -1672,6 +1693,13 @@ module.exports = function operatorModule(deps) {
                  u.name as scheduled_host_name,
                  av.ends_at as scheduled_end_at,
                  (u.id is null) as host_unassigned,
+                 -- the day this tour belongs to, decided in the PROPERTY'S tz.
+                 -- A 8pm Eastern tour is 00:00 UTC the next day; deciding day
+                 -- membership in UTC puts it on the wrong page of the board.
+                 ${TW.operatingDateExpr("$2")} as operating_date,
+                 -- outcome recorded → the tour has left the capture set, but it
+                 -- is still what happened that day.
+                 ${TW.isTerminalExpr()} as is_terminal,
                  (proj.commercial_state='booked_tour' and proj.waiting_on='manager')
                    as booked_inbound_waiting_on_manager,
                  -- past = ended + grace < now, computed in the PROPERTY'S TZ.
@@ -1688,30 +1716,30 @@ module.exports = function operatorModule(deps) {
             left join tour_availability av on av.id = t.slot_id
             left join proj on proj.conversation_id = c.id
            where t.property_id=$1
-             -- Windowed day range in the PROPERTY's operating timezone. days=0
-             -- (the default) is exactly the previous today-only behaviour, so
-             -- every existing caller is unchanged. days=6 gives the week ahead.
+             -- Ranged day window in the PROPERTY's operating timezone.
              -- Parameterised rather than forked into a second endpoint: two
              -- tour reads would drift, and the board must have one meaning.
-             and (t.scheduled_for at time zone $2)::date
-                   between (now() at time zone $2)::date
-                       and ((now() at time zone $2)::date + ($4::int))
-             and t.status in ('scheduled','confirmed_by_prospect','checked_in')
+             and ${TW.windowPredicate("$2", "$4", "$5")}
+             and ${TW.statusPredicate("$6")}
         ),
         routed as (
           select *,
             case when is_past is null then 'unknown'
                  when is_past then 'past' else 'future' end as phase,
-            array_remove(array[
-              case when host_unassigned then 'host_unassigned' end,
-              case when booked_inbound_waiting_on_manager then 'booked_inbound_waiting_on_manager' end,
-              case when is_past is true then 'outcome_overdue' end
-            ], null) as open_issues
+            -- a settled tour has no OPEN issue: its outcome is recorded, so
+            -- neither a missing host nor a past end time is still actionable.
+            case when is_terminal then array[]::text[]
+                 else array_remove(array[
+                   case when host_unassigned then 'host_unassigned' end,
+                   case when booked_inbound_waiting_on_manager then 'booked_inbound_waiting_on_manager' end,
+                   case when is_past is true then 'outcome_overdue' end
+                 ], null) end as open_issues
           from tours
         ),
         final as (
           select *,
             case
+              when is_terminal then 'settled'
               when phase='past' then 'outcomes_needing_capture'
               when host_unassigned then 'tours_needing_owner'
               when booked_inbound_waiting_on_manager then 'answer_before_tour'
@@ -1724,12 +1752,54 @@ module.exports = function operatorModule(deps) {
             when 'answer_before_tour'       then 'reply'
             else 'open_tour' end as primary_action_key
         from final
-        order by scheduled_for`, [req.operator.property_id, PROPERTY_TZ, GRACE_MINUTES, WINDOW_DAYS]);
-      const _dayLabel = WINDOW_DAYS === 0 ? "today" : `over the next ${WINDOW_DAYS + 1} days`;
+        order by scheduled_for`,
+        [req.operator.property_id, PROPERTY_TZ, GRACE_MINUTES, FROM_OFFSET, TO_OFFSET, INCLUDE_TERMINAL]);
+
+      // The window's real dates, resolved by the DATABASE in the property's
+      // timezone — never recomputed in Node, where a second date library
+      // would be a second opinion about what day it is.
+      const w = (await pool.query(
+        `select (now() at time zone $1)::date + ($2)::int as from_date,
+                (now() at time zone $1)::date + ($3)::int as to_date,
+                (now() at time zone $1)::date            as today_date`,
+        [PROPERTY_TZ, FROM_OFFSET, TO_OFFSET])).rows[0];
+      const iso = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
+
+      // EVERY day in the window, including the empty ones. A day with no
+      // tours is a real answer ("nothing was scheduled") and the board must
+      // be able to land on it; omitting it makes an empty day look broken.
+      const byDate = new Map();
+      for (const row of r.rows) {
+        const k = iso(row.operating_date);
+        byDate.set(k, (byDate.get(k) || 0) + 1);
+      }
+      const days = [];
+      for (let o = FROM_OFFSET; o <= TO_OFFSET; o++) {
+        const d = new Date(`${iso(w.today_date)}T00:00:00Z`);
+        d.setUTCDate(d.getUTCDate() + o);
+        const k = d.toISOString().slice(0, 10);
+        days.push({ offset: o, date: k, is_today: o === 0, tour_count: byDate.get(k) || 0 });
+      }
+
+      const settled = r.rows.filter((x) => x.is_terminal).length;
+      const _span = TO_OFFSET - FROM_OFFSET + 1;
+      const _dayLabel = (FROM_OFFSET === 0 && TO_OFFSET === 0) ? "today"
+        : (FROM_OFFSET === 0) ? `over the next ${_span} days`
+        : (TO_OFFSET === 0) ? `over the last ${_span} days`
+        : `across ${_span} days`;
+
       return res.json({
-        receipt: `${r.rows.length} active tour(s) on the board ${_dayLabel}.`,
+        receipt: `${r.rows.length} tour(s) on the board ${_dayLabel}.`
+          + (INCLUDE_TERMINAL && settled ? ` ${settled} already settled.` : ""),
         property_id: req.operator.property_id,
-        window_days: WINDOW_DAYS,
+        timezone: PROPERTY_TZ,
+        window: {
+          from_offset: FROM_OFFSET, to_offset: TO_OFFSET,
+          from_date: iso(w.from_date), to_date: iso(w.to_date), today_date: iso(w.today_date),
+          include_terminal: INCLUDE_TERMINAL, mode: WIN.mode, days,
+        },
+        window_days: WINDOW_DAYS,     // legacy field, unchanged for existing readers
+        settled_count: settled,
         tours: r.rows });
     } catch (e) { console.error("operator tours today:", e); return res.status(500).json({ receipt: "Could not load today's tours.", error: e.message }); }
   });
