@@ -41,7 +41,7 @@
 // ════════════════════════════════════════════════════════════════════
 "use strict";
 
-const staffIdentity = require("./staff_identity_resolver.js");
+const staffIdentity = require("../identity/staff_identity_resolver.js");
 
 function httpErr(status, message) {
   const e = new Error(message);

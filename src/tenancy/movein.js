@@ -13,7 +13,7 @@
 
 "use strict";
 
-const staffSessions = require("./staff_session_service");
+const staffSessions = require("../identity/staff_session_service");
 const economicTenancy = require("./economic_tenancy_service");
 const moveInQueue = require("./move_in_queue");
 

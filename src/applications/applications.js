@@ -48,8 +48,8 @@ module.exports = function applicationsModule(deps) {
   // Back-compat: if absent (older server.js), the two routes fail closed with
   // a clear 503 rather than silently reverting to a second implementation.
   const tenancyAnchor = deps.tenancyAnchor || null;
-  const { dormantWriteGuard } = require("./dormant_gate");  // fail-closed commitment-write gate
-  const { activationPerimeter } = require("./activation_perimeter"); // Step 6: scoped activation perimeter
+  const { dormantWriteGuard } = require("../identity/dormant_gate");  // fail-closed commitment-write gate
+  const { activationPerimeter } = require("../identity/activation_perimeter"); // Step 6: scoped activation perimeter
   const router = express.Router();
 
   // ── v3 TERMS-REVIEW CORRECTION (the birth event) ─────────────────────

@@ -23,7 +23,7 @@
 // GET /properties/:id/leasing
 // ============================================================
 
-const { byPropertyId, byCanonical } = require("./deal_registry");
+const { byPropertyId, byCanonical } = require("../onboarding/deal_registry");
 
 module.exports = function leasingDetail(deps) {
   const express = require("express");

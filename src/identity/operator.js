@@ -34,8 +34,8 @@
 const crypto = require("crypto");
 const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
-const proposedTerms = require("./proposed_terms_service"); // Part 3: governed proposed-terms confirmation (Part 2 service)
-const applicationSendCommand = require("./application_send_command"); // composite Send-application command (intent→prepare→dispatch)
+const proposedTerms = require("../applications/proposed_terms_service"); // Part 3: governed proposed-terms confirmation (Part 2 service)
+const applicationSendCommand = require("../applications/application_send_command"); // composite Send-application command (intent→prepare→dispatch)
 
 module.exports = function operatorModule(deps) {
   const {
@@ -47,9 +47,9 @@ module.exports = function operatorModule(deps) {
     applicationsService = null,
     leasePacketsService = null,
   } = deps;
-  const { rankTurnPriority } = require("./turn_priority"); // shared Turn-Priority ranking (slice 1)
-  const { buildReviewList, buildReviewDetail } = require("./application_review"); // application review reads (slice 2)
-  const { loadLeasingDesk } = require("./leasing_desk_loader"); // Leasing Desk composition (one repeatable-read snapshot)
+  const { rankTurnPriority } = require("../maintenance/turn_priority"); // shared Turn-Priority ranking (slice 1)
+  const { buildReviewList, buildReviewDetail } = require("../applications/application_review"); // application review reads (slice 2)
+  const { loadLeasingDesk } = require("../leasing/leasing_desk_loader"); // Leasing Desk composition (one repeatable-read snapshot)
   // ── THE ONE CANONICAL TENANCY-ANCHOR SERVICE (Fable ruling) ──────────
   // The SAME countersign + confirm-term implementation applications.js calls.
   // Injected from server.js (built once from the obligation engine). The two
@@ -88,7 +88,7 @@ module.exports = function operatorModule(deps) {
   // browser routes (below); linkTour/cancelTour/correctTourLink stay as internal
   // service functions to be called by the canonical tour-creation / scheduling-
   // cancellation / audited-repair paths — NOT general operator endpoints.
-  const leasingLifecycle = require("./leasing_lifecycle_service")({ pool });
+  const leasingLifecycle = require("../leasing/leasing_lifecycle_service")({ pool });
 
   // Compare a presented bearer credential against the configured one in constant time.
   // We SHA-256 BOTH sides first so the timingSafeEqual inputs are always equal fixed
@@ -815,7 +815,7 @@ module.exports = function operatorModule(deps) {
   //  'lost' remains owned by the lead module (leasingleads.recordLeadEvent), not here.
   // ════════════════════════════════════════════════════════════════════
 
-  const conversationOperating = require("./conversation_operating_contract");
+  const conversationOperating = require("../shared/conversation_operating_contract");
 
   const QUEUE_LIMIT = 50;
   const ACTIVE_STATES = ["new", "active"];
@@ -1632,11 +1632,11 @@ module.exports = function operatorModule(deps) {
   //  Resolved through the ONE shared resolver (property_timezone.js) — the SAME
   //  truth leasingleads.js uses for agent tour-offer local times. An
   //  UNCONFIGURED property gets an honest null (never an invented day).
-  const { resolvePropertyOperatingTimeZone } = require("./property_timezone");
+  const { resolvePropertyOperatingTimeZone } = require("../shared/property_timezone");
   // The board's DAY CONTRACT — offsets, clamping, and the SQL fragments that
   // enforce them. Shared with tours_conveyor.test.js so the harness exercises
   // the real predicate rather than a re-typed copy. (tour_window.js)
-  const TW = require("./tour_window");
+  const TW = require("../shared/tour_window");
   // ONE evaluator per governed action, shared by the write route and the
   // read projection so a rendered action and an enforced action cannot
   // disagree. (capability.js)
@@ -2205,7 +2205,7 @@ module.exports = function operatorModule(deps) {
   // send-time revalidation of a unit attached to a conversation. Optionally
   // checks the unit can be ready for an intended move-in date.
   async function unitOfferableState(property_id, unit_id, intended_move_in) {
-    const availability = require("./availability")({ pool });
+    const availability = require("../tenancy/availability")({ pool });
     const proj = await availability._service.readAvailability(property_id);
     const space = (proj.spaces || []).find((s) => String(s.unit_id) === String(unit_id));
     if (!space) return { offerable: false, reason: "not_at_property", state: null };
@@ -2675,7 +2675,7 @@ module.exports = function operatorModule(deps) {
   router.get("/operator/leasing/leaseable-units", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
-      const availability = require("./availability")({ pool });
+      const availability = require("../tenancy/availability")({ pool });
       const proj = await availability._service.readAvailability(req.operator.property_id);
       const spaces = (proj.spaces || []).filter((s) => LEASEABLE_STATES.includes(s.availability_state));
       const units = spaces.map((s) => ({
@@ -2696,7 +2696,7 @@ module.exports = function operatorModule(deps) {
   //  is enforced by requireOperator (401 on invalid/expired) +
   //  requireLeasingModuleAccess (403 without the module). No business logic
   //  lives here — the calculation is shared so it cannot drift from other views.
-  const { leasingConditionFacts } = require("./leasing_condition_facts.js");
+  const { leasingConditionFacts } = require("../leasing/leasing_condition_facts.js");
   router.get("/operator/leasing/condition", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
