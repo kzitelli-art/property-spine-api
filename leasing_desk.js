@@ -39,6 +39,30 @@ const APPLICATION_SHADOW_RUNGS = new Set([
   "application_lifecycle_followup",
 ]);
 
+
+// Leasing Work is a lifecycle conveyor, not a severity bucket.
+// These codes remain in Leasing Work's final tab until the tenancy anchor exists.
+const LEASE_SENT_STAGE_CODES = new Set([
+  "executed_lease_required",
+  "verify_executed_lease",
+  "review_conflict",
+  "confirm_term",
+]);
+
+// Once the canonical resolver says the application is complete/active/closed,
+// it has left acquisition. Move-in and Future Rent Roll own the next projection.
+const EXITED_LEASING_CODES = new Set([
+  "active",
+  "closed",
+  "term_confirmed",
+]);
+
+const LEASING_STAGE_CODES = Object.freeze([
+  "post_tour",
+  "application",
+  "lease_sent",
+]);
+
 const DUE_RANK = Object.freeze({ overdue: 0, today: 1, upcoming: 2, none: 3 });
 
 function valueOrNull(value) {
@@ -201,6 +225,110 @@ function normalizeFollowupRow(row) {
   };
 }
 
+
+function stageForApplicationNext(next) {
+  if (!next || !next.code) return null;
+  if (next.state === "complete" || EXITED_LEASING_CODES.has(next.code)) return null;
+  if (LEASE_SENT_STAGE_CODES.has(next.code)) return "lease_sent";
+  return "application";
+}
+
+function normalizeStageApplicationAction(row, next) {
+  const base = normalizeApplicationAction(row, next);
+  const labels = {
+    executed_lease_required: "Record executed lease",
+    verify_executed_lease: "Record executed lease",
+    review_conflict: "Review conflict",
+    confirm_term: "Confirm lease term",
+    await_resident_acknowledgment: "Open application",
+    awaiting_acknowledgment: "Open application",
+  };
+  return { ...base, label: labels[next.code] || base.label };
+}
+
+function normalizeStageApplicationRow(row) {
+  const next = row && row.next_action;
+  const stage = stageForApplicationNext(next);
+  if (!stage) return null;
+
+  return {
+    desk_key: applicationDeskKey(row),
+    deal_key: dealKey(row),
+    conversion_id: valueOrNull(row.conversion_id),
+    stage,
+    person_id: valueOrNull(row.person_id),
+    person_name: valueOrNull(row.person_name || row.applicant_name),
+    unit_number: valueOrNull(row.unit_number || row.unit_label),
+    application_id: row.application_id,
+    obligation_id: valueOrNull(row.obligation_id || next.obligation_id),
+    state_code: next.state || "available",
+    state_label: valueOrNull(next.label) || "Application in progress.",
+    blocker_code: valueOrNull(next.blocker_code),
+    next_action_code: next.code,
+    primary_action: normalizeStageApplicationAction(row, next),
+    owner_name: valueOrNull(row.owner_name),
+    owner_basis: valueOrNull(row.owner_basis),
+    due_at: toIsoOrNull(row.due_at),
+    due_state: valueOrNull(row.due_state),
+    created_at: toIsoOrNull(row.created_at),
+    source: "application_lifecycle",
+  };
+}
+
+function stageForFollowup(row) {
+  if (!row) return null;
+  const substatus = valueOrNull(row.applicant_substatus);
+  if (substatus === "declined") return null;
+  if (substatus === "application_sent" || substatus === "submitted" || substatus === "approved") {
+    return "application";
+  }
+  // createConversionFromTour is called only when tour_given !== false.
+  // Therefore origin_tour_id on an open rail row is the durable proof that
+  // post-tour capture actually happened; no-shows and reschedules stay in Tours.
+  if (valueOrNull(row.origin_tour_id)) return "post_tour";
+  return null;
+}
+
+function normalizeStageFollowupRow(row) {
+  const stage = stageForFollowup(row);
+  if (!stage) return null;
+  return { ...normalizeFollowupRow(row), stage };
+}
+
+function identityKeys(row) {
+  const keys = [];
+  if (row && row.conversion_id) keys.push(`conversion:${row.conversion_id}`);
+  if (row && row.application_id) keys.push(`application:${row.application_id}`);
+  return keys;
+}
+
+const LEASING_STAGE_RANK = Object.freeze({ post_tour: 0, application: 1, lease_sent: 2 });
+
+function dedupeLifecycleRows(rows) {
+  // Downstream truth outranks upstream truth for the same relationship. Within
+  // one stage, the existing deterministic urgency order selects the visible row.
+  const sorted = [...rows].sort((a, b) => {
+    const stageDelta = (LEASING_STAGE_RANK[b.stage] ?? -1) - (LEASING_STAGE_RANK[a.stage] ?? -1);
+    return stageDelta || compareRows(a, b);
+  });
+  const chosen = new Map();
+
+  for (const row of sorted) {
+    const key = row.conversion_id
+      ? `conversion:${row.conversion_id}`
+      : row.application_id
+        ? `application:${row.application_id}`
+        : row.desk_key;
+
+    if (!chosen.has(key)) {
+      chosen.set(key, { ...row, related_open_count: 1 });
+    } else {
+      chosen.get(key).related_open_count += 1;
+    }
+  }
+  return [...chosen.values()];
+}
+
 function isApplicationShadow(row) {
   return row && (row.display_shadow_of_application === true || APPLICATION_SHADOW_RUNGS.has(row.rung));
 }
@@ -273,6 +401,48 @@ function composeLeasingDesk({
     .filter((row) => !(shadowMatchesApplication(row) && isApplicationShadow(row)))
     .map(normalizeFollowupRow);
 
+
+  // The new operator projection: one relationship in exactly one lifecycle tab.
+  // It is additive; legacy `bands` remain below during the API→app rolling deploy.
+  const stageApplications = applicationRows
+    .map(normalizeStageApplicationRow)
+    .filter(Boolean);
+
+  // Application Review remains the stronger lifecycle authority even when its
+  // answer is "this relationship has exited Leasing." Build suppression keys
+  // from every resolver-backed application row, not only rows that remain in a
+  // visible stage; otherwise an active/term-confirmed application could leak
+  // back into Application through the rail's coarse `approved` substatus.
+  const applicationAuthorityKeys = new Set();
+  for (const row of applicationRows) {
+    if (!row || !row.next_action || !row.next_action.code) continue;
+    for (const key of identityKeys(row)) applicationAuthorityKeys.add(key);
+  }
+
+  function followupHasApplicationAuthority(row) {
+    return identityKeys(row).some((key) => applicationAuthorityKeys.has(key));
+  }
+
+  // The rail remains the authority for Post-tour and invitation-only waiting,
+  // before a resolver-backed application row exists.
+  const stageFollowups = followupRows
+    .filter((row) => !followupHasApplicationAuthority(row))
+    .map(normalizeStageFollowupRow)
+    .filter(Boolean);
+
+  const allStageRows = dedupeLifecycleRows([...stageApplications, ...stageFollowups]);
+  const stages = {
+    post_tour: allStageRows.filter((row) => row.stage === "post_tour").sort(compareRows),
+    application: allStageRows.filter((row) => row.stage === "application").sort(compareRows),
+    lease_sent: allStageRows.filter((row) => row.stage === "lease_sent").sort(compareRows),
+  };
+  const stage_counts = {
+    post_tour: stages.post_tour.length,
+    application: stages.application.length,
+    lease_sent: stages.lease_sent.length,
+    total: stages.post_tour.length + stages.application.length + stages.lease_sent.length,
+  };
+
   const bands = {
     ready_to_bind: applications.filter((row) => row.band === "ready_to_bind").sort(compareRows),
     ready_to_advance: applications.filter((row) => row.band === "ready_to_advance").sort(compareRows),
@@ -290,6 +460,8 @@ function composeLeasingDesk({
   return {
     property_id: propertyId,
     generated_at: new Date(generatedAt).toISOString(),
+    stages,
+    stage_counts,
     bands,
     counts,
     receipts: {
@@ -311,4 +483,10 @@ module.exports = {
   OMITTED_APPLICATION_CODES,
   APPLICATION_SHADOW_RUNGS,
   COMMUNICATION_MOVE_CODES,
+  LEASE_SENT_STAGE_CODES,
+  EXITED_LEASING_CODES,
+  LEASING_STAGE_CODES,
+  stageForApplicationNext,
+  stageForFollowup,
+  dedupeLifecycleRows,
 };
