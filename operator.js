@@ -1637,6 +1637,10 @@ module.exports = function operatorModule(deps) {
   // enforce them. Shared with tours_conveyor.test.js so the harness exercises
   // the real predicate rather than a re-typed copy. (tour_window.js)
   const TW = require("./tour_window");
+  // ONE evaluator per governed action, shared by the write route and the
+  // read projection so a rendered action and an enforced action cannot
+  // disagree. (capability.js)
+  const capability = require("./capability");
 
   // ══════════════════════════════════════════════════════════════════
   //  LIVE TOUR SURFACE (session door) — the reads/writes that let the
@@ -2234,29 +2238,36 @@ module.exports = function operatorModule(deps) {
   //  Every correction re-classifies dispatch state UNDER the invitation
   //  lock inside the services; these adapters add no business logic.
   // ══════════════════════════════════════════════════════════════════
+  // ── APPLICATION-LINK BIRTH GATE ───────────────────────────────────
+  // The policy no longer lives here. It lives in capability.js, and the
+  // BOARD PROJECTION asks the same function before it renders the Send
+  // button — so an action that this route would refuse arrives already
+  // disabled, carrying the reason, instead of being discovered by pressing
+  // it and reading a red box.
+  //
+  // Two callers, one decision, by construction. If this route computed its
+  // own verdict the two could drift, and the drift has a worst case: a
+  // button that says available while the server refuses. Rule 9 — no
+  // phantom dispatch — applies to what a screen PROMISES, not only to what
+  // it sends.
+  //
+  // The HTTP shape is preserved exactly (ok / status / error / receipt) so
+  // every existing call site is untouched.
+  const HTTP_FOR_REASON = {
+    APPLICATION_LINK_DISABLED: { status: 503, error: "application_intent_disabled" },
+    PROPERTY_NOT_ACTIVATED:    { status: 403, error: "property_not_activated" },
+    CONTROLLED_ACTIVATION_ONLY:{ status: 403, error: "person_not_internal_qa" },
+    PERSON_UNKNOWN:            { status: 403, error: "person_unknown" },
+  };
   async function applicationBirthGate(req, person_id, q = pool) {
-    if (String(process.env.APPLICATION_INTENT_PREPARE_ENABLED || "").toLowerCase() !== "true") {
-      return { ok: false, status: 503, error: "application_intent_disabled",
-               receipt: "Application-link birth is not enabled in this environment." };
-    }
-    const allow = String(process.env.APPLICATION_INTENT_PROPERTY_IDS || "")
-      .split(",").map((s) => s.trim()).filter(Boolean);
-    if (!allow.includes(String(req.operator.property_id))) {
-      return { ok: false, status: 403, error: "property_not_activated",
-               receipt: "This property is not activated for application-link birth." };
-    }
-    if (person_id) {
-      const cls = (await q.query(
-        `select record_class from person_property_classifications
-          where person_id=$1 and property_id=$2 and superseded_at is null
-          order by classified_at desc limit 1`,
-        [person_id, req.operator.property_id])).rows[0];
-      if (!cls || cls.record_class !== "internal_qa") {
-        return { ok: false, status: 403, error: "person_not_internal_qa",
-                 receipt: "During controlled activation, application-link birth is limited to internal QA records." };
-      }
-    }
-    return { ok: true };
+    const verdict = await capability.evaluateApplicationLinkBirth(q, {
+      property_id: req.operator.property_id,
+      person_id: person_id || null,
+    });
+    if (verdict.allowed) return { ok: true, capability: verdict };
+    const http = HTTP_FOR_REASON[verdict.reason_code] || { status: 403, error: "not_permitted" };
+    return { ok: false, status: http.status, error: http.error,
+             receipt: verdict.display_reason, capability: verdict };
   }
 
   function svcGuard(res, fn) {
