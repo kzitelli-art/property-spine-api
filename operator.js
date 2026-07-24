@@ -815,6 +815,8 @@ module.exports = function operatorModule(deps) {
   //  'lost' remains owned by the lead module (leasingleads.recordLeadEvent), not here.
   // ════════════════════════════════════════════════════════════════════
 
+  const conversationOperating = require("./conversation_operating_contract");
+
   const QUEUE_LIMIT = 50;
   const ACTIVE_STATES = ["new", "active"];
   // BL-3: an EXPLICIT, separate closed-state contract — never merged into the
@@ -1011,6 +1013,13 @@ module.exports = function operatorModule(deps) {
           else 'unowned_no_engagement'
         end as bucket_reason_code
       from staged
+    ),
+    operating as (
+      select *,
+        ${conversationOperating.OPERATING_BUCKET_SQL} as operating_bucket,
+        ${conversationOperating.OPERATING_REASON_SQL} as operating_reason_code,
+        ${conversationOperating.OPERATING_PRIORITY_SQL} as operating_priority
+      from projected
     )`;
 
   // GET /operator/leasing/conversation-queue — the ACTIVE WORK QUEUE (working states),
@@ -1058,6 +1067,23 @@ module.exports = function operatorModule(deps) {
       for (const b of bucketRows) { if (Object.prototype.hasOwnProperty.call(buckets, b.control_bucket)) buckets[b.control_bucket] = b.n; }
       counts.buckets = buckets;
 
+      const operatingBucketRows = (await pool.query(
+        PROJECTION_CTE + `
+        select operating_bucket, count(*)::int as n
+        from operating
+        where commercial_state = any($2::text[])
+        group by operating_bucket`,
+        [propertyId, STATES]
+      )).rows;
+      const operatingBuckets = { ...conversationOperating.EMPTY_COUNTS };
+      for (const b of operatingBucketRows) {
+        if (Object.prototype.hasOwnProperty.call(operatingBuckets, b.operating_bucket)) {
+          operatingBuckets[b.operating_bucket] = b.n;
+        }
+      }
+      counts.operating_buckets = operatingBuckets;
+      counts.operating_total = Object.values(operatingBuckets).reduce((n, value) => n + Number(value || 0), 0);
+
       const params = [propertyId, STATES];
       let cursorClause = "";
       if (beforeTs) {
@@ -1074,8 +1100,10 @@ module.exports = function operatorModule(deps) {
                last_inbound_at, last_delivered_outbound_at, last_meaningful_activity_at,
                tour_id, tour_status, closure_reason, closure_note, closure_actor_id,
                closure_actor_name, closure_occurred_at, closure_recorded_at, outreach_attempts,
-               control_bucket, bucket_reason_code, derivation
-        from projected
+               last_any_outbound_at, last_outbound_status,
+               control_bucket, bucket_reason_code,
+               operating_bucket, operating_reason_code, operating_priority, derivation
+        from operating
         -- CONTROL BOARD universe: new/active only. A booked_tour conversation
         -- remains in Person history but is NOT an active board card and does not
         -- inflate bucket counts -- it transfers operationally to the Tours
@@ -1085,7 +1113,7 @@ module.exports = function operatorModule(deps) {
         -- closure action. The underlying facts (waiting_on='manager') remain
         -- computed and queryable.
         where commercial_state = any($2::text[]) ${cursorClause}
-        order by last_meaningful_activity_at desc, conversation_id desc
+        order by operating_priority asc, last_meaningful_activity_at desc, conversation_id desc
         limit $${params.length}`,
         params
       )).rows;
@@ -1105,7 +1133,7 @@ module.exports = function operatorModule(deps) {
       const today = await todayCounts(propertyId);
 
       return res.json({
-        property_id: propertyId, as_of: asOf, projection_version: "queue_projection_v1",
+        property_id: propertyId, as_of: asOf, projection_version: "conversation_board_v1",
         scope, counts, sources, today, conversations: rows, next_cursor: nextCursor, limit,
       });
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
