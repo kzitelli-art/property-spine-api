@@ -163,13 +163,28 @@ const COMMUNICATION_MOVE_CODES = new Set([
   "schedule_second_tour",
 ]);
 
+function unsupportedFollowupAction(row, code, reason) {
+  return {
+    code: "unsupported_action",
+    label: "Unavailable",
+    kind: "unsupported",
+    target: { type: "obligation", id: row.obligation_id },
+    source_code: code,
+    reason: reason || "This action is not supported in the operator app yet.",
+  };
+}
+
 function normalizeFollowupAction(row) {
   const code = valueOrNull(row.next_move_code);
 
   if (code === "send_application") {
     const conversionId = valueOrNull(row.conversion_id);
     if (!conversionId) {
-      throw new Error("send_application requires conversion_id.");
+      return unsupportedFollowupAction(
+        row,
+        code,
+        "The application cannot be sent because this work has no leasing conversion."
+      );
     }
     return {
       code: "send_application",
@@ -179,24 +194,37 @@ function normalizeFollowupAction(row) {
     };
   }
 
-  // Communication-oriented move with a known person → open the conversation.
-  // Without a person_id there is nothing to open; fall through to Complete.
-  if (code && COMMUNICATION_MOVE_CODES.has(code) && valueOrNull(row.person_id)) {
+  if (code && COMMUNICATION_MOVE_CODES.has(code)) {
+    const personId = valueOrNull(row.person_id);
+    if (!personId) {
+      return unsupportedFollowupAction(
+        row,
+        code,
+        "The conversation cannot be opened because no durable person is connected to this work."
+      );
+    }
     return {
       code: "open_conversation",
       label: "Open",
       kind: "navigation",
-      target: { type: "person", id: row.person_id },
+      target: { type: "person", id: personId },
     };
   }
 
-  // Unknown generic obligation → Complete, which opens the confirmation sheet.
-  return {
-    code: "complete_task",
-    label: "Complete",   // closes a fulfilled obligation — the one true task write
-    kind: "task_write",
-    target: { type: "obligation", id: row.obligation_id },
-  };
+  // A rail row with no authored next move is the one genuine generic
+  // obligation-completion case. Explicit legacy completion codes remain accepted.
+  if (code == null || code === "complete_task" || code === "complete") {
+    return {
+      code: "complete_task",
+      label: "Complete",
+      kind: "task_write",
+      target: { type: "obligation", id: row.obligation_id },
+    };
+  }
+
+  // Unknown non-null codes are not completion instructions. Preserve the work,
+  // expose the unsupported source code, and refuse to invent a consequential write.
+  return unsupportedFollowupAction(row, code);
 }
 
 function normalizeFollowupRow(row) {
@@ -234,16 +262,10 @@ function stageForApplicationNext(next) {
 }
 
 function normalizeStageApplicationAction(row, next) {
-  const base = normalizeApplicationAction(row, next);
-  const labels = {
-    executed_lease_required: "Record executed lease",
-    verify_executed_lease: "Record executed lease",
-    review_conflict: "Review conflict",
-    confirm_term: "Confirm lease term",
-    await_resident_acknowledgment: "Open application",
-    awaiting_acknowledgment: "Open application",
-  };
-  return { ...base, label: labels[next.code] || base.label };
+  // The row sentence carries the specific business meaning. Every application
+  // lifecycle action opens the governed Application Review workspace, so the
+  // button vocabulary remains the canonical navigation verb: Open.
+  return normalizeApplicationAction(row, next);
 }
 
 function normalizeStageApplicationRow(row) {
@@ -515,4 +537,8 @@ module.exports = {
   stageForApplicationNext,
   stageForFollowup,
   dedupeLifecycleRows,
+  normalizeApplicationAction,
+  normalizeFollowupAction,
+  normalizeStageApplicationAction,
+  unsupportedFollowupAction,
 };
