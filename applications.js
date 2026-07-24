@@ -344,6 +344,22 @@ module.exports = function applicationsModule(deps) {
             guarantor_name = null, person_id = null, captured = {} } = req.body || {};
     if (!applicant_name) return res.status(400).json({ receipt: "applicant_name is required." });
 
+    // ── BIRTH GUARD — same requirement as the canonical service ────────
+    // This is a SECOND path that writes lease_applications with its own
+    // logic; applicationSubmission.submitApplicationService is the canonical
+    // one. Two paths writing the same domain object is a Rule 10 concern in
+    // its own right and retiring this route is a separate decision — but
+    // until that decision is made, both doors must hold the same contract.
+    // An application without a durable person is a name on a row.
+    if (!person_id) {
+      return res.status(400).json({
+        error: "person_required",
+        receipt: "person_id is required. An application must reference a durable person — " +
+                 "resolve or create the person through the canonical intake path first. " +
+                 "Identity is never inferred from an applicant name.",
+      });
+    }
+
     const client = await pool.connect();
     try {
       await client.query("begin");
