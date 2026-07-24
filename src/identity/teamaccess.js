@@ -216,13 +216,16 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
         // resend floor for re-login: if a live login invite for this phone
         // already has a fresh code, don't mint another (same 60s floor rule).
         const recent = (await pool.query(
-          `select id, otp_sent_at from team_invites
+          `select id, token, otp_sent_at from team_invites
             where phone_number=$1 and property_id=$2 and status='active'
               and accepted_user_id=$3 and allowed_modules='{}'
             order by created_at desc limit 1`, [phone, a.property_id, u.id])).rows[0];
         if (recent && recent.otp_sent_at &&
             (Date.now() - new Date(recent.otp_sent_at).getTime()) < RESEND_FLOOR_SEC * 1000) {
-          return res.status(429).json({ receipt: "A code was just sent. Wait a moment before requesting another." });
+          return res.status(429).json({
+            receipt: "A code was just sent. Enter it below.",
+            token: recent.token,
+          });
         }
 
         // supersede any prior live login invite for this phone+property, then
@@ -369,13 +372,16 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
         });
         const sessionToken = issued.session_token;
 
+        const propRow = (await client.query(
+          `select id, name from properties where id=$1`, [inv.property_id])).rows[0];
+
         await client.query("commit");
         return res.json({
           receipt: "Welcome back. You're in.",
           flow: "relogin",
           session_token: sessionToken,
           user: { id: user.id, name: user.name, phone_number: user.phone },
-          property_id: inv.property_id,
+          property: { id: inv.property_id, name: propRow ? propRow.name : null },
           role_title: a.role_title,
           allowed_modules: a.allowed_modules,
           can_manage_roles: a.can_manage_roles,
@@ -432,6 +438,9 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
       });
       const sessionToken = issued.session_token;
 
+      const propRow2 = (await client.query(
+        `select id, name from properties where id=$1`, [inv.property_id])).rows[0];
+
       await client.query("commit");
 
       const landing = landingModule(inv.allowed_modules, primaryFinal);
@@ -439,7 +448,7 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
         receipt: "Verified. You're in.",
         session_token: sessionToken,
         user: { id: user.id, name: user.name, phone_number: user.phone },
-        property_id: inv.property_id,
+        property: { id: inv.property_id, name: propRow2 ? propRow2.name : null },
         role_title: inv.role_title,
         allowed_modules: inv.allowed_modules,
         can_manage_roles: inv.can_manage_roles,
