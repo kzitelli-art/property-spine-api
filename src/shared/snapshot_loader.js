@@ -16,8 +16,8 @@
 // Replacement condition: direct parser for the canonical source export.
 // ============================================================
 
-const staffSessions = require("./staff_session_service.js");
-const { spacePosition } = require("./space_position");
+const staffSessions = require("../identity/staff_session_service.js");
+const { spacePosition } = require("../tenancy/space_position");
 
 const CONFIGS = {
   skyline: {

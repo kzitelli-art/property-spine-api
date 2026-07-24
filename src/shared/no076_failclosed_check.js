@@ -25,7 +25,7 @@ const fakeSms = {
   async sendSms({ to, from, body }) { wireLog.push({ to, from, body }); return { sent: true, sid: "SM_NO076", status: "queued" }; },
   validateWebhook: () => true,
 };
-const boundary = require("./communications_boundary")({ pool, sms: fakeSms });
+const boundary = require("../comms/communications_boundary")({ pool, sms: fakeSms });
 
 let pass = 0, fail = 0;
 const check = (name, ok, detail) => { ok ? (pass++, console.log(`  ✓ ${name}`)) : (fail++, console.log(`  ✗ ${name}${detail ? " — " + detail : ""}`)); };

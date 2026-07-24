@@ -61,7 +61,7 @@ module.exports = function bankBridgeModule({ pool, spawnObligationFromEvent, sat
   // earned-autonomy decision helpers (migration 044). The bridge OWNS the
   // money-event birth path; this only answers "may this line auto-confirm?"
   // and "revoke on override." Same pool, no duplicate lifecycle.
-  const { decideAutoConfirm, revokeOnOverride } = require("./autoconfirm").helpers({ pool });
+  const { decideAutoConfirm, revokeOnOverride } = require("../applications/autoconfirm").helpers({ pool });
 
   // ── the report vocabulary is DATA: valid categories = category_report_map
   async function validCategories(client) {

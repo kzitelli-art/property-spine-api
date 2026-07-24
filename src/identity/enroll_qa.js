@@ -3,7 +3,7 @@
 // Usage (Render shell):
 //   node enroll_qa.js <person_id> <property_id> <actor_user_id>
 const { Pool } = require("pg");
-const commsBoundaryFactory = require("./communications_boundary.js");
+const commsBoundaryFactory = require("../comms/communications_boundary.js");
 
 const person_id = process.argv[2];
 const property_id = process.argv[3];

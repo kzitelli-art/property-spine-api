@@ -138,7 +138,7 @@ module.exports = function moneyboard(deps) {
 
       // ── 3) EARNED BUT NOT SWITCHED: the "ask me" list ──────────────────
       //    Reuse the autoconfirm read so the threshold lives in ONE place.
-      const { trackRecord } = require("./autoconfirm").helpers({ pool });
+      const { trackRecord } = require("../applications/autoconfirm").helpers({ pool });
       const ruleVendors = (await pool.query(
         `select distinct v.id, v.canonical_name,
                 vpc.auto_confirm, vpc.revoked_at, vpc.revoked_reason,
