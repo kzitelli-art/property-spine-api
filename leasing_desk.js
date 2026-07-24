@@ -186,11 +186,27 @@ function normalizeFollowupAction(row) {
         "The application cannot be sent because this work has no leasing conversion."
       );
     }
+    // ── CAPABILITY BEFORE PROMISE ───────────────────────────────────
+    // The row carries the SAME verdict the write route will compute. If the
+    // action would be refused, it renders disabled with the operator-facing
+    // reason rather than as a live button that fails on press. A screen that
+    // offers what the server will not do is a phantom dispatch (Rule 9); the
+    // promise is made by the button, not by the request.
+    //
+    // A null verdict means capability was not evaluated on this deploy — the
+    // action is left exactly as it was. Unknown is not denial.
+    const cap = row.send_application_capability || null;
+    if (cap && cap.allowed === false) {
+      const blocked = unsupportedFollowupAction(row, code, cap.display_reason);
+      blocked.reason_code = cap.reason_code;
+      return blocked;
+    }
     return {
       code: "send_application",
       label: "Send",
       kind: "task_write",
       target: { type: "conversion", id: conversionId },
+      capability: cap || null,
     };
   }
 
