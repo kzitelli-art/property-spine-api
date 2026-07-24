@@ -78,10 +78,28 @@ async function loadApplicationRows(client, propertyId, deps) {
             blocker_code: execution.action === "review_conflict" ? "executed_lease_conflict" : null,
           };
         }
-        // Prefer detail-level identity when present; fall back to the summary.
-        unit_label = (detail.unit_label != null ? detail.unit_label : unit_label);
-        applicant_name = (detail.applicant_name != null ? detail.applicant_name : applicant_name);
-        person_id = detail.person_id != null ? detail.person_id : null;
+        // ── IDENTITY SHAPE ────────────────────────────────────────────
+        // buildReviewDetail returns identity NESTED — applicant.{name,person_id}
+        // and unit.{unit_id,unit_label} — not flat. Reading it flat yields
+        // undefined silently. applicant_name and unit_label survived only
+        // because the summary supplies a fallback; person_id has none, so every
+        // application row carried person_id: null and no application name could
+        // open the Person Card. The door was right to render plain text — there
+        // was no identity to link to.
+        //
+        // Nested first, flat second: if the detail contract is ever flattened
+        // this keeps working instead of silently going null again.
+        const applicantDetail = detail.applicant || {};
+        const unitDetail = detail.unit || {};
+        unit_label = (unitDetail.unit_label != null ? unitDetail.unit_label
+          : (detail.unit_label != null ? detail.unit_label : unit_label));
+        applicant_name = (applicantDetail.name != null ? applicantDetail.name
+          : (detail.applicant_name != null ? detail.applicant_name : applicant_name));
+        person_id = (applicantDetail.person_id != null ? applicantDetail.person_id
+          : (detail.person_id != null ? detail.person_id : null));
+        // conversion_id is NOT part of the review-detail contract today. Left as
+        // an honest null rather than guessed at; a row without a conversion is
+        // already handled downstream (send_application degrades to Unavailable).
         conversion_id = detail.conversion_id != null ? detail.conversion_id : null;
       }
     }
