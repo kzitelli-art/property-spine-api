@@ -163,6 +163,29 @@ const COMMUNICATION_MOVE_CODES = new Set([
   "schedule_second_tour",
 ]);
 
+// ── HELD, NOT UNAVAILABLE ────────────────────────────────────────────
+// Two different truths were collapsed into one word. "Unavailable" is
+// honest when the operator app does not implement an action — there is
+// nothing to press and nothing to explain. It is the WRONG word when the
+// action exists, works, and is simply held for this record by policy:
+// that is not a missing feature, it is a decision, and the operator should
+// see the verb they would press plus why they cannot press it yet.
+//
+// So a held action keeps its real code, label and target, and is marked
+// blocked. The button shows Send, disabled, with the reason underneath.
+// Rule 9 is not violated: a disabled control makes no promise.
+function blockedFollowupAction({ code, label, target, reason, reason_code }) {
+  return {
+    code,
+    label,
+    kind: "blocked",
+    target,
+    blocked: true,
+    reason_code: reason_code || null,
+    reason,
+  };
+}
+
 function unsupportedFollowupAction(row, code, reason) {
   return {
     code: "unsupported_action",
@@ -197,9 +220,13 @@ function normalizeFollowupAction(row) {
     // action is left exactly as it was. Unknown is not denial.
     const cap = row.send_application_capability || null;
     if (cap && cap.allowed === false) {
-      const blocked = unsupportedFollowupAction(row, code, cap.display_reason);
-      blocked.reason_code = cap.reason_code;
-      return blocked;
+      return blockedFollowupAction({
+        code: "send_application",
+        label: "Send",
+        target: { type: "conversion", id: conversionId },
+        reason: cap.display_reason,
+        reason_code: cap.reason_code,
+      });
     }
     return {
       code: "send_application",
@@ -557,4 +584,5 @@ module.exports = {
   normalizeFollowupAction,
   normalizeStageApplicationAction,
   unsupportedFollowupAction,
+  blockedFollowupAction,
 };
