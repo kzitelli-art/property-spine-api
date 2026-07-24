@@ -1,0 +1,143 @@
+# Deployment
+
+## Production stack
+
+| Component | Service |
+|-----------|---------|
+| API server | [Render](https://render.com) — Web Service, auto-deploys on push to `main` |
+| Database | [Neon](https://neon.tech) — serverless Postgres, connection pooling enabled |
+| SMS | Twilio (optional — OTP falls back gracefully when unconfigured) |
+| Bank feed | Plaid (optional) |
+| AI ingestion | Anthropic Claude API |
+
+---
+
+## Environment variables
+
+Set these in Render's Environment tab (never commit them):
+
+```bash
+# Required
+DATABASE_URL=postgresql://...          # Neon connection string with ?sslmode=require
+ANTHROPIC_API_KEY=sk-ant-...           # Claude API key for document ingestion
+OPERATOR_KEY=<random secret>           # Shared key for operator API gate
+OPERATOR_APP_ORIGIN=https://your-frontend.onrender.com  # Exact frontend URL for CORS
+
+# Optional — SMS OTP delivery
+TWILIO_ACCOUNT_SID=AC...
+TWILIO_AUTH_TOKEN=...
+TWILIO_FROM_NUMBER=+1...              # Usually not needed; sms_number is per-property
+
+# Optional — Plaid bank feed
+PLAID_CLIENT_ID=...
+PLAID_SECRET=...
+PLAID_ENV=sandbox                     # or 'production'
+
+# Render deploy script (for deploy.sh)
+RENDER_API_KEY=rnd_...
+RENDER_SERVICE_ID=srv-...
+```
+
+---
+
+## Startup sequence
+
+Every deploy runs:
+```
+npm start
+  → prestart: node migrations/migrate.js   (runs any unapplied migrations)
+  → node server.js                         (starts Express on port 3000)
+```
+
+Migrations are idempotent — running them on a database that's already up to date is safe.
+
+---
+
+## Migrations
+
+Schema changes go through numbered SQL files in `migrations/`. Never hand-edit the Neon console.
+
+```bash
+# Apply all pending migrations (runs automatically on start)
+node migrations/migrate.js
+
+# Apply against a specific database
+DATABASE_URL="postgresql://..." node migrations/migrate.js
+```
+
+Files are numbered `001`, `002`, ..., `090`, etc. The `schema_migrations` table tracks which have run. See [migrations/README.md](../migrations/README.md) for full detail.
+
+### Adding a migration
+
+1. Create `migrations/NNN_description.sql` (next number in sequence)
+2. Write idempotent SQL (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING`, etc.)
+3. Test locally, then push to `main` — Render will apply it on next deploy
+
+**Special case — `ALTER TYPE ... ADD VALUE`:** Postgres does not allow using a newly added enum value in the same transaction as an `INSERT` referencing it. Use a `DO $$ BEGIN ... EXCEPTION WHEN others THEN null; END $$;` block, then a separate `UPDATE` in the next statement. See `migrations/090_admin_users.sql` for the pattern.
+
+---
+
+## Manual deploy
+
+```bash
+./deploy.sh    # triggers a Render deploy via API without pushing code
+```
+
+Requires `RENDER_API_KEY` and `RENDER_SERVICE_ID` in `.env` or environment.
+
+---
+
+## Local development
+
+### Direct (no Docker)
+
+```bash
+npm install
+# Set DATABASE_URL in .env pointing to Neon (or a local Postgres)
+npm start
+```
+
+### Docker Compose (local Postgres)
+
+```bash
+docker-compose up
+```
+
+This starts:
+- `db` — Postgres 16 on port 5432 (credentials: `spine`/`spine`, db: `property_spine`)
+- `api` — the API server on port 3000, connected to the local Postgres
+
+The compose file overrides `DATABASE_URL` with the local container connection. All other env vars (Anthropic key, etc.) are read from `.env`.
+
+```bash
+# First run — migrations apply automatically
+docker-compose up
+
+# Rebuild after dependency changes
+docker-compose up --build
+
+# Stop and remove containers
+docker-compose down
+```
+
+---
+
+## Neon notes
+
+- Connection pooling: use the **pooled** connection string (contains `-pooler` in the hostname) for the API. Direct strings are for migrations and one-off queries.
+- SSL is required: `?sslmode=require&channel_binding=require` on the connection string.
+- The `pool` in `server.js` is configured with `ssl: { rejectUnauthorized: false }` to work with Neon's certificate chain.
+
+---
+
+## Checking a deploy
+
+```bash
+# Health check
+curl https://property-spine-api.onrender.com/health
+# → { "ok": true, "db_time": "..." }
+
+# Check which migrations have run
+curl -H "x-operator-key: $OPERATOR_KEY" \
+  https://property-spine-api.onrender.com/health/migrations
+```

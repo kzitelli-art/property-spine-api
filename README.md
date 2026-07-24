@@ -1,57 +1,88 @@
-# Property Spine — Backend v1
+# Property Spine — API
 
-This is the first real backend: a Postgres database holding the full spine, and a tiny API server with two working endpoints. **The schema expresses the whole thesis; the built endpoints stay narrow.** That split is deliberate — schema is cheap to get right now and painful to retrofit later; endpoints are the opposite.
+Node.js/Express API server for Property Spine, a property management platform built around a single core idea: **capture every event once, at the moment it happens, with proof attached — then reporting is a read, not a reconstruction.**
 
-## What's here
+Deployed on [Render](https://render.com), backed by [Neon](https://neon.tech) (Postgres). Frontend lives in [`property-spine-app`](https://github.com/kzitelli-art/property-spine-app).
 
-- `schema.sql` — the full data model as Postgres tables (validated against the real Postgres grammar)
-- `server.js` — minimal Express API: create property, read properties, health check
-- `package.json` — server dependencies
+---
 
-## The design decisions (so the next coder understands the *why*)
+## Quick start
 
-**One loop underneath everything:** Event → Obligation → Required Input → Clock → Escalation → Proof → Completed Record. Every module (leasing, maintenance, controls) is that loop pointed at a different domain.
+```bash
+# 1. Install dependencies
+npm install
 
-**The spine tables** (property → unit → space → person → lease → ledger → event → comm_event) are the durable backbone. A few invariants are baked in:
-- A lease attaches to a **space**, never directly to a unit. This is what lets whole-unit and by-the-bed leasing share one code path. Enforced by foreign key (`leases.space_id`).
-- Every unit automatically gets one space, via a database trigger (`ensure_unit_space`). The app enforces it too; the trigger guarantees it even if something writes around the app.
-- A **person is durable** — `lifecycle_status` changes (lead → applicant → tenant → past) but the record is never replaced.
+# 2. Set environment variables (copy and fill in)
+cp .env.example .env   # or create .env manually — see docs/deployment.md
 
-**Obligations are the engine.** Ownership works at two levels, both present from day one:
-- `assigned_role` (e.g. `leasing_agent`) — role-level ownership
-- `assigned_user_id` (e.g. Katie, nullable) — specific-person ownership
-- Same for escalation: `escalates_to_role` + `escalates_to_user_id` (nullable)
-
-One event can spawn multiple obligations for different roles — a Unit 304 conflict creates separate obligations for leasing, maintenance, the PM, and (only if it goes material) the owner.
-
-**The clock is real:** `due_at` exists now. Read-time logic only — `now() > due_at` means overdue; an AI-owned obligation that goes overdue escalates to a human. No background jobs yet.
-
-**Notification columns exist but the behavior does not.** `notification_channel`, `requires_acknowledgment`, `escalation_interval_minutes`, etc. are reserved so the schema doesn't fight Twilio/email/phone later — but none of that is wired today. Schema room, no behavior.
-
-**Property Controls are first-class.** Rental license, certificate of occupancy, insurance, taxes, lender reports, permits, inspections — each is a control that, when expiring or due, becomes an event that spawns an obligation through the *same loop*. This is what turns "property management software" into a control system. Table exists now; behavior built later.
-
-**A document is more than a file.** The `documents` table can point at the obligation it satisfies (`satisfies_obligation_id`) and the dates that drive a control. Shape now, behavior later.
-
-**Users table is minimal on purpose.** Enough that obligations can belong to real people, not just roles. No real auth today — `auth_provider` and related columns are reserved for when staff login gets built.
-
-## Setup — what you do vs. what's done
-
-The code is written and tested. What's left needs your accounts (they need your email + card on file; all have free tiers, ~$0 today):
-
-1. **Neon** (Postgres database) — create an account, create one project/database, copy the connection string (starts with `postgresql://`).
-2. **Apply the schema** — in the Neon SQL editor, paste the contents of `schema.sql` and run it. This creates every table.
-3. **GitHub** — create a repo, push this `backend/` folder to it.
-4. **Render** — create a Web Service pointing at the GitHub repo. Set one environment variable: `DATABASE_URL` = your Neon connection string. Render runs `npm start`.
-
-Once deployed, test it:
-```
-GET  https://your-app.onrender.com/health        → { ok: true, db_time: ... }
-POST https://your-app.onrender.com/properties     → { "name": "The Felix" }
-GET  https://your-app.onrender.com/properties     → [ { id, name, ... } ]
+# 3. Run migrations and start the server
+npm start              # prestart runs migrations automatically
 ```
 
-When `/health` returns `ok: true` and a POST then GET round-trips a property, the backend is real. Everything after that is the same pattern repeated for each table.
+The server starts on port 3000. `GET /health` returns `{ ok: true }` when the DB is reachable.
 
-## Security note (matters the moment this is real)
+---
 
-The `DATABASE_URL` is a password to your database. For local testing it's fine, but in production it lives **only** as an environment variable in Render — never in the code, never committed to GitHub, never pasted into chat. If it ever leaks, rotate it in Neon immediately.
+## Repository layout
+
+```
+server.js             — Express entry point; mounts all routers
+migrations/           — Numbered SQL migration files + migrate.js runner
+schema.sql            — Snapshot of the full schema (reference only)
+src/
+  agent/              — AI document ingestion (Anthropic Claude)
+  applications/       — Rental applications, lease packets, execution
+  comms/              — SMS transport, communications boundary, tenant links
+  identity/           — Auth: staff sessions, phone OTP, team access
+  leasing/            — Leads, tours, conversions, leasing desk
+  maintenance/        — Work orders, turnovers, urgency scoring
+  money/              — Charges, payments, Plaid bank feed, reporting
+  onboarding/         — Property onboarding, deal intake, rent-roll import
+  shared/             — Cross-domain utilities and contracts
+  surfaces/           — Operator-facing read surfaces (board, desks, portfolio)
+  tenancy/            — Move-in, move-out, occupancy, availability
+tests/                — Test harnesses and arc/beat scripts
+tools/                — Dev utilities
+docs/                 — Architecture docs and design specs
+```
+
+---
+
+## Documentation
+
+| Doc | What it covers |
+|-----|---------------|
+| [docs/architecture.md](docs/architecture.md) | How the server is structured, the organ pattern, request flow |
+| [docs/data-model.md](docs/data-model.md) | Core schema: property → unit → space → lease hierarchy |
+| [docs/auth.md](docs/auth.md) | Staff sessions, phone OTP login, CORS policy |
+| [docs/domains.md](docs/domains.md) | What each `src/` domain does and its key files |
+| [docs/deployment.md](docs/deployment.md) | Render, environment variables, migrations, Docker |
+| [docs/specs/DOCTRINE.md](docs/specs/DOCTRINE.md) | The core design doctrine: claimed vs. proven, the one loop |
+| [docs/specs/PROPERTY_SPINE_SPEC.md](docs/specs/PROPERTY_SPINE_SPEC.md) | Comprehensive spec validated against live source |
+
+---
+
+## Environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABASE_URL` | Yes | Neon Postgres connection string |
+| `ANTHROPIC_API_KEY` | Yes | Claude API key for document ingestion |
+| `OPERATOR_KEY` | Yes | Shared secret for operator API routes |
+| `OPERATOR_APP_ORIGIN` | Yes | Frontend origin for CORS (`https://your-app.onrender.com`) |
+| `TWILIO_ACCOUNT_SID` | No | SMS OTP delivery |
+| `TWILIO_AUTH_TOKEN` | No | SMS OTP delivery |
+| `PLAID_CLIENT_ID` | No | Bank feed integration |
+| `PLAID_SECRET` | No | Bank feed integration |
+
+See [docs/deployment.md](docs/deployment.md) for full details.
+
+---
+
+## Deploy
+
+```bash
+./deploy.sh    # triggers a manual Render deploy via API
+```
+
+Render also auto-deploys on every push to `main`. Migrations run automatically on startup via the `prestart` script.
