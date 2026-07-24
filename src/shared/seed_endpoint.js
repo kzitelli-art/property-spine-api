@@ -24,7 +24,7 @@ module.exports = function seedEndpoint(deps){
   if (!pool) throw new Error("seed_endpoint requires a pool");
 
   const legacy = require("./seed_snapshot");
-  const soloData = require("./seeds/data_solo");
+  const soloData = require("../../seeds/data_solo");
   const snapshotLoader = require("./snapshot_loader");
   const { seedOne, DATASETS } = legacy;
   const { loadSnapshot, CONFIGS } = snapshotLoader;

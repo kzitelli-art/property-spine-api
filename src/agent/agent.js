@@ -32,11 +32,11 @@ module.exports = function agentModule(deps) {
   // FUNNEL-FLOW: grounded inventory discovery + governed attachment live in
   // leasing_inventory.js (Class 1). The agent gains ONE tool over it; the
   // attach fires only on the prospect's own confirming words (offered ≠ selected).
-  const inventory = require("./leasing_inventory")({ pool });
+  const inventory = require("../leasing/leasing_inventory")({ pool });
   // SLICE 2: conversational prospect capture — extracts VOLUNTEERED facts from the
   // prospect's own inbound messages into person_attributes, fire-and-forget after
   // a draft is created. Fail-soft by construction (see prospect_capture.js).
-  const prospectCapture = require("./prospect_capture")({ pool, anthropic, INGEST_MODEL });
+  const prospectCapture = require("../comms/prospect_capture")({ pool, anthropic, INGEST_MODEL });
   if (!pool) throw new Error("agent.js requires { pool }");
   const MODEL = INGEST_MODEL || "claude-sonnet-4-6";
   const router = require("express").Router();

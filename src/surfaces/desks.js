@@ -30,8 +30,8 @@
 // ════════════════════════════════════════════════════════════════════
 
 const express = require("express");
-const { computeExposure } = require("./exposure");
-const { computeOnboardingState } = require("./onboarding_funnel"); // onboarding bridge: shared compute, never re-derived
+const { computeExposure } = require("../money/exposure");
+const { computeOnboardingState } = require("../onboarding/onboarding_funnel"); // onboarding bridge: shared compute, never re-derived
 
 module.exports = function desksModule({ pool }) {
   const router = express.Router();
@@ -69,7 +69,7 @@ module.exports = function desksModule({ pool }) {
   // also makes the desk reads grain-correct for bed/space properties. The return
   // shape keeps this module's two consumers working (total_units/occupied_units),
   // plus the richer grain-aware fields incl. the canonical unit_noun.
-  const { occupancyByBasis } = require("./leasing_occupancy_facts.js");
+  const { occupancyByBasis } = require("../leasing/leasing_occupancy_facts.js");
   async function occupancyFacts(propertyId) {
     const o = await occupancyByBasis(pool, propertyId);
     if (o.status === 'unavailable') {

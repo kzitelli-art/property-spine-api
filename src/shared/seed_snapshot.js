@@ -32,8 +32,8 @@
 const { Pool } = require("pg");
 
 const DATASETS = {
-  skyline: require("./seeds/data_skyline.js"),
-  solo: require("./seeds/data_solo.js"),
+  skyline: require("../../seeds/data_skyline.js"),
+  solo: require("../../seeds/data_solo.js"),
 };
 
 const NON_REVENUE = /^(vacant|model|down)$/i;

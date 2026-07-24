@@ -11,49 +11,49 @@ const cors = require("cors");
 const { Pool } = require("pg");
 const Anthropic = require("@anthropic-ai/sdk");
 const multer = require("multer");          // handles file uploads (rent roll .xlsx/.csv)
-const leasingIntelModule = require("./leasingintel");
-const leasePacketsModule = require("./leasepackets");
-const applicationsModule = require("./applications");
-const { createConversionClosureAuthority } = require("./conversion_obligation_closure");
+const leasingIntelModule = require("./src/leasing/leasingintel");
+const leasePacketsModule = require("./src/applications/leasepackets");
+const applicationsModule = require("./src/applications/applications");
+const { createConversionClosureAuthority } = require("./src/leasing/conversion_obligation_closure");
 // created ONCE; handed ONLY to the conversion rail below — never to the engine,
 // never to any other module. That exclusivity IS the structural guarantee.
 const __conversionClosureAuthority = createConversionClosureAuthority();
 const XLSX = require("xlsx");              // parses the spreadsheet to rows
-const maintenanceModule = require("./maintenance");  // isolated maintenance routes
-const downUnitsModule = require("./down_units");      // isolated down-units routes
-const orgchartModule = require("./orgchart");
-const roomOwnersModule = require("./roomowners"); // thin room-owner API over assignments (041); six rooms → owners
-const moneyModule = require("./money");
-const turnoversModule = require("./turnovers");
-const moveinModule = require("./movein");
-const { recordEffectivePossession, spacePosition } = require("./space_position"); // canonical dated space position — shared possession writer + read
-const noticeModule = require("./notice");        // Availability Slice A: resident notice → future supply
-const onboardingModule = require("./onboarding");   // isolated onboarding (takeover) routes
-const onboardingFunnel = require("./onboarding_funnel"); // six-step NOI-goal onboarding funnel (revenue/roles/noi-goal; honest mode)
-const registryModule = require("./registry");        // property alias registry (canonical key / bridge step zero)
-const identifyModule = require("./identify");        // property-agnostic front door: fast identity-first pass (read-only) + confirm-write
-const ownerModule = require("./owner");              // owner-facing aggregate endpoints (property cards + needs-attention queue)
-const bankIntakeModule = require("./bankintake");   // bank intake: onboarding/training pass (012)
-const exposureModule = require("./exposure");
-const reportingModule = require("./reporting");
-const chargesModule = require("./charges"); // income rung slice 2A: charge generation (the claim side)
-const paymentsModule = require("./payments"); // income rung slice 3: payment proof (apply + cash proof)
-const bankBridgeModule = require('./bankbridge');
-const autoConfirmModule = require('./autoconfirm');
-const moneyBoardModule = require('./moneyboard');
-const attributionsModule = require('./attributions');
-const portfolioModule = require('./portfolio');
-const snapshotLoaderModule = require('./snapshot_loader');
-const seedEndpointModule = require('./seed_endpoint');
-const managementReadModule = require('./management_read');
-const propertySurfaceModule = require('./property_surface');
-const plaidModule = require('./plaid'); // Plaid: second feed into bank_transactions (031); fail-soft when unconfigured
-const compareModule = require("./compare");   // report comparison layer (the hook)
-const explainModule = require("./explain");
-const tenantLinkModule = require("./tenantlink"); // tenant text line Phase 1: connection (invite link → verify → session)
-const teamAccessModule = require("./teamaccess");
-const smsTransport = require("./sms"); // SMS transport (Twilio) — fail-soft when unconfigured
-const communicationsBoundary = require("./communications_boundary"); // the permanent communications boundary — one inbound resolver, one outbound gate
+const maintenanceModule = require("./src/maintenance/maintenance");  // isolated maintenance routes
+const downUnitsModule = require("./src/tenancy/down_units");      // isolated down-units routes
+const orgchartModule = require("./src/surfaces/orgchart");
+const roomOwnersModule = require("./src/surfaces/roomowners"); // thin room-owner API over assignments (041); six rooms → owners
+const moneyModule = require("./src/money/money");
+const turnoversModule = require("./src/maintenance/turnovers");
+const moveinModule = require("./src/tenancy/movein");
+const { recordEffectivePossession, spacePosition } = require("./src/tenancy/space_position"); // canonical dated space position — shared possession writer + read
+const noticeModule = require("./src/tenancy/notice");        // Availability Slice A: resident notice → future supply
+const onboardingModule = require("./src/onboarding/onboarding");   // isolated onboarding (takeover) routes
+const onboardingFunnel = require("./src/onboarding/onboarding_funnel"); // six-step NOI-goal onboarding funnel (revenue/roles/noi-goal; honest mode)
+const registryModule = require("./src/identity/registry");        // property alias registry (canonical key / bridge step zero)
+const identifyModule = require("./src/identity/identify");        // property-agnostic front door: fast identity-first pass (read-only) + confirm-write
+const ownerModule = require("./src/surfaces/owner");              // owner-facing aggregate endpoints (property cards + needs-attention queue)
+const bankIntakeModule = require("./src/money/bankintake");   // bank intake: onboarding/training pass (012)
+const exposureModule = require("./src/money/exposure");
+const reportingModule = require("./src/money/reporting");
+const chargesModule = require("./src/money/charges"); // income rung slice 2A: charge generation (the claim side)
+const paymentsModule = require("./src/money/payments"); // income rung slice 3: payment proof (apply + cash proof)
+const bankBridgeModule = require('./src/money/bankbridge');
+const autoConfirmModule = require('./src/applications/autoconfirm');
+const moneyBoardModule = require('./src/money/moneyboard');
+const attributionsModule = require('./src/money/attributions');
+const portfolioModule = require('./src/surfaces/portfolio');
+const snapshotLoaderModule = require('./src/shared/snapshot_loader');
+const seedEndpointModule = require('./src/shared/seed_endpoint');
+const managementReadModule = require('./src/surfaces/management_read');
+const propertySurfaceModule = require('./src/surfaces/property_surface');
+const plaidModule = require('./src/money/plaid'); // Plaid: second feed into bank_transactions (031); fail-soft when unconfigured
+const compareModule = require("./src/money/compare");   // report comparison layer (the hook)
+const explainModule = require("./src/money/explain");
+const tenantLinkModule = require("./src/comms/tenantlink"); // tenant text line Phase 1: connection (invite link → verify → session)
+const teamAccessModule = require("./src/identity/teamaccess");
+const smsTransport = require("./src/comms/sms"); // SMS transport (Twilio) — fail-soft when unconfigured
+const communicationsBoundary = require("./src/comms/communications_boundary"); // the permanent communications boundary — one inbound resolver, one outbound gate
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
 // runaway file still can't choke the box. Oversize returns a clean 413 below.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -567,7 +567,7 @@ app.post("/persons", async (req, res) => {
     // duplicate person for the same human in a different phone format. If a
     // person with this canonical phone already exists, reuse it (backfilling
     // the canonical key on legacy rows) rather than creating a second.
-    const { normalizeE164: __normPhone } = require("./phone_identity");
+    const { normalizeE164: __normPhone } = require("./src/identity/phone_identity");
     const __canon = __normPhone(phone);
     let person = null;
     if (__canon) {
@@ -3248,10 +3248,10 @@ app.use("/", moneyModule({ pool, spawnObligationFromEvent, satisfyObligation, co
 app.use("/", orgchartModule({ pool }));
 app.use("/", roomOwnersModule({ pool }));
 app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, recordEffectivePossession }));
-const deliveryHelper = require("./delivery")({ satisfyObligation, completeObligation }); // Slice D shared completion-feed
+const deliveryHelper = require("./src/comms/delivery")({ satisfyObligation, completeObligation }); // Slice D shared completion-feed
 app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, deliveryHelper, recordEffectivePossession }));
 app.use("/", noticeModule({ pool }));   // Availability Slice A — notice writes unit_events only; no obligation spawns at notice
-app.use("/", require("./availability")({ pool })); // Availability Slice C — read-only forward-supply projection; derives from live tables, writes nothing
+app.use("/", require("./src/tenancy/availability")({ pool })); // Availability Slice C — read-only forward-supply projection; derives from live tables, writes nothing
 // Canonical dated space position (read-only): GET /properties/:id/space-position?as_of=YYYY-MM-DD
 // One shared truth for current rent roll / forward rent roll / availability — distinct fields, never one status.
 app.get("/properties/:id/space-position", async (req, res) => {
@@ -3282,10 +3282,10 @@ app.use("/", exposureModule({ pool }));
 app.use("/", reportingModule({ pool }));
 app.use("/", chargesModule({ pool })); // income rung slice 2A: /properties/:id/charges[/generate|/summary]
 app.use("/", paymentsModule({ pool })); // income rung slice 3: /properties/:id/payments, /payments/:id/apply|link-bank, /income-proof
-app.use("/", require("./board")({ pool })); // morning board: GET /properties/:id/today (read-only)
+app.use("/", require("./src/surfaces/board")({ pool })); // morning board: GET /properties/:id/today (read-only)
 app.use("/", leasingIntelModule({ pool, upload }));
-app.use("/", require("./desks")({ pool })); // V3 three desks: operator-home + management/leasing/maintenance dashboards (read-only)
-app.use("/", require("./management")({ pool })); // Management reverse-funnel surface: GET /properties/:id/management-surface (Needs You primary, Collections/Operations secondary, Rent Roll reference)
+app.use("/", require("./src/surfaces/desks")({ pool })); // V3 three desks: operator-home + management/leasing/maintenance dashboards (read-only)
+app.use("/", require("./src/surfaces/management")({ pool })); // Management reverse-funnel surface: GET /properties/:id/management-surface (Needs You primary, Collections/Operations secondary, Rent Roll reference)
 app.use("/", compareModule({ pool }));
 app.use("/", explainModule({ pool }));
 // tenant link (text line: connection + message loop) — pool, AI for classification.
@@ -3336,19 +3336,19 @@ app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary
 app.use("/", teamAccessModule({ pool, sms, commBoundary }));
 // owner-facing aggregate views (cards + attention queue). Only needs pool.
 app.use("/", ownerModule({ pool }));
-const publicReview = require("./public_review");
+const publicReview = require("./src/onboarding/public_review");
    app.use("/", publicReview({ pool, anthropic, INGEST_MODEL, fileToText, ingestPrompt, upload }));
 // ── INTAKE (Door 2: text/email/web field-event capture; claims only — routing
 //    to real records happens through the existing module endpoints) ──
-const intakeModule = require("./intake");
+const intakeModule = require("./src/onboarding/intake");
 app.use("/", intakeModule({ pool, anthropic, INGEST_MODEL, registryInstance, upload }));
-const dealIntakeModule = require("./dealintake");
+const dealIntakeModule = require("./src/onboarding/dealintake");
 // ── Shared lifecycle write service (Foundation 054) — ONE instance, injected into
 // every canonical inbound writer so a qualifying prospect inbound transactionally
 // reopens a soft-closed conversation. Stateless over the pool; safe to share.
-const leasingLifecycle = require("./leasing_lifecycle_service")({ pool });
+const leasingLifecycle = require("./src/leasing/leasing_lifecycle_service")({ pool });
 
-const leasingLeadsModule = require("./leasingleads"); // leasing lead intake: one-human/many-opportunities funnel + AI first response
+const leasingLeadsModule = require("./src/leasing/leasingleads"); // leasing lead intake: one-human/many-opportunities funnel + AI first response
 app.use("/", dealIntakeModule({ pool, anthropic, INGEST_MODEL, registryInstance, fileToText, runIngestAuto, upload }));
 // ── Post-tour leasing conversion rail + scheduling intake + interaction ledger ──
 // (migrations 047/048/049). sms + the obligation engine fns are all in scope here.
@@ -3356,15 +3356,15 @@ app.use("/", dealIntakeModule({ pool, anthropic, INGEST_MODEL, registryInstance,
 // its single-door createConversionFromTour service can be injected into the
 // tour-outcome seam (/leasing/tours/:id/complete). Route mounting order is
 // unaffected (paths are disjoint).
-const leasingConversionModule = require("./leasingconversion");   // conversion case + immutable child obligations + explicit handoff
-const leasingSchedulingModule = require("./leasingscheduling");   // Acuity/Outlook source events -> canonical scheduled tours
-const leasingInteractionsModule = require("./leasinginteractions"); // Twilio interaction ledger on extended comm_events
+const leasingConversionModule = require("./src/leasing/leasingconversion");   // conversion case + immutable child obligations + explicit handoff
+const leasingSchedulingModule = require("./src/leasing/leasingscheduling");   // Acuity/Outlook source events -> canonical scheduled tours
+const leasingInteractionsModule = require("./src/leasing/leasinginteractions"); // Twilio interaction ledger on extended comm_events
 const __leasingConversion = leasingConversionModule({ pool, spawnObligationFromEvent, completeObligation, closureAuthority: __conversionClosureAuthority });
 app.use("/", __leasingConversion);
-const decisionsModule = require("./decisions");   // the Decision Rail (059)
+const decisionsModule = require("./src/leasing/decisions");   // the Decision Rail (059)
 const __decisions = decisionsModule({ pool, spawnObligationFromEvent, completeObligation });
 app.use("/", __decisions);
-const commitmentLedgerModule = require("./commitmentledger");   // pricing authority + lease offers (062–065)
+const commitmentLedgerModule = require("./src/money/commitmentledger");   // pricing authority + lease offers (062–065)
 const __commitmentLedger = commitmentLedgerModule({ pool, spawnObligationFromEvent, completeObligation, decisionService: __decisions._service });
 app.use("/", __commitmentLedger);
 const __leasingLeads = leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices: __leasingConversion.services, commitmentLedger: __commitmentLedger._service, commBoundary });
@@ -3372,7 +3372,7 @@ app.use("/", __leasingLeads); // instance captured: its ONE tour-completion serv
 
 // ── APPLICATION SUBMISSION SLICE (invitation front + shared submit service +
 //    deny + gated approval→signature). Shares the conversion rail's service layer. ──
-const applicationSubmissionModule = require("./applicationSubmission");
+const applicationSubmissionModule = require("./src/applications/applicationSubmission");
 
 // ── APPLICATION INPUT AUTHORITY (v2.5-r1) ──────────────────────────────
 // The ONE satisfier of the two reserved invitation-proof inputs. Mirrors the
@@ -3442,10 +3442,10 @@ app.use("/", __applicationSubmission);
 // row, written by the canonical intake service behind its own activation gate.
 // The resolver takes (client, applicationId) and nothing else — no body value
 // can ever assert execution.
-const __executedLease = require("./executed_lease_service");
-const __executionEvidence = require("./execution_evidence")();
+const __executedLease = require("./src/applications/executed_lease_service");
+const __executionEvidence = require("./src/applications/execution_evidence")();
 
-const __tenancyAnchor = require("./tenancy_anchor_service")({
+const __tenancyAnchor = require("./src/tenancy/tenancy_anchor_service")({
   spawnObligationFromEvent, satisfyObligation, completeObligation,
   ledgerService: __commitmentLedger._service,
   executionEvidence: __executionEvidence,
@@ -3477,32 +3477,32 @@ app.use("/", __leasingInteractions);
 //    (new -> preview lead · known -> intent task, never a new lead · no/invalid ->
 //    conflict). Preview rows are outreach-barred by construction; this module has
 //    NO sms dependency and cannot send. ──
-const leasingShadowImportModule = require("./leasingShadowImport");
+const leasingShadowImportModule = require("./src/leasing/leasingShadowImport");
 app.use("/", leasingShadowImportModule({ pool }));
 
 // ── Two-sided live demo orchestration (migration 052). Reset/state/application-submit/
 //    application-approve. Owns NO domain truth; calls the application submission SERVICE
 //    inside its own transaction and appends an append-only demo_event. ──
-const demoModule = require("./demo");
+const demoModule = require("./src/leasing/demo");
 app.use("/", demoModule({ pool, submissionService: __applicationSubmission._service,
   applicationsService: __applications._service })); // R3: demo approve calls the ONE canonical approveApplication
 
 // ── Rehearsal reset (demo-only). Empties the live boardroom Conversations queue by
 //    closing every boardroom_demo conversation through the canonical close service —
 //    no deletes, reversible, fail-closed to the Demo Building. (demo_reset.js) ──
-app.use("/", require("./demo_reset")({ pool, leasingLifecycle }));
+app.use("/", require("./src/leasing/demo_reset")({ pool, leasingLifecycle }));
 
 // ── Agent Stage 0: model capability proof (operator-gated, NO schema, NO secrets
 //    exposed). One real generation to confirm the live model path works before any
 //    agent architecture is built on it. GET /agent/capability → { ok, reachable, model }. ──
-const agentCapabilityModule = require("./agentcapability");
+const agentCapabilityModule = require("./src/leasing/agentcapability");
 app.use("/", agentCapabilityModule({ anthropic, INGEST_MODEL }));
 
 // ── Agent Stage A: supervised, grounded, draft-first conversation loop. The agent
 //    PROPOSES; nothing reaches a lead until a human dispatches it. Two-transaction
 //    model call, monotonic thread versioning, obligation-backed review, server-derived
 //    manager identity. (Migration 053.) ──
-const agentModule = require("./agent");
+const agentModule = require("./src/agent/agent");
 const agentApp = agentModule({ pool, anthropic, INGEST_MODEL, spawnObligationFromEvent, completeObligation, leasingLifecycle, commBoundary, leasingBookingService: __leasingLeads._service });
 app.use("/", agentApp);
 
@@ -3512,8 +3512,8 @@ app.use("/", agentApp);
 // takeover/obligation/stale-draft) — agentApp._service. Identity is a real staff
 // session (x-staff-session → users row); the browser never claims identity. The
 // demo-session bootstrap is fail-closed (DEMO_MODE=true only). (operator.js)
-app.use("/", require("./operator_session_bootstrap")({ pool })); // BRICK ONE: POST /operator/session + /revoke  the only /operator/* routes that self-protect (they create/end the session)
-const operatorModule = require("./operator");
+app.use("/", require("./src/identity/operator_session_bootstrap")({ pool })); // BRICK ONE: POST /operator/session + /revoke  the only /operator/* routes that self-protect (they create/end the session)
+const operatorModule = require("./src/identity/operator");
 app.use("/", operatorModule({ pool, agentService: agentApp._service,
   leasingTourService: __leasingLeads._service, // the ONE completion service (leasingleads.js) — session door calls the same tx
   // the invitation service (applicationSubmission) — the session-gated operator
@@ -3549,13 +3549,13 @@ app.use("/", operatorModule({ pool, agentService: agentApp._service,
 // audited acts by an admin staff session — never inference, never capture
 // flow. Eligibility resolution lives in staff_identity_resolver.js (the ONE
 // module allowed to join users.person_id to assignments). (staffbridge.js)
-const staffBridgeModule = require("./staffbridge");
+const staffBridgeModule = require("./src/identity/staffbridge");
 app.use("/", staffBridgeModule({ pool }));
 
 // ── ONE-TIME demo facts seed — loads the REAL Solo handbook facts onto the demo
 // property (the operating-onboarding fact layer, hand-confirmed once from the 2026
 // Field Guide). Demo-only (/demo/, fail-closed on DEMO_MODE). (facts-seed.js)
-const factsSeedModule = require("./facts-seed");
+const factsSeedModule = require("./src/shared/facts-seed");
 app.use("/", factsSeedModule({ pool }));
 
 // ── DEMO SLOT AUTO-SEED (fail-soft, boot-time) ───────────────────────

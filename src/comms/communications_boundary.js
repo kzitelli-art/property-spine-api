@@ -486,7 +486,7 @@ module.exports = function communicationsBoundary({ pool, sms }) {
   // comms-boundary spec forbids. Returns null when the input can't be
   // normalized (null never matches a stored phone, so a bad input simply fails
   // the tier — never a false match). Twilio's own `From` is already E.164.
-  const { normalizeE164 } = require("./phone_identity");
+  const { normalizeE164 } = require("../identity/phone_identity");
 
   async function resolveInboundSmsContext({ To, From, MessageSid, body = null }, clientArg = null) {
     const q = clientArg || pool;
