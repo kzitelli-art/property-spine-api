@@ -186,10 +186,14 @@ async function main() {
 
       ok("8. the canonical submit service refuses an application with no person",
         !!refused, refused ? "" : "it accepted one");
+      // httpErr attaches the code as `httpStatus` (not `status`/`statusCode`) —
+      // read all three so this assertion survives a change in that convention
+      // instead of failing on the harness's own assumption.
+      const _code = refused && (refused.httpStatus ?? refused.status ?? refused.statusCode);
       ok("9. the refusal is a 400 that explains the requirement",
-        !!refused && Number(refused.status || refused.statusCode) === 400 &&
+        !!refused && Number(_code) === 400 &&
         /person_id is required/i.test(String(refused.message || "")),
-        refused ? `status=${refused.status || refused.statusCode} msg=${String(refused.message).slice(0,70)}` : "");
+        refused ? `code=${_code} msg=${String(refused.message).slice(0,70)}` : "");
 
       const stray = (await client.query(
         `select count(*)::int as n from lease_applications
