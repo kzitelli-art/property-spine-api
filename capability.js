@@ -39,16 +39,20 @@ const ACTION_APPLICATION_LINK = "send_application";
 // Reason codes are a closed set. A code with no display string is a bug,
 // not a fallback — an operator must never be told "not allowed" with no
 // reason, which is exactly the wall this module exists to remove.
+// Written for a leasing manager standing in front of the screen, not for a
+// release note. Each says what is true and, by implication, what would have
+// to change — never "unavailable", which states a condition and answers
+// nothing.
 const REASONS = {
   ALLOWED: "Ready to send.",
   APPLICATION_LINK_DISABLED:
-    "Application links are switched off in this environment.",
+    "Application links aren't switched on yet.",
   PROPERTY_NOT_ACTIVATED:
-    "This property is not activated for application links yet.",
+    "Application links aren't switched on for this property yet.",
   CONTROLLED_ACTIVATION_ONLY:
-    "Limited to internal QA records during controlled activation.",
+    "Application links aren't switched on for real prospects yet \u2014 test records only for now.",
   PERSON_UNKNOWN:
-    "No durable person is connected to this work, so a link cannot be issued.",
+    "No person is connected to this work yet.",
 };
 
 function envFlag(name) {
