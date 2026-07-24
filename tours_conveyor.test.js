@@ -228,7 +228,17 @@ async function testRealQuery(client, ids) {
   let sql = null;
   try {
     const src = fs.readFileSync(path.join(process.cwd(), "operator.js"), "utf8");
-    const cte = /const PROJECTION_CTE = `([\s\S]*?)`;/.exec(src)[1];
+    // PROJECTION_CTE is itself a template literal and now interpolates the
+    // Conversations operating-bucket SQL, so it must be evaluated, not spliced
+    // in raw. Loaded the same way operator.js loads it.
+    // eslint-disable-next-line no-unused-vars
+    const conversationOperating = (function () {
+      try { return require(path.resolve(process.cwd(), "conversation_operating_contract.js")); }
+      catch (_) { return {}; }
+    })();
+    const cteRaw = /const PROJECTION_CTE = `([\s\S]*?)`;/.exec(src)[1];
+    // eslint-disable-next-line no-eval
+    const cte = eval("`" + cteRaw.replace(/`/g, "\\`") + "`");
     const i = src.indexOf("PROJECTION_CTE + `,\n        proj as ( select conversation_id");
     const j = src.indexOf("order by scheduled_for`", i) + "order by scheduled_for".length;
     const body = src.slice(i + "PROJECTION_CTE + `".length, j);
