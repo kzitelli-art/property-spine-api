@@ -11,7 +11,8 @@
 
 const READY_TO_BIND_CODES = new Set([
   // Intentionally empty. Current source exposes no canonical resolver code that
-  // proves: tenant signed AND company countersignature is available. Add a code
+  // proves: the executed lease is verified and admitted (088 — there is no
+  // company countersignature step). Add a code
   // only when that exact lifecycle fact exists and is verified.
 ]);
 
@@ -93,17 +94,16 @@ function obligationDeskKey(row) {
 }
 
 function normalizeApplicationAction(row, next) {
+  // CLOSED CTA VOCABULARY (ruled): navigation → "Open", dispatch → "Send",
+  // obligation closure → "Complete". The row SENTENCE carries the business
+  // meaning ("Confirm the proposed terms."); the button says only what
+  // pressing it does. Every branch here is navigation, so every label is
+  // "Open" — this also retires the countersignature-era button label that
+  // was still speaking the signing ceremony 088 removed.
   const blocked = next.state === "blocked";
-  let label = "Review application";
-  if (blocked) label = "Review blocker";
-  else if (next.code === "confirm_proposed_terms") label = "Continue terms review";
-  else if (next.code === "generate_terms_review_packet") label = "Generate review packet";
-  else if (next.code === "issue_terms_review_link") label = "Review and issue";
-  else if (READY_TO_BIND_CODES.has(next.code)) label = "Review and countersign";
-
   return {
     code: blocked ? "review_application_blocker" : "open_application_review",
-    label,
+    label: "Open",
     kind: "navigation",
     target: { type: "application", id: row.application_id },
   };
@@ -173,7 +173,7 @@ function normalizeFollowupAction(row) {
     }
     return {
       code: "send_application",
-      label: valueOrNull(row.next_move_label) || "Send application",
+      label: "Send",
       kind: "task_write",
       target: { type: "conversion", id: conversionId },
     };
@@ -184,7 +184,7 @@ function normalizeFollowupAction(row) {
   if (code && COMMUNICATION_MOVE_CODES.has(code) && valueOrNull(row.person_id)) {
     return {
       code: "open_conversation",
-      label: valueOrNull(row.next_move_label) || "Open conversation",
+      label: "Open",
       kind: "navigation",
       target: { type: "person", id: row.person_id },
     };
@@ -193,7 +193,7 @@ function normalizeFollowupAction(row) {
   // Unknown generic obligation → Complete, which opens the confirmation sheet.
   return {
     code: "complete_task",
-    label: "Complete",
+    label: "Complete",   // closes a fulfilled obligation — the one true task write
     kind: "task_write",
     target: { type: "obligation", id: row.obligation_id },
   };
@@ -304,7 +304,37 @@ function identityKeys(row) {
 
 const LEASING_STAGE_RANK = Object.freeze({ post_tour: 0, application: 1, lease_sent: 2 });
 
+/* ONE RELATIONSHIP, ONE KEY — and the relationship is the DEAL, which the
+   conversion identifies. One conversion can legitimately hold two applications
+   (a re-application after a dead first attempt), and only the downstream one
+   may show, so the application id can NEVER be the primary key. But an
+   application row does not always carry its conversion — the Jordan Avery
+   defect: his application row (application:A, no conversion) and the rail
+   follow-up about him (conversion:C, application A) rendered as two rows in
+   one tab. Rows carrying BOTH establish the alias application → conversion,
+   and every row resolves through it before keying:
+     conversion_id || alias[application_id] || application_id || desk_key.
+   The stage-rank sort then keeps exactly one visible row per deal, downstream
+   truth outranking upstream. */
+function lifecycleAliases(rows) {
+  const byApplication = new Map();
+  for (const row of rows) {
+    if (row && row.conversion_id && row.application_id) {
+      byApplication.set(String(row.application_id), String(row.conversion_id));
+    }
+  }
+  return byApplication;
+}
+function lifecycleRowKey(row, aliases) {
+  const convId = row.conversion_id
+    || (row.application_id ? aliases.get(String(row.application_id)) : null);
+  if (convId) return `conversion:${convId}`;
+  if (row.application_id) return `application:${row.application_id}`;
+  return row.desk_key;
+}
+
 function dedupeLifecycleRows(rows) {
+  const aliases = lifecycleAliases(rows);
   // Downstream truth outranks upstream truth for the same relationship. Within
   // one stage, the existing deterministic urgency order selects the visible row.
   const sorted = [...rows].sort((a, b) => {
@@ -314,11 +344,7 @@ function dedupeLifecycleRows(rows) {
   const chosen = new Map();
 
   for (const row of sorted) {
-    const key = row.conversion_id
-      ? `conversion:${row.conversion_id}`
-      : row.application_id
-        ? `application:${row.application_id}`
-        : row.desk_key;
+    const key = lifecycleRowKey(row, aliases);
 
     if (!chosen.has(key)) {
       chosen.set(key, { ...row, related_open_count: 1 });
