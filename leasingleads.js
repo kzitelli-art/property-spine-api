@@ -471,6 +471,44 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         console.log(`[intake] activated property but NO consent signal person=${person.id} property=${propertyId} lead=${lead.id} — captured, not textable`);
       }
 
+      // ── BIRTH GUARD — no person leaves this service ungoverned ────────
+      // Classification is the single fact every central exclusion keys on:
+      // outbound messaging, prospect outreach, reporting, leasing metrics,
+      // AI prompts, automated decision rules. Until now it was written ONLY
+      // on the activation path above, so every other arrival left the person
+      // classified as NOTHING.
+      //
+      // Nothing is not neutral. A policy written as `record_class !==
+      // 'internal_qa'` does not exclude a record that is neither, so an
+      // ungoverned person lands on the PERMISSIVE side of every filter —
+      // fail-closed on messaging, fail-open on reporting. Seventeen such
+      // people were found in the Demo Building on 2026-07-24.
+      //
+      // FILL THE ABSENCE; NEVER OVERWRITE A DECISION. reclassify() supersedes
+      // unconditionally, so a blind call here would downgrade an already
+      // production person on their next un-consented submission. Only a person
+      // holding no current classification is classified.
+      //
+      // Outside the activation perimeter `internal_qa` is the honest value:
+      // the record is created through the real architecture and centrally
+      // excluded from outreach, reporting, metrics and AI — which is exactly
+      // what that classification means. If it is wrong for a given person it
+      // is wrong in the SAFE direction (excluded, not wrongly counted), and a
+      // deliberate attributed supersession corrects it. Inside this same
+      // transaction, so a lead is never committed ungoverned.
+      const _existingClass = (await client.query(
+        `select 1 from person_property_classifications
+          where person_id=$1 and property_id=$2 and superseded_at is null limit 1`,
+        [person.id, propertyId])).rows[0];
+      if (!_existingClass) {
+        await commBoundary.reclassify(
+          { person_id: person.id, property_id: propertyId, record_class: "internal_qa",
+            actor_user_id: null, reason: "birth_default_outside_activation" },
+          client
+        );
+        console.log(`[intake] birth-guard classified person=${person.id} property=${propertyId} internal_qa (outside activation perimeter)`);
+      }
+
       // ── THREAD IT (memo §2.2: never an orphaned event). The conversation-queue
       //    projection inner-joins conversations — without this row an intake lead is
       //    INVISIBLE to the operator door. Upsert on (property, person): a repeat
