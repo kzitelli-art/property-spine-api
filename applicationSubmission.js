@@ -159,6 +159,27 @@ module.exports = function applicationSubmissionModule(deps) {
     if (!property_id) throw httpErr(400, "property_id is required.");
     if (!applicant_name) throw httpErr(400, "applicant_name is required.");
 
+    // ── BIRTH GUARD — an application must reference a durable person ───
+    // person_id defaulted to null here, so an application could be created
+    // holding an applicant NAME and no identity. One such record was found
+    // in the Demo Building on 2026-07-24 sitting at status 'lease_ready':
+    // a string on a row, linked to no conversation, no tour history, no
+    // Person Card. Nothing downstream can recover an identity that was
+    // never written — the operator app correctly rendered the name as
+    // plain text, three layers from the cause.
+    //
+    // The person is REQUIRED, never INFERRED. A name, an email or a phone
+    // is evidence of identity and never permission to create or merge one.
+    // A caller without a person resolves or creates it through the canonical
+    // intake path first, then submits with the id. Refusing here is the
+    // honest failure; guessing would be the confident-wrong one.
+    if (!person_id) {
+      throw httpErr(400,
+        "person_id is required. An application must reference a durable person — " +
+        "resolve or create the person through the canonical intake path first, then submit. " +
+        "Identity is never inferred from an applicant name.");
+    }
+
     const prop = (await client.query("select id from properties where id=$1", [property_id])).rows[0];
     if (!prop) throw httpErr(404, "No property with that id.");
 
