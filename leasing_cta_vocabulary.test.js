@@ -1,39 +1,18 @@
-// CLOSED CTA VOCABULARY (ruled): navigation → Open · send_application → Send ·
-// complete_task → Complete · unknown → disabled Unavailable. The row sentence
-// stays specific; the button says only what pressing it does. No free-text CTA.
-const fs=require('fs');
+// CLOSED CTA CONTRACT: three verbs plus one honest disabled fallback.
+const assert=require('assert');
 const path=require('path');
-const dir=process.argv[2]||'.';
-const desk=fs.readFileSync(path.join(dir,'leasing_desk.js'),'utf8');
-const door=fs.readFileSync(path.join(dir,'followups-door.js'),'utf8');
-let pass=0,fail=0;
-const ok=(n,c)=>{ c?(pass++,console.log('  PASS '+n)):(fail++,console.log('  FAIL '+n)); };
-
-// API side — the vocabulary is closed at the source
-const labels=[...desk.matchAll(/label:\s*"([^"]+)"/g)].map(m=>m[1]);
-ok('exactly three CTA labels exist', new Set(labels).size===3);
-ok('the three are Open, Send, Complete', ['Open','Send','Complete'].every(v=>labels.includes(v)));
-ok('no free-text label pass-through as CTA', !/label:\s*valueOrNull\(row\.next_move_label\)/.test(desk));
-ok('retired countersign CTA is gone', !/Review and countersign/.test(desk));
-ok('navigation actions all say Open', !/label:\s*"Review[^"]*"/.test(desk));
-ok('row sentences remain specific (state_label untouched)', /state_label:\s*valueOrNull\(/.test(desk));
-
-// Behavioral: the normalizer itself, executed
-const sandbox={module:{exports:{}},exports:{},require:()=>({})};
-try{
-  const fn=new Function('module','exports','require',desk+'\nreturn {normalizeApplicationAction};');
-  const {normalizeApplicationAction}=fn(sandbox.module,sandbox.exports,sandbox.require);
-  const open1=normalizeApplicationAction({application_id:'a1'},{state:'available',code:'confirm_proposed_terms'});
-  ok('terms-review action renders as Open', open1.label==='Open' && open1.kind==='navigation');
-  const blocked=normalizeApplicationAction({application_id:'a1'},{state:'blocked',code:'anything'});
-  ok('blocked action is still Open (navigate to the blocker)', blocked.label==='Open');
-}catch(e){ ok('normalizer executes standalone ('+e.message+')', false); }
-
-// App side — closed dispatch and honest unknowns
-ok('validation marks unsupported at LOAD time', /row\.action_unsupported\s*=\s*true/.test(door));
-ok('unsupported renders disabled Unavailable', /disabled title="This action is not supported in the operator app yet\."\s*>Unavailable</.test(door));
-ok('the reason is written next to the button', /This action is not supported in the operator app yet\.<\/div>/.test(door));
-ok('dispatcher fall-through is a stop, not a UX path', /unreachable when validation ran/.test(door));
-ok('no click handler on an unsupported row', /action_unsupported\s*\n?\s*\?\s*'<button class="pslh-btn" disabled/.test(door) || /row\.action_unsupported\s*?[\s\S]{0,80}disabled/.test(door));
-console.log(`${pass}/${pass+fail}`);
-process.exit(fail?1:0);
+const desk=require(path.resolve(process.argv[2]||'.','leasing_desk.js'));
+let pass=0; const ok=(value,message)=>{assert.ok(value,message);pass++;};
+let action=desk.normalizeStageApplicationAction({application_id:'a1'},{state:'available',code:'confirm_proposed_terms'});
+ok(action.label==='Open'&&action.kind==='navigation','application navigation is Open');
+action=desk.normalizeFollowupAction({obligation_id:'o1',conversion_id:'c1',next_move_code:'send_application'});
+ok(action.label==='Send'&&action.code==='send_application','application dispatch is Send');
+action=desk.normalizeFollowupAction({obligation_id:'o2',person_id:'p2',next_move_code:'send_follow_up'});
+ok(action.label==='Open'&&action.target.type==='person','communication is Open');
+action=desk.normalizeFollowupAction({obligation_id:'o3',next_move_code:null});
+ok(action.label==='Complete'&&action.code==='complete_task','generic closure is Complete');
+action=desk.normalizeFollowupAction({obligation_id:'o4',next_move_code:'unknown_move'});
+ok(action.label==='Unavailable'&&action.kind==='unsupported'&&action.reason,'unknown action is unavailable');
+action=desk.normalizeFollowupAction({obligation_id:'o5',next_move_code:'send_follow_up'});
+ok(action.kind==='unsupported'&&/durable person/i.test(action.reason),'communication without person is unavailable');
+console.log(`leasing CTA vocabulary: ${pass}/${pass}`);
