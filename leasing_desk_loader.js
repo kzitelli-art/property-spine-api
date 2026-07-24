@@ -28,13 +28,7 @@ const { composeLeasingDesk } = require("./leasing_desk");
 
 // The rail's own next-move label map — kept identical to the live task-queue so
 // the desk and the queue never disagree on wording. (Mirror of operator.js.)
-const NEXT_MOVE_LABELS = {
-  send_application: "Send the application",
-  send_floor_plans: "Send floor plans",
-  schedule_second_tour: "Schedule a second tour",
-  send_follow_up: "Send a follow-up",
-  call_prospect: "Call the prospect",
-};
+
 
 // ── APPLICATION ROWS ───────────────────────────────────────────────────────
 // buildReviewList returns main_blocker per row, NOT next_action. The composer
@@ -201,9 +195,6 @@ async function loadFollowupRows(client, propertyId, deps) {
     due_at: r.due_at,
     due_state: r.due_state,
     next_move_code: r.next_move_code,
-    next_move_label: r.next_move_code
-      ? (NEXT_MOVE_LABELS[r.next_move_code] || String(r.next_move_code).replace(/_/g, " "))
-      : null,
     created_at: r.created_at,
     // D: explicit shadow flag the composer honors (never suppresses on
     // conversion-share alone). Both id keys travel on the row already.
