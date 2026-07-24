@@ -88,8 +88,11 @@ function testNormalizer() {
       display_reason: capability.REASONS.CONTROLLED_ACTIVATION_ONLY,
     },
   });
-  ok("B1. a refused action renders as Unavailable, not as a live Send",
-    denied.label === "Unavailable" && denied.kind === "unsupported", JSON.stringify(denied));
+  ok("B1. a held action keeps the verb the operator would press, disabled",
+    denied.label === "Send" && denied.kind === "blocked" && denied.blocked === true,
+    JSON.stringify(denied));
+  ok("B1b. HELD is not the same truth as UNSUPPORTED — the app can do this, policy holds it",
+    denied.kind !== "unsupported");
   ok("B2. it carries the operator-facing reason",
     denied.reason === capability.REASONS.CONTROLLED_ACTIVATION_ONLY, denied.reason);
   ok("B3. it carries the machine reason code for logs",
@@ -105,8 +108,14 @@ function testNormalizer() {
   ok("B5. an UNEVALUATED verdict changes nothing — unknown is not denial",
     unknown.label === "Send" && unknown.kind === "task_write", JSON.stringify(unknown));
 
-  ok("B6. the closed CTA vocabulary is intact",
-    ["Send", "Unavailable"].includes(denied.label) && ["Send", "Unavailable"].includes(allowed.label));
+  ok("B6. the closed CTA vocabulary is intact — no new verb was invented",
+    ["Open", "Send", "Complete", "Unavailable"].includes(denied.label) &&
+    ["Open", "Send", "Complete", "Unavailable"].includes(allowed.label));
+  ok("B7. a genuinely unsupported action still reads Unavailable",
+    (function () {
+      const u = desk.normalizeFollowupAction({ obligation_id: "o9", next_move_code: "unknown_move" });
+      return u.label === "Unavailable" && u.kind === "unsupported";
+    })());
 }
 
 // ════════ C · BATCH AND SINGLE AGREE, ON REAL DATA ═══════════════════
