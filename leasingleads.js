@@ -1247,8 +1247,28 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       [tourId, leadId, type, actorType, actorId, slotId, metadata ? JSON.stringify(metadata) : null])).rows[0];
 
     // projection SECOND — status + the matching timestamp column
+    //
+    // ── WHY 'scheduled' STAMPS NOTHING ────────────────────────────────────
+    // Every other entry in this map is an OCCURRENCE time: completed_at,
+    // no_show_at, checked_in_at all mean "when this happened", so writing
+    // ev.event_at into them is correct.
+    //
+    // scheduled_for is NOT an occurrence time. It is the APPOINTMENT time —
+    // the moment the tour is FOR — written by the booking service from
+    // tour_availability.starts_at. Treating it like its siblings stamped the
+    // booking moment over the appointment on every tour ever booked: the
+    // INSERT wrote the correct slot time, and this UPDATE (same transaction,
+    // milliseconds later) replaced it with now(). RETURNING looked right;
+    // the stored row was wrong; updated_at matched created_at because both
+    // resolved to the same transaction timestamp. Nothing in the plumbing
+    // was broken — the map asserted a meaning the column does not have.
+    //
+    // WHEN scheduling happened is not lost: it lives in tour_events.event_at,
+    // which is the source of truth and is written above, untouched by this.
+    // ('rescheduled' already stamps nothing for the same class of reason.)
     const TS_COL = {
-      scheduled: "scheduled_for", confirmed_by_prospect: "confirmed_at",
+      scheduled: null,             // appointment time, NOT an occurrence time — see above
+      confirmed_by_prospect: "confirmed_at",
       reminder_sent: "reminded_at", checked_in: "checked_in_at",
       completed: "completed_at", no_show: "no_show_at",
       cancelled: "cancelled_at", rescheduled: null, // rescheduled stamps no own col; successor tour carries on
@@ -1346,20 +1366,6 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       await leasingLifecycle.assertNotSoftClosedForLead(client, { leadId: lead.id });
     }
 
-    // ── TEMP DIAGNOSTIC (BOOKING-SCHEDULED-FOR) — remove once the write bug is
-    //    found. Logs what we are ABOUT to pass and what the DB hands back, so the
-    //    JS side and the DB side can be told apart in one booking. No behavior change.
-    try {
-      console.log("[BOOKPROBE] pre-insert", JSON.stringify({
-        slot_id: slotId,
-        slot_keys: Object.keys(slot || {}),
-        starts_at_value: slot ? String(slot.starts_at) : null,
-        starts_at_type: slot ? (slot.starts_at instanceof Date ? "Date" : typeof slot.starts_at) : null,
-        starts_at_iso: (slot && slot.starts_at instanceof Date) ? slot.starts_at.toISOString() : null,
-        agent_id: slot ? slot.leasing_agent_id : null,
-      }));
-    } catch (_e) { console.log("[BOOKPROBE] pre-insert log failed:", _e.message); }
-
     // ── create the tour on this slot (status 'scheduled'). Execution is SYSTEM;
     //    the confirming prospect + originating cause are recorded, not conflated.
     const tour = (await client.query(
@@ -1367,18 +1373,6 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
          (lead_id, property_id, unit_id, leasing_agent_id, slot_id, scheduled_for, status, booking_idempotency_key)
        values ($1,$2,$3,$4,$5,$6,'scheduled',$7) returning *`,
       [lead.id, lead.property_id, slot.unit_id, slot.leasing_agent_id, slotId, slot.starts_at, idempotencyKey || null])).rows[0];
-
-    // ── TEMP DIAGNOSTIC (BOOKING-SCHEDULED-FOR) — what the DB actually stored. ──
-    try {
-      console.log("[BOOKPROBE] post-insert", JSON.stringify({
-        tour_id: tour.id,
-        stored_scheduled_for: String(tour.scheduled_for),
-        stored_created_at: String(tour.created_at),
-        stored_slot_id: tour.slot_id,
-        stored_agent_id: tour.leasing_agent_id,
-        matches_slot: String(tour.scheduled_for) === String(slot.starts_at),
-      }));
-    } catch (_e) { console.log("[BOOKPROBE] post-insert log failed:", _e.message); }
 
     // flip the slot to booked (partial unique index is the concurrent backstop)
     await client.query(
