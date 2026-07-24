@@ -59,7 +59,7 @@ function arg(name) {
 
   // 3. Wire the DEPLOYED loader and validate with ITS validator.
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
-  const router = require("./snapshot_loader")({ pool });
+  const router = require("../shared/snapshot_loader")({ pool });
   const H = router.helpers;
 
   const verdict = H.validateReconciliation(document);

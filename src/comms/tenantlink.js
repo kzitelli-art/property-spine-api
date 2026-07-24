@@ -67,7 +67,7 @@
 
 const express = require("express");
 const crypto = require("crypto");
-const { classifyUrgency } = require("./maintenance_urgency.js"); // narrow urgency decision for tenant maintenance
+const { classifyUrgency } = require("../maintenance/maintenance_urgency.js"); // narrow urgency decision for tenant maintenance
 
 module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService, getAgentService }) {
   const router = express.Router();

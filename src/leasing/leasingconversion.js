@@ -25,7 +25,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 const express = require("express");
-const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
+const staffIdentity = require("../identity/staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 
 module.exports = function leasingConversionModule({ pool, spawnObligationFromEvent, completeObligation, closureAuthority }) {
   // THE CLOSURE CAPABILITY (structural, not conventional): server.js creates

@@ -19,7 +19,7 @@
 // GET /deals                          (the six deals + load state, for the picker)
 // ============================================================
 
-const { DEALS, byPropertyId, byCanonical } = require("./deal_registry");
+const { DEALS, byPropertyId, byCanonical } = require("../onboarding/deal_registry");
 
 module.exports = function propertySurface(deps) {
   const express = require("express");

@@ -45,7 +45,7 @@ module.exports = function management(deps) {
   // if it can't be required or read, the Collections door still computes its
   // own delinquency numbers; we just omit the exposure cross-reference.
   let computeExposure = null;
-  try { ({ computeExposure } = require("./exposure")); } catch (_) { /* fail-soft */ }
+  try { ({ computeExposure } = require("../money/exposure")); } catch (_) { /* fail-soft */ }
 
   const requireOperator =
     (deps && deps.requireOperator) ||

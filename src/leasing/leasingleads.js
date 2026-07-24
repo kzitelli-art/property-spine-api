@@ -22,8 +22,8 @@
 // ════════════════════════════════════════════════════════════════════
 
 const express = require("express");
-const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
-const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
+const staffSessions = require("../identity/staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
+const staffIdentity = require("../identity/staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 const crypto = require("crypto");
 // Rule-0 capture-first attribution buckets (Fable ruling): two materially different
 // truths, never folded together. A MISSING/blank tag = no channel data arrived.
@@ -137,7 +137,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // ── helpers ──────────────────────────────────────────────────────────
   // Canonical phone normalization is the SHARED module (phone_identity.js) —
   // one implementation for all identity dedup, not a per-module copy.
-  const { normalizeE164: __normalizeE164 } = require("./phone_identity");
+  const { normalizeE164: __normalizeE164 } = require("../identity/phone_identity");
   function normalizePhone(raw) { return __normalizeE164(raw); }
 
   // ── PROSPECT ACTIVATION (Path A) ──────────────────────────────────────
@@ -1460,7 +1460,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // Property operating timezone — resolved through the ONE shared resolver
   // (property_timezone.js), the SAME truth operator.js uses. Honest null for an
   // unconfigured property; booking/offers refuse rather than invent local times.
-  const { resolvePropertyOperatingTimeZone } = require("./property_timezone");
+  const { resolvePropertyOperatingTimeZone } = require("../shared/property_timezone");
   function propertyTimezone(propertyId) {
     return resolvePropertyOperatingTimeZone(propertyId); // null = unconfigured
   }
@@ -1950,7 +1950,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           // dormant gate: the capture hook invokes the ledger DIRECTLY (not via
           // an HTTP route), so the fail-closed check must run HERE too — an
           // internal caller must not bypass dormancy to mint an offer/incident.
-          const { resolveMode } = require("./dormant_gate");
+          const { resolveMode } = require("../identity/dormant_gate");
           if (resolveMode() !== "enabled") {
             throw svcErr(403, {
               error: "commitment_ledger_dormant", code: "LEDGER_DORMANT",

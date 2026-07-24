@@ -138,7 +138,7 @@ function money(n) {
 // hard-mode incidents so a double-submit / retry cannot mint two records
 // of one promise. Stable field order, normalized numbers.
 const crypto = require("crypto");
-const { dormantWriteGuard } = require("./dormant_gate");  // fail-closed commitment-write gate
+const { dormantWriteGuard } = require("../identity/dormant_gate");  // fail-closed commitment-write gate
 function concessionSignature(concessions, scope, scope_ref, space_id) {
   const norm = (concessions || [])
     .map((c) => `${c.concession_type}:${Number(c.value)}:${c.fee_category || ""}:${c.timing_profile || ""}`)

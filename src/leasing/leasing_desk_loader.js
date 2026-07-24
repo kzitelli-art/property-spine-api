@@ -200,7 +200,7 @@ async function loadFollowupRows(client, propertyId, deps) {
   // verdict is honestly unknown, never a silent denial.
   let capabilityByPerson = null;
   try {
-    const capability = require("./capability");
+    const capability = require("../identity/capability");
     capabilityByPerson = await capability.evaluateApplicationLinkBirthBatch(client, {
       property_id: propertyId,
       person_ids: rows.map((r) => r.person_id).filter(Boolean),
