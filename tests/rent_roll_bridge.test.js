@@ -95,8 +95,8 @@ function makePool({ breakSpaces = false } = {}) {
   // reach the un-exported reader through the module's route, or directly if exported.
   // readLatestSnapshot is module-internal; drive it through GET /operator/rent-roll
   // with a stubbed session — the same path the app takes.
-  const loaderModule = require(path.join(__dirname, "snapshot_loader.js"));
-  const spaceMod = require(path.join(__dirname, "space_position.js"));
+  const loaderModule = require(path.join(__dirname, "..", "src", "shared", "snapshot_loader.js"));
+  const spaceMod = require(path.join(__dirname, "..", "src", "tenancy", "space_position.js"));
 
   // ── 1. spacePosition surfaces the person ─────────────────────────────
   console.log("1. spacePosition carries tenant identity");
@@ -123,7 +123,7 @@ function makePool({ breakSpaces = false } = {}) {
   const express = require("express");
   const app = express();
   // stub the staff session the route resolves
-  const staffSessions = require(path.join(__dirname, "staff_session_service.js"));
+  const staffSessions = require(path.join(__dirname, "..", "src", "identity", "staff_session_service.js"));
   const realResolve = staffSessions.resolveStaffSession;
   staffSessions.resolveStaffSession = async () => ({ id: "op-1", property_id: PROP });
   app.use("/", loaderModule({ pool: makePool() }));
