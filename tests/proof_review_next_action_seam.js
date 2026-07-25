@@ -10,8 +10,8 @@
 // =============================================================
 
 const path = require("path");
-const applicationsModule = require(path.join(__dirname, "..", "..", "applications.js"));
-const { buildReviewDetail } = require(path.join(__dirname, "..", "..", "application_review.js"));
+const applicationsModule = require(path.join(__dirname, "..", "src", "applications", "applications.js"));
+const { buildReviewDetail } = require(path.join(__dirname, "..", "src", "applications", "application_review.js"));
 
 const stub = {
   pool: { query: async () => { throw new Error("proof: pool untouched"); } },

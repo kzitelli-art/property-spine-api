@@ -9,9 +9,9 @@ const http = require("http");
 const express = require("express");
 const crypto = require("crypto");
 const engine = require("./_engine.js");
-const buildConversion = require("../leasingconversion.js");
-const buildOperator = require("../operator.js");
-const buildBridge = require("../staffbridge.js");
+const buildConversion = require("../src/leasing/leasingconversion.js");
+const buildOperator = require("../src/identity/operator.js");
+const buildBridge = require("../src/identity/staffbridge.js");
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 10 });
 let pass = 0, fail = 0;
@@ -83,7 +83,7 @@ async function call(port, method, path, { token, body } = {}) {
   });
 
   // ── rig ──
-  const closureAuthority = require("../conversion_obligation_closure.js").createConversionClosureAuthority();
+  const closureAuthority = require("../src/leasing/conversion_obligation_closure.js").createConversionClosureAuthority();
   const convRouter = buildConversion({ pool, closureAuthority,
     spawnObligationFromEvent: engine.spawnObligationFromEvent, completeObligation: engine.completeObligation });
   const convSvc = convRouter._service;

@@ -39,7 +39,7 @@ const fakeAnthropic = { messages: { async create(req) {
 // ── WIRE COUNTER ───────────────────────────────────────────────────────
 // Wrap the REAL boundary so we count actual sendPropertySms invocations (the
 // wire attempt), independent of what the DB shows. Reset per block.
-const realBoundary = require("./communications_boundary")({ pool, sms: { enabled: () => false, sendSms: async () => ({ sent: true, sid: "SMwire" }), validateWebhook: () => true } });
+const realBoundary = require("../src/comms/communications_boundary.js")({ pool, sms: { enabled: () => false, sendSms: async () => ({ sent: true, sid: "SMwire" }), validateWebhook: () => true } });
 let WIRE_CALLS = 0;
 const boundary = new Proxy(realBoundary, {
   get(target, prop) {
@@ -57,7 +57,7 @@ async function spawnOb(c, o) {
     [o.property_id, o.person_id, o.module, o.type, o.label, o.owner_type, o.assigned_role || null]);
   return r.rows[0];
 }
-const agent = require("./agent")({ pool, anthropic: fakeAnthropic, INGEST_MODEL: "fake", spawnObligationFromEvent: spawnOb, completeObligation: async () => ({}), leasingLifecycle: { maybeReopenOnQualifyingInbound: async () => ({}) }, commBoundary: boundary, inventory: inventoryStub, leasingBookingService: null });
+const agent = require("../src/agent/agent.js")({ pool, anthropic: fakeAnthropic, INGEST_MODEL: "fake", spawnObligationFromEvent: spawnOb, completeObligation: async () => ({}), leasingLifecycle: { maybeReopenOnQualifyingInbound: async () => ({}) }, commBoundary: boundary, inventory: inventoryStub, leasingBookingService: null });
 
 let srv, base; const track = [];
 async function newProspect(name) {

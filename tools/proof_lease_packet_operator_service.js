@@ -13,9 +13,9 @@
 
 const crypto = require("crypto");
 const { Pool } = require("pg");
-const leasePacketsModule = require("../../leasepackets");
-const applicationsModule = require("../../applications");
-const { buildReviewDetail } = require("../../application_review");
+const leasePacketsModule = require("../src/applications/leasepackets.js");
+const applicationsModule = require("../src/applications/applications.js");
+const { buildReviewDetail } = require("../src/applications/application_review.js");
 
 const APPLICATION_ID =
   process.env.PROOF_APPLICATION_ID ||

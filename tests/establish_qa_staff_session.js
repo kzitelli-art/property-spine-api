@@ -18,7 +18,7 @@
  * It writes ONE canonical staff_sessions row and nothing else.
  */
 const { Pool } = require("pg");
-const svc = require("./staff_session_service");
+const svc = require("../src/identity/staff_session_service.js");
 
 const DB = process.env.DATABASE_URL;
 const DEMO = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
