@@ -90,11 +90,53 @@ check("pipeline: end-to-end leaves no markup", finished,
 check("pipeline: no em/en dash escapes", finished,
   s => !s.includes("—") && !s.includes("–"), "no AI dashes");
 
-// ─── Report ───────────────────────────────────────────────────────────────────
-console.log(`\n${pass} passed, ${fail} failed`);
-if (process.argv.includes("--show-prefix")) {
-  console.log("\n--- PRE-FIX REPRODUCTION (what the prospect actually got) ---");
-  console.log("stripDashes only, no stripMarkdown:");
+// ─── Case G: the opener must not force a choice between two slots ────────────
+// The pre-fix opener drew "why so pushy for tour i just filled out form" from a
+// real prospect. Offering a tour early is NOT the defect; naming two specific
+// times and asking which works IS. Asserted against the real drafter with the
+// model disabled, so this exercises the deterministic fallback path.
+const leasing = require(path.join(__dirname, "..", "src", "leasing", "leasingleads.js"))({
+  pool: { query: async () => ({ rows: [] }) }, anthropic: null, sms: null,
+  leasingLifecycle: null, conversionServices: null, commBoundary: null,
+});
+const REAL_SLOTS = [{ label: "Mon, Jul 27 at 2:00 PM" }, { label: "Mon, Jul 27 at 4:00 PM" }];
+
+(async () => {
+  const withSlots = await leasing.__test__.draftFirstResponse({
+    name: "Cameron", unitLabel: null, propertyName: "Solo on Chestnut", rent: null, slots: REAL_SLOTS,
+  });
+  const known = await leasing.__test__.draftFirstResponse({
+    name: "Cameron", unitLabel: "Unit 602", propertyName: "Solo on Chestnut", rent: 2700, slots: REAL_SLOTS,
+  });
+
+  check("opener: does not list specific tour times", withSlots,
+    s => !/\d{1,2}:\d{2}\s*(AM|PM)/i.test(s), "no clock times in the first message");
+  check("opener: does not force a pick-one question", withSlots,
+    s => !/which (one )?works|either of those|want to grab one/i.test(s),
+    "no forced choice between slots");
+  check("opener: offers the low-commitment path", withSlots,
+    s => /anything i can answer|any questions/i.test(s),
+    "an explicit 'or ask me something first' escape hatch");
+  check("opener: at most one exclamation mark", withSlots,
+    s => (s.match(/!/g) || []).length <= 1, "<= 1 '!' (the old opener had 3)");
+  check("opener: still honest about unverified pricing", withSlots,
+    s => /confirming/i.test(s), "says it is confirming rather than inventing rent");
+  check("opener: states verified rent when known", known,
+    s => s.includes("$2700") || s.includes("$2,700"), "real rent surfaced when available");
+  check("opener: no markdown or AI dashes", withSlots,
+    s => !s.includes("*") && !s.includes("—") && !s.includes("–"), "clean punctuation");
+
+  console.log(`\n${pass} passed, ${fail} failed`);
+  if (process.argv.includes("--show-prefix")) {
+    console.log("\n--- PRE-FIX OPENER (what drew 'why so pushy') ---");
+    console.log('  "...I have Mon, Jul 27 at 2:00 PM or 4:00 PM available. Which works better for you?"');
+    console.log("--- v8 OPENER ---");
+    console.log(`  "${withSlots}"`);
+  }
+  process.exit(fail ? 1 : 0);
+})();
+
+// ─── Report (unreachable; the async IIFE above reports and exits) ─────────────
+function __unusedReport() {
   console.log(stripDashes(LIVE_FEE_REPLY).slice(0, 200) + "...");
 }
-process.exit(fail ? 1 : 0);
