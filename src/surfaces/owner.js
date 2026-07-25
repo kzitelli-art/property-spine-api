@@ -159,6 +159,14 @@ module.exports = function owner(deps) {
     "260b6bac-4738-47c4-b86d-511b726adc48", // 4125 Chestnut
     "9e2bb96e-08e2-41db-81c2-91055ceb50a3", // 4233 Chestnut
     "971c51ab-be96-4e5f-81df-0e59804c879b", // The Felix
+    // Demo Building. NOT a real operating property, but it holds the ONLY
+    // irreplaceable record in the system (Marlow's 2026-07-05 tour,
+    // 31ca5801-…) plus the whole demo corpus: 344 leases, 431 comm_events,
+    // 15 tours, and the open tour_availability the boardroom run needs.
+    // Until now it was spared only because its NAME does not match
+    // TEST_PATTERNS — a naming coincidence, not a guard. A rename, or a new
+    // pattern that happens to match, would cascade all of it away.
+    "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe", // Property Spine Demo Building
   ];
   // Name patterns that mark a row as test/scratch. Anchored to how these were
   // actually named (prefixes + embedded timestamps). Real properties never match.
