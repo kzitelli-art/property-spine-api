@@ -341,25 +341,35 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
 
     // Deterministic fallback — real slots when we have them, an honest ask when
     // we don't. No hardcoded times in either branch.
+    // OPENER SHAPE (docs/AI_VOICE.md §5 Case G). The prior opener listed two
+    // specific slots and asked "which works better for you?" — a CLOSED question
+    // whose only answers are two commitments. A real prospect answered it with
+    // "why so pushy for tour i just filled out form". Offering a tour early is
+    // NOT the defect; forcing a choice between two times is. Every branch below
+    // makes an OPEN offer and gives an explicit lower-commitment path ("or
+    // anything I can answer first"), which hands control back to the prospect.
+    // Real slots are still never invented; they are simply not led with.
     let fallback;
-    if (haveSlots) {
-      fallback = known
-        ? `Hi ${firstName(name)} — ${unitLabel} at ${propertyName || "the property"} is available. Rent is $${rent}. We have tours ${slotPhrase}. Want either of those?`
-        : `Hi ${firstName(name)} — thanks for your interest in ${propertyName || "the property"}! I'm confirming current availability and pricing now. In the meantime, we have tours ${slotPhrase} — want to grab one?`;
+    if (known) {
+      fallback = `Hi ${firstName(name)}, thanks for the inquiry! ${unitLabel} at ${propertyName || "the property"} is available at $${rent}. I'd love to show you around, or is there anything I can answer first?`;
     } else {
-      fallback = known
-        ? `Hi ${firstName(name)} — ${unitLabel} at ${propertyName || "the property"} is available. Rent is $${rent}. What days or times work for a tour? I'll line one up.`
-        : `Hi ${firstName(name)} — thanks for your interest in ${propertyName || "the property"}! I'm confirming current availability and pricing now. What days or times generally work for a tour? I'll get one set up.`;
+      fallback = `Hi ${firstName(name)}, thanks for the inquiry! I'm confirming current availability and pricing now. I'd love to show you around, or is there anything I can answer first?`;
     }
+    // `slotPhrase` stays available for the model branch below, which may offer
+    // real times if the prospect's message already signalled tour intent.
+    void slotPhrase;
     if (!anthropic) return fallback;
     try {
       const slotInstruction = haveSlots
-        ? `Offer these two REAL tour times and ask which works: ${slotPhrase}.`
-        : `We have NO confirmed tour times to offer right now — DO NOT invent, guess, or imply any tour time. Instead, ask what days/times generally work so we can set one up.`;
+        ? `We DO have real tour times available (${slotPhrase}), but DO NOT list them in this first message and DO NOT ask the prospect to pick one. Make an open offer to show them around instead. They just filled out a form seconds ago; naming two specific times and asking "which works better" reads as pushy and has driven a real prospect away. Save the specific times for when they say yes.`
+        : `We have NO confirmed tour times to offer right now. DO NOT invent, guess, or imply any tour time.`;
       const prompt =
-        `You are the leasing assistant for ${propertyName || "an apartment community"}. Write ONE short, warm SMS (under 320 chars) to a prospect named ${firstName(name)}. ` +
-        `Goal: confirm the unit is available if known, state rent if given, and handle tour timing. ` +
+        `You are the leasing assistant for ${propertyName || "an apartment community"}. Write ONE short, warm SMS (under 320 chars) to a prospect named ${firstName(name)} who submitted a web inquiry about 30 seconds ago. ` +
+        `Sound like a sharp, helpful person texting between showings. Not a brochure. Two sentences, warm and brief. ` +
+        `Goal: thank them for the inquiry, confirm the unit and rent IF known, and offer to show them around. ` +
         `${slotInstruction} ` +
+        `END by giving them BOTH paths: offer the tour AND an easy way to just ask questions first, e.g. "or is there anything I can answer first?". The lower-commitment option is required; it hands them control and is the whole point of this message. ` +
+        `AT MOST ONE exclamation mark in the entire message. Never use an em dash or en dash. Never use markdown. ` +
         `If unit or rent is unknown, DO NOT invent it — say you're confirming. Never invent a tour time, price, or availability. ` +
         `Do NOT try to close a lease, ask for an application, or request documents. ` +
         `Unit: ${unitLabel || "(unknown — confirming)"}. Rent: ${rent ? "$" + rent : "(unknown — confirming)"}. Reply with ONLY the message text.`;
@@ -2428,5 +2438,10 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     propertyAgentBookingEnabled, // permanent per-property booking capability
     propertyTimezone,          // shared honest-null tz resolver
   };
+  // TEST-ONLY (Class 3, inert at runtime): exposes the opener drafter so the
+  // voice harness asserts against the REAL emitted text, not a copy. No route,
+  // no side effect. Removal condition: delete with prove_voice_v8.js.
+  router.__test__ = { draftFirstResponse };
+
   return router;
 };
