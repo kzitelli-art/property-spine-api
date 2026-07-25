@@ -95,13 +95,19 @@ module.exports = function agentModule(deps) {
   }
 
   // ── PROSPECT-TEXT PUNCTUATION GUARANTEE (§2 / PUNCTUATION) ──────────────────
-  // The persona forbids em/en dashes in prospect texts, but a prompt rule is not
+  // The persona forbids the em dash in prospect texts, but a prompt rule is not
   // a guarantee — models emit them constantly. This is the deterministic strip
-  // that makes the rule real. ONLY targets em (U+2014) and en (U+2013) dashes;
-  // ordinary hyphens (dates, phones, compounds) are untouched. Context-aware:
-  // a dash used as a mid-thought break becomes '...'; a dash joining two clauses
-  // that reads as a pause becomes ', '. Heuristic, but far better than shipping
-  // the AI tell.
+  // that makes the rule real. Context-aware: a dash used as a mid-thought break
+  // becomes '...'; a dash joining two clauses that reads as a pause becomes ', '.
+  //
+  // SCOPE: EM DASH (U+2014) ONLY. The EN DASH (U+2013) is the RANGE character
+  // and must survive — it carries real meaning in prospect-facing copy:
+  //     quiet hours 9 PM–8 AM Sun–Thu, 11 PM–8 AM Fri–Sat
+  //     units 402–602
+  // Stripping it produced live breakage: "9 PM, 8 AM Sunday, Thursday, 11 PM,
+  // 8 AM Friday, Saturday" — four random times where a reader expects two
+  // ranges. Ordinary hyphens (dates, phones, compounds) and slashes in prices
+  // ($2,700/month) were never in scope and remain untouched.
   function stripDashes(text) {
     if (!text) return text;
     let s = String(text);
@@ -110,15 +116,15 @@ module.exports = function agentModule(deps) {
     // parenthetical/trailing break → '...'. A dash tightly BETWEEN words with no
     // space (word—word) reads as a joining pause → ', '.
     // 1) " — " (spaced both sides): trailing-thought feel → "... "
-    s = s.replace(/\s+[—–]\s+/g, (m) => {
+    s = s.replace(/\s+—\s+/g, (m) => {
       // If what follows looks like a full new clause (starts lowercase 'and/but/
       // so/let/i' or similar) treat as a pause comma; else an ellipsis break.
       return "... ";
     });
     // 2) "word—word" (no spaces): joining → ", "
-    s = s.replace(/([^\s])[—–]([^\s])/g, "$1, $2");
+    s = s.replace(/([^\s])—([^\s])/g, "$1, $2");
     // 3) any stragglers (dash at start/end or odd spacing) → ", "
-    s = s.replace(/[—–]/g, ", ");
+    s = s.replace(/—/g, ", ");
     // Collapse an accidental ", ..." or double punctuation the swaps can create.
     s = s.replace(/,\s*\.\.\./g, "...").replace(/\.\.\.\s*,/g, "...");
     s = s.replace(/\s{2,}/g, " ").replace(/\s+([,.])/g, "$1").trim();
@@ -293,6 +299,7 @@ A greeting or contentless message ("hi", "good morning", "hey", "you there?") is
 2. REDIRECT: The question asks for a subjective safety, demographic, or steering judgment. Pivot to practical facts or objective public sources.
 3. DEFER: The fact is not verified but YOU could find it yourself (look it up, check live data). Say you are checking the exact answer, then keep the conversation moving. No one else needs to do anything.
 4. FLAG: A HUMAN must handle something before you can answer — confirm a unit's readiness or move-in date, accelerate a turn, verify parking availability, decide an exception or waiver, or check an operating fact only staff can confirm. Tell the prospect honestly that this needs the team and that the team can see your conversation — then KEEP the conversation. Do NOT claim you filed, flagged, or submitted anything, do NOT claim someone is already working on it, do NOT promise an outcome or a response time. Do NOT emit a handoff tag — this is not a handoff.
+   YOU MAY NOT PROMISE ACTION. Stating that the team can see the conversation is the ONLY commitment you may make. Never say you will advocate, push, ask around, escalate, chase, "see what I can do", "shake the tree", "work on it", or otherwise act on the prospect's behalf, and never say you or anyone will follow up, circle back, get back to them, let them know, or reach out. No first-person future action ("I'll…", "let me…"), no third-party future action ("they'll…", "someone will…"). Nothing in the system is listening to such a promise, so making one is a lie to a real person. Say what is true — the team can see this — and continue being useful in this message.
 5. HANDOFF: The prospect is frustrated, explicitly wants a person, requests an accommodation, reports an emergency, or raises a direct legal or discrimination complaint. This is when a PERSON must take over the CONVERSATION itself. Say you are getting the team involved and add this exact tag on its own line:
 
 [[HANDOFF: short reason]]
@@ -456,6 +463,7 @@ HANDOFFS AND PROMISES
 A normal unknown fact you could find yourself is a DEFER, not a handoff.
 
 If a HUMAN must review or handle something before you can answer (readiness, a turn, an exception, or a staff-only operating check), that is a FLAG: say honestly that it needs the team and the team can see your conversation, then KEEP the conversation. It is not a handoff — do not emit the tag.
+"The team can see your conversation" is the ONLY commitment available to you. Do not promise that you or anyone will advocate, push, chase, follow up, circle back, get back to them, or reach out. No "I'll…", no "let me…", no "they'll…". Nothing is listening to that promise, so it would be a lie to a real person.
 
 Bring in a person to OWN the conversation (a HANDOFF) only for the handoff conditions above.
 
