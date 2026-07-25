@@ -17,10 +17,32 @@ let passed = 0, failed = 0;
 const chk = (n, c, d = "") => { if (c) { passed++; console.log(`  \u2713 ${n}`); } else { failed++; console.log(`  \u2717 ${n} ${d}`); } };
 
 const ONLY = (process.env.ONLY_BLOCK||"").split(",").filter(Boolean);
-const DEMO = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
-process.env.AGENT_TOUR_BOOKING_PROPERTY_IDS = DEMO;
+
+// ── SCRATCH PROPERTY — this harness owns its own property ────────────
+//  Every statement in this file names PROP, a property created at the top
+//  of main() and removed in cleanup() by tracked id plus a '__XTURN__%'
+//  name guard. No production property id appears anywhere below, so no
+//  run of this file — whole file or per block — can delete a row it did
+//  not create. (Convention copied from the '__CB_NO076__%' prefix in
+//  src/shared/no076_failclosed_check.js.)
+//
+//  This replaces two property-wide `delete from tour_availability where
+//  property_id = <Demo Building>` statements that destroyed 19 real demo
+//  slots on 2026-07-25.
+const PROP = crypto.randomUUID();
+const PROP_NAME = `__XTURN__P ${PROP.slice(0, 8)}`;
+const PROP_SMS = "+1555" + Math.floor(1e6 + Math.random() * 8e6);
+process.env.AGENT_TOUR_BOOKING_PROPERTY_IDS = PROP;
 process.env.SMS_SEND_MODE = "internal_qa_autonomous";
-process.env.AGENT_AUTO_DISPATCH_PROPERTY_IDS = DEMO;
+process.env.AGENT_AUTO_DISPATCH_PROPERTY_IDS = PROP;
+// A scratch property is not in property_timezone.js's builtin allowlist, and
+// an UNCONFIGURED property resolves to an honest null — on which offers and
+// bookings correctly refuse. Register it through the PROPERTY_OPERATING_TZ_JSON
+// map that module documents for QA rigs, so this harness still exercises the
+// real resolver rather than bypassing it.
+process.env.PROPERTY_OPERATING_TZ_JSON = JSON.stringify(Object.assign(
+  (() => { try { return JSON.parse(process.env.PROPERTY_OPERATING_TZ_JSON || "{}"); } catch (_) { return {}; } })(),
+  { [PROP]: "America/New_York" }));
 
 // Scripted fake model. Per-turn behavior via module vars.
 //   MODE 'offer'  → calls offer_tour_slots with PRESENT_IDS, then (2nd turn) states them
@@ -44,21 +66,25 @@ const agent = require("../src/agent/agent.js")({ pool, anthropic: fakeAnthropic,
 
 let srv, base; const track = { persons: [], leads: [], slots: [] };
 async function blockReset() { MODE = "text"; PRESENT_IDS = []; BOOK_ID = null; await new Promise(r => setTimeout(r, 1200)); }
-async function inbound(pid, body) { const ms = "SM" + crypto.randomBytes(10).toString("hex"); const res = await fetch(`${base}/agent/inbound`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ property_id: DEMO, person_id: pid, body, sms_sid: ms, idempotency_key: ms }) }); await res.json().catch(() => ({})); await new Promise(r => setTimeout(r, 500)); }
-async function mkSlot(h) { const id = uuid(); track.slots.push(id); const st = new Date(Date.now() + h * 3600e3), en = new Date(st.getTime() + 30 * 60e3); await pool.query(`insert into tour_availability (id,property_id,starts_at,ends_at,capacity,status) values ($1,$2,$3,$4,1,'open')`, [id, DEMO, st.toISOString(), en.toISOString()]); return id; }
-async function newProspect(name) { const pid = uuid(); track.persons.push(pid); await pool.query(`insert into persons (id,name,phone) values ($1,$2,$3)`, [pid, name, "+1555" + Math.floor(1e6 + Math.random() * 8e6)]); const lead = uuid(); track.leads.push(lead); await pool.query(`insert into leasing_leads (id,person_id,property_id,status) values ($1,$2,$3,'new')`, [lead, pid, DEMO]);
+async function inbound(pid, body) { const ms = "SM" + crypto.randomBytes(10).toString("hex"); const res = await fetch(`${base}/agent/inbound`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ property_id: PROP, person_id: pid, body, sms_sid: ms, idempotency_key: ms }) }); await res.json().catch(() => ({})); await new Promise(r => setTimeout(r, 500)); }
+async function mkSlot(h) { const id = uuid(); track.slots.push(id); const st = new Date(Date.now() + h * 3600e3), en = new Date(st.getTime() + 30 * 60e3); await pool.query(`insert into tour_availability (id,property_id,starts_at,ends_at,capacity,status) values ($1,$2,$3,$4,1,'open')`, [id, PROP, st.toISOString(), en.toISOString()]); return id; }
+async function newProspect(name) { const pid = uuid(); track.persons.push(pid); await pool.query(`insert into persons (id,name,phone) values ($1,$2,$3)`, [pid, name, "+1555" + Math.floor(1e6 + Math.random() * 8e6)]); const lead = uuid(); track.leads.push(lead); await pool.query(`insert into leasing_leads (id,person_id,property_id,status) values ($1,$2,$3,'new')`, [lead, pid, PROP]);
   // classify internal_qa + opted_in (valid source 'system') so the presenting reply dispatches
-  await pool.query(`insert into person_property_classifications (person_id,property_id,record_class,classification_source) values ($1,$2,'internal_qa','system')`, [pid, DEMO]).catch(e => console.error("cls:", e.message));
+  await pool.query(`insert into person_property_classifications (person_id,property_id,record_class,classification_source) values ($1,$2,'internal_qa','system')`, [pid, PROP]).catch(e => console.error("cls:", e.message));
   await pool.query(`insert into contact_preferences (person_id,channel,consent_state,source,updated_at) values ($1,'text','opted_in','internal_qa_enrollment',now()) on conflict (person_id,channel) do update set consent_state='opted_in'`, [pid]).catch(e => console.error("cp:", e.message));
   return { pid, lead }; }
-async function convOf(pid) { return (await pool.query(`select id from conversations where person_id=$1 and property_id=$2`, [pid, DEMO])).rows[0]?.id; }
+async function convOf(pid) { return (await pool.query(`select id from conversations where person_id=$1 and property_id=$2`, [pid, PROP])).rows[0]?.id; }
 async function toursOf(lead) { return (await pool.query(`select id, slot_id, booking_idempotency_key from leasing_tours where lead_id=$1`, [lead])).rows; }
 
 async function main() {
   const app = express(); app.use(express.json()); app.use("/", agent);
   srv = http.createServer(app); await new Promise(r => srv.listen(0, r)); base = `http://127.0.0.1:${srv.address().port}`;
-  await pool.query(`insert into properties (id,name,sms_number) values ($1,'Property Spine Demo Building','+12154452021') on conflict (id) do nothing`, [DEMO]);
-  await pool.query(`delete from tour_availability where property_id=$1`, [DEMO]);
+  // Create the scratch property. No `on conflict do nothing`: a fresh uuid
+  // cannot collide, and if it somehow did we want the run to fail loudly
+  // rather than silently adopt an existing property.
+  await pool.query(`insert into properties (id,name,sms_number) values ($1,$2,$3)`, [PROP, PROP_NAME, PROP_SMS]);
+  console.log(`  scratch property ${PROP} (${PROP_NAME})`);
+  // (No availability reset here — a property created seconds ago has none.)
 
   if(!ONLY.length||ONLY.includes("A")){ // ── A. offer turn A → confirm turn B ──
   console.log("\n\u2500\u2500\u2500 A. offer (turn A) \u2192 confirm (turn B) \u2192 books \u2500\u2500\u2500");
@@ -152,7 +178,7 @@ async function main() {
     await inbound(pid, "one time please");
     // add 6 earlier slots so `offered` falls outside the top-4 availability
     for (let i = 0; i < 6; i++) await mkSlot(1 + i);
-    const top4 = await leasing._service.readOfferableSlots(pool, { propertyId: DEMO, limit: 4 });
+    const top4 = await leasing._service.readOfferableSlots(pool, { propertyId: PROP, limit: 4 });
     chk("D. presented slot has fallen outside current top-4", !(top4 || []).some(s => s.slot_id === offered), "");
     MODE = "book"; BOOK_ID = offered;
     await inbound(pid, "yes that one");
@@ -183,7 +209,13 @@ async function cleanup() {
   }
   const s = [...new Set(track.slots)];
   if (s.length) { const ph = s.map((_, i) => `$${i + 1}`).join(","); await pool.query(`update tour_availability set booked_tour_id=null where id in (${ph})`, s).catch(() => {}); await pool.query(`delete from tour_availability where id in (${ph})`, s).catch(() => {}); }
-  await pool.query(`delete from tour_availability where property_id=$1`, [DEMO]).catch(() => {});
-  console.log("  cleanup complete.");
+  // The scratch property itself — tracked id AND a name guard, so this
+  // statement is structurally incapable of removing a property this harness
+  // did not create. Slots are already gone above by tracked id, so nothing
+  // here deletes by property_id.
+  const gone = await pool.query(
+    `delete from properties where id=$1 and name like '__XTURN__%'`, [PROP]
+  ).catch(e => { console.error("  scratch property NOT removed:", e.message); return { rowCount: 0 }; });
+  console.log(`  cleanup complete. scratch property removed: ${gone.rowCount}`);
 }
 main().catch(async e => { console.error("XTURN ERROR:", e); try { if (srv) srv.close(); await cleanup(); } catch (_) {} try { await pool.end(); } catch (_) {} process.exit(1); });
