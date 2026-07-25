@@ -33,7 +33,7 @@ const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = process.env.INGEST_MODEL || "claude-sonnet-4-6";
 
 const noopSms = { enabled: () => false, sendSms: async () => ({ sent: true, sid: "SMx" }), validateWebhook: () => true };
-const boundary = require("./communications_boundary")({ pool, sms: noopSms });
+const boundary = require("../src/comms/communications_boundary.js")({ pool, sms: noopSms });
 async function spawnOb(c, o) {
   const r = await c.query(
     `insert into obligations (id, property_id, person_id, module, type, label, owner_type, assigned_role, status, priority, severity)
@@ -41,7 +41,7 @@ async function spawnOb(c, o) {
     [o.property_id, o.person_id, o.module, o.type, o.label, o.owner_type, o.assigned_role || null]);
   return r.rows[0];
 }
-const agent = require("./agent")({ pool, anthropic, INGEST_MODEL: MODEL, spawnObligationFromEvent: spawnOb, completeObligation: async () => ({}), leasingLifecycle: { maybeReopenOnQualifyingInbound: async () => ({}) }, commBoundary: boundary, leasingBookingService: null });
+const agent = require("../src/agent/agent.js")({ pool, anthropic, INGEST_MODEL: MODEL, spawnObligationFromEvent: spawnOb, completeObligation: async () => ({}), leasingLifecycle: { maybeReopenOnQualifyingInbound: async () => ({}) }, commBoundary: boundary, leasingBookingService: null });
 
 let srv, base; const track = [];
 async function newProspect(name) {

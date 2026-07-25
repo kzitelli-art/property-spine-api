@@ -37,10 +37,10 @@ const fakeAnthropic = { messages: { async create(req) {
 }}};
 
 const noopSms = { enabled: () => false, sendSms: async () => ({ sent: false }), validateWebhook: () => true };
-const boundary = require("./communications_boundary")({ pool, sms: noopSms });
-const leasing = require("./leasingleads")({ pool, anthropic: fakeAnthropic, INGEST_MODEL: "fake", sms: noopSms, leasingLifecycle: null, conversionServices: {}, commBoundary: boundary });
+const boundary = require("../src/comms/communications_boundary.js")({ pool, sms: noopSms });
+const leasing = require("../src/leasing/leasingleads.js")({ pool, anthropic: fakeAnthropic, INGEST_MODEL: "fake", sms: noopSms, leasingLifecycle: null, conversionServices: {}, commBoundary: boundary });
 async function spawnOb(c, o) { const r = await c.query(`insert into obligations (id,property_id,person_id,module,type,label,owner_type,status) values (gen_random_uuid(),$1,$2,$3,$4,$5,$6,'open') returning id`, [o.property_id, o.person_id, o.module, o.type, o.label, o.owner_type]).catch(() => ({ rows: [{ id: null }] })); return r.rows[0]; }
-const agent = require("./agent")({ pool, anthropic: fakeAnthropic, INGEST_MODEL: "fake", spawnObligationFromEvent: spawnOb, completeObligation: async () => ({}), leasingLifecycle: { maybeReopenOnQualifyingInbound: async () => ({}) }, commBoundary: boundary, leasingBookingService: leasing._service });
+const agent = require("../src/agent/agent.js")({ pool, anthropic: fakeAnthropic, INGEST_MODEL: "fake", spawnObligationFromEvent: spawnOb, completeObligation: async () => ({}), leasingLifecycle: { maybeReopenOnQualifyingInbound: async () => ({}) }, commBoundary: boundary, leasingBookingService: leasing._service });
 
 let srv, base; const track = { persons: [], leads: [], slots: [] };
 async function blockReset() { MODE = "text"; PRESENT_IDS = []; BOOK_ID = null; await new Promise(r => setTimeout(r, 1200)); }

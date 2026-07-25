@@ -9,7 +9,7 @@
 // ════════════════════════════════════════════════════════════════════
 const { Pool } = require("pg");
 const engine = require("./_engine.js");
-const buildModule = require("../leasingconversion.js");
+const buildModule = require("../src/leasing/leasingconversion.js");
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 

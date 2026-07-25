@@ -19,9 +19,9 @@ const fs = require("fs");
 const path = require("path");
 
 const engine = require("./_engine.js");
-const resolver = require("../staff_identity_resolver.js");
-const buildStaffBridge = require("../staffbridge.js");
-const buildConversion = require("../leasingconversion.js");
+const resolver = require("../src/identity/staff_identity_resolver.js");
+const buildStaffBridge = require("../src/identity/staffbridge.js");
+const buildConversion = require("../src/leasing/leasingconversion.js");
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -478,7 +478,7 @@ async function call(port, method, urlPath, { token, body } = {}) {
   // ────────────────────────────────────────────────────────────────
   await T("I1  Commitment Ledger dormant gate still fail-closed (COMMITMENT_LEDGER_MODE unset)", async () => {
     delete process.env.COMMITMENT_LEDGER_MODE;
-    const gate = require("../dormant_gate.js");
+    const gate = require("../src/identity/dormant_gate.js");
     assert(gate.resolveMode() === "dormant", `expected dormant, got ${gate.resolveMode()}`);
   });
 

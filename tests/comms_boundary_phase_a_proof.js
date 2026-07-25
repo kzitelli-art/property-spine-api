@@ -25,7 +25,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 const { Pool } = require("pg");
-const communicationsBoundary = require("./communications_boundary.js");
+const communicationsBoundary = require("../src/comms/communications_boundary.js");
 
 const pool = process.env.DATABASE_URL
   ? new Pool({

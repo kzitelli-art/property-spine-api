@@ -27,7 +27,7 @@
 "use strict";
 
 const path = require("path");
-const loader = require(path.resolve(process.argv[2] || ".", "leasing_desk_loader.js"));
+const loader = require(path.resolve(process.argv[2] || path.join(__dirname, "..", "src", "leasing"), "leasing_desk_loader.js"));
 
 let passed = 0, failed = 0;
 const lines = [];

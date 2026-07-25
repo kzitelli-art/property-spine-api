@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 const path = require("path");
-const service = require(path.resolve(process.argv[2] || "economic_tenancy_service.js"));
+const service = require(path.resolve(process.argv[2] || path.join(__dirname, "..", "src", "tenancy", "economic_tenancy_service.js")));
 let pass=0,fail=0; const ok=(n,c)=>{if(c){pass++;console.log("PASS "+n)}else{fail++;console.log("FAIL "+n)}};
 
 function dbFor({delivery=null,possession=null}){

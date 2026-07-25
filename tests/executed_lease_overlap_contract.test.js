@@ -56,7 +56,7 @@ Module._load = function patchedLoad(request, parent, isMain) {
   return originalLoad(request, parent, isMain);
 };
 
-const servicePath = path.join(__dirname, "executed_lease_service.js");
+const servicePath = path.join(__dirname, "..", "src", "applications", "executed_lease_service.js");
 const svc = require(servicePath);
 Module._load = originalLoad;
 

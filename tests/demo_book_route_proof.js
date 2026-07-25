@@ -23,7 +23,7 @@ process.env.DEMO_MODE = "true";
 process.env.DEMO_BOOKING_ENABLED = "true";
 
 const noopSms = { enabled: () => false, sendSms: async () => ({ sent: false }), validateWebhook: () => true };
-const leasing = require("./leasingleads")({ pool, anthropic: null, INGEST_MODEL: "fake", sms: noopSms, leasingLifecycle: null, conversionServices: {}, commBoundary: null });
+const leasing = require("../src/leasing/leasingleads.js")({ pool, anthropic: null, INGEST_MODEL: "fake", sms: noopSms, leasingLifecycle: null, conversionServices: {}, commBoundary: null });
 
 let srv, base;
 const track = { properties: [], units: [], slots: [], persons: [], leads: [], convs: [] };
