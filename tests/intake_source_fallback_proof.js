@@ -35,14 +35,25 @@ const chk = (n, c, d = "") => { c ? (pass++, console.log(`  ✓ ${n}`)) : (fail+
 async function main() {
   console.log("═══ INTAKE SOURCE FALLBACK (read-mostly, always rolled back) ═══\n");
 
-  // ── 1. the live constraint ──────────────────────────────────────────
-  console.log("─── 1. the constraint the fallback violates ───");
+  // STATE-AWARE, like tests/lead_source_attribution_proof.js. Before 091
+  // this file documents a live defect; after 091 it documents the fix and
+  // guards against a regression. Green in both states — a permanently red
+  // harness stops being read.
   const def = (await pool.query(
     `select pg_get_constraintdef(con.oid) def from pg_constraint con
       join pg_class c on c.oid=con.conrelid
      where c.relname='lead_sources' and con.contype='c'`)).rows.map(r => r.def).join(" ");
+  const FIXED = /'system'/.test(def);
+  console.log(`  migration 091 is ${FIXED ? "APPLIED — this run guards the fix" : "NOT APPLIED — this run documents the defect"}\n`);
+
+  // ── 1. the live constraint ──────────────────────────────────────────
+  console.log("─── 1. the constraint the fallback depends on ───");
   chk("lead_sources.source_type is CHECK-constrained", /source_type/.test(def), def);
-  chk("'system' is NOT an allowed source_type", !/'system'/.test(def), def);
+  if (FIXED) {
+    chk("POST-091: 'system' IS an allowed source_type", /'system'/.test(def), def);
+  } else {
+    chk("PRE-091: 'system' is NOT an allowed source_type — the defect", !/'system'/.test(def), def);
+  }
 
   // ── 2. the buckets do not exist ─────────────────────────────────────
   console.log("\n─── 2. the house buckets have never been created ───");
@@ -51,37 +62,41 @@ async function main() {
     [SOURCE_UNATTRIBUTED, SOURCE_UNMAPPED])).rows;
   chk("neither 'Unattributed' nor 'Unmapped' exists", buckets.length === 0, JSON.stringify(buckets));
 
-  // ── 3. the fallback insert genuinely fails (rolled back) ────────────
-  console.log("\n─── 3. the fallback INSERT fails against the live table ───");
+  // ── 3. the fallback insert — the whole point ────────────────────────
+  console.log("\n─── 3. can intakeProspect create its house bucket? ───");
   {
     const c = await pool.connect();
-    let code = null, reselect = null;
+    let code = null, created = null;
     try {
       await c.query("begin");
       try {
-        await c.query(`insert into lead_sources (name, source_type) values ($1,'system')`,
+        const r = await c.query(
+          `insert into lead_sources (name, source_type) values ($1,'system') returning id, source_type`,
           [SOURCE_UNATTRIBUTED]);
+        created = r.rows[0];
       } catch (e) { code = e.code; }
-      // exactly what the catch block does next
-      if (code) {
-        await c.query("rollback to savepoint s").catch(() => {});
-      }
-      await c.query("rollback");
+    } finally { await c.query("rollback").catch(() => {}); c.release(); }
+    if (FIXED) {
+      chk("POST-091: the bucket is created — a sourceless lead can be captured",
+        !!created && created.source_type === "system", `code=${code}`);
+    } else {
+      chk("PRE-091: the insert raises 23514 (check_violation)", code === "23514", `got ${code}`);
       // the re-select the real code performs after the failed insert
-      reselect = (await pool.query(
+      const reselect = (await pool.query(
         `select id from lead_sources where lower(name)=lower($1) order by id limit 1`,
         [SOURCE_UNATTRIBUTED])).rows[0];
-    } finally { c.release(); }
-    chk("the insert raises 23514 (check_violation)", code === "23514", `got ${code}`);
-    chk("the re-select finds nothing → `fb` is undefined → `fb.id` throws",
-      reselect === undefined, JSON.stringify(reselect));
+      chk("PRE-091: the re-select finds nothing → `fb` is undefined → `fb.id` throws",
+        reselect === undefined, JSON.stringify(reselect));
+    }
   }
 
   // ── 4. only the known names work ────────────────────────────────────
   console.log("\n─── 4. which source names can actually be captured today ───");
   const known = (await pool.query(`select name, source_type from lead_sources order by name`)).rows;
-  console.log("  capturable source names: " + known.map(k => k.name).join(", "));
-  chk("a finite allowlist — anything else falls into the broken path", known.length > 0);
+  console.log("  mapped source names: " + known.map(k => k.name).join(", "));
+  chk(FIXED
+    ? "a finite allowlist — anything else now lands in a house bucket"
+    : "a finite allowlist — anything else falls into the broken path", known.length > 0);
 
   // ── 5. the damage, measured ─────────────────────────────────────────
   console.log("\n─── 5. current attribution coverage ───");
