@@ -24,6 +24,7 @@
 const express = require("express");
 const staffSessions = require("../identity/staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 const staffIdentity = require("../identity/staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
+const { recordPersonFact } = require("../identity/person_facts.js"); // 092: the ONE person × property fact write
 const crypto = require("crypto");
 // Rule-0 capture-first attribution buckets (Fable ruling): two materially different
 // truths, never folded together. A MISSING/blank tag = no channel data arrived.
@@ -566,19 +567,22 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           const _c = await pool.connect();
           try {
             await _c.query("begin");
-            const _cur = (await _c.query(
-              `select id, attr_value from person_attributes
-                where person_id=$1 and property_id is not distinct from $2 and attr_key='move_month' and status='active'`,
-              [person.id, propertyId]
-            )).rows[0];
-            if (!_cur || _cur.attr_value !== _mm) {
-              if (_cur) await _c.query(`update person_attributes set status='retired' where id=$1`, [_cur.id]);
-              await _c.query(
-                `insert into person_attributes (person_id, property_id, attr_key, attr_value, source, source_ref)
-                 values ($1,$2,'move_month',$3,'form',$4)`,
-                [person.id, propertyId, _mm, lead.id]
-              );
-            }
+            await recordPersonFact(_c, {
+              personId: person.id, propertyId,
+              attrKey: "move_month", attrValue: _mm,
+              source: "form",                          // the capture CHANNEL
+              sourceRecordType: "leasing_lead",        // the receipt, TYPED
+              sourceRecordId: lead.id,
+              // the prospect stated this when they submitted, not when we stored it
+              occurredAt: lead.received_at || null,
+              occurredAtBasis: lead.received_at ? "source_record" : null,
+              // a human typed it themselves — the public door has no users row,
+              // so this is 'prospect', not 'operator' and not 'system'
+              actorType: "prospect",
+              claimStrength: "asserted",
+              verb: "captured",
+              idempotencyKey: `captured:leasing_lead:${lead.id}:move_month`,
+            });
             await _c.query("commit");
           } catch (e) { try { await _c.query("rollback"); } catch (_) {} throw e; }
           finally { _c.release(); }
@@ -1972,22 +1976,38 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           // tour happened. The savepoint scopes the failure to one observation.
           await client.query("savepoint pa_obs");
           try {
-            const cur = (await client.query(
-              `select id, attr_value from person_attributes
-                where person_id=$1 and property_id=$2 and attr_key=$3 and status='active'`,
-              [conversion.person_id, tour.property_id, attrKey])).rows[0];
-            // identical to the active value → the record already holds this truth;
-            // writing a duplicate row would fake a change that didn't happen.
-            if (cur && cur.attr_value === v) { await client.query("release savepoint pa_obs"); continue; }
-            if (cur) {
-              await client.query(`update person_attributes set status='retired' where id=$1`, [cur.id]);
-            }
-            await client.query(
-              `insert into person_attributes (person_id, property_id, attr_key, attr_value, source, source_ref)
-               values ($1,$2,$3,$4,'human',$5)`,
-              [conversion.person_id, tour.property_id, attrKey, v, tourId]);
+            const u = await recordPersonFact(client, {
+              personId: conversion.person_id, propertyId: tour.property_id,
+              attrKey, attrValue: v,
+              source: "human",                       // the capture CHANNEL
+              // THE RECEIPT, TYPED — and this is the live provenance bug being
+              // closed. tourId is a leasing_tours id, and it has been going into
+              // source_ref under source='human' while 061 declares that column
+              // holds a comm_event or a lead id. Anything resolving the receipt
+              // by branching on `source` looked in the wrong table and found
+              // nothing. Now the row says which table it is.
+              sourceRecordType: "leasing_tour",
+              sourceRecordId: tourId,
+              // a tour close carries no separate statement time — the operator is
+              // recording it as they close. Labelled as the proxy it is.
+              occurredAt: new Date().toISOString(),
+              occurredAtBasis: "recorded_proxy",
+              // THE ACTOR — already in scope as a parameter of this service and
+              // simply never written down. The machine door can supply no user at
+              // all, and the service normalizes that to 'unattributed' rather than
+              // inventing one or rejecting the row.
+              actorType: recordedByUserId ? "operator" : "unattributed",
+              actorUserId: recordedByUserId || null,
+              // staff transcribing a prospect's self-report is still a self-report
+              claimStrength: "asserted",
+              verb: "captured",
+              // NO idempotency key: a tour close is an operator command, not a
+              // retried webhook, and the same tour legitimately re-completes with
+              // corrected values.
+            });
             await client.query("release savepoint pa_obs");
-            bitsExtra.push(`${attrKey} ${cur ? "updated" : "captured"}: ${v}.`);
+            if (!u.written) continue;                 // unchanged → nothing to report
+            bitsExtra.push(`${attrKey} ${u.superseded_id ? "updated" : "captured"}: ${v}.`);
           } catch (e) {
             await client.query("rollback to savepoint pa_obs").catch(() => {});
             console.error(`[tour_capture] observation '${attrKey}' not written (non-fatal):`, (e && e.message) || "unknown");

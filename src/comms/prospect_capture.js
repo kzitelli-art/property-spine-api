@@ -76,24 +76,11 @@ module.exports = function prospectCapture(deps) {
     return out;
   }
 
-  // Upsert one fact: same active value → no-op; new value → retire prior, insert.
-  async function upsertAttribute(client, { personId, propertyId, key, value, sourceRef }) {
-    const cur = (await client.query(
-      `select id, attr_value from person_attributes
-        where person_id=$1 and property_id is not distinct from $2 and attr_key=$3 and status='active'`,
-      [personId, propertyId, key]
-    )).rows[0];
-    if (cur && cur.attr_value === value) return { changed: false };
-    if (cur) {
-      await client.query(`update person_attributes set status='retired' where id=$1`, [cur.id]);
-    }
-    await client.query(
-      `insert into person_attributes (person_id, property_id, attr_key, attr_value, source, source_ref)
-       values ($1,$2,$3,$4,'ai_conversation',$5)`,
-      [personId, propertyId, key, value, sourceRef]
-    );
-    return { changed: true };
-  }
+  // Fact writing is no longer hand-rolled here. recordPersonFact
+  // (src/identity/person_facts.js) is the ONE canonical write — the same
+  // one the form intake and the tour capture use — so every fact carries
+  // identical provenance instead of three different partial versions.
+  const { recordPersonFact } = require("../identity/person_facts");
 
   /**
    * captureFromConversation — the whole slice-2 write path.
@@ -106,15 +93,23 @@ module.exports = function prospectCapture(deps) {
       if (!conversationId || !personId) return { ok: false, skipped_reason: "missing_ids", changed: [] };
 
       // PROSPECT WORDS ONLY: inbound messages, newest last, capped window.
+      // occurred_at is now SELECTED, not just sorted on. A fact's occurred
+      // time is the moment the prospect actually said it — the inbound
+      // message's own business time — not the moment we got around to
+      // extracting it. Every writer in this codebase previously passed
+      // write time for both, which made a proxy indistinguishable from a
+      // real observation.
       const inbound = (await pool.query(
-        `select id, body from comm_events
+        `select id, body, occurred_at from comm_events
           where conversation_id=$1 and channel='text' and direction='inbound' and body is not null
           order by occurred_at desc nulls last, id desc limit 12`,
         [conversationId]
       )).rows.reverse();
       if (inbound.length === 0) return { ok: true, changed: [], skipped_reason: "no_inbound" };
 
-      const latestInboundId = inbound[inbound.length - 1].id;
+      const latestInbound = inbound[inbound.length - 1];
+      const latestInboundId = latestInbound.id;
+      const latestInboundAt = latestInbound.occurred_at || null;
       const lines = inbound.map((m) => "- " + String(m.body).slice(0, 400)).join("\n");
 
       const r = await anthropic.messages.create({
@@ -134,7 +129,7 @@ module.exports = function prospectCapture(deps) {
         await client.query("begin");
         for (const k of KEYS) {
           if (facts[k] == null) continue;                    // honest blank: write nothing
-          // SAVEPOINT PER FACT. upsertAttribute is retire-then-insert against a
+          // SAVEPOINT PER FACT. recordPersonFact is retire-then-insert against a
           // partial unique index, so a concurrent capture (an inbound text racing
           // a tour close on the same person+key) raises 23505. Without a savepoint
           // that one collision aborts this transaction and discards ALL the other
@@ -142,11 +137,24 @@ module.exports = function prospectCapture(deps) {
           // race. Now a collision costs exactly the fact that collided, and says so.
           await client.query("savepoint pa_fact");
           try {
-            const u = await upsertAttribute(client, {
-              personId, propertyId: propertyId || null, key: k, value: facts[k], sourceRef: latestInboundId,
+            const u = await recordPersonFact(client, {
+              personId, propertyId: propertyId || null,
+              attrKey: k, attrValue: facts[k],
+              source: "ai_conversation",              // the capture CHANNEL
+              sourceRecordType: "comm_event",         // the receipt, TYPED
+              sourceRecordId: latestInboundId,
+              // when they said it, not when we extracted it
+              occurredAt: latestInboundAt || null,
+              occurredAtBasis: latestInboundAt ? "source_record" : null,
+              actorType: "agent",                     // the AI recorded this
+              claimStrength: "asserted",              // a prospect's self-report
+              verb: "captured",
+              // a retried inbound (Twilio redelivery) must not accrete a
+              // second identical claim, nor retire a value it will not replace
+              idempotencyKey: `captured:comm_event:${latestInboundId}:${k}`,
             });
             await client.query("release savepoint pa_fact");
-            if (u.changed) changed.push(k);
+            if (u.written) changed.push(k);
           } catch (e) {
             await client.query("rollback to savepoint pa_fact").catch(() => {});
             console.error(`[prospect_capture] fact '${k}' not written (non-fatal):`, (e && e.message) || "unknown");
@@ -166,5 +174,8 @@ module.exports = function prospectCapture(deps) {
     }
   }
 
-  return { captureFromConversation, _sanitize: sanitize, _upsertAttribute: upsertAttribute };
+  // _upsertAttribute is gone: fact writing moved to the ONE canonical
+  // service (src/identity/person_facts.js). Nothing in the repo imported
+  // it — verified by grep before removal.
+  return { captureFromConversation, _sanitize: sanitize };
 };
