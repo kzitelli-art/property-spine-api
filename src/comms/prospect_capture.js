@@ -134,10 +134,23 @@ module.exports = function prospectCapture(deps) {
         await client.query("begin");
         for (const k of KEYS) {
           if (facts[k] == null) continue;                    // honest blank: write nothing
-          const u = await upsertAttribute(client, {
-            personId, propertyId: propertyId || null, key: k, value: facts[k], sourceRef: latestInboundId,
-          });
-          if (u.changed) changed.push(k);
+          // SAVEPOINT PER FACT. upsertAttribute is retire-then-insert against a
+          // partial unique index, so a concurrent capture (an inbound text racing
+          // a tour close on the same person+key) raises 23505. Without a savepoint
+          // that one collision aborts this transaction and discards ALL the other
+          // facts extracted from the same message — five good facts lost to one
+          // race. Now a collision costs exactly the fact that collided, and says so.
+          await client.query("savepoint pa_fact");
+          try {
+            const u = await upsertAttribute(client, {
+              personId, propertyId: propertyId || null, key: k, value: facts[k], sourceRef: latestInboundId,
+            });
+            await client.query("release savepoint pa_fact");
+            if (u.changed) changed.push(k);
+          } catch (e) {
+            await client.query("rollback to savepoint pa_fact").catch(() => {});
+            console.error(`[prospect_capture] fact '${k}' not written (non-fatal):`, (e && e.message) || "unknown");
+          }
         }
         await client.query("commit");
       } catch (e) {
