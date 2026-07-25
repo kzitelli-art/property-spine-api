@@ -1560,12 +1560,28 @@ module.exports = function operatorModule(deps) {
         who: m.direction === "inbound" ? (p.name || "Prospect") : (m.sender_role || "Property"),
       }));
 
+      // ── STAGE — the ONE resolver (shared/relationship_stage.js) ──────
+      // Derived from evidence, never stored. The card used to answer only
+      // 'prospect' | 'applicant', so a person holding a lease at THIS
+      // property read as an applicant. The resolver adds the two lease
+      // rungs (future_resident, pending → resident, active). It does NOT
+      // invent former_resident: no ended lease state exists to derive it.
+      // Fail-soft: if the resolver errors, the card keeps the inline
+      // application-derived value rather than 500ing.
+      let stage_basis = null;
+      try {
+        const { resolveRelationshipStage } = require("../shared/relationship_stage");
+        const rs = await resolveRelationshipStage(client, { personId, propertyId });
+        if (rs && rs.stage) { stage = rs.stage; stage_basis = rs.basis; }
+      } catch (_) { /* keep the inline stage — honest, just less specific */ }
+
       return res.json({
         person: { id: p.id, name: p.name },
         property_id: propertyId,
         conversation_id: conversation ? conversation.id : null,
         conversation: conversation ? { id: conversation.id, status: conversation.status, mode: conversation.mode || "ai_active" } : null,
-        stage,                                 // 'prospect' | 'applicant' — drives the card badge
+        stage,                                 // 'prospect' | 'applicant' | 'future_resident' | 'resident'
+        stage_basis,                           // the evidence behind it, or null
         relationship: { vitals, recent_messages: recent, conversation_id: conversation ? conversation.id : null },
         application,                           // compact Application band, or null (honestly not applied yet)
         next,                                  // empty array = honestly nothing pending
