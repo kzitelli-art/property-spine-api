@@ -55,18 +55,40 @@ function strip(toursExpr, qaClause) {
 async function main() {
   console.log("═══ LEAD SOURCE ATTRIBUTION ═══\n");
 
-  // ── A. PRE-MIGRATION: the fallback insert is impossible ─────────────
-  console.log("─── A. before 091 — the house bucket cannot be created ───");
+  // STATE-AWARE. This harness is meaningful both before and after 091 is
+  // applied, and green in both states. A test that is permanently red once
+  // the fix ships trains people to ignore it, which is the same failure mode
+  // as a test that cannot fail — it stops being evidence either way.
+  const liveDef0 = (await pool.query(
+    `select pg_get_constraintdef(con.oid) def from pg_constraint con
+      join pg_class c on c.oid=con.conrelid
+     where c.relname='lead_sources' and con.contype='c'`)).rows.map(r => r.def).join(" ");
+  const APPLIED = /'system'/.test(liveDef0);
+  console.log(`  migration 091 is ${APPLIED ? "APPLIED" : "NOT YET APPLIED"} on this database\n`);
+
+  // ── A. the house bucket: impossible before 091, possible after ──────
+  console.log("─── A. can the house bucket be created? ───");
   {
     const c = await pool.connect();
-    let code = null;
+    let code = null, ok = null;
     try {
       await c.query("begin");
-      try { await c.query(`insert into lead_sources (name, source_type) values ('__PROOF_A__','system')`); }
-      catch (e) { code = e.code; }
+      try {
+        const r = await c.query(
+          `insert into lead_sources (name, source_type) values ('__PROOF_A__','system') returning source_type`);
+        ok = r.rows[0].source_type;
+      } catch (e) { code = e.code; }
     } finally { await c.query("rollback").catch(() => {}); c.release(); }
-    chk("PRE-091: source_type 'system' is rejected (23514) — 091 is load-bearing",
-      code === "23514", `got ${code}`);
+    if (!APPLIED) {
+      chk("PRE-091: source_type 'system' is rejected (23514) — 091 is load-bearing",
+        code === "23514", `got ${code}`);
+    } else {
+      chk("POST-091: the house bucket insert succeeds — the intake fallback can complete",
+        ok === "system" && code === null, `code=${code} ok=${ok}`);
+      const led = (await pool.query(
+        `select version from schema_migrations where version='091'`)).rows[0];
+      chk("POST-091: the ledger records 091 as applied", !!led, JSON.stringify(led));
+    }
   }
 
   // ── B. APPLY THE REAL MIGRATION, EXERCISE IT, ROLL IT BACK ──────────
@@ -96,14 +118,17 @@ async function main() {
       !!inserted && inserted.source_type === "system", JSON.stringify(inserted));
   }
 
-  // ── B2. production schema is untouched by this harness ──────────────
+  // ── B2. this harness changed nothing, whichever state we are in ─────
   console.log("\n─── B2. nothing leaked out of the rollback ───");
   const def = (await pool.query(
     `select pg_get_constraintdef(con.oid) def from pg_constraint con
       join pg_class c on c.oid=con.conrelid
      where c.relname='lead_sources' and con.contype='c'`)).rows.map(r => r.def).join(" ");
-  chk("live constraint still EXCLUDES 'system' (migration not actually applied)",
-    !/'system'/.test(def), def);
+  // The invariant is that the harness did not CHANGE the constraint — not that
+  // the constraint has any particular value. Compare against the state we read
+  // on entry, so this holds before and after the real migration lands.
+  chk("the live constraint is exactly as it was when this harness started",
+    def === liveDef0, `before=${liveDef0} after=${def}`);
   const strays = (await pool.query(
     `select count(*)::int n from lead_sources where name like '__PROOF_%'`)).rows[0].n;
   chk("no __PROOF_ rows committed", strays === 0, `n=${strays}`);
