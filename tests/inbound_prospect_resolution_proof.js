@@ -61,7 +61,7 @@ const fakeAnthropic = {
   },
 };
 
-const boundary = require("./communications_boundary")({ pool, sms: smsSpy });
+const boundary = require("../src/comms/communications_boundary.js")({ pool, sms: smsSpy });
 
 async function spawnObligationFromEvent(client, o) {
   const r = await client.query(
@@ -128,11 +128,11 @@ async function postInbound({ To, From, Body, MessageSid }) {
 }
 
 async function main() {
-  agentApp = require("./agent")({
+  agentApp = require("../src/agent/agent.js")({
     pool, anthropic: fakeAnthropic, INGEST_MODEL: "fake-model",
     spawnObligationFromEvent, completeObligation, leasingLifecycle, commBoundary: boundary,
   });
-  const tenantLink = require("./tenantlink")({
+  const tenantLink = require("../src/comms/tenantlink.js")({
     pool, anthropic: fakeAnthropic, INGEST_MODEL: "fake-model", sms: smsSpy,
     commBoundary: boundary,
     getAgentService: () => agentApp._service,

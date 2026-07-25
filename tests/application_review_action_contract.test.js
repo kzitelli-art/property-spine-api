@@ -1,8 +1,9 @@
 #!/usr/bin/env node
+const path = require('path');
 'use strict';
 const fs = require('fs');
 const vm = require('vm');
-const src = fs.readFileSync(process.argv[2] || 'application_review.js','utf8');
+const src = fs.readFileSync(process.argv[2] || path.join(__dirname,'..','src','applications','application_review.js'),'utf8');
 let pass=0, fail=0;
 function ok(name, cond){ if(cond){pass++; console.log('PASS '+name);} else {fail++; console.log('FAIL '+name);} }
 function extractFunction(name){

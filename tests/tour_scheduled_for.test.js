@@ -59,7 +59,7 @@ async function main() {
   // booking service run. bookTourIntoSlot touches exactly one external dep.
   let bookTourIntoSlot;
   try {
-    const leasingLeadsModule = require("./leasingleads.js");
+    const leasingLeadsModule = require("../src/leasing/leasingleads.js");
     const router = leasingLeadsModule({
       pool: { query: async () => ({ rows: [] }) },   // module-scope pool is unused by this path
       anthropic: null,

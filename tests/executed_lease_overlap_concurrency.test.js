@@ -16,8 +16,8 @@
 
 const { Pool } = require("pg");
 const crypto = require("crypto");
-const svc = require("./executed_lease_service");
-const { normalizeAndHash } = require("./proposed_terms_service");
+const svc = require("../src/applications/executed_lease_service.js");
+const { normalizeAndHash } = require("../src/applications/proposed_terms_service.js");
 
 let pass = 0;
 let fail = 0;

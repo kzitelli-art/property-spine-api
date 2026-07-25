@@ -2,8 +2,15 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
-const queue = require(path.resolve(process.argv[2] || "move_in_queue.js"));
-const routeFile = process.argv[3] || "movein.js";
+const queue = require(path.resolve(process.argv[2] || path.join(__dirname, "..", "src", "tenancy", "move_in_queue.js")));
+const routeFile = process.argv[3] || path.join(__dirname, "..", "src", "tenancy", "movein.js");
+// Fail loudly if the route source is missing. It previously degraded to "" —
+// every route assertion then failed for the wrong reason, saying nothing about
+// why. A test that cannot find its subject must say so, not report a defect.
+if (!fs.existsSync(routeFile)) {
+  console.error("CANNOT LOCATE ROUTE SOURCE: " + routeFile);
+  process.exit(2);
+}
 let pass = 0, fail = 0;
 function ok(name, cond) { if (cond) { pass++; console.log("PASS " + name); } else { fail++; console.log("FAIL " + name); } }
 

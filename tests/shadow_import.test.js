@@ -100,7 +100,7 @@ function ok(name, cond) {
 
   // build the module with a transport SPY to prove outreach is never sent.
   let smsCalls = 0;
-  const moduleFactory = require("../leasingShadowImport.js");
+  const moduleFactory = require("../src/leasing/leasingShadowImport.js");
   const router = moduleFactory({ pool });
   const svc = router._service;
 

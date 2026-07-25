@@ -1,8 +1,8 @@
 "use strict";
 
 const assert = require("assert");
-const buildDelivery = require("./delivery");
-const { spacePosition } = require("./space_position");
+const buildDelivery = require("../src/comms/delivery.js");
+const { spacePosition } = require("../src/tenancy/space_position.js");
 
 let passed = 0;
 async function test(name, fn) {

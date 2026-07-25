@@ -32,7 +32,7 @@ function track(k, id) { created[k].push(id); return id; }
 
 // Build the leasingleads module to get its _service (the real booking service).
 const noopSms = { enabled: () => false, sendSms: async () => ({ sent: false }) };
-const leasing = require("./leasingleads")({
+const leasing = require("../src/leasing/leasingleads.js")({
   pool, anthropic: null, INGEST_MODEL: "fake",
   sms: noopSms, leasingLifecycle: null, conversionServices: {}, commBoundary: null,
 });

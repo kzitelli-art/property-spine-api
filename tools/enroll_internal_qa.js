@@ -39,7 +39,7 @@ if (!person_id || !property_id || !confirmed) {
 
 (async () => {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
-  const boundary = require("../communications_boundary")({ pool, sms: null });
+  const boundary = require("../src/comms/communications_boundary.js")({ pool, sms: null });
   try {
     const out = await boundary.enrollInternalQa({ person_id, property_id, actor_user_id, reason });
     console.log("── RECEIPT ──");

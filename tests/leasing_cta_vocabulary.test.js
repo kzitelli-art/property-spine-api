@@ -1,7 +1,7 @@
 // CLOSED CTA CONTRACT: three verbs plus one honest disabled fallback.
 const assert=require('assert');
 const path=require('path');
-const desk=require(path.resolve(process.argv[2]||'.','leasing_desk.js'));
+const desk=require(path.resolve(process.argv[2]||path.join(__dirname,'..','src','leasing'),'leasing_desk.js'));
 let pass=0; const ok=(value,message)=>{assert.ok(value,message);pass++;};
 let action=desk.normalizeStageApplicationAction({application_id:'a1'},{state:'available',code:'confirm_proposed_terms'});
 ok(action.label==='Open'&&action.kind==='navigation','application navigation is Open');

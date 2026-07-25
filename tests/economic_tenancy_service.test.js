@@ -1,7 +1,7 @@
 "use strict";
 
 const assert = require("assert");
-const svc = require("./economic_tenancy_service");
+const svc = require("../src/tenancy/economic_tenancy_service.js");
 
 let passed = 0;
 function test(name, fn) {

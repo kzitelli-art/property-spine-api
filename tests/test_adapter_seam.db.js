@@ -7,8 +7,8 @@
 //    DATABASE_URL=... node test_adapter_seam.db.js
 // ════════════════════════════════════════════════════════════════════
 const { Pool } = require('pg');
-const { parseAcuityMessage, parseDigestOccurrences } = require('../modules/outlookAcuitySync');
-const { ingestSchedulingSourceEvent, translateEnvelope } = require('../modules/schedulingAdapterSeam');
+const { parseAcuityMessage, parseDigestOccurrences } = require('../src/shared/outlookAcuitySync.js');
+const { ingestSchedulingSourceEvent, translateEnvelope } = require('../src/shared/schedulingAdapterSeam.js');
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -109,7 +109,7 @@ async function main() {
 
   // ── THE KEY PROOF: a digest parses to 3 occurrences → 3 canonical tours ──
   await T('4 · digest parser extracts 3 occurrences from one email', async () => {
-    const occ = parseDigestOccurrences(digestMsg().body.content, require('../modules/outlookAcuitySync').normalizeHtmlToText(digestMsg().body.content));
+    const occ = parseDigestOccurrences(digestMsg().body.content, require('../src/shared/outlookAcuitySync.js').normalizeHtmlToText(digestMsg().body.content));
     assert(occ.length === 3, 'expected 3 occurrences, got ' + occ.length);
     const ids = occ.map((o) => o.external_appointment_id).sort();
     assert(ids[0] === '2001' && ids[2] === '2003', 'appt ids not extracted: ' + ids.join(','));
