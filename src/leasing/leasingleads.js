@@ -558,21 +558,39 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         const _rp = b.raw_payload || {};
         const _mm = _rp.desired_move_month;
         if (_mm === "flexible" || (typeof _mm === "string" && /^\d{4}-(0[1-9]|1[0-2])$/.test(_mm))) {
-          const _cur = (await pool.query(
-            `select id, attr_value from person_attributes
-              where person_id=$1 and property_id is not distinct from $2 and attr_key='move_month' and status='active'`,
-            [person.id, propertyId]
-          )).rows[0];
-          if (!_cur || _cur.attr_value !== _mm) {
-            if (_cur) await pool.query(`update person_attributes set status='retired' where id=$1`, [_cur.id]);
-            await pool.query(
-              `insert into person_attributes (person_id, property_id, attr_key, attr_value, source, source_ref)
-               values ($1,$2,'move_month',$3,'form',$4)`,
-              [person.id, propertyId, _mm, lead.id]
-            );
-          }
+          // ATOMIC. Retire and insert are ONE transaction on ONE connection. As two
+          // bare pool.query() calls they could land on different pooled connections
+          // with no transaction around them, so a failure or a crash between them
+          // left the person with the old value retired and no new value written —
+          // an active move_month silently deleted rather than replaced.
+          const _c = await pool.connect();
+          try {
+            await _c.query("begin");
+            const _cur = (await _c.query(
+              `select id, attr_value from person_attributes
+                where person_id=$1 and property_id is not distinct from $2 and attr_key='move_month' and status='active'`,
+              [person.id, propertyId]
+            )).rows[0];
+            if (!_cur || _cur.attr_value !== _mm) {
+              if (_cur) await _c.query(`update person_attributes set status='retired' where id=$1`, [_cur.id]);
+              await _c.query(
+                `insert into person_attributes (person_id, property_id, attr_key, attr_value, source, source_ref)
+                 values ($1,$2,'move_month',$3,'form',$4)`,
+                [person.id, propertyId, _mm, lead.id]
+              );
+            }
+            await _c.query("commit");
+          } catch (e) { try { await _c.query("rollback"); } catch (_) {} throw e; }
+          finally { _c.release(); }
         }
-      } catch (_) { /* store not migrated yet or transient — intake is already durable */ }
+      } catch (e) {
+        // FAIL-SOFT, BUT NEVER SILENT. The intake is already committed and a lost
+        // fact must never lose a real prospect, so this does not rethrow. But the
+        // previous bare `catch (_) {}` meant move_month capture could stop working
+        // entirely with no exception, no log, and a 200 still returned to the
+        // caller — the one failure mode nothing in the system could observe.
+        console.error("[intake] move_month fact not recorded (non-fatal):", (e && e.message) || "unknown");
+      }
 
       // ── Immediate AI first response (outside the txn; lead is durable). ──
       let responseReceipt = "Opportunity saved. No phone on file, so no text sent — the team can follow up by email.";
@@ -1944,21 +1962,36 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           // skip a no-op confirm of the identical active value (still a real
           // confirm? — a confirm IS knowledge; write it only when changed OR
           // explicitly flagged confirmed, so the lineage stays meaningful)
-          const cur = (await client.query(
-            `select id, attr_value from person_attributes
-              where person_id=$1 and property_id=$2 and attr_key=$3 and status='active'`,
-            [conversion.person_id, tour.property_id, attrKey])).rows[0];
-          // identical to the active value → the record already holds this truth;
-          // writing a duplicate row would fake a change that didn't happen.
-          if (cur && cur.attr_value === v) continue;
-          if (cur) {
-            await client.query(`update person_attributes set status='retired' where id=$1`, [cur.id]);
+          // SAVEPOINT. This loop runs inside the CALLER's transaction. Any error
+          // here — most likely 23505 from a concurrent capture (an inbound text
+          // racing this tour close on the same person+key) — aborts that whole
+          // transaction, so every later statement fails with 25P02 and the tour
+          // completion returns 500. The operator then cannot close the tour at
+          // all because a prospect happened to text at the wrong moment.
+          // An observation is enrichment; it must never block recording that the
+          // tour happened. The savepoint scopes the failure to one observation.
+          await client.query("savepoint pa_obs");
+          try {
+            const cur = (await client.query(
+              `select id, attr_value from person_attributes
+                where person_id=$1 and property_id=$2 and attr_key=$3 and status='active'`,
+              [conversion.person_id, tour.property_id, attrKey])).rows[0];
+            // identical to the active value → the record already holds this truth;
+            // writing a duplicate row would fake a change that didn't happen.
+            if (cur && cur.attr_value === v) { await client.query("release savepoint pa_obs"); continue; }
+            if (cur) {
+              await client.query(`update person_attributes set status='retired' where id=$1`, [cur.id]);
+            }
+            await client.query(
+              `insert into person_attributes (person_id, property_id, attr_key, attr_value, source, source_ref)
+               values ($1,$2,$3,$4,'human',$5)`,
+              [conversion.person_id, tour.property_id, attrKey, v, tourId]);
+            await client.query("release savepoint pa_obs");
+            bitsExtra.push(`${attrKey} ${cur ? "updated" : "captured"}: ${v}.`);
+          } catch (e) {
+            await client.query("rollback to savepoint pa_obs").catch(() => {});
+            console.error(`[tour_capture] observation '${attrKey}' not written (non-fatal):`, (e && e.message) || "unknown");
           }
-          await client.query(
-            `insert into person_attributes (person_id, property_id, attr_key, attr_value, source, source_ref)
-             values ($1,$2,$3,$4,'human',$5)`,
-            [conversion.person_id, tour.property_id, attrKey, v, tourId]);
-          bitsExtra.push(`${attrKey} ${cur ? "updated" : "captured"}: ${v}.`);
         }
         // reactions (what landed) — durable person knowledge with tour provenance
         const reactions = {
