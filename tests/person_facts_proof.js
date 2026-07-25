@@ -41,8 +41,31 @@ async function allRows(c, key) {
       where person_id=$1::uuid and attr_key=$2::text order by created_at`, [PERSON, key])).rows;
 }
 
+// The live shape BEFORE this harness runs. Block 9 asserts the harness
+// changed nothing — measured against this baseline, not against any
+// particular value. Asserting "092 is unapplied" would have made the file
+// permanently red the moment 092 shipped, and a permanently red harness
+// stops being read, which is the same failure as one that cannot fail.
+async function baseline() {
+  const v = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  await v.connect();
+  const cols = (await v.query(
+    `select count(*)::int n from information_schema.columns
+      where table_schema='public' and table_name='person_attributes'
+        and column_name in ('occurred_at','occurred_at_basis','actor_type','actor_user_id',
+                            'claim_strength','verb','source_record_type','supersedes_id',
+                            'correction_reason','idempotency_key')`)).rows[0].n;
+  const rows = (await v.query(`select count(*)::int n from person_attributes`)).rows[0].n;
+  const props = (await v.query(`select count(*)::int n from properties where name like '__PFACT__%'`)).rows[0].n;
+  await v.end();
+  return { cols, rows, props };
+}
+
 async function main() {
   console.log("═══ PERSON FACTS (migration 092 + recordPersonFact) ═══\n");
+  const before = await baseline();
+  console.log(`  live schema on entry: ${before.cols}/10 provenance columns, ${before.rows} fact rows`);
+  console.log(`  migration 092 is ${before.cols === 10 ? "APPLIED" : "NOT YET APPLIED"} on this database\n`);
   const c = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
   await c.connect();
 
@@ -186,20 +209,16 @@ async function main() {
   } finally { await c.end(); }
 
   // ── 9. production really is untouched ───────────────────────────────
-  console.log("\n─── 9. production schema untouched ───");
-  const v = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
-  await v.connect();
-  const cols = (await v.query(
-    `select count(*)::int n from information_schema.columns
-      where table_schema='public' and table_name='person_attributes'
-        and column_name in ('occurred_at','actor_type','claim_strength','verb','supersedes_id')`)).rows[0].n;
-  const scratch = (await v.query(
-    `select count(*)::int n from properties where name like '__PFACT__%'`)).rows[0].n;
-  const total = (await v.query(`select count(*)::int n from person_attributes`)).rows[0].n;
-  await v.end();
-  chk("the new columns do NOT exist on production yet (092 unapplied)", cols === 0, `found ${cols}`);
-  chk("no scratch property committed", scratch === 0, `n=${scratch}`);
-  console.log(`  person_attributes row count: ${total}`);
+  // The invariant is that this harness CHANGED nothing — compared against
+  // the shape read on entry, so it holds whether or not 092 has shipped.
+  console.log("\n─── 9. production untouched by this harness ───");
+  const after = await baseline();
+  chk("the live schema is exactly as it was on entry",
+    after.cols === before.cols, `before=${before.cols} after=${after.cols}`);
+  chk("no fact row was committed",
+    after.rows === before.rows, `before=${before.rows} after=${after.rows}`);
+  chk("no scratch property committed", after.props === 0, `n=${after.props}`);
+  console.log(`  person_attributes row count: ${after.rows}`);
 
   console.log(`\n═ RESULT: ${pass} passed, ${fail} failed ═`);
   process.exit(fail === 0 ? 0 : 1);
