@@ -524,9 +524,18 @@ module.exports = function operatorModule(deps) {
   }
 
   // ── SOURCE CONVERSION (slice 3) — the funnel per lead source, HONEST COUNTS. ──
-  // leads   = distinct opportunities by source (leasing_leads.source_id)
-  // tours   = of those, leads whose person has a scheduled tour at this property
+  // leads   = distinct opportunities by source (leasing_leads.source_id),
+  //           EXCLUDING internal_qa records (§23)
+  // tours   = of those, leads with a tour in EITHER store — externally-ingested
+  //           scheduled_tours OR the canonical internal leasing_tours (039).
+  //           Same both-stores definition the board's live_tour CTE uses; a lead
+  //           with a tour in both counts once because leads are counted, not tours.
+  //           Previously this read scheduled_tours alone, of which Demo Building
+  //           has ZERO, so every source reported 0 tours while 16 real tours sat
+  //           in the other table.
   // leases  = of those, leads whose status reached 'leased'
+  // NOT included yet: applications. lease_applications has no source linkage and
+  // person_id is null on 8 of 14 rows, so an application column would be a guess.
   // Rates are computed by the CALLER (the UI), from raw counts — the API ships
   // counts only, so no rounding opinion is baked into the truth. Fail-soft: any
   // error returns [] (the UI simply shows nothing) — never breaks the queue.
@@ -535,14 +544,27 @@ module.exports = function operatorModule(deps) {
       return (await pool.query(
         `select coalesce(ls.name,'(no source)') as source,
                 count(ll.id)::int as leads,
-                count(ll.id) filter (where exists (
-                  select 1 from scheduled_tours st
-                   where st.person_id = ll.person_id and st.property_id = ll.property_id
-                ))::int as tours,
+                count(ll.id) filter (where
+                  exists (select 1 from scheduled_tours st
+                           where st.person_id = ll.person_id and st.property_id = ll.property_id)
+                  or exists (select 1 from leasing_tours lt
+                              where lt.lead_id = ll.id)
+                )::int as tours,
                 count(ll.id) filter (where ll.status = 'leased')::int as leases
            from leasing_leads ll
            left join lead_sources ls on ls.id = ll.source_id
           where ll.property_id = $1
+            -- §23: controlled QA records are excluded from leasing metrics and
+            -- reporting. Without this the strip counted internal_qa fixtures as
+            -- demand — 99 of 132 Demo leads were harness rows named 'T5 Handoff',
+            -- 'B1 Retry' and the like, inserted directly by tests that bypass
+            -- intake. An operator was reading test residue as a funnel.
+            and not exists (
+              select 1 from person_property_classifications c
+               where c.person_id = ll.person_id
+                 and c.property_id = ll.property_id
+                 and c.superseded_at is null
+                 and c.record_class = 'internal_qa')
           group by coalesce(ls.name,'(no source)')
           order by leads desc`,
         [propertyId]
