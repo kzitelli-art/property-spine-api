@@ -57,7 +57,7 @@ const call = (method, path, { token, key, body } = {}) =>
     S.noL = (await c.query(`insert into users (name,email,role) values ($1,$2,'maintenance'::role_name) returning id`,
       ["R3 SMOKE NoLeasing " + RUN, `r3smoke-nol-${RUN}@proof.internal`])).rows[0].id;
     // bridge the AGENT (the eligible reassign target) through the CANONICAL service
-    const bridgeSvc = require("../staffbridge.js")({ pool })._service;
+    const bridgeSvc = require("../src/identity/staffbridge.js")({ pool })._service;
     S.agentP = (await c.query(`insert into persons (name, phone) values ($1,$2) returning id`,
       ["R3 SMOKE Agent P " + RUN, "+1215666" + String(RUN).slice(-4)])).rows[0].id;
     await c.query("begin");

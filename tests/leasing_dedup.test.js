@@ -2,7 +2,7 @@
 // belongs to must never render as two rows. Keys prefer application_id (the
 // downstream shared identifier); stage rank picks the survivor.
 const path=require('path');
-const desk=require(path.resolve(process.argv[2]||'.','leasing_desk.js'));
+const desk=require(path.resolve(process.argv[2]||path.join(__dirname,'..','src','leasing'),'leasing_desk.js'));
 let pass=0,fail=0;
 const ok=(n,c)=>{ c?(pass++,console.log('  PASS '+n)):(fail++,console.log('  FAIL '+n)); };
 

@@ -29,9 +29,13 @@
 
 const path = require("path");
 const { Pool } = require("pg");
-const ROOT = process.argv[2] || ".";
-const capability = require(path.resolve(ROOT, "capability.js"));
-const desk = require(path.resolve(ROOT, "leasing_desk.js"));
+// After the src/ restructure these two no longer share a directory, so a single
+// ROOT cannot locate both. argv[2] still overrides for a flat layout.
+const ROOT = process.argv[2] || null;
+const capability = require(ROOT ? path.resolve(ROOT, "capability.js")
+  : path.join(__dirname, "..", "src", "identity", "capability.js"));
+const desk = require(ROOT ? path.resolve(ROOT, "leasing_desk.js")
+  : path.join(__dirname, "..", "src", "leasing", "leasing_desk.js"));
 
 const DEMO_PROPERTY_ID = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
 

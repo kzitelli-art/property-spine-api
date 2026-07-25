@@ -1,7 +1,7 @@
 "use strict";
 const fs=require('fs');
 const path=require('path');
-const root=path.resolve(process.argv[2]||'.');
+const root=path.resolve(process.argv[2]||path.join(__dirname,'..','src','shared'));
 const c=require(path.join(root,'conversation_operating_contract.js'));
 let pass=0,fail=0;
 function ok(name,condition){if(condition){pass++;console.log('  PASS '+name);}else{fail++;console.log('  FAIL '+name);}}
@@ -28,7 +28,7 @@ ok('empty counts reconcile',Object.keys(c.EMPTY_COUNTS).length===3&&Object.value
 const operator=path.join(root,'operator.js');
 if(fs.existsSync(operator)){
   const src=fs.readFileSync(operator,'utf8');
-  ok('operator imports one contract',src.includes('require("./conversation_operating_contract")'));
+  ok('operator imports one contract',src.includes('require("../src/shared/conversation_operating_contract.js")'));
   ok('operator authors operating bucket',src.includes('operating_bucket'));
   ok('operator returns operating counts',src.includes('counts.operating_buckets = operatingBuckets'));
   ok('operator preserves legacy bucket during rollout',src.includes('control_bucket, bucket_reason_code'));

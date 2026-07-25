@@ -45,7 +45,7 @@ const fakeAnthropic = { messages: { async create(req) {
 }}};
 
 const noopSms = { enabled: () => false, sendSms: async () => ({ sent: false }), validateWebhook: () => true };
-const boundary = require("./communications_boundary")({ pool, sms: noopSms });
+const boundary = require("../src/comms/communications_boundary.js")({ pool, sms: noopSms });
 
 // spawnOb mirrors server.js: sets assigned_role + source_event_id + dedupe_key
 // so the OWNER ladder and the reason-keyed unique index (086) are genuinely
@@ -60,7 +60,7 @@ async function spawnOb(c, o) {
   return r.rows[0];
 }
 
-const agent = require("./agent")({ pool, anthropic: fakeAnthropic, INGEST_MODEL: "fake", spawnObligationFromEvent: spawnOb, completeObligation: async () => ({}), leasingLifecycle: { maybeReopenOnQualifyingInbound: async () => ({}) }, commBoundary: boundary, leasingBookingService: null });
+const agent = require("../src/agent/agent.js")({ pool, anthropic: fakeAnthropic, INGEST_MODEL: "fake", spawnObligationFromEvent: spawnOb, completeObligation: async () => ({}), leasingLifecycle: { maybeReopenOnQualifyingInbound: async () => ({}) }, commBoundary: boundary, leasingBookingService: null });
 
 let srv, base; const track = { persons: [], leads: [] };
 async function blockReset() { MODE = "defer"; await new Promise(r => setTimeout(r, 1000)); }

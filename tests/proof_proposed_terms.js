@@ -17,7 +17,7 @@
 //  RUN:  cd ~/project/src && node proof_proposed_terms.js
 // ════════════════════════════════════════════════════════════════════
 const { Pool } = require("pg");
-const { confirmProposedTerms } = require("./proposed_terms_service");
+const { confirmProposedTerms } = require("../src/applications/proposed_terms_service.js");
 
 const PROPERTY_A = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe"; // Demo Building
 let pass = 0, fail = 0;

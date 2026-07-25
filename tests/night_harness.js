@@ -45,14 +45,14 @@ async function fakeComplete(client, { obligation_id }) {
 
 (async () => {
   console.log("═══ FUNNEL-FLOW NIGHT HARNESS ═══\n");
-  const commBoundary = require("./communications_boundary")({ pool, sms: fakeSms });
-  const inventory = require("./leasing_inventory")({ pool });
-  const agent = require("./agent")({
+  const commBoundary = require("../src/comms/communications_boundary.js")({ pool, sms: fakeSms });
+  const inventory = require("../src/leasing/leasing_inventory.js")({ pool });
+  const agent = require("../src/agent/agent.js")({
     pool, anthropic: fakeAnthropic, INGEST_MODEL: "claude-sonnet-4-6",
     spawnObligationFromEvent: fakeSpawn, completeObligation: fakeComplete,
     leasingLifecycle: null, commBoundary,
   });
-  const appSub = require("./applicationSubmission")({
+  const appSub = require("../src/applications/applicationSubmission.js")({
     pool, spawnObligationFromEvent: fakeSpawn, completeObligation: fakeComplete,
     conversionService: null, commBoundary,
   });

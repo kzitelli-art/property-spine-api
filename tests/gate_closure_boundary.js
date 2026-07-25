@@ -52,7 +52,7 @@ for (const f of files) {
 }
 
 // self-test: the gate must be able to see (plant a violation in-memory and match it)
-const planted = 'const x = require("./conversion_obligation_closure.js");';
+const planted = 'const x = require("../src/leasing/conversion_obligation_closure.js");';
 if (!/require\(["'].\/conversion_obligation_closure(\.js)?["']\)/.test(planted)) {
   console.log("GATE SELF-TEST FAILED — the import pattern no longer matches its own plant.");
   process.exit(1);

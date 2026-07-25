@@ -58,7 +58,7 @@ async function main() {
   // The comms boundary owns reclassify — the same module the service calls.
   let commBoundary;
   try {
-    commBoundary = require("./communications_boundary.js")({
+    commBoundary = require("../src/comms/communications_boundary.js")({
       pool: { query: async () => ({ rows: [] }) },
       sms: { enabled: () => false, sendSms: async () => ({ sid: null }) },
     });
@@ -162,7 +162,7 @@ async function main() {
     // refuse rather than infer identity from the applicant name.
     let submitService = null;
     try {
-      const mod = require("./applicationSubmission.js")({
+      const mod = require("../src/applications/applicationSubmission.js")({
         pool: { query: async () => ({ rows: [] }) },
         spawnObligationFromEvent: async () => ({}),
         completeObligation: async () => ({}),

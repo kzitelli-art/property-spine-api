@@ -72,8 +72,8 @@ async function engineComplete(client, { obligation_id, completed_by = null }) {
   return r.rows[0];
 }
 
-const leasingConversionModule = require("../leasingconversion.js");
-const applicationSubmissionModule = require("../applicationSubmission.js");
+const leasingConversionModule = require("../src/leasing/leasingconversion.js");
+const applicationSubmissionModule = require("../src/applications/applicationSubmission.js");
 
 // build the conversion service (we only need _service)
 const convMod = leasingConversionModule({

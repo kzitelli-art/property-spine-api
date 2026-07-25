@@ -38,7 +38,7 @@
 const fs = require("fs");
 const path = require("path");
 const { Pool } = require("pg");
-const TW = require("./tour_window");
+const TW = require("../src/shared/tour_window.js");
 
 const DEMO_PROPERTY_ID = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
 const TZ = "America/New_York";

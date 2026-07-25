@@ -6,8 +6,8 @@
 //  Run: DATABASE_URL=... node test_scheduling_interactions.db.js
 // ════════════════════════════════════════════════════════════════════
 const { Pool } = require("pg");
-const buildScheduling = require("../leasingscheduling.js");
-const buildInteractions = require("../leasinginteractions.js");
+const buildScheduling = require("../src/leasing/leasingscheduling.js");
+const buildInteractions = require("../src/leasing/leasinginteractions.js");
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
