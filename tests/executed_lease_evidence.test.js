@@ -77,7 +77,7 @@ function stubClient(overrides = {}) {
   }};
 }
 
-const svc = require(path.join(__dirname, "executed_lease_service.js"));
+const svc = require(path.join(__dirname, "..", "src", "applications", "executed_lease_service.js"));
 const base = () => ({
   application_id: APP, space_id: SPACE, rent: 1850, security_deposit: 1850,
   lease_start_date: "2026-08-01", lease_end_date: "2027-07-31",
@@ -87,7 +87,7 @@ const base = () => ({
 });
 const DEPS = { spawnObligationFromEvent: async (_c, o) => { const ob = { id: "ob-" + (store.obligations.length + 1), ...o }; store.obligations.push(ob); return ob; } };
 const grab = async (fn) => { try { await fn(); return null; } catch (e) { return e; } };
-const { normalizeAndHash } = require(path.join(__dirname, "proposed_terms_service.js"));
+const { normalizeAndHash } = require(path.join(__dirname, "..", "src", "applications", "proposed_terms_service.js"));
 ACK.payload_hash = normalizeAndHash({ rent: 1850, security_deposit: 1850,
   lease_start_date: "2026-08-01", lease_end_date: "2027-07-31", concession_status: "none" }).payload_hash;
 

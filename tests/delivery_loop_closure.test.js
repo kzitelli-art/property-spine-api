@@ -77,7 +77,7 @@ const stubClient = {
 };
 
 (async () => {
-  const helper = require(path.join(__dirname, "delivery.js"))({
+  const helper = require(path.join(__dirname, "..", "src", "comms", "delivery.js"))({
     satisfyObligation: stubSatisfy, completeObligation: stubComplete,
   });
 
@@ -136,8 +136,8 @@ const stubClient = {
 
   // ═══════════════ PART 2 — static wiring of the door ═══════════════
   console.log("\n2. Operator door wiring (static)");
-  const op = fs.readFileSync(path.join(__dirname, "operator.js"), "utf8");
-  const srv = fs.readFileSync(path.join(__dirname, "server.js"), "utf8");
+  const op = fs.readFileSync(path.join(__dirname, "..", "src", "identity", "operator.js"), "utf8");
+  const srv = fs.readFileSync(path.join(__dirname, "..", "server.js"), "utf8");
 
   const doorAt = op.indexOf('"/operator/leasing/leases/:leaseId/delivery/keys-ready"');
   ok("the keys-ready door exists", doorAt > 0);
@@ -165,10 +165,13 @@ const stubClient = {
   ok("operator.js accepts the deliveryHelper dep", /deps\.deliveryHelper \|\| null/.test(op));
   ok("server.js injects deliveryHelper into the operator module",
     /operatorModule\(\{[\s\S]{0,2500}deliveryHelper,/.test(srv));
+  // Line-ending agnostic: the repo has no .gitattributes, so a Windows checkout
+  // is CRLF while Render builds LF. A literal "\n" match here passed in CI and
+  // failed locally on Windows — a false negative, not a real defect.
   const declLine = srv.indexOf("const deliveryHelper = require");
-  const injLine = srv.indexOf("deliveryHelper,\n  leasePacketsService");
+  const injLine = srv.search(/deliveryHelper,\r?\n\s*leasePacketsService/);
   ok("same helper instance as movein.js (declared before both mounts)",
-    declLine > 0 && injLine > declLine && /moveinModule\(\{[^\n]*deliveryHelper/.test(srv));
+    declLine > 0 && injLine > declLine && /moveinModule\(\{[^\r\n]*deliveryHelper/.test(srv));
 
   console.log("\n" + "-".repeat(52));
   console.log((fail === 0 ? "ALL PASS" : "FAILURES PRESENT") + `   ${pass}/${pass + fail}`);
