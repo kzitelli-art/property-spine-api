@@ -325,22 +325,43 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // derived server-side inside the gate; save-first is preserved via
   // eventId. This module never calls raw sms.sendSms.
 
-  // AI's first response: speed + clarity. Surface the unit, offer tour slots,
-  // stop. If pricing/availability is unknown, the AI says so rather than
-  // inventing it. Deterministic fallback if the model is unavailable.
-  async function draftFirstResponse({ name, unitLabel, propertyName, rent }) {
-    const slots = "today at 3:00 or tomorrow at 11:00"; // placeholder; real availability plugs in via tours
+  // AI's first response: speed + clarity. Surface the unit, offer REAL tour
+  // slots when we have them, and NEVER invent a time. `slots` is the output of
+  // readOfferableSlots (real tour_availability rows in the property tz); a
+  // null/empty list means we have nothing offerable, so we ask the prospect for
+  // their preferred timing instead of fabricating one. Honest blank beats
+  // confident wrong (§5): an invented tour time is a prospect-facing lie.
+  // If pricing/availability is unknown, the AI says so rather than inventing it.
+  // Deterministic fallback if the model is unavailable.
+  async function draftFirstResponse({ name, unitLabel, propertyName, rent, slots }) {
+    const slotList = Array.isArray(slots) ? slots.filter(s => s && s.label) : [];
+    const haveSlots = slotList.length > 0;
+    const slotPhrase = haveSlots ? slotList.slice(0, 2).map(s => s.label).join(" or ") : null;
     const known = unitLabel && rent;
-    const fallback = known
-      ? `Hi ${firstName(name)} — ${unitLabel} at ${propertyName || "the property"} is available. Rent is $${rent}. We have tours ${slots}. Want either of those?`
-      : `Hi ${firstName(name)} — thanks for your interest in ${propertyName || "the property"}! I'm confirming current availability and pricing now. In the meantime, we have tours ${slots} — want to grab one?`;
+
+    // Deterministic fallback — real slots when we have them, an honest ask when
+    // we don't. No hardcoded times in either branch.
+    let fallback;
+    if (haveSlots) {
+      fallback = known
+        ? `Hi ${firstName(name)} — ${unitLabel} at ${propertyName || "the property"} is available. Rent is $${rent}. We have tours ${slotPhrase}. Want either of those?`
+        : `Hi ${firstName(name)} — thanks for your interest in ${propertyName || "the property"}! I'm confirming current availability and pricing now. In the meantime, we have tours ${slotPhrase} — want to grab one?`;
+    } else {
+      fallback = known
+        ? `Hi ${firstName(name)} — ${unitLabel} at ${propertyName || "the property"} is available. Rent is $${rent}. What days or times work for a tour? I'll line one up.`
+        : `Hi ${firstName(name)} — thanks for your interest in ${propertyName || "the property"}! I'm confirming current availability and pricing now. What days or times generally work for a tour? I'll get one set up.`;
+    }
     if (!anthropic) return fallback;
     try {
+      const slotInstruction = haveSlots
+        ? `Offer these two REAL tour times and ask which works: ${slotPhrase}.`
+        : `We have NO confirmed tour times to offer right now — DO NOT invent, guess, or imply any tour time. Instead, ask what days/times generally work so we can set one up.`;
       const prompt =
         `You are the leasing assistant for ${propertyName || "an apartment community"}. Write ONE short, warm SMS (under 320 chars) to a prospect named ${firstName(name)}. ` +
-        `Goal: confirm the unit is available if known, state rent if given, and offer two concrete tour times (${slots}). ` +
-        `If unit or rent is unknown, DO NOT invent it — say you're confirming and still offer the tour. ` +
-        `Do NOT try to close a lease, ask for an application, or request documents. End by asking which tour time works. ` +
+        `Goal: confirm the unit is available if known, state rent if given, and handle tour timing. ` +
+        `${slotInstruction} ` +
+        `If unit or rent is unknown, DO NOT invent it — say you're confirming. Never invent a tour time, price, or availability. ` +
+        `Do NOT try to close a lease, ask for an application, or request documents. ` +
         `Unit: ${unitLabel || "(unknown — confirming)"}. Rent: ${rent ? "$" + rent : "(unknown — confirming)"}. Reply with ONLY the message text.`;
       const r = await anthropic.messages.create({ model: INGEST_MODEL, max_tokens: 200, messages: [{ role: "user", content: prompt }] });
       const text = (r.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
@@ -553,7 +574,12 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           const u = (await pool.query(`select unit_number, market_rent from units where id=$1`, [lead.unit_id])).rows[0];
           if (u) { unitLabel = u.unit_number ? `Unit ${u.unit_number}` : null; rent = u.market_rent || null; }
         }
-        const body = await draftFirstResponse({ name: person.name, unitLabel, propertyName: prop.display_name, rent });
+        // Real availability only — readOfferableSlots returns open tour_availability
+        // rows in the property tz, or null when the tz is unconfigured. Either way,
+        // draftFirstResponse never fabricates a time: it offers real slots or asks
+        // for preferred timing.
+        const offerSlots = await readOfferableSlots(pool, { propertyId, limit: 2 });
+        const body = await draftFirstResponse({ name: person.name, unitLabel, propertyName: prop.display_name, rent, slots: offerSlots });
         draftBody = body;
 
         // THREADED outbound: conversation_id + sender_role so the message lives on the
