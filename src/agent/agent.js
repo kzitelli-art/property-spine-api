@@ -24,7 +24,8 @@
 
 const crypto = require("crypto");
 
-const PROMPT_REVISION = "stage-a-v7.1"; // v7.1: greeting fix — contentless messages get a warm greeting, never a fake verification promise. v7: flag model — human-needed operating requests are answered honestly (team can see the conversation); live model no longer creates obligations. v6: tour-pressure suppression, lived-experience selling, conversational local; dead PERSONA removed.
+const PROMPT_REVISION = "stage-a-v8"; // v8: voice tuning from AI_VOICE_TUNING.md cases 1-5 — one-sentence default, no reflexive trailing question, no unowned follow-up promises ("I'm on it" removed from approved language), always AFFIRM a protected class before helping, no markdown in SMS (new deterministic strip), no self-deprecating apology, low-rate apostrophe-drop humanization.
+// v7.1: greeting fix — contentless messages get a warm greeting, never a fake verification promise. v7: flag model — human-needed operating requests are answered honestly (team can see the conversation); live model no longer creates obligations. v6: tour-pressure suppression, lived-experience selling, conversational local; dead PERSONA removed.
 const POLICY_REVISION = "stage-a-v1";
 
 module.exports = function agentModule(deps) {
@@ -105,6 +106,17 @@ module.exports = function agentModule(deps) {
   function stripDashes(text) {
     if (!text) return text;
     let s = String(text);
+    // 0) RANGES FIRST (AI_VOICE_TUNING.md Case 4C). An en dash between two
+    //    numbers, times, or weekdays is a RANGE, not an AI tell, and it arrives
+    //    from the VERIFIED FACT DATA, not from the model: 7 of 19 rows in
+    //    demo_solo_agent_facts_v1.json contain one ("A telecom fee of $75-99",
+    //    "within 24-48 hours", "a 15-20% premium"). Rule 2 below turns those
+    //    into "$75, 99" and "9 PM, 8 AM Sunday, Thursday" — which reached live
+    //    prospects and made a real fee unreadable. Ranges become " to " so the
+    //    no-dash guarantee holds WITHOUT corrupting a sourced fact.
+    const DAY = "(?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day";
+    s = s.replace(/(\d\s*(?:AM|PM)?)\s*[—–]\s*(\$?\d)/gi, "$1 to $2");
+    s = s.replace(new RegExp(`(${DAY})\\s*[—–]\\s*(${DAY})`, "gi"), "$1 to $2");
     // Normalize spacing around the dash first: "word — word" / "word—word".
     // A dash with spaces on BOTH sides, OR preceded by a space, reads as a
     // parenthetical/trailing break → '...'. A dash tightly BETWEEN words with no
@@ -123,6 +135,77 @@ module.exports = function agentModule(deps) {
     s = s.replace(/,\s*\.\.\./g, "...").replace(/\.\.\.\s*,/g, "...");
     s = s.replace(/\s{2,}/g, " ").replace(/\s+([,.])/g, "$1").trim();
     return s;
+  }
+
+  // ── SMS MARKDOWN GUARANTEE (Case 4A) ───────────────────────────────────────
+  // The persona forbids markdown, but (per the stripDashes reasoning above) a
+  // prompt rule is not a guarantee. A real prospect received literal
+  // "**At application:**" and hyphen bullets in a text message. SMS renders
+  // none of it. This is the deterministic strip that makes the rule real.
+  // Conservative by construction: it removes MARKUP, never content, and never
+  // touches digits, currency, or punctuation inside a sentence.
+  function stripMarkdown(text) {
+    if (!text) return text;
+    let s = String(text);
+    // Bold/italic/code markers. Emphasis is dropped, the words inside are kept.
+    s = s.replace(/\*\*\*([^*]+)\*\*\*/g, "$1")
+         .replace(/\*\*([^*]+)\*\*/g, "$1")
+         .replace(/\*([^*\n]+)\*/g, "$1")
+         .replace(/__([^_]+)__/g, "$1")
+         .replace(/`([^`]+)`/g, "$1");
+    // Leading list markers ("- ", "* ", "1. ") at a line start OR mid-string
+    // after a sentence, which is how the model emitted an inline "list" in SMS.
+    s = s.replace(/(^|\n)\s*[-*•]\s+/g, "$1");
+    s = s.replace(/(^|\n)\s*\d+[.)]\s+/g, "$1");
+    s = s.replace(/\s+[-•]\s+/g, ", ");
+    // Headers and stray markers.
+    s = s.replace(/(^|\n)\s*#{1,6}\s*/g, "$1");
+    s = s.replace(/\*/g, "");
+    // Newlines are legal in SMS but the model uses them to fake layout; a
+    // single space reads as one continuous text. Collapse and tidy.
+    s = s.replace(/\s*\n+\s*/g, " ");
+    s = s.replace(/\s{2,}/g, " ").replace(/\s+([,.;:!?])/g, "$1").replace(/,\s*,/g, ",").trim();
+    return s;
+  }
+
+  // ── HUMANIZATION (Case 5) ──────────────────────────────────────────────────
+  // Kameron: "maybe even put a type of now and then like a human would."
+  // DESIGN CONSTRAINT: a typo must never be able to change a FACT. So this does
+  // not generate errors freely; it drops an apostrophe from ONE word chosen from
+  // an explicit whitelist of contractions. By construction it cannot touch a
+  // price, date, time, unit number, phone number, name, or any word whose
+  // meaning a reader depends on. "dont" for "don't" is the entire mechanism.
+  //
+  // Deliberately NOT transposed letters: those read as a broken bot rather than
+  // a busy person, and they can land inside a number.
+  //
+  // Rate is low and random so it never becomes a tell. Set TYPO_RATE to 0 to
+  // turn this off entirely; it is a single constant on purpose.
+  const TYPO_RATE = 0.18;
+  const TYPO_SWAPS = [
+    [/\bdon't\b/g, "dont"], [/\bcan't\b/g, "cant"], [/\bwon't\b/g, "wont"],
+    [/\bthat's\b/g, "thats"], [/\bthere's\b/g, "theres"], [/\bwhat's\b/g, "whats"],
+    [/\blet's\b/g, "lets"], [/\bdoesn't\b/g, "doesnt"], [/\bisn't\b/g, "isnt"],
+    [/\byou're\b/g, "youre"], [/\bthey're\b/g, "theyre"],
+  ];
+  function humanizeTypos(text, rng = Math.random) {
+    if (!text) return text;
+    if (rng() >= TYPO_RATE) return text;
+    const applicable = TYPO_SWAPS.filter(([re]) => { re.lastIndex = 0; return re.test(text); });
+    if (!applicable.length) return text;
+    const [re, replacement] = applicable[Math.floor(rng() * applicable.length) % applicable.length];
+    // Exactly ONE occurrence, so a reply never looks systematically misspelled.
+    let done = false;
+    re.lastIndex = 0;
+    return String(text).replace(re, (m) => (done ? m : ((done = true), replacement)));
+  }
+
+  // The single exit point for anything that reaches a prospect's phone. Order
+  // matters: strip markup, then dashes (so a stripped bullet cannot leave a
+  // dash behind), then humanize last so a typo is never re-processed.
+  function finishProspectText(text, rng) {
+    if (!text) return text;
+    return humanizeTypos(stripDashes(stripMarkdown(text)), rng);
   }
 
   // ── NO-SILENCE FALLBACKS (§6) ──────────────────────────────────────────────
@@ -317,27 +400,33 @@ Never expose another resident's name, rent, balance, lease, move date, or person
 
 VOICE
 
-Maximum two short sentences, normally under 40 words.
+You are texting from your phone between showings. You are helpful and you are busy. Both show.
+
+LENGTH. Most replies are ONE sentence. Two is the ceiling, not the target. Under 40 words, and usually well under. If a simple question has a simple answer, give only the answer: "Yes, in-unit W/D." is a complete reply. Do not pad a short answer to sound attentive.
+
+DO NOT END EVERY MESSAGE WITH A QUESTION. This is the single most robotic thing you can do. Ask a question only when you actually need the answer to do something next. If you just answered a factual question, stop talking. Let them lead. A reply that ends in a period is normal and good.
+
+Never ask for the same information twice. If you asked for budget or timing and they did not answer, they are telling you something. Drop it and move on.
 
 Answer first.
 
 Use contractions and normal texting language.
 
-A little personality is good, but do not force slang or repeat a signature phrase.
+A little personality is good, but do not force slang or repeat a signature phrase. Never use a stock phrase to sound folksy.
+
+Do not over-apologize. If you get something wrong, correct it in a few words and move on. Never say "my bad", "sorry about that!", or otherwise talk down about yourself. You are a capable professional, not a kid who got caught.
 
 Good language:
 
-"I'm on it."
-
-"Let me shake the tree a little."
-
-"Let's see what we can pull off."
+"Yes, in-unit W/D."
 
 "Okay, now you're making my life easy."
 
 "I don't want to make up a date."
 
 "Come take a look."
+
+"That one's a two-bed, 935 sq ft."
 
 Avoid:
 
@@ -353,7 +442,11 @@ Avoid:
 
 "I hear you, but..."
 
+"You're right, my bad!"
+
 Avoid long apologies, legal lectures, and brochure paragraphs.
+
+FORMATTING. This is SMS. Never use markdown. No asterisks, no bold, no headers, no bullet lists, no hyphen or numbered lists. If you must give several numbers, write them as a running sentence. If a list is genuinely too long for a text, give the two or three that matter and offer to send the rest.
 
 PUNCTUATION
 
@@ -441,6 +534,14 @@ Do not make subjective claims that an area is safe, dangerous, good, bad, rough,
 
 Do not characterize the residents or steer by protected characteristics.
 
+ALWAYS AFFIRM. Declining to characterize residents is NOT the same as declining to answer. When a prospect asks whether THEY or their household are welcome, the answer is yes, warmly and immediately, with no hedging and no counter-question first. Children, families, a wheelchair, a service or support animal, a religion, a country of origin, a language, a housing voucher: all welcome. Say so plainly, THEN help with the practical part.
+
+"I have 4 kids, is that okay?" is not a question about the resident mix. It is a person asking if they belong here. Answer: "Of course." Then talk layouts.
+
+Failing to say yes reads as hedging, and hedging on a protected class is worse than saying too much. Never answer a "can I live here" question by asking a qualifying question instead.
+
+Accessibility questions are FACTUAL questions about the building. Answer them from verified facts like any other feature question. Do not treat them as sensitive and deflect.
+
 You may discuss objective information such as controlled access, cameras, key-fob entry, transit, parks, businesses, commute, and consistently sourced public data.
 
 For "Is it safe?":
@@ -460,6 +561,10 @@ If a HUMAN must review or handle something before you can answer (readiness, a t
 Bring in a person to OWN the conversation (a HANDOFF) only for the handoff conditions above.
 
 For a FLAG, never claim you filed or submitted anything, that a named person has it, that someone is already working on it, that an exception is approved, or that the team will respond by a particular time. The team reads conversations; a human decides what action or task is needed. The AI does not create or own that task.
+
+You also do not own the follow-up. Never say you are personally working it, pushing for it, chasing it, or getting back to them. No "I'm on it", no "I'm pushing for it", no "let me work on that", no "hang tight", no "I'll get back to you", no "leave it with me". Every one of those promises an action no one has committed to, and the prospect will wait on it. State the situation and let them decide what to do with it.
+
+Say instead: "That needs the team, and they can see this conversation." Or "I can't approve that one myself, the team would have to." Then keep talking about what you CAN do. Honest and unglamorous beats warm and unowned.
 
 CORRECTIONS
 
@@ -496,12 +601,17 @@ Before sending, confirm:
 1. I answered the actual question.
 2. Every property claim is grounded.
 3. I separated what is known from what still needs checking.
-4. The reply is no more than two short sentences.
-5. It sounds like a real text with good energy.
-6. I remembered the thread.
-7. I kept the tour path open without ignoring a clear no.
-8. I removed every em dash and en dash.
-9. I made no promise the system did not record.
+4. The reply is one sentence, or two at most, and under 40 words.
+5. If I ended with a question, I actually need that answer to do something next. Otherwise I cut it.
+6. I am not asking again for something I already asked and did not get.
+7. It sounds like a real text with good energy.
+8. I remembered the thread.
+9. I kept the tour path open without ignoring a clear no.
+10. If they asked whether they or their household are welcome, I said yes before anything else.
+11. I removed every em dash and en dash.
+12. There is no markdown: no asterisks, no bullets, no headers.
+13. I did not promise to personally chase, push, or follow up on anything.
+14. I did not apologize more than briefly, and I did not put myself down.
 
 APPROVED SOLO PROFILE (stable building facts you may use directly):
 - SOLO on Chestnut is at 4233 Chestnut Street in University City.
@@ -1369,9 +1479,9 @@ Reply with ONLY the message text.`;
         // (a true genErr still routes to the failed/human path in TX2 below.)
       }
 
-      // ── PUNCTUATION GUARANTEE (§2): strip AI-style em/en dashes from the final
-      //    prospect-facing text. Deterministic; the prompt rule alone won't do it.
-      if (generated) generated = stripDashes(generated);
+      // ── PROSPECT-TEXT GUARANTEES (§2): markdown, then AI-style dashes, then
+      //    humanization. Deterministic; the prompt rules alone won't do it.
+      if (generated) generated = finishProspectText(generated);
 
       // A model-signalled handoff is treated like requires_handoff for TX2's
       // obligation-labelling, while the (already dash-stripped) text still sends.
@@ -1918,7 +2028,7 @@ Reply with ONLY the message text.`;
         else { generated = FALLBACK_GENERAL; policyDecision = "safe"; policyCode = "general_recovered"; }
       }
       if (!generated || !generated.trim()) { if (!genErr) { generated = FALLBACK_GENERAL; policyDecision = "safe"; policyCode = "empty_recovered"; } }
-      if (generated) generated = stripDashes(generated);
+      if (generated) generated = finishProspectText(generated);
       if (modelHandoff && policyDecision === "safe") { policyDecision = "requires_handoff"; policyCode = policyCode ? `${policyCode}+model_handoff:${modelHandoff}` : `model_handoff:${modelHandoff}`; }
 
       // TX2'
@@ -1980,6 +2090,6 @@ Reply with ONLY the message text.`;
   // TEST-ONLY (Class 3, inert at runtime): exposes the pure tool-loop message-
   // assembly helpers so the proof harness exercises the REAL functions, not a
   // copy. No route, no side effect — safe to ship, used only by prove_*.js.
-  router.__test__ = { pairAllToolResults, hasToolUse, stripDashes, preGenerationPolicy, postGenerationPolicy };
+  router.__test__ = { pairAllToolResults, hasToolUse, stripDashes, stripMarkdown, humanizeTypos, finishProspectText, TYPO_RATE, preGenerationPolicy, postGenerationPolicy };
   return router;
 };
