@@ -1840,9 +1840,49 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       // OUTCOME IS RECORDED ONCE. A terminal tour keeps its truth; corrections
       // go through explicit lifecycle actions, never a silent re-submit.
       if (["completed", "no_show", "cancelled", "rescheduled"].includes(tour.status)) {
-        const existing = (await client.query(
-          `select id, current_stage, status from leasing_conversions where origin_tour_id=$1 order by opened_at asc limit 1`, [tourId])).rows[0];
-        throw svcErr(409, { receipt: `Outcome already recorded — this tour is ${tour.status}.`, tour_id: tourId, conversion_id: existing ? existing.id : null });
+        // ── ALREADY CAPTURED. Two very different situations. ────────────
+        //  A REPLAY — the same save arriving twice because the phone lost
+        //  signal, the operator pressed twice, or the request was retried —
+        //  must return the ORIGINAL result and look like success. It was
+        //  successful; the operator has no idea their tap went out twice
+        //  and should never be shown an error for it.
+        //
+        //  A DIFFERENT capture on a settled tour is a correction, which has
+        //  its own deliberate lane (/correct-outcome, which never mutates
+        //  the original). That still refuses — but in words a person can
+        //  act on, not a status code.
+        const prior = (await client.query(
+          `select id, event_at, metadata from tour_events
+            where tour_id=$1 and event_type in ('completed','no_show','cancelled')
+            order by event_at asc limit 1`, [tourId])).rows[0];
+        const priorKey = prior && prior.metadata && prior.metadata.capture_idempotency_key;
+        const incomingKey = (typeof b.idempotency_key === "string" && b.idempotency_key.trim())
+          ? b.idempotency_key.trim() : null;
+
+        // the relationship this tour belongs to — found by PERSON, not by
+        // origin_tour_id, because a second tour reuses the first tour's
+        // conversion and origin_tour_id would miss it entirely.
+        const personRow = tour.lead_id
+          ? (await client.query(`select person_id from leasing_leads where id=$1`, [tour.lead_id])).rows[0]
+          : null;
+        const conv = personRow ? (await client.query(
+          `select id, current_stage, status from leasing_conversions
+            where person_id=$1 and property_id=$2 and status='active' limit 1`,
+          [personRow.person_id, tour.property_id])).rows[0] : null;
+
+        if (incomingKey && priorKey && incomingKey === priorKey) {
+          return {
+            ok: true, replayed: true,
+            tour_id: tourId,
+            conversion_id: conv ? conv.id : null,
+            receipt: "Already saved — nothing changed.",
+          };
+        }
+
+        throw svcErr(409, {
+          receipt: "This tour was already saved. To change what was recorded, use Correct outcome — the original stays on the record.",
+          tour_id: tourId, conversion_id: conv ? conv.id : null,
+        });
       }
 
       // ── attendance truth (the same one-door event write as always) ──
@@ -1914,6 +1954,10 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           //  projections of it. When the standing could NOT be resolved the
           //  reason is recorded too — an honest blank that explains itself
           //  beats a silent null nobody can account for later.
+          // the key that made this capture, so a replay of the SAME save can
+          // be recognised as a replay rather than refused as a conflict
+          capture_idempotency_key: (typeof b.idempotency_key === "string" && b.idempotency_key.trim())
+            ? b.idempotency_key.trim().slice(0, 200) : null,
           standing: _cap.standing,
           standing_source: _cap.source,
           standing_unresolved_reason: _cap.unresolved_reason,
