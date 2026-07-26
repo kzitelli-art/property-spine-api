@@ -568,13 +568,17 @@ module.exports = function maintenance(deps) {
         `insert into supply_requests
            (property_id, unit_id, work_order_id, requested_by,
             item, quantity, reason,
-            field_category, operating_category, gl_category,
+            field_category, operating_category,
             est_cost, status)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'requested')
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'requested')
          returning *`,
+        // gl_category is no longer derived or written here either — a supply
+        // request authors money meaning no more than a work order does. Same
+        // ruling (019: resolution at read, never stored); same column left in
+        // place, unwritten, for step 5's single migration.
         [property_id, unit_id ?? null, work_order_id ?? null, requested_by ?? null,
          item, quantity ?? null, reason ?? null,
-         field_category ?? null, derived.operating_category, derived.gl_category,
+         field_category ?? null, derived.operating_category,
          est_cost ?? null]
       );
       res.status(201).json(r.rows[0]);

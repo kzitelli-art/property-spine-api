@@ -81,21 +81,35 @@ function deriveCategories({ field_category, unit_state, cause, is_emergency }) {
     operating_category = "resident_repair";   // occupied / default
   }
 
-  // GL category — what accounting sees. Field action + operating context.
-  let gl_category;
-  if (operating_category === "capital") {
-    gl_category = `capex_${fc}`;
-  } else if (operating_category === "tenant_billback") {
-    gl_category = `tenant_billback_${fc}`;
-  } else if (operating_category === "turn") {
-    gl_category = `turn_${fc}`;
-  } else {
-    gl_category = `${fc}_repairs`;
-  }
-
+  // NO gl_category. A work order does not author money meaning.
+  //
+  //  This function used to derive and store a per-trade GL string
+  //  (`capex_flooring`, `tenant_billback_drywall`, `turn_paint`,
+  //  `plumbing_repairs`). That inverted the layering: money is a layer
+  //  THROUGH capture surfaces, reporting READS confirmed truth and never
+  //  authors it, and maintenance ended up owning a chart it has no authority
+  //  over. migrations/019_vendor_property_categories.sql already ruled this,
+  //  in its own header: "Resolution order, applied at read time, NEVER
+  //  STORED" and "the category vocabulary stays DATA". Storing a computed
+  //  gl_category contradicted a rule that already existed.
+  //
+  //  It also crushed two axes into one string. Whether the property or the
+  //  tenant bears a cost is a BILLBACK fact; which account it hits is an
+  //  ACCOUNTING fact. `tenant_billback_drywall` fused them — and the live
+  //  chart proves the point: category_report_map maps `tenant_billback` to
+  //  report_section 'Income', not to an expense line at all. One field could
+  //  not carry both without lying about one.
+  //
+  //  What this returns now is only what the work order actually KNOWS:
+  //  operating context, capital-in-nature, and tenant-caused. GL resolution
+  //  is a mapping applied at read, owned by the reporting layer where
+  //  category_report_map lives.
+  //
+  //  The gl_category COLUMN is deliberately left in place and simply unwritten
+  //  until step 5's single migration — one design change should not cost two
+  //  migrations. Rows created from now on carry null there, honestly.
   return {
     operating_category,
-    gl_category,
     is_capex: operating_category === "capital",
     billback: operating_category === "tenant_billback",
   };
@@ -227,14 +241,14 @@ function makeWorkOrderService(deps) {
       `insert into work_orders
          (property_id, unit_id, person_id, title, description,
           status, assigned_to, source,
-          field_category, operating_category, gl_category,
+          field_category, operating_category,
           unit_state, cause, is_emergency, is_capex, billback, est_cost, needs_pm_review,
           urgency_status, urgency_basis, urgency_decided_by, urgency_decided_at, idempotency_key)
-       values ($1,$2,$3,$4,$5,'open',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,now(),$21)
+       values ($1,$2,$3,$4,$5,'open',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,now(),$20)
        returning *`,
       [property_id, unit_id, person_id, title, description,
        assigned_to, source,
-       field_category, derived.operating_category, derived.gl_category,
+       field_category, derived.operating_category,
        unit_state, cause, is_emergency, derived.is_capex, derived.billback, est_cost, is_emergency,
        urgency_status, urgency_basis, urgency_decided_by, idempotency_key])).rows[0];
 
