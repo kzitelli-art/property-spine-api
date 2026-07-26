@@ -7,7 +7,10 @@
 //
 //      mode enabled
 //        AND property activated (approved set)
-//        AND record is internal_qa (person × THAT property, CURRENT)
+//        AND record carries a CURRENT ELIGIBLE class (person × THAT property)
+//            — see currentEligibleClass; the list is imported from
+//              capability.js so this gate and the application gate cannot
+//              disagree about who is eligible
 //        AND authenticated staff session has property/action authority
 //        AND application state is eligible
 //      → otherwise refuse, deterministically and NON-REVEALINGLY.
@@ -29,7 +32,7 @@
 //    Layer 1 — MODE (no DB, runs FIRST via dormantWriteGuard in the chain).
 //    Layer 2 — PERIMETER (this module): authenticated session → server-
 //      derived entitlement at the application's property → current
-//      internal_qa classification → eligible application state.
+//      eligible classification → eligible application state.
 //
 //  ── PER-PHASE (ruling) ────────────────────────────────────────────────
 //  Classification and entitlement are re-checked on EVERY phase. Phase-1
@@ -84,9 +87,31 @@ function audit(entry) {
   } catch (_e) { /* audit must never throw into the request path */ }
 }
 
-// Current internal_qa classification for a person in a property.
+// Current ELIGIBLE classification for a person in a property.
 // { ok, read_failed }. Absence → ok:false. Read error → ok:false, read_failed:true.
-async function currentInternalQa(pool, personId, propertyId) {
+//
+// THE SECOND HALF OF THE DEADLOCK (merged 2026-07-26).
+// This read used to be `record_class === "internal_qa"`, hardcoded. The
+// application-link gate had the mirror-image rule, and between them a person
+// could be application-eligible or admission-eligible but never both — so a
+// `production` prospect could be SENT an application and could never become a
+// resident. Closing one end left the wall standing at the other.
+//
+// The two questions stay separate functions — "may we send them an
+// application?" is not "may this tenancy be admitted?" — but they read the
+// SAME list, imported rather than restated, so they cannot drift into
+// disagreeing about which classes are eligible at all.
+//
+// It remains an ALLOWLIST with exact matching and no normalization: an
+// unclassified person is refused (absence of a decision is not permission),
+// and a class nobody named is refused rather than admitted by default.
+//
+// NOT checked here, deliberately: consent. STOP/opt-out governs whether the
+// product may MESSAGE someone; it has no bearing on whether a lease they
+// signed may be recorded. Recording a fact is not composing an outbound.
+const { ELIGIBLE_RECORD_CLASSES } = require("./capability");
+
+async function currentEligibleClass(pool, personId, propertyId) {
   if (!personId || !propertyId) return { ok: false, read_failed: false };
   try {
     const q = await pool.query(
@@ -94,7 +119,7 @@ async function currentInternalQa(pool, personId, propertyId) {
         where person_id = $1 and property_id = $2 and superseded_at is null limit 1`,
       [personId, propertyId]);
     if (q.rows.length === 0) return { ok: false, read_failed: false };
-    return { ok: q.rows[0].record_class === "internal_qa", read_failed: false };
+    return { ok: ELIGIBLE_RECORD_CLASSES.includes(q.rows[0].record_class), read_failed: false };
   } catch (_e) {
     return { ok: false, read_failed: true };
   }
@@ -175,11 +200,11 @@ function activationPerimeter({ pool, loadApplication, eligibleStatuses, action, 
 
     // RECORD CLASSIFICATION: current internal_qa for the application's person.
     // Re-checked every phase. Read failure → refuse, audited distinctly.
-    const cls = await currentInternalQa(pool, app.person_id, app.property_id);
+    const cls = await currentEligibleClass(pool, app.person_id, app.property_id);
     if (!cls.ok) {
       audit({ actor_user_id: session.id, property_id: app.property_id, application_id: app.id,
               action: ACTION, decision: "refused",
-              reason: cls.read_failed ? "classification_read_failed" : "record_not_internal_qa" });
+              reason: cls.read_failed ? "classification_read_failed" : "record_class_not_eligible" });
       return refuse(res);
     }
 
@@ -202,4 +227,4 @@ function activationPerimeter({ pool, loadApplication, eligibleStatuses, action, 
   };
 }
 
-module.exports = { activationPerimeter, activatedPropertyIds, currentInternalQa };
+module.exports = { activationPerimeter, activatedPropertyIds, currentEligibleClass };
