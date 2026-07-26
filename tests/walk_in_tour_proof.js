@@ -44,6 +44,14 @@ async function mustReject(client, label, sql, params) {
 (async () => {
   console.log("WALK-IN TOUR — a real tour nobody scheduled\n");
 
+  //  Baseline BEFORE anything. The rollback check must measure THIS
+  //  harness's effect, not the absolute state of the table — real
+  //  walk-ins exist now, and an assertion that breaks when the product
+  //  starts being used is an assertion measuring the wrong thing.
+  const baseline = (await pool.query(
+    `select count(*)::int total, count(*) filter (where origin='walk_in')::int walk_ins
+       from leasing_tours where property_id=$1`, [DEMO])).rows[0];
+
   // ── [1] the resolver now tells the two no-slot cases apart ─────────
   console.log("[1] a walk-in without a slot is NOT the same as a scheduled tour without one");
   const NOW = "2026-07-28T18:00:00Z";
@@ -133,18 +141,35 @@ async function mustReject(client, label, sql, params) {
 
   } finally { await client.query("rollback"); client.release(); }
 
+  // ── [4b] THE READ MUST FEED THE RESOLVER ──────────────────────────
+  //  Regression guard for a bug that shipped and was caught live: the
+  //  resolver handled occurredAt correctly, but the tours/today read never
+  //  passed it, so a walk-in was labelled "No time on record" seconds
+  //  after someone recorded its time. A correct resolver starved of input
+  //  is still a wrong answer on the screen.
+  console.log("\n[4b] the desk read passes the walk-in's arrival time through");
+  const src = require("fs").readFileSync(
+    require("path").join(__dirname, "..", "src", "identity", "operator.js"), "utf8");
+  check(/occurredAt:\s*row\.checked_in_at/.test(src),
+        "the read passes checked_in_at as occurredAt",
+        "without it a walk-in reads as untrackable");
+  check(/origin:\s*row\.origin/.test(src),
+        "and passes origin, so walk-in and defect are told apart");
+
   // ── [5] nothing leaked, and the live table is unharmed ────────────
-  console.log("\n[5] rollback");
+  console.log("\n[5] rollback — measured as a DELTA, not an absolute");
   const after = (await pool.query(
-    `select count(*)::int total,
-            count(*) filter (where origin='walk_in')::int walk_ins,
-            count(*) filter (where origin is null)::int no_origin
+    `select count(*)::int total, count(*) filter (where origin='walk_in')::int walk_ins
        from leasing_tours where property_id=$1`, [DEMO])).rows[0];
-  console.table([after]);
-  check(after.walk_ins === 0, "no walk-in rows persisted", "the transaction rolled back");
-  check(after.no_origin === after.total,
-        "every existing tour still has origin NULL",
-        "097 backfilled nothing — guessing which historical tours were walk-ins would invent history");
+  console.table([{ baseline_total: baseline.total, after_total: after.total,
+                   baseline_walk_ins: baseline.walk_ins, after_walk_ins: after.walk_ins }]);
+  check(after.total === baseline.total,
+        "this harness added no rows", `${baseline.total} before, ${after.total} after`);
+  check(after.walk_ins === baseline.walk_ins,
+        "and no walk-ins of its own", "the transaction rolled back cleanly");
+  if (baseline.walk_ins > 0) {
+    console.log(`      note: ${baseline.walk_ins} REAL walk-in(s) already exist — recorded through the product, not by this file.`);
+  }
 
   console.log(`\n${failures === 0 ? "ALL CHECKS PASSED" : failures + " CHECK(S) FAILED"}`);
   process.exitCode = failures === 0 ? 0 : 1;

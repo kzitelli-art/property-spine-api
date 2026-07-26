@@ -1878,6 +1878,14 @@ module.exports = function operatorModule(deps) {
           // already selected by the tours CTE as av.ends_at -> scheduled_end_at.
           // NULL means no slot, which is exactly the untrackable case.
           tourEndedAt:  row.scheduled_end_at || null,
+          // A WALK-IN HAS NO SLOT AND THAT IS NOT A DEFECT. Its arrival is
+          // recorded on the tour itself, and that is as honest an end time
+          // as a slot's. Without these two the board called a walk-in
+          // "No time on record" seconds after someone recorded its time —
+          // caught by running the flow live, not by the harness, because
+          // the harness proved the resolver while the READ never fed it.
+          occurredAt:   row.checked_in_at || row.completed_at || null,
+          origin:       row.origin || null,
           graceMinutes: GRACE_MINUTES,
         });
         row.capture_state       = cs.state;
