@@ -306,14 +306,18 @@ async function main() {
   //  category policy. If the policy changes, these still hold.
   section("C · the category shown equals the category saved");
 
+  //  NOTE — these assert OPERATIONAL facts only. gl_category is deliberately
+  //  absent: a work order does not author money meaning (019's read-time rule),
+  //  so there is no GL string to agree about. C*c below proves the column is
+  //  left UNWRITTEN rather than merely unchecked.
   const cases = [
-    { label: "tenant damage bills back to the resident",
+    { label: "tenant damage is recorded as tenant-caused",
       q: { field_category: "drywall", unit_state: "occupied", cause: "tenant_damage" },
       expect: { operating_category: "tenant_billback", billback: true, is_capex: false } },
-    { label: "renovation work is capital, not an expense",
+    { label: "renovation work is recorded as capital in nature",
       q: { field_category: "flooring", unit_state: "renovation", cause: "wear" },
       expect: { operating_category: "capital", is_capex: true, billback: false } },
-    { label: "work in a vacant unit is turn cost",
+    { label: "work in a vacant unit is recorded as turn context",
       q: { field_category: "paint", unit_state: "vacant", cause: "wear" },
       expect: { operating_category: "turn", is_capex: false, billback: false } },
     { label: "ordinary occupied repair stays a resident repair",
@@ -343,12 +347,17 @@ async function main() {
     ok(`C${i + 1}b. THE SAVED ROW MATCHES THE PREVIEW — ${c.label}`,
       !!row && !!d &&
         row.operating_category === d.operating_category &&
-        row.gl_category === d.gl_category &&
         row.is_capex === d.is_capex &&
         row.billback === d.billback,
       `preview=${JSON.stringify(d)} saved=${JSON.stringify(row && {
-        operating_category: row.operating_category, gl_category: row.gl_category,
+        operating_category: row.operating_category,
         is_capex: row.is_capex, billback: row.billback })}`);
+
+    ok(`C${i + 1}c. NO GL MEANING IS AUTHORED — neither derived nor stored`,
+      !!row && !!d &&
+        !("gl_category" in d) && row.gl_category === null,
+      `preview_has_gl=${d && "gl_category" in d} saved_gl=${JSON.stringify(row && row.gl_category)}` +
+      ` — a work order must not author money meaning (019: resolution at read, never stored)`);
   }
 
   // ════════ D · THE PROOF GATE AND THE CONTINUITY ENGINE ════════════
