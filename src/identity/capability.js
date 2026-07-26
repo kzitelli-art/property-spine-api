@@ -174,6 +174,12 @@ async function evaluateApplicationLinkBirthBatch(q, { property_id, person_ids = 
 module.exports = {
   ACTION_APPLICATION_LINK,
   REASONS,
+  // Exported so the tenancy activation perimeter can enforce the SAME set.
+  // Application eligibility and admission eligibility are different questions
+  // and stay different functions — but if they disagree about which classes
+  // are eligible, a real prospect can be sent an application and can never
+  // become a resident. One list, two readers.
+  ELIGIBLE_RECORD_CLASSES,
   decideApplicationLinkBirth,
   evaluateApplicationLinkBirth,
   evaluateApplicationLinkBirthBatch,
