@@ -60,19 +60,47 @@ function testDecision() {
   ok("A2. an unlisted property denies",
     notProp.allowed === false && notProp.reason_code === "PROPERTY_NOT_ACTIVATED");
 
+  // A3 is the assertion that encodes the ruling. It must FAIL against the
+  // pre-merge code, which denied production with RECORD_NOT_CLASSIFIED.
+  // If this passes on old code the file is testing nothing.
   const prod = D({ enabled: true, property_allowlisted: true, person_id: "p", record_class: "production" });
-  ok("A3. a production person denies during controlled activation",
-    prod.allowed === false && prod.reason_code === "CONTROLLED_ACTIVATION_ONLY");
+  ok("A3. THE RULING — a production person is allowed, same class the comms boundary requires",
+    prod.allowed === true, JSON.stringify(prod));
 
   const none = D({ enabled: true, property_allowlisted: true, person_id: "p", record_class: null });
   ok("A4. an UNCLASSIFIED person denies — absence of a decision is not permission",
-    none.allowed === false && none.reason_code === "CONTROLLED_ACTIVATION_ONLY");
+    none.allowed === false && none.reason_code === "RECORD_NOT_CLASSIFIED", JSON.stringify(none));
 
   const qa = D({ enabled: true, property_allowlisted: true, person_id: "p", record_class: "internal_qa" });
-  ok("A5. an internal_qa person is allowed", qa.allowed === true);
+  ok("A5. an internal_qa person is still allowed — the QA harness chain runs on these",
+    qa.allowed === true, JSON.stringify(qa));
+
+  // The eligible set is an ALLOWLIST. The tempting shape of this fix —
+  // "deny only when the classification is missing" — passes A3/A4/A5 and
+  // fails here, which is the whole reason this case exists.
+  const bogus = D({ enabled: true, property_allowlisted: true, person_id: "p", record_class: "vendor" });
+  ok("A5b. a class nobody named is NOT eligible — the gate allowlists, it does not merely require presence",
+    bogus.allowed === false && bogus.reason_code === "RECORD_NOT_CLASSIFIED", JSON.stringify(bogus));
+
+  const blank = D({ enabled: true, property_allowlisted: true, person_id: "p", record_class: "" });
+  ok("A5c. an empty classification is not a classification",
+    blank.allowed === false, JSON.stringify(blank));
+
+  // Order matters: a production person at an unlisted property must still be
+  // refused BY THE PROPERTY, not admitted by the newly-widened person check.
+  ok("A5d. widening the person check did not widen the property allowlist",
+    D({ enabled: true, property_allowlisted: false, person_id: "p", record_class: "production" }).reason_code
+      === "PROPERTY_NOT_ACTIVATED");
+  ok("A5e. widening the person check did not defeat the kill switch",
+    D({ enabled: false, property_allowlisted: true, person_id: "p", record_class: "production" }).reason_code
+      === "APPLICATION_LINK_DISABLED");
 
   ok("A6. every denial carries a human reason, never a bare refusal",
-    [off, notProp, prod, none].every((v) => typeof v.display_reason === "string" && v.display_reason.length > 10));
+    [off, notProp, none, bogus, blank].every((v) => typeof v.display_reason === "string" && v.display_reason.length > 10));
+
+  ok("A6b. no denial still tells an operator 'test records only' — that sentence is no longer true",
+    !Object.values(capability.REASONS).some((r) => /test record/i.test(r)),
+    JSON.stringify(Object.values(capability.REASONS)));
 
   ok("A7. no display reason leaks an environment variable name",
     Object.values(capability.REASONS).every((r) => !/[A-Z_]{6,}/.test(r)),
@@ -88,8 +116,8 @@ function testNormalizer() {
     ...base,
     send_application_capability: {
       action: "send_application", allowed: false,
-      reason_code: "CONTROLLED_ACTIVATION_ONLY",
-      display_reason: capability.REASONS.CONTROLLED_ACTIVATION_ONLY,
+      reason_code: "RECORD_NOT_CLASSIFIED",
+      display_reason: capability.REASONS.RECORD_NOT_CLASSIFIED,
     },
   });
   ok("B1. a held action keeps the verb the operator would press, disabled",
@@ -98,9 +126,9 @@ function testNormalizer() {
   ok("B1b. HELD is not the same truth as UNSUPPORTED — the app can do this, policy holds it",
     denied.kind !== "unsupported");
   ok("B2. it carries the operator-facing reason",
-    denied.reason === capability.REASONS.CONTROLLED_ACTIVATION_ONLY, denied.reason);
+    denied.reason === capability.REASONS.RECORD_NOT_CLASSIFIED, denied.reason);
   ok("B3. it carries the machine reason code for logs",
-    denied.reason_code === "CONTROLLED_ACTIVATION_ONLY");
+    denied.reason_code === "RECORD_NOT_CLASSIFIED");
 
   const allowed = desk.normalizeFollowupAction({
     ...base,
@@ -125,6 +153,18 @@ function testNormalizer() {
 // ════════ C · BATCH AND SINGLE AGREE, ON REAL DATA ═══════════════════
 async function testAgreement() {
   section("C · batch and single agree");
+
+  // Layer C sets its own activation, deliberately. Both evaluators read
+  // process.env at call time, so on a shell where the kill switch happens to
+  // be off EVERY verdict is APPLICATION_LINK_DISABLED — and "batch agrees
+  // with single" then agrees about nothing, passing while testing nothing.
+  // The classification read is the whole point of this layer, so the layer
+  // establishes the preconditions that make it reachable.
+  const savedEnabled = process.env.APPLICATION_INTENT_PREPARE_ENABLED;
+  const savedIds = process.env.APPLICATION_INTENT_PROPERTY_IDS;
+  process.env.APPLICATION_INTENT_PREPARE_ENABLED = "true";
+  process.env.APPLICATION_INTENT_PROPERTY_IDS = DEMO_PROPERTY_ID;
+
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
   const client = await pool.connect();
   try {
@@ -150,6 +190,13 @@ async function testAgreement() {
       property_id: DEMO_PROPERTY_ID, person_ids: ids,
     });
 
+    // C0 exists because C1 is satisfiable by universal refusal. If the gate
+    // never got past the kill switch, nothing below reads a classification
+    // and every assertion in this layer is vacuous. Fail loudly instead.
+    ok("C0. the environment gate was actually passed — this layer is not vacuous",
+      [...batch.values()].some((v) => v.reason_code !== "APPLICATION_LINK_DISABLED"),
+      "every verdict was APPLICATION_LINK_DISABLED; layer C proved nothing");
+
     let agree = true, detail = "";
     for (const id of ids) {
       const single = await capability.evaluateApplicationLinkBirth(client, {
@@ -170,12 +217,22 @@ async function testAgreement() {
 
     ok("C3. an unclassified person is denied in the batch path too",
       batch.get(String(noneId)) && batch.get(String(noneId)).allowed === false);
+
+    // C4 is A3 again, but through a real classification row read out of real
+    // Postgres by the board's batch query — the path the Send button uses.
+    const bProd = batch.get(String(prodId));
+    ok("C4. THE RULING, ON REAL DATA — a production person's board row offers Send",
+      !!bProd && bProd.allowed === true, JSON.stringify(bProd));
   } catch (e) {
     failed++; lines.push(`  FAIL  harness threw: ${e.message}`);
   } finally {
     try { await client.query("rollback"); } catch (_) {}
     client.release();
     await pool.end().catch(() => {});
+    if (savedEnabled === undefined) delete process.env.APPLICATION_INTENT_PREPARE_ENABLED;
+    else process.env.APPLICATION_INTENT_PREPARE_ENABLED = savedEnabled;
+    if (savedIds === undefined) delete process.env.APPLICATION_INTENT_PROPERTY_IDS;
+    else process.env.APPLICATION_INTENT_PROPERTY_IDS = savedIds;
   }
 }
 
