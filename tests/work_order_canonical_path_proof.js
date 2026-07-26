@@ -86,11 +86,18 @@ const uuid = () => crypto.randomUUID();
 //    the assertions below read those fields back.
 async function spawnObligationFromEvent(client, o) {
   const r = await client.query(
+    // Must carry EVERY field the real engine writes (server.js:226). It
+    // previously omitted ownership_origin / owner_eligibility_state /
+    // dedupe_key, so when ck_oblig_billback_ownership began requiring the
+    // provenance pair this stand-in started inventing a failure the real
+    // engine would never produce. Second time a thin stand-in has done that
+    // — see the required_inputs note above.
     `insert into obligations
        (property_id, person_id, unit_id, source_event_id, module, type, label,
         owner_type, assigned_role, escalates_to_role, status, priority, severity,
-        due_at, required_inputs, related_id, related_type)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+        due_at, required_inputs, related_id, related_type,
+        ownership_origin, owner_eligibility_state, dedupe_key)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
      returning *`,
     [o.property_id, o.person_id ?? null, o.unit_id ?? null, o.source_event_id ?? null,
      o.module, o.type, o.label, o.owner_type ?? "human",
@@ -100,7 +107,8 @@ async function spawnObligationFromEvent(client, o) {
      // writes an array literal; this stand-in must do the same or it invents a
      // failure the real engine would never produce.
      o.due_at ?? null, o.required_inputs ?? [],
-     o.related_id ?? null, o.related_type ?? null]
+     o.related_id ?? null, o.related_type ?? null,
+     o.ownership_origin ?? null, o.owner_eligibility_state ?? null, o.dedupe_key ?? null]
   );
   track.obligations.push(r.rows[0].id);
   return r.rows[0];
