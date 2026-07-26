@@ -133,11 +133,21 @@ const CAUSES = [
   "equipment_failure",  // a component failed
   "accident",           // unintentional damage
   "improper_use",       // used in a way it was not meant to be
+  "vandalism",          // deliberate damage — distinct from improper_use by
+                        // intent, and often by a third party rather than the resident
   "weather",            // storm, freeze, water from outside
   "end_of_life",        // reached the end of its service life
   "unknown",            // honestly not established
 ];
 const WORK_NATURES = ["repair", "replacement"];
+
+// ── THE BILLBACK RAIL ───────────────────────────────────────────────
+//  An OBSERVATION (`tenant_caused`) is not a billback. Whether the property
+//  charges a resident is a DECISION with an owner, an actor, a time and a
+//  reason, reversible only by a correction that preserves what it corrected.
+//  See migration 099 for the full shape and for what is deliberately not built.
+const BILLBACK_DECISIONS = ["bill_back", "do_not_bill_back"];
+const BILLBACK_OBLIGATION_TYPE = "billback_decision";
 
 function makeWorkOrderService(deps) {
   const { spawnObligationFromEvent } = deps;
@@ -322,8 +332,178 @@ function makeWorkOrderService(deps) {
       })
     );
 
-    return { workOrder: wo, event: ev, obligation };
+    // 4) THE OBSERVATION OWES A DECISION.
+    //    tenant_caused === true is an observation, never a billback. It spawns
+    //    an obligation someone must answer, in THIS transaction — so a work
+    //    order asserting the resident caused the damage cannot exist without a
+    //    named human owing a decision about it. Strictly `=== true`: an
+    //    unobserved cause (null) is not an accusation and owes nothing.
+    let billbackObligation = null;
+    if (tenant_caused === true) {
+      billbackObligation = await spawnBillbackDecision(client, { workOrder: wo, event: ev });
+    }
+
+    return { workOrder: wo, event: ev, obligation, billbackObligation };
   }
+
+  // ══════════════════════════════════════════════════════════════════
+  //  THE BILLBACK RAIL
+  //
+  //  observation (tenant_caused=true)
+  //    → obligation 'billback_decision'   someone OWES an answer
+  //      → a decision entry               attributed, dated, reasoned
+  //        → a correction entry           reverses without overwriting
+  //
+  //  Nothing here posts money. A decision to bill back is a decision; turning
+  //  it into money is a separate rung that does not exist.
+  // ══════════════════════════════════════════════════════════════════
+
+  //  Spawned from the observation, inside the SAME transaction as the work
+  //  order — so a work order that says "the resident caused this" can never
+  //  exist without someone owing a decision about it.
+  async function spawnBillbackDecision(client, { workOrder, event }) {
+    return spawnObligationFromEvent(client, {
+      property_id: workOrder.property_id,
+      person_id: workOrder.affected_person_id ?? workOrder.reported_by_person_id ?? null,
+      unit_id: workOrder.unit_id ?? null,
+      source_event_id: event ? event.id : null,
+      module: "maintenance",
+      type: BILLBACK_OBLIGATION_TYPE,
+      label: `Decide whether to bill this back — ${workOrder.title || "work order"}`,
+      // A machine may not decide to charge a resident.
+      owner_type: "human",
+      assigned_role: "property_manager",
+      escalates_to_role: "owner",
+      status: "open",                       // BORN OPEN. never born complete.
+      priority: "normal",
+      severity: "normal",
+      // Honestly null. There is no defensible SLA for deciding a billback, and
+      // an invented clock would be a fake number. Note that no operator surface
+      // lists this obligation yet either — see migration 099, note 4. That is a
+      // missing surface, not a missing clock.
+      due_at: null,
+      required_inputs: ["billback_decision"],
+      related_id: workOrder.id,
+      related_type: "work_order",
+      // Provenance, so "nobody is eligible" and "nobody asked" are different
+      // facts. ck_oblig_billback_ownership enforces the pairing.
+      ownership_origin: "observation_spawn",
+      owner_eligibility_state: "unassigned",
+      // One decision per work order, so a retry cannot produce a second.
+      dedupe_key: `billback_decision:${workOrder.id}`,
+    });
+  }
+
+  //  Shared writer for both a decision and a correction. Append-only: there is
+  //  deliberately no update path and no delete path on this table, here or
+  //  anywhere else.
+  async function appendBillbackEntry(client, {
+    work_order_id, entry_kind, decision, actor_user_id,
+    reason, amount_cents = null, supersedes_id = null,
+  }) {
+    if (!work_order_id) throw Object.assign(new Error("work_order_id is required"), { httpStatus: 400 });
+    if (!BILLBACK_DECISIONS.includes(decision))
+      throw Object.assign(new Error("invalid billback decision"), { httpStatus: 400, allowed: BILLBACK_DECISIONS });
+    // Every entry says WHY. A charge with no stated reason is a silent charge.
+    if (!reason || !String(reason).trim())
+      throw Object.assign(new Error("a reason is required for a billback decision"), { httpStatus: 400 });
+    // A human decided, or it did not happen.
+    if (!actor_user_id)
+      throw Object.assign(new Error("actor_user_id is required — a billback decision needs a human actor"), { httpStatus: 400 });
+    // Never a placeholder zero. Absent cost stays absent.
+    if (amount_cents !== null && !(Number(amount_cents) > 0))
+      throw Object.assign(new Error("amount_cents must be a positive amount or null — never zero-filled"), { httpStatus: 400 });
+
+    const wo = (await client.query(
+      "select id, property_id from work_orders where id=$1", [work_order_id])).rows[0];
+    if (!wo) throw Object.assign(new Error("work order not found"), { httpStatus: 404 });
+
+    const obl = (await client.query(
+      `select id, status from obligations
+        where related_type='work_order' and related_id=$1 and type=$2
+        order by created_at asc limit 1`,
+      [work_order_id, BILLBACK_OBLIGATION_TYPE])).rows[0] || null;
+
+    const row = (await client.query(
+      `insert into work_order_billback_decisions
+         (work_order_id, property_id, entry_kind, decision, amount_cents,
+          reason, actor_user_id, supersedes_id, source_obligation_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
+      [work_order_id, wo.property_id, entry_kind, decision, amount_cents,
+       String(reason).trim(), actor_user_id, supersedes_id, obl ? obl.id : null])).rows[0];
+
+    // The first decision satisfies the obligation and CLOSES IT SAYING HOW.
+    // Deciding NOT to charge closes it too — that is a decision, not an
+    // absence of one.
+    if (entry_kind === "decision" && obl && obl.status !== "complete") {
+      await client.query(
+        `update obligations
+            set status='complete', completed_at=now(), resolution_code='satisfied', updated_at=now()
+          where id=$1`, [obl.id]);
+    }
+    return row;
+  }
+
+  const recordBillbackDecision = (client, spec) =>
+    appendBillbackEntry(client, { ...spec, entry_kind: "decision", supersedes_id: null });
+
+  //  A reversal is a NEW entry pointing at the one it supersedes. The original
+  //  is never touched: current reads may change, history may not.
+  async function recordBillbackCorrection(client, spec) {
+    if (!spec || !spec.supersedes_id)
+      throw Object.assign(new Error("supersedes_id is required — a correction must say what it corrects"), { httpStatus: 400 });
+    return appendBillbackEntry(client, { ...spec, entry_kind: "correction" });
+  }
+
+  //  CURRENT STATE IS A READ, never a stored status. The latest entry that
+  //  nothing supersedes wins. `disputed` is derived here rather than living in
+  //  ck_obl_status, which every obligation in the system shares.
+  async function readBillbackState(db, { work_order_id }) {
+    const rows = (await db.query(
+      `select * from work_order_billback_decisions
+        where work_order_id=$1 order by created_at asc, id asc`, [work_order_id])).rows;
+    if (rows.length === 0) return null;              // no decision exists yet
+    const superseded = new Set(rows.map((r) => r.supersedes_id).filter(Boolean));
+    const decisions = rows.filter((r) => r.entry_kind !== "dispute" && !superseded.has(r.id));
+    const current = decisions[decisions.length - 1] || null;
+    const lastDispute = [...rows].reverse().find((r) => r.entry_kind === "dispute") || null;
+
+    // Separation of duties is made VISIBLE, not enforced. On a small team the
+    // same human legitimately observes and decides; a control that gets worked
+    // around teaches people to work around controls. So we surface it.
+    const wo = (await db.query(
+      "select reported_by_person_id, tenant_caused from work_orders where id=$1",
+      [work_order_id])).rows[0] || {};
+    const observer = (await db.query(
+      `select note from events
+        where type in ('emergency_work_order','work_order_opened')
+          and note::text like '%' || $1 || '%' limit 1`, [work_order_id])).rows[0] || null;
+
+    return {
+      work_order_id,
+      decision: current ? current.decision : null,
+      amount_cents: current ? current.amount_cents : null,   // null is normal
+      entry_id: current ? current.id : null,
+      decided_by: current ? current.actor_user_id : null,
+      decided_at: current ? current.created_at : null,
+      reason: current ? current.reason : null,
+      corrected: !!(current && current.entry_kind === "correction"),
+      disputed: !!(lastDispute && current && lastDispute.created_at > current.created_at),
+      // visible, not prevented — see above
+      observed_by_same_actor:
+        !!(current && observer && String(observer.note || "").includes(String(current.actor_user_id))),
+      history: rows.map((r) => ({
+        id: r.id, kind: r.entry_kind, decision: r.decision, amount_cents: r.amount_cents,
+        actor_user_id: r.actor_user_id, actor_person_id: r.actor_person_id,
+        reason: r.reason, supersedes_id: r.supersedes_id, created_at: r.created_at,
+      })),
+    };
+  }
+
+  //  There is deliberately NO recordBillbackDispute here. The table accepts the
+  //  shape so we do not migrate twice, but a dispute needs a resident-facing
+  //  surface that does not exist and has not been approved. Dormant by design,
+  //  not by omission. See migration 099, note 1.
 
   // ── APPEND: clarification as history on the SAME open loop. ──
   //  Original description is NEVER overwritten. If the clarification (via the
@@ -390,12 +570,19 @@ function makeWorkOrderService(deps) {
     return wo;
   }
 
-  return { createWorkOrder, appendClarification, assertTenantOwnsWorkOrder, EMERGENCY_TYPES };
+  return {
+    createWorkOrder, appendClarification, assertTenantOwnsWorkOrder, EMERGENCY_TYPES,
+    // The billback rail — APPEND ONLY. Note what is deliberately absent and
+    // must stay absent: no updateBillbackDecision, no deleteBillbackDecision
+    // (history is not editable), and no recordBillbackDispute (dormant until a
+    // resident-facing surface exists and has been approved).
+    recordBillbackDecision, recordBillbackCorrection, readBillbackState,
+  };
 }
 
 module.exports = {
   makeWorkOrderService, EMERGENCY_TYPES, EMERGENCY_CHAIN,
-  CAUSES, WORK_NATURES,
+  CAUSES, WORK_NATURES, BILLBACK_DECISIONS, BILLBACK_OBLIGATION_TYPE,
   // deriveCategories survives ONLY for supply_requests, which still carries an
   // operating_category. Decomposing the supply request is separate work and is
   // deliberately not in this slice. It is no longer on the work-order path.
