@@ -2552,7 +2552,9 @@ module.exports = function operatorModule(deps) {
   //
   //  BIRTH (new intent / first preparation / provider send-at-prepare) is
   //  activation-gated: kill switch + property allowlist + the person's
-  //  CURRENT internal_qa classification + this authenticated session.
+  //  CURRENT eligible classification + this authenticated session. The
+  //  eligible set now matches the one the comms boundary already requires
+  //  to text a person at all; see capability.js.
   //  DRAIN/CORRECTION (finalize, revoke, expire, regenerate, retry) works
   //  when birth is disabled — but always property-authed via the session.
   //  Every correction re-classifies dispatch state UNDER the invitation
@@ -2576,7 +2578,7 @@ module.exports = function operatorModule(deps) {
   const HTTP_FOR_REASON = {
     APPLICATION_LINK_DISABLED: { status: 503, error: "application_intent_disabled" },
     PROPERTY_NOT_ACTIVATED:    { status: 403, error: "property_not_activated" },
-    CONTROLLED_ACTIVATION_ONLY:{ status: 403, error: "person_not_internal_qa" },
+    RECORD_NOT_CLASSIFIED:     { status: 403, error: "person_not_classified" },
     PERSON_UNKNOWN:            { status: 403, error: "person_unknown" },
   };
   async function applicationBirthGate(req, person_id, q = pool) {

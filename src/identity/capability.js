@@ -49,8 +49,8 @@ const REASONS = {
     "Application links aren't switched on yet.",
   PROPERTY_NOT_ACTIVATED:
     "Application links aren't switched on for this property yet.",
-  CONTROLLED_ACTIVATION_ONLY:
-    "Application links aren't switched on for real prospects yet \u2014 test records only for now.",
+  RECORD_NOT_CLASSIFIED:
+    "This person hasn't been classified for this property yet.",
   PERSON_UNKNOWN:
     "No person is connected to this work yet.",
 };
@@ -69,9 +69,23 @@ function envList(name) {
 //  construction rather than by discipline.
 //
 //  `record_class` semantics: null means the person carries no current
-//  classification. That is treated as NOT eligible — an ungoverned record
-//  is not an internal-QA record, and during controlled activation the
-//  absence of a decision is not permission.
+//  classification. That is treated as NOT eligible — the absence of a
+//  decision is not permission. That rule survived the end of controlled
+//  activation, because it was never about being careful with real people;
+//  it is about refusing to act on an ungoverned record.
+//
+//  ELIGIBLE_RECORD_CLASSES is an ALLOWLIST, deliberately. The obvious
+//  version of this change — "deny only when the classification is missing"
+//  — would silently admit every class invented after today. A class earns
+//  application eligibility by being named here.
+//
+//  Both members are load-bearing. `production` is the point of the merge:
+//  the comms boundary already requires `production` to text a person at
+//  all, so any other eligible class here would be a person who can receive
+//  an application and can never be sent it. `internal_qa` stays because
+//  six harnesses and the QA Lifecycle Tester chain run on QA records.
+const ELIGIBLE_RECORD_CLASSES = ["production", "internal_qa"];
+
 function decideApplicationLinkBirth({ enabled, property_allowlisted, person_id, record_class }) {
   const deny = (code) => ({
     action: ACTION_APPLICATION_LINK,
@@ -84,9 +98,9 @@ function decideApplicationLinkBirth({ enabled, property_allowlisted, person_id, 
   if (!property_allowlisted) return deny("PROPERTY_NOT_ACTIVATED");
   // A person is optional at the gate's original call site (some routes pass
   // none), but a board row that offers Send always has one. When an id is
-  // supplied the classification must be present and must be internal_qa.
+  // supplied the classification must be present and must be eligible.
   if (person_id) {
-    if (record_class !== "internal_qa") return deny("CONTROLLED_ACTIVATION_ONLY");
+    if (!ELIGIBLE_RECORD_CLASSES.includes(record_class)) return deny("RECORD_NOT_CLASSIFIED");
   }
   return {
     action: ACTION_APPLICATION_LINK,
