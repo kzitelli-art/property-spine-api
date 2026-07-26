@@ -215,16 +215,33 @@ module.exports = function superAdminModule({ pool }) {
     }
   });
 
+  // ── GET /admin/roles ─────────────────────────────────────────────────────
+  router.get("/admin/roles", requireSuperAdmin, async (req, res) => {
+    try {
+      const rows = (await pool.query(
+        `select key, label, allowed_modules, primary_modules, can_manage_roles, description
+           from staff_roles order by sort_order`
+      )).rows;
+      res.json(rows);
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
   // ── POST /admin/organizations/:orgId/invite ──────────────────────────────
-  // Creates (or updates) an admin user for this org and sends them an OTP
-  // invite via the existing teamaccess machinery.
-  // Body: { name, phone, email, property_id }
-  // property_id must belong to this org (or be provided to bootstrap the first one).
+  // Body: { name, phone, email, property_id, role_key, platform_role }
+  // role_key: one of the staff_roles keys (defaults to 'property_admin')
+  // platform_role: 'org_admin' | 'member' (defaults to 'member')
   router.post("/admin/organizations/:orgId/invite", requireSuperAdmin, async (req, res) => {
     try {
-      const { name, phone, email, property_id } = req.body || {};
+      const { name, phone, email, property_id, role_key = "property_admin", platform_role = "member" } = req.body || {};
       if (!name || !phone) return res.status(400).json({ error: "name and phone are required." });
       if (!property_id) return res.status(400).json({ error: "property_id is required — the user logs into a specific property." });
+
+      const allowed_platform_roles = ["org_admin", "member"];
+      if (!allowed_platform_roles.includes(platform_role)) {
+        return res.status(400).json({ error: `platform_role must be one of: ${allowed_platform_roles.join(", ")}` });
+      }
 
       const org = (await pool.query(`select id, name from organizations where id = $1`, [req.params.orgId])).rows[0];
       if (!org) return res.status(404).json({ error: "Organization not found." });
@@ -235,41 +252,60 @@ module.exports = function superAdminModule({ pool }) {
       )).rows[0];
       if (!prop) return res.status(400).json({ error: "Property does not belong to this organization." });
 
+      // Resolve role preset
+      const roleRow = (await pool.query(`select * from staff_roles where key = $1`, [role_key])).rows[0];
+      const preset = roleRow || {
+        label: "Property Admin", key: "property_admin",
+        allowed_modules: ["management","leasing","maintenance","reporting"],
+        primary_modules: ["management"], can_manage_roles: true,
+      };
+
       const normalizedPhone = phone.replace(/\D/g, "").replace(/^1/, "");
       const e164 = "+1" + normalizedPhone;
 
       // Upsert the user
-      const user = (await pool.query(
-        `insert into users (name, email, phone, role, auth_provider, platform_role, organization_id, is_active, status)
-         values ($1, $2, $3, 'property_manager', 'phone_otp', 'member', $4, true, 'active')
-         on conflict (email) do update
-           set name = excluded.name,
-               phone = excluded.phone,
-               organization_id = excluded.organization_id,
-               is_active = true,
-               status = 'active',
-               updated_at = now()
-         returning id, name, email, phone`,
-        [name, email || null, e164, org.id]
-      )).rows[0];
+      let user;
+      if (email && email.trim()) {
+        user = (await pool.query(
+          `insert into users (name, email, phone, role, auth_provider, platform_role, organization_id, is_active, status)
+           values ($1, $2, $3, 'property_manager', 'phone_otp', $4, $5, true, 'active')
+           on conflict (email) do update
+             set name = excluded.name, phone = excluded.phone,
+                 platform_role = excluded.platform_role,
+                 organization_id = excluded.organization_id,
+                 is_active = true, status = 'active', updated_at = now()
+           returning id, name, email, phone`,
+          [name.trim(), email.trim(), e164, platform_role, org.id]
+        )).rows[0];
+      } else {
+        user = (await pool.query(
+          `insert into users (name, phone, role, auth_provider, platform_role, organization_id, is_active, status)
+           values ($1, $2, 'property_manager', 'phone_otp', $3, $4, true, 'active')
+           on conflict (phone) do update
+             set name = excluded.name, platform_role = excluded.platform_role,
+                 organization_id = excluded.organization_id,
+                 is_active = true, status = 'active', updated_at = now()
+           returning id, name, email, phone`,
+          [name.trim(), e164, platform_role, org.id]
+        )).rows[0];
+      }
 
-      // Ensure a property_team_assignments row exists
+      // Upsert property_team_assignments with canonical role preset
       await pool.query(
         `insert into property_team_assignments
-           (property_id, user_id, role_title, scope_type, allowed_modules,
+           (property_id, user_id, role_title, role_key, scope_type, allowed_modules,
             primary_for_modules, can_manage_roles, active)
-         values ($1, $2, 'Admin', 'property',
-                 array['management','leasing','maintenance','reporting'],
-                 array['management','leasing','maintenance','reporting'],
-                 true, true)
+         values ($1, $2, $3, $4, 'property', $5, $6, $7, true)
          on conflict (property_id, user_id) do update
-           set role_title = 'Admin',
-               allowed_modules = array['management','leasing','maintenance','reporting'],
-               primary_for_modules = array['management','leasing','maintenance','reporting'],
-               can_manage_roles = true,
-               active = true,
-               updated_at = now()`,
-        [property_id, user.id]
+           set role_title        = excluded.role_title,
+               role_key          = excluded.role_key,
+               allowed_modules   = excluded.allowed_modules,
+               primary_for_modules = excluded.primary_for_modules,
+               can_manage_roles  = excluded.can_manage_roles,
+               active            = true,
+               updated_at        = now()`,
+        [property_id, user.id, preset.label, preset.key,
+         preset.allowed_modules, preset.primary_modules, preset.can_manage_roles]
       );
 
       res.status(201).json({
@@ -277,6 +313,8 @@ module.exports = function superAdminModule({ pool }) {
         user: { id: user.id, name: user.name, email: user.email, phone: user.phone },
         organization_id: org.id,
         property_id,
+        role_key: preset.key,
+        platform_role,
         note: "User provisioned. They can now log in via phone OTP at the operator app.",
       });
     } catch (e) {
