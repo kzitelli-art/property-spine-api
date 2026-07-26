@@ -185,6 +185,85 @@ function resolveTourOutcome({ attendance = null, standing = null, judgedBy = nul
            needs_standing: false, valid: true, refusal: null };
 }
 
+// ── THREE VOCABULARIES, ONE MEANING ──────────────────────────────────
+//  This surface has been written three times and nothing ever migrated:
+//
+//    v1 (live, what the UI still sends)  tour_outcome free text:
+//         'interested' 27 · 'start_application' 5 · 'keep_working' 1 · null 7
+//    v2 (built, never adopted by the UI) disposition + sub_read:
+//         start_application | keep_working | needs_change | close_watch
+//         × hot | warm | exploring
+//    v3 (this file, the owner's design)  ONE four-value standing.
+//
+//  v3 is deliberately FLATTER: disposition-then-sub_read is two decisions
+//  on a screen the agent has ten seconds for. One tap, four words.
+//
+//  normalizeStanding exists so all three land on one meaning and the UI
+//  can move at its own pace without the record forking. It is the bridge,
+//  not a fourth vocabulary.
+//
+//  ── WHAT IT REFUSES TO DO ────────────────────────────────────────────
+//  'interested' and a bare 'keep_working' are genuinely AMBIGUOUS between
+//  hot_lead and possible. The distinction was never captured, so it does
+//  not exist in the record and cannot be recovered by mapping. Guessing
+//  would manufacture a judgment the agent never made — the same defect as
+//  letting the AI supply a standing.
+//
+//  So they resolve to null WITH A REASON. 27 historical rows stay honestly
+//  unresolved rather than becoming confidently wrong. Backfilling meaning
+//  that was never captured is how a record starts lying about its own past.
+const LEGACY_STANDING_MAP = Object.freeze({
+  // unambiguous — the word already meant exactly one thing
+  start_application: STANDING.READY_TO_APPLY,
+  needs_change:      STANDING.POSSIBLE,
+  // v2 two-level, resolvable only WITH the sub_read
+  // (handled below; listed here for readers)
+});
+
+function normalizeStanding({ standing = null, disposition = null,
+                             sub_read = null, future_fit = null,
+                             interest_level = null } = {}) {
+  const unresolved = (reason, from) => ({ standing: null, resolved: false, reason, from });
+
+  // v3 — already the target vocabulary
+  if (standing != null) {
+    return STANDING_VALUES.includes(standing)
+      ? { standing, resolved: true, reason: null, from: "v3" }
+      : unresolved(`unknown standing '${standing}'`, "v3");
+  }
+
+  // v2 — disposition (+ sub_read for the one that needs it)
+  if (disposition != null) {
+    if (disposition === "close_watch") {
+      // future_fit decides: 'close' is a real no, 'keep' is still possible
+      if (future_fit === "close") return { standing: STANDING.NOT_MOVING_FORWARD, resolved: true, reason: null, from: "v2" };
+      if (future_fit === "keep")  return { standing: STANDING.POSSIBLE,           resolved: true, reason: null, from: "v2" };
+      return unresolved("close_watch without future_fit is ambiguous between possible and not_moving_forward", "v2");
+    }
+    if (disposition === "keep_working") {
+      if (sub_read === "hot") return { standing: STANDING.HOT_LEAD, resolved: true, reason: null, from: "v2" };
+      if (sub_read === "warm" || sub_read === "exploring")
+        return { standing: STANDING.POSSIBLE, resolved: true, reason: null, from: "v2" };
+      return unresolved("keep_working without sub_read is ambiguous between hot_lead and possible", "v2");
+    }
+    if (LEGACY_STANDING_MAP[disposition])
+      return { standing: LEGACY_STANDING_MAP[disposition], resolved: true, reason: null, from: "v2" };
+    return unresolved(`unknown disposition '${disposition}'`, "v2");
+  }
+
+  // v1 — the free-text field that is 68% one word
+  if (interest_level != null) {
+    if (LEGACY_STANDING_MAP[interest_level])
+      return { standing: LEGACY_STANDING_MAP[interest_level], resolved: true, reason: null, from: "v1" };
+    // 'interested' lands here, and stays here.
+    return unresolved(
+      `legacy value '${interest_level}' cannot be resolved to a standing — the distinction was never captured`,
+      "v1");
+  }
+
+  return unresolved("nothing to normalize", null);
+}
+
 /**
  * captureLatencyMinutes — how long the fresh judgment sat before it was
  * recorded. Null when the tour has no slot (no honest end time exists) or
@@ -203,5 +282,5 @@ module.exports = {
   ATTENDANCE, ATTENDANCE_VALUES, ATTENDANCE_HAS_STANDING,
   STANDING, STANDING_VALUES, STANDING_LABEL, STANDING_HELP,
   JUDGED_BY, NEXT_MOVE, ATTENDANCE_NEXT_MOVE,
-  resolveTourOutcome, captureLatencyMinutes,
+  resolveTourOutcome, captureLatencyMinutes, normalizeStanding,
 };

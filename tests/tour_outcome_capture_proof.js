@@ -134,6 +134,48 @@ async function mustReject(client, label, sql, params) {
           tourEndedAt: "2026-07-28T14:00:00Z", capturedAt: "2026-07-28T14:07:00Z" }) === 7,
         "a real pair measures correctly", "7 minutes");
 
+  // ── [7b] three vocabularies, one meaning — against the REAL live rows ──
+  console.log("\n[7b] the bridge: every live outcome value, normalized");
+  const live = (await pool.query(
+    `select coalesce(tour_outcome,'(null)') as v, count(*)::int c
+       from leasing_conversions group by 1 order by 2 desc`)).rows;
+  const mapped = live.map(r => {
+    const n = TO.normalizeStanding({ interest_level: r.v === "(null)" ? null : r.v });
+    return { live_value: r.v, rows: r.c,
+             resolves_to: n.standing || "— unresolved —",
+             why: n.reason ? n.reason.slice(0, 62) : "" };
+  });
+  console.table(mapped);
+  const ambiguous = mapped.find(m => m.live_value === "interested");
+  check(ambiguous && ambiguous.resolves_to === "— unresolved —",
+        "'interested' (27 rows) refuses to resolve",
+        "the hot/possible distinction was never captured — guessing would invent a judgment");
+  const clean = mapped.find(m => m.live_value === "start_application");
+  check(clean && clean.resolves_to === TO.STANDING.READY_TO_APPLY,
+        "'start_application' DOES resolve — it only ever meant one thing");
+
+  console.log("\n     v2 two-level → v3 one word:");
+  const v2cases = [
+    { disposition: "keep_working", sub_read: "hot" },
+    { disposition: "keep_working", sub_read: "warm" },
+    { disposition: "keep_working" },                          // ambiguous on purpose
+    { disposition: "close_watch", future_fit: "close" },
+    { disposition: "close_watch", future_fit: "keep" },
+    { disposition: "close_watch" },                           // ambiguous on purpose
+    { disposition: "needs_change" },
+  ];
+  console.table(v2cases.map(c => {
+    const n = TO.normalizeStanding(c);
+    return { input: JSON.stringify(c), resolves_to: n.standing || "— unresolved —",
+             why: n.reason ? n.reason.slice(0, 54) : "" };
+  }));
+  check(TO.normalizeStanding({ disposition: "keep_working", sub_read: "hot" }).standing === TO.STANDING.HOT_LEAD,
+        "keep_working + hot → Hot Lead");
+  check(TO.normalizeStanding({ disposition: "keep_working" }).resolved === false,
+        "keep_working ALONE refuses", "ambiguous between hot_lead and possible");
+  check(TO.normalizeStanding({ disposition: "close_watch", future_fit: "close" }).standing === TO.STANDING.NOT_MOVING_FORWARD,
+        "close_watch + close → Not Moving Forward", "the funnel gets its first way to close");
+
   // ── [8] the ask record binds ──────────────────────────────────────
   console.log("\n[8] tour_outcome_prompts — the CHECKs actually reject");
   const tour = (await pool.query(`select id from leasing_tours order by created_at desc limit 1`)).rows[0];
