@@ -70,6 +70,39 @@ async function main() {
     return;
   }
 
+  // ── DUPLICATE PREFIX = HARD STOP ─────────────────────────────────────
+  //  The ledger is keyed on the three-digit prefix alone, so two files
+  //  sharing a number means the second one is silently skipped FOREVER —
+  //  it prints "already applied" and moves on, and its tables never exist.
+  //
+  //  That happened on 2026-07-26: two 094s were merged from parallel
+  //  threads, and a live feature shipped expecting tables the deploy had
+  //  quietly declined to create. Nothing failed. Nothing warned.
+  //
+  //  A migration that never runs and never complains is the worst failure
+  //  shape available, so this refuses to run at all until it is resolved.
+  //  Stopping the whole deploy is the point: half-applied schema on a
+  //  system with no staging is not a thing to be clever about.
+  const seen = new Map();
+  const clashes = [];
+  for (const f of files) {
+    const v = f.slice(0, 3);
+    if (seen.has(v)) clashes.push([v, seen.get(v), f]);
+    else seen.set(v, f);
+  }
+  if (clashes.length) {
+    console.error("\n  ✗ DUPLICATE MIGRATION NUMBER(S) — refusing to run.\n");
+    for (const [v, a, b] of clashes) {
+      console.error(`      ${v}  ${a}`);
+      console.error(`      ${v}  ${b}   <-- this one would be SILENTLY SKIPPED`);
+    }
+    console.error("\n    The ledger is keyed on the number alone, so the second file");
+    console.error("    would never run and never say so. Renumber it to the next free");
+    console.error("    slot and deploy again. Nothing was applied.\n");
+    await client.end();
+    process.exit(1);
+  }
+
   let ranAny = false;
   for (const file of files) {
     const version = file.slice(0, 3);            // '001'
