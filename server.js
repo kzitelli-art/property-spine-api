@@ -52,6 +52,7 @@ const compareModule = require("./src/money/compare");   // report comparison lay
 const explainModule = require("./src/money/explain");
 const tenantLinkModule = require("./src/comms/tenantlink"); // tenant text line Phase 1: connection (invite link → verify → session)
 const teamAccessModule = require("./src/identity/teamaccess");
+const superAdminModule = require("./src/identity/super_admin");
 const smsTransport = require("./src/comms/sms"); // SMS transport (Twilio) — fail-soft when unconfigured
 const communicationsBoundary = require("./src/comms/communications_boundary"); // the permanent communications boundary — one inbound resolver, one outbound gate
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
@@ -146,6 +147,7 @@ app.use((req, res, next) => {
   const p = req.path;
   if (PUBLIC_EXACT.has(p) || PUBLIC_PREFIXES.some((x) => p === x || p.startsWith(x))) return next();
   if (isOperatorPath(p)) return next(); // /operator/* applies its own staff-session auth
+  if (p === "/admin" || p.startsWith("/admin/")) return next(); // /admin/* enforces its own super-admin session auth
   if (!OPERATOR_KEY) {
     return res.status(503).json({ receipt: "Operator routes are locked: set OPERATOR_KEY in Render's environment, then send it as the x-operator-key header." });
   }
@@ -3334,6 +3336,7 @@ app.post("/sms-proof", async (req, res) => {
 });
 app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, getAgentService: () => agentApp._service }));
 app.use("/", teamAccessModule({ pool, sms, commBoundary }));
+app.use("/", superAdminModule({ pool }));
 // owner-facing aggregate views (cards + attention queue). Only needs pool.
 app.use("/", ownerModule({ pool }));
 const publicReview = require("./src/onboarding/public_review");
