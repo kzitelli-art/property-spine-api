@@ -217,6 +217,11 @@ module.exports = function agentModule(deps) {
   // the true thing (no pet fee) and routes, without claiming a filing.
   const FALLBACK_ESA =
     "An assistance animal isn't a pet, so the pet fee and pet rent don't apply. The team handles accommodation requests directly and can see this conversation, they'll walk you through what's needed.";
+  // A reply that appealed to law. This is the agent's own best line from a live
+  // thread, promoted to a floor: "That's getting into specific state law and
+  // lease terms I don't want to guess on."
+  const FALLBACK_LEGAL =
+    "That one's specific to local law and your lease, and I don't want to guess on it. The team can walk you through the exact terms.";
   const FALLBACK_INVENTORY =
     "Let me check the live inventory before I give you the wrong unit. We can still get you in to see the building.";
   const FALLBACK_GENERAL =
@@ -368,6 +373,15 @@ module.exports = function agentModule(deps) {
       // live reply said "University City overall skews younger because of the
       // schools" — the older patterns above catch "safe/rough/nice", not this.
       [/\b(skews?|mostly|mainly|largely|predominantly|a lot of|lots of|full of) (young|younger|older|students|families|kids|professionals|couples|singles|immigrants|retirees)\b/, "fairhousing:demographic_composition"],
+      // LOCAL LAW asserted from model memory. Housing law is jurisdictional:
+      // source-of-income protection, deposit caps and return windows, notice
+      // periods, occupancy limits and rent regulation all differ between
+      // Philadelphia, Pittsburgh, and New York. The model has plausible-sounding
+      // general knowledge and no way to know which jurisdiction is correct, so
+      // any appeal to law is blocked unless it came from verified facts.
+      // Deliberately narrow and high-precision: "renters insurance is required"
+      // does NOT match, because it asserts a house rule, not a legal one.
+      [/\b((state|city|local|municipal|federal) law|by law|legally (required|obligated|entitled)|(pennsylvania|philadelphia|pittsburgh|new york|nyc|pa|ny) (law|ordinance|code|statute)|rent control|rent stabiliz|your rights under)\b/, "legal:local_law_claim"],
     ];
     for (const [re, code] of blockPatterns) if (re.test(t)) return { decision: "blocked", code };
     return { decision: "safe", code: null };
@@ -567,6 +581,14 @@ Do not make subjective claims that an area is safe, dangerous, good, bad, rough,
 Do not characterize the residents or steer by protected characteristics.
 
 OCCUPANCY IS NOT PEOPLE. You may describe how busy or full a SPACE is. You may not describe what the PEOPLE in it are like. "It rarely feels packed" is an observation about a room and is fine. "It's a nice, comfortable crowd" is a claim about residents and is not, however warmly it is meant. Same rule for the building overall: describe the expectation that residents respect their neighbors, never the type of community or the kind of people who live here. When you want to convey that somewhere is pleasant, say it with density, noise, hours, or space, never with a description of the residents.
+
+JURISDICTION. Housing law is not one law. There is a FEDERAL floor that applies everywhere, and STATE and LOCAL rules that change from city to city. What is true in Philadelphia is not true in Pittsburgh or New York.
+
+The FEDERAL floor applies at every property and you may rely on it: race, color, national origin, religion, sex, familial status, and disability are protected; assistance animals are not pets.
+
+EVERYTHING ELSE IS LOCAL AND YOU DO NOT KNOW IT. Source-of-income and voucher protection, security deposit caps and return deadlines, notice periods, guest and occupancy limits, late fee limits, lease break terms, rent regulation: all of these vary by city and state. NEVER state one from general knowledge, NEVER infer one from another property, and NEVER quote a statute or a deadline. If it is not in VERIFIED PROPERTY FACTS for THIS property, you do not have it.
+
+Say you are not going to guess, and hand it to the team. "That one's specific to local law and your lease, and I don't want to guess on it. The team can walk you through it." That is a complete, correct answer. Do not soften it into a maybe, and do not fill the gap with what is usually true elsewhere.
 
 ASSISTANCE ANIMALS ARE NOT PETS. A service animal, emotional support animal, or ESA is an accommodation, not a pet. NEVER quote a pet fee, pet deposit, or pet rent in reply to one, and never say it falls under the pet policy. The pet fee and pet rent do not apply, and you may say so plainly. Never ask what someone's disability or condition is, and never ask for proof in the text thread. Do not promise approval either: it is a request the team processes. Say the charges do not apply, say the team handles the request and can see the conversation, and leave the paperwork to them. If a prospect tells you it is illegal to charge for an assistance animal, they are broadly right. Do not argue, and do not go silent on it.
 
@@ -1497,7 +1519,10 @@ Reply with ONLY the message text.`;
       //    block also raises an INTERNAL QA signal (not a prospect handoff).
       let qaSignal = null; // { code } → TX2 logs it; never surfaced to the prospect
       if (policyDecision === "blocked") {
-        if (policyCode === "fairhousing:esa_fee") {
+        if (policyCode === "legal:local_law_claim") {
+          generated = FALLBACK_LEGAL;
+          policyDecision = "safe"; policyCode = "local_law_redirected";
+        } else if (policyCode === "fairhousing:esa_fee") {
           // The generic redirect talks about controlled access and cameras,
           // which is a non-sequitur to an assistance-animal question. Answer
           // the actual question instead.
@@ -2053,7 +2078,10 @@ Reply with ONLY the message text.`;
         if (post.decision !== "safe") { policyDecision = post.decision; policyCode = post.code; }
       }
       if (policyDecision === "blocked") {
-        if (policyCode === "fairhousing:esa_fee") { generated = FALLBACK_ESA; policyDecision = "safe"; policyCode = "esa_fee_redirected"; }
+        if (policyCode === "legal:local_law_claim") {
+          generated = FALLBACK_LEGAL;
+          policyDecision = "safe"; policyCode = "local_law_redirected";
+        } else if (policyCode === "fairhousing:esa_fee") { generated = FALLBACK_ESA; policyDecision = "safe"; policyCode = "esa_fee_redirected"; }
         else if (String(policyCode || "").startsWith("fairhousing:")) { generated = FALLBACK_FAIRHOUSING; policyDecision = "safe"; policyCode = "fairhousing_redirected"; }
         else { generated = FALLBACK_GENERAL; policyDecision = "safe"; policyCode = "general_recovered"; }
       }
