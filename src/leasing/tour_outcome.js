@@ -363,6 +363,138 @@ function resolveCaptureState({ isTerminal = false, attendance = null, standing =
   return out(CAPTURE_STATE.SCHEDULED, "not yet due");
 }
 
+// ── A STANDING IS NOT A LABEL ─────────────────────────────────────────
+//  Fable lock 1 (2026-07-26): keep these two truths apart.
+//
+//    lifecycle stage    Prospect / Applicant / Resident   — where they ARE
+//    post-tour standing Ready to Apply / Hot Lead /        — what one agent
+//                       Possible / Not Moving Forward        read, once
+//
+//  "Hot Lead" is a SOURCED ASSESSMENT from a particular tour on a
+//  particular day. It must be superseded by later evidence and disappear
+//  when the relationship advances, closes, or changes. Do not permanently
+//  brand the person as Hot.
+//
+//  The risk is concrete and lives in the design contract's own example
+//  header — `Applicant · Hot Lead` — where a one-day read sits beside a
+//  durable position looking equally permanent. Three weeks later, after an
+//  application and two more conversations, that badge is still there
+//  telling an agent something nobody has believed since.
+//
+//  So a standing is only ever displayed WITH its source, and it goes
+//  quiet the moment the relationship moves past it.
+const STAGE_RANK = Object.freeze({
+  tour_followup: 1, applicant_followup: 2, lease_signature_followup: 3,
+});
+
+/**
+ * standingOptionsForStage — which four words to offer, given where the
+ * relationship already is.
+ *
+ *  Owner: "'Ready to Apply' makes sense before an application; after they
+ *  have applied, the equivalent decision may be 'Ready to Sign'… Do not
+ *  invent a second lifecycle — just avoid presenting an action that has
+ *  already happened."
+ *
+ *  So the KEYS never change. There is one standing vocabulary and one
+ *  ladder. What changes is the WORDS on the button, because
+ *  `ready_to_apply` has always meant "ready for the next commitment step"
+ *  and that step is different once they have applied.
+ *
+ *  Offering "Ready to Apply" to someone who applied a week ago is worse
+ *  than merely redundant: a rushed agent taps it, and the record now says
+ *  the next move is something already done.
+ *
+ *  A stage this does not know about gets the default set rather than a
+ *  guess — an unranked position is not a licence to invent labels.
+ */
+const STANDING_LABEL_BY_STAGE = Object.freeze({
+  applicant_followup: {
+    [STANDING.READY_TO_APPLY]: "Ready to Sign",
+    [STANDING.HOT_LEAD]:       "Hot — push it",
+  },
+  lease_signature_followup: {
+    // The commitment step is in flight; there is nothing further to
+    // declare them ready FOR, so that option is withdrawn entirely
+    // rather than relabelled into something meaningless.
+    [STANDING.READY_TO_APPLY]: null,
+  },
+});
+
+function standingOptionsForStage(stage) {
+  const overrides = STANDING_LABEL_BY_STAGE[stage] || {};
+  return STANDING_VALUES
+    .map((key) => {
+      const override = Object.prototype.hasOwnProperty.call(overrides, key)
+        ? overrides[key] : undefined;
+      if (override === null) return null;              // withdrawn at this stage
+      return {
+        key,
+        label: override !== undefined ? override : STANDING_LABEL[key],
+        help: STANDING_HELP[key],
+        relabelled: override !== undefined && override !== null,
+      };
+    })
+    .filter(Boolean);
+}
+
+/**
+ * resolveStandingDisplay — should this standing still be shown, and how?
+ *
+ *   standing        the recorded four-word read
+ *   standingAt      when that tour was captured
+ *   standingStage   the relationship's stage AT capture time (if known)
+ *   currentStage    where the relationship is now
+ *   relationshipClosed
+ *   laterStandingAt a newer tour's standing, if one exists
+ *
+ * Returns { show, label, qualifier, reason }. `qualifier` is never
+ * optional decoration — it is what stops a read becoming a brand.
+ */
+function resolveStandingDisplay({ standing = null, standingAt = null,
+                                  standingStage = null, currentStage = null,
+                                  relationshipClosed = false,
+                                  laterStandingAt = null, now = null } = {}) {
+  const hide = (reason) => ({ show: false, label: null, qualifier: null, reason });
+  if (!standing || !STANDING_VALUES.includes(standing)) return hide("no standing on record");
+
+  // A closed relationship has no live read. Whatever the last tour said,
+  // it is history now.
+  if (relationshipClosed) return hide("relationship is closed — the read is history");
+
+  // A newer tour outranks an older one. The most recent judgment wins;
+  // the older stays in history where it belongs.
+  if (laterStandingAt && standingAt && new Date(laterStandingAt) > new Date(standingAt)) {
+    return hide("superseded by a later tour");
+  }
+
+  // THE RELATIONSHIP MOVED PAST IT. Someone read as 'Ready to Apply' who
+  // has since applied is not still ready to apply — they did it. Showing
+  // it implies work that is already done.
+  const then = STAGE_RANK[standingStage];
+  const nowRank = STAGE_RANK[currentStage];
+  if (then != null && nowRank != null && nowRank > then) {
+    return hide(`relationship advanced to ${currentStage} after this read`);
+  }
+
+  // Still current — but shown as what it is: one person's read, on a day.
+  let qualifier = "from the tour";
+  if (standingAt) {
+    const d = new Date(standingAt);
+    if (!isNaN(d.getTime())) {
+      const days = Math.floor(((now ? new Date(now) : new Date()) - d) / 86400000);
+      qualifier = days <= 0 ? "from today's tour"
+                : days === 1 ? "from yesterday's tour"
+                : days <= 14 ? `from the tour ${days} days ago`
+                // Past a fortnight a tour read is a stale opinion, not a
+                // current signal. Still shown, but dated so nobody mistakes
+                // it for fresh.
+                : `from a tour ${days} days ago`;
+    }
+  }
+  return { show: true, label: STANDING_LABEL[standing], qualifier, reason: null };
+}
+
 /**
  * resolveCapturedStanding — the decision the capture service makes, kept
  * HERE rather than inline in the service so it can be exercised directly
@@ -430,4 +562,6 @@ module.exports = {
   resolveTourOutcome, captureLatencyMinutes, normalizeStanding,
   resolveCapturedStanding,
   CAPTURE_STATE, CAPTURE_STATE_LABEL, CAPTURE_STATE_IS_WORK, resolveCaptureState,
+  resolveStandingDisplay, STAGE_RANK,
+  standingOptionsForStage, STANDING_LABEL_BY_STAGE,
 };
