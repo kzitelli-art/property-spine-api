@@ -63,10 +63,16 @@ async function spawnOb(c, o) {
 const agent = require("../src/agent/agent.js")({ pool, anthropic: fakeAnthropic, INGEST_MODEL: "fake", spawnObligationFromEvent: spawnOb, completeObligation: async () => ({}), leasingLifecycle: { maybeReopenOnQualifyingInbound: async () => ({}) }, commBoundary: boundary, leasingBookingService: null });
 
 let srv, base; const track = { persons: [], leads: [] };
+
+// /agent/inbound is operator-gated (2026-07-26) — it used to let anyone write
+// words into a real conversation as a real person. This harness starts its own
+// server below, so it owns the key it sets here.
+const OP_KEY = process.env.OPERATOR_KEY || (process.env.OPERATOR_KEY = "harness-op-key");
+const AGENT_HEADERS = { "content-type": "application/json", "x-operator-key": OP_KEY };
 async function blockReset() { MODE = "defer"; await new Promise(r => setTimeout(r, 1000)); }
 async function inbound(pid, body, smsSid) {
   const ms = smsSid || ("SM" + crypto.randomBytes(10).toString("hex"));
-  const res = await fetch(`${base}/agent/inbound`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ property_id: DEMO, person_id: pid, body, sms_sid: ms, idempotency_key: ms }) });
+  const res = await fetch(`${base}/agent/inbound`, { method: "POST", headers: AGENT_HEADERS, body: JSON.stringify({ property_id: DEMO, person_id: pid, body, sms_sid: ms, idempotency_key: ms }) });
   const j = await res.json().catch(() => ({}));
   await new Promise(r => setTimeout(r, 400));
   return { ms, j };
@@ -132,7 +138,7 @@ async function main() {
       const { pid } = await newProspect("B2 Concurrent");
       MODE = "escalate"; REASON = "confirm unit 214 can be ready for Sunday move-in";
       const ms = "SM" + crypto.randomBytes(10).toString("hex");
-      const fire = () => fetch(`${base}/agent/inbound`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ property_id: DEMO, person_id: pid, body: "can I move in Sunday?", sms_sid: ms, idempotency_key: ms }) }).then(r => r.status);
+      const fire = () => fetch(`${base}/agent/inbound`, { method: "POST", headers: AGENT_HEADERS, body: JSON.stringify({ property_id: DEMO, person_id: pid, body: "can I move in Sunday?", sms_sid: ms, idempotency_key: ms }) }).then(r => r.status);
       const [s1, s2] = await Promise.all([fire(), fire()]);
       await new Promise(r => setTimeout(r, 600));
       const obs = await escOf(pid);

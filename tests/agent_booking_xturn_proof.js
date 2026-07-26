@@ -65,8 +65,14 @@ async function spawnOb(c, o) { const r = await c.query(`insert into obligations 
 const agent = require("../src/agent/agent.js")({ pool, anthropic: fakeAnthropic, INGEST_MODEL: "fake", spawnObligationFromEvent: spawnOb, completeObligation: async () => ({}), leasingLifecycle: { maybeReopenOnQualifyingInbound: async () => ({}) }, commBoundary: boundary, leasingBookingService: leasing._service });
 
 let srv, base; const track = { persons: [], leads: [], slots: [] };
+
+// /agent/inbound is operator-gated (2026-07-26) — it used to let anyone write
+// words into a real conversation as a real person. This harness starts its own
+// server below, so it owns the key it sets here.
+const OP_KEY = process.env.OPERATOR_KEY || (process.env.OPERATOR_KEY = "harness-op-key");
+const AGENT_HEADERS = { "content-type": "application/json", "x-operator-key": OP_KEY };
 async function blockReset() { MODE = "text"; PRESENT_IDS = []; BOOK_ID = null; await new Promise(r => setTimeout(r, 1200)); }
-async function inbound(pid, body) { const ms = "SM" + crypto.randomBytes(10).toString("hex"); const res = await fetch(`${base}/agent/inbound`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ property_id: PROP, person_id: pid, body, sms_sid: ms, idempotency_key: ms }) }); await res.json().catch(() => ({})); await new Promise(r => setTimeout(r, 500)); }
+async function inbound(pid, body) { const ms = "SM" + crypto.randomBytes(10).toString("hex"); const res = await fetch(`${base}/agent/inbound`, { method: "POST", headers: AGENT_HEADERS, body: JSON.stringify({ property_id: PROP, person_id: pid, body, sms_sid: ms, idempotency_key: ms }) }); await res.json().catch(() => ({})); await new Promise(r => setTimeout(r, 500)); }
 async function mkSlot(h) { const id = uuid(); track.slots.push(id); const st = new Date(Date.now() + h * 3600e3), en = new Date(st.getTime() + 30 * 60e3); await pool.query(`insert into tour_availability (id,property_id,starts_at,ends_at,capacity,status) values ($1,$2,$3,$4,1,'open')`, [id, PROP, st.toISOString(), en.toISOString()]); return id; }
 async function newProspect(name) { const pid = uuid(); track.persons.push(pid); await pool.query(`insert into persons (id,name,phone) values ($1,$2,$3)`, [pid, name, "+1555" + Math.floor(1e6 + Math.random() * 8e6)]); const lead = uuid(); track.leads.push(lead); await pool.query(`insert into leasing_leads (id,person_id,property_id,status) values ($1,$2,$3,'new')`, [lead, pid, PROP]);
   // classify internal_qa + opted_in (valid source 'system') so the presenting reply dispatches

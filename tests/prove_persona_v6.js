@@ -44,6 +44,12 @@ async function spawnOb(c, o) {
 const agent = require("../src/agent/agent.js")({ pool, anthropic, INGEST_MODEL: MODEL, spawnObligationFromEvent: spawnOb, completeObligation: async () => ({}), leasingLifecycle: { maybeReopenOnQualifyingInbound: async () => ({}) }, commBoundary: boundary, leasingBookingService: null });
 
 let srv, base; const track = [];
+
+// /agent/inbound is operator-gated (2026-07-26) — it used to let anyone write
+// words into a real conversation as a real person. This harness starts its own
+// server below, so it owns the key it sets here.
+const OP_KEY = process.env.OPERATOR_KEY || (process.env.OPERATOR_KEY = "harness-op-key");
+const AGENT_HEADERS = { "content-type": "application/json", "x-operator-key": OP_KEY };
 async function newProspect(name) {
   const pid = uuid(); track.push(pid);
   await pool.query(`insert into persons (id,name,phone) values ($1,$2,$3)`, [pid, name, "+1555" + Math.floor(1e6 + Math.random() * 8e6)]);
@@ -54,7 +60,7 @@ async function newProspect(name) {
 }
 async function convOf(pid) { return (await pool.query(`select id from conversations where person_id=$1 and property_id=$2`, [pid, DEMO])).rows[0]?.id; }
 async function say(pid, body) {
-  await fetch(`${base}/agent/inbound`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ property_id: DEMO, person_id: pid, body, sms_sid: "SM" + crypto.randomBytes(10).toString("hex") }) });
+  await fetch(`${base}/agent/inbound`, { method: "POST", headers: AGENT_HEADERS, body: JSON.stringify({ property_id: DEMO, person_id: pid, body, sms_sid: "SM" + crypto.randomBytes(10).toString("hex") }) });
   await new Promise(z => setTimeout(z, 1200));
   const conv = await convOf(pid);
   const d = (await pool.query(`select d.generated_body from agent_drafts d join agent_runs r on r.id=d.agent_run_id where r.conversation_id=$1 order by d.created_at desc limit 1`, [conv])).rows[0];
