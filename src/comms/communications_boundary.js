@@ -94,6 +94,65 @@ module.exports = function communicationsBoundary({ pool, sms }) {
     return r.rows.length ? r.rows[0].sms_number : null;
   }
 
+  // ── PROPERTY OPERATING AUTHORITY (094) ─────────────────────────────
+  //  propertyHasCapability — the ONE reader of property_channel_capabilities.
+  //
+  //  Fable ruling 2026-07-25: AGENT_AUTO_DISPATCH_PROPERTY_IDS is an
+  //  acceptable deployment kill switch but is NOT operating authority.
+  //  Authority is a durable, attributed record. This is how it is read.
+  //
+  //  FAIL-CLOSED, and every branch of that matters:
+  //    no row              → false   (never activated)
+  //    status suspended    → false   (paused, deliberately)
+  //    status revoked      → false   (ended, deliberately)
+  //    table absent        → false   (pre-094 database, or rollback)
+  //    query error         → false   (an unreadable authority is no authority)
+  //  Absence is refusal. There is no code path here that returns true
+  //  without an `active` row naming this exact property, channel and
+  //  capability.
+  //
+  //  THE FIVE CAPABILITIES ARE NOT INTERCHANGEABLE. Holding
+  //  send_customer_care_human grants nothing about send_ai_autodispatch or
+  //  send_marketing. Callers must ask for the precise thing they intend to
+  //  do; this function will never widen a grant on their behalf.
+  //
+  //  NOT YET IN THE GATE — see migration 094's DELIBERATE OMISSION note.
+  //  Wiring it into canSendSmsForRecord today would refuse every send at
+  //  the one property that currently works, because no property holds a
+  //  row yet. The AND-clause goes in when a real property is activated by
+  //  a named human. Exported and harness-tested so it cannot rot.
+  const CAPABILITIES = Object.freeze([
+    "receive_inbound",
+    "send_customer_care_human",
+    "send_ai_assisted_approved",
+    "send_ai_autodispatch",
+    "send_marketing",
+  ]);
+
+  async function propertyHasCapability(q, { property_id, capability, channel = "sms" }) {
+    if (!property_id || !capability) return false;
+    // an unknown capability name is a caller bug; refuse rather than guess
+    if (!CAPABILITIES.includes(capability)) {
+      console.error(`propertyHasCapability: unknown capability '${capability}' — refusing.`);
+      return false;
+    }
+    try {
+      const r = await q.query(
+        `select 1 from property_channel_capabilities
+          where property_id = $1::uuid and channel = $2 and capability = $3
+            and status = 'active'
+          limit 1`,
+        [property_id, channel, capability]
+      );
+      return r.rows.length > 0;
+    } catch (e) {
+      // undefined_table (42P01) on a pre-094 database, or anything else:
+      // an authority we cannot read is an authority we do not have.
+      console.error(`propertyHasCapability: refusing (${e.code || "err"}: ${e.message})`);
+      return false;
+    }
+  }
+
   // ── PERSON × PROPERTY CONTEXT RESOLVER ─────────────────────────────
   //  resolvePersonPropertyContext — ONE read/projection over the REAL
   //  distributed relationship sources plus the classification fact.
@@ -711,6 +770,11 @@ module.exports = function communicationsBoundary({ pool, sms }) {
     sendPropertySms,
     // the relationship/classification read
     resolvePersonPropertyContext,
+    // property operating authority (094). The ONE reader of
+    // property_channel_capabilities. Fail-closed: no active row → false.
+    // Not yet an AND-clause in canSendSmsForRecord — see 094's header.
+    propertyHasCapability,
+    CAPABILITIES,
     // governed classification operations
     enrollInternalQa,
     reclassify,
