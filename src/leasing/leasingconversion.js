@@ -938,16 +938,42 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
   }
 
   // coverage authority (v2.4 Corr 3 — owner | role_coverage ONLY; server-derived)
+  //
+  //  AUTHORITY IS NOT A DISPLAY STRING (fixed 2026-07-26).
+  //  This used to match `property_team_assignments.role_title`, which is a
+  //  free-text label an operator types. Live values were "Admin",
+  //  "Demo Leasing Manager", "R3" and "property_manager" — exactly ONE of the
+  //  four ever matched, so the check passed almost by accident. The portfolio
+  //  super-admin, titled "Admin", was refused; a QA account whose label had
+  //  been typed "property_manager" was allowed. Meanwhile the BOARD offered
+  //  Send anyway, because capability.js never consults ownership — a button
+  //  that promises what the server refuses, which is precisely the
+  //  phantom-dispatch failure capability.js exists to prevent.
+  //
+  //  Authority now comes from `users.role`, the structural enum, plus the
+  //  same 'leasing' module entitlement the activation perimeter already
+  //  treats as canonical ("may THIS actor perform THIS action here?").
+  //  Verified against live data before changing: of 13 active leasing-module
+  //  assignments, this takes access from ZERO and restores it to 8.
+  //
+  //  Still required, unchanged: an ACTIVE assignment at THIS property, and
+  //  the leasing module on it. A `leasing_agent` is deliberately not covered.
+  const COVERING_ROLES = ["leasing_manager", "property_manager"];
+
   async function resolveSendActionBasis(client, { actor_user_id, property_id, stored_owner_user_id }) {
     if (!actor_user_id) return { allowed: false, reason: "no_actor" };
     if (stored_owner_user_id && actor_user_id === stored_owner_user_id) {
       return { allowed: true, basis: "owner" };
     }
     const pta = (await client.query(
-      `select role_title, allowed_modules from property_team_assignments
-        where user_id=$1 and property_id=$2 and active=true limit 1`,
+      `select u.role, a.allowed_modules
+         from property_team_assignments a
+         join users u on u.id = a.user_id
+        where a.user_id=$1 and a.property_id=$2 and a.active=true
+          and u.is_active = true and u.status = 'active'
+        limit 1`,
       [actor_user_id, property_id])).rows[0];
-    if (pta && ["leasing_manager","property_manager"].includes(pta.role_title)
+    if (pta && COVERING_ROLES.includes(pta.role)
         && (pta.allowed_modules || []).includes("leasing")) {
       return { allowed: true, basis: "role_coverage" };
     }
