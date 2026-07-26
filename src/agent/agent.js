@@ -1741,10 +1741,35 @@ Reply with ONLY the message text.`;
     }
   }
 
-  // THIN ROUTE: the public door. Delegates to the shared service; both this
-  // route and the SMS webhook (via router._service.processInbound) run the
-  // SAME in-process path — no loopback HTTP boundary.
-  router.post("/agent/inbound", async (req, res) => {
+  // ── THE LAST /agent/ DOOR, NOW CLOSED (2026-07-26) ──────────────────
+  //  This route used to be open. Anyone who could reach the API could name
+  //  a property_id and a person_id and inject a message into a real
+  //  conversation as that person — writing words into a prospect's or a
+  //  resident's history that they never said, and making the agent answer
+  //  them. The reply itself is gated by the communications boundary, so
+  //  nothing reached a phone; the damage was to the record, which is the
+  //  thing this whole system exists to keep straight.
+  //
+  //  It survives because six harnesses drive the agent through real HTTP,
+  //  and that is the only way to exercise cross-turn behaviour honestly.
+  //  So it is gated rather than deleted, with the SAME fail-closed operator
+  //  key every other operator route uses — no key set means locked, not open.
+  //
+  //  REAL INBOUND SMS IS UNAFFECTED. Twilio does not come through here.
+  //  tenantlink owns the webhook and calls router._service.processInbound
+  //  in-process (server.js: getAgentService: () => agentApp._service), so
+  //  there is one code path and no loopback HTTP boundary to authenticate.
+  function requireOperator(req, res, next) {
+    const expected = process.env.OPERATOR_KEY;
+    if (!expected) return res.status(503).json({ receipt: "Operator routes are locked: set OPERATOR_KEY in Render's environment, then send it as the x-operator-key header." });
+    if (req.headers["x-operator-key"] !== expected) return res.status(401).json({ receipt: "Operator key missing or wrong." });
+    next();
+  }
+
+  // THIN ROUTE: the operator/harness door. Delegates to the shared service;
+  // both this route and the SMS webhook (via router._service.processInbound)
+  // run the SAME in-process path — no loopback HTTP boundary.
+  router.post("/agent/inbound", requireOperator, async (req, res) => {
     const out = await processInbound(req.body || {});
     return res.status(out.status).json(out.body);
   });

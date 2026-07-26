@@ -67,7 +67,9 @@ async function fakeComplete(client, { obligation_id }) {
   const port = srv.address().port;
   async function agentInbound(body) {
     const res = await fetch(`http://127.0.0.1:${port}/agent/inbound`, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      // /agent/inbound is operator-gated (2026-07-26). This harness sets
+      // OPERATOR_KEY above for the server it just started.
+      method: "POST", headers: { "content-type": "application/json", "x-operator-key": "night-op-key" }, body: JSON.stringify(body),
     });
     return { status: res.status, json: await res.json() };
   }

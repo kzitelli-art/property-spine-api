@@ -60,6 +60,12 @@ async function spawnOb(c, o) {
 const agent = require("../src/agent/agent.js")({ pool, anthropic: fakeAnthropic, INGEST_MODEL: "fake", spawnObligationFromEvent: spawnOb, completeObligation: async () => ({}), leasingLifecycle: { maybeReopenOnQualifyingInbound: async () => ({}) }, commBoundary: boundary, inventory: inventoryStub, leasingBookingService: null });
 
 let srv, base; const track = [];
+
+// /agent/inbound is operator-gated (2026-07-26) — it used to let anyone write
+// words into a real conversation as a real person. This harness starts its own
+// server below, so it owns the key it sets here.
+const OP_KEY = process.env.OPERATOR_KEY || (process.env.OPERATOR_KEY = "harness-op-key");
+const AGENT_HEADERS = { "content-type": "application/json", "x-operator-key": OP_KEY };
 async function newProspect(name) {
   const pid = uuid(); track.push(pid);
   await pool.query(`insert into persons (id,name,phone) values ($1,$2,$3)`, [pid, name, "+1555" + Math.floor(1e6 + Math.random() * 8e6)]);
@@ -70,7 +76,7 @@ async function newProspect(name) {
 }
 function fireInbound(pid, body, sms) {
   const ms = sms || ("SM" + crypto.randomBytes(10).toString("hex"));
-  return fetch(`${base}/agent/inbound`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ property_id: DEMO, person_id: pid, body, sms_sid: ms, idempotency_key: ms }) }).then(async r => ({ status: r.status, j: await r.json().catch(() => ({})) }));
+  return fetch(`${base}/agent/inbound`, { method: "POST", headers: AGENT_HEADERS, body: JSON.stringify({ property_id: DEMO, person_id: pid, body, sms_sid: ms, idempotency_key: ms }) }).then(async r => ({ status: r.status, j: await r.json().catch(() => ({})) }));
 }
 async function inbound(pid, body, sms) { const r = await fireInbound(pid, body, sms); await new Promise(z => setTimeout(z, 400)); return r; }
 async function convOf(pid) { return (await pool.query(`select id from conversations where person_id=$1 and property_id=$2`, [pid, DEMO])).rows[0]?.id; }

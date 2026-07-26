@@ -84,9 +84,44 @@ function routeTable(router) {
   check(!has("POST", "/agent/thread/regenerate"), "POST /agent/thread/regenerate removed");
   check(!has("GET",  "/agent/thread"),            "GET  /agent/thread removed");
 
-  console.log("\n[2] the door three harnesses depend on SURVIVES");
+  console.log("\n[2] the door the harnesses depend on SURVIVES — but is no longer open");
   check(has("POST", "/agent/inbound"), "POST /agent/inbound still mounted",
         has("POST", "/agent/inbound") ? "not over-deleted" : "OVER-DELETED — harnesses will break");
+
+  // Mounted is not the same as safe. Until 2026-07-26 anyone who could reach
+  // the API could name a property_id and a person_id and inject a message
+  // into a real conversation AS that person — words in a prospect's history
+  // they never said. Drive the real handler and watch it refuse.
+  const inboundRoute = router.stack.find(l => l.route
+    && l.route.path === "/agent/inbound" && l.route.methods.post);
+  const runGate = (headers) => new Promise((resolve) => {
+    const res = {
+      statusCode: null,
+      status(c) { this.statusCode = c; return this; },
+      json(b) { resolve({ status: this.statusCode, body: b }); return this; },
+    };
+    const stack = inboundRoute.route.stack;
+    // Only the gate runs; `next` resolving means it let the request through.
+    stack[0].handle({ headers, get: (h) => headers[String(h).toLowerCase()], body: {} }, res,
+      () => resolve({ status: 200, passed: true }));
+  });
+
+  const savedKey = process.env.OPERATOR_KEY;
+  process.env.OPERATOR_KEY = "proof-key";
+  let g = await runGate({});
+  check(g.status === 401 && !g.passed, "no key → 401, the request never reaches the agent", String(g.status));
+  g = await runGate({ "x-operator-key": "wrong" });
+  check(g.status === 401 && !g.passed, "wrong key → 401", String(g.status));
+  g = await runGate({ "x-operator-key": "proof-key" });
+  check(g.passed === true, "the right key passes the gate", String(g.status));
+
+  // FAIL CLOSED. An unset key must lock the door, not open it — the failure
+  // mode of "no key configured means no check" is how a gate becomes theatre.
+  delete process.env.OPERATOR_KEY;
+  g = await runGate({ "x-operator-key": "anything" });
+  check(g.status === 503 && !g.passed, "OPERATOR_KEY unset → 503 LOCKED, never open", String(g.status));
+  if (savedKey === undefined) delete process.env.OPERATOR_KEY;
+  else process.env.OPERATOR_KEY = savedKey;
 
   console.log("\n[3] the borrowed-identity helper and its fallback are gone");
   const src = fs.readFileSync(SRC, "utf8");
