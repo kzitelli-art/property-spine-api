@@ -24,6 +24,10 @@ module.exports = function maintenance(deps) {
 
   // ── the ONE category derivation, owned by the canonical service ──
   const { deriveCategories } = require("./work_order_service");
+  // BRICK ONE: the ONE session resolver. Required directly, exactly as
+  // operator.js:35 does — not injected, so this adds no new boot-fatal
+  // dependency to the module's wire-up.
+  const staffSessions = require("../identity/staff_session_service");
 
   // ── injected core services (option 1: dependency injection) ──
   const { pool, spawnObligationFromEvent, workOrderService } = deps;
@@ -42,6 +46,70 @@ module.exports = function maintenance(deps) {
       "makeWorkOrderService({ spawnObligationFromEvent }) and inject it)"
     );
   }
+
+  // ════════════════════════════════════════════════════════════════
+  //  THE AUTHORITY SEAM  (§21 server-derived identity and authority)
+  //
+  //    authenticated staff session
+  //      → server-derived property
+  //        → maintenance module entitlement
+  //          → canonical work-order service
+  //
+  //  The browser may REQUEST work. It may not decide which building it acts
+  //  on. Every /operator/work-orders route below takes property_id from the
+  //  SESSION (staff_sessions → property_team_assignments, re-read live on
+  //  every request), never from the body or the query string.
+  //
+  //  This is the seam the older /work-orders routes do not have: those sit
+  //  behind the shared x-operator-key server-to-server gate and accept
+  //  property_id as a parameter, so a single key reads any building. They are
+  //  left in place for dev tooling and the existing callers; this is the path
+  //  a signed-in human uses, and it cannot cross a property boundary.
+  // ════════════════════════════════════════════════════════════════
+
+  //  Session validity + active user + active assignment for the session's
+  //  property are all re-checked here on EVERY request. No cached scope.
+  async function requireOperator(req, res, next) {
+    try {
+      const op = await staffSessions.resolveStaffSession(pool, req.headers["x-staff-session"]);
+      if (!op) return res.status(401).json({ error: "No valid operator session. Sign in." });
+      req.operator = op;
+      next();
+    } catch (e) {
+      return res.status(500).json({ error: "session resolution failed" });
+    }
+  }
+
+  //  allowed_modules is LIVE from the resolver above — no second assignment
+  //  query, so entitlement cannot drift from identity within one request.
+  function requireMaintenanceModuleAccess(req, res, next) {
+    const mods = (req.operator && req.operator.allowed_modules) || [];
+    if (!mods.includes("maintenance")) {
+      return res.status(403).json({
+        error: "maintenance-module access required at this property (property_team_assignments.allowed_modules).",
+      });
+    }
+    return next();
+  }
+
+  //  A client-supplied property_id is never authority (§21). If one is sent
+  //  and it does not match the session's property, REFUSE — do not silently
+  //  substitute the session value. Silently writing to a different building
+  //  than the caller named is a confident wrong: the caller believes it acted
+  //  on property A while the record landed on property B, and nothing says so.
+  function refuseClientProperty(req, res, next) {
+    const claimed =
+      (req.body && req.body.property_id) || (req.query && req.query.property_id) || null;
+    if (claimed && String(claimed) !== String(req.operator.property_id)) {
+      return res.status(403).json({
+        error: "property authority is server-derived; a client-supplied property_id cannot select a different property.",
+        acting_on: req.operator.property_id,
+      });
+    }
+    return next();
+  }
+
+  const operatorGate = [requireOperator, requireMaintenanceModuleAccess, refuseClientProperty];
 
   // ════════════════════════════════════════════════════════════════
   //  THE EMERGENCY LIST (fixed for v1) + manager override
@@ -405,6 +473,72 @@ module.exports = function maintenance(deps) {
       res.status(500).json({ error: e.message });
     } finally {
       client.release();
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════
+  //  OPERATOR WORK ORDERS — the authority-scoped path
+  //
+  //  POST /operator/work-orders   create at the SESSION's property
+  //  GET  /operator/work-orders   read ONLY the session's property
+  //
+  //  Identical business meaning to POST /work-orders — the same canonical
+  //  service, the same category derivation, the same obligation and event.
+  //  The only difference is where property authority comes from. There is no
+  //  second work-order path, only a second door into the one that exists.
+  // ════════════════════════════════════════════════════════════════
+  router.post("/operator/work-orders", ...operatorGate, async (req, res) => {
+    const b = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const { workOrder, event, obligation, deduped } = await workOrderService.createWorkOrder(client, {
+        // ── authority: from the session, never the request ──
+        property_id: req.operator.property_id,
+        // ── everything else is a request, not a claim of authority ──
+        unit_id: b.unit_id, person_id: b.person_id,
+        title: b.title, description: b.description,
+        field_category: b.field_category, unit_state: b.unit_state, cause: b.cause,
+        est_cost: b.est_cost, assigned_to: b.assigned_to,
+        source: "operator",
+        urgency_status: b.is_emergency ? "emergency" : "regular",
+        urgency_basis: b.is_emergency ? "operator marked emergency" : "operator entry",
+        urgency_decided_by: "operator",
+        emergency_type: b.emergency_type,
+        idempotency_key: b.idempotency_key,
+      });
+      await client.query("commit");
+      res.status(201).json({
+        work_order: workOrder, event, obligation, deduped: !!deduped,
+        // The receipt names the building the operator actually acted on, so
+        // server-derived scope is visible rather than merely enforced.
+        acted_on: { property_id: req.operator.property_id, actor: req.operator.name || null },
+      });
+    } catch (e) {
+      try { await client.query("rollback"); } catch (_) {}
+      res.status(e.httpStatus || 500).json({ error: e.message, ...(e.allowed ? { allowed: e.allowed } : {}) });
+    } finally {
+      client.release();
+    }
+  });
+
+  router.get("/operator/work-orders", ...operatorGate, async (req, res) => {
+    const { status, unit_id, is_emergency, needs_pm_review } = req.query;
+    try {
+      // property_id is NOT a filter here — it is the scope, and it is the
+      // session's. A caller cannot widen it, and there is no "all properties".
+      const vals = [req.operator.property_id];
+      const where = ["property_id = $1"];
+      if (status)          { vals.push(status);                    where.push(`status = $${vals.length}`); }
+      if (unit_id)         { vals.push(unit_id);                   where.push(`unit_id = $${vals.length}`); }
+      if (is_emergency)    { vals.push(is_emergency === "true");    where.push(`is_emergency = $${vals.length}`); }
+      if (needs_pm_review) { vals.push(needs_pm_review === "true"); where.push(`needs_pm_review = $${vals.length}`); }
+      const r = await pool.query(
+        "select * from work_orders where " + where.join(" and ") +
+        " order by is_emergency desc, created_at desc", vals);
+      res.json({ property_id: req.operator.property_id, work_orders: r.rows });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
     }
   });
 
