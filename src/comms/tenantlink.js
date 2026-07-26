@@ -72,6 +72,26 @@ const { classifyUrgency } = require("../maintenance/maintenance_urgency.js"); //
 module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService, getAgentService }) {
   const router = express.Router();
 
+  // ── DEPENDENCY ASSERTION (symmetric with maintenance.js) ──────────────
+  //  POST /tenant/maintenance and /tenant/maintenance/:id/add delegate every
+  //  create and every append to the canonical work-order service. This module
+  //  used to accept its absence: server.js never built the service, so
+  //  workOrderService arrived undefined, every resident maintenance request
+  //  threw TypeError inside the route, and the catch answered "Could not open
+  //  your maintenance request." A resident was told the building had failed,
+  //  the building was told nothing, and the API booted perfectly green.
+  //
+  //  Assert at CONSTRUCTION instead. A failed deploy is loud, caught by the
+  //  health check, and leaves the previous version serving. A resident route
+  //  that boots successfully and silently refuses every request is the more
+  //  dangerous failure: nothing anywhere reports it.
+  if (!workOrderService || typeof workOrderService.createWorkOrder !== "function") {
+    throw new Error(
+      "tenantlink module requires workOrderService (build it with " +
+      "makeWorkOrderService({ spawnObligationFromEvent }) in server.js and inject it)"
+    );
+  }
+
   // ── OPERATOR AUTH (fail-closed) ──────────────────────────────────────
   // The moment outbound tenant messaging existed, these routes stopped
   // being data plumbing — they can speak AS the building and read tenant
