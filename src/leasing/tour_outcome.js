@@ -319,7 +319,8 @@ const CAPTURE_STATE_IS_WORK = Object.freeze({
  * Returns { state, label, is_work, reason }.
  */
 function resolveCaptureState({ isTerminal = false, attendance = null, standing = null,
-                               tourEndedAt = null, now = null, graceMinutes = 0 } = {}) {
+                               tourEndedAt = null, occurredAt = null, origin = null,
+                               now = null, graceMinutes = 0 } = {}) {
   const out = (state, reason) => ({
     state, label: CAPTURE_STATE_LABEL[state], is_work: CAPTURE_STATE_IS_WORK[state], reason,
   });
@@ -332,14 +333,26 @@ function resolveCaptureState({ isTerminal = false, attendance = null, standing =
     return out(CAPTURE_STATE.JUDGMENT_OWED, "toured, but where they landed is still owed");
   }
 
-  // NO SLOT -> NO END TIME -> NO HONEST ANSWER. Never silently 'scheduled',
-  // which is what makes it disappear into the calm rows today.
-  if (!tourEndedAt) {
+  // A WALK-IN HAS NO SLOT AND THAT IS NOT A DEFECT. Somebody in the
+  // neighbourhood came in and got toured; there was never a slot to book.
+  // What matters is whether a real time is on record, not where it came
+  // from — so an actual occurrence time (check-in / arrival) is as honest
+  // an end time as a slot's, and is used when the slot has none.
+  //
+  // This is the distinction 097's `origin` column exists for: a walk-in
+  // without a slot is fine, a SCHEDULED tour without one is the defect
+  // that made 21 of 30 tours untimeable. Collapsing them would make the
+  // untrackable diagnosis useless the moment walk-ins start arriving.
+  const effectiveEnd = tourEndedAt || occurredAt || null;
+
+  if (!effectiveEnd) {
     return out(CAPTURE_STATE.UNTRACKABLE,
-      "no slot on this tour, so there is no end time to measure against");
+      origin === "walk_in"
+        ? "walk-in with no recorded arrival time — capture it and the time is set"
+        : "no slot on this tour, so there is no end time to measure against");
   }
 
-  const end = new Date(tourEndedAt).getTime();
+  const end = new Date(effectiveEnd).getTime();
   const nowMs = now ? new Date(now).getTime() : Date.now();
   if (!Number.isFinite(end)) {
     return out(CAPTURE_STATE.UNTRACKABLE, "unreadable end time");
