@@ -2071,26 +2071,49 @@ module.exports = function operatorModule(deps) {
         [leadId, propertyId, b.unit_id || lead.unit_id || null,
          req.operator.id, occurredAt.toISOString()])).rows[0];
 
-      // ── capture through the ONE canonical completion service ─────────
-      const out = await leasingTourService.completeTour(client, {
-        tourId: tour.id,
-        b,                                            // carries the outcome fields
-        recordedByUserId: req.operator.id,            // SERVER-DERIVED
-        enforcePropertyId: propertyId,
-      });
+      // ── the outcome is OPTIONAL here, on purpose ─────────────────────
+      //  Two callers, one capture path:
+      //
+      //  · The Person Card taps "They toured just now" with no outcome. It
+      //    gets a tour row back and opens the SAME capture sheet every other
+      //    tour uses. Creating a half-finished tour is not a compromise —
+      //    "toured, judgment still owed" is an explicitly valid state, and
+      //    it is exactly what a walk-in is in the seconds after it happens.
+      //
+      //  · An API caller that already has the outcome sends it and gets both
+      //    in one transaction.
+      //
+      //  Capturing here unconditionally would mark the tour terminal, and the
+      //  capture sheet would then refuse it as already recorded — forcing a
+      //  SECOND outcome path for walk-ins. One capture path is worth more
+      //  than one round trip.
+      const wantsCapture = !!(b.disposition || b.standing || b.interest_level
+                              || b.tour_given !== undefined || b.feedback);
+      let out = null;
+      if (wantsCapture) {
+        out = await leasingTourService.completeTour(client, {
+          tourId: tour.id,
+          b,
+          recordedByUserId: req.operator.id,            // SERVER-DERIVED
+          enforcePropertyId: propertyId,
+        });
+      }
 
       await client.query("commit");
+      const heads = conflicting.length
+        ? ` Heads up: this person still has ${conflicting.length} scheduled tour(s) on the books. Nothing was cancelled — decide whether they still stand.`
+        : "";
       return res.json({
-        ...out,
+        ...(out || {}),
         walk_in_tour_id: tour.id,
+        tour_id: tour.id,                 // what the capture sheet expects
+        person_id: lead.person_id,
+        captured: !!out,
         occurred_at: occurredAt.toISOString(),
         // Surfaced, NOT acted on. The agent decides whether the booked tour
         // still stands; nothing here cancels it.
         scheduled_tours_still_open: conflicting,
-        receipt: (out && out.receipt ? out.receipt + " " : "")
-          + (conflicting.length
-              ? `Heads up: this person still has ${conflicting.length} scheduled tour(s) on the books. Nothing was cancelled — decide whether they still stand.`
-              : "Walk-in recorded."),
+        receipt: (out && out.receipt ? out.receipt : "Walk-in recorded — now capture how it went.") + heads,
       });
     } catch (e) {
       try { await client.query("rollback"); } catch {}
