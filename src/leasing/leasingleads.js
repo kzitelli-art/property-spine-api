@@ -1840,9 +1840,49 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       // OUTCOME IS RECORDED ONCE. A terminal tour keeps its truth; corrections
       // go through explicit lifecycle actions, never a silent re-submit.
       if (["completed", "no_show", "cancelled", "rescheduled"].includes(tour.status)) {
-        const existing = (await client.query(
-          `select id, current_stage, status from leasing_conversions where origin_tour_id=$1 order by opened_at asc limit 1`, [tourId])).rows[0];
-        throw svcErr(409, { receipt: `Outcome already recorded — this tour is ${tour.status}.`, tour_id: tourId, conversion_id: existing ? existing.id : null });
+        // ── ALREADY CAPTURED. Two very different situations. ────────────
+        //  A REPLAY — the same save arriving twice because the phone lost
+        //  signal, the operator pressed twice, or the request was retried —
+        //  must return the ORIGINAL result and look like success. It was
+        //  successful; the operator has no idea their tap went out twice
+        //  and should never be shown an error for it.
+        //
+        //  A DIFFERENT capture on a settled tour is a correction, which has
+        //  its own deliberate lane (/correct-outcome, which never mutates
+        //  the original). That still refuses — but in words a person can
+        //  act on, not a status code.
+        const prior = (await client.query(
+          `select id, event_at, metadata from tour_events
+            where tour_id=$1 and event_type in ('completed','no_show','cancelled')
+            order by event_at asc limit 1`, [tourId])).rows[0];
+        const priorKey = prior && prior.metadata && prior.metadata.capture_idempotency_key;
+        const incomingKey = (typeof b.idempotency_key === "string" && b.idempotency_key.trim())
+          ? b.idempotency_key.trim() : null;
+
+        // the relationship this tour belongs to — found by PERSON, not by
+        // origin_tour_id, because a second tour reuses the first tour's
+        // conversion and origin_tour_id would miss it entirely.
+        const personRow = tour.lead_id
+          ? (await client.query(`select person_id from leasing_leads where id=$1`, [tour.lead_id])).rows[0]
+          : null;
+        const conv = personRow ? (await client.query(
+          `select id, current_stage, status from leasing_conversions
+            where person_id=$1 and property_id=$2 and status='active' limit 1`,
+          [personRow.person_id, tour.property_id])).rows[0] : null;
+
+        if (incomingKey && priorKey && incomingKey === priorKey) {
+          return {
+            ok: true, replayed: true,
+            tour_id: tourId,
+            conversion_id: conv ? conv.id : null,
+            receipt: "Already saved — nothing changed.",
+          };
+        }
+
+        throw svcErr(409, {
+          receipt: "This tour was already saved. To change what was recorded, use Correct outcome — the original stays on the record.",
+          tour_id: tourId, conversion_id: conv ? conv.id : null,
+        });
       }
 
       // ── attendance truth (the same one-door event write as always) ──
@@ -1886,6 +1926,20 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         future_fit: fb.future_fit || null,                 // close_watch: keep|close
         note: fb.notes || null,
       } : null;
+
+      // ── STANDING (v3) — the ONE judgment only the agent can supply ──────
+      //  Three vocabularies have accumulated here (v1 free text, v2
+      //  disposition+sub_read, v3 the four words). normalizeStanding is the
+      //  single bridge; it resolves what was genuinely captured and REFUSES
+      //  what was not. 'interested' does not become 'hot_lead' because
+      //  somebody wanted a tidier column — that distinction was never
+      //  recorded and inventing it would manufacture a judgment.
+      //  ATTRIBUTION: a standing is only a standing if a human who was there
+      //  supplied it. recordedByUserId is SERVER-DERIVED from the session, so
+      //  a body value can never forge it. The decision itself lives in
+      //  tour_outcome.js — one place, directly testable, not copied here.
+      const TOUT = require("./tour_outcome");
+      const _cap = TOUT.resolveCapturedStanding({ fb, recordedByUserId });
       await recordTourEvent(client, {
         tourId, leadId: tour.lead_id, type: "completed",
         actorType: "human", actorId: recordedByUserId,
@@ -1895,6 +1949,20 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           actual_tour_host_name_claim: actualHostNameClaim,    // #3: free-text only, never dereferenced
           recorded_by_user_id: recordedByUserId,               // #4: SERVER-DERIVED from the session
           outcome: v2outcome,
+          // ── v3 standing, recorded on the immutable event ──────────────
+          //  The event is the record; conversions and the board are
+          //  projections of it. When the standing could NOT be resolved the
+          //  reason is recorded too — an honest blank that explains itself
+          //  beats a silent null nobody can account for later.
+          // the key that made this capture, so a replay of the SAME save can
+          // be recognised as a replay rather than refused as a conflict
+          capture_idempotency_key: (typeof b.idempotency_key === "string" && b.idempotency_key.trim())
+            ? b.idempotency_key.trim().slice(0, 200) : null,
+          standing: _cap.standing,
+          standing_source: _cap.source,
+          standing_unresolved_reason: _cap.unresolved_reason,
+          judged_by: _cap.judged_by,
+          next_move_key: _cap.next_move ? _cap.next_move.key : null,
         },
       });
 
@@ -1942,7 +2010,11 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           // active-eligible roster. It is honored ONLY if eligible (the service
           // re-validates); absent it, ownership falls to eligible actual/scheduled.
           explicit_owner_user_id: (b.follow_up_owner_user_id || null),
-          tour_outcome: (fb.disposition || fb.interest_level) || null,
+          //  Prefer the resolved four-word standing; fall back to the raw
+          //  value when it could not be resolved, so nothing the agent
+          //  supplied is ever silently discarded. New captures get a word
+          //  that routes; legacy shapes keep working untouched.
+          tour_outcome: _cap.tour_outcome_value,
           tour_notes: fb.notes || null,
           // v2: the RECOMMENDATION is the content of the follow-up obligation —
           // never a soft word that can rot unowned. Carried into the rung label.

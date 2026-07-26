@@ -1854,6 +1854,52 @@ module.exports = function operatorModule(deps) {
         order by scheduled_for`,
         [req.operator.property_id, PROPERTY_TZ, GRACE_MINUTES, FROM_OFFSET, TO_OFFSET, INCLUDE_TERMINAL]);
 
+      // ── CAPTURE STATE (v3) — what each tour actually owes ─────────────
+      //  THE DEFECT THIS CLOSES: a tour with phase 'unknown' (no slot, so no
+      //  honest end time) currently falls through every branch of the board's
+      //  issue logic and renders CALM — indistinguishable from a tour that is
+      //  genuinely fine. The server was already honest; the screen quietly
+      //  turned "I cannot tell" into "nothing needed". On this property that
+      //  is 9 of 17 tours.
+      //
+      //  Derived by the ONE resolver in tour_outcome.js, so the board and the
+      //  end-of-day sweep cannot drift into two opinions about the same tour.
+      //  Additive: existing fields are untouched, so no current reader changes
+      //  behaviour. The board renders this once it reads the new field.
+      const _TOUT = require("../leasing/tour_outcome");
+      for (const row of r.rows) {
+        const cs = _TOUT.resolveCaptureState({
+          isTerminal:   !!row.is_terminal,
+          // attendance/standing are not projected onto this read yet; the
+          // terminal flag already covers "outcome recorded". Passing them as
+          // null keeps this honest rather than guessing a half-state.
+          attendance:   null,
+          standing:     null,
+          // already selected by the tours CTE as av.ends_at -> scheduled_end_at.
+          // NULL means no slot, which is exactly the untrackable case.
+          tourEndedAt:  row.scheduled_end_at || null,
+          // A WALK-IN HAS NO SLOT AND THAT IS NOT A DEFECT. Its arrival is
+          // recorded on the tour itself, and that is as honest an end time
+          // as a slot's. Without these two the board called a walk-in
+          // "No time on record" seconds after someone recorded its time —
+          // caught by running the flow live, not by the harness, because
+          // the harness proved the resolver while the READ never fed it.
+          occurredAt:   row.checked_in_at || row.completed_at || null,
+          origin:       row.origin || null,
+          graceMinutes: GRACE_MINUTES,
+        });
+        row.capture_state       = cs.state;
+        row.capture_state_label = cs.label;
+        row.capture_is_work     = cs.is_work;
+        row.capture_state_reason = cs.reason;
+        // surfaced as an issue so a board that reads open_issues can pick it
+        // up without a second rule. Unknown strings are ignored by the
+        // current renderer, so this changes nothing until it is adopted.
+        if (cs.state === _TOUT.CAPTURE_STATE.UNTRACKABLE && Array.isArray(row.open_issues)) {
+          row.open_issues = row.open_issues.concat(["capture_untrackable"]);
+        }
+      }
+
       // The window's real dates, resolved by the DATABASE in the property's
       // timezone — never recomputed in Node, where a second date library
       // would be a second opinion about what day it is.
@@ -1931,6 +1977,213 @@ module.exports = function operatorModule(deps) {
       if (e.http === 422 || e.httpStatus === 422) return res.status(422).json({ receipt: e.message });
       console.error("operator tour complete:", e);
       return res.status(500).json({ receipt: "Could not complete the tour.", error: e.message });
+    } finally { client.release(); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  //  POST /operator/leasing/walk-in-tour — capture a tour that was never
+  //  scheduled.
+  //
+  //  Somebody is in the neighbourhood, walks in, gets toured. That is a
+  //  real tour and until now it could not be recorded at all: the only
+  //  capture door needs a tour row that already exists, and a walk-in has
+  //  none. The Person Card is where an agent is already standing when
+  //  this happens, so this is reachable from a person, not from a board.
+  //
+  //  IT CREATES ITS OWN TOUR ROW. The shortcut — capture the walk-in
+  //  against whatever tour the person already has booked — would falsify
+  //  WHEN it happened, claiming it occurred at tomorrow's slot time.
+  //  "The tour we planned" and "the tour that happened" are two facts.
+  //
+  //  IT NEVER CANCELS THE SCHEDULED ONE. If a future tour exists it is
+  //  RETURNED so the agent can decide, and left completely untouched.
+  //  Both outcomes are real: they came early instead, or they saw the
+  //  lobby today and still want the unit tour tomorrow. Only the human
+  //  who was there knows which, so the system does not guess.
+  //
+  //  CAPTURE IS THE SAME CANONICAL SERVICE. It calls completeTour — the
+  //  identical transaction the board's capture uses. No second outcome
+  //  path, no fork; the walk-in differs only in that the tour row is
+  //  created first, in the same transaction.
+  // ══════════════════════════════════════════════════════════════════
+  router.post("/operator/leasing/walk-in-tour", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!leasingTourService || typeof leasingTourService.completeTour !== "function") {
+      return res.status(503).json({ receipt: "Tour completion is not wired on this deploy (leasingTourService missing)." });
+    }
+    const b = req.body || {};
+    const propertyId = req.operator.property_id;          // SERVER-DERIVED
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+
+      // ── the person, and their lead AT THIS PROPERTY ──────────────────
+      //  A tour hangs off a lead. The property wall is the session's, never
+      //  the body's.
+      let leadId = b.lead_id || null;
+      if (!leadId) {
+        if (!b.person_id) {
+          await client.query("rollback");
+          return res.status(400).json({ receipt: "person_id or lead_id is required." });
+        }
+        const lead = (await client.query(
+          `select id from leasing_leads
+            where person_id=$1 and property_id=$2
+            order by created_at desc limit 1`, [b.person_id, propertyId])).rows[0];
+        if (!lead) {
+          await client.query("rollback");
+          return res.status(409).json({
+            receipt: "That person has no lead at this property yet — intake them through the canonical path first." });
+        }
+        leadId = lead.id;
+      }
+      const lead = (await client.query(
+        `select * from leasing_leads where id=$1 and property_id=$2`, [leadId, propertyId])).rows[0];
+      if (!lead) {
+        await client.query("rollback");
+        return res.status(404).json({ receipt: "No lead with that id at this property." });
+      }
+
+      // ── the time it ACTUALLY happened ────────────────────────────────
+      //  Defaults to now, because the normal case is capturing it while the
+      //  person is still in the lobby. An explicit time is accepted (an
+      //  agent catching up an hour later) but never invented beyond now.
+      const occurredAt = b.occurred_at ? new Date(b.occurred_at) : new Date();
+      if (isNaN(occurredAt.getTime())) {
+        await client.query("rollback");
+        return res.status(400).json({ receipt: "occurred_at is not a readable time." });
+      }
+      if (occurredAt.getTime() > Date.now() + 60000) {
+        await client.query("rollback");
+        return res.status(400).json({ receipt: "A walk-in cannot have happened in the future." });
+      }
+
+      // ══════════════════════════════════════════════════════════════
+      //  IDEMPOTENCY — two guards, because one of them was not enough.
+      //
+      //  Five walk-in rows were created on 2026-07-26 by repeated clicks.
+      //  A disabled button is UX, not a safeguard: double-clicks, retries,
+      //  latency and network replay all still arrive here.
+      //
+      //  GUARD 1 — the caller's key. Same mechanism the slot-booking path
+      //  already uses (mig 079): pre-check, with the unique partial index
+      //  on booking_idempotency_key as the race backstop. A replay returns
+      //  the ORIGINAL row and a 200, not a duplicate and not an error.
+      //
+      //  GUARD 2 — the canonical duplicate guard, which is what would
+      //  actually have stopped those five. The client that made them sent
+      //  no key at all, so a key-only scheme protects nothing when the
+      //  caller forgets. The real-world rule: a person cannot have two
+      //  UNCAPTURED walk-ins at one property. If one is already open,
+      //  clicking again returns it. A second genuine walk-in only makes
+      //  sense once the first has an outcome.
+      // ══════════════════════════════════════════════════════════════
+      const idemKey = (typeof b.idempotency_key === "string" && b.idempotency_key.trim())
+        ? b.idempotency_key.trim().slice(0, 200) : null;
+
+      if (idemKey) {
+        const prior = (await client.query(
+          `select * from leasing_tours where booking_idempotency_key=$1 limit 1`, [idemKey])).rows[0];
+        if (prior) {
+          await client.query("rollback");
+          return res.json({
+            walk_in_tour_id: prior.id, tour_id: prior.id, person_id: lead.person_id,
+            captured: !!prior.completed_at, replayed: true,
+            occurred_at: prior.checked_in_at,
+            scheduled_tours_still_open: [],
+            receipt: "Already recorded — returning the walk-in from the first request.",
+          });
+        }
+      }
+
+      const openWalkIn = (await client.query(
+        `select * from leasing_tours
+          where lead_id=$1 and property_id=$2 and origin='walk_in'
+            and completed_at is null
+            and status not in ('completed','no_show','cancelled','rescheduled')
+          order by checked_in_at desc limit 1`, [leadId, propertyId])).rows[0];
+      if (openWalkIn) {
+        await client.query("rollback");
+        return res.json({
+          walk_in_tour_id: openWalkIn.id, tour_id: openWalkIn.id, person_id: lead.person_id,
+          captured: false, deduped: true,
+          occurred_at: openWalkIn.checked_in_at,
+          scheduled_tours_still_open: [],
+          receipt: "This walk-in is already recorded and still needs its outcome.",
+        });
+      }
+
+      // ── the scheduled tour we are NOT touching ───────────────────────
+      const conflicting = (await client.query(
+        `select t.id, t.scheduled_for, t.status
+           from leasing_tours t
+          where t.lead_id = $1
+            and t.status not in ('completed','no_show','cancelled','rescheduled')
+            and coalesce(t.scheduled_for, t.requested_for) > now()
+          order by coalesce(t.scheduled_for, t.requested_for) asc`, [leadId])).rows;
+
+      // ── the walk-in's own row ────────────────────────────────────────
+      //  origin='walk_in' (097) is what tells the board this tour has no
+      //  slot BY NATURE, not because the booking path was bypassed.
+      //  checked_in_at is the honest arrival: they physically showed.
+      const tour = (await client.query(
+        `insert into leasing_tours
+           (lead_id, property_id, unit_id, leasing_agent_id, scheduled_for,
+            checked_in_at, status, origin, booking_idempotency_key)
+         values ($1,$2,$3,$4,$5,$5,'scheduled','walk_in',$6) returning *`,
+        [leadId, propertyId, b.unit_id || lead.unit_id || null,
+         req.operator.id, occurredAt.toISOString(), idemKey])).rows[0];
+
+      // ── the outcome is OPTIONAL here, on purpose ─────────────────────
+      //  Two callers, one capture path:
+      //
+      //  · The Person Card taps "They toured just now" with no outcome. It
+      //    gets a tour row back and opens the SAME capture sheet every other
+      //    tour uses. Creating a half-finished tour is not a compromise —
+      //    "toured, judgment still owed" is an explicitly valid state, and
+      //    it is exactly what a walk-in is in the seconds after it happens.
+      //
+      //  · An API caller that already has the outcome sends it and gets both
+      //    in one transaction.
+      //
+      //  Capturing here unconditionally would mark the tour terminal, and the
+      //  capture sheet would then refuse it as already recorded — forcing a
+      //  SECOND outcome path for walk-ins. One capture path is worth more
+      //  than one round trip.
+      const wantsCapture = !!(b.disposition || b.standing || b.interest_level
+                              || b.tour_given !== undefined || b.feedback);
+      let out = null;
+      if (wantsCapture) {
+        out = await leasingTourService.completeTour(client, {
+          tourId: tour.id,
+          b,
+          recordedByUserId: req.operator.id,            // SERVER-DERIVED
+          enforcePropertyId: propertyId,
+        });
+      }
+
+      await client.query("commit");
+      const heads = conflicting.length
+        ? ` Heads up: this person still has ${conflicting.length} scheduled tour(s) on the books. Nothing was cancelled — decide whether they still stand.`
+        : "";
+      return res.json({
+        ...(out || {}),
+        walk_in_tour_id: tour.id,
+        tour_id: tour.id,                 // what the capture sheet expects
+        person_id: lead.person_id,
+        captured: !!out,
+        occurred_at: occurredAt.toISOString(),
+        // Surfaced, NOT acted on. The agent decides whether the booked tour
+        // still stands; nothing here cancels it.
+        scheduled_tours_still_open: conflicting,
+        receipt: (out && out.receipt ? out.receipt : "Walk-in recorded — now capture how it went.") + heads,
+      });
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      if (e.svc) return res.status(e.http).json(e.body);
+      if (e.http === 422 || e.httpStatus === 422) return res.status(422).json({ receipt: e.message });
+      console.error("operator walk-in tour:", e);
+      return res.status(500).json({ receipt: "Could not record the walk-in.", error: e.message });
     } finally { client.release(); }
   });
 

@@ -122,11 +122,44 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     });
 
     // Cache latest stage for fast queue reads (conversation rungs only).
+    //
+    //  THE STAGE ONLY EVER ADVANCES. This wrote the new rung unconditionally,
+    //  which meant a SECOND tour for someone already in applicant_followup
+    //  dragged the whole relationship back to tour_followup — the person had
+    //  applied, and the board would have started asking for the tour
+    //  follow-up again. Caught live on Kameron Zitelli's walk-in.
+    //
+    //  A later tour is a real event and deserves its own obligation; it is
+    //  not evidence that the relationship went backwards. Opening a
+    //  tour_followup rung is correct. Re-labelling the RELATIONSHIP as
+    //  tour_followup is not.
+    //
+    //  The ladder is the existing one (see the rung list this module already
+    //  uses for owner reassignment) — no second lifecycle invented. An
+    //  unranked rung is left alone rather than guessed at.
+    //  Guarded IN SQL rather than in JS: the caller hands us a `conversion`
+    //  object that may already be stale by the time several rungs spawn in one
+    //  transaction, and a stale read here would let the regression back in.
+    //  One statement, atomic, no read-then-write window. An unranked rung
+    //  (array_position -> null) advances nothing rather than being guessed at.
     if (cfg.kind === "conversation") {
-      await client.query(
-        `update leasing_conversions set current_stage=$1, updated_at=now() where id=$2`,
-        [rung, conversion.id]
+      const LADDER = ["tour_followup", "applicant_followup", "lease_signature_followup"];
+      const advanced = await client.query(
+        `update leasing_conversions
+            set current_stage=$1, updated_at=now()
+          where id=$2
+            and array_position($3::text[], $1) is not null
+            and coalesce(array_position($3::text[], current_stage), 0)
+                < array_position($3::text[], $1)
+          returning id`,
+        [rung, conversion.id, LADDER]
       );
+      if (!advanced.rows.length) {
+        // Not an advance — still a real touch on the relationship, so the
+        // timestamp moves while the position does not.
+        await client.query(
+          `update leasing_conversions set updated_at=now() where id=$1`, [conversion.id]);
+      }
     }
     return { obligation: ob, link };
   }
@@ -171,26 +204,89 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     }
     if (!person_id || !property_id) throw httpErr(400, "person_id and property_id are required.");
 
-    // actual host becomes the initial conversation owner.
-    const conv = (await client.query(
-      `insert into leasing_conversions
-         (person_id, property_id, origin_tour_id, lead_id,
-          scheduled_tour_host_user_id, actual_tour_host_user_id, feedback_recorded_by_user_id,
-          conversation_owner_user_id, current_stage, status, tour_outcome, tour_notes)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,'tour_followup','active',$9,$10)
-       returning *`,
-      [person_id, property_id, origin_tour_id, lead_id,
-       scheduled_tour_host_user_id, actual_tour_host_user_id, feedback_recorded_by_user_id,
-       actual_tour_host_user_id, tour_outcome, tour_notes]
+    // ══════════════════════════════════════════════════════════════════
+    //  ONE PERSON, ONE ACTIVE RELATIONSHIP, MANY TOURS INSIDE IT.
+    //
+    //  This used to INSERT unconditionally, which meant the second tour for
+    //  the same person hit `leasing_conversions_one_active` and 500'd. The
+    //  constraint was right and the insert was wrong: a tour is an EVENT in
+    //  the relationship; the conversion IS the relationship.
+    //
+    //  So: find the live one first, under a row lock, and reuse it. Never a
+    //  parallel thread, never closing the existing one to make room.
+    //  Owner ruling 2026-07-26.
+    // ══════════════════════════════════════════════════════════════════
+    const existing = (await client.query(
+      `select * from leasing_conversions
+        where person_id=$1 and property_id=$2 and status='active'
+        order by opened_at asc limit 1
+        for update`,
+      [person_id, property_id]
     )).rows[0];
 
+    let conv, reusedExisting = false;
+    if (existing) {
+      reusedExisting = true;
+      //  THE STAGE IS NOT TOUCHED HERE. A later tour must never walk the
+      //  relationship backward — someone already in applicant_followup does
+      //  not return to tour_followup because they came back to see a second
+      //  unit. Advancement is the obligation machinery's job (it ranks
+      //  tour_followup < applicant_followup < lease_signature_followup and
+      //  owns the transitions); this write only records what the tour said.
+      //
+      //  tour_outcome/tour_notes are a projection of the LATEST read. The
+      //  per-tour truth is immutable on tour_events — the history lives
+      //  there, so refreshing the projection loses nothing.
+      conv = (await client.query(
+        `update leasing_conversions
+            set tour_outcome                 = coalesce($2, tour_outcome),
+                tour_notes                   = coalesce($3, tour_notes),
+                actual_tour_host_user_id     = coalesce($4, actual_tour_host_user_id),
+                feedback_recorded_by_user_id = coalesce($5, feedback_recorded_by_user_id),
+                updated_at                   = now()
+          where id=$1
+          returning *`,
+        [existing.id, tour_outcome, tour_notes,
+         actual_tour_host_user_id, feedback_recorded_by_user_id]
+      )).rows[0];
+
+      //  The additional tour is recorded in the handoff history so the
+      //  relationship can say "they toured again, and who gave it" without
+      //  a second conversion existing to say it.
+      await client.query(
+        `insert into leasing_conversation_handoffs
+           (conversion_id, from_user_id, to_user_id, by_user_id, kind, reason)
+         values ($1, null, $2, $3, 'origin', 'gave an additional tour in this relationship')`,
+        [conv.id, actual_tour_host_user_id, feedback_recorded_by_user_id || actual_tour_host_user_id]
+      );
+    } else {
+      // First tour in this relationship — open the rail. actual host becomes
+      // the initial conversation owner.
+      conv = (await client.query(
+        `insert into leasing_conversions
+           (person_id, property_id, origin_tour_id, lead_id,
+            scheduled_tour_host_user_id, actual_tour_host_user_id, feedback_recorded_by_user_id,
+            conversation_owner_user_id, current_stage, status, tour_outcome, tour_notes)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,'tour_followup','active',$9,$10)
+         returning *`,
+        [person_id, property_id, origin_tour_id, lead_id,
+         scheduled_tour_host_user_id, actual_tour_host_user_id, feedback_recorded_by_user_id,
+         actual_tour_host_user_id, tour_outcome, tour_notes]
+      )).rows[0];
+    }
+
     // origin row in the handoff history: "toured by X" (from = null).
-    await client.query(
-      `insert into leasing_conversation_handoffs
-         (conversion_id, from_user_id, to_user_id, by_user_id, kind, reason)
-       values ($1, null, $2, $3, 'origin', 'gave the completed tour')`,
-      [conv.id, actual_tour_host_user_id, feedback_recorded_by_user_id || actual_tour_host_user_id]
-    );
+    // ONLY on the first tour. The reuse branch above already wrote its own
+    // handoff naming the additional tour; writing both would claim the
+    // relationship originated twice.
+    if (!reusedExisting) {
+      await client.query(
+        `insert into leasing_conversation_handoffs
+           (conversion_id, from_user_id, to_user_id, by_user_id, kind, reason)
+         values ($1, null, $2, $3, 'origin', 'gave the completed tour')`,
+        [conv.id, actual_tour_host_user_id, feedback_recorded_by_user_id || actual_tour_host_user_id]
+      );
+    }
 
     const REC_LABEL = {
       send_application: "send the application", send_terms: "send terms",
