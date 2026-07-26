@@ -1244,7 +1244,30 @@ module.exports = function operatorModule(deps) {
              or exists (select 1 from person_attributes where person_id=$1 and property_id=$2)
              -- R3: a conversion IS presence — the card projects task events for
              -- conversion-driven people, so the wall must recognize them.
-             or exists (select 1 from leasing_conversions where person_id=$1 and property_id=$2)`,
+             or exists (select 1 from leasing_conversions where person_id=$1 and property_id=$2)
+             -- A LEASE IS PRESENCE (owner ruling, 2026-07-25). The card is
+             -- Person × Property, and a lease is the strongest possible
+             -- statement that a person has a relationship with a property.
+             -- Before this clause the wall tested leads/conversations/attrs/
+             -- conversions but NEVER leases, so 621 of 623 active-lease
+             -- residents got "person not found" — a bug that failed closed,
+             -- not a privacy control.
+             --   · Scoped to THIS property. Never portfolio-wide — that would
+             --     collide with the locked cross-deal rule.
+             --   · No lease_status filter, deliberately: 'active', 'pending'
+             --     and 'commercial' all evidence presence here, and a future
+             --     historical status must not silently drop a person off the
+             --     card. (relationship_stage.js still refuses to LABEL
+             --     former_resident — presence and stage are different jobs.)
+             --   · A PRESENCE test, not an entitlement. Which projection a
+             --     given viewer gets is a separate question and stays open.
+             -- $1/$2 are cast explicitly: every other use here is uuid, so the
+             -- inference stays uuid (see relationship_stage.js:52 for the
+             -- 42883 trap when a bare $1 meets a cast $1).
+             or exists (select 1 from leases
+                         where property_id = $2::uuid
+                           and tenant_ids is not null
+                           and tenant_ids @> array[$1::uuid])`,
         [personId, propertyId])).rows[0];
       if (!presence) return res.status(404).json({ error: "person not found" }); // no presence here → the name does not leak across the wall
 
