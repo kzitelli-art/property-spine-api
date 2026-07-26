@@ -171,26 +171,89 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     }
     if (!person_id || !property_id) throw httpErr(400, "person_id and property_id are required.");
 
-    // actual host becomes the initial conversation owner.
-    const conv = (await client.query(
-      `insert into leasing_conversions
-         (person_id, property_id, origin_tour_id, lead_id,
-          scheduled_tour_host_user_id, actual_tour_host_user_id, feedback_recorded_by_user_id,
-          conversation_owner_user_id, current_stage, status, tour_outcome, tour_notes)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,'tour_followup','active',$9,$10)
-       returning *`,
-      [person_id, property_id, origin_tour_id, lead_id,
-       scheduled_tour_host_user_id, actual_tour_host_user_id, feedback_recorded_by_user_id,
-       actual_tour_host_user_id, tour_outcome, tour_notes]
+    // ══════════════════════════════════════════════════════════════════
+    //  ONE PERSON, ONE ACTIVE RELATIONSHIP, MANY TOURS INSIDE IT.
+    //
+    //  This used to INSERT unconditionally, which meant the second tour for
+    //  the same person hit `leasing_conversions_one_active` and 500'd. The
+    //  constraint was right and the insert was wrong: a tour is an EVENT in
+    //  the relationship; the conversion IS the relationship.
+    //
+    //  So: find the live one first, under a row lock, and reuse it. Never a
+    //  parallel thread, never closing the existing one to make room.
+    //  Owner ruling 2026-07-26.
+    // ══════════════════════════════════════════════════════════════════
+    const existing = (await client.query(
+      `select * from leasing_conversions
+        where person_id=$1 and property_id=$2 and status='active'
+        order by opened_at asc limit 1
+        for update`,
+      [person_id, property_id]
     )).rows[0];
 
+    let conv, reusedExisting = false;
+    if (existing) {
+      reusedExisting = true;
+      //  THE STAGE IS NOT TOUCHED HERE. A later tour must never walk the
+      //  relationship backward — someone already in applicant_followup does
+      //  not return to tour_followup because they came back to see a second
+      //  unit. Advancement is the obligation machinery's job (it ranks
+      //  tour_followup < applicant_followup < lease_signature_followup and
+      //  owns the transitions); this write only records what the tour said.
+      //
+      //  tour_outcome/tour_notes are a projection of the LATEST read. The
+      //  per-tour truth is immutable on tour_events — the history lives
+      //  there, so refreshing the projection loses nothing.
+      conv = (await client.query(
+        `update leasing_conversions
+            set tour_outcome                 = coalesce($2, tour_outcome),
+                tour_notes                   = coalesce($3, tour_notes),
+                actual_tour_host_user_id     = coalesce($4, actual_tour_host_user_id),
+                feedback_recorded_by_user_id = coalesce($5, feedback_recorded_by_user_id),
+                updated_at                   = now()
+          where id=$1
+          returning *`,
+        [existing.id, tour_outcome, tour_notes,
+         actual_tour_host_user_id, feedback_recorded_by_user_id]
+      )).rows[0];
+
+      //  The additional tour is recorded in the handoff history so the
+      //  relationship can say "they toured again, and who gave it" without
+      //  a second conversion existing to say it.
+      await client.query(
+        `insert into leasing_conversation_handoffs
+           (conversion_id, from_user_id, to_user_id, by_user_id, kind, reason)
+         values ($1, null, $2, $3, 'origin', 'gave an additional tour in this relationship')`,
+        [conv.id, actual_tour_host_user_id, feedback_recorded_by_user_id || actual_tour_host_user_id]
+      );
+    } else {
+      // First tour in this relationship — open the rail. actual host becomes
+      // the initial conversation owner.
+      conv = (await client.query(
+        `insert into leasing_conversions
+           (person_id, property_id, origin_tour_id, lead_id,
+            scheduled_tour_host_user_id, actual_tour_host_user_id, feedback_recorded_by_user_id,
+            conversation_owner_user_id, current_stage, status, tour_outcome, tour_notes)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,'tour_followup','active',$9,$10)
+         returning *`,
+        [person_id, property_id, origin_tour_id, lead_id,
+         scheduled_tour_host_user_id, actual_tour_host_user_id, feedback_recorded_by_user_id,
+         actual_tour_host_user_id, tour_outcome, tour_notes]
+      )).rows[0];
+    }
+
     // origin row in the handoff history: "toured by X" (from = null).
-    await client.query(
-      `insert into leasing_conversation_handoffs
-         (conversion_id, from_user_id, to_user_id, by_user_id, kind, reason)
-       values ($1, null, $2, $3, 'origin', 'gave the completed tour')`,
-      [conv.id, actual_tour_host_user_id, feedback_recorded_by_user_id || actual_tour_host_user_id]
-    );
+    // ONLY on the first tour. The reuse branch above already wrote its own
+    // handoff naming the additional tour; writing both would claim the
+    // relationship originated twice.
+    if (!reusedExisting) {
+      await client.query(
+        `insert into leasing_conversation_handoffs
+           (conversion_id, from_user_id, to_user_id, by_user_id, kind, reason)
+         values ($1, null, $2, $3, 'origin', 'gave the completed tour')`,
+        [conv.id, actual_tour_host_user_id, feedback_recorded_by_user_id || actual_tour_host_user_id]
+      );
+    }
 
     const REC_LABEL = {
       send_application: "send the application", send_terms: "send terms",
