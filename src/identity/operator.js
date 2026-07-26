@@ -1854,6 +1854,44 @@ module.exports = function operatorModule(deps) {
         order by scheduled_for`,
         [req.operator.property_id, PROPERTY_TZ, GRACE_MINUTES, FROM_OFFSET, TO_OFFSET, INCLUDE_TERMINAL]);
 
+      // ── CAPTURE STATE (v3) — what each tour actually owes ─────────────
+      //  THE DEFECT THIS CLOSES: a tour with phase 'unknown' (no slot, so no
+      //  honest end time) currently falls through every branch of the board's
+      //  issue logic and renders CALM — indistinguishable from a tour that is
+      //  genuinely fine. The server was already honest; the screen quietly
+      //  turned "I cannot tell" into "nothing needed". On this property that
+      //  is 9 of 17 tours.
+      //
+      //  Derived by the ONE resolver in tour_outcome.js, so the board and the
+      //  end-of-day sweep cannot drift into two opinions about the same tour.
+      //  Additive: existing fields are untouched, so no current reader changes
+      //  behaviour. The board renders this once it reads the new field.
+      const _TOUT = require("../leasing/tour_outcome");
+      for (const row of r.rows) {
+        const cs = _TOUT.resolveCaptureState({
+          isTerminal:   !!row.is_terminal,
+          // attendance/standing are not projected onto this read yet; the
+          // terminal flag already covers "outcome recorded". Passing them as
+          // null keeps this honest rather than guessing a half-state.
+          attendance:   null,
+          standing:     null,
+          // already selected by the tours CTE as av.ends_at -> scheduled_end_at.
+          // NULL means no slot, which is exactly the untrackable case.
+          tourEndedAt:  row.scheduled_end_at || null,
+          graceMinutes: GRACE_MINUTES,
+        });
+        row.capture_state       = cs.state;
+        row.capture_state_label = cs.label;
+        row.capture_is_work     = cs.is_work;
+        row.capture_state_reason = cs.reason;
+        // surfaced as an issue so a board that reads open_issues can pick it
+        // up without a second rule. Unknown strings are ignored by the
+        // current renderer, so this changes nothing until it is adopted.
+        if (cs.state === _TOUT.CAPTURE_STATE.UNTRACKABLE && Array.isArray(row.open_issues)) {
+          row.open_issues = row.open_issues.concat(["capture_untrackable"]);
+        }
+      }
+
       // The window's real dates, resolved by the DATABASE in the property's
       // timezone — never recomputed in Node, where a second date library
       // would be a second opinion about what day it is.

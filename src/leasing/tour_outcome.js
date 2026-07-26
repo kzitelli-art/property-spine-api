@@ -264,6 +264,92 @@ function normalizeStanding({ standing = null, disposition = null,
   return unresolved("nothing to normalize", null);
 }
 
+// ── CAPTURE STATE — what the board owes, per tour ────────────────────
+//  The desk and the end-of-day sweep must agree about what a tour needs.
+//  Two surfaces deriving that separately is how they drift, so it is
+//  derived once, here.
+//
+//  THE DEFECT THIS EXISTS TO FIX: today a tour whose phase is 'unknown'
+//  (no slot, so no honest end time) falls through every branch of the
+//  board's issue logic and renders CALM — identical to a tour that is
+//  genuinely fine. The server is honest ('unknown'); the screen quietly
+//  translates that into "nothing needed". Until this morning that was 21
+//  of 30 tours: a whole board of tours the system could not reason about,
+//  all showing as healthy.
+//
+//  A tour nobody captured and a tour that went averagely are different
+//  facts. UNTRACKABLE is its own state and says so.
+const CAPTURE_STATE = Object.freeze({
+  SETTLED:      "settled",        // outcome recorded — asks for nothing
+  JUDGMENT_OWED:"judgment_owed",  // attendance in, standing still missing
+  OVERDUE:      "overdue",        // tour ended + grace, nothing captured
+  SCHEDULED:    "scheduled",      // future tour, nothing owed yet
+  UNTRACKABLE:  "untrackable",    // no slot -> no end time -> cannot tell
+});
+
+const CAPTURE_STATE_LABEL = Object.freeze({
+  [CAPTURE_STATE.SETTLED]:       "Captured",
+  [CAPTURE_STATE.JUDGMENT_OWED]: "Needs your read",
+  [CAPTURE_STATE.OVERDUE]:       "Outcome needed",
+  [CAPTURE_STATE.SCHEDULED]:     "Scheduled",
+  [CAPTURE_STATE.UNTRACKABLE]:   "No time on record",
+});
+
+//  Whether the board should show this as WORK. 'untrackable' counts:
+//  it is not calm, it is unknown, and unknown is a thing to fix.
+const CAPTURE_STATE_IS_WORK = Object.freeze({
+  [CAPTURE_STATE.SETTLED]:       false,
+  [CAPTURE_STATE.JUDGMENT_OWED]: true,
+  [CAPTURE_STATE.OVERDUE]:       true,
+  [CAPTURE_STATE.SCHEDULED]:     false,
+  [CAPTURE_STATE.UNTRACKABLE]:   true,
+});
+
+/**
+ * resolveCaptureState — what this tour owes the board, right now.
+ *
+ *   isTerminal    the outcome is already recorded
+ *   attendance    what was captured so far (null if nothing)
+ *   standing      the agent's judgment (null if still owed)
+ *   tourEndedAt   the SLOT's end time. null means no slot, which means
+ *                 there is no honest end time and therefore no honest
+ *                 answer to "is this overdue?"
+ *   now / graceMinutes
+ *
+ * Returns { state, label, is_work, reason }.
+ */
+function resolveCaptureState({ isTerminal = false, attendance = null, standing = null,
+                               tourEndedAt = null, now = null, graceMinutes = 0 } = {}) {
+  const out = (state, reason) => ({
+    state, label: CAPTURE_STATE_LABEL[state], is_work: CAPTURE_STATE_IS_WORK[state], reason,
+  });
+
+  if (isTerminal) return out(CAPTURE_STATE.SETTLED, "outcome already recorded");
+
+  // Attendance captured, judgment still owed. Real, common, and the whole
+  // reason a busy day needs chasing — it is not calm and not overdue.
+  if (attendance && ATTENDANCE_HAS_STANDING[attendance] && standing == null) {
+    return out(CAPTURE_STATE.JUDGMENT_OWED, "toured, but where they landed is still owed");
+  }
+
+  // NO SLOT -> NO END TIME -> NO HONEST ANSWER. Never silently 'scheduled',
+  // which is what makes it disappear into the calm rows today.
+  if (!tourEndedAt) {
+    return out(CAPTURE_STATE.UNTRACKABLE,
+      "no slot on this tour, so there is no end time to measure against");
+  }
+
+  const end = new Date(tourEndedAt).getTime();
+  const nowMs = now ? new Date(now).getTime() : Date.now();
+  if (!Number.isFinite(end)) {
+    return out(CAPTURE_STATE.UNTRACKABLE, "unreadable end time");
+  }
+  if (nowMs > end + graceMinutes * 60000) {
+    return out(CAPTURE_STATE.OVERDUE, "the tour has ended and nothing was captured");
+  }
+  return out(CAPTURE_STATE.SCHEDULED, "not yet due");
+}
+
 /**
  * resolveCapturedStanding — the decision the capture service makes, kept
  * HERE rather than inline in the service so it can be exercised directly
@@ -330,4 +416,5 @@ module.exports = {
   JUDGED_BY, NEXT_MOVE, ATTENDANCE_NEXT_MOVE,
   resolveTourOutcome, captureLatencyMinutes, normalizeStanding,
   resolveCapturedStanding,
+  CAPTURE_STATE, CAPTURE_STATE_LABEL, CAPTURE_STATE_IS_WORK, resolveCaptureState,
 };

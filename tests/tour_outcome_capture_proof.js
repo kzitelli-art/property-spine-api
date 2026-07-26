@@ -231,6 +231,65 @@ async function mustReject(client, label, sql, params) {
   catch (e) { svcErrMsg = e.message; }
   check(svcOk, "leasingleads.js resolves tour_outcome.js", svcOk ? "require graph intact" : svcErrMsg);
 
+  // ── [7e] CAPTURE STATE — the calm-tour defect ─────────────────────
+  console.log("\n[7e] an uncaptured tour must not read as calm");
+  const NOW = "2026-07-28T18:00:00Z";
+  const states = [
+    { name: "settled",                       a: { isTerminal: true } },
+    { name: "toured, judgment owed",         a: { attendance: "toured", standing: null, tourEndedAt: "2026-07-28T14:00:00Z", now: NOW } },
+    { name: "ended, nothing captured",       a: { tourEndedAt: "2026-07-28T14:00:00Z", now: NOW, graceMinutes: 30 } },
+    { name: "future tour",                   a: { tourEndedAt: "2026-07-29T14:00:00Z", now: NOW } },
+    { name: "NO SLOT (the 21-of-30 case)",   a: { tourEndedAt: null, now: NOW } },
+  ];
+  console.table(states.map(s => {
+    const r = TO.resolveCaptureState(s.a);
+    return { case: s.name, state: r.state, shown_as: r.label, is_work: r.is_work, reason: r.reason.slice(0, 46) };
+  }));
+
+  const noSlot = TO.resolveCaptureState({ tourEndedAt: null, now: NOW });
+  check(noSlot.state === TO.CAPTURE_STATE.UNTRACKABLE,
+        "a tour with no slot resolves to UNTRACKABLE, not scheduled",
+        "this is the state that currently renders as calm");
+  check(noSlot.is_work === true,
+        "and it counts as WORK — unknown is a thing to fix, not to ignore",
+        "the defect: today it falls through every branch and shows healthy");
+
+  const owed = TO.resolveCaptureState({ attendance: "toured", standing: null,
+                                        tourEndedAt: "2026-07-28T14:00:00Z", now: NOW });
+  check(owed.state === TO.CAPTURE_STATE.JUDGMENT_OWED && owed.is_work === true,
+        "'toured, judgment owed' is its own state", "not calm, not overdue — the busy-day state");
+
+  const overdue = TO.resolveCaptureState({ tourEndedAt: "2026-07-28T14:00:00Z", now: NOW, graceMinutes: 30 });
+  check(overdue.state === TO.CAPTURE_STATE.OVERDUE, "an ended, uncaptured tour is overdue");
+  check(TO.resolveCaptureState({ tourEndedAt: "2026-07-29T14:00:00Z", now: NOW }).is_work === false,
+        "a future tour asks for nothing");
+  check(TO.resolveCaptureState({ isTerminal: true }).is_work === false,
+        "a settled tour asks for nothing");
+
+  //  the grace window must actually bind, not be decorative
+  const insideGrace = TO.resolveCaptureState({
+    tourEndedAt: "2026-07-28T17:50:00Z", now: NOW, graceMinutes: 30 });
+  check(insideGrace.state === TO.CAPTURE_STATE.SCHEDULED,
+        "inside the grace window it is NOT yet overdue", "10 min after end, 30 min grace");
+
+  // ── against the REAL board: how many tours currently read as calm? ──
+  const board = (await pool.query(
+    `select t.id, t.status, av.ends_at,
+            (t.status in ('completed','no_show','cancelled','rescheduled')) as is_terminal
+       from leasing_tours t
+       left join tour_availability av on av.id = t.slot_id
+      where t.property_id = 'a50fbdd0-3642-431e-b532-0dcd6ab8a4fe'`)).rows;
+  const tally = {};
+  for (const t of board) {
+    const r = TO.resolveCaptureState({ isTerminal: t.is_terminal, tourEndedAt: t.ends_at, graceMinutes: 30 });
+    tally[r.state] = (tally[r.state] || 0) + 1;
+  }
+  console.log("\n     the real board, by capture state:");
+  console.table(Object.entries(tally).map(([state, n]) => ({ state, tours: n })));
+  check((tally[TO.CAPTURE_STATE.UNTRACKABLE] || 0) > 0,
+        `${tally[TO.CAPTURE_STATE.UNTRACKABLE] || 0} real tours are UNTRACKABLE`,
+        "every one of them renders as calm on the board today");
+
   // ── [8] the ask record binds ──────────────────────────────────────
   console.log("\n[8] tour_outcome_prompts — the CHECKs actually reject");
   const tour = (await pool.query(`select id from leasing_tours order by created_at desc limit 1`)).rows[0];
