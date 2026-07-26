@@ -53,6 +53,7 @@ const OPERATOR_KEY = process.env.OPERATOR_KEY || "";
 const INTAKE_SECRET = process.env.LEASING_INTAKE_SECRET || "";
 const QA_ACTOR = process.env.ARC_ACTOR_USER_ID || "e9a7659f-ee1a-4bde-9e0c-02c6632ff066";
 const SEND_MODE = (process.env.ARC_SEND || "provider").toLowerCase(); // provider | prepare
+const RESUME = process.env.ARC_RESUME_CONVERSION || "";               // pick up the back half
 const RENT = Number(process.env.ARC_RENT || 1850);
 
 const H = {
@@ -90,6 +91,43 @@ function announce(label) { step++; console.log(`\n[${step}] ${label}`); }
   console.log(`property=${PROPERTY_ID}`);
   console.log(`prospect="${NAME}"  phone=${PHONE || "(unset)"}`);
   console.log(`send mode=${SEND_MODE}\n── preflight ──`);
+
+  // ══ RESUME ════════════════════════════════════════════════════════
+  //  A real applicant submitted the form on their own phone. Pick up the
+  //  back half from the conversion, deriving everything from the record
+  //  rather than re-asking for it.
+  if (RESUME) {
+    if (!process.env.DATABASE_URL || !STAFF_SESSION) {
+      console.error("\n✗ resume needs DATABASE_URL and STAFF_SESSION."); await pool.end(); process.exit(1);
+    }
+    const app = (await pool.query(
+      `select la.id, la.status, la.person_id, la.unit_id, la.applicant_name,
+              s.id space_id, u.unit_number
+         from lease_applications la
+         left join units u on u.id = la.unit_id
+         left join spaces s on s.unit_id = u.id
+        where la.conversion_id = $1
+          and la.status not in ('denied','declined','withdrawn')
+        order by la.created_at desc limit 1`, [RESUME])).rows[0];
+    if (!app) {
+      console.error(`\n✗ No live application on conversion ${RESUME} yet.`);
+      console.error(`  The applicant has not submitted the form. Nothing to resume.`);
+      await pool.end(); process.exit(1);
+    }
+    console.log(`  resuming conversion ${RESUME}`);
+    console.log(`  application ${app.id}  status=${app.status}  applicant="${app.applicant_name}"`);
+    console.log(`  unit ${app.unit_number}  space=${app.space_id}\n`);
+    if (!app.space_id) {
+      console.error("✗ the application has no resolvable space — executed-lease intake requires premises.");
+      await pool.end(); process.exit(1);
+    }
+    await backHalf({
+      application_id: app.id, space_id: app.space_id, unit_number: app.unit_number,
+      person_id: app.person_id, applicant_name: app.applicant_name || NAME,
+    });
+    await pool.end();
+    return;
+  }
 
   const missing = [];
   if (!process.env.DATABASE_URL) missing.push("DATABASE_URL");
@@ -202,9 +240,28 @@ function announce(label) { step++; console.log(`\n[${step}] ${label}`); }
   });
   if (!good(sent)) halt("send application", sent,
     "403 owner/covering role = STAFF_SESSION's role_title is not literally 'leasing_manager'/'property_manager'.");
+  console.log(`  ✓ invitation=${sent.json.invitation_id}`);
+  if (sent.json.link) console.log(`    link: ${sent.json.link}`);
+
+  // The PROVIDER SEND route returns no raw token — by design. The token is
+  // hashed at rest and exists in clear only inside the message that was sent.
+  // So in provider mode the arc CANNOT submit on the applicant's behalf, and
+  // should not want to: a real person is holding the link. Stop here and wait.
+  if (SEND_MODE === "provider") {
+    console.log(`\n═══ HANDED OFF TO THE APPLICANT ═══`);
+    console.log(`  A real text has been dispatched. The arc does not fill in the form —`);
+    console.log(`  the person holding the phone does.`);
+    console.log(`\n  conversion:   ${conversion_id}`);
+    console.log(`  person:       ${person_id}`);
+    console.log(`  unit/space:   ${unit.unit_number} / ${unit.space_id}`);
+    console.log(`\n  When they have submitted, resume the back half with:`);
+    console.log(`    ARC_RESUME_CONVERSION=${conversion_id} node tests/full_lifecycle_arc.js`);
+    console.log(`\n  (If the link is needed again it is recoverable from comm_events.body —`);
+    console.log(`   the invitation row stores only a digest.)`);
+    await pool.end();
+    return;
+  }
   const token = sent.json.token;
-  console.log(`  ✓ invitation=${sent.json.invitation_id}  status=${sent.json.dispatch_status || "(see receipt)"}`);
-  console.log(`    link: ${sent.json.link || `${API}/t/application/${token}`}`);
 
   // ══ 7 · THE PROSPECT FILLS IT IN ══════════════════════════════════
   announce("apply → POST /applications/submit-public  (public; no operator auth)");
@@ -232,6 +289,18 @@ function announce(label) { step++; console.log(`\n[${step}] ${label}`); }
   const application_id = submitJson.application_id || submitJson.id;
   console.log(`  ✓ application=${application_id}  status=${submitJson.status || "(submitted)"}`);
 
+  await backHalf({ application_id, space_id: unit.space_id, unit_number: unit.unit_number,
+                   person_id, applicant_name: NAME });
+  await pool.end();
+  return;
+
+  // ══ THE BACK HALF ═════════════════════════════════════════════════
+  //  Declared here, hoisted, and called from BOTH paths: the full run
+  //  above, and the resume path for when a real applicant submitted the
+  //  form themselves. Provider mode cannot self-submit — the raw token
+  //  only exists inside the message that was sent — so resuming is the
+  //  normal way this finishes, not an error recovery.
+  async function backHalf({ application_id, space_id, unit_number, person_id, applicant_name }) {
   // ══ 8 · APPROVE ═══════════════════════════════════════════════════
   announce("approve → POST /operator/leasing/applications/:id/approve");
   const approve = await call("POST", `/operator/leasing/applications/${application_id}/approve`, {
@@ -253,7 +322,7 @@ function announce(label) { step++; console.log(`\n[${step}] ${label}`); }
   // ══ 10 · THE EXECUTED LEASE ═══════════════════════════════════════
   announce("executed lease → POST /operator/leasing/applications/:id/executed-lease/verify");
   const verify = await call("POST", `/operator/leasing/applications/${application_id}/executed-lease/verify`, {
-    space_id: unit.space_id, rent: RENT, security_deposit: RENT,
+    space_id, rent: RENT, security_deposit: RENT,
     lease_start_date: "2026-09-01", lease_end_date: "2027-08-31",
     concession_status: "none",
     document_reference: "full lifecycle arc — executed lease",
@@ -262,7 +331,7 @@ function announce(label) { step++; console.log(`\n[${step}] ${label}`); }
     executed_at: new Date().toISOString(),
     effective_date: "2026-09-01",
     execution_channel: "paper",
-    signers: [{ name: NAME, capacity: "resident" }, { name: "Property Spine", capacity: "landlord_agent" }],
+    signers: [{ name: applicant_name, capacity: "resident" }, { name: "Property Spine", capacity: "landlord_agent" }],
     idempotency_key: `arc-exec-${application_id}`,
   });
   if (!good(verify)) halt("executed lease verify", verify);
@@ -292,12 +361,12 @@ function announce(label) { step++; console.log(`\n[${step}] ${label}`); }
   console.log(`  status       ${lease.lease_status}   ${String(lease.start_date).slice(0,10)} → ${String(lease.end_date).slice(0,10)}   $${lease.rent}`);
   console.log(`  tenant       ${tenants.length ? tenants.join(", ") : "NONE — investigate"}`);
   console.log(`  application  ${application_id}  status=${app.status}`);
-  console.log(`  person       ${person_id}   "${NAME}"   ${PHONE}`);
-  console.log(`  unit         ${unit.unit_number}  space=${unit.space_id}`);
+  console.log(`  person       ${person_id}   "${applicant_name}"`);
+  console.log(`  unit         ${unit_number}  space=${space_id}`);
   console.log(`\n  inquiry → tour → application → lease, every step through a canonical door.`);
   if (!tenants.includes(person_id)) {
     console.error(`\n  ⚠ the lease does not list this person as a tenant — that is a real defect, not a pass.`);
     process.exitCode = 1;
   }
-  await pool.end();
+  }
 })().catch((e) => { console.error("\n✗ UNCAUGHT:", e.message); process.exit(1); });
