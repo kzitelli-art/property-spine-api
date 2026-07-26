@@ -291,6 +291,22 @@ async function main() {
   ok("F2. that resident create landed on the SAME instrumented service object",
     serviceCalls.length === callsBefore + 1, `calls before=${callsBefore} after=${serviceCalls.length}`);
 
+  //  Regression guard. F1 only checked the status code, so when the person
+  //  columns were split this route silently began recording a resident-reported
+  //  work order with NOBODY attached — 201, empty attribution, harness green.
+  //  A status code is not evidence that the right facts were written.
+  const residentRow = residentReq.json.work_order_id
+    ? (await pool.query(
+        `select reported_by_person_id, affected_person_id, unit_id
+           from work_orders where id=$1`, [residentReq.json.work_order_id])).rows[0]
+    : null;
+  ok("F2b. the resident is recorded as BOTH reporter and affected — not dropped",
+    !!residentRow &&
+      residentRow.reported_by_person_id === resident &&
+      residentRow.affected_person_id === resident &&
+      residentRow.unit_id === unitA,
+    `saved=${JSON.stringify(residentRow)} expected person=${resident}`);
+
   const bySource = serviceCalls.reduce((m, c) => { m[c.source] = (m[c.source] || 0) + 1; return m; }, {});
   ok("F3. THE ONE THAT MATTERS — both doors invoked ONE service instance",
     bySource.operator >= 1 && bySource.tenant >= 1 && instrumented.__tag === INSTANCE_TAG,

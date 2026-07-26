@@ -75,7 +75,8 @@ function ok(label, cond, detail) {
 function section(t) { lines.push(`\n  ── ${t} ${"─".repeat(Math.max(0, 54 - t.length))}`); }
 
 // ── Tracked ids. Cleanup deletes ONLY these, behind a name guard. ──
-const track = { work_orders: [], events: [], obligations: [] };
+const track = { work_orders: [], events: [], obligations: [], persons: [] };
+const uuid = () => crypto.randomUUID();
 
 // ── A faithful-enough stand-in for server.js's obligation engine.
 //    server.js owns the real ownership resolver (role → eligible assignment →
@@ -301,64 +302,128 @@ async function main() {
     !!reg.json.event && reg.json.event.type === "work_order_opened",
     JSON.stringify(reg.json.event && { type: reg.json.event.type }));
 
-  // ════════ C · PREVIEW AND WRITE AGREE ═════════════════════════════
-  //  The assertions here are about AGREEMENT, not about any particular
-  //  category policy. If the policy changes, these still hold.
-  section("C · the category shown equals the category saved");
+  // ════════ C · OPERATIONAL FACTS ONLY ══════════════════════════════
+  //  A work order stores what it KNOWS and nothing else. These assertions are
+  //  about the SHAPE of recorded truth, not about any classification policy —
+  //  if the policy changes, these still hold.
+  //
+  //  What the work order must NOT carry:
+  //    gl_category         money meaning it has no authority over (019)
+  //    operating_category  three orthogonal axes crushed into one enum
+  //    is_capex            a cost-threshold determination made before cost exists
+  //    billback            a decision with an owner, masquerading as a boolean
+  //    unit_state          a point-in-time fact the unit itself owns
+  //    person_id           two different humans flattened into one column
+  section("C · the work order stores operational facts only");
 
-  //  NOTE — these assert OPERATIONAL facts only. gl_category is deliberately
-  //  absent: a work order does not author money meaning (019's read-time rule),
-  //  so there is no GL string to agree about. C*c below proves the column is
-  //  left UNWRITTEN rather than merely unchecked.
-  const cases = [
-    { label: "tenant damage is recorded as tenant-caused",
-      q: { field_category: "drywall", unit_state: "occupied", cause: "tenant_damage" },
-      expect: { operating_category: "tenant_billback", billback: true, is_capex: false } },
-    { label: "renovation work is recorded as capital in nature",
-      q: { field_category: "flooring", unit_state: "renovation", cause: "wear" },
-      expect: { operating_category: "capital", is_capex: true, billback: false } },
-    { label: "work in a vacant unit is recorded as turn context",
-      q: { field_category: "paint", unit_state: "vacant", cause: "wear" },
-      expect: { operating_category: "turn", is_capex: false, billback: false } },
-    { label: "ordinary occupied repair stays a resident repair",
-      q: { field_category: "plumbing", unit_state: "occupied", cause: "wear" },
-      expect: { operating_category: "resident_repair", is_capex: false, billback: false } },
-  ];
+  const DROPPED = ["gl_category", "operating_category", "is_capex", "billback",
+                   "unit_state", "person_id"];
+  const cols = (await pool.query(
+    `select column_name from information_schema.columns where table_name='work_orders'`
+  )).rows.map((r) => r.column_name);
 
-  for (let i = 0; i < cases.length; i++) {
-    const c = cases[i];
-    const qs = new URLSearchParams(c.q).toString();
-    const pv = await get(`/maintenance/preview-category?${qs}`);
+  ok("C1. the columns a work order must not own are GONE from the schema",
+    DROPPED.every((c) => !cols.includes(c)),
+    `still present: ${DROPPED.filter((c) => cols.includes(c)).join(", ") || "none"}`);
 
-    const saved = await post("/work-orders", {
-      property_id: PROP, title: `Category case ${i + 1}`, ...c.q,
-    });
-    if (saved.json && saved.json.work_order) track.work_orders.push(saved.json.work_order.id);
-    if (saved.json && saved.json.event) track.events.push(saved.json.event.id);
+  ok("C2. the observation columns exist instead",
+    ["tenant_caused", "work_nature", "extends_useful_life",
+     "reported_by_person_id", "affected_person_id"].every((c) => cols.includes(c)),
+    `missing: ${["tenant_caused", "work_nature", "extends_useful_life",
+      "reported_by_person_id", "affected_person_id"].filter((c) => !cols.includes(c)).join(", ")}`);
 
-    const row = saved.json.work_order ? await woRow(saved.json.work_order.id) : null;
-    const d = pv.json && pv.json.derived;
+  // ── the observations are stored AS GIVEN, never re-derived ──
+  const obs = await post("/work-orders", {
+    property_id: PROP, title: "Resident put a hole in the drywall",
+    field_category: "drywall", cause: "improper_use",
+    tenant_caused: true, work_nature: "repair", extends_useful_life: false,
+  });
+  if (obs.json && obs.json.work_order) track.work_orders.push(obs.json.work_order.id);
+  if (obs.json && obs.json.event) track.events.push(obs.json.event.id);
+  const obsRow = obs.json.work_order ? await woRow(obs.json.work_order.id) : null;
 
-    ok(`C${i + 1}a. preview derives it right — ${c.label}`,
-      !!d && d.operating_category === c.expect.operating_category &&
-        d.is_capex === c.expect.is_capex && d.billback === c.expect.billback,
-      JSON.stringify(d));
+  ok("C3. an observation is recorded exactly as observed — not inferred",
+    obs.status === 201 && !!obsRow &&
+      obsRow.tenant_caused === true && obsRow.cause === "improper_use" &&
+      obsRow.work_nature === "repair" && obsRow.extends_useful_life === false,
+    `status=${obs.status} saved=${JSON.stringify(obsRow && {
+      tenant_caused: obsRow.tenant_caused, cause: obsRow.cause,
+      work_nature: obsRow.work_nature, extends_useful_life: obsRow.extends_useful_life })}`);
 
-    ok(`C${i + 1}b. THE SAVED ROW MATCHES THE PREVIEW — ${c.label}`,
-      !!row && !!d &&
-        row.operating_category === d.operating_category &&
-        row.is_capex === d.is_capex &&
-        row.billback === d.billback,
-      `preview=${JSON.stringify(d)} saved=${JSON.stringify(row && {
-        operating_category: row.operating_category,
-        is_capex: row.is_capex, billback: row.billback })}`);
+  // ── an unobserved fact stays UNKNOWN. It does not become false. ──
+  const unknown = await post("/work-orders", {
+    property_id: PROP, title: "Ceiling stain, cause not established",
+    field_category: "plumbing",
+  });
+  if (unknown.json && unknown.json.work_order) track.work_orders.push(unknown.json.work_order.id);
+  if (unknown.json && unknown.json.event) track.events.push(unknown.json.event.id);
+  const unkRow = unknown.json.work_order ? await woRow(unknown.json.work_order.id) : null;
 
-    ok(`C${i + 1}c. NO GL MEANING IS AUTHORED — neither derived nor stored`,
-      !!row && !!d &&
-        !("gl_category" in d) && row.gl_category === null,
-      `preview_has_gl=${d && "gl_category" in d} saved_gl=${JSON.stringify(row && row.gl_category)}` +
-      ` — a work order must not author money meaning (019: resolution at read, never stored)`);
-  }
+  ok("C4. AN UNOBSERVED FACT IS NULL, NOT FALSE — honest unknown, never a default",
+    !!unkRow && unkRow.tenant_caused === null && unkRow.work_nature === null &&
+      unkRow.extends_useful_life === null && unkRow.cause === null,
+    `saved=${JSON.stringify(unkRow && {
+      tenant_caused: unkRow.tenant_caused, work_nature: unkRow.work_nature,
+      extends_useful_life: unkRow.extends_useful_life, cause: unkRow.cause })}`);
+
+  // ── the vocabularies are closed: an unknown value is REFUSED ──
+  const badCause = await post("/work-orders", {
+    property_id: PROP, title: "bad cause", cause: "because_i_said_so",
+  });
+  ok("C5. an unrecognised cause is REFUSED, never silently stored",
+    badCause.status >= 400 && badCause.status < 500,
+    `status=${badCause.status} body=${JSON.stringify(badCause.json).slice(0, 200)}`);
+
+  const badNature = await post("/work-orders", {
+    property_id: PROP, title: "bad nature", work_nature: "sort_of_both",
+  });
+  ok("C6. an unrecognised work_nature is REFUSED",
+    badNature.status >= 400 && badNature.status < 500,
+    `status=${badNature.status} body=${JSON.stringify(badNature.json).slice(0, 200)}`);
+
+  // ── the two people stay two people ──
+  const reporter = uuid(), affected = uuid();
+  track.persons.push(reporter, affected);
+  await pool.query(
+    `insert into persons (id,name,lifecycle_status) values ($1,'WOProof Reporter [INTERNAL]','tenant'),($2,'WOProof Affected [INTERNAL]','tenant')`,
+    [reporter, affected]);
+  const split = await post("/work-orders", {
+    property_id: PROP, title: "Neighbour reports a leak through the shared wall",
+    field_category: "plumbing",
+    reported_by_person_id: reporter, affected_person_id: affected,
+  });
+  if (split.json && split.json.work_order) track.work_orders.push(split.json.work_order.id);
+  if (split.json && split.json.event) track.events.push(split.json.event.id);
+  const splitRow = split.json.work_order ? await woRow(split.json.work_order.id) : null;
+
+  ok("C7. THE REPORTER AND THE AFFECTED RESIDENT ARE NOT THE SAME FIELD",
+    split.status === 201 && !!splitRow &&
+      splitRow.reported_by_person_id === reporter &&
+      splitRow.affected_person_id === affected &&
+      reporter !== affected,
+    `status=${split.status} saved=${JSON.stringify(splitRow && {
+      reported_by: splitRow.reported_by_person_id, affected: splitRow.affected_person_id })}`);
+
+  // ── the category-preview door is GONE ──
+  //  It previewed a derivation the write no longer performs. A preview that
+  //  promises what the save will not do is the precise bug this file was built
+  //  to catch (an operator previewed "tenant billback" and got a resident
+  //  repair). With the derivation removed, the honest move is to remove the
+  //  preview too rather than leave it answering about a vanished field.
+  const deadPreview = await get(
+    "/maintenance/preview-category?field_category=drywall&cause=improper_use");
+  ok("C8. the category-preview door is gone — it cannot promise what the write won't do",
+    deadPreview.status === 404,
+    `status=${deadPreview.status} body=${JSON.stringify(deadPreview.json).slice(0, 200)}`);
+
+  // ── and nothing in the create response carries money meaning ──
+  ok("C9. NO GL MEANING IS AUTHORED — not in the row, not in the response",
+    !!obsRow && !("gl_category" in obsRow) && !("operating_category" in obsRow) &&
+      !("is_capex" in obsRow) && !("billback" in obsRow),
+    `row keys still present: ${Object.keys(obsRow || {})
+      .filter((k) => ["gl_category", "operating_category", "is_capex", "billback"].includes(k))
+      .join(", ") || "none"}` +
+    ` — a work order must not author money meaning (019: resolution at read, never stored)`);
 
   // ════════ D · THE PROOF GATE AND THE CONTINUITY ENGINE ════════════
   section("D · closeout cannot lie");
@@ -425,6 +490,8 @@ async function cleanup() {
     await pool.query("delete from obligations where property_id=$1", [PROP]);
     await pool.query("delete from work_orders where property_id=$1", [PROP]);
     await pool.query("delete from events where property_id=$1", [PROP]);
+    if (track.persons.length)
+      await pool.query("delete from persons where id = any($1::uuid[])", [track.persons]);
     const gone = await pool.query(
       "delete from properties where id=$1 and name like '__WOPROOF__P %'", [PROP]);
     lines.push(`  cleanup complete. scratch property removed: ${gone.rowCount}`);
