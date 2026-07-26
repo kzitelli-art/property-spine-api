@@ -218,20 +218,18 @@ module.exports = function agentModule(deps) {
   const FALLBACK_GENERAL =
     "Let me verify that and get you the real answer.";
 
-  // The demo manager: SERVER-DERIVED identity. Never trust a client-supplied user_id.
-  // Reuses the seeded leasing_manager (demo.js seed creates demo-manager@propertyspine.internal).
-  async function demoManagerUserId(client) {
-    let m = (await client.query(
-      "select id from users where email='demo-manager@propertyspine.internal' limit 1"
-    )).rows[0];
-    if (!m) {
-      m = (await client.query(
-        "select id from users where role='leasing_manager'::role_name order by created_at asc limit 1"
-      )).rows[0];
-    }
-    if (!m) throw httpErr(409, "No demo manager user — seed one first (the demo seed creates it).");
-    return m.id;
-  }
+  // REMOVED 2026-07-25 — demoManagerUserId(). It existed only to give the three
+  // legacy /agent/ adapter routes an actor, and those are gone, so it goes with
+  // them: one deletion, both defects.
+  //
+  // Its second failure mode is the one worth remembering. When the seeded row was
+  // missing it fell through to `select id from users where role='leasing_manager'
+  // order by created_at asc limit 1` — WHOEVER HAPPENS TO BE OLDEST. That was
+  // dormant only because the seeded user was also the oldest. The moment a real
+  // leasing manager became the oldest row, a real person's name would have landed
+  // on messages they never sent. Do not reintroduce an actor fallback: an actor is
+  // either server-derived from an authenticated session, or there is no actor and
+  // the record says so.
 
   // resolve-or-create the canonical conversation for (person, property)
   async function ensureConversation(client, { person_id, property_id }) {
@@ -1742,19 +1740,14 @@ Reply with ONLY the message text.`;
     return c || null;
   }
 
-  // LEGACY/DEMO adapter route.
-  router.get("/agent/thread", async (req, res) => {
-    try {
-      const property_id = req.query.property_id, person_id = req.query.person_id;
-      if (!property_id || !person_id) return res.status(400).json({ error: "property_id and person_id required" });
-      const conv = await resolveConversationByPair(person_id, property_id);
-      if (!conv) return res.json({ exists: false, messages: [], draft: null, mode: null });
-      const out = await getConversationStateService({ conversationId: conv.id });
-      return res.json(out);
-    } catch (e) {
-      return res.status(500).json({ error: e.message });
-    }
-  });
+  // REMOVED 2026-07-25 — GET /agent/thread (legacy/demo adapter).
+  // Not part of the attribution defect, but the worst of the four in its own way:
+  // an UNAUTHENTICATED read that returned the full conversation state — every
+  // message body — for any (person_id, property_id) pair a caller could name.
+  // Real prospect and resident conversation content, on a public prefix.
+  // Zero callers. Durable interface: GET /operator/leasing/conversations/:id,
+  // which is behind requireOperator + requireLeasingModuleAccess and scoped to
+  // the session's property.
 
   // ── manager ACTIONS ────────────────────────────────────────────────────────
   // All resolve the manager identity SERVER-SIDE. Body carries the draft_id only.
@@ -1797,7 +1790,14 @@ Reply with ONLY the message text.`;
         `insert into comm_events
            (property_id, person_id, conversation_id, channel, direction, body, classification, sender_role,
             ai_drafted_at, human_approved_by_user_id, human_approved_at, sent_by_user_id, occurred_at)
-         values ($1,$2,$3,'text','outbound',$4,'leasing','agent', now(), $5, now(), $5, now())
+         values ($1,$2,$3,'text','outbound',$4,'leasing','agent', now(), $5,
+                 -- An approval TIME with no approver is a claim that someone
+                 -- reviewed this. On an auto dispatch nobody did, so the
+                 -- timestamp must be absent too, not merely unattributed.
+                 -- (220 rows written before 2026-07-25 carry the old shape;
+                 -- they are history and are left alone deliberately.)
+                 case when $5::uuid is null then null else now() end,
+                 $5, now())
          returning id`,
         [conv.property_id, conv.person_id, conv.id, bodyToSend, mgrId]
       )).rows[0];
@@ -1848,22 +1848,15 @@ Reply with ONLY the message text.`;
     return out;
   }
 
-  // LEGACY/DEMO adapter route — thin wrapper over sendDraftService with the seeded
-  // demo manager as actor. (Demo-access restrictions apply via the allowlist; the
-  // durable manager interface is /operator/agent-drafts/:id/send.)
-  router.post("/agent/drafts/:id/send", async (req, res) => {
-    const editedBody = (req.body && typeof req.body.body === "string") ? req.body.body : null;
-    try {
-      const client0 = await pool.connect();
-      let actorUserId;
-      try { actorUserId = await demoManagerUserId(client0); }
-      finally { client0.release(); }
-      const out = await sendDraftService({ draftId: req.params.id, editedBody, actorUserId });
-      return res.json(out);
-    } catch (e) {
-      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
-    }
-  });
+  // REMOVED 2026-07-25 — POST /agent/drafts/:id/send (legacy/demo adapter).
+  // It resolved its actor via demoManagerUserId() and stamped that seeded user
+  // into BOTH sent_by_user_id and human_approved_by_user_id, so every message
+  // it dispatched asserted a human review that never happened (§5, faked owner).
+  // It was also unauthenticated: /agent/ sits in PUBLIC_PREFIXES.
+  // Verified to have ZERO callers — not app/index.html, not any app repo file,
+  // not a test. The durable interface is POST /operator/agent-drafts/:id/send,
+  // which the operator UI already uses and which stamps req.operator.id.
+  // Fable ruling 2026-07-25: "demo data may exist, demo paths may not."
 
   // TAKE OVER: thread → human_takeover. AI stops drafting/sending. No silent re-entry.
   // ── SHARED ACTION SERVICE: takeOverConversation ──────────────────────────
@@ -1920,22 +1913,10 @@ Reply with ONLY the message text.`;
     });
   }
 
-  // LEGACY/DEMO adapter route.
-  router.post("/agent/thread/takeover", async (req, res) => {
-    try {
-      const property_id = req.body && req.body.property_id, person_id = req.body && req.body.person_id;
-      if (!property_id || !person_id) return res.status(400).json({ error: "property_id and person_id required" });
-      const conv = await resolveConversationByPair(person_id, property_id);
-      if (!conv) return res.status(404).json({ error: "No conversation." });
-      const client0 = await pool.connect();
-      let actorUserId;
-      try { actorUserId = await demoManagerUserId(client0); } finally { client0.release(); }
-      const out = await takeOverConversationService({ conversationId: conv.id, actorUserId });
-      return res.json(out);
-    } catch (e) {
-      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
-    }
-  });
+  // REMOVED 2026-07-25 — POST /agent/thread/takeover (legacy/demo adapter).
+  // Same defect: unauthenticated, and it borrowed demoManagerUserId() as the
+  // actor, so a takeover recorded a human who never took anything over.
+  // Zero callers. Durable interface: POST /operator/conversations/:id/take-over.
 
   // REGENERATE: new run + new draft (does NOT mutate the old). Supersedes the prior
   // ready draft. SAME review obligation (no duplicate). Re-runs the model.
@@ -2077,20 +2058,18 @@ Reply with ONLY the message text.`;
     }
   }
 
-  // LEGACY/DEMO adapter route.
-  router.post("/agent/thread/regenerate", async (req, res) => {
-    try {
-      const property_id = req.body && req.body.property_id, person_id = req.body && req.body.person_id;
-      const out = await regenerateDraftService({ property_id, person_id });
-      return res.json(out);
-    } catch (e) {
-      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
-    }
-  });
+  // REMOVED 2026-07-25 — POST /agent/thread/regenerate (legacy/demo adapter).
+  // It borrowed no identity, so it was not part of the attribution defect — but
+  // it was an unauthenticated door with zero callers that triggered a real model
+  // run and superseded a live draft. Removed with its two siblings so the legacy
+  // adapter LAYER is gone rather than reduced: a surviving member is an invitation
+  // to add to the category. Durable interface: POST /operator/agent-drafts/:id/regenerate.
 
   // The SHARED ACTION SERVICES — the single source of truth for the consequential
-  // operator actions. Both the legacy /agent/* adapter routes and the authenticated
-  // /operator/* routes call THESE. (editAndSend = sendDraftService with editedBody.)
+  // operator actions. The authenticated /operator/* routes call THESE, and since
+  // 2026-07-25 they are the ONLY callers: the legacy /agent/* adapter routes were
+  // removed, so there is exactly one door to each action and it is authenticated.
+  // (editAndSend = sendDraftService with editedBody.)
   router._service = {
     preGenerationPolicy, postGenerationPolicy, resolveContext, buildMessages,
     sendDraftService, getConversationStateService, takeOverConversationService,
