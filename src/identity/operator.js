@@ -1972,6 +1972,135 @@ module.exports = function operatorModule(deps) {
     } finally { client.release(); }
   });
 
+  // ══════════════════════════════════════════════════════════════════
+  //  POST /operator/leasing/walk-in-tour — capture a tour that was never
+  //  scheduled.
+  //
+  //  Somebody is in the neighbourhood, walks in, gets toured. That is a
+  //  real tour and until now it could not be recorded at all: the only
+  //  capture door needs a tour row that already exists, and a walk-in has
+  //  none. The Person Card is where an agent is already standing when
+  //  this happens, so this is reachable from a person, not from a board.
+  //
+  //  IT CREATES ITS OWN TOUR ROW. The shortcut — capture the walk-in
+  //  against whatever tour the person already has booked — would falsify
+  //  WHEN it happened, claiming it occurred at tomorrow's slot time.
+  //  "The tour we planned" and "the tour that happened" are two facts.
+  //
+  //  IT NEVER CANCELS THE SCHEDULED ONE. If a future tour exists it is
+  //  RETURNED so the agent can decide, and left completely untouched.
+  //  Both outcomes are real: they came early instead, or they saw the
+  //  lobby today and still want the unit tour tomorrow. Only the human
+  //  who was there knows which, so the system does not guess.
+  //
+  //  CAPTURE IS THE SAME CANONICAL SERVICE. It calls completeTour — the
+  //  identical transaction the board's capture uses. No second outcome
+  //  path, no fork; the walk-in differs only in that the tour row is
+  //  created first, in the same transaction.
+  // ══════════════════════════════════════════════════════════════════
+  router.post("/operator/leasing/walk-in-tour", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!leasingTourService || typeof leasingTourService.completeTour !== "function") {
+      return res.status(503).json({ receipt: "Tour completion is not wired on this deploy (leasingTourService missing)." });
+    }
+    const b = req.body || {};
+    const propertyId = req.operator.property_id;          // SERVER-DERIVED
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+
+      // ── the person, and their lead AT THIS PROPERTY ──────────────────
+      //  A tour hangs off a lead. The property wall is the session's, never
+      //  the body's.
+      let leadId = b.lead_id || null;
+      if (!leadId) {
+        if (!b.person_id) {
+          await client.query("rollback");
+          return res.status(400).json({ receipt: "person_id or lead_id is required." });
+        }
+        const lead = (await client.query(
+          `select id from leasing_leads
+            where person_id=$1 and property_id=$2
+            order by created_at desc limit 1`, [b.person_id, propertyId])).rows[0];
+        if (!lead) {
+          await client.query("rollback");
+          return res.status(409).json({
+            receipt: "That person has no lead at this property yet — intake them through the canonical path first." });
+        }
+        leadId = lead.id;
+      }
+      const lead = (await client.query(
+        `select * from leasing_leads where id=$1 and property_id=$2`, [leadId, propertyId])).rows[0];
+      if (!lead) {
+        await client.query("rollback");
+        return res.status(404).json({ receipt: "No lead with that id at this property." });
+      }
+
+      // ── the time it ACTUALLY happened ────────────────────────────────
+      //  Defaults to now, because the normal case is capturing it while the
+      //  person is still in the lobby. An explicit time is accepted (an
+      //  agent catching up an hour later) but never invented beyond now.
+      const occurredAt = b.occurred_at ? new Date(b.occurred_at) : new Date();
+      if (isNaN(occurredAt.getTime())) {
+        await client.query("rollback");
+        return res.status(400).json({ receipt: "occurred_at is not a readable time." });
+      }
+      if (occurredAt.getTime() > Date.now() + 60000) {
+        await client.query("rollback");
+        return res.status(400).json({ receipt: "A walk-in cannot have happened in the future." });
+      }
+
+      // ── the scheduled tour we are NOT touching ───────────────────────
+      const conflicting = (await client.query(
+        `select t.id, t.scheduled_for, t.status
+           from leasing_tours t
+          where t.lead_id = $1
+            and t.status not in ('completed','no_show','cancelled','rescheduled')
+            and coalesce(t.scheduled_for, t.requested_for) > now()
+          order by coalesce(t.scheduled_for, t.requested_for) asc`, [leadId])).rows;
+
+      // ── the walk-in's own row ────────────────────────────────────────
+      //  origin='walk_in' (097) is what tells the board this tour has no
+      //  slot BY NATURE, not because the booking path was bypassed.
+      //  checked_in_at is the honest arrival: they physically showed.
+      const tour = (await client.query(
+        `insert into leasing_tours
+           (lead_id, property_id, unit_id, leasing_agent_id, scheduled_for,
+            checked_in_at, status, origin)
+         values ($1,$2,$3,$4,$5,$5,'scheduled','walk_in') returning *`,
+        [leadId, propertyId, b.unit_id || lead.unit_id || null,
+         req.operator.id, occurredAt.toISOString()])).rows[0];
+
+      // ── capture through the ONE canonical completion service ─────────
+      const out = await leasingTourService.completeTour(client, {
+        tourId: tour.id,
+        b,                                            // carries the outcome fields
+        recordedByUserId: req.operator.id,            // SERVER-DERIVED
+        enforcePropertyId: propertyId,
+      });
+
+      await client.query("commit");
+      return res.json({
+        ...out,
+        walk_in_tour_id: tour.id,
+        occurred_at: occurredAt.toISOString(),
+        // Surfaced, NOT acted on. The agent decides whether the booked tour
+        // still stands; nothing here cancels it.
+        scheduled_tours_still_open: conflicting,
+        receipt: (out && out.receipt ? out.receipt + " " : "")
+          + (conflicting.length
+              ? `Heads up: this person still has ${conflicting.length} scheduled tour(s) on the books. Nothing was cancelled — decide whether they still stand.`
+              : "Walk-in recorded."),
+      });
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      if (e.svc) return res.status(e.http).json(e.body);
+      if (e.http === 422 || e.httpStatus === 422) return res.status(422).json({ receipt: e.message });
+      console.error("operator walk-in tour:", e);
+      return res.status(500).json({ receipt: "Could not record the walk-in.", error: e.message });
+    } finally { client.release(); }
+  });
+
   router.get("/operator/leasing/task-queue", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
