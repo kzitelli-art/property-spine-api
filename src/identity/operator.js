@@ -2058,6 +2058,61 @@ module.exports = function operatorModule(deps) {
         return res.status(400).json({ receipt: "A walk-in cannot have happened in the future." });
       }
 
+      // ══════════════════════════════════════════════════════════════
+      //  IDEMPOTENCY — two guards, because one of them was not enough.
+      //
+      //  Five walk-in rows were created on 2026-07-26 by repeated clicks.
+      //  A disabled button is UX, not a safeguard: double-clicks, retries,
+      //  latency and network replay all still arrive here.
+      //
+      //  GUARD 1 — the caller's key. Same mechanism the slot-booking path
+      //  already uses (mig 079): pre-check, with the unique partial index
+      //  on booking_idempotency_key as the race backstop. A replay returns
+      //  the ORIGINAL row and a 200, not a duplicate and not an error.
+      //
+      //  GUARD 2 — the canonical duplicate guard, which is what would
+      //  actually have stopped those five. The client that made them sent
+      //  no key at all, so a key-only scheme protects nothing when the
+      //  caller forgets. The real-world rule: a person cannot have two
+      //  UNCAPTURED walk-ins at one property. If one is already open,
+      //  clicking again returns it. A second genuine walk-in only makes
+      //  sense once the first has an outcome.
+      // ══════════════════════════════════════════════════════════════
+      const idemKey = (typeof b.idempotency_key === "string" && b.idempotency_key.trim())
+        ? b.idempotency_key.trim().slice(0, 200) : null;
+
+      if (idemKey) {
+        const prior = (await client.query(
+          `select * from leasing_tours where booking_idempotency_key=$1 limit 1`, [idemKey])).rows[0];
+        if (prior) {
+          await client.query("rollback");
+          return res.json({
+            walk_in_tour_id: prior.id, tour_id: prior.id, person_id: lead.person_id,
+            captured: !!prior.completed_at, replayed: true,
+            occurred_at: prior.checked_in_at,
+            scheduled_tours_still_open: [],
+            receipt: "Already recorded — returning the walk-in from the first request.",
+          });
+        }
+      }
+
+      const openWalkIn = (await client.query(
+        `select * from leasing_tours
+          where lead_id=$1 and property_id=$2 and origin='walk_in'
+            and completed_at is null
+            and status not in ('completed','no_show','cancelled','rescheduled')
+          order by checked_in_at desc limit 1`, [leadId, propertyId])).rows[0];
+      if (openWalkIn) {
+        await client.query("rollback");
+        return res.json({
+          walk_in_tour_id: openWalkIn.id, tour_id: openWalkIn.id, person_id: lead.person_id,
+          captured: false, deduped: true,
+          occurred_at: openWalkIn.checked_in_at,
+          scheduled_tours_still_open: [],
+          receipt: "This walk-in is already recorded and still needs its outcome.",
+        });
+      }
+
       // ── the scheduled tour we are NOT touching ───────────────────────
       const conflicting = (await client.query(
         `select t.id, t.scheduled_for, t.status
@@ -2074,10 +2129,10 @@ module.exports = function operatorModule(deps) {
       const tour = (await client.query(
         `insert into leasing_tours
            (lead_id, property_id, unit_id, leasing_agent_id, scheduled_for,
-            checked_in_at, status, origin)
-         values ($1,$2,$3,$4,$5,$5,'scheduled','walk_in') returning *`,
+            checked_in_at, status, origin, booking_idempotency_key)
+         values ($1,$2,$3,$4,$5,$5,'scheduled','walk_in',$6) returning *`,
         [leadId, propertyId, b.unit_id || lead.unit_id || null,
-         req.operator.id, occurredAt.toISOString()])).rows[0];
+         req.operator.id, occurredAt.toISOString(), idemKey])).rows[0];
 
       // ── the outcome is OPTIONAL here, on purpose ─────────────────────
       //  Two callers, one capture path:
