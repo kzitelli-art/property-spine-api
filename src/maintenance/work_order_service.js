@@ -41,13 +41,63 @@ const urgencyToDueAt = (urgency) => {
 // obligations.priority allows only low|normal|high. All emergency tiers are high.
 const urgencyToPriority = (urgency) => (urgency ? "high" : "normal");
 
+// ── THE THREE-LAYER CATEGORY ENGINE — ONE definition, owned here ──
+//
+//  Layer 1 field_category     — what the tech taps  (plumbing, paint…)
+//  Layer 2 operating_category — what the PM sees     (repair/turn/billback/capex)
+//  Layer 3 gl_category        — what accounting sees (derived)
+//
+//  Context (unit_state, cause) is what lets the SAME field action map
+//  differently. Simple at the edge, precise at the center.
+//
+//  Pure function: same input always gives same output. The tech sets
+//  field_category plus simple context; the server derives the rest, at the
+//  moment work happens, so accounting never reconstructs.
+//
+//  HISTORY — why this is emphatic about being the only copy. A second,
+//  stubbed deriveCategories used to live inside this file while the real
+//  engine lived in maintenance.js, reachable only through
+//  GET /maintenance/preview-category. The stub ignored unit_state and cause
+//  and always returned resident_repair / is_capex:false / billback:false —
+//  and the stub was the one inside createWorkOrder. So the operator previewed
+//  "tenant billback", pressed save, and got an ordinary resident repair:
+//  money owed by a resident silently expensed to the property, and renovation
+//  work expensed instead of capitalized. Preview and write must agree by
+//  CONSTRUCTION, not by two functions being kept in step by hand. Callers
+//  import this one; nobody redefines it.
+//  Proven by tests/work_order_canonical_path_proof.js layer C (agreement).
 function deriveCategories({ field_category, unit_state, cause, is_emergency }) {
-  const fc = field_category || "general";
+  const fc = (field_category || "general").toLowerCase();
+
+  // Operating category — what the PM sees.
+  let operating_category;
+  if (cause === "tenant_damage") {
+    operating_category = "tenant_billback";
+  } else if (unit_state === "renovation") {
+    operating_category = "capital";
+  } else if (unit_state === "vacant") {
+    operating_category = "turn";
+  } else {
+    operating_category = "resident_repair";   // occupied / default
+  }
+
+  // GL category — what accounting sees. Field action + operating context.
+  let gl_category;
+  if (operating_category === "capital") {
+    gl_category = `capex_${fc}`;
+  } else if (operating_category === "tenant_billback") {
+    gl_category = `tenant_billback_${fc}`;
+  } else if (operating_category === "turn") {
+    gl_category = `turn_${fc}`;
+  } else {
+    gl_category = `${fc}_repairs`;
+  }
+
   return {
-    operating_category: "resident_repair",
-    gl_category: `${fc}_repairs`,
-    is_capex: false,
-    billback: false,
+    operating_category,
+    gl_category,
+    is_capex: operating_category === "capital",
+    billback: operating_category === "tenant_billback",
   };
 }
 

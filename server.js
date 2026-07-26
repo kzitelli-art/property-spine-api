@@ -20,6 +20,7 @@ const { createConversionClosureAuthority } = require("./src/leasing/conversion_o
 const __conversionClosureAuthority = createConversionClosureAuthority();
 const XLSX = require("xlsx");              // parses the spreadsheet to rows
 const maintenanceModule = require("./src/maintenance/maintenance");  // isolated maintenance routes
+const { makeWorkOrderService } = require("./src/maintenance/work_order_service"); // the ONE work-order create path
 const downUnitsModule = require("./src/tenancy/down_units");      // isolated down-units routes
 const orgchartModule = require("./src/surfaces/orgchart");
 const roomOwnersModule = require("./src/surfaces/roomowners"); // thin room-owner API over assignments (041); six rooms → owners
@@ -3239,8 +3240,17 @@ app.post("/ingest/:runId/approve", async (req, res) => {
   }
 });
 
+// ── THE ONE CANONICAL WORK-ORDER SERVICE ──
+//  Built once, here, and injected into EVERY consumer. Its own header carries
+//  the ruling: "every work order — tenant, operator, or future channel — flows
+//  through this service." It was never constructed anywhere, while both
+//  maintenance.js and tenantlink.js destructured `workOrderService` out of
+//  their deps and called it — so every create threw TypeError on undefined and
+//  returned a bare 500. One service instance, two mounts, no second path.
+const workOrderService = makeWorkOrderService({ spawnObligationFromEvent });
+
 // ── MAINTENANCE MODULE (isolated; injected pool + shared obligation path) ──
-app.use("/", maintenanceModule({ pool, spawnObligationFromEvent }));
+app.use("/", maintenanceModule({ pool, spawnObligationFromEvent, workOrderService }));
 // applications module mounted lower (after the conversion + submission services exist,
 // so /approve can close the leasing_manager application_approval gate). See below.
 const __leasePackets = leasePacketsModule({ pool, satisfyObligation, completeObligation });
@@ -3336,7 +3346,7 @@ app.post("/sms-proof", async (req, res) => {
     return res.status(500).json({ sent: false, reason: "proof_route_error", error: e.message });
   }
 });
-app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, getAgentService: () => agentApp._service }));
+app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService, getAgentService: () => agentApp._service }));
 app.use("/", teamAccessModule({ pool, sms, commBoundary }));
 app.use("/", superAdminModule({ pool }));
 app.use("/", orgAdminModule({ pool }));

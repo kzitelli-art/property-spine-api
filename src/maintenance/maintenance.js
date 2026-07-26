@@ -22,11 +22,25 @@ module.exports = function maintenance(deps) {
   const express = require("express");
   const router = express.Router();
 
+  // ── the ONE category derivation, owned by the canonical service ──
+  const { deriveCategories } = require("./work_order_service");
+
   // ── injected core services (option 1: dependency injection) ──
   const { pool, spawnObligationFromEvent, workOrderService } = deps;
   if (!pool) throw new Error("maintenance module requires a pool");
   if (typeof spawnObligationFromEvent !== "function") {
     throw new Error("maintenance module requires spawnObligationFromEvent()");
+  }
+  // POST /work-orders delegates every create to the canonical service. Assert
+  // it at CONSTRUCTION, not at first request: this module previously booted
+  // clean without it and then threw TypeError on undefined inside the route,
+  // which its own catch turned into a bare 500. Every work-order create was
+  // dead for weeks behind a green boot. Fail at wire-up, loudly, instead.
+  if (!workOrderService || typeof workOrderService.createWorkOrder !== "function") {
+    throw new Error(
+      "maintenance module requires workOrderService (build it with " +
+      "makeWorkOrderService({ spawnObligationFromEvent }) and inject it)"
+    );
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -142,42 +156,11 @@ module.exports = function maintenance(deps) {
   // ════════════════════════════════════════════════════════════════
   //  THE CATEGORY ENGINE  (field + context → operating → gl)
   // ════════════════════════════════════════════════════════════════
-  // Pure function. Same input always gives same output. The tech sets
-  // field_category + simple context; the server derives the rest. This is
-  // captured at the moment work happens — accounting never reconstructs.
-  function deriveCategories({ field_category, unit_state, cause, is_emergency }) {
-    const fc = (field_category || "general").toLowerCase();
-
-    // Operating category — what the PM sees.
-    let operating_category;
-    if (cause === "tenant_damage") {
-      operating_category = "tenant_billback";
-    } else if (unit_state === "renovation") {
-      operating_category = "capital";
-    } else if (unit_state === "vacant") {
-      operating_category = "turn";
-    } else {
-      operating_category = "resident_repair";   // occupied / default
-    }
-
-    // GL category — what accounting sees. Field action + operating context.
-    let gl_category;
-    if (operating_category === "capital") {
-      gl_category = `capex_${fc}`;
-    } else if (operating_category === "tenant_billback") {
-      gl_category = `tenant_billback_${fc}`;
-    } else if (operating_category === "turn") {
-      gl_category = `turn_${fc}`;
-    } else {
-      gl_category = `${fc}_repairs`;
-    }
-
-    const is_capex = operating_category === "capital";
-    const billback = operating_category === "tenant_billback";
-
-    return { operating_category, gl_category, is_capex, billback };
-  }
-
+  //  Imported, never redefined. The canonical service owns this derivation
+  //  (see work_order_service.js) because createWorkOrder must categorize a
+  //  saved row exactly as GET /maintenance/preview-category promised. A
+  //  second local copy here is what let the preview and the write disagree.
+  //  One definition, three callers: preview, create, supply requests.
   // ════════════════════════════════════════════════════════════════
   //  PREVIEW CATEGORY  —  GET /maintenance/preview-category
   //  Lets the UI show how a work item will be categorized before saving.
