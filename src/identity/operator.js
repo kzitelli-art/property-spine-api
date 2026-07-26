@@ -235,7 +235,13 @@ module.exports = function operatorModule(deps) {
     // /operator/me the AUTHORITATIVE module source the shell needs on every
     // boot path — closing the Runtime Map session-contract gap. Array always
     // (never null) so the client can trust it as truth, not guess from a token.
-    return res.json({ id: o.id, name: o.name, role: o.role, property_id: o.property_id, property_name: propertyName, allowed_modules: Array.isArray(o.allowed_modules) ? o.allowed_modules : [] });
+    // Include platform_role so the frontend can detect super admins and show the admin panel
+    let platform_role = 'member';
+    try {
+      const pr = (await pool.query(`select platform_role from users where id=$1`, [o.id])).rows[0];
+      platform_role = pr ? (pr.platform_role || 'member') : 'member';
+    } catch (_) {}
+    return res.json({ id: o.id, name: o.name, role: o.role, property_id: o.property_id, property_name: propertyName, allowed_modules: Array.isArray(o.allowed_modules) ? o.allowed_modules : [], platform_role });
   });
 
   // ── property-scope verification helpers (used by every read/write below) ──
