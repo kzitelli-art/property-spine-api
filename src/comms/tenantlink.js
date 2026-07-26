@@ -176,7 +176,12 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
       try {
         await client.query("begin");
         const { workOrder, deduped } = await workOrderService.createWorkOrder(client, {
-          property_id: sess.property_id, unit_id: place.unit_id, person_id: sess.person_id,
+          property_id: sess.property_id, unit_id: place.unit_id,
+          // migration 098: the resident who texted is BOTH the reporter and the
+          // affected resident. Both are named explicitly — passing the old
+          // single `person_id` here would now be silently dropped, leaving a
+          // resident-reported work order with nobody attached to it.
+          reported_by_person_id: sess.person_id, affected_person_id: sess.person_id,
           title: (c.urgency === "emergency" ? "EMERGENCY: " : "") + "Maintenance request",
           description, source: "tenant",
           urgency_status: c.urgency, urgency_basis: c.basis, urgency_decided_by: "system",
@@ -831,25 +836,34 @@ Rules: classification "emergency" only for active danger or major damage in prog
     const unitLabel = place ? `Unit ${place.unit_number}` : "your unit";
 
     if (c.classification === "emergency") {
+      // NOTE (migration 098): operating_category and gl_category are gone — a
+      // work order does not author money meaning. The resident who texted is
+      // both the reporter and the affected resident. tenant_caused is left NULL
+      // because nobody has observed it; an unobserved fact stays unknown.
+      // FLAGGED: this is a RAW insert around workOrderService.createWorkOrder,
+      // so it produces no event and no routing obligation. Rerouting it through
+      // the canonical service is the correct fix and is resident-facing, so it
+      // needs a decision rather than a quiet change.
       const wo = (await pool.query(
-        `insert into work_orders (property_id, unit_id, person_id, title, description,
-                                  status, source, field_category, operating_category, gl_category,
-                                  needs_pm_review)
-         values ($1,$2,$3,$4,$5,'open','tenant',$6,'resident_repair',$7,true) returning id`,
+        `insert into work_orders (property_id, unit_id, reported_by_person_id, affected_person_id,
+                                  title, description,
+                                  status, source, field_category, needs_pm_review)
+         values ($1,$2,$3,$3,$4,$5,'open','tenant',$6,true) returning id`,
         [propertyId, place ? place.unit_id : null, personId,
          "EMERGENCY: " + (c.suggested_title || c.field_category || "tenant report"),
-         body, c.field_category, `${c.field_category}_repairs`])).rows[0];
+         body, c.field_category])).rows[0];
       createdType = "work_order"; createdId = wo.id;
       reply = "Emergency received — management has been notified in the system. If there is immediate danger to anyone, call 911 first.";
     } else if (c.classification === "maintenance" && c.confidence >= 0.7 && !c.needs_human) {
+      // Same shape and same flag as the emergency branch above.
       const wo = (await pool.query(
-        `insert into work_orders (property_id, unit_id, person_id, title, description,
-                                  status, source, field_category, operating_category, gl_category,
-                                  needs_pm_review)
-         values ($1,$2,$3,$4,$5,'open','tenant',$6,'resident_repair',$7,true) returning id`,
+        `insert into work_orders (property_id, unit_id, reported_by_person_id, affected_person_id,
+                                  title, description,
+                                  status, source, field_category, needs_pm_review)
+         values ($1,$2,$3,$3,$4,$5,'open','tenant',$6,true) returning id`,
         [propertyId, place ? place.unit_id : null, personId,
          c.suggested_title || `${c.field_category} request`,
-         body, c.field_category, `${c.field_category}_repairs`])).rows[0];
+         body, c.field_category])).rows[0];
       createdType = "work_order"; createdId = wo.id;
       reply = `Got it — ${c.field_category.replace("_", "/")} request opened for ${unitLabel}. We'll keep you updated right here.`;
     } else if (c.classification === "balance" && c.confidence >= 0.7 && !c.needs_human && place) {
@@ -1210,20 +1224,27 @@ Rules: classification "emergency" only for active danger or major damage in prog
         return res.status(400).json({ receipt: "Status here can only be 'scheduled' or 'open'. Completion has its own gate." });
       }
 
+      // migration 098: the reporter and the affected resident are separate
+      // facts. This route notifies the person WAITING on the update — the one
+      // who raised it — falling back to the affected resident when staff filed
+      // it on someone's behalf. The join follows the same person.
       const woQ = await pool.query(
-        `select w.*, per.name as person_name, per.phone as person_phone, u.unit_number
+        `select w.*,
+                coalesce(w.reported_by_person_id, w.affected_person_id) as notify_person_id,
+                per.name as person_name, per.phone as person_phone, u.unit_number
            from work_orders w
-           left join persons per on per.id = w.person_id
+           left join persons per
+                  on per.id = coalesce(w.reported_by_person_id, w.affected_person_id)
            left join units u on u.id = w.unit_id
           where w.id = $1`, [workOrderId]);
       if (!woQ.rows.length) return res.status(404).json({ receipt: "No work order with that id." });
       const wo = woQ.rows[0];
-      if (!wo.person_id) {
+      if (!wo.notify_person_id) {
         return res.status(409).json({ receipt: "This work order has no reporting tenant attached — there's nobody to notify." });
       }
       const convoQ = await pool.query(
         `select id from conversations where property_id = $1 and person_id = $2`,
-        [wo.property_id, wo.person_id]);
+        [wo.property_id, wo.notify_person_id]);
       if (!convoQ.rows.length) {
         return res.status(409).json({ receipt: "That tenant isn't connected to the tenant line yet — send them a setup link first." });
       }
@@ -1234,13 +1255,13 @@ Rules: classification "emergency" only for active danger or major damage in prog
       const noteEvt = (await pool.query(
         `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification)
          values ($1,$2,$3,$4,'portal','outbound',$5,'work_order_update') returning id`,
-        [wo.property_id, wo.person_id, wo.unit_id, convoQ.rows[0].id, note])).rows[0];
+        [wo.property_id, wo.notify_person_id, wo.unit_id, convoQ.rows[0].id, note])).rows[0];
       await pool.query(`update conversations set last_message_at = now() where id = $1`, [convoQ.rows[0].id]);
 
       // 030: ride the wire when we can. Save-first held above.
       const wire = await commBoundary.sendPropertySms({
         property_id: wo.property_id, recipient: wo.person_phone, body: note,
-        purpose: "agent", person_id: wo.person_id, eventId: noteEvt.id,
+        purpose: "agent", person_id: wo.notify_person_id, eventId: noteEvt.id,
       });
 
       res.json({

@@ -10,20 +10,34 @@
 //      const maintenance = require("./maintenance");
 //      app.use("/", maintenance({ pool, spawnObligationFromEvent }));
 //
-//  THE THREE-LAYER CATEGORY ENGINE
-//    Layer 1 field_category     — what the tech taps  (plumbing, paint…)
-//    Layer 2 operating_category — what the PM sees     (repair/turn/billback/capex)
-//    Layer 3 gl_category        — what accounting sees (derived)
-//  Context (unit_state, cause) is what lets the SAME field action map
-//  differently. Simple at the edge, precise at the center.
+//  WHAT A WORK ORDER RECORDS  (migration 098)
+//    field_category        what kind of work        (plumbing, paint…)
+//    cause                 what caused it           (closed vocabulary)
+//    tenant_caused         OBSERVED resident-caused (the one field a tech is asked)
+//    work_nature           repair or replacement    (half the capital question)
+//    extends_useful_life   does it extend asset life(the other half)
+//    reported_by_person_id who raised it
+//    affected_person_id    whose home it affects
+//
+//  It records OBSERVATIONS, not determinations. It does NOT store a GL
+//  category, an operating category, an is_capex flag, a billback flag, or a
+//  copy of the unit's state — see migration 098 for why each of those left.
+//  Money meaning is resolved at READ by the reporting layer (migration 019:
+//  "resolution order, applied at read time, never stored").
+//
+//  The previous header described a three-layer category engine ending in a
+//  stored gl_category. That is gone. This comment is kept accurate on purpose:
+//  a rule that lives only in a comment is how the code drifted from its own
+//  design four times over.
 // ════════════════════════════════════════════════════════════════════
 
 module.exports = function maintenance(deps) {
   const express = require("express");
   const router = express.Router();
 
-  // ── the ONE category derivation, owned by the canonical service ──
-  const { deriveCategories } = require("./work_order_service");
+  // ── the closed operational vocabularies + the surviving supply-request
+  //    derivation, all owned by the canonical service ──
+  const { deriveCategories, CAUSES, WORK_NATURES } = require("./work_order_service");
   // BRICK ONE: the ONE session resolver. Required directly, exactly as
   // operator.js:35 does — not injected, so this adds no new boot-fatal
   // dependency to the module's wire-up.
@@ -230,13 +244,30 @@ module.exports = function maintenance(deps) {
   //  second local copy here is what let the preview and the write disagree.
   //  One definition, three callers: preview, create, supply requests.
   // ════════════════════════════════════════════════════════════════
-  //  PREVIEW CATEGORY  —  GET /maintenance/preview-category
-  //  Lets the UI show how a work item will be categorized before saving.
+  //  PREVIEW CATEGORY  —  REMOVED (migration 098)
+  //
+  //  This previewed a derivation the write no longer performs. A preview that
+  //  promises what the save will not do is precisely the defect this module was
+  //  just repaired for: an operator previewed "tenant billback", pressed save,
+  //  and got an ordinary resident repair. Now that the work order records
+  //  observations instead of deriving categories, there is nothing to preview —
+  //  so the door is gone rather than left answering about a vanished field.
+  //
+  //  The operator surface asks for observations directly. What it needs is the
+  //  ALLOWED VALUES, not a prediction, and those are served below.
   // ════════════════════════════════════════════════════════════════
-  router.get("/maintenance/preview-category", (req, res) => {
-    const { field_category, unit_state, cause } = req.query;
-    const derived = deriveCategories({ field_category, unit_state, cause });
-    res.json({ input: { field_category, unit_state, cause }, derived });
+  router.get("/maintenance/observation-vocabulary", (_req, res) => {
+    res.json({
+      cause: CAUSES,
+      work_nature: WORK_NATURES,
+      // Named so a UI builder knows which single question is the one worth
+      // asking a field tech (DOCTRINE §5: one question per event, maximum).
+      primary_question: {
+        field: "tenant_caused",
+        prompt: "Was this tenant-caused?",
+        note: "Leave unanswered if not observed. Unanswered stays unknown; it never becomes 'no'.",
+      },
+    });
   });
 
   // List the fixed emergency types (for the UI dropdown).
@@ -260,13 +291,21 @@ module.exports = function maintenance(deps) {
   //
   //  Body: {
   //    property_id (required),
-  //    unit_id?      (optional — null = common area / property-level),
-  //    person_id?    (optional — tenant/staff/anyone; null = unattributed),
+  //    unit_id?                 (null = common area / property-level),
+  //    reported_by_person_id?   who raised it   (null = staff-originated),
+  //    affected_person_id?      whose home it affects (null = unknown/common),
   //    title, description?,
-  //    field_category?, unit_state?, cause?, est_cost?,
+  //    field_category?, cause?  (closed vocabulary — see CAUSES), est_cost?,
+  //    tenant_caused?           OBSERVED resident-caused; null = not observed,
+  //    work_nature?             'repair' | 'replacement',
+  //    extends_useful_life?     bool; null = not assessed,
   //    assigned_to?,
   //    is_emergency? (bool), emergency_type? (key from EMERGENCY_TYPES)
   //  }
+  //
+  //  Every observation is OPTIONAL and an omitted one stays NULL. It does not
+  //  become false to keep a form looking complete. GET
+  //  /maintenance/observation-vocabulary serves the allowed values.
   //
   //  A normal work order just records. An EMERGENCY work order writes a
   //  maintenance EVENT and spawns an OBLIGATION from it (same atomic path
@@ -281,9 +320,12 @@ module.exports = function maintenance(deps) {
     try {
       await client.query("begin");
       const { workOrder, event, obligation } = await workOrderService.createWorkOrder(client, {
-        property_id: b.property_id, unit_id: b.unit_id, person_id: b.person_id,
+        property_id: b.property_id, unit_id: b.unit_id,
+        reported_by_person_id: b.reported_by_person_id, affected_person_id: b.affected_person_id,
         title: b.title, description: b.description,
-        field_category: b.field_category, unit_state: b.unit_state, cause: b.cause, est_cost: b.est_cost,
+        field_category: b.field_category, cause: b.cause, est_cost: b.est_cost,
+        tenant_caused: b.tenant_caused, work_nature: b.work_nature,
+        extends_useful_life: b.extends_useful_life,
         assigned_to: b.assigned_to, source: "maintenance_module",
         urgency_status: b.is_emergency ? "emergency" : "regular",
         urgency_basis: b.is_emergency ? "operator marked emergency" : "operator entry",
@@ -392,7 +434,7 @@ module.exports = function maintenance(deps) {
         const ev = await client.query(
           `insert into events (property_id, person_id, unit_id, type, note)
            values ($1,$2,$3,'maintenance_followup',$4) returning *`,
-          [wo.property_id, wo.person_id ?? null, wo.unit_id ?? null, JSON.stringify(followNote)]
+          [wo.property_id, wo.affected_person_id ?? wo.reported_by_person_id ?? null, wo.unit_id ?? null, JSON.stringify(followNote)]
         );
 
         // 2) The WO stays OPEN, flagged for review, with the structured reason
@@ -412,7 +454,7 @@ module.exports = function maintenance(deps) {
         //    step: who owns it, where it escalates, what it's for.
         const followup = await spawnObligationFromEvent(client, {
           property_id: wo.property_id,
-          person_id: wo.person_id ?? null,
+          person_id: wo.affected_person_id ?? wo.reported_by_person_id ?? null,
           unit_id: wo.unit_id ?? null,
           source_event_id: ev.rows[0].id,
           module: "maintenance",
@@ -461,7 +503,7 @@ module.exports = function maintenance(deps) {
       await client.query(
         `insert into events (property_id, person_id, unit_id, type, note)
          values ($1,$2,$3,'work_order_closed',$4)`,
-        [wo.property_id, wo.person_id ?? null, wo.unit_id ?? null,
+        [wo.property_id, wo.affected_person_id ?? wo.reported_by_person_id ?? null, wo.unit_id ?? null,
          JSON.stringify({ work_order_id: wo.id })]
       );
 
@@ -496,9 +538,12 @@ module.exports = function maintenance(deps) {
         // ── authority: from the session, never the request ──
         property_id: req.operator.property_id,
         // ── everything else is a request, not a claim of authority ──
-        unit_id: b.unit_id, person_id: b.person_id,
+        unit_id: b.unit_id,
+        reported_by_person_id: b.reported_by_person_id, affected_person_id: b.affected_person_id,
         title: b.title, description: b.description,
-        field_category: b.field_category, unit_state: b.unit_state, cause: b.cause,
+        field_category: b.field_category, cause: b.cause,
+        tenant_caused: b.tenant_caused, work_nature: b.work_nature,
+        extends_useful_life: b.extends_useful_life,
         est_cost: b.est_cost, assigned_to: b.assigned_to,
         source: "operator",
         urgency_status: b.is_emergency ? "emergency" : "regular",

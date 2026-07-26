@@ -41,31 +41,32 @@ const urgencyToDueAt = (urgency) => {
 // obligations.priority allows only low|normal|high. All emergency tiers are high.
 const urgencyToPriority = (urgency) => (urgency ? "high" : "normal");
 
-// ── THE THREE-LAYER CATEGORY ENGINE — ONE definition, owned here ──
+// ── deriveCategories — NO LONGER ON THE WORK-ORDER PATH ─────────────
 //
-//  Layer 1 field_category     — what the tech taps  (plumbing, paint…)
-//  Layer 2 operating_category — what the PM sees     (repair/turn/billback/capex)
-//  Layer 3 gl_category        — what accounting sees (derived)
+//  ⚠ SURVIVES FOR ONE CALLER ONLY: the supply-requests route, which still
+//  carries an operating_category of its own. Decomposing the supply request the
+//  way migration 098 decomposed the work order is separate, unstarted work.
 //
-//  Context (unit_state, cause) is what lets the SAME field action map
-//  differently. Simple at the edge, precise at the center.
+//  createWorkOrder does NOT call this. A work order records OBSERVATIONS
+//  (tenant_caused, work_nature, extends_useful_life, cause) and derives no
+//  category at all — see migration 098 and the module header for why each
+//  derived column left. Do not reintroduce a call to this from the work-order
+//  path; that is the thing that was removed.
 //
-//  Pure function: same input always gives same output. The tech sets
-//  field_category plus simple context; the server derives the rest, at the
-//  moment work happens, so accounting never reconstructs.
+//  HISTORY, kept because it is the reason for the rule. Two functions with this
+//  name once disagreed: a stub in this file that ignored unit_state and cause
+//  and always returned resident_repair / is_capex:false / billback:false, and
+//  the real engine in maintenance.js reachable only through
+//  GET /maintenance/preview-category. The STUB was the one inside
+//  createWorkOrder. So an operator previewed "tenant billback", pressed save,
+//  and got an ordinary resident repair — money owed by a resident silently
+//  expensed to the property, renovation work expensed instead of capitalized.
+//  Consolidating them was right, but consolidation was not the real fix: the
+//  work order should never have been authoring money meaning in the first
+//  place. Migration 098 finished the job.
 //
-//  HISTORY — why this is emphatic about being the only copy. A second,
-//  stubbed deriveCategories used to live inside this file while the real
-//  engine lived in maintenance.js, reachable only through
-//  GET /maintenance/preview-category. The stub ignored unit_state and cause
-//  and always returned resident_repair / is_capex:false / billback:false —
-//  and the stub was the one inside createWorkOrder. So the operator previewed
-//  "tenant billback", pressed save, and got an ordinary resident repair:
-//  money owed by a resident silently expensed to the property, and renovation
-//  work expensed instead of capitalized. Preview and write must agree by
-//  CONSTRUCTION, not by two functions being kept in step by hand. Callers
-//  import this one; nobody redefines it.
-//  Proven by tests/work_order_canonical_path_proof.js layer C (agreement).
+//  REMOVAL CONDITION (§18 Class 4): delete this function when the supply
+//  request records observations instead of a derived operating_category.
 function deriveCategories({ field_category, unit_state, cause, is_emergency }) {
   const fc = (field_category || "general").toLowerCase();
 
@@ -117,6 +118,26 @@ function deriveCategories({ field_category, unit_state, cause, is_emergency }) {
 
 const URGENCY_STATUSES = ["emergency", "regular", "needs_confirmation"];
 const DECIDED_BY = ["system", "resident_clarification", "operator"];
+
+// ── CLOSED OPERATIONAL VOCABULARIES ─────────────────────────────────
+//  Same discipline as EMERGENCY_TYPES and NOT_DONE_REASONS: a fixed list that
+//  REFUSES what it does not recognise. `cause` is an operational observation
+//  ONLY — nothing derives money meaning from it, so a typo can no longer
+//  silently change how a cost is treated (which is exactly what the old
+//  free-text `cause === "tenant_damage"` derivation allowed).
+//
+//  Mirrored by ck_wo_cause / ck_wo_work_nature in migration 098. The DB is the
+//  structural backstop; these give the caller an honest 400 naming the set.
+const CAUSES = [
+  "normal_wear",        // ordinary aging and use
+  "equipment_failure",  // a component failed
+  "accident",           // unintentional damage
+  "improper_use",       // used in a way it was not meant to be
+  "weather",            // storm, freeze, water from outside
+  "end_of_life",        // reached the end of its service life
+  "unknown",            // honestly not established
+];
+const WORK_NATURES = ["repair", "replacement"];
 
 function makeWorkOrderService(deps) {
   const { spawnObligationFromEvent } = deps;
@@ -177,9 +198,15 @@ function makeWorkOrderService(deps) {
   // ── CREATE: the one path. Caller owns the transaction (client). ──
   async function createWorkOrder(client, spec) {
     const {
-      property_id, unit_id = null, person_id = null,
+      property_id, unit_id = null,
+      // TWO people, never one. Frequently the same human; sometimes not — a
+      // neighbour reports a leak coming through a shared wall.
+      reported_by_person_id = null, affected_person_id = null,
       title, description = null,
-      field_category = null, unit_state = null, cause = null, est_cost = null,
+      field_category = null, cause = null, est_cost = null,
+      // OBSERVATIONS the work order legitimately knows. All optional: an
+      // unobserved fact stays null. It never becomes false to keep a form tidy.
+      tenant_caused = null, work_nature = null, extends_useful_life = null,
       assigned_to = null,
       source,                       // 'tenant' | 'operator' | future
       urgency_status,               // required, source-neutral
@@ -194,6 +221,16 @@ function makeWorkOrderService(deps) {
       throw Object.assign(new Error("valid urgency_status is required"), { httpStatus: 400 });
     if (!DECIDED_BY.includes(urgency_decided_by))
       throw Object.assign(new Error("invalid urgency_decided_by"), { httpStatus: 400 });
+
+    // ── closed vocabularies, refused in the service, not by a DB constraint ──
+    //  The DB check constraints are the structural backstop. These give the
+    //  caller an honest 400 that NAMES the allowed set, the same discipline as
+    //  EMERGENCY_TYPES and NOT_DONE_REASONS. A caller should learn what is
+    //  allowed from the refusal, not from a 500.
+    if (cause !== null && !CAUSES.includes(cause))
+      throw Object.assign(new Error("invalid cause"), { httpStatus: 400, allowed: CAUSES });
+    if (work_nature !== null && !WORK_NATURES.includes(work_nature))
+      throw Object.assign(new Error("invalid work_nature"), { httpStatus: 400, allowed: WORK_NATURES });
 
     const is_emergency = urgency_status === "emergency";
     let emDef = null;
@@ -211,23 +248,27 @@ function makeWorkOrderService(deps) {
       const u = await client.query("select id from units where id=$1", [unit_id]);
       if (u.rows.length === 0) throw Object.assign(new Error("unit not found"), { httpStatus: 404 });
     }
-    if (person_id) {
-      const p = await client.query("select id from persons where id=$1", [person_id]);
-      if (p.rows.length === 0) throw Object.assign(new Error("person not found"), { httpStatus: 404 });
+    for (const [label, pid] of [["reported_by_person_id", reported_by_person_id],
+                                ["affected_person_id", affected_person_id]]) {
+      if (!pid) continue;
+      const p = await client.query("select id from persons where id=$1", [pid]);
+      if (p.rows.length === 0)
+        throw Object.assign(new Error(`person not found (${label})`), { httpStatus: 404 });
     }
-
-    const derived = deriveCategories({ field_category, unit_state, cause, is_emergency });
 
     // ── Idempotency: a client-supplied key makes retries safe. If a work order
     //    with this key already exists, return it (and its obligation) — NO new
     //    work order, NO new obligation. The unique index makes a concurrent race
     //    fail the loser rather than duplicate.
+    //    Keyed on the REPORTER: the same person re-sending the same request is
+    //    the retry this protects against.
     const idempotency_key = spec.idempotency_key ?? null;
     if (idempotency_key) {
       const dup = (await client.query(
         `select * from work_orders
-          where idempotency_key=$1 and property_id=$2 and person_id is not distinct from $3`,
-        [idempotency_key, property_id, person_id])).rows[0];
+          where idempotency_key=$1 and property_id=$2
+            and reported_by_person_id is not distinct from $3`,
+        [idempotency_key, property_id, reported_by_person_id])).rows[0];
       if (dup) {
         const obl = (await client.query(
           "select * from obligations where related_type='work_order' and related_id=$1 order by created_at asc limit 1",
@@ -239,17 +280,19 @@ function makeWorkOrderService(deps) {
     // 1) the work order — description stored VERBATIM; urgency truth is source-neutral.
     const wo = (await client.query(
       `insert into work_orders
-         (property_id, unit_id, person_id, title, description,
+         (property_id, unit_id, reported_by_person_id, affected_person_id, title, description,
           status, assigned_to, source,
-          field_category, operating_category,
-          unit_state, cause, is_emergency, is_capex, billback, est_cost, needs_pm_review,
+          field_category, cause,
+          tenant_caused, work_nature, extends_useful_life,
+          is_emergency, est_cost, needs_pm_review,
           urgency_status, urgency_basis, urgency_decided_by, urgency_decided_at, idempotency_key)
-       values ($1,$2,$3,$4,$5,'open',$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,now(),$20)
+       values ($1,$2,$3,$4,$5,$6,'open',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,now(),$20)
        returning *`,
-      [property_id, unit_id, person_id, title, description,
+      [property_id, unit_id, reported_by_person_id, affected_person_id, title, description,
        assigned_to, source,
-       field_category, derived.operating_category,
-       unit_state, cause, is_emergency, derived.is_capex, derived.billback, est_cost, is_emergency,
+       field_category, cause,
+       tenant_caused, work_nature, extends_useful_life,
+       is_emergency, est_cost, is_emergency,
        urgency_status, urgency_basis, urgency_decided_by, idempotency_key])).rows[0];
 
     // 2) the trigger event (uniform trail; carries the WO link + urgency)
@@ -261,14 +304,22 @@ function makeWorkOrderService(deps) {
     };
     const evType = is_emergency ? "emergency_work_order" : "work_order_opened";
     const ev = (await client.query(
+      // The event carries the AFFECTED person: the relationship spine is about
+      // whose home this happened to, not who happened to phone it in. When only
+      // a reporter is known, that is the best available relationship anchor.
       `insert into events (property_id, person_id, unit_id, type, note)
        values ($1,$2,$3,$4,$5) returning *`,
-      [property_id, person_id, unit_id, evType, JSON.stringify(noteObj)])).rows[0];
+      [property_id, affected_person_id ?? reported_by_person_id, unit_id,
+       evType, JSON.stringify(noteObj)])).rows[0];
 
     // 3) the routing obligation — for EVERY work order (owner or honest UNASSIGNED)
     const obligation = await spawnObligationFromEvent(
       client,
-      obligationSpecFor(urgency_status, emDef, wo, { property_id, person_id, unit_id, source_event_id: ev.id })
+      obligationSpecFor(urgency_status, emDef, wo, {
+        property_id, unit_id, source_event_id: ev.id,
+        // the obligation hangs off the affected relationship for the same reason
+        person_id: affected_person_id ?? reported_by_person_id,
+      })
     );
 
     return { workOrder: wo, event: ev, obligation };
@@ -316,14 +367,24 @@ function makeWorkOrderService(deps) {
   }
 
   // ── Tenant authorization — every tenant read/write of a work order runs through
-  //    this. Fails CLOSED: a work order is reachable only by the resident whose
-  //    person owns it, in the same property, and the same unit. 403 otherwise.
+  //    this. Fails CLOSED: 403 otherwise.
+  //
+  //  With the person split, "whose work order is this" has two honest answers:
+  //  the resident who REPORTED it, and the resident whose home is AFFECTED.
+  //  Either may reach it — a resident must be able to follow a repair in their
+  //  own unit that a neighbour or staff member filed, and the neighbour who
+  //  reported it must be able to see the thing they raised. Property and unit
+  //  must still match, so this widens who inside a tenancy may look, never
+  //  which tenancy.
   async function assertTenantOwnsWorkOrder(client, { work_order_id, person_id, property_id, unit_id = null }) {
     const wo = (await client.query(
-      "select id, person_id, property_id, unit_id from work_orders where id=$1", [work_order_id])).rows[0];
+      `select id, reported_by_person_id, affected_person_id, property_id, unit_id
+         from work_orders where id=$1`, [work_order_id])).rows[0];
     // Generic 403 for BOTH not-found and not-owned — never reveal whether the
     // target work order exists to an authenticated tenant out of scope.
-    const authorized = !!wo && wo.person_id === person_id && wo.property_id === property_id &&
+    const isTheirs = !!wo && !!person_id &&
+      (wo.reported_by_person_id === person_id || wo.affected_person_id === person_id);
+    const authorized = isTheirs && wo.property_id === property_id &&
       (wo.unit_id == null || unit_id == null || wo.unit_id === unit_id);
     if (!authorized) throw Object.assign(new Error("not authorized"), { httpStatus: 403 });
     return wo;
@@ -332,4 +393,11 @@ function makeWorkOrderService(deps) {
   return { createWorkOrder, appendClarification, assertTenantOwnsWorkOrder, EMERGENCY_TYPES };
 }
 
-module.exports = { makeWorkOrderService, EMERGENCY_TYPES, EMERGENCY_CHAIN, deriveCategories, urgencyToDueAt, urgencyToPriority };
+module.exports = {
+  makeWorkOrderService, EMERGENCY_TYPES, EMERGENCY_CHAIN,
+  CAUSES, WORK_NATURES,
+  // deriveCategories survives ONLY for supply_requests, which still carries an
+  // operating_category. Decomposing the supply request is separate work and is
+  // deliberately not in this slice. It is no longer on the work-order path.
+  deriveCategories, urgencyToDueAt, urgencyToPriority,
+};
