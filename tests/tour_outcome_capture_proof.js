@@ -176,6 +176,61 @@ async function mustReject(client, label, sql, params) {
   check(TO.normalizeStanding({ disposition: "close_watch", future_fit: "close" }).standing === TO.STANDING.NOT_MOVING_FORWARD,
         "close_watch + close → Not Moving Forward", "the funnel gets its first way to close");
 
+  // ── [7c] THE WRITE PATH DECISION — the real function the service calls ──
+  //  Not a copy. completeTourService calls exactly this.
+  console.log("\n[7c] what the capture service will actually write");
+  const RECORDER = "11111111-1111-1111-1111-111111111111";
+  const cases = [
+    { name: "v3 · agent taps Hot Lead",
+      fb: { standing: "hot_lead" }, rec: RECORDER },
+    { name: "v2 · keep_working + hot",
+      fb: { disposition: "keep_working", sub_read: "hot" }, rec: RECORDER },
+    { name: "v2 · close_watch + close",
+      fb: { disposition: "close_watch", future_fit: "close" }, rec: RECORDER },
+    { name: "v1 · 'interested' (the 27 rows)",
+      fb: { interest_level: "interested" }, rec: RECORDER },
+    { name: "v3 · Hot Lead but NO recorder",
+      fb: { standing: "hot_lead" }, rec: null },
+    { name: "nothing supplied",
+      fb: {}, rec: RECORDER },
+  ];
+  console.table(cases.map(c => {
+    const r = TO.resolveCapturedStanding({ fb: c.fb, recordedByUserId: c.rec });
+    return { case: c.name, writes_tour_outcome: r.tour_outcome_value || "(null)",
+             standing: r.standing || "—", judged_by: r.judged_by || "—",
+             next_move: r.next_move ? r.next_move.key : "—",
+             why_not: r.unresolved_reason ? r.unresolved_reason.slice(0, 40) : "" };
+  }));
+
+  const v3 = TO.resolveCapturedStanding({ fb: { standing: "hot_lead" }, recordedByUserId: RECORDER });
+  check(v3.standing === "hot_lead" && v3.judged_by === "agent" && v3.tour_outcome_value === "hot_lead",
+        "a v3 tap writes the four-word standing, attributed to the agent");
+  check(v3.next_move && v3.next_move.key === "follow_up_today",
+        "and it carries the next move", v3.next_move.key);
+
+  const v2c = TO.resolveCapturedStanding({ fb: { disposition: "close_watch", future_fit: "close" }, recordedByUserId: RECORDER });
+  check(v2c.standing === "not_moving_forward" && v2c.next_move.closes_lead === true,
+        "a v2 close resolves and CLOSES the lead");
+
+  const v1c = TO.resolveCapturedStanding({ fb: { interest_level: "interested" }, recordedByUserId: RECORDER });
+  check(v1c.standing === null && v1c.tour_outcome_value === "interested",
+        "'interested' writes through UNCHANGED — not upgraded, not lost",
+        "the raw input is preserved; no judgment is invented");
+  check(!!v1c.unresolved_reason, "and the reason is recorded", "an honest blank that explains itself");
+
+  const noRec = TO.resolveCapturedStanding({ fb: { standing: "hot_lead" }, recordedByUserId: null });
+  check(noRec.standing === null && noRec.judged_by === null,
+        "a standing with NO recorder is refused", noRec.unresolved_reason);
+  check(noRec.tour_outcome_value === "hot_lead",
+        "but the raw value still survives", "input is never silently discarded");
+
+  // ── [7d] the service module still loads with the new wiring ────────
+  console.log("\n[7d] the capture service loads with the new dependency");
+  let svcOk = false, svcErrMsg = "";
+  try { require("../src/leasing/leasingleads"); svcOk = true; }
+  catch (e) { svcErrMsg = e.message; }
+  check(svcOk, "leasingleads.js resolves tour_outcome.js", svcOk ? "require graph intact" : svcErrMsg);
+
   // ── [8] the ask record binds ──────────────────────────────────────
   console.log("\n[8] tour_outcome_prompts — the CHECKs actually reject");
   const tour = (await pool.query(`select id from leasing_tours order by created_at desc limit 1`)).rows[0];

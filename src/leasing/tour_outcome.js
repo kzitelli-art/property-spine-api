@@ -265,6 +265,52 @@ function normalizeStanding({ standing = null, disposition = null,
 }
 
 /**
+ * resolveCapturedStanding — the decision the capture service makes, kept
+ * HERE rather than inline in the service so it can be exercised directly
+ * instead of copied into a test.
+ *
+ * Takes the raw feedback body (whatever vocabulary the UI is on) plus the
+ * SERVER-DERIVED recorder, and returns exactly what should be written.
+ *
+ * Two ways to end up with no standing, and they are different facts:
+ *   · the value could not be resolved   → reason names the missing distinction
+ *   · nobody was attributable           → reason says so
+ * Either way the raw value is preserved for the projection, so nothing the
+ * agent supplied is silently discarded.
+ */
+function resolveCapturedStanding({ fb = {}, recordedByUserId = null } = {}) {
+  const norm = normalizeStanding({
+    standing:       fb.standing || null,
+    disposition:    fb.disposition || null,
+    sub_read:       fb.sub_read || null,
+    future_fit:     fb.future_fit || null,
+    interest_level: fb.interest_level || null,
+  });
+
+  const raw = (fb.standing || fb.disposition || fb.interest_level) || null;
+
+  if (!norm.resolved) {
+    return { standing: null, judged_by: null, source: null, next_move: null,
+             unresolved_reason: norm.reason, tour_outcome_value: raw };
+  }
+  if (!recordedByUserId) {
+    // A standing with no attributable human is not a standing. Refuse to
+    // record it as one; keep the raw value so the input is not lost.
+    return { standing: null, judged_by: null, source: null, next_move: null,
+             unresolved_reason: "no server-derived recorder — a judgment with no judge is not a judgment",
+             tour_outcome_value: raw };
+  }
+  return {
+    standing: norm.standing,
+    judged_by: JUDGED_BY.AGENT,
+    source: norm.from,
+    next_move: NEXT_MOVE[norm.standing] || null,
+    unresolved_reason: null,
+    tour_outcome_value: norm.standing,   // the resolved word wins the projection
+  };
+}
+
+/**
  * captureLatencyMinutes — how long the fresh judgment sat before it was
  * recorded. Null when the tour has no slot (no honest end time exists) or
  * no capture happened. Never guessed: an unmeasurable latency reads as
@@ -283,4 +329,5 @@ module.exports = {
   STANDING, STANDING_VALUES, STANDING_LABEL, STANDING_HELP,
   JUDGED_BY, NEXT_MOVE, ATTENDANCE_NEXT_MOVE,
   resolveTourOutcome, captureLatencyMinutes, normalizeStanding,
+  resolveCapturedStanding,
 };
