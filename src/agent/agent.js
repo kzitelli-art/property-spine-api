@@ -213,6 +213,10 @@ module.exports = function agentModule(deps) {
   // these. Kept as constants so they're auditable and in the founder's voice.
   const FALLBACK_FAIRHOUSING =
     "I can give you the practical stuff, SOLO has controlled access, cameras, package lockers, and key-fob entry. For the neighborhood, I can point you to current public data so you can make your own call.";
+  // An assistance-animal reply that got blocked for quoting a pet charge. Says
+  // the true thing (no pet fee) and routes, without claiming a filing.
+  const FALLBACK_ESA =
+    "An assistance animal isn't a pet, so the pet fee and pet rent don't apply. The team handles accommodation requests directly and can see this conversation, they'll walk you through what's needed.";
   const FALLBACK_INVENTORY =
     "Let me check the live inventory before I give you the wrong unit. We can still get you in to see the building.";
   const FALLBACK_GENERAL =
@@ -313,9 +317,21 @@ module.exports = function agentModule(deps) {
       // Explicit accommodation request (ADA) — legally must be handled right.
       // NOTE: a general accessibility question ("is it wheelchair accessible")
       // is NOT this — that's an answerable building fact, left to the model.
-      [/\b(service animal|emotional support animal|esa|reasonable accommodation|request an accommodation|ada request)\b/,
+      // The ack must ANSWER, not just route. A real prospect asked "do I need to
+      // pay if it is an ESA animal" and received the old routing-only ack three
+      // times, including in reply to "it is illegal to charge for ESA animals"
+      // (he was substantially right). Because this is a deterministic pre-gate,
+      // the SAME string returns every time, so a content-free ack reads as a
+      // stonewall on a protected request. Two corrections: state the settled
+      // substance (an assistance animal is not a pet, so pet fees and pet rent
+      // do not apply), and drop the "I'm sending this to the right person"
+      // claim, which asserts a filing the AI does not perform (see :462).
+      // Erring toward "no fee" is the low-risk direction: wrongly charging for
+      // an assistance animal is a fair-housing violation; wrongly declining to
+      // charge is not.
+      [/\b(service animal|emotional support animal|assistance animal|esa|reasonable accommodation|request an accommodation|ada request)\b/,
         "accommodation_request",
-        "Got it, I'm sending this to the right person on the team now so it's handled properly."],
+        "An assistance animal isn't a pet, so the pet fee and pet rent don't apply. The team handles accommodation requests directly and can see this conversation, they'll walk you through what's needed."],
       // Explicit request for a person.
       [/\b(talk to (a|someone|a real)|speak (to|with) (a|someone)|call me|can i call|get me a (person|human|manager)|real person|human being)\b/,
         "human_requested",
@@ -340,6 +356,18 @@ module.exports = function agentModule(deps) {
       [/\b(good|bad|safe|dangerous|rough|sketchy|nice|great) (neighborhood|area|part of town|block|side of town)\b/, "fairhousing:neighborhood_character"],
       [/\b(crime rate|crime is|safe to walk|it'?s safe|is safe|very safe|totally safe|perfectly safe)\b/, "fairhousing:safety_claim"],
       [/\b(perfect for|ideal for|suited for|great for|good for) (families|singles|young professionals|students|christian|jewish|muslim|couples)/, "fairhousing:demographic_steering"],
+      // ESA / assistance animal quoted a PET CHARGE. Under the FHA an assistance
+      // animal is not a pet, so pet fees, pet deposits, and pet rent generally
+      // may not be charged. The pre-gate routes an explicit ESA request, but the
+      // model can still reach this pairing on its own (a live thread quoted
+      // "$300 one-time fee plus $30/month pet rent" one turn after an ESA
+      // question). This is the floor that makes the rule real.
+      [/\b(service animal|emotional support animal|assistance animal|esa)\b[\s\S]{0,240}(\$\s?\d|pet fee|pet rent|pet deposit)/, "fairhousing:esa_fee"],
+      [/(\$\s?\d|pet fee|pet rent|pet deposit)[\s\S]{0,240}\b(service animal|emotional support animal|assistance animal|esa)\b/, "fairhousing:esa_fee"],
+      // Area DEMOGRAPHIC composition, not just safety adjectives (Case 6C). A
+      // live reply said "University City overall skews younger because of the
+      // schools" — the older patterns above catch "safe/rough/nice", not this.
+      [/\b(skews?|mostly|mainly|largely|predominantly|a lot of|lots of|full of) (young|younger|older|students|families|kids|professionals|couples|singles|immigrants|retirees)\b/, "fairhousing:demographic_composition"],
     ];
     for (const [re, code] of blockPatterns) if (re.test(t)) return { decision: "blocked", code };
     return { decision: "safe", code: null };
@@ -540,6 +568,8 @@ Do not characterize the residents or steer by protected characteristics.
 
 OCCUPANCY IS NOT PEOPLE. You may describe how busy or full a SPACE is. You may not describe what the PEOPLE in it are like. "It rarely feels packed" is an observation about a room and is fine. "It's a nice, comfortable crowd" is a claim about residents and is not, however warmly it is meant. Same rule for the building overall: describe the expectation that residents respect their neighbors, never the type of community or the kind of people who live here. When you want to convey that somewhere is pleasant, say it with density, noise, hours, or space, never with a description of the residents.
 
+ASSISTANCE ANIMALS ARE NOT PETS. A service animal, emotional support animal, or ESA is an accommodation, not a pet. NEVER quote a pet fee, pet deposit, or pet rent in reply to one, and never say it falls under the pet policy. The pet fee and pet rent do not apply, and you may say so plainly. Never ask what someone's disability or condition is, and never ask for proof in the text thread. Do not promise approval either: it is a request the team processes. Say the charges do not apply, say the team handles the request and can see the conversation, and leave the paperwork to them. If a prospect tells you it is illegal to charge for an assistance animal, they are broadly right. Do not argue, and do not go silent on it.
+
 ALWAYS AFFIRM. Declining to characterize residents is NOT the same as declining to answer. When a prospect asks whether THEY or their household are welcome, the answer is yes, warmly and immediately, with no hedging and no counter-question first. Children, families, a wheelchair, a service or support animal, a religion, a country of origin, a language, a housing voucher: all welcome. Say so plainly, THEN help with the practical part.
 
 "I have 4 kids, is that okay?" is not a question about the resident mix. It is a person asking if they belong here. Answer: "Of course." Then talk layouts.
@@ -627,6 +657,7 @@ APPROVED SOLO PROFILE (stable building facts you may use directly):
 - Amenities: coworking and study spaces, fitness facilities, rooftop space, recreation areas, an indoor golf simulator, package lockers, controlled access, underground parking.
 - The fitness center is open 24/7. The GOLF SIMULATOR IS NOT: it keeps separate hours. Never fold the simulator into a 24/7 statement. If asked its hours specifically and you do not have them verified, say you are checking.
 - Solo is pet friendly, but current restrictions and charges must come from VERIFIED PROPERTY FACTS below.
+- Assistance animals (service animals and ESAs) are NOT pets and are NOT charged pet fees or pet rent. The documented process is a valid ESA letter from a licensed mental health professional sent to the leasing team. Never quote a pet charge against an assistance animal.
 
 FEES ARE CURRENTLY UNGOVERNED. The fee amounts (security deposit, amenity fee, pet fee) disagree across sources, so there is no single authority to quote yet. Until that is resolved, DEFER on fee amounts rather than asserting one: say you are checking the current fee sheet so you do not give the wrong number, then keep the conversation moving. Do not end on a holding statement, and do not pick whichever number appears first. The application fee and rent figures from LIVE UNIT DATA are unaffected by this and may be stated normally.
 
@@ -1466,7 +1497,13 @@ Reply with ONLY the message text.`;
       //    block also raises an INTERNAL QA signal (not a prospect handoff).
       let qaSignal = null; // { code } → TX2 logs it; never surfaced to the prospect
       if (policyDecision === "blocked") {
-        if (String(policyCode || "").startsWith("fairhousing:")) {
+        if (policyCode === "fairhousing:esa_fee") {
+          // The generic redirect talks about controlled access and cameras,
+          // which is a non-sequitur to an assistance-animal question. Answer
+          // the actual question instead.
+          generated = FALLBACK_ESA;
+          policyDecision = "safe"; policyCode = "esa_fee_redirected";
+        } else if (String(policyCode || "").startsWith("fairhousing:")) {
           generated = FALLBACK_FAIRHOUSING;
           policyDecision = "safe"; policyCode = "fairhousing_redirected";
         } else if (String(policyCode || "").startsWith("hallucinated_unit")) {
@@ -2016,7 +2053,8 @@ Reply with ONLY the message text.`;
         if (post.decision !== "safe") { policyDecision = post.decision; policyCode = post.code; }
       }
       if (policyDecision === "blocked") {
-        if (String(policyCode || "").startsWith("fairhousing:")) { generated = FALLBACK_FAIRHOUSING; policyDecision = "safe"; policyCode = "fairhousing_redirected"; }
+        if (policyCode === "fairhousing:esa_fee") { generated = FALLBACK_ESA; policyDecision = "safe"; policyCode = "esa_fee_redirected"; }
+        else if (String(policyCode || "").startsWith("fairhousing:")) { generated = FALLBACK_FAIRHOUSING; policyDecision = "safe"; policyCode = "fairhousing_redirected"; }
         else { generated = FALLBACK_GENERAL; policyDecision = "safe"; policyCode = "general_recovered"; }
       }
       if (!generated || !generated.trim()) { if (!genErr) { generated = FALLBACK_GENERAL; policyDecision = "safe"; policyCode = "empty_recovered"; } }

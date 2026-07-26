@@ -90,6 +90,44 @@ check("pipeline: end-to-end leaves no markup", finished,
 check("pipeline: no em/en dash escapes", finished,
   s => !s.includes("—") && !s.includes("–"), "no AI dashes");
 
+// ─── Case 7A: assistance animals are never charged a pet fee ─────────────────
+const { preGenerationPolicy, postGenerationPolicy } = router.__test__;
+
+// The VERBATIM live reply, sent one turn after an ESA question on 2026-07-22.
+const LIVE_CAT_FEE =
+  "Cats are also welcome, same policy: $300 one-time fee plus $30/month pet rent. " +
+  "But if you're bringing an ESA, the team's going to handle that conversation properly.";
+check("ESA: a pet charge beside an assistance animal is blocked", postGenerationPolicy(LIVE_CAT_FEE),
+  r => r.code === "fairhousing:esa_fee", "blocked as fairhousing:esa_fee");
+check("ESA: blocked in the other word order too",
+  postGenerationPolicy("For an emotional support animal it's a $300 one-time fee."),
+  r => r.code === "fairhousing:esa_fee", "order-independent");
+check("ESA: an ordinary pet reply is NOT blocked",
+  postGenerationPolicy("Yep! It's a $300 one-time pet fee plus $30/month pet rent, and there's a dog run."),
+  r => r.code !== "fairhousing:esa_fee", "normal pet answers still send");
+
+// The pre-gate ack must ANSWER, not merely route, and must not claim a filing.
+const esaAck = preGenerationPolicy("Do I need to pay if it is an ESA animal");
+check("ESA: pre-gate still routes to a human", esaAck,
+  r => r.decision === "requires_handoff" && r.code === "accommodation_request",
+  "accommodation requests keep deterministic routing");
+check("ESA: the ack states the fee does not apply", esaAck,
+  r => /isn'?t a pet|don'?t apply/i.test(r.ack || ""), "substantive, not routing-only");
+check("ESA: the ack no longer claims a filing", esaAck,
+  r => !/sending this to the right person|i'?m filing|submitted/i.test(r.ack || ""),
+  "no claim of an action the AI does not perform");
+check("ESA: 'assistance animal' also trips the gate",
+  preGenerationPolicy("i have an assistance animal"),
+  r => r.decision === "requires_handoff", "wording variant covered");
+
+// ─── Case 6C: area DEMOGRAPHIC composition, not just safety adjectives ────────
+check("area: demographic composition claim is blocked",
+  postGenerationPolicy("University City overall skews younger because of the schools."),
+  r => r.code === "fairhousing:demographic_composition", "blocked");
+check("area: occupancy observation still allowed",
+  postGenerationPolicy("It rarely feels packed even when people are in there."),
+  r => r.code !== "fairhousing:demographic_composition", "density is not demography");
+
 // ─── Case G: the opener must not force a choice between two slots ────────────
 // The pre-fix opener drew "why so pushy for tour i just filled out form" from a
 // real prospect. Offering a tour early is NOT the defect; naming two specific
