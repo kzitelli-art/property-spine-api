@@ -122,11 +122,44 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     });
 
     // Cache latest stage for fast queue reads (conversation rungs only).
+    //
+    //  THE STAGE ONLY EVER ADVANCES. This wrote the new rung unconditionally,
+    //  which meant a SECOND tour for someone already in applicant_followup
+    //  dragged the whole relationship back to tour_followup — the person had
+    //  applied, and the board would have started asking for the tour
+    //  follow-up again. Caught live on Kameron Zitelli's walk-in.
+    //
+    //  A later tour is a real event and deserves its own obligation; it is
+    //  not evidence that the relationship went backwards. Opening a
+    //  tour_followup rung is correct. Re-labelling the RELATIONSHIP as
+    //  tour_followup is not.
+    //
+    //  The ladder is the existing one (see the rung list this module already
+    //  uses for owner reassignment) — no second lifecycle invented. An
+    //  unranked rung is left alone rather than guessed at.
+    //  Guarded IN SQL rather than in JS: the caller hands us a `conversion`
+    //  object that may already be stale by the time several rungs spawn in one
+    //  transaction, and a stale read here would let the regression back in.
+    //  One statement, atomic, no read-then-write window. An unranked rung
+    //  (array_position -> null) advances nothing rather than being guessed at.
     if (cfg.kind === "conversation") {
-      await client.query(
-        `update leasing_conversions set current_stage=$1, updated_at=now() where id=$2`,
-        [rung, conversion.id]
+      const LADDER = ["tour_followup", "applicant_followup", "lease_signature_followup"];
+      const advanced = await client.query(
+        `update leasing_conversions
+            set current_stage=$1, updated_at=now()
+          where id=$2
+            and array_position($3::text[], $1) is not null
+            and coalesce(array_position($3::text[], current_stage), 0)
+                < array_position($3::text[], $1)
+          returning id`,
+        [rung, conversion.id, LADDER]
       );
+      if (!advanced.rows.length) {
+        // Not an advance — still a real touch on the relationship, so the
+        // timestamp moves while the position does not.
+        await client.query(
+          `update leasing_conversions set updated_at=now() where id=$1`, [conversion.id]);
+      }
     }
     return { obligation: ob, link };
   }
