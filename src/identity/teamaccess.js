@@ -374,6 +374,8 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
 
         const propRow = (await client.query(
           `select id, name from properties where id=$1`, [inv.property_id])).rows[0];
+        const prRow = (await client.query(
+          `select platform_role from users where id=$1`, [user.id])).rows[0];
 
         await client.query("commit");
         return res.json({
@@ -386,6 +388,7 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
           allowed_modules: a.allowed_modules,
           can_manage_roles: a.can_manage_roles,
           landing_module: landingModule(a.allowed_modules, a.primary_for_modules),
+          platform_role: prRow ? (prRow.platform_role || "member") : "member",
         });
       }
 
@@ -440,6 +443,8 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
 
       const propRow2 = (await client.query(
         `select id, name from properties where id=$1`, [inv.property_id])).rows[0];
+      const prRow2 = (await client.query(
+        `select platform_role from users where id=$1`, [user.id])).rows[0];
 
       await client.query("commit");
 
@@ -453,6 +458,7 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
         allowed_modules: inv.allowed_modules,
         can_manage_roles: inv.can_manage_roles,
         landing_module: landing,
+        platform_role: prRow2 ? (prRow2.platform_role || "member") : "member",
       });
     } catch (e) {
       try { await client.query("rollback"); } catch (_) {}
