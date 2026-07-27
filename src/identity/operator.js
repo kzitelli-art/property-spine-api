@@ -1453,6 +1453,18 @@ module.exports = function operatorModule(deps) {
     } catch (e) { return res.status(500).json({ error: e.message }); }
   });
 
+  // THE ONE DECISION. Read-only; approval is a separate explicit action that
+  // is deliberately NOT mounted until ownership approves.
+  router.get("/operator/economics/application-fee-decision", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { applicationFeeDecision } = require("../money/application_fee_decision");
+      return res.json(await applicationFeeDecision(pool, {
+        property_id: req.operator.property_id, user_id: req.operator.id,
+      }));
+    } catch (e) { return res.status(500).json({ error: "decision unavailable" }); }
+  });
+
   router.get("/operator/economics/decision-room", requireOperator, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
