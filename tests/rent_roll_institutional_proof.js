@@ -66,10 +66,19 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
     "security deposit is blank on every row until its meaning is governed");
   ok(inst.reconciliation.statements.some(s => /deposit claims exist but have not yet been mapped/i.test(s)),
     "and the reconciliation SAYS why, rather than leaving an unexplained empty column");
-  ok(inst.rows.every(r => r.unit_type === "Not configured"),
-    "unit type reads Not configured until a governed mapping exists");
+  // Unit types now come from the reviewed mapping receipt. What must hold is
+  // that they are GOVERNED labels, that no raw source code is presented as a
+  // type, and that the one position with no deterministic source row stays
+  // honestly unconfigured rather than being inferred from bedrooms or sqft.
+  const types = [...new Set(inst.rows.map(r => r.unit_type))];
+  ok(types.length > 1, `unit types come from governed mappings (${types.length} distinct)`);
+  ok(types.some(t => /Studio|Bed|Commercial/.test(t)), `governed labels are human-readable (${types.filter(t => t !== "Not configured").slice(0, 3).join(", ")}…)`);
+  ok(!types.some(t => /_0\d$|^[0-9S]\.\d[A-Z]{2}/.test(t)), "no raw source code (S.1UN_02) is presented as a type");
+  const unconfigured = inst.rows.filter(r => r.unit_type === "Not configured");
+  ok(unconfigured.length === 1,
+    `exactly the unmatched position stays Not configured (${unconfigured.map(r => r.position).join(", ")})`);
   ok(!JSON.stringify(inst.rows).includes("market_rent"), "no market_rent value reaches the schedule");
-  ok(!JSON.stringify(inst).includes("S.1UN_02"), "no raw source unit-type code is presented as a type");
+  ok(!JSON.stringify(inst).includes("S.1UN_02"), "no raw source unit-type code appears anywhere in the report");
 
   console.log("\n== CONTESTED NEVER ENTERS TRUSTED RENT ==");
   const contestedRows = inst.rows.filter(r => r._axes.tenancy_state === "contested");
