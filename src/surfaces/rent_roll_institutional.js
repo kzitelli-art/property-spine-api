@@ -58,7 +58,17 @@ const COLUMNS = [
   { key: "status",            label: "Status" },
 ];
 
-const ymd = (v) => (v ? String(v).slice(0, 10) : "");
+// Dates arrive as either an ISO string or a pg Date. String(date).slice(0,10)
+// on a Date yields "Wed Jul 22" — a locale string, not a date — which is
+// exactly the kind of thing that reads as fine until a lender opens the CSV.
+const ymd = (v) => {
+  if (!v) return "";
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? "" : v.toISOString().slice(0, 10);
+  const s = String(v);
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? "" : d.toISOString().slice(0, 10);
+};
 
 // Occupancy / exception state in language an owner or lender reads without a
 // glossary. The canonical axes stay available in the raw rows beneath.
