@@ -348,7 +348,7 @@ module.exports = function superAdminModule({ pool }) {
   router.patch("/admin/users/:id", requireSuperAdmin, async (req, res) => {
     try {
       const { platform_role, organization_id, status } = req.body || {};
-      const allowed_roles = ["super_admin", "member"];
+      const allowed_roles = ["super_admin", "org_admin", "member"];
       if (platform_role && !allowed_roles.includes(platform_role)) {
         return res.status(400).json({ error: `platform_role must be one of: ${allowed_roles.join(", ")}` });
       }
@@ -368,6 +368,91 @@ module.exports = function superAdminModule({ pool }) {
       res.json(updated);
     } catch (e) {
       console.error("admin/users patch error", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── GET /admin/users/:id — single user with assignments ─────────────────
+  router.get("/admin/users/:id", requireSuperAdmin, async (req, res) => {
+    try {
+      const user = (await pool.query(
+        `select u.id, u.name, u.email, u.phone, u.platform_role, u.status,
+                u.organization_id, u.created_at,
+                o.name as organization_name
+           from users u
+           left join organizations o on o.id = u.organization_id
+          where u.id = $1`,
+        [req.params.id]
+      )).rows[0];
+      if (!user) return res.status(404).json({ error: "User not found." });
+
+      const assignments = (await pool.query(
+        `select a.id, a.property_id, coalesce(p.display_name, p.name) as property_name,
+                a.role_title, a.role_key, a.allowed_modules, a.can_manage_roles, a.active
+           from property_team_assignments a
+           join properties p on p.id = a.property_id
+          where a.user_id = $1
+          order by p.name`,
+        [req.params.id]
+      )).rows;
+
+      res.json({ ...user, assignments });
+    } catch (e) {
+      console.error("admin/users/:id error", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── PATCH /admin/users/:id/assignments/:assignmentId ─────────────────────
+  // Update role_key or active on a single assignment
+  router.patch("/admin/users/:id/assignments/:assignmentId", requireSuperAdmin, async (req, res) => {
+    try {
+      const { role_key, active } = req.body || {};
+
+      const ROLE_MODULE_MAP = {
+        maintenance_tech: { allowed: ["maintenance"],                                         primary: ["maintenance"],  can_manage: false },
+        leasing_agent:    { allowed: ["leasing"],                                              primary: ["leasing"],      can_manage: false },
+        property_manager: { allowed: ["management","leasing","maintenance"],                   primary: ["management"],   can_manage: false },
+        property_admin:   { allowed: ["management","leasing","maintenance","reporting"],        primary: ["management"],   can_manage: true  },
+        owner:            { allowed: ["management","leasing","maintenance","reporting","capital"], primary: ["management"], can_manage: true },
+      };
+
+      if (role_key && !ROLE_MODULE_MAP[role_key]) {
+        return res.status(400).json({ error: `role_key must be one of: ${Object.keys(ROLE_MODULE_MAP).join(", ")}` });
+      }
+
+      const preset = role_key ? ROLE_MODULE_MAP[role_key] : null;
+      const roleLabel = role_key
+        ? ((await pool.query(`select label from staff_roles where key = $1`, [role_key])).rows[0] || {}).label || role_key
+        : null;
+
+      const updated = (await pool.query(
+        `update property_team_assignments
+            set role_key            = coalesce($1, role_key),
+                role_title          = coalesce($2, role_title),
+                allowed_modules     = coalesce($3, allowed_modules),
+                primary_for_modules = coalesce($4, primary_for_modules),
+                can_manage_roles    = coalesce($5, can_manage_roles),
+                active              = coalesce($6, active),
+                updated_at          = now()
+          where id = $7 and user_id = $8
+          returning id, property_id, role_key, role_title, allowed_modules, can_manage_roles, active`,
+        [
+          role_key || null,
+          roleLabel,
+          preset ? preset.allowed : null,
+          preset ? preset.primary : null,
+          preset != null ? preset.can_manage : null,
+          active != null ? active : null,
+          req.params.assignmentId,
+          req.params.id,
+        ]
+      )).rows[0];
+
+      if (!updated) return res.status(404).json({ error: "Assignment not found." });
+      res.json(updated);
+    } catch (e) {
+      console.error("admin/users/:id/assignments patch error", e);
       res.status(500).json({ error: e.message });
     }
   });
