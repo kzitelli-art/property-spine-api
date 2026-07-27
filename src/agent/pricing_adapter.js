@@ -37,9 +37,14 @@ const HANDOFF = (reason, detail) => ({
  *  ctx: { property_id, space_id?, unit_type_id?, lease_term_months?, intent? }
  *       intent: 'new_lease' | 'renewal'   (default new_lease)
  */
-async function quotablePricing(pool, ctx = {}) {
+async function quotablePricing(pool, ctx = {}, opts = {}) {
   const { property_id, space_id = null, unit_type_id = null,
           lease_term_months = null, intent = "new_lease" } = ctx;
+  // opts.picture lets the publication PREVIEW run this exact function against
+  // a proposed sheet. The seam is here rather than in the caller so there is
+  // one refusal path, not a copy of it: a preview that reimplemented these
+  // rules would prove nothing about what the live path will say.
+  const preloaded = opts.picture || null;
 
   if (!property_id) return HANDOFF("no_property_context", "The conversation is not bound to a property.");
 
@@ -59,14 +64,24 @@ async function quotablePricing(pool, ctx = {}) {
                : "No unit type or rentable position was supplied.");
   }
 
-  const pricing = await effectivePropertyPricing(pool, { property_id });
+  const pricing = preloaded || await effectivePropertyPricing(pool, { property_id });
+
+  // TYPE APPLICABILITY IS TESTED BEFORE VERSION PRESENCE, deliberately. A
+  // non-residential type has no residential pricing whether or not a version
+  // exists, so answering "no version is published" there would imply that
+  // publishing one would produce a price for it. Its legacy numeric value is
+  // evidence, and a zero must never reach a prospect as an authorized offer.
+  const type = pricing.unit_types.find((t) => String(t.unit_type_id) === String(typeId));
+  if (!type) return HANDOFF("unit_type_not_in_property", "That unit type does not belong to this property.");
+  if (type.offer_state === "not_applicable_to_residential_pricing")
+    return HANDOFF("not_applicable_to_residential_pricing",
+      `${type.label} is not residential inventory and has no residential pricing.`);
+
   if (!pricing.published_version) {
     return HANDOFF("no_published_pricing_version",
       "No governed pricing version is published and effective for this property.");
   }
 
-  const type = pricing.unit_types.find((t) => String(t.unit_type_id) === String(typeId));
-  if (!type) return HANDOFF("unit_type_not_in_property", "That unit type does not belong to this property.");
   if (type.offer_state === "not_offered")
     return HANDOFF("type_not_offered", `${type.label} is not currently offered.`);
   if (type.offer_state === "pricing_unavailable" || type.offer_state === "not_addressed")

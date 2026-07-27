@@ -1256,6 +1256,49 @@ module.exports = function operatorModule(deps) {
   });
 
   // ══════════════════════════════════════════════════════════════════
+  // GET /operator/pricing/decision-packet?as_of=&horizon_days=
+  //   The ownership decision surface for version one. Read-only: it borrows
+  //   every derivation from the canonical reads, recommends nothing, and
+  //   writes nothing.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/pricing/decision-packet", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { pricingDecisionPacket } = require("../money/pricing_decision_packet");
+      const out = await pricingDecisionPacket(pool, {
+        property_id: req.operator.property_id,   // session only
+        as_of: req.query.as_of || null,
+        horizon_days: Number(req.query.horizon_days) || 90,
+      });
+      return res.json(out);
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  // POST /operator/pricing/publication-preview
+  //   DRY RUN. Accepts a proposed sheet and returns what would happen.
+  //   Deliberately a POST that WRITES NOTHING — the body is a proposal, not
+  //   a command, and the response says `dry_run_no_write_performed`. There is
+  //   no publish route to fall through to.
+  // ══════════════════════════════════════════════════════════════════
+  router.post("/operator/pricing/publication-preview", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { previewPublication } = require("../money/pricing_publication_preview");
+      const out = await previewPublication(pool, {
+        property_id: req.operator.property_id,   // session only, never the body
+        proposal: (req.body && req.body.proposal) || {},
+        as_of: (req.body && req.body.as_of) || null,
+      });
+      return res.json(out);
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
   // GET /operator/rent-roll/institutional?as_of=&format=json|csv
   //   The formal as-of schedule for ownership, lenders and reporting. Same
   //   canonical read as the operating page — reshaped, never recomputed —

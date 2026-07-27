@@ -72,7 +72,16 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
   ok(eff.published_version === null, "no published version exists");
   ok(eff.absence && eff.absence.reason === "no_published_pricing_version", "absence is named, not an empty object");
   ok(eff.unit_types.length === 9, `every governed type is listed (${eff.unit_types.length})`);
-  ok(eff.unit_types.every(t => t.offer_state === "no_published_version"), "each type reports it has no published pricing");
+  // Every RESIDENTIAL type reports it has no published pricing. A
+  // non-residential type reports something stronger and different: it is
+  // outside residential pricing entirely, so publishing a version would not
+  // give it a price either.
+  ok(eff.unit_types.filter(t => t.residential_positions > 0)
+       .every(t => t.offer_state === "no_published_version"),
+    "each residential type reports it has no published pricing");
+  ok(eff.unit_types.filter(t => t.residential_positions === 0)
+       .every(t => t.offer_state === "not_applicable_to_residential_pricing"),
+    "a non-residential type is outside residential pricing, not merely unpriced");
   ok(eff.completeness.types_requiring_decision > 0,
     `${eff.completeness.types_requiring_decision} types have marketable inventory and owe a decision`);
   ok(eff.completeness.complete === false, "completeness is false without a version");

@@ -64,6 +64,7 @@ async function effectivePropertyPricing(pool, { property_id, as_of = null } = {}
   // position is not a pricing decision anybody owes.
   const inventory = (await pool.query(
     `select u.unit_type_id, count(*)::int positions,
+            count(*) filter (where s.use_type = 'residential')::int residential_positions,
             count(*) filter (where coalesce(u.is_down,false)=false
               and coalesce(u.operating_use,'standard')='standard'
               and s.use_type = 'residential')::int marketable_positions
@@ -121,10 +122,19 @@ async function effectivePropertyPricing(pool, { property_id, as_of = null } = {}
   }
 
   const unit_types = types.map((ty) => {
-    const inv = invByType.get(String(ty.id)) || { positions: 0, marketable_positions: 0 };
+    const inv = invByType.get(String(ty.id)) || { positions: 0, residential_positions: 0, marketable_positions: 0 };
+
+    // A type with NO residential positions is outside residential pricing
+    // entirely. It is not "unpriced" and it is certainly not offered at the
+    // legacy value its rows happen to carry — the commercial space carries
+    // market_rent = 0, and a numeric zero must never be able to surface as an
+    // authorized offer. It owes no decision and is said to owe none.
+    const residentialApplicable = inv.residential_positions > 0;
+
     const rows = (termsByType.get(String(ty.id)) || []).filter((t) => !t.override_scope);
     const offered = rows.filter((t) => t.offer_state === "offered");
-    const state = !version ? "no_published_version"
+    const state = !residentialApplicable ? "not_applicable_to_residential_pricing"
+      : !version ? "no_published_version"
       : rows.length === 0 ? "not_addressed"
       : offered.length ? "offered"
       : rows[0].offer_state;   // not_offered | pricing_unavailable
@@ -133,8 +143,12 @@ async function effectivePropertyPricing(pool, { property_id, as_of = null } = {}
       code: ty.code,
       label: ty.label,
       positions: inv.positions,
+      residential_positions: inv.residential_positions,
       marketable_positions: inv.marketable_positions,
-      requires_pricing_decision: inv.marketable_positions > 0,
+      requires_pricing_decision: residentialApplicable && inv.marketable_positions > 0,
+      // The legacy value on a non-residential type is EVIDENCE, never an
+      // offer, and is not carried into this response at all.
+      legacy_value_disposition: residentialApplicable ? null : "legacy_evidence_only",
       offer_state: state,
       terms: offered.map((t) => ({
         lease_term_months: t.lease_term_months,
