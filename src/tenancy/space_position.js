@@ -29,6 +29,30 @@ function datesSpan(lease, asOf) {
 function isFuture(lease, asOf) {
   return !!(lease && lease.start_date && lease.start_date > asOf);
 }
+// Two non-terminal leases on one space whose date ranges intersect. An open
+// end_date runs forever. This is the ONE definition of a contested position.
+function rangesOverlap(a, b) {
+  if (!a || !b || !a.start_date || !b.start_date) return false;
+  const aEnd = a.end_date ? String(a.end_date) : "9999-12-31";
+  const bEnd = b.end_date ? String(b.end_date) : "9999-12-31";
+  return String(a.start_date) <= bEnd && String(b.start_date) <= aEnd;
+}
+
+// HOW WE KNOW A LEASE IS TRUE — one answer, shared by every surface.
+//   native_verified          executed through Spine AND required move-in
+//                            funds cleared. The governed locked rule.
+//   confirmed_opening_import accepted as the property's opening contractual
+//                            truth from a governed source.
+//   unproven                 anything else. Never counts as locked.
+// Deliberately NOT collapsed: an imported lease is real operating truth, but
+// it did not pass proof steps it never passed, and the difference stays visible.
+function proofBasis(lease) {
+  if (!lease) return null;
+  if (lease.executed_verified && lease.move_in_funds_cleared) return "native_verified";
+  if (lease.source_type === "historical_snapshot" && lease.confidence === "confirmed") return "confirmed_opening_import";
+  return "unproven";
+}
+
 function tenantList(lease, personNames) {
   return (lease.tenant_ids || []).filter(Boolean).map((person_id) => ({
     person_id,
@@ -155,9 +179,29 @@ async function spacePosition(pool, { property_id, as_of = null }) {
             'id', l.id, 'lease_status', l.lease_status,
             'start_date', l.start_date, 'end_date', l.end_date,
             'rent', l.rent, 'tenant_ids', l.tenant_ids,
-            'economic_tenancy_activated_at', l.economic_tenancy_activated_at)
+            'economic_tenancy_activated_at', l.economic_tenancy_activated_at,
+            -- PROOF INPUTS (shared derivation). Carried here so every surface
+            -- reads ONE answer to "how do we know this lease is true" instead
+            -- of each re-deriving it. native = executed AND funded through
+            -- Spine; opening = accepted historical import; else unproven.
+            'source_type', l.source_type,
+            'confidence', l.confidence,
+            'executed_verified', (er.id is not null),
+            -- FUNDED means every required move-in charge is paid with nothing
+            -- outstanding. Absence of a charge set is NOT funded.
+            'move_in_funds_cleared', (
+              exists (select 1 from scheduled_charges c
+                       where c.lease_id = l.id and c.is_move_in_required = true)
+              and not exists (select 1 from scheduled_charges c
+                       where c.lease_id = l.id and c.is_move_in_required = true
+                         and (c.status <> 'paid'
+                              or coalesce(c.amount,0) - coalesce(c.amount_paid,0) > 0))
+            ))
            order by l.start_date, l.created_at)
-           from leases l where l.space_id=s.id) as leases,
+           from leases l
+           left join executed_lease_records er
+             on er.lease_id = l.id and er.record_state = 'verified'
+          where l.space_id=s.id) as leases,
         (select json_agg(json_build_object(
             'event_type', ue.event_type, 'effective_date', ue.effective_date,
             'created_at', ue.created_at, 'status', ue.status,
@@ -252,7 +296,52 @@ async function spacePosition(pool, { property_id, as_of = null }) {
       end_date: lease.end_date || null,
       rent: lease.rent == null ? null : Number(lease.rent),
       tenants: tenantList(lease, personNames),
+      proof_basis: proofBasis(lease),
     } : null;
+
+    // ── SHARED DERIVATIONS (one answer, every surface) ────────────────
+    // These used to be re-derived per screen: notice in three separate SQL
+    // fragments, conflict nowhere, successor nowhere. Deriving them once here
+    // is what keeps Current Rent Roll, Renewals, Availability and Future Rent
+    // Roll as different VIEWS of one truth rather than four meanings of it.
+
+    // CONFLICT: two non-terminal leases whose date ranges overlap. A contested
+    // position is NOT a successor relationship — we cannot say which lease
+    // governs, so it must never be silently resolved to the first match.
+    const conflicting = [];
+    for (let i = 0; i < leases.length; i++) {
+      for (let j = i + 1; j < leases.length; j++) {
+        if (rangesOverlap(leases[i], leases[j])) {
+          conflicting.push(leases[i].id, leases[j].id);
+        }
+      }
+    }
+    const conflict_ids = [...new Set(conflicting)];
+
+    // SUCCESSOR of the lease that governs as_of: the earliest non-terminal
+    // lease starting at or after it ends, that does NOT overlap it (an
+    // overlapping lease is a conflict, not a succession).
+    const governing = current || activationPending || null;
+    let successor = { state: "none", lease_id: null, proof_basis: null, locked: false };
+    if (governing && governing.end_date) {
+      const next = leases
+        .filter((l) => l.id !== governing.id
+          && l.start_date && String(l.start_date) >= String(governing.end_date)
+          && !rangesOverlap(l, governing))
+        .sort((a, b) => String(a.start_date).localeCompare(String(b.start_date)))[0] || null;
+      if (next) {
+        // LOCKED uses the SAME governed rule as everywhere else: executed AND
+        // funded. A 'pending' lease_status alone never closes the economic
+        // position — that is precisely the certainty this system must not fake.
+        const locked = !!(next.executed_verified && next.move_in_funds_cleared);
+        successor = {
+          state: locked ? "locked" : "pending",
+          lease_id: next.id,
+          proof_basis: proofBasis(next),
+          locked,
+        };
+      }
+    }
 
     return {
       space_id: row.space_id,
@@ -275,6 +364,12 @@ async function spacePosition(pool, { property_id, as_of = null }) {
       available_from,
       reason,
       next_required_action,
+      // ── shared facts (additive; existing consumers are unaffected) ──
+      notice_state: row.notice_date ? "on_notice" : "none",
+      notice_date: row.notice_date || null,
+      conflict_state: conflict_ids.length ? "conflicted" : "clear",
+      conflicting_lease_ids: conflict_ids,
+      successor,
       _compat_occupancy: row.compat_occupancy,
     };
   });

@@ -5,59 +5,65 @@
 //  90 days? Canonical leases and expiration dates only. No fixtures, no
 //  spreadsheet reconciliation, no forecast.
 //
-//  WRITES NOTHING. There is no renewals table and there must not be one —
-//  the cohort is DERIVED from leases / spaces / units / unit_events every
-//  time it is read. (Same discipline as availability.js and
-//  space_position.js: no parallel inventory, no hand-maintained list.)
+//  WRITES NOTHING, and DERIVES NOTHING THAT IS SHARED. Lease-spanning,
+//  successor state, notice, conflict, availability and proof basis all
+//  come from the ONE canonical dated derivation (tenancy/space_position).
+//  This module adds only what is specific to the renewal WORK view:
+//  urgency banding, days remaining, ordering, and conversation context.
 //
-//  SERVER-AUTHORED, APP NEVER RE-DERIVES: notice state, ordering, day
-//  counts and proof basis are computed HERE, once. The renderer displays
-//  the decision; it never reproduces the precedence client-side. This is
-//  the rule the previous Renewals door broke by computing its buckets in
-//  index.html from an imported rent-roll snapshot.
+//  Rev 2 (owner review, 2026-07-27) corrected two long-term defects found
+//  while the slice was still small:
 //
-//  FACT BOUNDARIES (owner rulings, 2026-07-27) — each of these is a place
-//  a plausible-looking wrong answer was available and is refused:
-//   · current rent comes ONLY from leases.rent. Never units.market_rent —
-//     that column is a different concept and disagrees with in-place rent
-//     in 105 of 114 studios measured.
+//   1. NO SUCCESSOR AWARENESS. The cohort was "any lease expiring in 90
+//      days", so 49 of 92 positions that ALREADY had a next lease were
+//      shown as open renewal decisions. That is the replacement rule
+//      failing at its first opportunity. A position must never appear
+//      more certain — or more available — than the evidence supports.
+//
+//   2. A THIRD NOTICE QUERY. notice_given was being re-derived here, in
+//      availability.js and in space_position.js. Shared facts are derived
+//      once; each surface adds context, not a new meaning.
+//
+//  THE THREE PERMANENT OUTCOMES for an expiring position:
+//    successor_state = none    → OPEN RENEWAL DECISION (the work list)
+//    successor_state = pending → SUCCESSOR PENDING, NOT LOCKED
+//                                (zero locked rent, zero projected rent,
+//                                 visible as unresolved exposure — never
+//                                 silently removed, never counted as open)
+//    successor_state = locked  → LOCKED FUTURE POSITION (leaves this door;
+//                                 feeds the Future Rent Roll)
+//  A date-conflicted lease is NOT a successor. It is a contested position
+//  and is excluded with an explicit conflict reason, appearing in neither
+//  the open nor the pending set.
+//
+//  'locked' uses the SAME governed rule as everywhere else — executed AND
+//  funded. A 'pending' lease_status alone never closes the economic
+//  position.
+//
+//  FACT BOUNDARIES (owner rulings) — each a place a plausible wrong answer
+//  was available and is refused:
+//   · current rent comes ONLY from leases.rent. Never units.market_rent,
+//     which disagrees with in-place rent in 105 of 114 studios measured.
 //   · notice comes ONLY from a governed notice_given unit_event. Silence
-//     is 'unresolved', which is NOT "waiting for a response" — we have not
-//     asked. There are currently ZERO notice_given events in the database,
-//     so every row is honestly 'unresolved'.
-//   · no renewed state. Distinguishing a signed renewal from a signed new
-//     lease requires lease-origin classification, which does not exist.
-//     Inventing the bucket would be a confident wrong. R1 is the OPEN
-//     renewal-work cohort, not completed-renewal history.
-//   · identity absence and accountability absence are DIFFERENT absences.
-//     A missing resident is 'Resident not linked'. UNASSIGNED is reserved
-//     for the accountable work owner and is never used for identity.
+//     is 'unresolved' — NOT "waiting for a response", because we have not
+//     asked.
+//   · no renewed state. Separating a signed renewal from a signed new
+//     lease needs lease-origin classification, which does not exist.
+//   · identity absence ≠ accountability absence. A missing resident is
+//     "Resident not linked". UNASSIGNED is only ever the work owner.
 //
-//  OWNERSHIP — an explicit product fact, not a failed lookup. No renewal
-//  obligation exists yet, so there is no candidate source. We do NOT call
-//  resolveEligibleOwner with an empty candidate list 92 times to be told
-//  what we already know. We state it: UNASSIGNED, because renewal work has
-//  not been created. When R2 creates governed renewal obligations, those
-//  obligations carry candidates and the canonical resolver replaces this
-//  constant — the shape of the field does not change.
-//
-//  OUT OF SCOPE (R1): renewal decisions, offers, pricing writes,
-//  lease-origin inference, historical renewal rates, forward economic
-//  schedules, Commitment Ledger activation, Future Rental projection, and
-//  pending-lease / application / lead / tour analytics.
+//  OWNERSHIP is a stated product fact, not a failed lookup: no renewal
+//  obligation exists, so there is no candidate source. We do not call
+//  resolveEligibleOwner with an empty list to be told what we know. When
+//  R2 creates governed renewal obligations they carry candidates and the
+//  canonical resolver replaces this constant.
 // ════════════════════════════════════════════════════════════════════
 
 "use strict";
 
-// The lease must be GOVERNING today to be renewable. Pending leases are
-// deliberately outside R1: a pending lease is not yet contractual truth
-// (space_position.js holds the same line), and R1 shows work on real
-// current tenancies, not on activation backlog.
-const GOVERNING_LEASE_STATUSES = ["active", "commercial"];
+const { spacePosition } = require("../tenancy/space_position");
 
 const DEFAULT_HORIZON_DAYS = 90;
-
-// Ownership is a stated fact in R1, not a resolution outcome.
 const R1_OWNER_STATE = "UNASSIGNED";
 const R1_OWNER_REASON = "renewal_work_not_created";
 
@@ -66,137 +72,128 @@ function ymd(value) {
   const d = value instanceof Date ? value : new Date(value);
   return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
 }
+function daysBetween(fromYmd, toYmd) {
+  const a = new Date(`${fromYmd}T00:00:00Z`).getTime();
+  const b = new Date(`${toYmd}T00:00:00Z`).getTime();
+  return Math.round((b - a) / 86400000);
+}
+function band(days) {
+  return days < 30 ? "d0_30" : days < 60 ? "d31_60" : "d61_90";
+}
 
 async function renewalsCohort(pool, { property_id, horizon_days = DEFAULT_HORIZON_DAYS } = {}) {
   if (!property_id) throw new Error("renewalsCohort requires property_id");
   const horizon = Number.isFinite(Number(horizon_days)) ? Number(horizon_days) : DEFAULT_HORIZON_DAYS;
 
-  const { rows } = await pool.query(
-    `select
-        l.id                as lease_id,
-        l.rent              as current_rent,
-        l.end_date          as expires_on,
-        (l.end_date::date - current_date)::int as days_until_expiration,
-        s.id                as space_id,
-        s.space_label,
-        u.id                as unit_id,
-        u.unit_number,
-        -- PRIMARY RESIDENT: the first linked tenant. tenant_ids may be empty
-        -- (imported leases without a person bridge) — that is an identity
-        -- absence and must render as "Resident not linked", never UNASSIGNED.
-        (l.tenant_ids)[1]   as person_id,
-        p.name              as resident_name,
-        coalesce(array_length(l.tenant_ids, 1), 0) as resident_count,
-        -- PERSON CARD CONTEXT: the existing conversation for this person at
-        -- THIS property. Absent is fine; the row still opens the card.
-        (select c.id from conversations c
-          where c.person_id = (l.tenant_ids)[1] and c.property_id = l.property_id
-          order by c.created_at limit 1) as conversation_id,
-        -- NOTICE: the ONLY governed producer is a scheduled notice_given
-        -- unit_event on THIS space (notice.js / Availability Slice A).
-        exists (
-          select 1 from unit_events ue
-           where ue.space_id = s.id
-             and ue.event_type = 'notice_given'
-             and ue.status = 'scheduled'
-        ) as has_notice,
-        -- PROOF BASIS: carried even though the first UI keeps it quiet.
-        -- A verified executed-lease record is native proof; a confirmed
-        -- historical import is accepted opening truth; anything else is
-        -- unproven and must be visible as such rather than assumed good.
-        (er.id is not null) as has_verified_execution,
-        l.source_type,
-        l.confidence
-       from leases l
-       join spaces s on s.id = l.space_id
-       join units  u on u.id = s.unit_id
-       left join persons p on p.id = (l.tenant_ids)[1]
-       left join executed_lease_records er
-         on er.lease_id = l.id and er.record_state = 'verified'
-      where l.property_id = $1
-        and l.lease_status = any($2::text[])
-        and l.end_date is not null
-        and l.end_date >= current_date
-        and l.end_date <  current_date + $3::int`,
-    [property_id, GOVERNING_LEASE_STATUSES, horizon]
-  );
+  // THE SHARED TRUTH. Everything positional comes from here.
+  const sp = await spacePosition(pool, { property_id });
+  const asOf = sp.as_of;
+  const horizonEnd = ymd(new Date(new Date(`${asOf}T00:00:00Z`).getTime() + horizon * 86400000));
 
-  const cohort = rows.map((r) => {
-    const proof_basis = r.has_verified_execution
-      ? "native_verified"
-      : (r.source_type === "historical_snapshot" && r.confidence === "confirmed")
-        ? "confirmed_opening_import"
-        : "unproven";
+  // Presentation-only context: the Person Card thread for this resident at
+  // this property. Not a shared fact — nothing else classifies on it.
+  const convRows = (await pool.query(
+    `select person_id, min(id::text) as conversation_id
+       from conversations where property_id=$1 and person_id is not null group by person_id`,
+    [property_id]
+  )).rows;
+  const convByPerson = new Map(convRows.map((r) => [String(r.person_id), r.conversation_id]));
 
-    return {
-      lease_id: r.lease_id,
-      space_id: r.space_id,
-      unit_id: r.unit_id,
-      unit_number: r.unit_number,
-      space_label: r.space_label || null,
-      person_id: r.person_id || null,
-      resident_name: r.resident_name || null,   // null ⇒ "Resident not linked"
-      resident_count: r.resident_count,
-      conversation_id: r.conversation_id || null,
-      current_rent: r.current_rent == null ? null : Number(r.current_rent), // null ⇒ "Current rent unavailable"
-      expires_on: ymd(r.expires_on),
-      days_until_expiration: r.days_until_expiration,
-      notice_state: r.has_notice ? "on_notice" : "unresolved",
-      // URGENCY BAND — DISJOINT, not cumulative. The operator groups by
-      // "what must be handled first", and overlapping bands would double-
-      // count the same lease in two groups.
-      band: r.days_until_expiration < 30 ? "d0_30"
-          : r.days_until_expiration < 60 ? "d31_60"
-          : "d61_90",
+  const expiring = [];
+  for (const p of sp.positions) {
+    const cur = p.current_lease_position;
+    if (!cur || !cur.end_date) continue;
+    const ends = ymd(cur.end_date);
+    if (!ends || ends < asOf || ends >= horizonEnd) continue;
+
+    const tenant = (cur.tenants || [])[0] || null;
+    const days = daysBetween(asOf, ends);
+    expiring.push({
+      lease_id: cur.lease_id,
+      space_id: p.space_id,
+      unit_id: p.unit_id,
+      unit_number: p.unit_number,
+      space_label: p.space_label || null,
+      person_id: tenant ? tenant.person_id : null,
+      resident_name: tenant ? (tenant.name || null) : null,   // null ⇒ "Resident not linked"
+      resident_count: (cur.tenants || []).length,
+      conversation_id: tenant ? (convByPerson.get(String(tenant.person_id)) || null) : null,
+      current_rent: cur.rent == null ? null : Number(cur.rent),  // null ⇒ "Current rent unavailable"
+      expires_on: ends,
+      days_until_expiration: days,
+      band: band(days),
+      notice_state: p.notice_state === "on_notice" ? "on_notice" : "unresolved",
+      conflict_state: p.conflict_state,
+      successor_state: p.conflict_state === "conflicted" ? "none" : p.successor.state,
+      successor_lease_id: p.conflict_state === "conflicted" ? null : p.successor.lease_id,
+      successor_proof_basis: p.conflict_state === "conflicted" ? null : p.successor.proof_basis,
       owner_user_id: null,
       owner_state: R1_OWNER_STATE,
       owner_reason: R1_OWNER_REASON,
-      proof_basis,
-    };
-  });
+      proof_basis: cur.proof_basis,
+    });
+  }
 
-  // ORDER (server-authored, never re-sorted client-side): unresolved before
-  // on_notice — unresolved is where nothing has happened yet and the work
-  // actually sits. Soonest expiration first inside each state; lease_id is
-  // the stable tie-break so equal dates never shuffle between reads.
-  cohort.sort((a, b) => {
-    const stateRank = (x) => (x.notice_state === "unresolved" ? 0 : 1);
-    return stateRank(a) - stateRank(b)
+  // Ordering (server-authored): unresolved before on_notice, soonest first,
+  // lease_id as a stable tie-break so equal dates never shuffle between reads.
+  const order = (rows) => rows.sort((a, b) => {
+    const rank = (x) => (x.notice_state === "unresolved" ? 0 : 1);
+    return rank(a) - rank(b)
       || a.days_until_expiration - b.days_until_expiration
       || String(a.lease_id).localeCompare(String(b.lease_id));
   });
 
-  const inBand = (b) => cohort.filter((r) => r.band === b).length;
-  const unresolved = cohort.filter((r) => r.notice_state === "unresolved").length;
-  const withOwner = cohort.filter((r) => r.owner_user_id).length;
+  // A position lands in EXACTLY ONE bucket.
+  const conflicted = order(expiring.filter((r) => r.conflict_state === "conflicted"));
+  const rest = expiring.filter((r) => r.conflict_state !== "conflicted");
+  const open = order(rest.filter((r) => r.successor_state === "none"));
+  const successorPending = order(rest.filter((r) => r.successor_state === "pending"));
+  const lockedSuccessor = rest.filter((r) => r.successor_state === "locked");
+
+  const inBand = (b) => open.filter((r) => r.band === b).length;
+  const unresolved = open.filter((r) => r.notice_state === "unresolved").length;
 
   return {
     property_id,
+    as_of: asOf,
     horizon_days: horizon,
-    count: cohort.length,
-    // Disjoint bands, summing to count. These drive both the quiet headline
-    // breakdown and the row grouping, so one number can never disagree with
-    // the other.
-    breakdown: {
-      d0_30: inBand("d0_30"),
-      d31_60: inBand("d31_60"),
-      d61_90: inBand("d61_90"),
+    horizon_end: horizonEnd,
+
+    // THE PRIMARY WORK LIST — open renewal decisions only.
+    count: open.length,
+    breakdown: { d0_30: inBand("d0_30"), d31_60: inBand("d31_60"), d61_90: inBand("d61_90") },
+    states: { unresolved, on_notice: open.length - unresolved },
+    rows: open,
+
+    // SECONDARY CONTEXT — visible, never mixed into the work list, and
+    // contributing zero locked and zero projected rent.
+    successor_pending: {
+      count: successorPending.length,
+      note: "A successor lease exists but is not executed and funded. Not a locked position, and not an open renewal decision.",
+      rows: successorPending,
     },
-    states: {
-      unresolved,
-      on_notice: cohort.length - unresolved,
+    locked_future: {
+      count: lockedSuccessor.length,
+      note: "Executed and funded successor. Leaves renewal work and feeds the Future Rent Roll.",
     },
-    // PAGE-LEVEL TRUTH. When every row shares a state, that is one fact about
-    // the property, not 92 warnings. The renderer states it once here and
-    // shows a row badge only where a row DIFFERS. Computed server-side so the
-    // page and the rows can never disagree about what is uniform.
+    conflicted: {
+      count: conflicted.length,
+      reason: "overlapping_operative_lease",
+      note: "Two non-terminal leases overlap on this position; which lease governs is unknown. Excluded from both open and pending.",
+      rows: conflicted,
+    },
+
+    totals: { expiring_in_horizon: expiring.length },
+
+    // PAGE-LEVEL TRUTH. When every open row shares a state that is ONE fact
+    // about the property, not N warnings. Computed here so the page and the
+    // rows can never disagree about what is uniform.
     uniform: {
-      all_unresolved: cohort.length > 0 && unresolved === cohort.length,
-      no_owner_anywhere: cohort.length > 0 && withOwner === 0,
-      owner_reason: cohort.length > 0 && withOwner === 0 ? R1_OWNER_REASON : null,
+      all_unresolved: open.length > 0 && unresolved === open.length,
+      no_owner_anywhere: open.length > 0 && open.every((r) => !r.owner_user_id),
+      owner_reason: open.length > 0 ? R1_OWNER_REASON : null,
     },
-    rows: cohort,
   };
 }
 
-module.exports = { renewalsCohort, GOVERNING_LEASE_STATUSES, DEFAULT_HORIZON_DAYS };
+module.exports = { renewalsCohort, DEFAULT_HORIZON_DAYS };

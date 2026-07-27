@@ -81,7 +81,10 @@ const head = (rel) => { try { return execSync(`git show HEAD:${rel}`, { cwd: REP
         and l.rent is not null and u.market_rent is not null and l.rent <> u.market_rent
       limit 1`, [DEMO])).rows[0];
   if (divergent) {
-    const row = out.rows.find(r => r.lease_id === divergent.id);
+    // The control lease may sit in ANY bucket now that positions are classified,
+    // so look across all of them rather than assuming it is open work.
+    const allRows = [...out.rows, ...out.successor_pending.rows, ...out.conflicted.rows];
+    const row = allRows.find(r => r.lease_id === divergent.id);
     ok(!!row && Number(row.current_rent) === Number(divergent.lease_rent),
       `current_rent is leases.rent (${divergent.lease_rent}), NOT units.market_rent (${divergent.market_rent})`);
   } else {
@@ -116,6 +119,67 @@ const head = (rel) => { try { return execSync(`git show HEAD:${rel}`, { cwd: REP
   ok(out.uniform.all_unresolved === (out.states.on_notice === 0),
     `uniform.all_unresolved agrees with the row states (${out.uniform.all_unresolved})`);
   ok(out.uniform.no_owner_anywhere === true, "uniform.no_owner_anywhere is true while no renewal work exists");
+
+  console.log("\n══ BLOCK A2 — the replacement rule (owner review correction) ══");
+
+  // 1. Open work is ONLY positions with no successor.
+  ok(out.rows.every(r => r.successor_state === "none"),
+    `open renewal work contains only successor_state=none (${out.count} rows)`);
+  ok(out.rows.every(r => r.successor_lease_id === null),
+    "an open row carries no successor lease id");
+
+  // 2. Pending successors are returned separately and labelled not locked.
+  ok(out.successor_pending && Array.isArray(out.successor_pending.rows),
+    `pending successors are returned separately (${out.successor_pending.count})`);
+  ok(out.successor_pending.rows.every(r => r.successor_state === "pending" && r.successor_lease_id),
+    "every pending row names its successor lease");
+  ok(/not executed and funded/i.test(out.successor_pending.note || ""),
+    "the pending group is explicitly labelled not locked");
+  ok(out.successor_pending.rows.every(r => r.successor_proof_basis !== undefined),
+    "pending rows carry successor_proof_basis");
+
+  // 3. Locked successors are absent from open work.
+  const lockedIds = new Set();
+  ok(typeof out.locked_future.count === "number", `locked-successor count reported (${out.locked_future.count})`);
+  ok(!out.rows.some(r => r.successor_state === "locked"), "no locked successor appears in open work");
+  ok(!out.successor_pending.rows.some(r => r.successor_state === "locked"), "no locked successor appears in the pending set");
+
+  // 4. Conflicted positions are in neither, with an explicit reason.
+  ok(out.conflicted && out.conflicted.reason === "overlapping_operative_lease",
+    `conflicted positions carry an explicit reason (${out.conflicted.count})`);
+  ok(out.conflicted.rows.every(r => r.conflict_state === "conflicted"), "conflicted rows are marked conflicted");
+  const openIds = new Set(out.rows.map(r => r.lease_id));
+  const pendIds = new Set(out.successor_pending.rows.map(r => r.lease_id));
+  ok(!out.conflicted.rows.some(r => openIds.has(r.lease_id) || pendIds.has(r.lease_id)),
+    "a conflicted position appears in neither open nor pending");
+
+  // NO POSITION IN TWO BUCKETS, and the buckets account for every expiring row.
+  const overlap = [...openIds].filter(id => pendIds.has(id));
+  ok(overlap.length === 0, "no position is simultaneously open and successor-pending");
+  const bucketTotal = out.count + out.successor_pending.count + out.locked_future.count + out.conflicted.count;
+  ok(bucketTotal === out.totals.expiring_in_horizon,
+    `buckets account for every expiring position exactly once: ${out.count}+${out.successor_pending.count}+${out.locked_future.count}+${out.conflicted.count} = ${bucketTotal} of ${out.totals.expiring_in_horizon}`);
+
+  // The headline no longer claims all 92 need a decision.
+  ok(out.count < out.totals.expiring_in_horizon,
+    `open decisions (${out.count}) are fewer than total expiring (${out.totals.expiring_in_horizon}) — the corrected headline`);
+
+  // LOCKED uses the governed rule, not lease_status. Cross-check against SQL.
+  const lockedBySql = (await pool.query(
+    `select count(*)::int n from leases l
+      join executed_lease_records er on er.lease_id=l.id and er.record_state='verified'
+     where l.property_id=$1
+       and exists (select 1 from scheduled_charges c where c.lease_id=l.id and c.is_move_in_required=true)
+       and not exists (select 1 from scheduled_charges c where c.lease_id=l.id and c.is_move_in_required=true
+                        and (c.status <> 'paid' or coalesce(c.amount,0)-coalesce(c.amount_paid,0) > 0))`, [DEMO])).rows[0].n;
+  ok(out.locked_future.count <= lockedBySql,
+    `locked successors (${out.locked_future.count}) never exceed executed AND funded leases (${lockedBySql}) — pending status alone does not lock`);
+
+  // SHARED DERIVATION: notice is no longer queried here.
+  const svcRaw = require("fs").readFileSync(path.join(REPO, "src/leasing/renewals_read.js"), "utf8");
+  const svcExec = svcRaw.split("\n").filter(l => !/^\s*\/\//.test(l)).join("\n");
+  ok(!/notice_given/.test(svcExec), "renewals_read no longer contains its own notice_given query");
+  ok(/space_position/.test(svcExec), "renewals_read reads the canonical shared derivation");
 
   // Pending leases are outside R1.
   const pendingLeaked = (await pool.query(
