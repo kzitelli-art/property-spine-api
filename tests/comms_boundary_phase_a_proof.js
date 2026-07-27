@@ -126,33 +126,34 @@ const send = async (opts) => { sent = []; return cb.sendPropertySms(opts); };
     check("no line: transport not reached", sent.length === 0);
 
     // ══ consent opted_out blocks everything ══
-    mode("internal_qa_autonomous");
-    r = await send({ property_id: P, recipient: RANDO, body: "x", purpose: "agent", person_id: outP });
-    check("opted_out: blocks agent even in qa mode", r.sent === false && r.reason === "consent_opted_out", r.reason);
-
-    // ══ internal_qa_autonomous ══
-    mode("internal_qa_autonomous"); setQaProp(null);
-    r = await send({ property_id: P, recipient: RANDO, body: "x", purpose: "agent", person_id: qaP });
-    check("qa mode: internal_qa+opted_in agent allowed", r.sent === true, r.reason);
-    r = await send({ property_id: P, recipient: RANDO, body: "x", purpose: "agent", person_id: unclP });
-    check("qa mode: unclassified refused", r.sent === false && r.reason === "record_unclassified", r.reason);
-    r = await send({ property_id: P, recipient: RANDO, body: "x", purpose: "agent", person_id: prodP });
-    check("qa mode: production-classified agent refused", r.sent === false && r.reason === "record_not_internal_qa", r.reason);
-    r = await send({ property_id: P, recipient: RANDO, body: "code", purpose: "otp", person_id: qaP });
-    check("qa mode: credential outside QA property refused", r.sent === false && r.reason === "credential_send_outside_qa_property", r.reason);
-    setQaProp(P);
-    r = await send({ property_id: P, recipient: RANDO, body: "code", purpose: "otp", person_id: qaP });
-    check("qa mode: credential inside QA property allowed", r.sent === true, r.reason);
-    setQaProp(null);
-
-    // ══ customer_care (fails closed without a production classification) ══
     mode("customer_care");
-    r = await send({ property_id: P, recipient: RANDO, body: "x", purpose: "agent", person_id: prodP });
-    check("customer_care: production+opted_in agent allowed", r.sent === true, r.reason);
-    r = await send({ property_id: P, recipient: RANDO, body: "x", purpose: "agent", person_id: unclP });
-    check("customer_care: unclassified fails closed", r.sent === false && r.reason === "record_unclassified", r.reason);
+    r = await send({ property_id: P, recipient: RANDO, body: "x", purpose: "agent", person_id: outP });
+    check("opted_out: blocks agent outright", r.sent === false && r.reason === "consent_opted_out", r.reason);
+
+    // ══ the retired mode is not a live mode ══
+    //  internal_qa_autonomous was removed on 2026-07-26. This block used to
+    //  exercise it and would now have run against a mode that silently
+    //  resolves to `disabled` — six checks passing because nothing happened.
+    //  It asserts the RETIREMENT instead, which is the thing that could
+    //  regress: if the string ever behaves like a live mode again, the
+    //  opposite-direction class gate is back.
+    mode("internal_qa_autonomous");
     r = await send({ property_id: P, recipient: RANDO, body: "x", purpose: "agent", person_id: qaP });
-    check("customer_care: internal_qa (not production) refused", r.sent === false && r.reason === "customer_care_requires_production_classification", r.reason);
+    check("retired mode sends NOTHING — an unknown mode falls to disabled, never to a live one",
+      r.sent === false && r.reason === "send_mode_disabled", r.reason);
+
+    // ══ customer_care — consent and property, no class ══
+    mode("customer_care"); setQaProp(null);
+    r = await send({ property_id: P, recipient: RANDO, body: "x", purpose: "agent", person_id: prodP });
+    check("customer_care: opted_in agent allowed", r.sent === true, r.reason);
+    r = await send({ property_id: P, recipient: RANDO, body: "x", purpose: "agent", person_id: qaP });
+    check("customer_care: CLASS IS NOT CONSULTED — an internal_qa record with consent is allowed",
+      r.sent === true, r.reason);
+    r = await send({ property_id: P, recipient: RANDO, body: "x", purpose: "agent", person_id: unclP });
+    check("customer_care: an unclassified record with consent is allowed — class gates nothing here",
+      r.sent === true, r.reason);
+    r = await send({ property_id: P, recipient: RANDO, body: "code", purpose: "otp", person_id: qaP });
+    check("customer_care: credential send inside property scope allowed", r.sent === true, r.reason);
 
     // ══ INBOUND resolver — safety-critical cases ══
     let ic;

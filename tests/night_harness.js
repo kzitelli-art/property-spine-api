@@ -225,7 +225,9 @@ async function fakeComplete(client, { obligation_id }) {
   const disp2 = await dispatchSvc({ property_id: DEMO, person_id: p1.id, unit_id: leadNow.unit_id, created_by_user_id: mgr.id });
   check("proof_only REFUSES application_link (and revokes honestly)", disp2.dispatched === false && disp2.status === "revoked", disp2.reason);
 
-  // internal_qa_autonomous + enrolled QA person → dispatch succeeds through the gate
+  // customer_care + a consented person at this property → dispatch succeeds.
+  // (Was internal_qa_autonomous + an enrolled QA person until 2026-07-26; that
+  // mode is retired and the enrollment no longer affects sending.)
   process.env.SMS_SEND_MODE = "customer_care"; process.env.SMS_QA_PROPERTY_ID = DEMO;
   await commBoundary.enrollInternalQa({ person_id: p1.id, property_id: DEMO, reason: "night harness" });
   const wiresBefore = wireLog.length;

@@ -197,7 +197,12 @@ function announce(label) { step++; console.log(`\n[${step}] ${label}`); }
 
   // ══ 2 · ENROL (classification + consent) ══════════════════════════
   announce("enrol → enrollInternalQa() [canonical fn; no route exists yet]");
-  const boundary = require(path.join(__dirname, "comm_boundary_harness"))({ pool });
+  // The REAL boundary, not a copy. tests/comm_boundary_harness.js used to be
+  // a 647-line duplicate of it and had already drifted — it still carried the
+  // retired internal_qa_autonomous mode and the class checks that were removed
+  // on 2026-07-26. A stale duplicate of the module that decides who may be
+  // texted is worse than no harness at all, so it is gone.
+  const boundary = require(path.join(__dirname, "..", "src", "comms", "communications_boundary.js"))({ pool });
   const enroll = await boundary.enrollInternalQa({
     person_id, property_id: PROPERTY_ID, actor_user_id: QA_ACTOR, reason: "full_lifecycle_arc",
   });

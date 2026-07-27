@@ -46,7 +46,13 @@ if (!person_id || !property_id || !confirmed) {
     console.log(out.receipt);
     console.log("classification id:", out.classification.id);
     console.log("record_class:", out.classification.record_class, "· classified_at:", out.classification.classified_at);
-    console.log("Next: this person can receive autonomous sends ONLY when SMS_SEND_MODE=internal_qa_autonomous.");
+    // Corrected 2026-07-26. This used to say autonomous sends required
+    // SMS_SEND_MODE=internal_qa_autonomous. That mode is retired and class no
+    // longer gates sending at all, so the old line would send someone to set
+    // an env value that now silences the deploy entirely.
+    console.log("Next: autonomous sends need SMS_SEND_MODE=customer_care, consent 'opted_in',");
+    console.log("      and a relationship at this property. The classification above gates NOTHING");
+    console.log("      about sending — it marks the record as a test context for replay and metrics.");
   } catch (e) {
     console.error("ENROLLMENT FAILED:", e.message);
     process.exit(1);

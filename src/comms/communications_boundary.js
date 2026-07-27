@@ -53,21 +53,21 @@ module.exports = function communicationsBoundary({ pool, sms }) {
   //                             flag SMS_ALLOW_CREDENTIAL_SENDS=1 is set.
   //                             proof_only never silently means
   //                             "proof plus whatever calls SMS".
-  //    internal_qa_autonomous → autonomous/agent sends ONLY to recipients
-  //                             holding a CURRENT internal_qa
-  //                             classification in this property AND
-  //                             consent_state='opted_in'. No row = refuse.
-  //                             Unknown consent = refuse. Credential sends
-  //                             allowed only within the QA property.
-  //    customer_care          → HELD. Requires an explicit current
-  //                             'production' classification, which has no
-  //                             authoritative source yet — so agent sends
-  //                             fail closed until that policy is
-  //                             deliberately activated. Credential sends
-  //                             allowed (opted_out always blocks).
-  // internal_qa_autonomous retired 2026-07-26 — see the note in the mode
-  // gates. An unrecognised value still resolves to 'disabled', so the
-  // retired string fails closed rather than behaving like a live mode.
+  //    customer_care          → the one autonomous mode. Requires a person
+  //                             record, a relationship at THIS property,
+  //                             and consent_state='opted_in'. No row =
+  //                             refuse. Unknown consent = refuse.
+  //                             Credential sends allowed (opted_out always
+  //                             blocks, everywhere, first).
+  //
+  //  RETIRED 2026-07-26 — internal_qa_autonomous. It sent only to
+  //  internal_qa records while customer_care sent only to production ones:
+  //  two gates on one field pointing opposite ways, so a person could be
+  //  textable or leasable and never both. Class left eligibility entirely,
+  //  which left that mode as customer_care plus an extra refusal.
+  //  An unrecognised value resolves to 'disabled', so the retired string
+  //  fails closed rather than behaving like a live mode. If a deploy goes
+  //  silent, check SMS_SEND_MODE for it first.
   const VALID_MODES = ["disabled", "proof_only", "customer_care"];
   function sendMode() {
     const m = (process.env.SMS_SEND_MODE || "disabled").trim();
@@ -322,14 +322,14 @@ module.exports = function communicationsBoundary({ pool, sms }) {
   //    { allowed: true, reason: "ok" | <aperture> }
   //    { allowed: false, reason }
   //
-  //  Eligibility law (ruling):
-  //    · opted_out ALWAYS blocks, every mode, every purpose.
-  //    · internal_qa_autonomous agent sends require a CURRENT internal_qa
-  //      classification AND consent 'opted_in'. No row = refuse.
+  //  Eligibility law (ruling, revised 2026-07-26):
+  //    · opted_out ALWAYS blocks, every mode, every purpose, first.
+  //    · customer_care agent sends require a person record, a relationship
+  //      at THIS property, and consent 'opted_in'. No row = refuse.
   //      Unknown consent = refuse.
-  //    · customer_care agent sends require a current 'production'
-  //      classification — no authoritative source yet, so this fails
-  //      closed until that policy is deliberately activated.
+  //    · record_class gates NOTHING here. It gated sending in one direction
+  //      and admission in the other, which is the deadlock this replaced.
+  //      Class now marks replay and metrics only.
   //    · proof_only permits only the exact proof aperture (+ credential
   //      sends only behind the named SMS_ALLOW_CREDENTIAL_SENDS flag).
   //    · unclassified never silently means production.

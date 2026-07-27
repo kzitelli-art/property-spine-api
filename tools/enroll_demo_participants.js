@@ -2,9 +2,19 @@
 // ════════════════════════════════════════════════════════════════════
 //  tools/enroll_demo_participants.js
 //
-//  Moves Demo Building records from 'production' to 'internal_qa' so the
-//  demo can run under internal_qa_autonomous WITHOUT anything pretending
-//  to be a real prospect.
+//  Moves Demo Building records from 'production' to 'internal_qa'.
+//
+//  ⚠ ITS ORIGINAL PURPOSE IS GONE (2026-07-26). This existed so the demo
+//  could run under internal_qa_autonomous — a mode that only texted
+//  internal_qa records — without anything pretending to be a real
+//  prospect. That mode is retired and classification no longer gates
+//  sending at all, so reclassifying a record NO LONGER CHANGES WHETHER
+//  THEY CAN BE TEXTED. Consent and property do that now.
+//
+//  What it still legitimately does: mark records as a test context so they
+//  are excluded from metrics and hidden from the leasing desk. That is a
+//  bookkeeping act, not a permission one. Do not run this expecting it to
+//  silence or unsilence anybody.
 //
 //  WHY: Fable ruling 2026-07-25 — Demo Building must never be a
 //  production property. Owner direction the same day — "a real person

@@ -273,8 +273,11 @@ async function main() {
   console.log("\n\u2500\u2500\u2500 #4 OUTBOUND-REPLY DEDUP (deterministic model + SMS spy) \u2500\u2500\u2500");
   {
     // Replicate the LIVE aperture the real environment provides for an AI reply
-    // to a prospect: send mode internal_qa_autonomous + the recipient enrolled
-    // as internal_qa/opted_in. This proves the outbound goes through the REAL
+    // to a prospect: send mode customer_care + the recipient consented at this
+    // property. (Was internal_qa_autonomous + an internal_qa enrollment until
+    // 2026-07-26 — that mode is retired and class no longer gates sending, so
+    // the enrollment below now only marks the record as a test context.)
+    // This proves the outbound goes through the REAL
     // gate (not bypassing it) exactly once, and the duplicate is suppressed.
     process.env.SMS_SEND_MODE = "customer_care";
     const phone = "+1215" + Math.floor(2e6 + Math.random() * 7e6);

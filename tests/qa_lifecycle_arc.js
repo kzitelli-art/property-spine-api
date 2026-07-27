@@ -112,7 +112,12 @@ function halt(step, status, json) {
 
   // ── STEP 2: ENROLL internal_qa (canonical fn; no route yet) ───────
   console.log("\n[2/5] enroll → enrollInternalQa() [canonical fn]");
-  const boundary = require("./comm_boundary_harness")({ pool });
+  // The REAL boundary. tests/comm_boundary_harness.js was a duplicate of it
+  // that had already drifted — it kept the retired internal_qa_autonomous mode
+  // and the class checks removed on 2026-07-26. Deleted rather than updated:
+  // a second copy of the module deciding who may be texted is a hazard, not a
+  // convenience.
+  const boundary = require("../src/comms/communications_boundary.js")({ pool });
   let enroll;
   try {
     enroll = await boundary.enrollInternalQa({
