@@ -76,13 +76,32 @@ const sec = (s) => console.log("\n== " + s + " ==");
     `its counterparty history is intact (${hist.comms} comms, ${hist.events} events, ${hist.obligations} obligations)`);
   ok(String(STAFF_PERSON) !== String(TENANT_PERSON), "the two identities remain separate rows");
 
-  sec("THE DUPLICATE I CREATED IN ERROR CANNOT ACT");
-  const v = (await pool.query("select name, email from persons where id=$1", [VOIDED])).rows[0];
-  ok(/^VOID/.test(v.name), "the accidental duplicate is labelled VOID, not left ambiguous");
-  ok(v.email === null, "its email was released so the identifier resolves to one person");
+  sec("THE DUPLICATE IS RETIRED, NOT DELETED OR MERGED");
+  const v = (await pool.query(
+    `select name, email, source, created_at, record_status, retired_at, retired_reason,
+            retired_by_user_id, superseded_by_person_id from persons where id=$1`, [VOIDED])).rows[0];
+  ok(!!v, "the duplicate row still EXISTS — not hard-deleted");
+  ok(v.record_status === "retired", "it is retired through the governed lifecycle");
+  ok(v.retired_reason === "duplicate_created_in_error", "with the reason recorded verbatim");
+  ok(!!v.retired_at && !!v.retired_by_user_id, "and when, and by whom");
+  ok(String(v.superseded_by_person_id) === STAFF_PERSON,
+    "an auditable resolution reference points at the surviving canonical identity");
+  ok(v.name === "Kameron Zitelli — Staff",
+    "the record still says what it WAS — retirement is recorded in its own fields, not by renaming");
+  ok(new Date(v.created_at).toISOString().startsWith("2026-07-27T21:45:08"),
+    "its creation timestamp is preserved");
+  ok(v.email === null, "its email was released so the identifier resolves to one active person");
   const vCtx = (await pool.query(
     "select id from person_contexts where person_id=$1 and context_type='staff'", [VOIDED])).rows;
   ok(vCtx.length === 0, "its staff context was removed — it can never receive authority");
+  const vAsg = (await pool.query("select id from assignments where person_id=$1", [VOIDED])).rows;
+  const vUsr = (await pool.query("select id from users where person_id=$1", [VOIDED])).rows;
+  ok(vAsg.length === 0 && vUsr.length === 0,
+    "it holds no assignment and no session — it cannot receive work or authority");
+  const retireGuard = (await pool.query(
+    `select pg_get_constraintdef(oid) def from pg_constraint
+      where conname='ck_persons_retirement_is_explained'`)).rows[0];
+  ok(!!retireGuard, "a retirement without a reason and timestamp is refused by constraint");
   const vAudit = (await pool.query(
     "select id from user_person_bridge_audit where prior_person_id=$1 or new_person_id=$1", [VOIDED])).rows;
   ok(vAudit.length === 2, "but the bridge audit still references it — history was NOT rewritten");
@@ -169,6 +188,49 @@ const sec = (s) => console.log("\n== " + s + " ==");
   ok(frr.published_version_at_date === null, "and sees no published version");
   const persons = Number((await pool.query("select count(*)::int n from persons")).rows[0].n);
   ok(persons === 902, `persons = ${persons} (900 original + 1 staff + 1 voided duplicate); none merged or deleted`);
+
+  sec("STAFF CREATION IS IDEMPOTENT — RETRIES AND RACES");
+  const bridge = require(path.join(REPO, "src/identity/staffbridge"))({ pool });
+  const n0 = Number((await pool.query("select count(*)::int n from persons")).rows[0].n);
+  const attempt = async () => {
+    const c = await pool.connect();
+    try {
+      await c.query("begin");
+      const out = await bridge._service.linkBridge(c, {
+        user_id: KZ_USER,
+        create_staff_person: { name: "Kameron Zitelli — Staff", email: "kz8434@gmail.com",
+                               phone: null, property_id: DEMO },
+        reason_code: "idempotency_probe", performed_by_user_id: "e9a7659f-ee1a-4bde-9e0c-02c6632ff066",
+      });
+      await c.query("commit");
+      return out;
+    } catch (e) { await c.query("rollback").catch(() => {}); return { error: e.message }; }
+    finally { c.release(); }
+  };
+  const seq = await attempt();
+  ok(seq.already_exists === true && String(seq.person.id) === STAFF_PERSON,
+    "a sequential retry returns the already-linked person, explicitly");
+  // FIVE at once — the case a pre-check alone cannot survive.
+  const burst = await Promise.all([1, 2, 3, 4, 5].map(attempt));
+  ok(burst.every((b) => b.already_exists === true),
+    "five SIMULTANEOUS requests all return already_exists");
+  ok(burst.every((b) => String(b.person.id) === STAFF_PERSON),
+    "and all resolve to the same canonical person");
+  const n1 = Number((await pool.query("select count(*)::int n from persons")).rows[0].n);
+  ok(n1 === n0, `ZERO persons were created across 6 attempts (${n0} → ${n1})`);
+  const activeStaff = (await pool.query(
+    `select id from persons where lower(email)='kz8434@gmail.com'
+       and source='staff_bridge' and record_status='active'`)).rows;
+  ok(activeStaff.length === 1, "exactly one ACTIVE staff person holds that identity");
+
+  // The database backstop: a caller bypassing the function entirely.
+  let raw = null;
+  try {
+    await pool.query("insert into persons (name,email,source) values ($1,$2,'staff_bridge')",
+      ["Bypass Attempt", "kz8434@gmail.com"]);
+  } catch (e) { raw = e.constraint || e.message; }
+  ok(raw === "uq_active_staff_person_email",
+    "a DIRECT insert bypassing the service is refused by the database, not just the application");
 
   console.log(`\n==== ${pass} passed, ${fail} failed ====`);
   await pool.end();

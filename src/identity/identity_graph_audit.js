@@ -39,7 +39,8 @@ async function identityGraphAudit(pool, { property_id = null } = {}) {
 
   const persons = (await pool.query(
     `select p.id, p.name, p.email, p.phone, p.primary_phone_e164, p.phone_verified_at,
-            p.lifecycle_status, p.source, p.source_type, p.created_at, p.import_batch_id
+            p.lifecycle_status, p.source, p.source_type, p.created_at, p.import_batch_id,
+            coalesce(p.record_status, 'active') as record_status
        from persons p`)).rows;
 
   const assignments = (await pool.query(
@@ -78,6 +79,10 @@ async function identityGraphAudit(pool, { property_id = null } = {}) {
   for (const p of persons) {
     const k = norm(p.name);
     if (!k) continue;
+    // A RETIRED record cannot be selected as anybody, so a label it shares is
+    // not an ambiguity — it is a resolved one, and counting it would make the
+    // duplicate-resolution mechanism look like the problem it solved.
+    if (p.record_status === 'retired') continue;
     if (!byLabel.has(k)) byLabel.set(k, []);
     byLabel.get(k).push(p);
   }

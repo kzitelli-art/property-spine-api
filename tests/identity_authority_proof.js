@@ -204,7 +204,8 @@ const sec = (s) => console.log("\n== " + s + " ==");
   ok(audit.person_label_collisions.length > 0,
     `${audit.person_label_collisions.length} duplicate person labels exist — names cannot be identity`);
   ok(audit.person_label_collisions.filter((c) => c.carries_authority).length === 0,
-    "NO label collision carries authority any more — the one that did was corrected");
+    "NO label collision carries authority — the demo-lead one was corrected, and the retired " +
+    "duplicate is excluded because a retired record cannot be selected as anybody");
   ok(/was derived from a display name/i.test(audit.rule)
      && /never to create a link/i.test(audit.rule),
     "the audit states its own rule: names may disqualify a link, never create one");
