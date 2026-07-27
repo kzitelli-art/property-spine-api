@@ -1453,6 +1453,30 @@ module.exports = function operatorModule(deps) {
     } catch (e) { return res.status(500).json({ error: e.message }); }
   });
 
+  router.get("/operator/economics/decision-room", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { economicDecisionRoom } = require("../money/economic_decision_room");
+      return res.json(await economicDecisionRoom(pool, {
+        property_id: req.operator.property_id,
+        include_shadow: req.query.shadow !== "0",
+      }));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // Multi-class publication preview. Writes nothing; there is no publish route.
+  router.post("/operator/economics/publication-preview", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { economicPublicationPreview } = require("../money/economic_publication_preview");
+      return res.json(await economicPublicationPreview(pool, {
+        property_id: req.operator.property_id,
+        user_id: req.operator.id,
+        proposal: (req.body && req.body.proposal) || {},
+      }));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
   router.get("/operator/economics/picture", requireOperator, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
