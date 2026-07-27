@@ -109,17 +109,30 @@ function audit(entry) {
 // NOT checked here, deliberately: consent. STOP/opt-out governs whether the
 // product may MESSAGE someone; it has no bearing on whether a lease they
 // signed may be recorded. Recording a fact is not composing an outbound.
-const { ELIGIBLE_RECORD_CLASSES } = require("./capability");
-
+//  CLASS NO LONGER GATES ADMISSION (owner ruling 2026-07-26).
+//  This read has been through three shapes in one day, which is itself the
+//  argument for the ruling:
+//    1. record_class === 'internal_qa'      — deadlocked against the comms
+//       boundary, which demanded 'production' for the same person.
+//    2. a shared allowlist with capability.js — the two gates agreed, but a
+//       field with three jobs still gated whether anything worked.
+//    3. this — class is out of eligibility entirely.
+//  Admission asks the same two questions as every other gate: did they say
+//  yes, and is this property switched on. The property half is already
+//  enforced above by ACTIVATION_PROPERTY_IDS, so what remains here is
+//  consent.
+//
+//  Read failure still fails closed and is still audited distinctly — an
+//  unreadable answer is not a yes.
 async function currentEligibleClass(pool, personId, propertyId) {
   if (!personId || !propertyId) return { ok: false, read_failed: false };
   try {
     const q = await pool.query(
-      `select record_class from person_property_classifications
-        where person_id = $1 and property_id = $2 and superseded_at is null limit 1`,
-      [personId, propertyId]);
+      `select consent_state from contact_preferences
+        where person_id = $1 and channel = 'text' limit 1`,
+      [personId]);
     if (q.rows.length === 0) return { ok: false, read_failed: false };
-    return { ok: ELIGIBLE_RECORD_CLASSES.includes(q.rows[0].record_class), read_failed: false };
+    return { ok: q.rows[0].consent_state === "opted_in", read_failed: false };
   } catch (_e) {
     return { ok: false, read_failed: true };
   }
@@ -204,7 +217,7 @@ function activationPerimeter({ pool, loadApplication, eligibleStatuses, action, 
     if (!cls.ok) {
       audit({ actor_user_id: session.id, property_id: app.property_id, application_id: app.id,
               action: ACTION, decision: "refused",
-              reason: cls.read_failed ? "classification_read_failed" : "record_class_not_eligible" });
+              reason: cls.read_failed ? "consent_read_failed" : "no_consent" });
       return refuse(res);
     }
 

@@ -2578,7 +2578,7 @@ module.exports = function operatorModule(deps) {
   const HTTP_FOR_REASON = {
     APPLICATION_LINK_DISABLED: { status: 503, error: "application_intent_disabled" },
     PROPERTY_NOT_ACTIVATED:    { status: 403, error: "property_not_activated" },
-    RECORD_NOT_CLASSIFIED:     { status: 403, error: "person_not_classified" },
+    NO_CONSENT:                { status: 403, error: "person_has_not_consented" },
     PERSON_UNKNOWN:            { status: 403, error: "person_unknown" },
   };
   async function applicationBirthGate(req, person_id, q = pool) {
