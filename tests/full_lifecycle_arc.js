@@ -157,8 +157,14 @@ function announce(label) { step++; console.log(`\n[${step}] ${label}`); }
   // a vacant unit with a space and NO operative lease — hollow 'pending'
   // leases are a known recurring class and each one silently freezes
   // confirm-term on its unit four layers from any error message.
-  const unit = (await pool.query(
-    `select u.id unit_id, u.unit_number, s.id space_id
+  //  "No operative lease" is necessary but NOT sufficient. The availability
+  //  projection has its own idea of leaseable, and a unit whose
+  //  occupancy_status is 'unknown' is refused at prepare with
+  //  not_leaseable — after a lease-free unit is chosen and five steps have
+  //  already written. So gather CANDIDATES, vacant first, and let the route
+  //  be the authority on offerability rather than guessing it here.
+  const units = (await pool.query(
+    `select u.id unit_id, u.unit_number, u.occupancy_status, s.id space_id
        from units u
        join spaces s on s.unit_id = u.id
       where u.property_id = $1
@@ -168,13 +174,15 @@ function announce(label) { step++; console.log(`\n[${step}] ${label}`); }
            where l.space_id = s.id
              and l.lease_status not in
                  ('cancelled','terminated','rescinded','void','expired','superseded'))
-      order by u.unit_number limit 1`, [PROPERTY_ID])).rows[0];
-  console.log(`  clear unit (no operative lease): ${unit ? `${unit.unit_number} space=${unit.space_id}` : "NONE"}`);
-  if (!unit) {
+      order by (u.occupancy_status = 'vacant') desc, u.unit_number
+      limit 8`, [PROPERTY_ID])).rows;
+  console.log(`  candidate units (vacant first): ${units.map((u) => `${u.unit_number}(${u.occupancy_status || "-"})`).join(", ") || "NONE"}`);
+  if (!units.length) {
     console.error("  Every non-occupied unit already carries an operative lease — confirm-term would block.");
     console.error("  Check for hollow 'pending' leases (tenants=0, application_id null).");
     await pool.end(); process.exit(1);
   }
+  let unit = units[0];
 
   const dupe = (await pool.query(`select id, name from persons where phone = $1`, [PHONE])).rows;
   console.log(`  existing persons on this phone: ${dupe.length}${dupe.length ? ` (${dupe.map(d=>d.name).join(", ")})` : ""}`);
@@ -239,12 +247,25 @@ function announce(label) { step++; console.log(`\n[${step}] ${label}`); }
     ? "/operator/leasing/application-invitations"
     : "/operator/leasing/application-invitations/send";
   announce(`send → POST ${sendPath}${SEND_MODE === "provider" ? "  (this really texts)" : "  (NO text)"}`);
-  const sent = await call("POST", sendPath, {
-    prepare_obligation_id, unit_id: unit.unit_id,
-    message_prefix: "Your application for the apartment you toured:",
-  });
-  if (!good(sent)) halt("send application", sent,
-    "403 owner/covering role = STAFF_SESSION's role_title is not literally 'leasing_manager'/'property_manager'.");
+  //  Try candidates until one is offerable. A 409 not_leaseable is the
+  //  availability projection refusing THIS unit, not a failure of the arc —
+  //  any other status is a real stop.
+  let sent = null;
+  for (const cand of units) {
+    const r = await call("POST", sendPath, {
+      prepare_obligation_id, unit_id: cand.unit_id,
+      message_prefix: "Your application for the apartment you toured:",
+    });
+    if (good(r)) { unit = cand; sent = r; break; }
+    const notLeaseable = r.status === 409 && /not_leaseable|no longer offerable/i.test(JSON.stringify(r.json));
+    console.log(`    unit ${cand.unit_number} refused: ${r.status} ${JSON.stringify(r.json)}`);
+    if (!notLeaseable) halt("send application", r,
+      "403 owner/covering role = STAFF_SESSION's role_title is not literally 'leasing_manager'/'property_manager'.");
+  }
+  if (!sent) halt("send application",
+    { status: 409, json: { error: "no candidate unit was offerable" } },
+    "Every lease-free unit was refused by the availability projection. Check occupancy_status — 'unknown' is not leaseable.");
+  console.log(`  using unit ${unit.unit_number}`);
   console.log(`  ✓ invitation=${sent.json.invitation_id}`);
   if (sent.json.link) console.log(`    link: ${sent.json.link}`);
 
