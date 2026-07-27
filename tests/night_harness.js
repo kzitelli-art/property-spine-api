@@ -226,7 +226,7 @@ async function fakeComplete(client, { obligation_id }) {
   check("proof_only REFUSES application_link (and revokes honestly)", disp2.dispatched === false && disp2.status === "revoked", disp2.reason);
 
   // internal_qa_autonomous + enrolled QA person → dispatch succeeds through the gate
-  process.env.SMS_SEND_MODE = "internal_qa_autonomous"; process.env.SMS_QA_PROPERTY_ID = DEMO;
+  process.env.SMS_SEND_MODE = "customer_care"; process.env.SMS_QA_PROPERTY_ID = DEMO;
   await commBoundary.enrollInternalQa({ person_id: p1.id, property_id: DEMO, reason: "night harness" });
   const wiresBefore = wireLog.length;
   const disp3 = await dispatchSvc({ property_id: DEMO, person_id: p1.id, unit_id: leadNow.unit_id, created_by_user_id: mgr.id });
@@ -260,7 +260,7 @@ async function fakeComplete(client, { obligation_id }) {
     plainRes.status === 200 && plain.token && plainRow.status === "prepared" && plainRow.dispatch_comm_event_id === null, JSON.stringify(plain));
 
   // C2: crash between accepted transport and attestation → resume reconciles, NO second text
-  process.env.SMS_SEND_MODE = "internal_qa_autonomous"; process.env.SMS_QA_PROPERTY_ID = DEMO;
+  process.env.SMS_SEND_MODE = "customer_care"; process.env.SMS_QA_PROPERTY_ID = DEMO;
   // simulate: phase 1+2 succeed (sid stamped on the event), phase 3 "crashes" —
   // we reproduce by dispatching normally, then FORCING the invitation back to
   // pre-attestation state while the event keeps its sid (exactly the crash residue).

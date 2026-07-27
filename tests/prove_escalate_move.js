@@ -22,7 +22,7 @@ const chk = (n, c, d = "") => { if (c) { passed++; console.log(`  \u2713 ${n}`);
 
 const ONLY = (process.env.ONLY_BLOCK || "").split(",").filter(Boolean);
 const DEMO = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
-process.env.SMS_SEND_MODE = "internal_qa_autonomous";
+process.env.SMS_SEND_MODE = "customer_care";
 process.env.AGENT_AUTO_DISPATCH_PROPERTY_IDS = DEMO;
 
 // Scripted fake model.

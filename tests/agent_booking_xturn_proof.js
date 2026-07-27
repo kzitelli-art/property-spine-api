@@ -33,7 +33,7 @@ const PROP = crypto.randomUUID();
 const PROP_NAME = `__XTURN__P ${PROP.slice(0, 8)}`;
 const PROP_SMS = "+1555" + Math.floor(1e6 + Math.random() * 8e6);
 process.env.AGENT_TOUR_BOOKING_PROPERTY_IDS = PROP;
-process.env.SMS_SEND_MODE = "internal_qa_autonomous";
+process.env.SMS_SEND_MODE = "customer_care";
 process.env.AGENT_AUTO_DISPATCH_PROPERTY_IDS = PROP;
 // A scratch property is not in property_timezone.js's builtin allowlist, and
 // an UNCONFIGURED property resolves to an honest null — on which offers and

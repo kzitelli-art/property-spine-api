@@ -115,7 +115,7 @@ const AUTONOMOUS = "ai_reply";
     // ════════════════════════════════════════════════════════════════
     console.log("\n[A] STOP — the claim that a person who opts out is never texted again\n");
 
-    mode("internal_qa_autonomous");
+    mode("customer_care");
     let r = await can({ property_id: A.id, recipient: "+15005558001", person_id: sarah, purpose: AUTONOMOUS, from: A.line });
     check("BEFORE the STOP, this send is allowed", r.allowed === true, r.reason);
 
@@ -140,7 +140,7 @@ const AUTONOMOUS = "ai_reply";
 
     // ── THE POINT. Every mode, every purpose. ──────────────────────────
     console.log("\n  ...and now every door is shut:\n");
-    for (const m of ["disabled", "proof_only", "internal_qa_autonomous", "customer_care"]) {
+    for (const m of ["disabled", "proof_only", "customer_care"]) {
       mode(m);
       process.env.SMS_PROOF_CELL = "+15005558001";     // she IS the proof cell — still no
       process.env.SMS_ALLOW_CREDENTIAL_SENDS = "1";    // the flag is ON — still no
@@ -196,12 +196,12 @@ const AUTONOMOUS = "ai_reply";
 
     await Q(`update contact_preferences set consent_state='opted_in' where person_id=$1 and channel='text'`, [sarah]);
 
-    mode("internal_qa_autonomous");
+    mode("customer_care");
     r = await can({ property_id: A.id, recipient: "+15005558001", person_id: sarah, purpose: AUTONOMOUS, from: A.line });
     check("Sarah is reachable at her OWN property", r.allowed === true, r.reason);
 
     // The same person, the same phone, through the wrong property.
-    for (const m of ["internal_qa_autonomous", "customer_care"]) {
+    for (const m of ["customer_care"]) {
       mode(m);
       const d = await can({ property_id: B.id, recipient: "+15005558001", person_id: sarah, purpose: AUTONOMOUS, from: B.line });
       check(`${m}: Sarah is NOT reachable through property B`, d.allowed === false, d.reason);
@@ -267,10 +267,21 @@ const AUTONOMOUS = "ai_reply";
           : c.query(sql, params),
     };
 
+    // The door count is DERIVED, not asserted as a literal. It used to be a
+    // hardcoded 16 (four modes x four purposes); retiring
+    // internal_qa_autonomous made it 12 and the mutation test failed for a
+    // reason that had nothing to do with consent. A number baked into a
+    // safety assertion turns an unrelated change into a false alarm — and
+    // the next person's instinct is to edit the number, which is exactly
+    // how a mutation test quietly stops mutating.
+    const MODES = ["disabled", "proof_only", "customer_care"];
+    const PURPOSES = [AUTONOMOUS, CREDENTIAL, "proof_text", "staff_invite"];
+    const doors = MODES.length * PURPOSES.length;
+
     let opened = 0, stillClosedByConsent = 0;
-    for (const m of ["disabled", "proof_only", "internal_qa_autonomous", "customer_care"]) {
+    for (const m of MODES) {
       mode(m);
-      for (const purpose of [AUTONOMOUS, CREDENTIAL, "proof_text", "staff_invite"]) {
+      for (const purpose of PURPOSES) {
         const dd = await cb.canSendSmsForRecord(
           { property_id: A.id, recipient: "+15005558001", person_id: sarah, purpose, from: A.line }, blind);
         if (dd.reason !== "consent_opted_out") opened++;
@@ -278,10 +289,10 @@ const AUTONOMOUS = "ai_reply";
       }
     }
     check("blinding the consent read changes the answer — the opt-out gate is the thing doing the work",
-      opened === 16 && stillClosedByConsent === 0,
-      `${opened} of 16 doors behaved differently`);
+      opened === doors && stillClosedByConsent === 0,
+      `${opened} of ${doors} doors behaved differently`);
 
-    mode("internal_qa_autonomous");
+    mode("customer_care");
     const wouldSend = await cb.canSendSmsForRecord(
       { property_id: A.id, recipient: "+15005558001", person_id: sarah, purpose: AUTONOMOUS, from: A.line }, blind);
     check("...and with consent blinded, an opted-out person WOULD have been texted",

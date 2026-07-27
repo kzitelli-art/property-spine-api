@@ -65,7 +65,10 @@ module.exports = function communicationsBoundary({ pool, sms }) {
   //                             fail closed until that policy is
   //                             deliberately activated. Credential sends
   //                             allowed (opted_out always blocks).
-  const VALID_MODES = ["disabled", "proof_only", "internal_qa_autonomous", "customer_care"];
+  // internal_qa_autonomous retired 2026-07-26 — see the note in the mode
+  // gates. An unrecognised value still resolves to 'disabled', so the
+  // retired string fails closed rather than behaving like a live mode.
+  const VALID_MODES = ["disabled", "proof_only", "customer_care"];
   function sendMode() {
     const m = (process.env.SMS_SEND_MODE || "disabled").trim();
     return VALID_MODES.includes(m) ? m : "disabled";
@@ -375,29 +378,26 @@ module.exports = function communicationsBoundary({ pool, sms }) {
       return { allowed: false, reason: "send_mode_proof_only_blocks_this_purpose" };
     }
 
-    if (mode === "internal_qa_autonomous") {
-      if (CREDENTIAL_PURPOSES.has(purpose)) {
-        // Credential transport inside the QA perimeter only.
-        const qaProp = qaPropertyId();
-        if (!qaProp || property_id !== qaProp) {
-          return { allowed: false, reason: "credential_send_outside_qa_property" };
-        }
-        return { allowed: true, reason: "qa_credential" };
-      }
-      if (AUTONOMOUS_PURPOSES.has(purpose)) {
-        if (!person_id) return { allowed: false, reason: "qa_autonomous_requires_person_record" };
-        const ctx = await resolvePersonPropertyContext(person_id, property_id, q);
-        if (ctx.classification_unavailable) return { allowed: false, reason: "classification_unavailable" };
-        if (!ctx.classification) return { allowed: false, reason: "record_unclassified" };
-        if (!ctx.is_qa) return { allowed: false, reason: "record_not_internal_qa" };
-        if (consent !== "opted_in") return { allowed: false, reason: "qa_autonomous_requires_opted_in_consent" };
-        // Scope is implied and verified: classification is property-scoped
-        // and the relationship check below re-confirms the tie.
-        if (!ctx.relationship_exists) return { allowed: false, reason: "recipient_not_in_property_scope" };
-        return { allowed: true, reason: "qa_autonomous" };
-      }
-      return { allowed: false, reason: "purpose_not_permitted_in_qa_mode" };
-    }
+    // `internal_qa_autonomous` is RETIRED (owner ruling 2026-07-26).
+    //
+    //  Its entire reason to exist was the class check: it sent to
+    //  internal_qa records and refused everyone else, while customer_care
+    //  did the mirror image. That was the deadlock — one person could be
+    //  textable or leasable, never both, depending on a setting nobody
+    //  could see from the board. It cost a full afternoon: a real prospect
+    //  arrived through the website, was correctly classified production,
+    //  and the AI went silent on him twice because the mode was still QA.
+    //
+    //  With class out of eligibility there is nothing left for it to do —
+    //  it would be customer_care with an extra refusal. So it is gone
+    //  rather than kept as a synonym, and the value now falls through
+    //  VALID_MODES to `disabled`, which fails closed and loudly.
+    //
+    //  ⚠ OPERATIONAL: if SMS_SEND_MODE is still set to this string
+    //  anywhere, that deploy now sends NOTHING. That is deliberate — a
+    //  retired mode must not silently behave like a live one — but it is
+    //  the failure someone will hit first, so check the env when a deploy
+    //  goes quiet.
 
     if (mode === "customer_care") {
       if (CREDENTIAL_PURPOSES.has(purpose)) {
@@ -408,17 +408,25 @@ module.exports = function communicationsBoundary({ pool, sms }) {
         }
         return { allowed: true, reason: "credential" };
       }
-      // Agent/autonomous sends require an explicit current 'production'
-      // classification. No authoritative source populates that yet, so
-      // this fails closed — deliberately — until the activation policy
-      // writes production classifications.
+      // CLASS NO LONGER GATES SENDING (owner ruling 2026-07-26).
+      //
+      //  This used to require a current 'production' classification, while
+      //  internal_qa_autonomous required 'internal_qa' for the same person.
+      //  Two gates, opposite directions, one field — the deadlock.
+      //
+      //  What remains is what actually protects someone: they must exist as
+      //  a record, they must belong to THIS property, and they must have
+      //  said yes. Absence of consent is refusal, unchanged. A STOP still
+      //  short-circuits above this block before any of it runs.
+      //
+      //  This is a real widening and worth naming: anyone opted in at a
+      //  property the product operates can now receive autonomous outreach,
+      //  where before a classification stood between them and it. That
+      //  classification was never a consent signal though — it was a
+      //  deployment marker doing a safety job it was never designed for.
+      //  Consent is the signal, and it is the one the person actually gave.
       if (!person_id) return { allowed: false, reason: "customer_care_requires_person_record" };
       const ctx = await resolvePersonPropertyContext(person_id, property_id, q);
-      if (ctx.classification_unavailable) return { allowed: false, reason: "classification_unavailable" };
-      if (!ctx.classification) return { allowed: false, reason: "record_unclassified" };
-      if (ctx.classification.record_class !== "production") {
-        return { allowed: false, reason: "customer_care_requires_production_classification" };
-      }
       if (!ctx.relationship_exists) return { allowed: false, reason: "recipient_not_in_property_scope" };
       if (consent !== "opted_in") return { allowed: false, reason: "customer_care_requires_opted_in_consent" };
       return { allowed: true, reason: "customer_care" };

@@ -247,7 +247,7 @@ async function main() {
 
   console.log("\n\u2500\u2500\u2500 #3 CONCURRENCY RACE (same MessageSid, concurrent) \u2500\u2500\u2500");
   {
-    process.env.SMS_SEND_MODE = "internal_qa_autonomous";
+    process.env.SMS_SEND_MODE = "customer_care";
     const phone = "+1973" + Math.floor(1e6 + Math.random() * 8e6);
     const pid = await makeLead(TEST_PROP, phone, "Race Lead", "new");
     await boundary.enrollInternalQa({ person_id: pid, property_id: TEST_PROP, actor_user_id: null });
@@ -276,7 +276,7 @@ async function main() {
     // to a prospect: send mode internal_qa_autonomous + the recipient enrolled
     // as internal_qa/opted_in. This proves the outbound goes through the REAL
     // gate (not bypassing it) exactly once, and the duplicate is suppressed.
-    process.env.SMS_SEND_MODE = "internal_qa_autonomous";
+    process.env.SMS_SEND_MODE = "customer_care";
     const phone = "+1215" + Math.floor(2e6 + Math.random() * 7e6);
     const pid = await makeLead(TEST_PROP, phone, "Reply Dedup Lead", "new");
     await boundary.enrollInternalQa({ person_id: pid, property_id: TEST_PROP, actor_user_id: null });

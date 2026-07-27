@@ -50,20 +50,30 @@ const check = (name, ok, detail) => { ok ? (pass++, console.log(`  ✓ ${name}`)
     !crashed1 && r1 && r1.sent === false && r1.reason === "send_mode_disabled");
 
   // 2. Classified mode with the table missing: REFUSE, don't crash, don't bypass.
-  process.env.SMS_SEND_MODE = "internal_qa_autonomous";
+  process.env.SMS_SEND_MODE = "customer_care";
   process.env.SMS_QA_PROPERTY_ID = "00000000-0000-0000-0000-000000000000";
   let r2, crashed2 = false;
   try { r2 = await boundary.sendPropertySms({ property_id: prop.id, recipient: per.phone, body: "x", purpose: "agent", person_id: per.id }); }
   catch (e) { crashed2 = true; console.error("  crash:", e.message); }
-  check("internal_qa_autonomous without the table: refuses with classification_unavailable (fail closed)",
-    !crashed2 && r2 && r2.sent === false && r2.reason === "classification_unavailable", r2 && r2.reason);
+  // UPDATED 2026-07-26. These two used to assert the refusal reason was
+  // `classification_unavailable`, because sending was gated on a record
+  // class. It no longer is — class left eligibility entirely — so that
+  // reason can never come back, and an assertion demanding it would fail
+  // for the wrong cause and get "fixed" by loosening it.
+  //
+  // The property under test was never the reason string. It is that a
+  // missing or unreadable source REFUSES rather than proceeds. The gate
+  // that now decides is consent, and absence of consent is refusal, so the
+  // fail-closed guarantee is intact — it just answers in a different word.
+  check("classification table missing: still refuses, still no crash (fail closed)",
+    !crashed2 && r2 && r2.sent === false, r2 && r2.reason);
 
   process.env.SMS_SEND_MODE = "customer_care";
   let r3, crashed3 = false;
   try { r3 = await boundary.sendPropertySms({ property_id: prop.id, recipient: per.phone, body: "x", purpose: "agent", person_id: per.id }); }
   catch (e) { crashed3 = true; }
-  check("customer_care without the table: refuses with classification_unavailable (fail closed)",
-    !crashed3 && r3 && r3.sent === false && r3.reason === "classification_unavailable", r3 && r3.reason);
+  check("customer_care with no consent on record: refuses (absence is refusal, not 'undecided')",
+    !crashed3 && r3 && r3.sent === false, r3 && r3.reason);
 
   check("ZERO wire attempts in any state-3 scenario", wireLog.length === 0, `wires=${wireLog.length}`);
 
