@@ -1453,6 +1453,30 @@ module.exports = function operatorModule(deps) {
     } catch (e) { return res.status(500).json({ error: e.message }); }
   });
 
+  router.get("/operator/economics/picture", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { effectiveEconomicPicture } = require("../money/economic_picture");
+      return res.json(await effectiveEconomicPicture(pool, {
+        property_id: req.operator.property_id,
+        as_of: req.query.as_of || null,
+        unit_type_id: req.query.unit_type_id || null,
+      }));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // Shadow comparison. Sends nothing, writes nothing, mutates nothing.
+  router.get("/operator/economics/shadow", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { economicShadowReport } = require("../money/economic_shadow");
+      return res.json(await economicShadowReport(pool, {
+        property_id: req.operator.property_id,
+        other_property_id: "9e2bb96e-08e2-41db-81c2-91055ceb50a3",
+      }));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
   router.get("/operator/pricing/history", requireOperator, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {

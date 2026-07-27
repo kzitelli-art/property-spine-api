@@ -290,9 +290,11 @@ const sec = (s) => console.log("\n== " + s + " ==");
     "and the combined monthly total is STILL withheld, because a component is missing");
   await pc.query("rollback");
   pc.release();
-  const leftover = Number((await pool.query(
-    "select count(*)::int n from property_governed_charges")).rows[0].n);
-  ok(leftover === 0, `the published charge did not survive the rollback (${leftover} rows)`);
+  // Count ACTIVE rows: two DRAFT candidates are legitimately persisted, so a
+  // bare row count would now flag them as rollback leakage.
+  const leftoverActive = Number((await pool.query(
+    "select count(*)::int n from property_governed_charges where record_state='active'")).rows[0].n);
+  ok(leftoverActive === 0, `no ACTIVE charge survived the rollback (${leftoverActive})`);
 
   sec("FUTURE RENT ROLL ECONOMIC STACK");
   const frr = await futureRentRollPricingPreview(pool, { property_id: DEMO });
@@ -318,18 +320,119 @@ const sec = (s) => console.log("\n== " + s + " ==");
   sec("OPERATING STATE UNCHANGED");
   const st = (await pool.query(
     `select (select count(*)::int from property_pricing_versions) v,
-            (select count(*)::int from property_governed_charges) c,
+            (select count(*)::int from property_governed_charges where record_state='active') c,
             (select count(*)::int from concession_policies where active) k`)).rows[0];
   ok(Number(st.v) === 0, "no pricing version published");
-  ok(Number(st.c) === 0, "no governed charge published — the catalog exists and is empty");
+  ok(Number(st.c) === 0, "no governed charge is PUBLISHED — only draft candidates exist");
   ok(Number(st.k) === 0, "no concession active");
   const agentSrc = fs.readFileSync(path.join(REPO, "src/agent/agent.js"), "utf8");
   ok(!/economic_adapter|economicAnswer/.test(agentSrc), "the live agent does not call the economic adapter");
   const eaCallers = require("child_process")
     .execSync("git grep -l economic_adapter -- src server.js || true", { cwd: REPO, encoding: "utf8" })
     .trim().split("\n").filter(Boolean);
-  ok(eaCallers.length === 1 && eaCallers[0].includes("economic_adapter"),
-    `the economic adapter has no consumers (${eaCallers.join(", ")})`);
+  // operator.js consumes it for a REVIEW-only route. Dark has always meant
+  // no PROSPECT-FACING path calls it, not zero references.
+  const AE_ALLOWED = ["src/agent/economic_adapter.js", "src/identity/operator.js"];
+  const eaUnexpected = eaCallers
+    .map((c) => c.split("\\").join("/"))
+    .filter((c) => !AE_ALLOWED.includes(c));
+  ok(eaUnexpected.length === 0,
+    `only review-only consumers reference the economic adapter (${eaUnexpected.join(", ") || "none"})`);
+
+
+  sec("PERSISTED DRAFTS HAVE ZERO OPERATING EFFECT");
+  const { effectiveEconomicPicture } = require(path.join(REPO, "src/money/economic_picture"));
+  const { economicShadowReport } = require(path.join(REPO, "src/money/economic_shadow"));
+  const activeOnly = await gc.governedCharges(pool, { property_id: DEMO });
+  const withDrafts = await gc.governedCharges(pool, { property_id: DEMO, include_drafts: true });
+  ok(withDrafts.summary.draft === 2, `two draft candidates are persisted (${withDrafts.summary.draft})`);
+  ok(activeOnly.summary.total === 0,
+    "and the DEFAULT read returns none of them — a draft is invisible, not merely flagged");
+  ok(withDrafts.summary.active === 0 && withDrafts.summary.quotable === 0,
+    "no draft is active or quotable");
+  const draftCodes = withDrafts.one_time_fees.map((c) => c.charge_code).sort();
+  ok(JSON.stringify(draftCodes) === JSON.stringify(["fee.administration", "fee.application"]),
+    `the drafts are the two safe fees (${draftCodes.join(", ")})`);
+  ok(withDrafts.one_time_fees.every((c) => /migration_candidate_from:/.test(c.source_provenance)),
+    "each records the source fact it was derived from");
+  ok(withDrafts.one_time_fees.every((c) => c.not_quotable_reason === "draft_has_no_operating_effect"),
+    "and each states why it cannot be quoted");
+  const adapterNow = await economicAnswer(pool, { property_id: DEMO });
+  ok(!adapterNow.components.some((c) => c.code === "fee.application"),
+    "the DARK ADAPTER cannot see the drafts at all");
+  const liveFacts = Number((await pool.query(
+    `select count(*)::int n from agent_facts where property_id=$1 and status='active'
+       and fact_key in ('pricing_application_fee','pricing_admin_fee')`, [DEMO])).rows[0].n);
+  ok(liveFacts === 2, "the legacy facts remain the ONLY live quotable source");
+
+  sec("ECONOMIC PICTURE — composition, not a new source");
+  const pic = await effectiveEconomicPicture(pool, { property_id: DEMO });
+  ok(pic.disposition === "composition_read_no_new_source_of_truth", "it declares itself a composition");
+  ok(pic.proof.copies_nothing === true, "and copies nothing");
+  ["base_rent", "one_time_fees", "recurring_charges", "deposit_requirements", "advertised_concessions"]
+    .forEach((k) => ok(!!pic[k] && !!pic[k].economic_class, `${k} is a separate block carrying its class`));
+  ok(pic.one_time_fees.drafts.length === 2 && pic.one_time_fees.published.length === 0,
+    "drafts are carried SEPARATELY from published, never merged");
+  ok(pic.combined_monthly_total.amount === null && pic.combined_monthly_total.withheld === true,
+    "no combined monthly total is fabricated");
+  ok(Array.isArray(pic.combined_monthly_total.withheld_because)
+     && pic.combined_monthly_total.withheld_because.length > 0,
+    `and the reason is named (${pic.combined_monthly_total.withheld_because.join(", ")})`);
+  ok(pic.combined_move_in_total.amount === null
+     && /Deposits stay SEPARATELY identified/.test(pic.combined_move_in_total.rule),
+    "the move-in total is withheld and deposits stay separately identified");
+  ok(pic.legacy_transitional.still_live === true && pic.legacy_transitional.facts.length === 13,
+    "the 13 transitional legacy facts are carried as still-live");
+  ok(pic.contradictions.length === 11, `${pic.contradictions.length} contradictions are surfaced`);
+  ok(pic.missing_determinants.length > 0,
+    `missing determinants are named (${pic.missing_determinants.length})`);
+  ok(pic.completeness.independently_governed === true,
+    "classes stay independently governed — there is no master economic version");
+  const picPayload = JSON.stringify({ ...pic, proof: { ...pic.proof, never_reads: undefined } });
+  ok(!picPayload.includes("market_rent"), "no market_rent value appears in the picture");
+  const deadPic = await effectiveEconomicPicture(
+    { query: async () => { throw new Error("down"); } }, { property_id: DEMO });
+  ok(Object.values(deadPic.completeness.by_class).includes("unavailable"),
+    "a failed read returns UNAVAILABLE per class, never empty or sample economics");
+
+  sec("EXTENDED SHADOW — 25 scenarios, nothing sent");
+  const beforeS = (await pool.query(
+    `select (select count(*)::int from comm_events) c, (select count(*)::int from persons) p,
+            (select count(*)::int from obligations) o,
+            (select count(*)::int from property_governed_charges) g`)).rows[0];
+  const shadow = await economicShadowReport(pool, { property_id: DEMO, other_property_id: OTHER });
+  const afterS = (await pool.query(
+    `select (select count(*)::int from comm_events) c, (select count(*)::int from persons) p,
+            (select count(*)::int from obligations) o,
+            (select count(*)::int from property_governed_charges) g`)).rows[0];
+  ok(JSON.stringify(beforeS) === JSON.stringify(afterS),
+    `nothing was written (${JSON.stringify(afterS)})`);
+  ok(shadow.sent_anything === false, "the report states it sent nothing");
+  ok(shadow.summary.compared >= 25, `${shadow.summary.compared} scenarios compared`);
+  const has = (frag) => shadow.comparisons.some((c) => c.scenario.includes(frag));
+  ["new_lease_asking_rent", "renewal_rent", "application_fee", "administration_fee",
+   "amenity_fee", "telecom_charge", "parking", "pet_fee_and_rent", "wifi", "insurance",
+   "deposit_requirement", "move_in_requirements", "move_in_credits",
+   "concession:one_time_fee_waiver", "concession:flat_dated_credit",
+   "concession:fixed_monthly_discount", "concession:free_rent_period",
+   "unclassified_unit_101", "model_unit_214", "activation_pending_unit_530",
+   "commercial_space", "another_property", "failed_economic_read"]
+    .forEach((f) => ok(has(f), `scenario present: ${f}`));
+  ok(shadow.summary.unsupported_precision > 0,
+    `${shadow.summary.unsupported_precision} live answers carry unsupported precision`);
+  ok(shadow.summary.duplicate_ownership_blocking === 0,
+    "NO duplicate ownership today — because no governed charge is published yet");
+  ok(shadow.summary.cannot_survive_cutover > 0,
+    `${shadow.summary.cannot_survive_cutover} live answers cannot safely survive cutover, each with a reason`);
+  const failRow = shadow.comparisons.find((c) => c.scenario === "failed_economic_read");
+  ok(failRow && failRow.governed_disposition === "unavailable",
+    "a failed economic read is reported as unavailable, not as agreement");
+  const commRow2 = shadow.comparisons.find((c) => c.scenario === "commercial_space");
+  ok(commRow2 && commRow2.current_answer === 0 && commRow2.governed_answer === null,
+    "commercial: the live $0 against a governed refusal is surfaced as a real disagreement");
+  ok(shadow.comparisons.filter((c) => c.scenario.startsWith("concession:"))
+      .some((c) => c.governed_disposition === "refused"),
+    "a concession over an unresolved fee is still refused in shadow");
 
   console.log(`\n==== ${pass} passed, ${fail} failed ====`);
   await pool.end();
