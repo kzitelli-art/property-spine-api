@@ -115,7 +115,16 @@ const PROPERTY = process.argv[2] || "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
     console.log(`so the next auto-assigned obligation here will be unreachable.`);
   } else {
     console.log(`\nThese are not overdue, not failed, not flagged anywhere. They look`);
-    console.log(`healthy. Nobody — including the named owner — can complete them.`);
+    console.log(`healthy, and the named owner cannot act on them.`);
+    console.log(`\nAn authorised manager CAN still cover this work — coverage is a`);
+    console.log(`separate authority and was fixed on 2026-07-26. What is wrong here`);
+    console.log(`is the ATTRIBUTION: the board names an owner who has no access.`);
+    console.log(`\nRepair with tools/repair_invalid_task_owners.js, which returns them`);
+    console.log(`to UNASSIGNED through the governed path and keeps the former owner`);
+    console.log(`in history. NOTE it can only reach conversion RUNGS — child`);
+    console.log(`obligations (prepare/send_application_link) have no ownership-history`);
+    console.log(`table, so they cannot be corrected without silently erasing the`);
+    console.log(`former owner. Those are reported here and deliberately left alone.`);
   }
   console.log(`${bar}\n`);
   await p.end();

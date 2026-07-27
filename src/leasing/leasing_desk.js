@@ -153,14 +153,44 @@ function normalizeApplicationRow(row) {
 //   navigation  target {type:'application'} → Application Review
 // Communication-oriented next moves open the conversation rather than asserting
 // completion of undone work. This set is CONFIG TO VERIFY against the live
-// rail's actual next_move_code vocabulary before the loader ships (Rule 11);
-// unlisted codes fall to Complete, so a missing entry is safe, never wrong.
+// rail's actual next_move_code vocabulary before the loader ships (Rule 11).
+// CORRECTED 2026-07-26: this used to claim "unlisted codes fall to Complete,
+// so a missing entry is safe, never wrong." They fall to UNAVAILABLE. A
+// missing entry is therefore neither safe nor invisible — it tells the
+// operator the app cannot do a thing it just offered them.
+// tests/leasing_action_deadend_audit.js exists to catch the next one.
 const COMMUNICATION_MOVE_CODES = new Set([
   "send_follow_up",
   "call_prospect",
   "message_prospect",
   "send_floor_plans",
   "schedule_second_tour",
+]);
+
+// ── REMINDERS — the work IS the remembering ──────────────────────────
+//  Added 2026-07-26. These are authored by the post-tour capture menu, so
+//  they are not "unknown codes"; the desk simply never declared them. Every
+//  one of them rendered "Unavailable", which told an operator the app could
+//  not do something it had just invited them to choose. Seven of the ten
+//  remaining post-tour options were in that state.
+//
+//  The fallback below is NOT the bug and is deliberately left alone: for a
+//  genuinely unrecognised code, refusing to invent a consequential write is
+//  correct. The fix is to say what these mean, not to loosen the default.
+//
+//  Note the header comment on COMMUNICATION_MOVE_CODES claimed "unlisted
+//  codes fall to Complete, so a missing entry is safe, never wrong". That
+//  was never true of the code — unlisted fell to Unavailable. Corrected
+//  there as well, because a comment that misdescribes its own fallback is
+//  how a missing entry stays missing.
+const REMINDER_MOVE_CODES = new Set([
+  "follow_up_later",
+  "set_follow_up_time",
+  "watch_future",
+  "close_out",
+  "different_home",
+  "different_price",
+  "different_timing",
 ]);
 
 // ── HELD, NOT UNAVAILABLE ────────────────────────────────────────────
@@ -255,8 +285,11 @@ function normalizeFollowupAction(row) {
   }
 
   // A rail row with no authored next move is the one genuine generic
-  // obligation-completion case. Explicit legacy completion codes remain accepted.
-  if (code == null || code === "complete_task" || code === "complete") {
+  // obligation-completion case. Explicit legacy completion codes remain
+  // accepted, as do the declared reminder moves — for those, recording that
+  // the remembering happened IS the whole of the work.
+  if (code == null || code === "complete_task" || code === "complete"
+      || REMINDER_MOVE_CODES.has(code)) {
     return {
       code: "complete_task",
       label: "Complete",
