@@ -42,6 +42,7 @@ module.exports = function factsSeedModule(deps) {
     utilities_policy: "utilities", renters_insurance: "insurance", rent_payment_policy: "rent",
     move_in_process: "movein", amenities_list: "amenities", noise_policy: "policies",
     guest_policy: "policies", building_restrictions: "policies", entry_access: "fees",
+    current_concession: "rent", pricing_premiums: "rent",
   };
 
   // The REAL Solo facts, verbatim numbers from the 2026 Field Guide. Written as the
@@ -150,6 +151,51 @@ module.exports = function factsSeedModule(deps) {
       rendered_text:
         "Guests are welcome. In the amenity spaces, residents may bring up to two guests, and guests must " +
         "be accompanied at all times. Guest parking is in designated guest spaces.",
+    },
+    // ── July 2026 pricing sheet ────────────────────────────────────────────
+    // Source: 03. Leasing & Marketing / "Current Pricing & Specials July 2026.pdf".
+    // Dated the current month and titled "Current", so it is the rent-and-
+    // concession authority. ONLY the unambiguous, single-source values are
+    // seeded here. The per-unit-type PRICES are deliberately NOT seeded: they
+    // conflict with live `units` rows (the sheet says a studio is $1,450-1,600;
+    // unit 530 quoted $1,687 to a live prospect), and unit truth is read LIVE
+    // from units by design. That conflict is logged in docs/SOLO_FACTS_PACK.md
+    // for an owner to resolve, per this file's own rule.
+    {
+      fact_key: "current_concession",
+      rendered_text:
+        "Current special: one month free on a one-year lease that expires in July 2027. Quote the gross " +
+        "rent and then say what it works out to with the free month applied, so the net number is never " +
+        "a surprise. Concessions change month to month, so never state one that isn't in these facts.",
+    },
+    // Matterport 3D tours. FLOOR-PLAN media, never unit media: the tour shows
+    // the LAYOUT, not the specific apartment someone would lease. Sending one
+    // as "here's your apartment" is the media misrepresentation docs/AI_VOICE.md
+    // §9 exists to prevent. Only links VERIFIED to belong to this property and
+    // this layout are listed; the rest are held in docs/SOLO_FACTS_PACK.md §8.
+    {
+      fact_key: "virtual_tours",
+      rendered_text:
+        "3D walkthroughs, one per layout. " +
+        "Studio: https://my.matterport.com/show/?m=H5qs9j6vYc5 . " +
+        "One bedroom: https://my.matterport.com/show/?m=CbvpwiPGRah . " +
+        "Furnished model one bedroom: https://my.matterport.com/show/?m=CVU7qPMehm9 . " +
+        "One bedroom with den: https://my.matterport.com/show/?m=QmzDAeTLUmK . " +
+        "Three bedroom, two bath: https://my.matterport.com/show/?m=tBSRwYtiTMU . " +
+        "Send the one matching the layout they're asking about, when someone wants to see a unit, is " +
+        "deciding from out of town, or can't make a tour time. Always describe it as the LAYOUT, never " +
+        "their specific apartment: say it's the same floor plan, never 'here's your unit'. The three " +
+        "bedroom tour was filmed inside a real occupied-style apartment, so be especially careful not to " +
+        "imply it is the one they would get. THERE IS NO TWO-BEDROOM TOUR: if someone asks about the " +
+        "two bedroom, do not send another layout as a substitute and do not imply a tour exists. Offer " +
+        "the in-person or live video option instead. Live video tours over FaceTime or WhatsApp are " +
+        "available Monday to Friday, 9:00 AM to 4:30 PM.",
+    },
+    {
+      fact_key: "pricing_premiums",
+      rendered_text:
+        "Unit pricing carries location premiums on top of the base price for the layout: $100 more on the " +
+        "7th floor, $50 more on the 6th floor, and $50 more for odd-numbered units.",
     },
     {
       fact_key: "building_restrictions",
