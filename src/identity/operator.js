@@ -1356,6 +1356,16 @@ module.exports = function operatorModule(deps) {
     } catch (e) { return res.status(500).json({ error: e.message }); }
   });
 
+  // The ownership decision sheet. Read-only, and blank where ownership must
+  // decide — it cannot populate a governed draft.
+  router.get("/operator/pricing/version-one-worksheet", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { versionOneWorksheet } = require("../money/version_one_worksheet");
+      return res.json(await versionOneWorksheet(pool, { property_id: req.operator.property_id }));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
   router.get("/operator/pricing/history", requireOperator, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
