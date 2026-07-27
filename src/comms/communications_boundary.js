@@ -315,6 +315,57 @@ module.exports = function communicationsBoundary({ pool, sms }) {
     }
   }
 
+  // ── SEND WINDOW (quiet hours) ──────────────────────────────────────
+  //  A reply is triggered by a human who just texted us; a FOLLOW-UP fires on
+  //  a timer with nobody watching. That difference is the whole reason this
+  //  exists. Today every send is reactive, so nothing here changes behavior —
+  //  it is in place BEFORE the first scheduled sender, not bolted on after it
+  //  has already texted somebody at 4am.
+  //
+  //  ONLY proactive purposes are gated. Replies (agent, ai_reply), the
+  //  responsive first response, and CREDENTIAL sends (OTP, invites, an
+  //  application link someone is waiting on) are never held: a person locked
+  //  out at 2am needs their code, and holding it would be the defect.
+  //
+  //  JURISDICTION (PHILOSOPHY §22, and the same reasoning as the agent's local-
+  //  law floor): quiet-hour rules are not one national rule. 8:00–21:00 local is
+  //  the common conservative floor; a stricter state or municipality tightens it
+  //  and this must move with the property, never with the server's clock. An
+  //  UNRESOLVED timezone REFUSES a proactive send — we cannot prove it is a
+  //  decent hour there, and honest blank beats confident wrong (§5).
+  const PROACTIVE_PURPOSES = new Set([
+    "followup", "nudge", "reengagement", "campaign", "tour_reminder",
+  ]);
+  const SEND_WINDOW_START_HOUR = 8;  // inclusive
+  const SEND_WINDOW_END_HOUR = 21;   // exclusive (21:00 = last minute is 20:59)
+
+  // Local wall-clock hour at the property, or null when tz is unconfigured.
+  function localHourAtProperty(property_id, now = new Date()) {
+    const { resolvePropertyOperatingTimeZone } = require("../shared/property_timezone");
+    const tz = resolvePropertyOperatingTimeZone(property_id);
+    if (!tz) return null;
+    try {
+      const hour = new Intl.DateTimeFormat("en-US", {
+        timeZone: tz, hour: "numeric", hour12: false,
+      }).format(now);
+      const n = parseInt(hour, 10);
+      return Number.isFinite(n) ? (n === 24 ? 0 : n) : null;
+    } catch (_) { return null; }
+  }
+
+  // { allowed, reason }. Exported for the proof harness and for a scheduler to
+  // consult BEFORE queueing, so it can defer to the next open window rather
+  // than burning an attempt against a closed door.
+  function withinSendWindow(property_id, purpose, now = new Date()) {
+    if (!PROACTIVE_PURPOSES.has(purpose)) return { allowed: true, reason: "not_proactive" };
+    const hour = localHourAtProperty(property_id, now);
+    if (hour === null) return { allowed: false, reason: "send_window_timezone_unconfigured" };
+    if (hour < SEND_WINDOW_START_HOUR || hour >= SEND_WINDOW_END_HOUR) {
+      return { allowed: false, reason: "outside_send_window" };
+    }
+    return { allowed: true, reason: "within_send_window" };
+  }
+
   // ── CENTRAL OUTBOUND ELIGIBILITY ───────────────────────────────────
   //  canSendSmsForRecord — the ONE decision point. Consent, record
   //  classification, property/recipient scope, purpose, and send mode.
@@ -345,6 +396,13 @@ module.exports = function communicationsBoundary({ pool, sms }) {
     if (!from) return { allowed: false, reason: "no_property_line" };
     if (!recipient) return { allowed: false, reason: "no_recipient" };
     if (!purpose) return { allowed: false, reason: "no_purpose" };
+
+    // 0b. Quiet hours — proactive purposes only. Placed BEFORE consent so a
+    // scheduled send outside the window never even reads a consent row; it is
+    // simply not a thing we do at that hour. Reactive replies fall straight
+    // through (withinSendWindow returns allowed for non-proactive purposes).
+    const windowCheck = withinSendWindow(property_id, purpose);
+    if (!windowCheck.allowed) return { allowed: false, reason: windowCheck.reason };
 
     // 1. Consent — read once; opted_out blocks EVERYTHING, every mode.
     let consent = "unknown";
@@ -776,6 +834,10 @@ module.exports = function communicationsBoundary({ pool, sms }) {
     resolveInboundSmsContext,
     canSendSmsForRecord,
     sendPropertySms,
+    // quiet hours. Exported so a scheduler can ask BEFORE queueing and defer
+    // to the next open window instead of burning an attempt on a closed door.
+    withinSendWindow,
+    PROACTIVE_PURPOSES,
     // the relationship/classification read
     resolvePersonPropertyContext,
     // property operating authority (094). The ONE reader of
