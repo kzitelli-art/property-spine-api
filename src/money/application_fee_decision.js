@@ -104,8 +104,15 @@ async function applicationFeeDecision(pool, { property_id, user_id = null } = {}
       may_approve: mayApprove,
       may_modify: mayApprove,
       may_reject: mayApprove,
-      denied_reason: mayApprove ? null
-        : (actor && actor.failure_reason) || "You do not have authority to decide pricing for this property.",
+      // Operator-facing copy. The machine reason is real and stays in `audit`;
+      // a person told "session_identity_not_linked_to_a_person" learns nothing
+      // and cannot tell whether to ask for access or ask someone else.
+      denied_reason: mayApprove ? null : (
+        !actor ? "Sign in to decide this."
+        : actor.reconciliation_required
+          ? "Your sign-in isn’t linked to a staff record yet. That’s an account setup step — ask an administrator to link it, then this decision becomes available."
+          : "You don’t have pricing authority for this property. Someone with an owner or asset-manager role here can decide it."),
+      denied_code: mayApprove ? null : (actor && actor.failure_reason) || "no_session",
       approve_label: "Approve — govern this fee at $50",
       modify_label: "Modify — return to preview",
       reject_label: "Reject — keep the current source",
@@ -131,6 +138,7 @@ async function applicationFeeDecision(pool, { property_id, user_id = null } = {}
       acting_person: actor && actor.person ? actor.person.display_name : null,
       authority_basis: actor && actor.basis ? actor.basis.may_publish_pricing : null,
       property_id,
+      denied_code: (actor && !actor.capabilities.may_publish_pricing) ? actor.failure_reason : null,
     },
 
     proof: {
