@@ -432,7 +432,11 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
   // ════════════════════════════════════════════════════════════════════
 
   const REOPEN_WINDOW_HOURS = 72;
-  const REASSIGN_REASONS = ["coverage_change","vacation_or_absence","actual_host_correction","workload_balance","unassigned_pickup","other"];
+  // `owner_not_eligible` (2026-07-26): the named owner can no longer hold the
+  // task — typically their team authority at the property lapsed. A named
+  // reason rather than `other` + prose, because this is a recurring machine-
+  // meaningful condition and the audit trail should be able to count it.
+  const REASSIGN_REASONS = ["coverage_change","vacation_or_absence","actual_host_correction","workload_balance","unassigned_pickup","owner_not_eligible","other"];
   const RECOVERY_REASONS = ["closed_by_mistake","couldnt_complete","new_information","other"];
 
   // Dependency-aware reopenability — one rail-level rule (Amendment 2).
@@ -590,8 +594,23 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
   // Task-only (Q1): conversation ownership is untouched. Eligible targets
   // only (Q3), re-resolved INSIDE this transaction — picker state is never
   // trusted at write time.
+  //  UNASSIGNING IS A REASSIGNMENT (2026-07-26).
+  //  to_user_id === null means "return this to UNASSIGNED". It is not a
+  //  missing argument — callers must pass it explicitly, so a bug that drops
+  //  the field still throws rather than silently orphaning a task.
+  //
+  //  It exists because ownership can become invalid without anyone touching
+  //  the task: a person loses their team authority and every obligation
+  //  naming them turns into a false owner. There was no way to say "nobody
+  //  eligible holds this" through the governed path, so the only options were
+  //  to leave the lie or to edit the row behind the mechanism's back. Both
+  //  are worse than an honest blank.
+  //
+  //  History is preserved either way — appendEvent records
+  //  prior_owner_user_id, so the former owner is never erased.
   async function reassignTask(client, { obligation_id, by_user_id = null, to_user_id, reason, reason_detail = null, idempotency_key = null }) {
-    if (!to_user_id) throw httpErr(400, "to_user_id required — reassignment names an owner.");
+    const unassigning = to_user_id === null;
+    if (to_user_id === undefined) throw httpErr(400, "to_user_id required — pass null to return the task to UNASSIGNED.");
     if (!reason || !REASSIGN_REASONS.includes(reason))
       throw httpErr(400, "reason required: " + REASSIGN_REASONS.join(" | ") + ".");
     if (reason === "other" && !(reason_detail && String(reason_detail).trim()))
@@ -605,13 +624,22 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     if (link.outcome != null) throw httpErr(409, "task is closed — a terminal task cannot be reassigned.");
     if (link.owner_user_id && link.owner_user_id === to_user_id)
       throw httpErr(409, "already owned by that person — nothing to change.");
+    if (unassigning && !link.owner_user_id)
+      throw httpErr(409, "already UNASSIGNED — nothing to change.");
 
-    // eligibility, decided NOW, through the one canonical resolver
-    const owned = await eligibleOwner(client, link.property_id, [to_user_id]);
-    if (owned.owner !== to_user_id)
-      throw httpErr(400, "that person is not an eligible owner at this property (bridged + active assignment required). Team access alone does not make an owner.");
+    // eligibility, decided NOW, through the one canonical resolver.
+    // Skipped when unassigning: UNASSIGNED is the ABSENCE of an owner, and
+    // asking whether nobody is eligible is not a question.
+    if (!unassigning) {
+      const owned = await eligibleOwner(client, link.property_id, [to_user_id]);
+      if (owned.owner !== to_user_id)
+        throw httpErr(400, "that person is not an eligible owner at this property (bridged + active assignment + active team authority required). Team access alone does not make an owner, and an assignment alone no longer does either.");
+    }
 
-    const origin = (!link.owner_user_id && by_user_id && to_user_id === by_user_id)
+    // Unassigning IS a manual reassignment — to nobody. No new origin value is
+    // minted: the enum is constrained in the database and the existing word is
+    // accurate. WHY it happened is carried by owner_eligibility_state below.
+    const origin = (!unassigning && !link.owner_user_id && by_user_id && to_user_id === by_user_id)
       ? "unassigned_pickup" : "manual_reassignment";
 
     let snapPerson = null, snapAssignment = null, snapBasis = "unbridged";
@@ -627,12 +655,26 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
       identity_resolution_basis: snapBasis,
       prior_status: "open", next_status: "open",
       prior_owner_user_id: link.owner_user_id, next_owner_user_id: to_user_id,
-      ownership_origin: origin, owner_eligibility_state: "eligible_assignment",
+      ownership_origin: origin,
+      // The EVENT records why: 'eligibility_lapsed' already exists in the
+      // schema for precisely this — an owner who was valid and no longer is.
+      // The OBLIGATION records the resulting state ('unassigned'), which its
+      // own CHECK ties to a null assigned_user_id.
+      owner_eligibility_state: unassigning ? "eligibility_lapsed" : "eligible_assignment",
       reason: reason === "other" ? `other: ${String(reason_detail).trim()}` : reason,
       idempotency_key,
     });
     // due_at unchanged; conversation ownership untouched — TASK ONLY.
     await client.query(`update leasing_conversion_obligations set owner_user_id=$2 where id=$1`, [link.id, to_user_id]);
+    // The same fact lives in two columns. obligations.assigned_user_id is what
+    // the obligation engine and the reachability check read; lco.owner_user_id
+    // is what the desk renders. Leaving one stale would replace one false
+    // owner with a quieter one.
+    await client.query(
+      `update obligations set assigned_user_id=$2,
+              owner_eligibility_state=$3, ownership_origin=$4, updated_at=now()
+        where id=$1`,
+      [obligation_id, to_user_id, unassigning ? "unassigned" : "eligible_assignment", origin]);
     return { reassigned: true, obligation_id, rung: link.rung,
              prior_owner_user_id: link.owner_user_id, owner_user_id: to_user_id, ownership_origin: origin };
   }
