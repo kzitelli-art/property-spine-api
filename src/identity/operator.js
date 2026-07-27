@@ -1366,6 +1366,58 @@ module.exports = function operatorModule(deps) {
     } catch (e) { return res.status(500).json({ error: e.message }); }
   });
 
+  // ── Management: identity & authority. Read-only. ────────────────
+  router.get("/operator/authority-view", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { resolveActorContext } = require("./actor_context");
+      const { authorityInventory } = require("../money/pricing_authority");
+      const [ctx, inv] = await Promise.all([
+        resolveActorContext(pool, { user_id: req.operator.id, property_id: req.operator.property_id }),
+        authorityInventory(pool, { property_id: req.operator.property_id }),
+      ]);
+      // Which assignments on this property rest on a NON-STAFF person? That is
+      // the row that made the whole inventory misleading, so it is surfaced.
+      const suspect = (await pool.query(
+        `select a.id assignment_id, a.role, pe.id person_id, pe.name, pe.lifecycle_status, pe.source,
+                (select count(*)::int from person_contexts pc
+                  where pc.person_id = pe.id and pc.context_type='staff') staff_contexts,
+                (select count(*)::int from users u where u.person_id = pe.id) linked_logins
+           from assignments a join persons pe on pe.id = a.person_id
+          where a.property_id = $1 and a.is_active = true
+            and a.role in ('owner','asset_manager')`, [req.operator.property_id])).rows
+        .filter((r) => r.staff_contexts === 0 || r.linked_logins === 0);
+
+      return res.json({
+        signed_in_account: ctx.user ? {
+          display_name: ctx.user.display_name, login_identifier: ctx.user.login_identifier,
+          account_kind: ctx.user.account_kind } : null,
+        verified_staff_identity: ctx.person
+          ? { display_name: ctx.person.display_name, lifecycle_status: ctx.person.lifecycle_status }
+          : null,
+        link_status: ctx.link_status,
+        missing_step: ctx.reconciliation_required
+          ? (ctx.user && ctx.user.account_kind !== "human_staff"
+              ? "classify_account_as_human_staff" : "link_login_to_verified_person")
+          : null,
+        property_assignments: (ctx.assignments || []).map((a) => a.role),
+        pricing_capabilities: ctx.capabilities,
+        authority_source: ctx.basis,
+        temporary_grants: (ctx.grants || []).map((g) => ({
+          expires: g.effective_until || "no expiry", grant_id: g.grant_id })),
+        invalid_authority_on_non_staff_records: suspect.map((s) => ({
+          role: s.role, display_name: s.name, lifecycle_status: s.lifecycle_status,
+          source: s.source, staff_contexts: s.staff_contexts, linked_logins: s.linked_logins,
+          why_invalid: s.staff_contexts === 0
+            ? "No governed staff context — this is not a staff record."
+            : "No linked login — the authority cannot be exercised by anyone.",
+        })),
+        purpose: "Make privileged operating authority understandable and auditable. " +
+                 "Not a directory, not an HR system.",
+      });
+    } catch (e) { return res.status(500).json({ error: "authority view unavailable" }); }
+  });
+
   router.get("/operator/pricing/history", requireOperator, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
