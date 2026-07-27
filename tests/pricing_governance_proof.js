@@ -66,10 +66,31 @@ const section = (s) => console.log("\n== " + s + " ==");
 
   // ── PHASE 2: authority ────────────────────────────────────────────
   section("PHASE 2 — authority is explicit and fails closed");
-  const owner = await pricingAuthority(pool, { property_id: DEMO, person_id: OWNER_PERSON });
+  // The property's only owner assignment sat on a demo lead and has been
+  // deactivated by ruling, so this can no longer be proven against live data.
+  // It is proven against a CONSTRUCTED assignment inside a rolled-back
+  // transaction instead — the rule still holds, and the harness no longer
+  // depends on an invalid row continuing to exist.
+  const deadOwner = await pricingAuthority(pool, { property_id: DEMO, person_id: OWNER_PERSON });
+  ok(!deadOwner.may_publish_pricing,
+    "the DEACTIVATED owner assignment confers nothing — an inactive row is not authority");
+
+  const c0 = await pool.connect();
+  await c0.query("begin");
+  const probePool = { query: c0.query.bind(c0) };
+  await c0.query(
+    `insert into assignments (person_id, property_id, role, is_active)
+     values ($1,$2,'owner',true)`, [LEASING_PERSON, DEMO]);
+  const owner = await pricingAuthority(probePool, { property_id: DEMO, person_id: LEASING_PERSON });
   ok(owner.may_prepare_pricing && owner.may_review_pricing && owner.may_publish_pricing,
-    "an active owner assignment holds the pricing verbs");
+    "an ACTIVE owner assignment holds the pricing verbs (constructed, rolled back)");
   ok(owner.basis.may_publish_pricing === "assignment:owner", "and the receipt names the basis");
+  await c0.query("rollback");
+  c0.release();
+  const stillNone = (await pool.query(
+    `select count(*)::int n from assignments where property_id=$1 and is_active=true
+       and role in ('owner','asset_manager')`, [DEMO])).rows[0].n;
+  ok(Number(stillNone) === 0, "and the constructed assignment did not survive the rollback");
   const leasing = await pricingAuthority(pool, { property_id: DEMO, person_id: LEASING_PERSON });
   ok(!leasing.may_publish_pricing && !leasing.may_prepare_pricing,
     "a LEASING assignment grants nothing — generic property membership is not authority");
@@ -90,7 +111,9 @@ const section = (s) => console.log("\n== " + s + " ==");
   ok(!qaUser.may_publish_pricing && qaUser.denied_reason === "session_identity_not_linked_to_a_person",
     "the QA operator's SESSION cannot reach authority — reported, not name-matched");
   const inv = await authorityInventory(pool, {});
-  ok(inv.summary.properties_with_publish_authority === 1,
+  // ZERO by ruling: the only owner assignment in the portfolio sat on a demo
+  // lead and was deactivated. No property can publish pricing today.
+  ok(inv.summary.properties_with_publish_authority === 0,
     `exactly ${inv.summary.properties_with_publish_authority} of ${inv.summary.properties_total} properties has publish authority`);
   ok(inv.summary.grants_total === 0, "no authority grants exist anywhere");
 
@@ -264,39 +287,73 @@ const section = (s) => console.log("\n== " + s + " ==");
   catch (e) { denied = e.code; }
   ok(denied === "not_authorized_to_review", "a leasing assignment cannot submit a review");
 
-  // Real writes against real constraints and triggers. The services manage
-  // their own transactions, so they cannot be wrapped in an outer one — an
-  // earlier attempt to do that had saveDraft's commit committing the wrapper.
-  // Cleanup is therefore by TRACKED ID in a finally, never by property_id.
+  // Real writes against real constraints and triggers — inside ONE outer
+  // transaction that is always rolled back.
+  //
+  // The property now has NO active owner assignment (the invalid one was
+  // deactivated by ruling), so this block needs an authority that does not
+  // exist. It is NOT created in production: the assignment is inserted inside
+  // the outer transaction and dies with it. A temporary real assignment on a
+  // shared database would be an authority grant that survives a crash.
+  //
+  // The shim neutralises the services' own begin/commit so their transaction
+  // control cannot escape the wrapper — an earlier version without this had
+  // saveDraft's commit committing the outer transaction.
+  const txClient = await pool.connect();
+  await txClient.query("begin");
+  const rawQuery = txClient.query.bind(txClient);
+  const shimQuery = async (text, params) => {
+    if (typeof text === "string" && /^\s*(begin|commit|rollback)\s*;?\s*$/i.test(text)) {
+      return { rows: [], rowCount: 0 };
+    }
+    return rawQuery(text, params);
+  };
+  const txPool = {
+    query: shimQuery,
+    connect: async () => ({ query: shimQuery, release: () => {} }),
+  };
+  await rawQuery(
+    `insert into assignments (person_id, property_id, role, is_active)
+     values ($1,$2,'owner',true)`, [OWNER_PERSON, DEMO]);
+
+  // An EXPECTED failure inside a transaction aborts it, so every intentional
+  // refusal runs in its own savepoint. Without this the first proven trigger
+  // would poison every assertion after it.
+  const expectFail = async (sql, params) => {
+    await rawQuery("savepoint sp");
+    try { await rawQuery(sql, params); await rawQuery("release savepoint sp"); return null; }
+    catch (e) { await rawQuery("rollback to savepoint sp"); return e.message; }
+  };
+
   const created = { versions: [], receipts: [] };
   try {
     // A proposal that WOULD publish, so the digest check is actually reached
     // rather than being masked by an earlier contract refusal.
     const publishable = { ...proposal, publisher_person_id: OWNER_PERSON, receipt_reviewed: true };
 
-    const draft = await saveDraft(pool, { property_id: DEMO, person_id: OWNER_PERSON, proposal: publishable });
+    const draft = await saveDraft(txPool, { property_id: DEMO, person_id: OWNER_PERSON, proposal: publishable });
     created.versions.push(draft.draft_version_id);
     ok(!!draft.draft_version_id, "an owner can save a draft");
     ok(draft.status === "draft" && draft.operating_effect === "none", "the draft declares zero operating effect");
 
-    const termRows = (await pool.query(
+    const termRows = (await txPool.query(
       "select count(*)::int n from pricing_terms where pricing_version_id=$1", [draft.draft_version_id])).rows[0].n;
     ok(termRows === priced.length, `all ${termRows} addressed types were written as real rows`);
 
-    const visible = await effectivePropertyPricing(pool, { property_id: DEMO });
+    const visible = await effectivePropertyPricing(txPool, { property_id: DEMO });
     ok(visible.published_version === null,
       "THE DRAFT IS INVISIBLE — effective pricing still reports no published version");
     ok(visible.absence.reason === "no_published_pricing_version", "and the absence is unchanged");
-    const frrWithDraft = await futureRentRollPricingPreview(pool, { property_id: DEMO });
+    const frrWithDraft = await futureRentRollPricingPreview(txPool, { property_id: DEMO });
     ok(frrWithDraft.published_version_at_date === null,
       "and the Future Rent Roll preview is unchanged by the draft's existence");
 
-    const rev = await submitReview(pool, { property_id: DEMO, person_id: OWNER_PERSON,
+    const rev = await submitReview(txPool, { property_id: DEMO, person_id: OWNER_PERSON,
       draft_version_id: draft.draft_version_id, proposal: publishable, decision: "approved", note: "harness" });
     created.receipts.push(rev.review_receipt_id);
     ok(!!rev.review_receipt_id, "a review receipt is written");
     ok(rev.proposal_digest === proposalDigest(publishable), "the receipt carries the proposal digest");
-    const snap = (await pool.query(
+    const snap = (await txPool.query(
       "select packet_snapshot, preview_snapshot from pricing_review_receipts where id=$1",
       [rev.review_receipt_id])).rows[0];
     ok(!!snap.packet_snapshot && !!snap.preview_snapshot,
@@ -305,7 +362,7 @@ const section = (s) => console.log("\n== " + s + " ==");
     // THE CHECK THAT MAKES THE RECEIPT MEAN SOMETHING.
     let pubErr = null;
     try {
-      await publishVersion(pool, { property_id: DEMO, person_id: OWNER_PERSON,
+      await publishVersion(txPool, { property_id: DEMO, person_id: OWNER_PERSON,
         draft_version_id: draft.draft_version_id,
         proposal: { ...publishable, terms: publishable.terms.map((t) => ({ ...t, base_rent: 1600 })) },
         review_receipt_id: rev.review_receipt_id, dry_run: true });
@@ -315,57 +372,41 @@ const section = (s) => console.log("\n== " + s + " ==");
 
     // The receipt survives its draft being replaced — the whole reason the
     // table exists separately from the version.
-    await saveDraft(pool, { property_id: DEMO, person_id: OWNER_PERSON,
+    await saveDraft(txPool, { property_id: DEMO, person_id: OWNER_PERSON,
       proposal: { ...publishable, note: "rewritten" }, draft_version_id: draft.draft_version_id });
-    const stillThere = (await pool.query(
+    const stillThere = (await txPool.query(
       "select id, proposal_digest from pricing_review_receipts where id=$1", [rev.review_receipt_id])).rows[0];
     ok(!!stillThere && stillThere.proposal_digest === rev.proposal_digest,
       "the review receipt SURVIVES the draft being rewritten, digest intact");
 
     // A published version would be immutable — proven against the real trigger.
-    await pool.query("update property_pricing_versions set status='published', effective_from=$2 where id=$1",
+    await txPool.query("update property_pricing_versions set status='published', effective_from=$2 where id=$1",
       [draft.draft_version_id, "2026-09-01"]);
-    let immutable = null;
-    try { await pool.query("update property_pricing_versions set effective_from=$2 where id=$1",
-      [draft.draft_version_id, "2026-11-01"]); }
-    catch (e) { immutable = e.message; }
+    const immutable = await expectFail("update property_pricing_versions set effective_from=$2 where id=$1",
+      [draft.draft_version_id, "2026-11-01"]);
     ok(/immutable/i.test(immutable || ""), "a published version REFUSES to have its dates altered");
-    let frozen = null;
-    try { await pool.query("update pricing_terms set base_rent=9999 where pricing_version_id=$1",
-      [draft.draft_version_id]); }
-    catch (e) { frozen = e.message; }
+    const frozen = await expectFail("update pricing_terms set base_rent=9999 where pricing_version_id=$1",
+      [draft.draft_version_id]);
     ok(/immutable/i.test(frozen || ""), "the terms of a published version REFUSE to change");
-    let backToDraft = null;
-    try { await pool.query("update property_pricing_versions set status='draft' where id=$1",
-      [draft.draft_version_id]); }
-    catch (e) { backToDraft = e.message; }
+    const backToDraft = await expectFail("update property_pricing_versions set status='draft' where id=$1",
+      [draft.draft_version_id]);
     ok(/cannot return to draft/i.test(backToDraft || ""), "a published version cannot return to draft");
 
     // Two published versions cannot cover one day.
     let overlap = null;
-    const second = (await pool.query(
+    const second = (await txPool.query(
       `insert into property_pricing_versions (property_id,status,effective_from)
        values ($1,'draft','2026-10-01') returning id`, [DEMO])).rows[0].id;
     created.versions.push(second);
-    try { await pool.query("update property_pricing_versions set status='published' where id=$1", [second]); }
-    catch (e) { overlap = e.message; }
+    overlap = await expectFail("update property_pricing_versions set status='published' where id=$1", [second]);
     ok(/exclusion|overlap|conflicting key/i.test(overlap || ""),
       `a second published version overlapping the first is REFUSED by the database [${overlap || "NO ERROR RAISED"}]`);
   } finally {
-    // Cleanup by tracked id only. Published rows must be demoted first,
-    // because the freeze trigger correctly refuses to delete their terms.
-    for (const v of created.versions) {
-      await pool.query("update property_pricing_versions set status='retired' where id=$1", [v]).catch(() => {});
-      await pool.query("delete from pricing_terms where pricing_version_id=$1", [v]).catch(() => {});
-      await pool.query("delete from concession_policies where pricing_version_id=$1", [v]).catch(() => {});
-    }
-    for (const r of created.receipts) {
-      await pool.query("update property_pricing_versions set review_receipt_id=null where review_receipt_id=$1", [r]).catch(() => {});
-      await pool.query("delete from pricing_review_receipts where id=$1", [r]).catch(() => {});
-    }
-    for (const v of created.versions) {
-      await pool.query("delete from property_pricing_versions where id=$1", [v]).catch(() => {});
-    }
+    // ONE rollback discards the draft, the receipt, the published state AND
+    // the constructed assignment. Nothing is deleted by id because nothing
+    // was ever committed.
+    await rawQuery("rollback");
+    txClient.release();
   }
 
   const leftover = (await pool.query(

@@ -139,7 +139,63 @@ const failed = (r, id) => r.receipt.evidence.find((c) => c.id === id && !c.passe
   ok(pac.LEDGER_MIGRATION.target.includes("commitmentledger"),
     "the ledger migration plan travels with the contract");
   ok(/LATENT, not live/.test(pac.LEDGER_MIGRATION.risk_today),
-    "and states honestly that the defect is latent, not live");
+    "and states honestly that the defect was latent, not live");
+
+  sec("LEDGER ACTOR BOUNDARY — closed");
+  const ledgerSrc = fs.readFileSync(path.join(REPO, "src/money/commitmentledger.js"), "utf8");
+  ok(/require\("\.\.\/identity\/privileged_actor_contract"\)/.test(ledgerSrc),
+    "the ledger imports the privileged actor contract");
+  ok(/const published_by_person_id = _actor\.acting_person_id/.test(ledgerSrc),
+    "the publisher is READ FROM the sealed actor, not from the spec");
+  ok(!/const \{ property_id, published_by_person_id,/.test(ledgerSrc),
+    "published_by_person_id is no longer destructured from the caller's spec");
+  const ledger = require(path.join(REPO, "src/money/commitmentledger"))({ pool });
+  const svc = ledger._service;
+  const tryPublish = async (spec) => {
+    try { await svc.publishPricing(pool, spec); return null; } catch (e) { return e.code; }
+  };
+  ok(await tryPublish({ property_id: DEMO, published_by_person_id: STAFF_PERSON, terms: [{}] })
+      === "CALLER_SUPPLIED_ACTOR",
+    "a RAW caller-supplied person id is refused outright, not silently ignored");
+  ok(await tryPublish({ property_id: DEMO, terms: [{}] }) === "unresolved_actor",
+    "no actor at all is refused");
+  ok(await tryPublish({ property_id: DEMO, terms: [{}],
+      actor: { kind: "human", acting_person_id: STAFF_PERSON } }) === "unresolved_actor",
+    "a hand-built actor object is refused");
+  const realSys = pac.systemActor("seed", { property_id: DEMO });
+  ok(await tryPublish({ property_id: DEMO, terms: [{}], actor: { ...realSys } }) === "unresolved_actor",
+    "a COPIED actor is refused — the WeakSet seal cannot be spread");
+  ok(await tryPublish({ property_id: DEMO, terms: [{}],
+      actor: { ...realSys, acting_person_id: DEMO_LEAD } }) === "unresolved_actor",
+    "and acting-person MUTATION via a copy is refused");
+  ok(await tryPublish({ property_id: DEMO, terms: [{}],
+      actor: pac.systemActor("seed", { property_id: OTHER }) }) === "CROSS_PROPERTY_ACTOR",
+    "an actor resolved for another property is refused");
+  ok(await tryPublish({ property_id: DEMO, terms: [{}], actor: realSys }) === "BAD_INPUT",
+    "a SYSTEM actor cannot be the publisher of record — a human publishes pricing");
+
+  sec("THE CORRECTION — invalid authority deactivated, history intact");
+  const corrected = (await pool.query(
+    "select id, person_id, role, is_active, created_at, provenance from assignments where id=$1",
+    ["4117da50-87fc-4624-b4a9-509921e7e97f"])).rows[0];
+  ok(!!corrected, "the historical row still EXISTS — it was not deleted");
+  ok(corrected.is_active === false, "the invalid owner authority is deactivated");
+  ok(String(corrected.person_id) === DEMO_LEAD, "its person_id was NOT edited — no transfer occurred");
+  ok(corrected.role === "owner", "its role is unchanged, so the row still shows what was created");
+  // created_at is a Date; String(Date) is "Thu Jul 02 2026…", not ISO.
+  ok(new Date(corrected.created_at).toISOString().startsWith("2026-07-02"),
+    `its creation date is unchanged — history was not rewritten (${new Date(corrected.created_at).toISOString()})`);
+  ok(!!corrected.provenance.deactivated_at && !!corrected.provenance.deactivated_by_user_id,
+    "provenance records WHEN it was corrected and WHO corrected it");
+  ok(/non-staff demo lead/.test(corrected.provenance.deactivation_reason || ""),
+    "and WHY, in the ruling's own words");
+  const activeOwners = (await pool.query(
+    `select count(*)::int n from assignments where property_id=$1 and is_active=true
+       and role in ('owner','asset_manager')`, [DEMO])).rows[0].n;
+  ok(Number(activeOwners) === 0, "Demo Building now has ZERO active owner/asset-manager authority");
+  const anyGrants = Number((await pool.query(
+    "select count(*)::int n from concession_authority_grants")).rows[0].n);
+  ok(anyGrants === 0, "and no authority grant was created — the identity gate was not passed");
 
   sec("PRICING REHEARSAL — stops where authority stops, leaves nothing");
   const before = (await pool.query(
@@ -168,8 +224,8 @@ const failed = (r, id) => r.receipt.evidence.find((c) => c.id === id && !c.passe
   sec("STANDING GUARANTEES");
   const asg = (await pool.query(
     "select role, is_active from assignments where person_id=$1 and property_id=$2", [DEMO_LEAD, DEMO])).rows[0];
-  ok(asg && asg.role === "owner" && asg.is_active === true,
-    "the demo lead's owner assignment is UNCHANGED — not transferred, not deactivated");
+  ok(asg && asg.role === "owner" && asg.is_active === false,
+    "the demo lead's owner assignment is DEACTIVATED, its row and role intact");
   const leadUsers = (await pool.query("select id from users where person_id=$1", [DEMO_LEAD])).rows;
   ok(leadUsers.length === 0, "no login was linked to the demo lead");
   const grants = Number((await pool.query("select count(*)::int n from concession_authority_grants")).rows[0].n);

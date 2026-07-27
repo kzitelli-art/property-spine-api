@@ -79,8 +79,12 @@ const sec = (s) => console.log("\n== " + s + " ==");
   ok(dupes.length === 4, `${dupes.length} person rows share that label`);
   const ownerHolders = (await pool.query(
     `select person_id from assignments where property_id=$1 and is_active=true and role='owner'`, [DEMO])).rows;
-  ok(ownerHolders.length === 1 && String(ownerHolders[0].person_id) === OWNER_PERSON,
-    "exactly one of them holds the owner assignment");
+  ok(ownerHolders.length === 0,
+    "NONE of them holds active owner authority — the invalid assignment was deactivated by ruling");
+  const historical = (await pool.query(
+    `select person_id, is_active from assignments where property_id=$1 and role='owner'`, [DEMO])).rows;
+  ok(historical.length === 1 && String(historical[0].person_id) === OWNER_PERSON && historical[0].is_active === false,
+    "and the historical row survives, still naming the lead it was wrongly attached to");
   const ownerUsers = (await pool.query("select id from users where person_id=$1", [OWNER_PERSON])).rows;
   ok(ownerUsers.length === 0, "NO user is linked to the owner-holding row — the label bought nothing");
   const ctxSrc = fs.readFileSync(path.join(REPO, "src/identity/actor_context.js"), "utf8")
@@ -199,8 +203,8 @@ const sec = (s) => console.log("\n== " + s + " ==");
     "ZERO users portfolio-wide reach pricing authority — the blocker is real and unchanged");
   ok(audit.person_label_collisions.length > 0,
     `${audit.person_label_collisions.length} duplicate person labels exist — names cannot be identity`);
-  ok(audit.person_label_collisions.filter((c) => c.carries_authority).length === 1,
-    "exactly one label collision carries authority");
+  ok(audit.person_label_collisions.filter((c) => c.carries_authority).length === 0,
+    "NO label collision carries authority any more — the one that did was corrected");
   ok(/was derived from a display name/i.test(audit.rule)
      && /never to create a link/i.test(audit.rule),
     "the audit states its own rule: names may disqualify a link, never create one");

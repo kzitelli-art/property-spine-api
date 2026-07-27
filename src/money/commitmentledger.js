@@ -72,6 +72,39 @@
 
 const express = require("express");
 
+// ── PRIVILEGED ACTOR BOUNDARY ───────────────────────────────────────
+// These services used to take the acting person straight from the caller.
+// The acting person is now read from a SEALED actor that only the canonical
+// actor-context service can mint, and a caller-supplied person id is refused
+// outright rather than merely discouraged.
+const { requireResolvedActor } = require("../identity/privileged_actor_contract");
+
+function requirePrivilegedActor(spec, verb, legacyField) {
+  // A caller that still supplies the old field is REFUSED, not silently
+  // ignored — silently ignoring it would let a caller believe it chose the
+  // actor while the server used a different one.
+  if (spec && legacyField && spec[legacyField] != null && !spec.actor) {
+    const e = new Error(
+      `${legacyField} may no longer be supplied by the caller. Pass a resolved actor.`);
+    e.code = "CALLER_SUPPLIED_ACTOR"; e.httpStatus = 400; e.publicMessage = e.message;
+    throw e;
+  }
+  const actor = requireResolvedActor(spec && spec.actor, verb);
+  if (actor.kind === "system" && !actor.authority_basis) {
+    const e = new Error("a system actor must name an explicit system-authority basis");
+    e.code = "SYSTEM_ACTOR_WITHOUT_BASIS"; e.httpStatus = 400; e.publicMessage = e.message;
+    throw e;
+  }
+  // An actor resolved for one property cannot act on another.
+  if (spec && spec.property_id && actor.property_id
+      && String(actor.property_id) !== String(spec.property_id)) {
+    const e = new Error("actor was resolved for a different property");
+    e.code = "CROSS_PROPERTY_ACTOR"; e.httpStatus = 403; e.publicMessage = e.message;
+    throw e;
+  }
+  return actor;
+}
+
 const CONCESSION_TYPES = ["free_rent", "fixed_rent_credit", "fee_waiver"];
 const TIMING_PROFILES = ["first_full_month", "third_full_month", "final_full_month", "monthly_scheduled_credit"];
 
@@ -286,9 +319,17 @@ module.exports = function commitmentLedgerModule({ pool, spawnObligationFromEven
 
   // ── SERVICE: publishPricing (Tier 1, D9 — unchanged from rev 1) ───
   async function publishPricing(client, spec) {
-    const { property_id, published_by_person_id, terms = [], policies = [], note = null } = spec || {};
+    const { property_id, terms = [], policies = [], note = null } = spec || {};
     if (!property_id) throw ledgerError("BAD_INPUT", "property_id required");
-    if (!published_by_person_id) throw ledgerError("BAD_INPUT", "published_by_person_id required — a human publishes");
+    // THE ACTING PERSON IS READ FROM A SEALED ACTOR, never from the caller.
+    // A uuid is a uuid: the WRONG person id type-checks perfectly, so a rule
+    // saying "pass the resolved person" was satisfiable by passing anyone.
+    const _actor = requirePrivilegedActor(spec, "may_publish_pricing", "published_by_person_id");
+    const published_by_person_id = _actor.acting_person_id;
+    if (!published_by_person_id) {
+      throw ledgerError("BAD_INPUT",
+        "a human publishes pricing — a system actor cannot be the publisher of record");
+    }
     if (!Array.isArray(terms) || terms.length === 0) throw ledgerError("BAD_INPUT", "at least one pricing term required");
 
     await mustProperty(client, property_id);
@@ -1276,7 +1317,20 @@ module.exports = function commitmentLedgerModule({ pool, spawnObligationFromEven
     } finally { client.release(); }
   }
 
+  // THIS ROUTE CANNOT PUBLISH, and says so rather than failing obscurely.
+  // It sits behind the operator-key gate and carries no staff session, so it
+  // has no way to mint a sealed actor — and the acting person may no longer
+  // come from the body. Publishing now requires a session-originated caller
+  // that resolves an actor from the canonical actor-context service.
   app.post("/pricing/:propertyId/publish", dormantWriteGuard, async (req, res) => {
+    if (!req.body || !req.body.actor) {
+      return res.status(403).json({
+        error: "no_session_actor",
+        detail: "Pricing publication requires a resolved actor from the canonical actor-context " +
+                "service. This operator-key route carries no staff session and cannot mint one. " +
+                "The acting person can no longer be supplied in the request body.",
+      });
+    }
     try {
       const out = await inTx((c) => publishPricing(c, { ...(req.body || {}), property_id: req.params.propertyId }));
       res.status(201).json({
