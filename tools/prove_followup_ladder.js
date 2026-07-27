@@ -56,6 +56,23 @@ for (const stopped of ["opted_out", "said_no", "leased_elsewhere", "human_owns"]
     r => !r.send, "permanent, not a pause");
 }
 
+// Both of these come from the FIRST dry run against live data, which would
+// have selected an opted-out number and eight leads two-to-three weeks cold.
+check("opted out never gets a rung",
+  nextFollowup({ lastOutboundAt: T0, rungsSent: 0, stopped: "opted_out" }, T0 + 2 * HOUR),
+  r => !r.send && /opted out/.test(r.reason),
+  "the ladder must not select who the send gate would refuse");
+
+check("a cold lead does not get a ladder STARTED on it",
+  nextFollowup({ lastOutboundAt: T0, rungsSent: 0 }, T0 + 21 * DAY),
+  r => !r.send && /cold/.test(r.reason),
+  "rung 1 three weeks late is a robot waking up, not persistence");
+
+check("a ladder already running is NOT killed by the cold-start rule",
+  nextFollowup({ lastOutboundAt: T0, rungsSent: 2 }, T0 + 21 * DAY),
+  r => r.send && r.rung === 3,
+  "cold-start guards the START only; a live sequence continues");
+
 check("a reply means we owe THEM, not a follow-up",
   nextFollowup({ lastOutboundAt: T0, lastInboundAt: T0 + HOUR, rungsSent: 0 }, T0 + 10 * DAY),
   r => !r.send && /replied/.test(r.reason), "answering an inbound is a reply, never a follow-up");

@@ -52,7 +52,19 @@ const STOP_REASONS = {
   leased_elsewhere: "leased elsewhere",
   human_owns: "a human took the conversation",
   ladder_exhausted: "ladder finished",
+  too_stale: "conversation went cold before the ladder existed",
 };
+
+// A ladder only makes sense starting from a live conversation. Rung 1 says
+// "following up on the thing you asked about" — sent three weeks late to
+// somebody who has forgotten they ever enquired, that is not persistence, it
+// is a robot waking up. So a cold lead does not get a ladder STARTED on it.
+//
+// This is a real finding, not a hypothetical: the first dry run against live
+// data would have opened rung 1 on ten leads, eight of them two to three
+// weeks old. Re-engaging that backlog is a deliberate campaign a human
+// decides to run, not a side effect of switching a ladder on.
+const MAX_COLD_START = 3 * 24 * 3600 * 1000; // 3 days
 
 // nextFollowup — the whole module.
 //
@@ -87,6 +99,11 @@ function nextFollowup(state = {}, now) {
 
   if (!lastOutboundAt) return { send: false, reason: "nothing sent yet" };
   if (rungsSent >= LADDER.length) return { send: false, reason: STOP_REASONS.ladder_exhausted };
+
+  // Never START a ladder on a conversation that already went cold.
+  if (rungsSent === 0 && now - lastOutboundAt > MAX_COLD_START) {
+    return { send: false, reason: STOP_REASONS.too_stale };
+  }
 
   const rung = LADDER[rungsSent];
   const due = lastOutboundAt + rung.after;
