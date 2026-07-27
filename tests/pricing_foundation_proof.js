@@ -187,11 +187,31 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
   ok(!/square_feet|bedrooms|label\s*===/.test(adapterSrc), "the adapter never infers a type from shape or label");
   ok(/effectivePropertyPricing/.test(adapterSrc), "the adapter reads only the governed truth sheet");
 
-  console.log("\n== the adapter is DARK ==");
+  console.log("\n== the adapter is DARK TO THE LIVE PATH ==");
+  // The adapter now has two legitimate consumers — the dry-run publication
+  // preview and the shadow simulator. BOTH are preview-only: one writes
+  // nothing, the other sends nothing. "Dark" was never about reference count;
+  // it means NO PATH THAT REACHES A PROSPECT calls it. That is what is
+  // asserted, so adding another preview consumer cannot quietly pass while a
+  // live consumer would fail.
+  const ALLOWED_CONSUMERS = [
+    "src/agent/pricing_adapter.js",
+    "src/money/pricing_publication_preview.js",
+    "src/money/shadow_quote_simulator.js",
+  ];
   const wired = require("child_process").execSync(
-    "git grep -l pricing_adapter -- src server.js || true", { cwd: REPO, encoding: "utf8" }).trim();
-  ok(wired === "" || wired === "src/agent/pricing_adapter.js",
-    `nothing calls the adapter yet (${wired || "no references"})`);
+    "git grep -l pricing_adapter -- src server.js || true", { cwd: REPO, encoding: "utf8" })
+    .trim().split("\n").filter(Boolean).map((s) => s.replace(/\\/g, "/"));
+  const unexpected = wired.filter((f) => !ALLOWED_CONSUMERS.includes(f));
+  ok(unexpected.length === 0,
+    `only preview-only consumers reference the adapter (${unexpected.join(", ") || "no unexpected callers"})`);
+  const agentSrc2 = require("fs").readFileSync(path.join(REPO, "src/agent/agent.js"), "utf8");
+  ok(!/pricing_adapter|quotablePricing/.test(agentSrc2),
+    "the LIVE agent does not call it — prospect-facing quoting is unchanged");
+  const previewSrc = require("fs").readFileSync(path.join(REPO, "src/money/pricing_publication_preview.js"), "utf8");
+  const shadowSrc = require("fs").readFileSync(path.join(REPO, "src/money/shadow_quote_simulator.js"), "utf8");
+  ok(/dry_run_no_write_performed/.test(previewSrc) && /sent_anything: false/.test(shadowSrc),
+    "and both consumers declare themselves write-free and send-free");
 
   await pool.end();
   console.log(`\n==== ${pass} passed, ${fail} failed ====\n`);
