@@ -80,7 +80,8 @@ function checkChargePublishable(c = {}, ctx = {}) {
   if (c.economic_class === "one_time_fee") {
     if (!c.incurred_on_event || !EVENTS.includes(c.incurred_on_event))
       b.push(blocker("fee_without_event", `A one-time fee must say when it is incurred (${EVENTS.join(", ")}).`));
-    if (!c.applies_to_new_lease && !c.applies_to_renewal && !c.applies_to_transfer)
+    const appliesNew = c.applies_to_new_lease !== false;
+    if (!appliesNew && !c.applies_to_renewal && !c.applies_to_transfer)
       b.push(blocker("fee_applies_to_nothing", "A fee that applies to no event applies to nothing."));
   }
   if (c.waivable === true && !c.waiver_authority_verb)
@@ -121,13 +122,17 @@ async function governedCharges(pool, { property_id, as_of = null, include_drafts
        left join property_unit_types put on put.id = c.unit_type_id
        left join persons p on p.id = c.published_by_person_id
       where c.property_id = $1
-        and ($3::boolean or c.record_state = 'active')
-      order by c.economic_class, c.charge_code`, [property_id, asOf, include_drafts])).rows;
+        and ($2::boolean or c.record_state = 'active')
+      order by c.economic_class, c.charge_code`, [property_id, include_drafts])).rows;
 
+  // Postgres date columns arrive as Date objects, and String(Date) is
+  // "Wed Jan 01 2026 …" — slicing that gives "Wed Jan 01", which compares
+  // lexically ABOVE any ISO date and made every charge look not-yet-effective.
+  const ymd = (v) => (v instanceof Date ? v.toISOString().slice(0, 10) : String(v || "").slice(0, 10));
   const effective = (c) =>
     c.record_state === "active"
-    && String(c.effective_from).slice(0, 10) <= asOf
-    && (!c.effective_until || String(c.effective_until).slice(0, 10) >= asOf);
+    && ymd(c.effective_from) <= asOf
+    && (!c.effective_until || ymd(c.effective_until) >= asOf);
 
   const shape = (c) => ({
     charge_id: c.id,
@@ -149,8 +154,8 @@ async function governedCharges(pool, { property_id, as_of = null, include_drafts
     refundable: c.refundable,
     waivable: c.waivable,
     waiver_authority_verb: c.waiver_authority_verb,
-    effective_from: String(c.effective_from).slice(0, 10),
-    effective_until: c.effective_until ? String(c.effective_until).slice(0, 10) : null,
+    effective_from: ymd(c.effective_from),
+    effective_until: c.effective_until ? ymd(c.effective_until) : null,
     record_state: c.record_state,
     effective_now: effective(c),
     source_provenance: c.source_provenance,

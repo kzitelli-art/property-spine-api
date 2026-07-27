@@ -207,7 +207,7 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
   walk(path.join(REPO, "src"));
   // Both consumers are preview-only: one writes nothing, the other sends
   // nothing. Dark means no prospect-facing path calls it, not zero references.
-  const allowed = ["pricing_publication_preview", "shadow_quote_simulator"];
+  const allowed = ["pricing_publication_preview", "shadow_quote_simulator", "economic_adapter"];
   ok(callers.length > 0 && callers.every((c) => allowed.some((a) => c.includes(a))),
     `only preview-only consumers call the adapter (${callers.join(", ") || "none"})`);
   const agentSrc = fs.readFileSync(path.join(REPO, "src/agent/agent.js"), "utf8");

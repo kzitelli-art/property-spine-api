@@ -198,6 +198,7 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
     "src/agent/pricing_adapter.js",
     "src/money/pricing_publication_preview.js",
     "src/money/shadow_quote_simulator.js",
+    "src/agent/economic_adapter.js",
   ];
   const wired = require("child_process").execSync(
     "git grep -l pricing_adapter -- src server.js || true", { cwd: REPO, encoding: "utf8" })

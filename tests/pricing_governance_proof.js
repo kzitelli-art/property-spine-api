@@ -161,10 +161,10 @@ const section = (s) => console.log("\n== " + s + " ==");
 
   // ── PHASE 6: the schedule compiler ────────────────────────────────
   section("PHASE 6 — the compiler produces dated lines, deterministically");
-  ok(IMPLEMENTED.length === 3, `three profiles are implemented (${IMPLEMENTED.join(", ")})`);
-  ok(PROFILES.free_rent_period.implemented === false
-     && PROFILES.free_rent_period.missing_primitive === "proration_basis",
-    "free_rent_period is SPECIFIED but not implemented — the missing primitive is named");
+  ok(IMPLEMENTED.length === 8, `all eight profiles are implemented (${IMPLEMENTED.length})`);
+  ok(PROFILES.free_rent_period.implemented === true
+     && PROFILES.free_rent_period.requires_proration_basis === true,
+    "free_rent_period is now implemented and requires an explicit proration basis");
   const waiver = compileSchedule({ timing_profile: "one_time_fee_waiver", concession_type: "fee_waiver",
     fee_category: "application", fee_amount: 50, fee_resolved: true, posting_date: "2026-09-01", base_rent: 1450 });
   ok(waiver.ok && waiver.lines.length === 1 && waiver.lines[0].amount === 50,
@@ -189,9 +189,12 @@ const section = (s) => console.log("\n== " + s + " ==");
   ok(compileSchedule({ timing_profile: "fixed_monthly_discount", value: 100, duration_months: 24,
       lease_start: "2026-09-01", lease_end: "2027-08-31", base_rent: 1450, lease_term_months: 12 }).code
       === "duration_exceeds_term", "a discount longer than the term is refused");
-  ok(compileSchedule({ timing_profile: "first_full_month", value: 1450, lease_start: "2026-09-01",
-      lease_end: "2027-08-31", base_rent: 1450 }).code === "timing_profile_not_implemented",
-    "an unsupported timing profile is refused");
+  ok(compileSchedule({ timing_profile: "first_full_month", lease_start: "2026-09-01",
+      lease_end: "2027-08-31", base_rent: 1450 }).code === "proration_basis_required",
+    "a calendar profile without an explicit proration basis is refused");
+  ok(compileSchedule({ timing_profile: "not_a_profile", lease_start: "2026-09-01",
+      lease_end: "2027-08-31", base_rent: 1450 }).code === "unknown_timing_profile",
+    "and a genuinely unknown profile is refused as unknown");
   const compSrc = fs.readFileSync(path.join(REPO, "src/money/concession_schedule_compiler.js"), "utf8");
   ok(!/Date\.now\(\)|Math\.random\(\)|new Date\(\)/.test(compSrc.replace(/new Date\(Date\.UTC/g, "").replace(/new Date\(String/g, "")),
     "the compiler has no clock and no randomness — it is pure");
