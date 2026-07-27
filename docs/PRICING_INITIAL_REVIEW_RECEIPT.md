@@ -172,9 +172,12 @@ These are the owner's, not mine.
 
 1. **Studio spread.** One Studio price, or a documented tier? 108 units
    currently span $1,045–$1,687 with no stated reason.
-2. **Which types are offered at all?** Eight types have marketable inventory
-   and owe a decision. Commercial Space carries $0 and almost certainly means
-   `pricing_unavailable`.
+2. **Which types are offered at all?** **Eight** types have marketable
+   inventory and owe a decision. Commercial Space is *not* among them — its
+   one space is non-residential, so it carries 0 marketable positions and the
+   contract asks nothing of it. Its `$0` market_rent is therefore quotable
+   today only through the legacy column, which is one more reason to retire
+   that column rather than reconcile it.
 3. **Renewal pricing.** Explicit renewal rent per type, or explicit
    "unavailable"? Silence is refused by the contract.
 4. **Lease terms.** Which terms are published — 12 only, or a set?
@@ -192,3 +195,23 @@ These are the owner's, not mine.
 
 Until these are answered, the honest state is the one the system now reports:
 *no governed pricing version has been published.*
+
+---
+
+## 7. Proof
+
+- **Harness:** `tests/pricing_foundation_proof.js` — **52 passed, 0 failed**
+  against live Neon.
+- **HTTP:** `GET /operator/pricing/effective` → 200 as the QA operator.
+  `absence.reason = no_published_pricing_version`, 9 governed types,
+  8 owing a decision, 1 unclassified position, `complete: false`,
+  concessions `schedule_line_engine_not_activated`, fees
+  `agent_facts / transitional_external / 5 facts`. **No `market_rent` value
+  anywhere in the payload** (the `proof.never_reads` disclaimer excluded).
+- **Browser:** signed in through the app's own invite path, the Pricing panel
+  renders `data-ps-state="no_version"`, headline *"No governed pricing version
+  has been published — nothing on this page is an asking rent"*, all nine
+  types listed as **Not priced**, the client store returns **0** unit types,
+  and `pricingSaveType` **refuses out loud** rather than silently no-opping.
+
+Claim: **Browser-verified.** Nothing is published.
