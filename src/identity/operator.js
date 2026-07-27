@@ -1299,6 +1299,81 @@ module.exports = function operatorModule(deps) {
   });
 
   // ══════════════════════════════════════════════════════════════════
+  // PRICING GOVERNANCE. Every route below is read-only or preview-only
+  // EXCEPT save-draft and review, which write only draft/receipt rows that
+  // no consumer reads. There is deliberately NO publish route mounted.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/pricing/authority", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { pricingAuthority, authorityInventory } = require("../money/pricing_authority");
+      const [mine, inventory] = await Promise.all([
+        pricingAuthority(pool, { property_id: req.operator.property_id, user_id: req.operator.id }),
+        authorityInventory(pool, { property_id: req.operator.property_id }),
+      ]);
+      return res.json({ mine, inventory });
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
+  router.get("/operator/pricing/history", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { versionHistory } = require("../money/pricing_lifecycle");
+      return res.json(await versionHistory(pool, { property_id: req.operator.property_id }));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
+  router.post("/operator/pricing/draft", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { saveDraft } = require("../money/pricing_lifecycle");
+      const out = await saveDraft(pool, {
+        property_id: req.operator.property_id,          // session only, never the body
+        user_id: req.operator.id,                        // session only, never the body
+        proposal: (req.body && req.body.proposal) || {},
+        draft_version_id: (req.body && req.body.draft_version_id) || null,
+      });
+      return res.json(out);
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null }); }
+  });
+
+  router.post("/operator/pricing/review", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { submitReview } = require("../money/pricing_lifecycle");
+      const b = req.body || {};
+      const out = await submitReview(pool, {
+        property_id: req.operator.property_id,
+        user_id: req.operator.id,
+        draft_version_id: b.draft_version_id || null,
+        proposal: b.proposal || {}, decision: b.decision, note: b.note || null,
+      });
+      return res.json(out);
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null }); }
+  });
+
+  // Shadow comparison. Sends nothing, writes nothing.
+  router.post("/operator/pricing/shadow-quote", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { shadowQuoteReport } = require("../money/shadow_quote_simulator");
+      return res.json(await shadowQuoteReport(pool, { property_id: req.operator.property_id }));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // Future Rent Roll integration CONTRACT preview. Not wired into the roll.
+  router.get("/operator/pricing/future-rent-roll-preview", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { futureRentRollPricingPreview } = require("../money/future_rent_roll_pricing_contract");
+      return res.json(await futureRentRollPricingPreview(pool, {
+        property_id: req.operator.property_id,
+        horizon_date: req.query.horizon_date || null,
+      }));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
   // GET /operator/rent-roll/institutional?as_of=&format=json|csv
   //   The formal as-of schedule for ownership, lenders and reporting. Same
   //   canonical read as the operating page — reshaped, never recomputed —
