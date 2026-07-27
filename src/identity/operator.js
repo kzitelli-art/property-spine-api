@@ -54,6 +54,7 @@ module.exports = function operatorModule(deps) {
   const { currentRentRoll } = require("../surfaces/rent_roll_canonical");   // canonical Current Rent Roll (migration route)
   const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts"); // factual Future Rent Roll (migration route)
   const { institutionalRentRoll, institutionalCsv } = require("../surfaces/rent_roll_institutional"); // formal as-of schedule + CSV
+  const { availabilityRead } = require("../surfaces/availability_read");   // Availability over the shared classifier
   // ── THE ONE CANONICAL TENANCY-ANCHOR SERVICE (Fable ruling) ──────────
   // The SAME countersign + confirm-term implementation applications.js calls.
   // Injected from server.js (built once from the obligation engine). The two
@@ -1204,6 +1205,29 @@ module.exports = function operatorModule(deps) {
       return res.json({ ...out, _migration_route: true });
     } catch (e) {
       // An error is an ERROR, never an empty rent roll.
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/leasing/availability-canonical?as_of=&horizon_days=
+  //   Availability as the LEASING INTERPRETATION of canonical positions.
+  //   Consumes lease, notice, successor, conflict, proof and down state;
+  //   adds possession, readiness, turnover and the marketability decision.
+  //   vacant != ready != marketable. MIGRATION ROUTE.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/leasing/availability-canonical", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const out = await availabilityRead(pool, {
+        property_id: req.operator.property_id,   // session only
+        as_of: req.query.as_of || null,
+        horizon_days: Number(req.query.horizon_days) || 90,
+      });
+      return res.json({ ...out, _migration_route: true });
+    } catch (e) {
+      // A failed live read is UNAVAILABLE. It must never render as vacancy
+      // or as marketable inventory.
       return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
     }
   });
