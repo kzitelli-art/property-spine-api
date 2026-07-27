@@ -53,6 +53,35 @@ function firstFullMonthStart(startYmd) {
 
 const fail = (code, detail) => ({ ok: false, code, detail, lines: [] });
 
+// ── PRORATION BASIS — the primitive that blocked four profiles ───────
+// A period that does not align to calendar months has no single correct
+// credit. On a 20-day February the three bases differ by more than 10%, so a
+// silent default would make the ledger unable to reproduce the number later.
+// There is deliberately NO property default: the basis must be declared.
+const PRORATION_BASES = {
+  actual_days:      { detail: 'Credit = monthly amount x (days covered / days in that calendar month).' },
+  thirty_day_month: { detail: 'Credit = monthly amount x (days covered / 30), regardless of month length.' },
+  full_months_only: { detail: 'Only whole calendar months are credited; partial months are credited nothing.' },
+};
+
+function daysInMonth(ymdStr) {
+  const d = parse(ymdStr);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+}
+
+/** Prorated credit for a partial month. PURE. */
+function prorate(monthlyAmount, coveredDays, anchorYmd, basis) {
+  if (basis === 'full_months_only') return 0;
+  const denom = basis === 'thirty_day_month' ? 30 : daysInMonth(anchorYmd);
+  return money((Number(monthlyAmount) * Number(coveredDays)) / denom);
+}
+
+// ── SCHEDULE SOURCE — the primitive that blocked monthly_scheduled_credit ──
+// A per-month schedule cannot be inferred from one total: 'nine hundred
+// dollars' does not say whether that is 3x300 or 9x100, nor which months.
+// So the caller supplies explicit dated amounts, or names a governed source.
+const SCHEDULE_SOURCES = ['explicit_lines', 'governed_reference'];
+
 // ── PROFILE CONTRACTS ────────────────────────────────────────────────
 const PROFILES = {
   one_time_fee_waiver: {
@@ -94,7 +123,7 @@ const PROFILES = {
   // implementable for the same reason free_rent_period is not. Returning
   // "unknown profile" for them would misreport a known gap as a typo.
   first_full_month: {
-    implemented: false, legacy: true,
+    implemented: true, legacy: true, requires_proration_basis: true,
     required_inputs: ["lease_start", "base_rent", "PRORATION RULE"],
     missing_primitive: "proration_basis",
     missing_detail: "Relative to a lease that does not begin on the 1st, 'the first full month' " +
@@ -102,18 +131,18 @@ const PROFILES = {
       "proration basis.",
     applies_to: ["new_lease", "renewal"], storable_today: true,
   },
-  third_full_month: { implemented: false, legacy: true, missing_primitive: "proration_basis",
+  third_full_month: { implemented: true, legacy: true, requires_proration_basis: true,
     missing_detail: "Same gap as first_full_month.", applies_to: ["new_lease", "renewal"], storable_today: true },
-  final_full_month: { implemented: false, legacy: true, missing_primitive: "proration_basis",
+  final_full_month: { implemented: true, legacy: true, requires_proration_basis: true,
     missing_detail: "Same gap, plus it depends on an end date that early termination can move.",
     applies_to: ["new_lease", "renewal"], storable_today: true },
-  monthly_scheduled_credit: { implemented: false, legacy: true, missing_primitive: "schedule_source",
+  monthly_scheduled_credit: { implemented: true, legacy: true, requires_schedule_source: true,
     missing_detail: "A per-month schedule needs a declared source for the amounts; the vocabulary " +
       "carries a single value and no schedule. fixed_monthly_discount is the implemented form of this shape.",
     applies_to: ["new_lease", "renewal"], storable_today: true },
 
   free_rent_period: {
-    implemented: false,
+    implemented: true, requires_proration_basis: true,
     required_inputs: ["lease_start", "lease_end", "base_rent", "free period start", "free period end", "PRORATION RULE"],
     date_rules: "Specified except for the proration rule on a partial month.",
     output: "One credit per covered month; a PARTIAL month's credit is undefined.",
@@ -181,8 +210,15 @@ function compileSchedule(input = {}) {
     return fail("missing_lease_dates", "A dated concession cannot be compiled without lease start and end dates.");
   if (parse(input.lease_end) <= parse(input.lease_start))
     return fail("invalid_lease_dates", "lease_end must be after lease_start.");
+  // `value` is required only by the profiles that USE it. Free-rent and
+  // full-month profiles forgive the RENT, and monthly_scheduled_credit
+  // carries its amounts on its schedule lines, so demanding a value from
+  // them would refuse a well-formed concession for missing a field it has
+  // no use for.
+  const VALUE_DRIVEN = ["flat_dated_credit", "fixed_monthly_discount"];
   const value = Number(input.value);
-  if (!Number.isFinite(value) || value <= 0) return fail("invalid_value", "A concession value must be greater than zero.");
+  if (VALUE_DRIVEN.includes(p) && (!Number.isFinite(value) || value <= 0))
+    return fail("invalid_value", "A concession value must be greater than zero.");
 
   const termMonths = Number(input.lease_term_months) || null;
 
@@ -226,7 +262,105 @@ function compileSchedule(input = {}) {
     };
   }
 
+  // ── PROFILES REQUIRING AN EXPLICIT PRORATION BASIS ────────────────
+  // Every one of these can land on a partial month, and there is no property
+  // default: an undeclared basis is refused, not guessed.
+  const needsProration = ["first_full_month", "third_full_month", "final_full_month", "free_rent_period"];
+  if (needsProration.includes(p)) {
+    const basis = input.proration_basis;
+    if (!basis) {
+      return fail("proration_basis_required",
+        `${p} can land on a partial month. Declare a proration basis (${Object.keys(PRORATION_BASES).join(", ")}). ` +
+        `On a 20-day February these differ by more than 10%, so a default would make the credit unreproducible.`);
+    }
+    if (!PRORATION_BASES[basis]) return fail("unknown_proration_basis", `${basis} is not a known basis.`);
+    if (input.base_rent == null) return fail("missing_base_rent", "A free-rent style concession needs the rent it forgives.");
+    const rent = Number(input.base_rent);
+
+    if (p === "free_rent_period") {
+      const from = input.free_from || input.lease_start;
+      const to = input.free_until;
+      if (!isYmd(from) || !isYmd(to)) return fail("missing_free_period", "State the free period start and end.");
+      if (parse(from) < parse(input.lease_start) || parse(to) > parse(input.lease_end))
+        return fail("free_period_outside_lease", `${from}..${to} is not inside the lease term.`);
+
+      // Walk calendar months, crediting whole months in full and partial
+      // months through the declared basis.
+      const lines = [];
+      let cursor = from;
+      while (parse(cursor) < parse(to)) {
+        const d = parse(cursor);
+        const monthStart = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1)).toISOString().slice(0, 10);
+        const nextMonth = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)).toISOString().slice(0, 10);
+        const segEnd = parse(nextMonth) < parse(to) ? nextMonth : to;
+        const dim = daysInMonth(cursor);
+        const covered = Math.round((parse(segEnd) - parse(cursor)) / 86400000);
+        const whole = covered >= dim;
+        const amount = whole ? money(rent) : prorate(rent, covered, cursor, basis);
+        if (amount > 0) {
+          lines.push({ date: cursor, kind: "rent_credit", amount,
+            reason: whole ? "free rent, whole month"
+                          : `free rent, ${covered}/${basis === "thirty_day_month" ? 30 : dim} days (${basis})` });
+        }
+        cursor = nextMonth;
+      }
+      if (!lines.length) return fail("free_period_credits_nothing",
+        `Under '${basis}' this period credits nothing. That is a real answer, not an error — but it is not a concession.`);
+      const total = money(lines.reduce((s2, l) => s2 + l.amount, 0));
+      return { ok: true, profile: p, proration_basis: basis, lines, total_credit: total,
+               effective_rent: termMonths ? money(rent - total / termMonths) : null };
+    }
+
+    // first / third / final full month — one whole month's rent, on the
+    // identified month. The basis matters because it decides which month
+    // qualifies as "full" when the lease does not start on the 1st.
+    const firstFull = firstFullMonthStart(input.lease_start);
+    let date;
+    if (p === "first_full_month") date = firstFull;
+    else if (p === "third_full_month") date = addMonths(firstFull, 2);
+    else {
+      const end = parse(input.lease_end);
+      const lastFull = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1)).toISOString().slice(0, 10);
+      date = lastFull;
+    }
+    if (parse(date) >= parse(input.lease_end) || parse(date) < parse(input.lease_start))
+      return fail("target_month_outside_lease", `${date} is not inside the lease term.`);
+    const amount = money(rent);
+    return { ok: true, profile: p, proration_basis: basis,
+             lines: [{ date, kind: "rent_credit", amount, reason: `${p.replace(/_/g, " ")} free` }],
+             total_credit: amount,
+             effective_rent: termMonths ? money(rent - amount / termMonths) : null };
+  }
+
+  // ── MONTHLY SCHEDULED CREDIT — needs an explicit schedule ─────────
+  if (p === "monthly_scheduled_credit") {
+    const src = input.schedule_source;
+    if (!src || !SCHEDULE_SOURCES.includes(src)) {
+      return fail("schedule_source_required",
+        `monthly_scheduled_credit cannot be inferred from one total: $${value || "X"} does not say how many ` +
+        `months, of what size, starting when. Supply schedule_source (${SCHEDULE_SOURCES.join(", ")}).`);
+    }
+    const sched = Array.isArray(input.schedule_lines) ? input.schedule_lines : [];
+    if (!sched.length) return fail("schedule_lines_required", "An explicit schedule needs its dated amounts.");
+    const lines = [];
+    for (const l of sched) {
+      if (!isYmd(l.date)) return fail("invalid_schedule_line_date", `${l.date} is not a date.`);
+      const amt = Number(l.amount);
+      if (!Number.isFinite(amt) || amt <= 0) return fail("invalid_schedule_line_amount", `${l.amount} is not an amount.`);
+      if (parse(l.date) < parse(input.lease_start) || parse(l.date) >= parse(input.lease_end))
+        return fail("schedule_line_outside_lease", `${l.date} is not inside the lease term.`);
+      lines.push({ date: l.date, kind: "rent_credit", amount: money(amt),
+                   reason: `scheduled credit (${src})` });
+    }
+    lines.sort((a, b) => (a.date < b.date ? -1 : 1));
+    const total = money(lines.reduce((s2, l) => s2 + l.amount, 0));
+    return { ok: true, profile: p, schedule_source: src, lines, total_credit: total,
+             effective_rent: input.base_rent != null && termMonths
+               ? money(Number(input.base_rent) - total / termMonths) : null };
+  }
+
   return fail("unhandled_profile", p);
 }
 
-module.exports = { compileSchedule, PROFILES, IMPLEMENTED, firstFullMonthStart, addMonths };
+module.exports = { compileSchedule, PROFILES, IMPLEMENTED, firstFullMonthStart, addMonths,
+                   PRORATION_BASES, SCHEDULE_SOURCES, prorate, daysInMonth };

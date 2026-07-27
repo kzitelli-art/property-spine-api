@@ -29,6 +29,7 @@
 
 const { datedPropertyPositions } = require("../tenancy/dated_positions");
 const { effectivePropertyPricing } = require("./effective_pricing");
+const { governedCharges } = require("./governed_charges");
 
 const ELIGIBLE_STATUS = "published";
 
@@ -37,12 +38,13 @@ async function futureRentRollPricingPreview(pool, { property_id, as_of = null, h
   const asOf = as_of || new Date().toISOString().slice(0, 10);
   const at = horizon_date || asOf;
 
-  const [positions, pricingAtDate] = await Promise.all([
+  const [positions, pricingAtDate, chargesAtDate] = await Promise.all([
     datedPropertyPositions(pool, { property_id, as_of: at }),
     // Effective pricing is resolved AT THE PROJECTION DATE, not today. A
     // future-dated version therefore applies only inside its own period, and
     // today's quote is unaffected by a version that has not started.
     effectivePropertyPricing(pool, { property_id, as_of: at }),
+    governedCharges(pool, { property_id, as_of: at }),
   ]);
 
   const typeById = new Map(pricingAtDate.unit_types.map((t) => [String(t.unit_type_id), t]));
@@ -140,6 +142,52 @@ async function futureRentRollPricingPreview(pool, { property_id, as_of = null, h
       not_residential: count("not_residential"),
       repriced_locked_positions: rows.filter((r) => r.disposition === "locked_contractual" && r.pricing_applied).length,
       positions_given_projected_pricing: rows.filter((r) => r.projected_rent != null && r.disposition !== "locked_contractual").length,
+    },
+
+    // ── THE ECONOMIC STACK, kept in separate lines ─────────────────
+    //   base contractual rent
+    // + recurring contractual charges
+    // − dated concession lines
+    // = scheduled recurring economics
+    // One-time fees, deposits and credits stay OUT of that sum, because each
+    // would misstate recurring economics in a different direction.
+    economic_stack: {
+      base_contractual_rent: {
+        source: "executed leases for locked positions; published pricing is an ASK, never revenue",
+        locked_total: rows.filter((r) => r.disposition === "locked_contractual")
+          .reduce((s, r) => s + Number(r.projected_rent || 0), 0),
+      },
+      recurring_contractual_charges: {
+        governed_count: (chargesAtDate.recurring_charges || []).length,
+        required_and_quotable: (chargesAtDate.recurring_charges || [])
+          .filter((c) => c.obligation === "required" && c.quotable_precisely).length,
+        included_in_projection: 0,
+        reason: (chargesAtDate.recurring_charges || []).length === 0
+          ? "no_governed_recurring_charge_published"
+          : "optional_and_conditional_charges_are_never_assumed",
+        rule: "A recurring charge stays SEPARATELY IDENTIFIABLE from base rent. An optional charge " +
+              "is never assumed onto a position, and a conditional charge applies only when its " +
+              "condition is governed AND true — neither is knowable for an unlocked position.",
+      },
+      dated_concession_lines: {
+        included: 0,
+        reason: "no_published_concession",
+        rule: "A concession reduces economics ONLY through dated lines produced by the compiler. " +
+              "Effective rent is derived from those lines, never asserted beside them.",
+      },
+      scheduled_recurring_economics: {
+        value: null,
+        reason: "requires_approved_assumptions_for_unlocked_positions",
+      },
+      // Deliberately OUTSIDE the recurring sum.
+      excluded_from_recurring: {
+        one_time_fees: { count: (chargesAtDate.one_time_fees || []).length,
+          treatment: "transaction economics — never annualized into rent" },
+        deposit_required: { count: (chargesAtDate.deposit_requirements || []).length,
+          treatment: "contractual requirement — contributes ZERO revenue" },
+        deposit_held: { treatment: "Money liability — contributes ZERO revenue, and is not in this catalog" },
+        one_time_credit: { treatment: "dated economic adjustment — never a rent reduction" },
+      },
     },
 
     assumptions: {
