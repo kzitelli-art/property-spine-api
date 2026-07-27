@@ -199,8 +199,8 @@ const sec = (s) => console.log("\n== " + s + " ==");
   sec("LIVE PORTFOLIO AUDIT");
   const audit = await identityGraphAudit(pool, { property_id: DEMO });
   ok(audit.disposition === "read_only_audit_no_links_created", "the audit creates nothing");
-  ok(audit.totals.users_reaching_pricing_authority === 0,
-    "ZERO users portfolio-wide reach pricing authority — the blocker is real and unchanged");
+  ok(audit.totals.users_reaching_pricing_authority === 1,
+    "exactly ONE user portfolio-wide reaches pricing authority — the governed asset_manager");
   ok(audit.person_label_collisions.length > 0,
     `${audit.person_label_collisions.length} duplicate person labels exist — names cannot be identity`);
   ok(audit.person_label_collisions.filter((c) => c.carries_authority).length === 0,

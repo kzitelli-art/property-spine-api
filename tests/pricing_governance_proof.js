@@ -90,7 +90,8 @@ const section = (s) => console.log("\n== " + s + " ==");
   const stillNone = (await pool.query(
     `select count(*)::int n from assignments where property_id=$1 and is_active=true
        and role in ('owner','asset_manager')`, [DEMO])).rows[0].n;
-  ok(Number(stillNone) === 0, "and the constructed assignment did not survive the rollback");
+  ok(Number(stillNone) === 1,
+    "and only the ONE governed assignment remains — the constructed probe did not survive the rollback");
   const leasing = await pricingAuthority(pool, { property_id: DEMO, person_id: LEASING_PERSON });
   ok(!leasing.may_publish_pricing && !leasing.may_prepare_pricing,
     "a LEASING assignment grants nothing — generic property membership is not authority");
@@ -111,9 +112,9 @@ const section = (s) => console.log("\n== " + s + " ==");
   ok(!qaUser.may_publish_pricing && qaUser.denied_reason === "session_identity_not_linked_to_a_person",
     "the QA operator's SESSION cannot reach authority — reported, not name-matched");
   const inv = await authorityInventory(pool, {});
-  // ZERO by ruling: the only owner assignment in the portfolio sat on a demo
-  // lead and was deactivated. No property can publish pricing today.
-  ok(inv.summary.properties_with_publish_authority === 0,
+  // ONE by ruling: the demo-lead owner assignment was deactivated, and a
+  // governed asset_manager was established on Demo Building only.
+  ok(inv.summary.properties_with_publish_authority === 1,
     `exactly ${inv.summary.properties_with_publish_authority} of ${inv.summary.properties_total} properties has publish authority`);
   ok(inv.summary.grants_total === 0, "no authority grants exist anywhere");
 

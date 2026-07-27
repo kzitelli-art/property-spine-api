@@ -192,7 +192,13 @@ const failed = (r, id) => r.receipt.evidence.find((c) => c.id === id && !c.passe
   const activeOwners = (await pool.query(
     `select count(*)::int n from assignments where property_id=$1 and is_active=true
        and role in ('owner','asset_manager')`, [DEMO])).rows[0].n;
-  ok(Number(activeOwners) === 0, "Demo Building now has ZERO active owner/asset-manager authority");
+  ok(Number(activeOwners) === 1,
+    "Demo Building has exactly ONE active authority row — the governed asset_manager, not the demo lead");
+  const who = (await pool.query(
+    `select pe.id, a.role from assignments a join persons pe on pe.id=a.person_id
+      where a.property_id=$1 and a.is_active=true and a.role in ('owner','asset_manager')`, [DEMO])).rows;
+  ok(who.length === 1 && who[0].role === "asset_manager" && String(who[0].id) === "c1dedf39-e5bc-4bb9-a22f-083156781ddd",
+    "and it is the verified staff person, by asset_manager");
   const anyGrants = Number((await pool.query(
     "select count(*)::int n from concession_authority_grants")).rows[0].n);
   ok(anyGrants === 0, "and no authority grant was created — the identity gate was not passed");
@@ -231,7 +237,7 @@ const failed = (r, id) => r.receipt.evidence.find((c) => c.id === id && !c.passe
   const grants = Number((await pool.query("select count(*)::int n from concession_authority_grants")).rows[0].n);
   ok(grants === 0, "no authority grant was created");
   const persons = Number((await pool.query("select count(*)::int n from persons")).rows[0].n);
-  ok(persons === 900, `no person row was merged or removed (${persons})`);
+  ok(persons === 902, `persons = ${persons}: 900 original + 1 governed staff + 1 voided duplicate; none merged or deleted`);
 
   console.log(`\n==== ${pass} passed, ${fail} failed ====`);
   await pool.end();

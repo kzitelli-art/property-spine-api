@@ -136,12 +136,30 @@ async function resolveAuthority(pool, { spec = {}, apply = false } = {}) {
   // ── 7. the person is not a counterparty or a demo artifact ──────
   const demoUse = person ? (await pool.query(
     "select count(*)::int n from demo_attempts where tenant_person_id = $1", [person.id])).rows[0].n : 0;
-  const lifecycleOk = person && !NON_STAFF_LIFECYCLES.has(String(person.lifecycle_status || ""));
+
+  // lifecycle_status DEFAULTS to 'lead' on every persons row, including every
+  // staff record the bridge creates — all 24 existing staff persons carry it.
+  // It describes a counterparty journey and says nothing about a staff human,
+  // so it only disqualifies a person who has NO governed staff context. The
+  // staff context is the governed fact; lifecycle_status is a default.
+  //
+  // Real counterparty evidence still disqualifies unconditionally: appearing
+  // as the tenant in a demo run, or carrying a lifecycle that only a real
+  // counterparty reaches (tenant, resident, applicant, vendor).
+  const hasStaffContext = staffCtx.length > 0;
+  const lifecycle = String(person && person.lifecycle_status || "");
+  const HARD_COUNTERPARTY = new Set(["tenant", "resident", "past_resident", "applicant", "vendor"]);
+  const lifecycleOk = person && (
+    HARD_COUNTERPARTY.has(lifecycle) ? false
+      : hasStaffContext ? true
+      : !NON_STAFF_LIFECYCLES.has(lifecycle));
   push(check("person_is_not_a_counterparty", !!person && lifecycleOk && demoUse === 0,
     !person ? "No person."
       : demoUse > 0 ? `This person appears as the TENANT in ${demoUse} demo run(s). It is a demo artifact, not a staff human.`
-      : !lifecycleOk ? `lifecycle_status is '${person.lifecycle_status}' — a counterparty, not staff.`
-      : "Not a prospect, resident, vendor or demo lead."));
+      : HARD_COUNTERPARTY.has(lifecycle)
+        ? `lifecycle_status is '${lifecycle}' — a real counterparty record, which a staff context cannot override.`
+      : !lifecycleOk ? `lifecycle_status is '${lifecycle}' and there is no governed staff context.`
+      : `Not a counterparty${hasStaffContext ? " (staff context governs; lifecycle_status is a table default)" : ""}.`));
 
   // ── 8. the effective window is real ─────────────────────────────
   const windowOk = !requested_verbs

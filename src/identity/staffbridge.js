@@ -128,6 +128,50 @@ module.exports = function buildStaffBridge({ pool }) {
     if (!person_id && !create_staff_person) throw httpErr(400, "supply person_id or create_staff_person");
     if (person_id && create_staff_person) throw httpErr(400, "supply person_id OR create_staff_person, not both");
 
+    // ── IDEMPOTENT STAFF CREATION ─────────────────────────────────
+    // A re-run of a creation script produced a second identical staff person.
+    // A pre-check alone cannot prevent it: two concurrent callers both read
+    // "none exists", then both insert. So the guard is a transaction-scoped
+    // ADVISORY LOCK keyed on the user — concurrent requests for the same
+    // identity serialise here, and the second sees the first's result.
+    // The partial unique index (migration 104) is the backstop underneath:
+    // even a caller that bypasses this function cannot create a second
+    // ACTIVE staff person for one email.
+    if (create_staff_person) {
+      await client.query("select pg_advisory_xact_lock(hashtext($1))", [String(user_id)]);
+
+      // Already bridged to a LIVE staff person? Return it. Never create again.
+      const cur = (await client.query(
+        `select p.id, p.name, p.email, p.record_status
+           from users u join persons p on p.id = u.person_id
+          where u.id = $1`, [user_id])).rows[0];
+      if (cur && cur.record_status === "active") {
+        return { replayed: true, already_exists: true, action: "already_linked",
+                 person: cur,
+                 detail: "This login is already bridged to an active staff person. " +
+                         "No second person was created." };
+      }
+      // A retired historical person must never be silently re-selected.
+      if (cur && cur.record_status === "retired") {
+        throw httpErr(409,
+          `this login points at a RETIRED person (${cur.id}); unlink it explicitly before creating a new staff record`);
+      }
+      // An active staff person already holding this email is the same identity.
+      const email = create_staff_person.email;
+      if (email) {
+        const owned = (await client.query(
+          `select id, name from persons
+            where lower(email) = lower($1) and source = 'staff_bridge' and record_status = 'active'
+            limit 1`, [email])).rows[0];
+        if (owned) {
+          return { replayed: true, already_exists: true, action: "existing_staff_person",
+                   person: owned,
+                   detail: "An active governed staff person already holds this email. " +
+                           "Link to it explicitly rather than creating a duplicate." };
+        }
+      }
+    }
+
     // Idempotency: an identical request replays its receipt, writes nothing.
     if (request_id) {
       const dup = (await client.query(
