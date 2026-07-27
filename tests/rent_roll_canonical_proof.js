@@ -89,7 +89,7 @@ const ECONOMICS = ["available", "unavailable", "not_applicable"];
   ok(rr.contested_claims.claims.every(c => c.lease_id && c.space_id), "every disputed claim names its lease and space");
 
   console.log("\n== BLOCK D - occupancy is explainable ==");
-  const occ = rr.totals.contractual_occupancy;
+  const occ = rr.totals.confirmed_contractual_occupancy;
   ok(occ.occupied === ten.contractually_occupied, "occupancy numerator is the tenancy axis only");
   ok(occ.of_leasable_resolved === rr.totals.leasable - ten.contested,
     "the denominator excludes down and contested, and says so");

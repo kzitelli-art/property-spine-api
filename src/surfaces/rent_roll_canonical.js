@@ -157,7 +157,10 @@ async function currentRentRoll(pool, { property_id, as_of = null } = {}) {
 
       // Occupancy from the TENANCY axis only. Evidence and economics do not
       // move a position in or out of it.
-      contractual_occupancy: {
+      // LANGUAGE: this is CONFIRMED contractual occupancy. Unresolved positions
+      // remain in the denominator, and the wording must never imply they are
+      // confirmed vacant — they are simply not yet established either way.
+      confirmed_contractual_occupancy: {
         occupied: occupied.length,
         of_leasable_resolved: occupancy_denominator,
         pct: occupancy_denominator ? Math.round(occupied.length / occupancy_denominator * 10000) / 100 : null,

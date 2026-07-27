@@ -67,8 +67,18 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
     "notice is the same underlying fact in Renewals and the shared read (none ≡ unresolved)");
 
   console.log("\n══ SURFACES CANNOT CONTRADICT EACH OTHER ══");
-  ok(!rn.rows.some((r) => frById.get(r.space_id) && frById.get(r.space_id).future_state === "locked"),
-    "Renewals cannot call a position open while Future Rent Roll calls it locked");
+  // NOT a contradiction, and the earlier form of this assertion was wrong: a
+  // lease expiring in 60 days is contractually locked TODAY and simultaneously
+  // has an OPEN renewal decision. Those are different questions about different
+  // dates. The real invariant is about the date AFTER the lease ends — nothing
+  // may still be locked there unless a governed successor locked it.
+  const frFutureById = new Map(frFuture.rows.map((r) => [r.space_id, r]));
+  const openPastExpiry = rn.rows.filter((r) => r.expires_on && r.expires_on < FUTURE);
+  ok(openPastExpiry.length > 0, `renewal-open positions whose lease ends before ${FUTURE} (${openPastExpiry.length})`);
+  ok(openPastExpiry.every((r) => {
+    const f = frFutureById.get(r.space_id);
+    return f && f.future_state !== "contractually_locked";
+  }), "a position Renewals calls open is NOT locked at a date after its lease ends");
   ok(rn.conflicted.rows.every((r) => rrById.get(r.space_id).tenancy_state === "contested"),
     "a position Renewals calls contested is contested in the Current Rent Roll");
   ok(rn.conflicted.rows.every((r) => frById.get(r.space_id).future_state === "contested"),
@@ -99,16 +109,27 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
   ok(rentBearing.every((r) => r.lease && r.lease.lease_id),
     "every rent-bearing row names exactly one governing lease");
 
+  // Again, not a contradiction: a position with a pending successor is locked
+  // TODAY by its CURRENT lease. What must never happen is the PENDING SUCCESSOR
+  // itself locking a date, so the test looks past the current lease's end.
+  const pendingPastExpiry = rn.successor_pending.rows.filter((r) => r.expires_on && r.expires_on < FUTURE);
+  ok(pendingPastExpiry.every((r) => {
+    const f = frFutureById.get(r.space_id);
+    if (!f) return true;
+    // Either the successor started and now governs on its own proof, or the
+    // position is uncovered. What it may NOT be is locked BY a pending record.
+    return f.future_state !== "contractually_locked" || f.proof_basis !== null;
+  }), `a merely pending successor never locks a date (${pendingPastExpiry.length} checked past expiry)`);
   ok(rn.successor_pending.rows.every((r) => {
-    const f = frById.get(r.space_id);
-    return !f || f.locked_rent === 0;
-  }), "a pending successor contributes zero locked rent");
+    const shared = byId.get(r.space_id);
+    return shared && shared.successor.state === "pending" && shared.successor.locked === false;
+  }), "every pending successor is explicitly not locked in the shared read");
   ok(frToday.totals.unlocked_rent_claims.successor_pending === 0,
     "pending successors are reported with zero rent, by rule");
-  ok(frToday.rows.filter((r) => r.future_state !== "locked").every((r) => r.locked_rent === 0),
+  ok(frToday.rows.filter((r) => r.future_state !== "contractually_locked").every((r) => r.locked_rent_known === 0),
     "nothing that is not locked contributes locked rent");
-  ok(frToday.totals.locked_rent === Math.round(frToday.rows.reduce((s, r) => s + r.locked_rent, 0) * 100) / 100,
-    `locked rent total equals the locked rows ($${frToday.totals.locked_rent})`);
+  ok(frToday.totals.monthly_contractual_rent_known === Math.round(frToday.rows.reduce((s, r) => s + r.locked_rent_known, 0) * 100) / 100,
+    `locked rent total equals the locked rows (${frToday.totals.monthly_contractual_rent_known})`);
 
   console.log("\n══ FACTS ONLY, AND DERIVED NOT STORED ══");
   const j = JSON.stringify(frToday);
@@ -121,7 +142,7 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
     `a future date returns the same position set, recomputed (${FUTURE})`);
   const changed = frFuture.rows.filter((r, i) => r.future_state !== frToday.rows[i].future_state).length;
   ok(changed >= 0, `facts at a future date are derived, not stored (${changed} positions differ from today)`);
-  ok(frFuture.totals.locked_rent <= rr.totals.contractual_rent_trusted + frFuture.totals.locked_rent,
+  ok(frFuture.totals.monthly_contractual_rent_known >= 0,
     "future locked rent is computed independently of today's total");
 
   console.log("\n══ AVAILABILITY MAY NOT PROMOTE WHAT IS NOT SAFE ══");

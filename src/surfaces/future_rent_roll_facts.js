@@ -33,30 +33,48 @@ const FACTS_ONLY_NOTE =
   "Contractual facts only. Expected projections are unavailable until governed pricing and assumptions are published.";
 
 // A position's FUTURE state on the selected date. Exactly one, by precedence.
-//   contested            overlapping non-terminal leases — governs unknown
-//   evidence_unavailable the position exists but its occupancy evidence
-//                        disagrees, or its economics are missing
-//   locked               a lease governs the date AND it is executed+funded,
-//                        or its successor is
-//   successor_pending    a next lease exists but is not executed+funded
-//   open                 nothing covers the date
-// CONTRACTUAL COVERAGE ONLY — leases decide this, never the imported claim.
-// The imported occupancy claim is DATED EVIDENCE about the import's own as-of
-// date. It says nothing about an arbitrary future date, so letting it classify
-// a future position manufactures "unresolved" for positions that are simply
-// uncovered later. It is still reported per row, as evidence, beside the state.
+//
+//   contested                    overlapping non-terminal leases — which
+//                                governs is unknown.
+//   contractually_locked         a governed contractual fact spans the date.
+//                                Under the opening-truth doctrine that is
+//                                EITHER proof basis: native_verified (executed
+//                                and funded through Spine) OR
+//                                confirmed_opening_import (accepted as the
+//                                property's opening contractual truth). These
+//                                are different PROOFS of the same contractual
+//                                state, not different states — so zero
+//                                native-verified must never read as zero
+//                                contractual truth.
+//   covered_unproven             a lease spans the date but its proof basis is
+//                                neither. It cannot be called locked. Zero on
+//                                Demo today; retained so it can never be
+//                                silently promoted.
+//   successor_pending_not_locked a next lease exists but is merely pending. It
+//                                must satisfy the governed execution-and-
+//                                funding rule (or a future governed import
+//                                equivalent proving an EXECUTED contract) to
+//                                count. A pending record never locks.
+//   open_or_uncovered            nothing covers the date.
+//
+//  ECONOMICS IS NOT A POSITION BUCKET. A position can be contractually locked
+//  while its rent is unavailable. That is reported as a split WITHIN locked.
+//
+//  CONTRACTUAL COVERAGE ONLY — leases decide this, never the imported
+//  occupancy claim, which is dated evidence about the import's own as-of date
+//  and says nothing about an arbitrary future date.
+const LOCKING_PROOFS = new Set(["native_verified", "confirmed_opening_import"]);
+
 function futureState(p) {
   if (p.conflict_state === "conflicted") return "contested";
 
   const lease = p.lease;              // lease spanning the SELECTED date
   if (lease) {
-    if (p.proof_basis === "native_verified") return "locked";
-    if (p.economics_state === "unavailable") return "covered_economics_unknown";
-    return "covered_not_locked";      // a lease governs, but proof is opening-import or unproven
+    return LOCKING_PROOFS.has(p.proof_basis) ? "contractually_locked" : "covered_unproven";
   }
-  if (p.successor && p.successor.state === "locked") return "locked";
-  if (p.successor && p.successor.state === "pending") return "successor_pending";
-  return "open";                      // uncovered on this date. Not "unknown".
+  if (p.successor && p.successor.state === "locked") return "contractually_locked";
+  if (p.successor && p.successor.state === "pending") return "successor_pending_not_locked";
+  return "open_or_uncovered";
 }
 
 async function futureRentRollFacts(pool, { property_id, as_of = null } = {}) {
@@ -82,26 +100,31 @@ async function futureRentRollFacts(pool, { property_id, as_of = null } = {}) {
       imported_occupancy_claim: p.imported_occupancy_claim,
       evidence_state: p.evidence_state,
 
-      // LOCKED RENT: only a position whose governing lease is executed AND
-      // funded contributes. Everything else contributes zero — explicitly,
-      // as a number, so the reader can see the zero was decided not missed.
-      locked_rent: state === "locked" && p.lease && p.lease.rent != null ? Number(p.lease.rent) : 0,
-      // The rent a position WOULD carry if its evidence resolved. Reported
-      // separately and never added to a locked total.
-      unlocked_rent_claim: state !== "locked" && p.lease && p.lease.rent != null ? Number(p.lease.rent) : 0,
+      // ECONOMICS IS A SEPARATE AXIS. A locked position with unavailable rent
+      // stays locked; its rent simply is not known and is never coerced to $0.
+      economics_state: p.economics_state,
+      contractual_rent: p.lease && p.lease.rent != null ? Number(p.lease.rent) : null,
+
+      // Only a contractually locked position with KNOWN rent contributes.
+      locked_rent_known: state === "contractually_locked" && p.economics_state === "available" && p.lease
+        ? Number(p.lease.rent) : 0,
+      // Rent claimed by a position that is NOT locked. Exposure, never revenue.
+      unlocked_rent_claim: state !== "contractually_locked" && p.economics_state === "available" && p.lease
+        ? Number(p.lease.rent) : 0,
     };
   });
 
   const inState = (s) => rows.filter((r) => r.future_state === s);
-  const locked = inState("locked");
-  const coveredNotLocked = inState("covered_not_locked");
-  const pending = inState("successor_pending");
-  const open = inState("open");
+  const locked = inState("contractually_locked");
+  const coveredUnproven = inState("covered_unproven");
+  const pending = inState("successor_pending_not_locked");
+  const open = inState("open_or_uncovered");
   const contested = inState("contested");
-  const unavailable = inState("evidence_unavailable"); // retained: zero by construction now
-  // A lease governs the date but its contractual rent is unknown. Covered, and
-  // separately incomplete — never folded into locked, never coerced to $0.
-  const economicsUnknown = inState("covered_economics_unknown");
+  // Economics splits WITHIN locked — it is not a position bucket.
+  // Split by the ECONOMICS AXIS, not by null-ness: a rent of 0 is unavailable,
+  // not a known zero, and must never read as a position priced at nothing.
+  const lockedKnown = locked.filter((r) => r.economics_state === "available");
+  const lockedUnknown = locked.filter((r) => r.economics_state !== "available");
 
   return {
     property_id: dp.property_id,
@@ -112,26 +135,36 @@ async function futureRentRollFacts(pool, { property_id, as_of = null } = {}) {
 
     totals: {
       positions: rows.length,
-      locked: locked.length,
-      covered_not_locked: coveredNotLocked.length,
-      successor_pending: pending.length,
-      open: open.length,
+
+      // POSITION BUCKETS — exactly one per position.
+      contractually_locked: locked.length,
+      covered_unproven: coveredUnproven.length,
+      successor_pending_not_locked: pending.length,
+      open_or_uncovered: open.length,
       contested: contested.length,
-      evidence_unavailable: unavailable.length,
-      covered_economics_unknown: economicsUnknown.length,
+
+      // ECONOMICS SPLIT WITHIN LOCKED — not a bucket of its own.
+      locked_with_known_economics: lockedKnown.length,
+      locked_economics_unavailable: lockedUnknown.length,
 
       // The only economic total this service may produce.
-      locked_rent: money(locked.reduce((s, r) => s + r.locked_rent, 0)),
+      monthly_contractual_rent_known: money(locked.reduce((s, r) => s + r.locked_rent_known, 0)),
 
-      // Everything that is NOT locked, shown as exposure rather than revenue.
-      unlocked_rent_claims: {
-        covered_not_locked: money(coveredNotLocked.reduce((s, r) => s + r.unlocked_rent_claim, 0)),
-        successor_pending: 0,     // a pending successor carries no rent, by rule
-        contested: money(contested.reduce((s, r) => s + r.unlocked_rent_claim, 0)),
-        evidence_unavailable: money(unavailable.reduce((s, r) => s + r.unlocked_rent_claim, 0)),
+      // PROOF SPLIT OF THE LOCKED POSITIONS — different proofs of the same
+      // contractual state, shown separately and never collapsed.
+      locked_proof_split: {
+        native_verified: locked.filter((r) => r.proof_basis === "native_verified").length,
+        confirmed_opening_import: locked.filter((r) => r.proof_basis === "confirmed_opening_import").length,
       },
 
-      proof_split: {
+      // Everything NOT locked, shown as exposure rather than revenue.
+      unlocked_rent_claims: {
+        covered_unproven: money(coveredUnproven.reduce((s, r) => s + r.unlocked_rent_claim, 0)),
+        successor_pending: 0,     // a pending successor carries no rent, by rule
+        contested: money(contested.reduce((s, r) => s + r.unlocked_rent_claim, 0)),
+      },
+
+      proof_split_all_positions: {
         native_verified: rows.filter((r) => r.proof_basis === "native_verified").length,
         confirmed_opening_import: rows.filter((r) => r.proof_basis === "confirmed_opening_import").length,
         unproven: rows.filter((r) => r.proof_basis === "unproven").length,
