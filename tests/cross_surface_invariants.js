@@ -172,6 +172,39 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
   ok(dpA.positions.filter((p) => p.physical_readiness === "turning").every((p) => !marketable(p)),
     "a turning position is not marketable");
 
+  console.log("\n══ AVAILABILITY IS NOW A REAL SURFACE, NOT A HYPOTHETICAL ══");
+  // Until Availability moved onto the classifier these rules were asserted
+  // against a locally-defined predicate. They now run against the shipped
+  // service, so a regression in it fails here.
+  const { availabilityRead } = require(path.join(REPO, "src/surfaces/availability_read"));
+  const avail = await availabilityRead(pool, { property_id: DEMO });
+  const avById = new Map(avail.rows.map((r) => [r.space_id, r]));
+  const mkt = avail.rows.filter((r) => r.marketing_state === "marketable_now");
+
+  ok(avail.count === dpA.positions.length, `Availability returns one row per canonical position (${avail.count})`);
+  ok(Object.values(avail.states).reduce((a, b) => a + b, 0) === avail.count,
+    "every position has exactly one marketing state");
+  ok(mkt.every((r) => rrById.get(r.space_id).tenancy_state !== "contractually_occupied"),
+    "a position marketable now is not contractually occupied");
+  ok(mkt.every((r) => rrById.get(r.space_id).tenancy_state !== "contested"),
+    "a contested position is never marketable");
+  ok(mkt.every((r) => rrById.get(r.space_id).evidence_state !== "disagrees"),
+    "an evidence-disagreement position is never marketable");
+  ok(mkt.every((r) => !rrById.get(r.space_id).is_down), "a down position is never marketable");
+  ok(mkt.every((r) => byId.get(r.space_id).successor.state === "none"),
+    "a pending or locked successor is never shown as open inventory");
+  ok(mkt.every((r) => frById.get(r.space_id).future_state !== "contractually_locked"),
+    "a locked future position is not shown as available for the same date");
+  ok(avail.rows.every((r) => r.successor_state === byId.get(r.space_id).successor.state),
+    "Renewals, Future Rent Roll and Availability share one successor meaning");
+  ok(avail.rows.filter((r) => r.turnover_in_progress).every((r) => {
+    const c = rrById.get(r.space_id);
+    // A turn may block marketing; it must not alter the contractual axis.
+    return c.tenancy_state === byId.get(r.space_id).tenancy_state;
+  }), "a turnover block affects Availability but does not rewrite contractual tenancy");
+  ok(avail.rows.every((r) => r.marketing_state === "marketable_now" ? !r.blocking_reason : !!r.blocking_reason),
+    "every blocked position names exactly one reason");
+
   console.log("\n══ HTTP BOUNDARY ══");
   const base = process.env.API_BASE, token = process.env.STAFF_SESSION;
   if (!base || !token) { console.log("   SKIP  no API_BASE / STAFF_SESSION"); }
