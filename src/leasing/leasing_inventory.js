@@ -30,7 +30,39 @@ module.exports = function leasingInventoryModule({ pool }) {
     const q = clientArg || pool;
     if (!property_id) return { units: [], qualification: "no_property" };
     const params = [property_id];
-    let where = `property_id = $1 and occupancy_status = 'vacant' and coalesce(is_down,false) = false`;
+    // RESIDENTIAL SHAPE GUARD (owner decision, 2026-07-27). `units` carries
+    // non-apartment rows — the property's commercial space is one (7,391 sq ft,
+    // market_rent 0.00). Nothing in the vacancy predicate says "residential", so
+    // that row was excluded only by its occupancy_status happening to be
+    // 'unknown'. If a status edit or an import normalized it to 'vacant', it
+    // would sort FIRST (results order by market_rent asc) and become the top
+    // unit offered to a residential prospect, passing any max_rent filter.
+    // bedrooms IS the residential shape: on Demo Building the commercial row is
+    // the ONLY row with a null bedrooms, so this guard excludes it and nothing
+    // else. A leaseable apartment always knows its bedroom count.
+    // COMMITTED-SPACE GUARD (owner decision, 2026-07-27). occupancy_status is
+    // not proof a unit is free to promise. Unit 530 was quoted as available in
+    // nine outbound texts while carrying a lease that had already STARTED
+    // (status 'pending', start 2026-07-24, from a historical_snapshot import).
+    // Either the lease or the vacancy flag is wrong, and we do not yet know
+    // which — so the unit comes out of customer-facing availability until an
+    // operator says which one is true. Its rent is deliberately NOT changed.
+    //
+    // Stated as a general rule, never `if unit = 530` (§22 Solo-first, never
+    // Solo-special): a space that carries a live lease is not offerable.
+    // The list is a NOT-IN of dead statuses rather than an IN of live ones, so
+    // it FAILS CLOSED — a status nobody anticipated withholds the unit instead
+    // of offering one that is already committed (§5 honest blank beats
+    // confident wrong). Vocabulary matches application_review.js:261.
+    let where = `property_id = $1 and occupancy_status = 'vacant' and coalesce(is_down,false) = false
+                 and bedrooms is not null
+                 and not exists (
+                   select 1 from spaces sp
+                     join leases lz on lz.space_id = sp.id
+                    where sp.unit_id = units.id
+                      and lz.lease_status not in
+                          ('cancelled','rescinded','void','superseded','terminated','expired')
+                 )`;
     if (bedrooms != null && Number.isFinite(Number(bedrooms))) {
       params.push(Number(bedrooms)); where += ` and bedrooms = $${params.length}`;
     }

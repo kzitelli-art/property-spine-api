@@ -2,6 +2,56 @@
 
 **Read-only. Nothing was built, changed, or written.** 2026-07-27.
 
+> ## ⚠️ CORRECTIONS — second pass, same day, live Neon + live Render
+>
+> A follow-up audit re-verified this file against the database rather than against source
+> and prior sessions. Four claims below did not survive. Read these before the body.
+>
+> **1. Q1's concession finding is wrong. `current_concession` does not exist.** Not
+> retired — **absent**. 38 `agent_facts` rows live, all on Demo Building, no such key at any
+> status, and zero facts whose text matches month-free / concession / special. It exists only
+> in `src/shared/facts-seed.js:165`, which was evidently never applied for this key. **The
+> agent has never quoted a concession** — its prompt forbids stating one not in the facts.
+> The line "a text string I seeded into `agent_facts` on 2026-07-25" should be read as
+> describing the seed file, not the database.
+>
+> **2. The follow-up runner never read it.** `followup_runner.js` references `agent_facts`
+> **zero times**. Its rung 3 was a hardcoded literal — "a month free right now on a one year
+> lease ending July 2027" — in deployed source, so retiring a fact could never have reached
+> it. Never fired: no comm_event matches. **Removed 2026-07-27** by owner decision;
+> harness-proven in `tests/pricing_guards_proof.js`.
+>
+> **3. Q4's interpretation is refuted.** `units.market_rent` is **not** "a mix of asking and
+> in-place rents." Across 114 studios with active leases it equals the in-place lease rent in
+> only **9** cases, and in-place is consistently *lower*. It is a third thing: a per-unit
+> number that mostly matches the sheet ($1,450 ×75, $1,600 ×32) with an unexplained scatter
+> above it ($1,475 · $1,505 · $1,555 · $1,605 · $1,655 · $1,687, plus one $1,045). **Every
+> off-sheet studio is occupied except 530.** Unit 530 is 363 sq ft — identical to 30 peers all
+> at $1,450 — and is the highest studio number in the building. A population of one.
+>
+> **4. Q3's open question is answered.** The seven routes are behind the global
+> `x-operator-key` gate (`server.js:147`, mounted `:3385`) — **not public**. The real defect is
+> attribution, not access: actor *and* property arrive in the **request body**
+> (`published_by_person_id`, `granted_by_person_id`), so a key-holder acts as any authorized
+> person with nothing recording who did it — a §21 violation of the same shape as the comms
+> attribution defect. Practical reach is contained **by emptiness, not by design**:
+> `concession_authority_grants` is 0 rows and no-grant = HARD fail-closed, and `canPublish`
+> reads the **`assignments`** table (*not* `property_team_assignments`, so migration 090's
+> portfolio admin grants do not apply) where exactly **one** publish-capable identity exists —
+> Jordan Avery (demo), `owner`, Demo Building. Real Solo has none.
+>
+> **Also established:** the ledger cannot work for three independent reasons, so populating
+> the tables would not start it — tables empty · `computeScheduleLines` is a throw-only stub
+> with `IMPLEMENTED_TIMING_PROFILES = []` · `lockLeaseEconomics`, `computeScheduleLines` and
+> `findEligibleOfferForApplication` have **zero callers repo-wide**, and `countersign` appears
+> in no `.js` file. `ledgerService` is passed into `applications.js:41` and
+> `tenancy_anchor_service.js:53` and never invoked.
+>
+> **And the live concession nobody was looking at:** `move_in_credits` — $500 first
+> responders, $500 military/veterans, $300 Penn Dental/Vet, "applied as a one-time credit
+> after lease execution." Undated, unversioned, no authority. Owner ruling 2026-07-27:
+> **these are concessions.**
+
 Answers the four questions asked before any build. Claim level on every item, per the vocabulary: `Proven` (real DB / real HTTP, with receipt) · `Built` (source exists and boots) · `Reported` (unverified claim).
 
 ---

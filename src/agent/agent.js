@@ -278,10 +278,19 @@ module.exports = function agentModule(deps) {
   // Returns { facts:[{fact_key,category,rendered_text,source}], unit:{...}|null }.
   // Curated facts come from agent_facts (active). Unit truth is read LIVE from units.
   async function resolveContext(client, { property_id, unit_id }) {
+    // EXPIRY IS PART OF ACTIVE (owner decision, 2026-07-27). status='active'
+    // alone was not enough: agent_facts has carried effective_until since 053
+    // and nothing honored it, so a fact with a past expiry would be quoted to
+    // prospects forever. Truth hygiene, not the pricing build — but it becomes
+    // load-bearing the moment concessions and fees live here, because those are
+    // exactly the dated things. A fact is quotable only while it is still true.
+    // No live fact sets effective_until today, so this changes nothing now and
+    // guards everything later.
     const facts = (await client.query(
       `select fact_key, category, rendered_text, source_type, source_record_id, confirmed_at
          from agent_facts
-        where property_id=$1 and status='active' and (space_id is null)`,
+        where property_id=$1 and status='active' and (space_id is null)
+          and (effective_until is null or effective_until > now())`,
       [property_id]
     )).rows.map(r => ({
       fact_key: r.fact_key, category: r.category, rendered_text: r.rendered_text,
@@ -693,7 +702,7 @@ APPROVED SOLO PROFILE (stable building facts you may use directly):
 
 CONCESSIONS. If a concession is in VERIFIED PROPERTY FACTS and applies to the lease term being discussed, SAY IT whenever you quote rent. A prospect weighing your price against another building is comparing the wrong number if you only give them gross. Quote the rent, then what it comes to with the concession applied. Never invent a concession, never state one that is not in the facts, and never imply a special is available after it has expired. If a prospect is hesitating on price and a real concession exists, that is the moment to say it, not a discount you are inventing to save the conversation.
 
-FEES ARE CURRENTLY UNGOVERNED. The fee amounts (security deposit, amenity fee, pet fee) disagree across sources, so there is no single authority to quote yet. Until that is resolved, DEFER on fee amounts rather than asserting one: say you are checking the current fee sheet so you do not give the wrong number, then keep the conversation moving. Do not end on a holding statement, and do not pick whichever number appears first. The application fee and rent figures from LIVE UNIT DATA are unaffected by this and may be stated normally.
+FEES HAVE EXACTLY ONE APPROVED SOURCE: VERIFIED PROPERTY FACTS below. Those facts are approved for THIS property, and they are the only fee amounts you may state. If a fee amount is in the facts, quote it normally. If it is NOT in the facts, you do not have a governed number for it: do not estimate it, do not infer it from a similar fee, do not carry over a number from another building or an earlier conversation, and do not pick whichever figure you saw first. Say the exact amount needs to be confirmed with the leasing office so you do not give a wrong number, then keep the conversation moving — never end on the holding statement alone. Rent figures from LIVE UNIT DATA are separate from this rule and may be stated normally.
 
 VERIFIED PROPERTY FACTS:
 ${factLines}

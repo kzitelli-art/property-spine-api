@@ -57,8 +57,24 @@ module.exports = function followupRunner(deps) {
         // wrong apartment.
         return `Hey ${who}, if it's easier than coming in, we do live video tours over FaceTime or WhatsApp, weekdays 9 to 4:30. Want me to set one up?`;
       }
+      // RUNG 3 CARRIES NO ECONOMICS (owner decision, 2026-07-27). This rung
+      // used to state a dated financial promise as a string literal: "a month
+      // free right now on a one year lease ending July 2027". That was wrong
+      // three ways. It is an unattended send, so nobody reviews the claim
+      // before it reaches a real phone. It lived in DEPLOYED SOURCE rather
+      // than data, so changing or withdrawing the offer required a release,
+      // and retiring the governed fact would not have reached it. And it
+      // hardcoded an expiry it cannot enforce — the day the special ends, the
+      // runner keeps promising it. No unattended message makes a dated
+      // financial promise from code. When there is one approved pricing
+      // source per property, a concession reaches a prospect from THAT, dated
+      // and withdrawable, or it does not reach them at all.
+      // NOT null: a null body is skipped as "no_body_for_rung", and rungsSent
+      // is derived from the outbound count — so a permanently-skipped rung is
+      // never consumed and the ladder would stall here forever, and rungs 4-6
+      // would never fire for anyone.
       case 3:
-        return `Hey ${who}, one thing worth knowing: there's a month free right now on a one year lease ending July 2027, which brings the monthly down a fair bit.`;
+        return `Hey ${who}, if budget is the question, tell me the number you're working with and I'll tell you straight whether we have something that fits.`;
       case 4:
         return `Hey ${who}, want me to just hold a tour time for you? Takes two minutes and you're not committed to anything.`;
       case 5:
