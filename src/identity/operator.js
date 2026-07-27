@@ -51,6 +51,7 @@ module.exports = function operatorModule(deps) {
   const { buildReviewList, buildReviewDetail } = require("../applications/application_review"); // application review reads (slice 2)
   const { loadLeasingDesk } = require("../leasing/leasing_desk_loader"); // Leasing Desk composition (one repeatable-read snapshot)
   const { renewalsCohort } = require("../leasing/renewals_read");        // R1 renewal-work cohort (read-only, server-authored)
+  const { currentRentRoll } = require("../surfaces/rent_roll_canonical"); // canonical Current Rent Roll (migration route)
   // ── THE ONE CANONICAL TENANCY-ANCHOR SERVICE (Fable ruling) ──────────
   // The SAME countersign + confirm-term implementation applications.js calls.
   // Injected from server.js (built once from the obligation engine). The two
@@ -1176,6 +1177,35 @@ module.exports = function operatorModule(deps) {
   // the source of truth). DISPATCH deliberately does not live here — actually
   // sending the follow-up stays behind the Twilio wall; this read tells a
   // human what is due, it never texts anyone.
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/rent-roll/canonical — MIGRATION ROUTE, NOT PERMANENT.
+  //
+  // The canonical Current Rent Roll read: positions ARE the rows, from the
+  // shared classifier. Exists alongside /operator/rent-roll only so the new
+  // response can be proven without breaking the running app.
+  //
+  // RETIREMENT CONDITION — this route does not survive the sequence:
+  //   new service proven → Current Rent Roll switched → factual Future Rent
+  //   Roll switched → Availability switched → legacy signed-in consumers
+  //   removed → this path removed or promoted to the stable
+  //   /operator/rent-roll contract.
+  // Two rent-roll APIs are not architecture. Everything in the operating API
+  // is meant to be canonical, so the word does not belong in a permanent path.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/rent-roll/canonical", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const out = await currentRentRoll(pool, {
+        property_id: req.operator.property_id,      // session only — never req.query
+        as_of: req.query.as_of || null,
+      });
+      return res.json({ ...out, _migration_route: true });
+    } catch (e) {
+      // An error is an ERROR, never an empty rent roll.
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    }
+  });
+
   // ══════════════════════════════════════════════════════════════════
   // GET /operator/leasing/renewals — R1: THE LIVE RENEWAL-WORK COHORT.
   //
