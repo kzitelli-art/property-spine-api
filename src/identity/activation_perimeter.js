@@ -7,13 +7,13 @@
 //
 //      mode enabled
 //        AND property activated (approved set)
-//        AND record carries a CURRENT ELIGIBLE class (person × THAT property)
-//            — see currentEligibleClass; the list is imported from
-//              capability.js so this gate and the application gate cannot
-//              disagree about who is eligible
 //        AND authenticated staff session has property/action authority
 //        AND application state is eligible
 //      → otherwise refuse, deterministically and NON-REVEALINGLY.
+//
+//  There is deliberately NO person-level condition. It carried a record
+//  class, then a consent state, and both were answering a question nobody
+//  asked. See the long note further down before adding a third.
 //
 //  ── OPERATOR AUTHORITY (ruling correction, load-bearing) ──────────────
 //  "Authorized operator" is NOT a shared header key. Identity, property
@@ -109,34 +109,35 @@ function audit(entry) {
 // NOT checked here, deliberately: consent. STOP/opt-out governs whether the
 // product may MESSAGE someone; it has no bearing on whether a lease they
 // signed may be recorded. Recording a fact is not composing an outbound.
-//  CLASS NO LONGER GATES ADMISSION (owner ruling 2026-07-26).
-//  This read has been through three shapes in one day, which is itself the
-//  argument for the ruling:
-//    1. record_class === 'internal_qa'      — deadlocked against the comms
+//  ── THE PERSON CHECK IS GONE (owner ruling 2026-07-26) ───────────────
+//  This read went through four shapes in one day, and the fourth is none:
+//    1. record_class === 'internal_qa'  — deadlocked against the comms
 //       boundary, which demanded 'production' for the same person.
-//    2. a shared allowlist with capability.js — the two gates agreed, but a
-//       field with three jobs still gated whether anything worked.
-//    3. this — class is out of eligibility entirely.
-//  Admission asks the same two questions as every other gate: did they say
-//  yes, and is this property switched on. The property half is already
-//  enforced above by ACTIVATION_PROPERTY_IDS, so what remains here is
-//  consent.
+//    2. a shared class allowlist        — the gates agreed, but a field with
+//       three jobs still decided whether anything worked.
+//    3. consent                          — dissolved the deadlock and created
+//       a worse one: a person who texts STOP could not have their signed
+//       lease recorded. Stopping texts is not declining a tenancy.
+//    4. nothing.
 //
-//  Read failure still fails closed and is still audited distinctly — an
-//  unreadable answer is not a yes.
-async function currentEligibleClass(pool, personId, propertyId) {
-  if (!personId || !propertyId) return { ok: false, read_failed: false };
-  try {
-    const q = await pool.query(
-      `select consent_state from contact_preferences
-        where person_id = $1 and channel = 'text' limit 1`,
-      [personId]);
-    if (q.rows.length === 0) return { ok: false, read_failed: false };
-    return { ok: q.rows[0].consent_state === "opted_in", read_failed: false };
-  } catch (_e) {
-    return { ok: false, read_failed: true };
-  }
-}
+//  RECORDING A SIGNED LEASE IS NOT AN OUTBOUND. Consent governs whether the
+//  product may MESSAGE someone; it has no bearing on whether a lease they
+//  already executed may be written down. Class governs replay and metrics.
+//  Neither answers "may this tenancy be admitted", so neither is asked.
+//
+//  What still gates admission, unchanged and sufficient:
+//    · the dormant-mode kill switch
+//    · an authenticated staff session
+//    · the application's OWN property being activation-allowlisted
+//    · that session holding the leasing module AT that property
+//    · an eligible application status
+//  A person reaches this point only because an operator verified an executed
+//  lease document against their application. That is the real-world gate;
+//  a person-level flag here was never adding one.
+//
+//  If a reason to refuse a specific PERSON a tenancy ever appears, it will be
+//  a tenancy fact — not consent, and not a replay marker. Add it then, named
+//  for what it actually is.
 
 function activationPerimeter({ pool, loadApplication, eligibleStatuses, action, requiredModule }) {
   const eligible = new Set(eligibleStatuses || []);
@@ -211,15 +212,10 @@ function activationPerimeter({ pool, loadApplication, eligibleStatuses, action, 
       return refuse(res);
     }
 
-    // RECORD CLASSIFICATION: current internal_qa for the application's person.
-    // Re-checked every phase. Read failure → refuse, audited distinctly.
-    const cls = await currentEligibleClass(pool, app.person_id, app.property_id);
-    if (!cls.ok) {
-      audit({ actor_user_id: session.id, property_id: app.property_id, application_id: app.id,
-              action: ACTION, decision: "refused",
-              reason: cls.read_failed ? "consent_read_failed" : "no_consent" });
-      return refuse(res);
-    }
+    // No person-level check. See the note above currentEligibleClass's
+    // former home: neither consent nor class answers "may this tenancy be
+    // admitted", so neither is asked. The property, the session and the
+    // application state are the gate.
 
     // ELIGIBLE APPLICATION STATE (final authority is still the handler under lock).
     if (eligible.size > 0 && !eligible.has(app.status)) {
@@ -240,4 +236,4 @@ function activationPerimeter({ pool, loadApplication, eligibleStatuses, action, 
   };
 }
 
-module.exports = { activationPerimeter, activatedPropertyIds, currentEligibleClass };
+module.exports = { activationPerimeter, activatedPropertyIds };
