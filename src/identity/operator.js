@@ -53,6 +53,7 @@ module.exports = function operatorModule(deps) {
   const { renewalsCohort } = require("../leasing/renewals_read");        // R1 renewal-work cohort (read-only, server-authored)
   const { currentRentRoll } = require("../surfaces/rent_roll_canonical");   // canonical Current Rent Roll (migration route)
   const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts"); // factual Future Rent Roll (migration route)
+  const { institutionalRentRoll, institutionalCsv } = require("../surfaces/rent_roll_institutional"); // formal as-of schedule + CSV
   // ── THE ONE CANONICAL TENANCY-ANCHOR SERVICE (Fable ruling) ──────────
   // The SAME countersign + confirm-term implementation applications.js calls.
   // Injected from server.js (built once from the obligation engine). The two
@@ -1203,6 +1204,32 @@ module.exports = function operatorModule(deps) {
       return res.json({ ...out, _migration_route: true });
     } catch (e) {
       // An error is an ERROR, never an empty rent roll.
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/rent-roll/institutional?as_of=&format=json|csv
+  //   The formal as-of schedule for ownership, lenders and reporting. Same
+  //   canonical read as the operating page — reshaped, never recomputed —
+  //   so the page, the print view and the CSV cannot disagree.
+  //   MIGRATION ROUTE, retires with the rest of the migration surface.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/rent-roll/institutional", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const out = await institutionalRentRoll(pool, {
+        property_id: req.operator.property_id,   // session only
+        as_of: req.query.as_of || null,
+      });
+      if (String(req.query.format || "").toLowerCase() === "csv") {
+        const name = `rent-roll_${(out.report.property_name || "property").replace(/[^a-z0-9]+/gi, "-")}_${out.report.as_of}.csv`;
+        res.set("Content-Type", "text/csv; charset=utf-8");
+        res.set("Content-Disposition", `attachment; filename="${name}"`);
+        return res.send(institutionalCsv(out));
+      }
+      return res.json({ ...out, _migration_route: true });
+    } catch (e) {
       return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
     }
   });

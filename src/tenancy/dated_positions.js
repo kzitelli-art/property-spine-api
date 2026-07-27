@@ -147,6 +147,21 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
     `select id from units where property_id=$1 and coalesce(is_down,false)=true`, [property_id]
   )).rows.map((r) => String(r.id)));
 
+  // STRUCTURAL ATTRIBUTES — square footage and the GOVERNED classification
+  // (migration 100). Loaded here rather than in space_position so that the
+  // classifier's output stays byte-identical to its characterization baseline.
+  // unit_type resolves through property_unit_types: a source code is
+  // provenance, never a type, so an unmapped unit reports null and every
+  // surface renders it as not configured.
+  const attrs = new Map((await pool.query(
+    `select s.id as space_id, u.square_feet, s.use_type, s.position_kind,
+            put.code as unit_type_code, put.label as unit_type_label
+       from spaces s
+       join units u on u.id = s.unit_id
+       left join property_unit_types put on put.id = u.unit_type_id
+      where u.property_id = $1`, [property_id]
+  )).rows.map((r) => [String(r.space_id), r]));
+
   const positions = sp.positions.map((p) => {
     const withDown = { ...p, is_down: down.has(String(p.unit_id)) };
     const lease = p.current_lease_position;
@@ -157,7 +172,18 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
       unit_id: p.unit_id,
       unit_number: p.unit_number,        // display only
       space_label: p.space_label,
-      position_kind: p.space_label ? "bed" : "unit",
+      // GOVERNED first, derived only as a fallback: once position_kind is
+      // populated it is the answer; until then the shape of the data is.
+      // A single-space unit is labelled '(whole unit)' in the source — that
+      // sentinel is truthy but it is NOT a bed label, and treating it as one
+      // made every position on a by-unit property report as a bed.
+      position_kind: (attrs.get(String(p.space_id)) || {}).position_kind
+        || (p.space_label && !/whole\s*unit/i.test(p.space_label) ? "bed" : "unit"),
+      square_feet: (attrs.get(String(p.space_id)) || {}).square_feet ?? null,
+      // null until a reviewed mapping receipt creates the governed row.
+      unit_type: (attrs.get(String(p.space_id)) || {}).unit_type_label || null,
+      unit_type_code: (attrs.get(String(p.space_id)) || {}).unit_type_code || null,
+      use_type: (attrs.get(String(p.space_id)) || {}).use_type || null,
 
       // FOUR INDEPENDENT AXES. Each balances within itself. A position may be
       // occupied AND inconclusive AND missing economics — three facts, three

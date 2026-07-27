@@ -39,6 +39,10 @@ const ECONOMICS = ["available", "unavailable", "not_applicable"];
   ok(rr.rows.length === spaces, `one row per SPACE (${rr.rows.length} = ${spaces}), not per import row`);
   ok(new Set(rr.rows.map(r => r.space_id)).size === rr.rows.length, "space_id unique per row - no join, no duplication");
   ok(rr.rows.every(r => r.position_kind === "unit" || r.position_kind === "bed"), "every row declares unit or bed");
+  // Demo is single-space-per-unit, so EVERY position must read as a unit.
+  // The (whole unit) sentinel is truthy and once made all 283 read as beds.
+  ok(rr.rows.every(r => r.position_kind === "unit"),
+    "a single-space property reports units, not beds - the (whole unit) sentinel is not a bed label");
   ok(rr.rows.every(r => r.space_id && r.unit_id), "durable ids on every row");
 
   console.log("\n== BLOCK B - four independent axes, each balancing within itself ==");
