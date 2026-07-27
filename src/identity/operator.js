@@ -1418,6 +1418,41 @@ module.exports = function operatorModule(deps) {
     } catch (e) { return res.status(500).json({ error: "authority view unavailable" }); }
   });
 
+  // ── Governed economic terms. All READ-ONLY. ─────────────────────
+  router.get("/operator/economics/charges", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { governedCharges } = require("../money/governed_charges");
+      return res.json(await governedCharges(pool, {
+        property_id: req.operator.property_id,
+        as_of: req.query.as_of || null,
+        include_drafts: req.query.include_drafts === "1",
+      }));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
+  router.get("/operator/economics/fact-migration-preview", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { factMigrationPreview } = require("../money/fact_migration_preview");
+      return res.json(await factMigrationPreview(pool, { property_id: req.operator.property_id }));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // The dark economic adapter's answer, for REVIEW only. Nothing about this
+  // route changes what the live agent says — it does not call the adapter.
+  router.get("/operator/economics/adapter-preview", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { economicAnswer } = require("../agent/economic_adapter");
+      return res.json(await economicAnswer(pool, {
+        property_id: req.operator.property_id,
+        unit_type_id: req.query.unit_type_id || null,
+        intent: req.query.intent || "new_lease",
+      }));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
   router.get("/operator/pricing/history", requireOperator, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
