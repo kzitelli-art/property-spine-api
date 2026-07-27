@@ -81,20 +81,29 @@ function band(days) {
   return days < 30 ? "d0_30" : days < 60 ? "d31_60" : "d61_90";
 }
 
-async function renewalsCohort(pool, { property_id, horizon_days = DEFAULT_HORIZON_DAYS } = {}) {
+async function renewalsCohort(pool, { property_id, horizon_days = DEFAULT_HORIZON_DAYS, as_of = null } = {}) {
   if (!property_id) throw new Error("renewalsCohort requires property_id");
   const horizon = Number.isFinite(Number(horizon_days)) ? Number(horizon_days) : DEFAULT_HORIZON_DAYS;
 
   // THE SHARED TRUTH. Everything positional comes from here.
-  const sp = await spacePosition(pool, { property_id });
-  const asOf = sp.as_of;
+  // as_of is passed EXPLICITLY rather than relying on the default: the shared
+  // derivation is dated, and the same call must serve a future horizon later
+  // without the caller's date silently coming from the server clock.
+  const asOf = as_of || new Date().toISOString().slice(0, 10);
+  const sp = await spacePosition(pool, { property_id, as_of: asOf });
   const horizonEnd = ymd(new Date(new Date(`${asOf}T00:00:00Z`).getTime() + horizon * 86400000));
 
   // Presentation-only context: the Person Card thread for this resident at
   // this property. Not a shared fact — nothing else classifies on it.
+  // DETERMINISTIC AND MEANINGFUL: the most recently active conversation, not
+  // min(id), which was an arbitrary tie-break dressed as a choice. A resident
+  // with several threads should open the one they are actually in. id is the
+  // final tie-break so the result is stable between reads.
   const convRows = (await pool.query(
-    `select person_id, min(id::text) as conversation_id
-       from conversations where property_id=$1 and person_id is not null group by person_id`,
+    `select distinct on (person_id) person_id, id::text as conversation_id
+       from conversations
+      where property_id=$1 and person_id is not null
+      order by person_id, last_message_at desc nulls last, created_at desc, id desc`,
     [property_id]
   )).rows;
   const convByPerson = new Map(convRows.map((r) => [String(r.person_id), r.conversation_id]));
