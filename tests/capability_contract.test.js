@@ -52,54 +52,63 @@ function testDecision() {
   section("A · the decision");
   const D = capability.decideApplicationLinkBirth;
 
-  const off = D({ enabled: false, property_allowlisted: true, person_id: "p", record_class: "internal_qa" });
+  const off = D({ enabled: false, property_allowlisted: true, person_id: "p", consent_state: "opted_in" });
   ok("A1. environment switch off denies, whatever the person is",
     off.allowed === false && off.reason_code === "APPLICATION_LINK_DISABLED", JSON.stringify(off));
 
-  const notProp = D({ enabled: true, property_allowlisted: false, person_id: "p", record_class: "internal_qa" });
+  const notProp = D({ enabled: true, property_allowlisted: false, person_id: "p", consent_state: "opted_in" });
   ok("A2. an unlisted property denies",
     notProp.allowed === false && notProp.reason_code === "PROPERTY_NOT_ACTIVATED");
 
-  // A3 is the assertion that encodes the ruling. It must FAIL against the
-  // pre-merge code, which denied production with RECORD_NOT_CLASSIFIED.
-  // If this passes on old code the file is testing nothing.
-  const prod = D({ enabled: true, property_allowlisted: true, person_id: "p", record_class: "production" });
-  ok("A3. THE RULING — a production person is allowed, same class the comms boundary requires",
-    prod.allowed === true, JSON.stringify(prod));
+  // A3 encodes the ruling: eligibility is consent + property, and CLASS IS
+  // NOT CONSULTED AT ALL. It fails against every previous shape of this
+  // gate, each of which demanded a record_class.
+  const consented = D({ enabled: true, property_allowlisted: true, person_id: "p", consent_state: "opted_in" });
+  ok("A3. THE RULING — consent at an activated property is the whole test; class is not consulted",
+    consented.allowed === true, JSON.stringify(consented));
 
-  const none = D({ enabled: true, property_allowlisted: true, person_id: "p", record_class: null });
-  ok("A4. an UNCLASSIFIED person denies — absence of a decision is not permission",
-    none.allowed === false && none.reason_code === "RECORD_NOT_CLASSIFIED", JSON.stringify(none));
+  const none = D({ enabled: true, property_allowlisted: true, person_id: "p", consent_state: null });
+  ok("A4. NO consent row denies — absence is refusal, never 'undecided, so proceed'",
+    none.allowed === false && none.reason_code === "NO_CONSENT", JSON.stringify(none));
 
-  const qa = D({ enabled: true, property_allowlisted: true, person_id: "p", record_class: "internal_qa" });
-  ok("A5. an internal_qa person is still allowed — the QA harness chain runs on these",
-    qa.allowed === true, JSON.stringify(qa));
+  // THE ONE THAT PROTECTS PEOPLE. Taking class out of this gate must not have
+  // taken consent with it. A person who said STOP is refused HERE, so the
+  // board never offers a Send the transport would refuse.
+  const stopped = D({ enabled: true, property_allowlisted: true, person_id: "p", consent_state: "opted_out" });
+  ok("A5. an OPTED-OUT person is refused — unbundling did not widen consent",
+    stopped.allowed === false && stopped.reason_code === "NO_CONSENT", JSON.stringify(stopped));
 
-  // The eligible set is an ALLOWLIST. The tempting shape of this fix —
-  // "deny only when the classification is missing" — passes A3/A4/A5 and
-  // fails here, which is the whole reason this case exists.
-  const bogus = D({ enabled: true, property_allowlisted: true, person_id: "p", record_class: "vendor" });
-  ok("A5b. a class nobody named is NOT eligible — the gate allowlists, it does not merely require presence",
-    bogus.allowed === false && bogus.reason_code === "RECORD_NOT_CLASSIFIED", JSON.stringify(bogus));
+  const junk = D({ enabled: true, property_allowlisted: true, person_id: "p", consent_state: "maybe" });
+  ok("A5b. only the exact word 'opted_in' passes — an unrecognised value is not consent",
+    junk.allowed === false, JSON.stringify(junk));
 
-  const blank = D({ enabled: true, property_allowlisted: true, person_id: "p", record_class: "" });
-  ok("A5c. an empty classification is not a classification",
-    blank.allowed === false, JSON.stringify(blank));
+  const blank = D({ enabled: true, property_allowlisted: true, person_id: "p", consent_state: "" });
+  ok("A5c. an empty consent value is not consent", blank.allowed === false, JSON.stringify(blank));
 
-  // Order matters: a production person at an unlisted property must still be
-  // refused BY THE PROPERTY, not admitted by the newly-widened person check.
-  ok("A5d. widening the person check did not widen the property allowlist",
-    D({ enabled: true, property_allowlisted: false, person_id: "p", record_class: "production" }).reason_code
+  // The property wall and the kill switch are the other two things this
+  // change must not have loosened. Both run BEFORE the person check, so a
+  // fully consented person must still be refused by each.
+  ok("A5d. unbundling did not widen the property wall",
+    D({ enabled: true, property_allowlisted: false, person_id: "p", consent_state: "opted_in" }).reason_code
       === "PROPERTY_NOT_ACTIVATED");
-  ok("A5e. widening the person check did not defeat the kill switch",
-    D({ enabled: false, property_allowlisted: true, person_id: "p", record_class: "production" }).reason_code
+  ok("A5e. unbundling did not defeat the kill switch",
+    D({ enabled: false, property_allowlisted: true, person_id: "p", consent_state: "opted_in" }).reason_code
       === "APPLICATION_LINK_DISABLED");
 
-  ok("A6. every denial carries a human reason, never a bare refusal",
-    [off, notProp, none, bogus, blank].every((v) => typeof v.display_reason === "string" && v.display_reason.length > 10));
+  // A record_class arriving on this call must change NOTHING. If someone
+  // reintroduces class here later, this is the assertion that catches it.
+  const withClass = D({ enabled: true, property_allowlisted: true, person_id: "p",
+                        consent_state: "opted_in", record_class: "whatever" });
+  const withoutClass = D({ enabled: true, property_allowlisted: true, person_id: "p", consent_state: "opted_in" });
+  ok("A5f. passing a record_class changes nothing — the field is out of this decision",
+    withClass.allowed === withoutClass.allowed && withClass.reason_code === withoutClass.reason_code,
+    JSON.stringify({ withClass, withoutClass }));
 
-  ok("A6b. no denial still tells an operator 'test records only' — that sentence is no longer true",
-    !Object.values(capability.REASONS).some((r) => /test record/i.test(r)),
+  ok("A6. every denial carries a human reason, never a bare refusal",
+    [off, notProp, none, stopped, blank].every((v) => typeof v.display_reason === "string" && v.display_reason.length > 10));
+
+  ok("A6b. classification vocabulary has left the operator-facing reasons entirely",
+    !Object.values(capability.REASONS).some((r) => /test record|classif/i.test(r)),
     JSON.stringify(Object.values(capability.REASONS)));
 
   ok("A7. no display reason leaks an environment variable name",
@@ -116,8 +125,8 @@ function testNormalizer() {
     ...base,
     send_application_capability: {
       action: "send_application", allowed: false,
-      reason_code: "RECORD_NOT_CLASSIFIED",
-      display_reason: capability.REASONS.RECORD_NOT_CLASSIFIED,
+      reason_code: "NO_CONSENT",
+      display_reason: capability.REASONS.NO_CONSENT,
     },
   });
   ok("B1. a held action keeps the verb the operator would press, disabled",
@@ -126,9 +135,9 @@ function testNormalizer() {
   ok("B1b. HELD is not the same truth as UNSUPPORTED — the app can do this, policy holds it",
     denied.kind !== "unsupported");
   ok("B2. it carries the operator-facing reason",
-    denied.reason === capability.REASONS.RECORD_NOT_CLASSIFIED, denied.reason);
+    denied.reason === capability.REASONS.NO_CONSENT, denied.reason);
   ok("B3. it carries the machine reason code for logs",
-    denied.reason_code === "RECORD_NOT_CLASSIFIED");
+    denied.reason_code === "NO_CONSENT");
 
   const allowed = desk.normalizeFollowupAction({
     ...base,
@@ -169,10 +178,20 @@ async function testAgreement() {
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const mk = async (name, cls) => {
+    // Fixtures now vary CONSENT, not class — the field this gate actually
+    // reads. A classification is written on one of them ON PURPOSE, to prove
+    // it makes no difference either way.
+    const mk = async (name, consent, cls = null) => {
       const p = (await client.query(
         `insert into persons (name, lifecycle_status, leasing_stage, source)
          values ($1,'prospect','inquiry','harness') returning id`, [name])).rows[0];
+      if (consent) {
+        await client.query(
+          `insert into contact_preferences (person_id, channel, consent_state, source, updated_at)
+           values ($1,'text',$2,'harness',now())
+           on conflict (person_id, channel) do update set consent_state = excluded.consent_state`,
+          [p.id, consent]);
+      }
       if (cls) {
         await client.query(
           `insert into person_property_classifications
@@ -181,10 +200,10 @@ async function testAgreement() {
       }
       return p.id;
     };
-    const qaId   = await mk("Cap QA", "internal_qa");
-    const prodId = await mk("Cap Prod", "production");
-    const noneId = await mk("Cap None", null);
-    const ids = [qaId, prodId, noneId];
+    const inId    = await mk("Cap OptedIn", "opted_in");
+    const outId   = await mk("Cap OptedOut", "opted_out", "production");
+    const noneId  = await mk("Cap NoConsent", null, "internal_qa");
+    const ids = [inId, outId, noneId];
 
     const batch = await capability.evaluateApplicationLinkBirthBatch(client, {
       property_id: DEMO_PROPERTY_ID, person_ids: ids,
@@ -211,18 +230,25 @@ async function testAgreement() {
     ok("C1. THE ONE THAT MATTERS — the board verdict equals the route verdict for every person",
       agree, detail);
 
-    const bQa = batch.get(String(qaId));
-    ok("C2. the batch read resolves a real classification, not a default",
-      !!bQa && typeof bQa.allowed === "boolean", JSON.stringify(bQa));
+    const bIn = batch.get(String(inId));
+    ok("C2. the batch read resolves a real consent row, not a default",
+      !!bIn && typeof bIn.allowed === "boolean", JSON.stringify(bIn));
 
-    ok("C3. an unclassified person is denied in the batch path too",
+    ok("C3. a person with NO consent row is denied in the batch path too",
       batch.get(String(noneId)) && batch.get(String(noneId)).allowed === false);
 
-    // C4 is A3 again, but through a real classification row read out of real
+    // C4 is A3 again, but through a real consent row read out of real
     // Postgres by the board's batch query — the path the Send button uses.
-    const bProd = batch.get(String(prodId));
-    ok("C4. THE RULING, ON REAL DATA — a production person's board row offers Send",
-      !!bProd && bProd.allowed === true, JSON.stringify(bProd));
+    ok("C4. THE RULING, ON REAL DATA — a consented person's board row offers Send",
+      !!bIn && bIn.allowed === true, JSON.stringify(bIn));
+
+    // THE PROTECTION, ON REAL DATA. This person carries a 'production'
+    // classification — the very class that used to be the ticket in — and is
+    // still refused, because they said stop. Class opens nothing; consent
+    // closes everything.
+    const bOut = batch.get(String(outId));
+    ok("C5. an opted-out person is refused on real data, production class notwithstanding",
+      !!bOut && bOut.allowed === false && bOut.reason_code === "NO_CONSENT", JSON.stringify(bOut));
   } catch (e) {
     failed++; lines.push(`  FAIL  harness threw: ${e.message}`);
   } finally {

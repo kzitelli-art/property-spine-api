@@ -49,8 +49,8 @@ const REASONS = {
     "Application links aren't switched on yet.",
   PROPERTY_NOT_ACTIVATED:
     "Application links aren't switched on for this property yet.",
-  RECORD_NOT_CLASSIFIED:
-    "This person hasn't been classified for this property yet.",
+  NO_CONSENT:
+    "This person hasn't agreed to be contacted yet.",
   PERSON_UNKNOWN:
     "No person is connected to this work yet.",
 };
@@ -68,25 +68,29 @@ function envList(name) {
 //  the projection land here, which is what makes them agree by
 //  construction rather than by discipline.
 //
-//  `record_class` semantics: null means the person carries no current
-//  classification. That is treated as NOT eligible — the absence of a
-//  decision is not permission. That rule survived the end of controlled
-//  activation, because it was never about being careful with real people;
-//  it is about refusing to act on an ungoverned record.
+//  ── CLASS NO LONGER GATES ELIGIBILITY (owner ruling 2026-07-26) ──────
+//  This gate used to require a record_class. So did the tenancy admission
+//  perimeter, and so did the comms boundary — in the OPPOSITE direction.
+//  One field was deciding three independent things, two of them
+//  contradicting each other, which is why every unjammed gate jammed again
+//  one step deeper.
 //
-//  ELIGIBLE_RECORD_CLASSES is an ALLOWLIST, deliberately. The obvious
-//  version of this change — "deny only when the classification is missing"
-//  — would silently admit every class invented after today. A class earns
-//  application eligibility by being named here.
+//  Eligibility now asks the only two questions that describe reality:
+//    · did this person say yes?          (consent)
+//    · is this property switched on?     (env allowlist)
+//  Class is out of it entirely. It goes back to one job — marking replay
+//  runs so they do not pollute the numbers — which is bookkeeping, not
+//  permission.
 //
-//  Both members are load-bearing. `production` is the point of the merge:
-//  the comms boundary already requires `production` to text a person at
-//  all, so any other eligible class here would be a person who can receive
-//  an application and can never be sent it. `internal_qa` stays because
-//  six harnesses and the QA Lifecycle Tester chain run on QA records.
-const ELIGIBLE_RECORD_CLASSES = ["production", "internal_qa"];
-
-function decideApplicationLinkBirth({ enabled, property_allowlisted, person_id, record_class }) {
+//  CONSENT IS CHECKED HERE ON PURPOSE, not left to the send. The
+//  application link goes out by SMS, so the comms boundary would refuse an
+//  opted-out recipient anyway — but refusing at send time while the board
+//  shows a live Send button is exactly the phantom dispatch Rule 9 forbids.
+//  The button must know what the transport knows.
+//
+//  Absence is refusal, unchanged: no consent row means no, never "not yet
+//  decided, so proceed".
+function decideApplicationLinkBirth({ enabled, property_allowlisted, person_id, consent_state }) {
   const deny = (code) => ({
     action: ACTION_APPLICATION_LINK,
     allowed: false,
@@ -97,10 +101,9 @@ function decideApplicationLinkBirth({ enabled, property_allowlisted, person_id, 
   if (!enabled) return deny("APPLICATION_LINK_DISABLED");
   if (!property_allowlisted) return deny("PROPERTY_NOT_ACTIVATED");
   // A person is optional at the gate's original call site (some routes pass
-  // none), but a board row that offers Send always has one. When an id is
-  // supplied the classification must be present and must be eligible.
+  // none), but a board row that offers Send always has one.
   if (person_id) {
-    if (!ELIGIBLE_RECORD_CLASSES.includes(record_class)) return deny("RECORD_NOT_CLASSIFIED");
+    if (consent_state !== "opted_in") return deny("NO_CONSENT");
   }
   return {
     action: ACTION_APPLICATION_LINK,
@@ -110,12 +113,15 @@ function decideApplicationLinkBirth({ enabled, property_allowlisted, person_id, 
   };
 }
 
-const CLASSIFICATION_SQL = `
-  select person_id, record_class
-    from person_property_classifications
-   where property_id = $1
-     and person_id = any($2::uuid[])
-     and superseded_at is null`;
+// Consent is per PERSON and per CHANNEL — deliberately not per property.
+// contact_preferences is the one revocation home, so a STOP reaches every
+// property at once. Scoping it per property would let a person who said stop
+// keep receiving from the building next door.
+const CONSENT_SQL = `
+  select person_id, consent_state
+    from contact_preferences
+   where channel = 'text'
+     and person_id = any($1::uuid[])`;
 
 // ── ONE PERSON — what a write route needs ───────────────────────────
 async function evaluateApplicationLinkBirth(q, { property_id, person_id = null }) {
@@ -126,15 +132,15 @@ async function evaluateApplicationLinkBirth(q, { property_id, person_id = null }
   // Short-circuit before touching the database: an environment-level or
   // property-level refusal does not depend on who the person is.
   if (!enabled || !property_allowlisted) {
-    return decideApplicationLinkBirth({ enabled, property_allowlisted, person_id, record_class: null });
+    return decideApplicationLinkBirth({ enabled, property_allowlisted, person_id, consent_state: null });
   }
 
-  let record_class = null;
+  let consent_state = null;
   if (person_id) {
-    const r = await q.query(CLASSIFICATION_SQL, [property_id, [person_id]]);
-    record_class = (r.rows[0] && r.rows[0].record_class) || null;
+    const r = await q.query(CONSENT_SQL, [[person_id]]);
+    consent_state = (r.rows[0] && r.rows[0].consent_state) || null;
   }
-  return decideApplicationLinkBirth({ enabled, property_allowlisted, person_id, record_class });
+  return decideApplicationLinkBirth({ enabled, property_allowlisted, person_id, consent_state });
 }
 
 // ── MANY PEOPLE — what a board projection needs ─────────────────────
@@ -150,36 +156,37 @@ async function evaluateApplicationLinkBirthBatch(q, { property_id, person_ids = 
   const ids = [...new Set((person_ids || []).filter(Boolean).map(String))];
   if (!enabled || !property_allowlisted) {
     for (const id of ids) {
-      out.set(id, decideApplicationLinkBirth({ enabled, property_allowlisted, person_id: id, record_class: null }));
+      out.set(id, decideApplicationLinkBirth({ enabled, property_allowlisted, person_id: id, consent_state: null }));
     }
     // The environment-level verdict, for rows that carry no person.
-    out.set(null, decideApplicationLinkBirth({ enabled, property_allowlisted, person_id: null, record_class: null }));
+    out.set(null, decideApplicationLinkBirth({ enabled, property_allowlisted, person_id: null, consent_state: null }));
     return out;
   }
 
   const byPerson = new Map();
   if (ids.length) {
-    const r = await q.query(CLASSIFICATION_SQL, [property_id, ids]);
-    for (const row of r.rows) byPerson.set(String(row.person_id), row.record_class);
+    const r = await q.query(CONSENT_SQL, [ids]);
+    for (const row of r.rows) byPerson.set(String(row.person_id), row.consent_state);
   }
   for (const id of ids) {
     out.set(id, decideApplicationLinkBirth({
-      enabled, property_allowlisted, person_id: id, record_class: byPerson.get(id) || null,
+      enabled, property_allowlisted, person_id: id, consent_state: byPerson.get(id) || null,
     }));
   }
-  out.set(null, decideApplicationLinkBirth({ enabled, property_allowlisted, person_id: null, record_class: null }));
+  out.set(null, decideApplicationLinkBirth({ enabled, property_allowlisted, person_id: null, consent_state: null }));
   return out;
 }
 
 module.exports = {
   ACTION_APPLICATION_LINK,
   REASONS,
-  // Exported so the tenancy activation perimeter can enforce the SAME set.
-  // Application eligibility and admission eligibility are different questions
-  // and stay different functions — but if they disagree about which classes
-  // are eligible, a real prospect can be sent an application and can never
-  // become a resident. One list, two readers.
-  ELIGIBLE_RECORD_CLASSES,
+  // ELIGIBLE_RECORD_CLASSES is gone. It existed for a few hours on
+  // 2026-07-26 as a shared allowlist so this gate and the tenancy admission
+  // perimeter could not disagree about which CLASSES were eligible. The
+  // ruling that followed removed class from eligibility altogether, so the
+  // list has nothing left to agree about. Both gates now ask consent +
+  // property, which is one answer for everyone by construction rather than
+  // by keeping two lists in step.
   decideApplicationLinkBirth,
   evaluateApplicationLinkBirth,
   evaluateApplicationLinkBirthBatch,
