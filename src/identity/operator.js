@@ -50,6 +50,7 @@ module.exports = function operatorModule(deps) {
   const { rankTurnPriority } = require("../maintenance/turn_priority"); // shared Turn-Priority ranking (slice 1)
   const { buildReviewList, buildReviewDetail } = require("../applications/application_review"); // application review reads (slice 2)
   const { loadLeasingDesk } = require("../leasing/leasing_desk_loader"); // Leasing Desk composition (one repeatable-read snapshot)
+  const { renewalsCohort } = require("../leasing/renewals_read");        // R1 renewal-work cohort (read-only, server-authored)
   // ── THE ONE CANONICAL TENANCY-ANCHOR SERVICE (Fable ruling) ──────────
   // The SAME countersign + confirm-term implementation applications.js calls.
   // Injected from server.js (built once from the obligation engine). The two
@@ -1175,6 +1176,37 @@ module.exports = function operatorModule(deps) {
   // the source of truth). DISPATCH deliberately does not live here — actually
   // sending the follow-up stays behind the Twilio wall; this read tells a
   // human what is due, it never texts anyone.
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/leasing/renewals — R1: THE LIVE RENEWAL-WORK COHORT.
+  //
+  // Which leases need renewal attention in the next 90 days? Session-scoped,
+  // server-authored, read-only. The property is the SESSION's property — a
+  // client-supplied property_id is never authority (§21) and is ignored here.
+  //
+  // Fixed 90-day horizon for conventional multifamily V1: no date controls,
+  // deliberately. The horizon is a product decision, not a user input, until
+  // student-housing cycle dates arrive.
+  //
+  // The cohort, its ordering, its notice state and its proof basis are all
+  // computed in the service (src/leasing/renewals_read.js). This route only
+  // authorizes and returns. Nothing here writes.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/leasing/renewals", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const out = await renewalsCohort(pool, {
+        property_id: req.operator.property_id,   // session only — never req.query
+        horizon_days: 90,
+      });
+      const asOf = (await pool.query("select current_date as d")).rows[0].d;
+      return res.json({ ...out, as_of: asOf instanceof Date ? asOf.toISOString().slice(0, 10) : String(asOf) });
+    } catch (e) {
+      // An error is an ERROR, never an empty cohort. "Could not look" must
+      // never render as "nothing needs attention" (§5).
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    }
+  });
+
   router.get("/operator/leasing/follow-ups", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
