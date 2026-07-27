@@ -88,6 +88,30 @@ const PROFILES = {
     storable_today: true,
     storage_note: "concession_policies with timing_profile='fixed_monthly_discount' and duration_months set.",
   },
+  // ── legacy calendar vocabulary (migration 062) ────────────────────
+  // Listed rather than treated as unknown. They are real, declared profiles
+  // that the concession vocabulary still accepts; they are simply not
+  // implementable for the same reason free_rent_period is not. Returning
+  // "unknown profile" for them would misreport a known gap as a typo.
+  first_full_month: {
+    implemented: false, legacy: true,
+    required_inputs: ["lease_start", "base_rent", "PRORATION RULE"],
+    missing_primitive: "proration_basis",
+    missing_detail: "Relative to a lease that does not begin on the 1st, 'the first full month' " +
+      "identifies a month but not the amount, because the partial month before it has no declared " +
+      "proration basis.",
+    applies_to: ["new_lease", "renewal"], storable_today: true,
+  },
+  third_full_month: { implemented: false, legacy: true, missing_primitive: "proration_basis",
+    missing_detail: "Same gap as first_full_month.", applies_to: ["new_lease", "renewal"], storable_today: true },
+  final_full_month: { implemented: false, legacy: true, missing_primitive: "proration_basis",
+    missing_detail: "Same gap, plus it depends on an end date that early termination can move.",
+    applies_to: ["new_lease", "renewal"], storable_today: true },
+  monthly_scheduled_credit: { implemented: false, legacy: true, missing_primitive: "schedule_source",
+    missing_detail: "A per-month schedule needs a declared source for the amounts; the vocabulary " +
+      "carries a single value and no schedule. fixed_monthly_discount is the implemented form of this shape.",
+    applies_to: ["new_lease", "renewal"], storable_today: true },
+
   free_rent_period: {
     implemented: false,
     required_inputs: ["lease_start", "lease_end", "base_rent", "free period start", "free period end", "PRORATION RULE"],
