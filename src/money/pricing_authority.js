@@ -55,20 +55,39 @@ const DENY = (reason) => ({
  * Resolve the four verbs. READ-ONLY.
  * @returns { person_id, name, <four booleans>, basis:{verb: source|null}, denied_reason }
  */
+// MIGRATED TO THE CANONICAL ACTOR CONTEXT. Pricing no longer resolves a
+// session to a human — resolveActorContext does, once, for every governed
+// surface. What remains here is the person-keyed form used by constructed
+// tests and by callers that already hold a person id.
+const { resolveActorContext } = require("../identity/actor_context");
+
 async function pricingAuthority(pool, { property_id, person_id, user_id = null } = {}) {
   if (!property_id) return DENY("no_property_context");
 
-  // A SESSION identifies a `users` row. Authority is held by a `persons` row.
-  // The only honest bridge is users.person_id. Matching on NAME would be the
-  // same label-join that has been removed from every other surface, and here
-  // it would be worse: the property has two "Jordan Avery (demo)" person rows,
-  // one holding the owner assignment and one not. A name match would hand
-  // publish authority to whichever row sorted first.
+  // A session identifies a `users` row; authority is held by a `persons` row.
+  // Resolution is delegated rather than repeated, so there is exactly one
+  // place in the system that decides who a signed-in operator is.
   if (!person_id && user_id) {
-    const u = (await pool.query("select person_id from users where id=$1 and is_active=true", [user_id])).rows[0];
-    if (!u) return DENY("user_not_found");
-    if (!u.person_id) return DENY("session_identity_not_linked_to_a_person");
-    person_id = u.person_id;
+    const ctx = await resolveActorContext(pool, { property_id, user_id });
+    if (!ctx.ok) return DENY(ctx.failure_reason || "actor_context_unresolved");
+    return {
+      person_id: ctx.person.person_id,
+      name: ctx.person.display_name,
+      may_prepare_pricing: ctx.capabilities.may_prepare_pricing,
+      may_review_pricing: ctx.capabilities.may_review_pricing,
+      may_publish_pricing: ctx.capabilities.may_publish_pricing,
+      may_manage_concession_authority: ctx.capabilities.may_manage_concession_authority,
+      basis: {
+        may_prepare_pricing: ctx.basis.may_prepare_pricing,
+        may_review_pricing: ctx.basis.may_review_pricing,
+        may_publish_pricing: ctx.basis.may_publish_pricing,
+        may_manage_concession_authority: ctx.basis.may_manage_concession_authority,
+      },
+      denied_reason: ctx.failure_reason,
+      // Carried so every downstream receipt can name BOTH identities.
+      session_user_id: ctx.user.user_id,
+      link_status: ctx.link_status,
+    };
   }
   if (!person_id) return DENY("no_person_identified");
 

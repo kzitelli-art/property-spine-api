@@ -1303,6 +1303,47 @@ module.exports = function operatorModule(deps) {
   // EXCEPT save-draft and review, which write only draft/receipt rows that
   // no consumer reads. There is deliberately NO publish route mounted.
   // ══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/actor-context
+  //   WHO THE SIGNED-IN OPERATOR IS AS A HUMAN ACTOR. The canonical read
+  //   for every surface that needs to know whether a person may act.
+  //   Internal ids are returned only where a client legitimately needs to
+  //   correlate; display uses names and reasons.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/actor-context", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { resolveActorContext } = require("./actor_context");
+      const ctx = await resolveActorContext(pool, {
+        user_id: req.operator.id,                 // SESSION ONLY
+        property_id: req.operator.property_id,    // SESSION ONLY
+      });
+      return res.json({
+        signed_in_user: ctx.user ? { display_name: ctx.user.display_name,
+          login_identifier: ctx.user.login_identifier, account_kind: ctx.user.account_kind } : null,
+        linked_person: ctx.person
+          ? { display_name: ctx.person.display_name, lifecycle_status: ctx.person.lifecycle_status }
+          : null,
+        link_status: ctx.link_status,
+        property: { property_id: ctx.property_id, name: req.operator.property_name || null },
+        property_entitlement: ctx.property_entitlement,
+        assignments: (ctx.assignments || []).map((a) => a.role),
+        capabilities: ctx.capabilities,
+        denied_because: ctx.failure_reason,
+        capability_denied_reason: Object.keys(ctx.capabilities || {}).reduce((o, k) => {
+          if (!ctx.capabilities[k]) {
+            o[k] = ctx.link_status !== "linked"
+              ? "This login is not linked to a verified person, so no person-governed action is permitted."
+              : "No active owner/asset-manager assignment or explicit grant for this verb on this property.";
+          }
+          return o;
+        }, {}),
+        reconciliation_required: ctx.reconciliation_required,
+        identity_provenance: ctx.identity_provenance,
+      });
+    } catch (e) { return res.status(500).json({ error: "actor context unavailable" }); }
+  });
+
   router.get("/operator/pricing/authority", requireOperator, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {

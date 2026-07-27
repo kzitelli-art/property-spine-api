@@ -143,6 +143,9 @@ async function saveDraft(pool, { property_id, person_id, user_id = null, proposa
     return {
       draft_version_id: versionId,
       status: "draft",
+      actor: { session_user_id: auth.session_user_id || null, acting_person_id: auth.person_id,
+               property_id, verb: 'may_prepare_pricing', authority_basis: auth.basis.may_prepare_pricing,
+               link_status: auth.link_status || 'person_supplied' },
       operating_effect: "none",
       operating_effect_detail:
         "Draft rows are invisible to effectivePropertyPricing, the AI adapter, Renewals and the " +
@@ -190,6 +193,9 @@ async function submitReview(pool, { property_id, person_id, user_id = null, draf
     reviewed_at: row.reviewed_at,
     reviewed_by: { person_id: auth.person_id, name: auth.name },
     decision, proposal_digest: digest,
+    actor: { session_user_id: auth.session_user_id || null, acting_person_id: auth.person_id,
+               property_id, verb: 'may_review_pricing', authority_basis: auth.basis.may_review_pricing,
+               link_status: auth.link_status || 'person_supplied' },
     would_publish: preview.would_publish,
     authority_basis: auth.basis,
     retention: "append_only_survives_draft_replacement",
@@ -269,11 +275,17 @@ async function publishVersion(pool, {
       await client.query("rollback");
       return { published: false, dry_run: true, would_have_published: draft_version_id,
                supersedes: prior ? prior.id : null, authority_basis: auth.basis,
+      actor: { session_user_id: auth.session_user_id || null, acting_person_id: auth.person_id,
+               property_id, verb: 'may_publish_pricing', authority_basis: auth.basis.may_publish_pricing,
+               link_status: auth.link_status || 'person_supplied', reviewed_proposal_digest: digest },
                note: "Executed against live constraints and triggers, then rolled back. No row was published." };
     }
     await client.query("commit");
     return { published: true, version_id: draft_version_id, supersedes: prior ? prior.id : null,
-             review_receipt_id, authority_basis: auth.basis };
+             review_receipt_id, authority_basis: auth.basis,
+      actor: { session_user_id: auth.session_user_id || null, acting_person_id: auth.person_id,
+               property_id, verb: 'may_publish_pricing', authority_basis: auth.basis.may_publish_pricing,
+               link_status: auth.link_status || 'person_supplied', reviewed_proposal_digest: digest }, };
   } catch (err) {
     await client.query("rollback").catch(() => {});
     throw err;
