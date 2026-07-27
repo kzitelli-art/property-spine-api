@@ -51,7 +51,8 @@ module.exports = function operatorModule(deps) {
   const { buildReviewList, buildReviewDetail } = require("../applications/application_review"); // application review reads (slice 2)
   const { loadLeasingDesk } = require("../leasing/leasing_desk_loader"); // Leasing Desk composition (one repeatable-read snapshot)
   const { renewalsCohort } = require("../leasing/renewals_read");        // R1 renewal-work cohort (read-only, server-authored)
-  const { currentRentRoll } = require("../surfaces/rent_roll_canonical"); // canonical Current Rent Roll (migration route)
+  const { currentRentRoll } = require("../surfaces/rent_roll_canonical");   // canonical Current Rent Roll (migration route)
+  const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts"); // factual Future Rent Roll (migration route)
   // ── THE ONE CANONICAL TENANCY-ANCHOR SERVICE (Fable ruling) ──────────
   // The SAME countersign + confirm-term implementation applications.js calls.
   // Injected from server.js (built once from the obligation engine). The two
@@ -1202,6 +1203,27 @@ module.exports = function operatorModule(deps) {
       return res.json({ ...out, _migration_route: true });
     } catch (e) {
       // An error is an ERROR, never an empty rent roll.
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/rent-roll/future-facts?as_of=YYYY-MM-DD
+  //   MIGRATION ROUTE. The same canonical positions read at a selected
+  //   future date, CONTRACTUAL FACTS ONLY. No pricing, no assumptions, no
+  //   projected occupancy, no renewal rate. The Expected Future Rent Roll
+  //   is a later calculation over these same rows, not a change to them.
+  //   Retires with the rest of the migration surface.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/rent-roll/future-facts", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const out = await futureRentRollFacts(pool, {
+        property_id: req.operator.property_id,   // session only
+        as_of: req.query.as_of || null,
+      });
+      return res.json({ ...out, _migration_route: true });
+    } catch (e) {
       return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
     }
   });
