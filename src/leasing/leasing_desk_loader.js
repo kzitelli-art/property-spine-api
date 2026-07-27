@@ -322,15 +322,54 @@ async function loadLeasingDesk(deps, propertyId, opts) {
     const followupRows = await loadFollowupRows(client, propertyId, deps);
     const recentlyClosedRows = await loadRecentlyClosed(client, propertyId, windowHours, deps);
 
+    // ── TEST RECORDS ARE NOT WORK ────────────────────────────────────
+    //  `internal_qa` means the RECORD is a test context — Fable's ruling,
+    //  and the same invariant the analytics exclusion already relies on
+    //  (counting QA fixtures once produced a fake 88% tour cliff). The desk
+    //  was the one surface that never applied it, so harness fixtures sat
+    //  in the same list as real prospects with no way to tell them apart.
+    //
+    //  Read INSIDE the snapshot so classification cannot tear against the
+    //  rows it filters.
+    //
+    //  CONSEQUENCE, stated because it is not obvious: a REAL person still
+    //  classified internal_qa disappears from this desk. That is the
+    //  classification meaning what it says. If they belong here, the fix is
+    //  to classify them production — not to widen this filter.
+    //
+    //  CLASS 2 — the env escape hatch exists because this ships days before
+    //  a live demo. Remove LEASING_DESK_SHOW_INTERNAL_QA once the demo runs
+    //  on production-classified people; the exclusion itself is Class 1.
+    const showQa = String(process.env.LEASING_DESK_SHOW_INTERNAL_QA || "").toLowerCase() === "true";
+    let hidden = 0;
+    let appRows = applicationRows, folRows = followupRows, closedRows = recentlyClosedRows;
+    if (!showQa) {
+      const qa = new Set((await client.query(
+        `select person_id from person_property_classifications
+          where property_id = $1 and superseded_at is null and record_class = 'internal_qa'`,
+        [propertyId])).rows.map((r) => String(r.person_id)));
+      const keep = (rows) => rows.filter((r) => {
+        const drop = r && r.person_id && qa.has(String(r.person_id));
+        if (drop) hidden++;
+        return !drop;
+      });
+      appRows = keep(applicationRows);
+      folRows = keep(followupRows);
+      closedRows = keep(recentlyClosedRows);
+    }
+
     await client.query("commit");
 
-    return composeLeasingDesk({
+    const desk = composeLeasingDesk({
       propertyId,
-      applicationRows,
-      followupRows,
-      recentlyClosedRows,
+      applicationRows: appRows,
+      followupRows: folRows,
+      recentlyClosedRows: closedRows,
       recentlyClosedWindowHours: windowHours,
     });
+    // Honest blank beats a quietly shortened list: say what was withheld.
+    desk.internal_qa_hidden = showQa ? null : hidden;
+    return desk;
   } catch (e) {
     try { await client.query("rollback"); } catch (_) {}
     throw e; // F: the route turns this into ONE honest unavailable/retry contract.
