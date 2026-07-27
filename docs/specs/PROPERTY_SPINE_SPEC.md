@@ -650,9 +650,18 @@ ABSENCE = UNCLASSIFIED, never silently production
 Append-only supersession; record_class NEVER updated in place
 ```
 
-Enforced centrally across outbound messaging · prospect outreach · reporting · leasing metrics · queues · AI prompts · automated decision rules. **Not** `is_test=true` scattered through screens.
+Enforced centrally across reporting · leasing metrics · queues · the leasing desk · AI prompts. **Not** `is_test=true` scattered through screens.
 
-> `internal_qa` is **not** `production`. With `SMS_SEND_MODE=customer_care`, `internal_qa` numbers receive no real texts.
+> **REVISED 2026-07-26 — classification no longer gates eligibility.**
+> This previously read: *"`internal_qa` is not `production`. With `SMS_SEND_MODE=customer_care`, `internal_qa` numbers receive no real texts."* That is no longer true, and the reason it changed matters more than the change.
+>
+> One field was deciding three independent things — whether someone could be **texted**, whether they were **application/activation eligible**, and whether they were **counted** — and two of those pointed in opposite directions. `customer_care` demanded `production`; `internal_qa_autonomous` demanded `internal_qa`. A person could be textable or leasable, never both, and every gate unjammed produced a new jam one step deeper.
+>
+> **Eligibility is now consent + property, everywhere.** Can we text them, send them an application, admit their tenancy — same two questions: did they say yes, and is this property switched on. `record_class` is consulted by none of those paths.
+>
+> **What `record_class` still does:** marks a record as a test context so it is excluded from metrics and hidden from the leasing desk. Bookkeeping, not permission. Reclassifying someone changes what they count toward; it does not silence or unsilence them.
+>
+> `internal_qa_autonomous` is **retired**. An unrecognised `SMS_SEND_MODE` falls to `disabled`, so the old value now silences a deploy entirely — check it first if sending goes quiet.
 
 ## 4.8 The staff ↔ person bridge (067)
 
