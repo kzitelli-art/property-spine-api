@@ -105,5 +105,64 @@ check("unknown timezone refuses a proactive send",
   r => !r.allowed && /timezone/.test(r.reason),
   "cannot prove it is a decent hour there, so do not send");
 
-console.log(`\n${pass} passed, ${fail} failed`);
-process.exit(fail ? 1 : 0);
+// ── The runner ───────────────────────────────────────────────────────────────
+const runnerFor = (rows) => require(path.join(__dirname, "..", "src", "leasing", "followup_runner.js"))({
+  pool: { query: async () => ({ rows }) },
+  commBoundary: { withinSendWindow: () => ({ allowed: true, reason: "within_send_window" }) },
+});
+const PROP = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
+
+check("rung 2 sends the tour for a layout we HAVE",
+  runnerFor([]).composeRung(2, { name: "Cameron", layout: "one_bedroom" }),
+  s => s.includes("CbvpwiPGRah"), "the verified one-bedroom tour");
+
+// The layout prospects ask about most, and the one with no tour.
+check("rung 2 NEVER substitutes a tour for the two-bedroom",
+  runnerFor([]).composeRung(2, { name: "Cameron", layout: "two_bedroom" }),
+  s => !s.includes("matterport") && /video tour/i.test(s),
+  "offers the live video option instead of the wrong apartment");
+
+check("no rung body contains markdown or an AI dash",
+  [1, 2, 3, 4, 5, 6].map(r => runnerFor([]).composeRung(r, { name: "Mike", layout: "studio" })),
+  arr => arr.every(s => s && !s.includes("*") && !s.includes("—") && !s.includes("–")),
+  "SMS-clean by construction");
+
+// rungsSent is DERIVED: outbound since their last inbound, minus the reply.
+const row = (over) => Object.assign({
+  status: "ai_responded", tour_scheduled_at: null, name: "Test", phone: "+15550000000",
+  consent: "opted_in", last_out: new Date(T0).toISOString(), last_in: null,
+  outbound_since_inbound: 1,
+}, over);
+
+check("never replied → one outbound → zero rungs sent → rung 1 next",
+  runnerFor([]).decideFor(row({}), T0 + 2 * HOUR),
+  r => r.send && r.rung === 1, "the opener is not a rung");
+
+check("one rung already out → rung 2 next",
+  runnerFor([]).decideFor(row({ outbound_since_inbound: 2 }), T0 + 2 * DAY),
+  r => r.send && r.rung === 2, "derived, with no new table");
+
+check("opted_out row is stopped by the runner too",
+  runnerFor([]).decideFor(row({ consent: "opted_out" }), T0 + 2 * HOUR),
+  r => !r.send, "consent checked before the send gate ever sees it");
+
+// The safety default that matters most.
+(async () => {
+  const r = runnerFor([row({})]);
+  const out = await r.runFollowups({ propertyId: PROP, now: T0 + 2 * HOUR });
+  check("runFollowups defaults to DRY RUN", out,
+    o => o.dryRun === true && o.sent.every(s => s.dryRun),
+    "sending requires passing dryRun:false explicitly");
+
+  const closed = require(path.join(__dirname, "..", "src", "leasing", "followup_runner.js"))({
+    pool: { query: async () => ({ rows: [row({})] }) },
+    commBoundary: { withinSendWindow: () => ({ allowed: false, reason: "outside_send_window" }) },
+  });
+  const out2 = await closed.runFollowups({ propertyId: PROP, now: T0 + 2 * HOUR, dryRun: false });
+  check("a closed send window skips, and never composes or sends", out2,
+    o => o.sent.length === 0 && o.skipped.some(s => s.reason === "outside_send_window"),
+    "quiet hours win over a due rung");
+
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})();
