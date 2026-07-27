@@ -358,6 +358,35 @@ async function loadLeasingDesk(deps, propertyId, opts) {
       closedRows = keep(recentlyClosedRows);
     }
 
+    // ── WHAT THE FILTER CANNOT JUDGE ─────────────────────────────────
+    //  The filter above hides a KNOWN test context. It says nothing about a
+    //  record carrying no classification at all, which sails past every
+    //  class-based filter in the product — the codebase already names this
+    //  trap: "Nothing is not neutral." An ungoverned record lands on the
+    //  permissive side of every check, so it is shown as ordinary work.
+    //
+    //  These are NOT hidden, deliberately. Hiding a record because it cannot
+    //  be judged is the same silent disappearance the filter was built to
+    //  avoid, one category over — and some of them may be real people whose
+    //  classification predates the intake birth guard. Honest blank beats
+    //  confident wrong in both directions: show the row, and say plainly
+    //  that nothing governs it.
+    //
+    //  A row with NO person at all is counted separately. That is not a
+    //  classification gap, it is an integrity one — work on a board with
+    //  nobody attached to it.
+    const shown = [...appRows, ...folRows, ...closedRows];
+    const shownIds = [...new Set(shown.map((r) => r && r.person_id).filter(Boolean).map(String))];
+    let ungoverned = 0;
+    if (shownIds.length) {
+      const governed = new Set((await client.query(
+        `select person_id from person_property_classifications
+          where property_id = $1 and superseded_at is null and person_id = any($2::uuid[])`,
+        [propertyId, shownIds])).rows.map((r) => String(r.person_id)));
+      ungoverned = shownIds.filter((id) => !governed.has(id)).length;
+    }
+    const personless = shown.filter((r) => r && !r.person_id).length;
+
     await client.query("commit");
 
     const desk = composeLeasingDesk({
@@ -367,8 +396,11 @@ async function loadLeasingDesk(deps, propertyId, opts) {
       recentlyClosedRows: closedRows,
       recentlyClosedWindowHours: windowHours,
     });
-    // Honest blank beats a quietly shortened list: say what was withheld.
+    // Honest blank beats a quietly shortened list: say what was withheld,
+    // and say what is shown that nothing vouches for.
     desk.internal_qa_hidden = showQa ? null : hidden;
+    desk.ungoverned_shown = ungoverned;   // people on the board with no classification
+    desk.personless_shown = personless;   // work on the board with nobody attached
     return desk;
   } catch (e) {
     try { await client.query("rollback"); } catch (_) {}
