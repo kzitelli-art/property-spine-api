@@ -29,12 +29,47 @@
 //                                       eligibility is any active assignment
 //                                       at the property, matching the prior
 //                                       eligibleOwner behavior)
+//      ↑ The 2026-07-26 ruling asked that an owner hold "an eligible
+//        assignment for that task type". HALF-ENFORCED, and said so rather
+//        than faked: there is no per-work-type column, so this module still
+//        enforces only "an active assignment at this property". When a
+//        work-type field exists, this reserved state becomes live and the
+//        ruling is satisfied in full. Do not simulate it from role names.
 //
 //  SCOPE NOTES:
-//    • assignments (migration 004, person-keyed) is the ONLY eligibility
-//      source. property_team_assignments (035, user-keyed) is a
-//      reconciliation/divergence-report source ONLY — it creates no
-//      eligibility, no ownership, no second truth. (Locked decision.)
+//    • assignments (migration 004, person-keyed) is the ONLY source that
+//      GRANTS eligibility. property_team_assignments (035, user-keyed)
+//      grants nothing and never will.
+//
+//      ⚠ SUPERSEDED IN PART — owner ruling 2026-07-26. The original note
+//      read: "property_team_assignments … creates no eligibility, no
+//      ownership, no second truth. (Locked decision.)" It is recorded here
+//      rather than deleted, because a locked decision should be seen to
+//      change, not quietly vanish.
+//
+//      WHY IT CHANGED. The two tables had drifted into disjoint
+//      populations: at Demo Building, three people could be ASSIGNED work
+//      (assignments) and four could ACT on it (property_team_assignments),
+//      with ZERO overlap. Every auto-assigned obligation therefore named an
+//      owner who could not open it — not overdue, not flagged, not broken,
+//      just quietly false. "Honest blank beats confident wrong" (§5) makes
+//      UNASSIGNED the correct answer there, and a name the incorrect one.
+//
+//      WHAT CHANGED, PRECISELY. property_team_assignments is now a
+//      NECESSARY condition for ownership, never a sufficient one. It still
+//      grants nothing: it can only DENY. A person with property authority
+//      and no `assignments` row remains ineligible exactly as before, so no
+//      second source of truth was created — one source still grants, and a
+//      second may now veto.
+//
+//      WHAT DID NOT CHANGE. The two identity systems are NOT merged; that
+//      remains the later structural fix. Manager COVERAGE
+//      (leasingconversion.resolveSendActionBasis) is untouched and still
+//      lets an authorised manager act on work they do not own — coverage
+//      authority must never make a manager a default owner. Completion
+//      attribution is untouched: closure records closed_by_user_id and
+//      snapshots identity at close, so a covering manager who finishes the
+//      work never retroactively becomes its owner.
 //    • Historical attribution is never rewritten here. This module answers
 //      "who may own NEW work now" — past events keep their raw actors.
 // ════════════════════════════════════════════════════════════════════
@@ -44,6 +79,11 @@
 const LIVE_STATES = Object.freeze([
   "resolved", "unbridged", "conflicted", "user_inactive",
   "assignment_inactive", "not_assigned_here", "free_text_claim",
+  // 2026-07-26: bridged, actively assigned, but holds no active team
+  // assignment at this property — so they could be handed work they have no
+  // authority to perform. Distinct from not_assigned_here on purpose: the
+  // person genuinely works here, the authority record is what is missing.
+  "no_property_authority",
 ]);
 
 const RESERVED_STATES = Object.freeze([
@@ -147,8 +187,28 @@ async function resolveStaffIdentity(client, { user_id, property_id, work_type = 
              basis: "assignment_exists_inactive" };
   }
 
+  // ── AUTHORITY TO PERFORM, NOT MERELY TO BE NAMED (2026-07-26) ──────
+  //  An owner must be able to do the work. This is a VETO, not a grant:
+  //  it can only remove eligibility the assignment already conferred, so
+  //  property_team_assignments still creates nothing.
+  //
+  //  Deliberately NOT checked here: role, role_title, or module. Those are
+  //  COVERAGE questions — "may this actor perform this action" — and they
+  //  belong to resolveSendActionBasis. Reading them here would make every
+  //  authorised manager a default owner, which is the collapse this fix
+  //  exists to prevent.
+  const authority = await client.query(
+    `select 1 from property_team_assignments
+      where user_id = $1 and property_id = $2 and active = true limit 1`,
+    [user_id, property_id]);
+  if (authority.rows.length === 0) {
+    return { ...base, state: "no_property_authority", person_id: u.person_id,
+             assignment_id: active.id, role: active.role,
+             basis: "assigned_here_but_no_active_team_authority" };
+  }
+
   return {
-    ...base, state: "resolved", basis: "bridge_plus_active_assignment",
+    ...base, state: "resolved", basis: "bridge_plus_active_assignment_plus_authority",
     person_id: u.person_id, assignment_id: active.id, role: active.role,
   };
 }
