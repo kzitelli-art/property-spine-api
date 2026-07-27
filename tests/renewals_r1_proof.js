@@ -128,11 +128,29 @@ const head = (rel) => { try { return execSync(`git show HEAD:${rel}`, { cwd: REP
     `select id from leases where property_id=$1 and lease_status='pending'`, [DEMO])).rows.map(r => r.id);
   ok(!pendingIds.some(id => cohortIds.has(id)), "no pending lease appears in the cohort");
 
-  console.log("\n══ BLOCK B — the assertions can fail (git HEAD) ══");
-  const opHead = head("src/identity/operator.js");
-  ok(opHead.length > 0, "read operator.js at HEAD");
-  ok(!/\/operator\/leasing\/renewals/.test(opHead), "HEAD has no /operator/leasing/renewals route — this slice adds it");
-  ok(head("src/leasing/renewals_read.js") === "", "HEAD has no renewals_read service — this slice adds it");
+  console.log("\n══ BLOCK B — the assertions can fail (pre-slice baseline) ══");
+  // BASELINE, not HEAD. Once this slice merges, HEAD contains it and a
+  // "HEAD lacks the route" assertion would invalidate itself — passing before
+  // the merge and failing forever after, which is worse than no test. Resolve
+  // the commit that ADDED the service and compare against its parent, so the
+  // proof stays meaningful for the life of the file.
+  let baseline = "HEAD";
+  try {
+    const adding = execSync(
+      "git log --diff-filter=A --format=%H -- src/leasing/renewals_read.js",
+      { cwd: REPO, encoding: "utf8" }
+    ).trim().split("\n").filter(Boolean).pop();
+    // `~1`, never `^`: execSync goes through cmd.exe on Windows, where `^` is
+    // the escape character and is silently eaten — which would resolve the
+    // baseline to the slice commit itself and quietly invert the test.
+    if (adding) baseline = `${adding}~1`;
+  } catch { /* not yet committed — HEAD is still the pre-slice state */ }
+  const at = (rel) => { try { return execSync(`git show ${baseline}:${rel}`, { cwd: REPO, encoding: "utf8", maxBuffer: 40e6 }); } catch { return ""; } };
+  console.log(`   (baseline = ${baseline})`);
+  const opBase = at("src/identity/operator.js");
+  ok(opBase.length > 0, "read operator.js at the pre-slice baseline");
+  ok(!/\/operator\/leasing\/renewals/.test(opBase), "baseline has no /operator/leasing/renewals route — this slice adds it");
+  ok(at("src/leasing/renewals_read.js") === "", "baseline has no renewals_read service — this slice adds it");
 
   console.log("\n══ BLOCK C — real HTTP ══");
   const base = process.env.API_BASE;
