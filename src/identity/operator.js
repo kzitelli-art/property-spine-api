@@ -55,6 +55,7 @@ module.exports = function operatorModule(deps) {
   const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts"); // factual Future Rent Roll (migration route)
   const { institutionalRentRoll, institutionalCsv } = require("../surfaces/rent_roll_institutional"); // formal as-of schedule + CSV
   const { availabilityRead } = require("../surfaces/availability_read");   // Availability over the shared classifier
+  const { effectivePropertyPricing } = require("../money/effective_pricing"); // the Pricing & Concessions truth sheet
   // ── THE ONE CANONICAL TENANCY-ANCHOR SERVICE (Fable ruling) ──────────
   // The SAME countersign + confirm-term implementation applications.js calls.
   // Injected from server.js (built once from the obligation engine). The two
@@ -1228,6 +1229,28 @@ module.exports = function operatorModule(deps) {
     } catch (e) {
       // A failed live read is UNAVAILABLE. It must never render as vacancy
       // or as marketable inventory.
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/pricing/effective?as_of=
+  //   The Pricing & Concessions truth sheet, READ-ONLY. There is no publish
+  //   route here and there will not be one until the initial review receipt
+  //   is approved. Today this returns a named absence for every property,
+  //   which is the correct answer, not a placeholder.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/pricing/effective", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const out = await effectivePropertyPricing(pool, {
+        property_id: req.operator.property_id,   // session only, never the client
+        as_of: req.query.as_of || null,
+      });
+      return res.json(out);
+    } catch (e) {
+      // A failed read is UNAVAILABLE. It must never render as "no pricing",
+      // because "no pricing" is itself a governed statement.
       return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
     }
   });

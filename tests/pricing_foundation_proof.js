@@ -78,10 +78,25 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
   ok(eff.completeness.complete === false, "completeness is false without a version");
   ok(eff.completeness.unclassified_positions >= 1,
     `unclassified positions are counted, not hidden (${eff.completeness.unclassified_positions})`);
-  ok(!JSON.stringify(eff).includes("market_rent"), "market_rent appears nowhere in the pricing read");
+  // The read DECLARES what it refuses to read, so the forbidden names appear
+  // in proof.never_reads by design. That declaration is the disclaimer; strip
+  // it, then assert the names appear nowhere else — and assert the disclaimer
+  // itself separately, so removing it cannot silently pass this test.
+  ok(Array.isArray(eff.proof.never_reads)
+     && ["units.market_rent", "window.__pricingStore", "rent_survey_observations"]
+        .every(s => eff.proof.never_reads.includes(s)),
+    "the read names the three sources it refuses, on the record");
+  const payload = { ...eff, proof: { ...eff.proof, never_reads: undefined } };
+  ok(!JSON.stringify(payload).includes("market_rent"),
+    "market_rent carries no value anywhere in the pricing read");
+
+  // Comment lines are prose; the declaration is a string literal. Strip both,
+  // so what remains is only source that could actually READ the column.
   const effSrc = require("fs").readFileSync(path.join(REPO, "src/money/effective_pricing.js"), "utf8")
-    .split("\n").filter(l => !/^\s*\/\//.test(l)).join("\n");
-  ok(!/units\.market_rent|__pricingStore/.test(effSrc), "the service never reads market_rent or the client store");
+    .split("\n").filter(l => !/^\s*\/\//.test(l)).join("\n")
+    .replace(/never_reads:\s*\[[^\]]*\]/, "never_reads:[]");
+  ok(!/market_rent|__pricingStore|rent_survey/.test(effSrc),
+    "the service never reads market_rent, the client store or a survey observation");
 
   console.log("\n== FEES: exactly one live source ==");
   ok(eff.fees.source === "agent_facts" && eff.fees.ownership === "transitional_external",
