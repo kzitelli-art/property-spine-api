@@ -147,7 +147,12 @@ async function loadDraft(client, property_id, charge_code) {
  * Refuses on anything that is not a draft — an active charge is superseded by
  * a new row, never edited into a different meaning.
  */
-async function recordRuling(pool, { property_id, user_id, charge_code, ruling, note = null } = {}) {
+const QUESTION_KEY = "applicability.renewal";
+
+async function recordRuling(pool, {
+  property_id, user_id, charge_code, ruling, note = null,
+  supporting_explanation = undefined, idempotency_key = null,
+} = {}) {
   const shape = APPLICABILITY_RULINGS[ruling];
   if (!shape) {
     const e = new Error(
@@ -157,61 +162,105 @@ async function recordRuling(pool, { property_id, user_id, charge_code, ruling, n
     e.httpStatus = 400; e.publicMessage = e.message; throw e;
   }
   const actor = await actorFromSession(pool, { user_id, property_id, verb: "may_publish_pricing" });
+  const idem = idempotency_key || `ruling:${property_id}:${charge_code}:${ruling}`;
 
   const client = await pool.connect();
   try {
     await client.query("begin");
+
+    // ── IDEMPOTENT RETRY ──────────────────────────────────────────
+    // Return the ORIGINAL ruling rather than inserting a second history of
+    // one decision. Checked inside the transaction, and backed by the unique
+    // index so a concurrent double-submit loses on the insert, not on this read.
+    const prior = (await client.query(
+      "select * from governed_charge_rulings where idempotency_key=$1", [idem])).rows[0];
+    if (prior) {
+      await client.query("commit");
+      return { ruled: true, idempotent_replay: true, ruling_id: prior.id,
+               charge_id: prior.governed_charge_id,
+               prior_terms_digest: prior.prior_terms_digest,
+               new_digest: prior.resulting_terms_digest,
+               receipt: { ruling: prior.selected_answer, recorded_at: prior.occurred_at,
+                          changed_fields: prior.changed_fields_json } };
+    }
+
     const draft = await loadDraft(client, property_id, charge_code);
     if (!draft) {
       const e = new Error("there is no draft of this charge to rule on");
       e.httpStatus = 409; e.publicMessage = e.message; throw e;
     }
 
-    const before = {
-      applies_to_new_lease: draft.applies_to_new_lease,
-      applies_to_renewal: draft.applies_to_renewal,
-      applies_to_transfer: draft.applies_to_transfer,
-      digest: termsDigest(draft),
+    const priorDigest = termsDigest(draft);
+    const changed = [];
+    const note1 = (field, from, to) => {
+      if (from !== to) changed.push({ field, from, to });
     };
+    note1("applies_to_new_lease", draft.applies_to_new_lease, shape.applies_to_new_lease);
+    note1("applies_to_renewal", draft.applies_to_renewal, shape.applies_to_renewal);
+    note1("applies_to_transfer", draft.applies_to_transfer, shape.applies_to_transfer);
+
+    // The supporting explanation may be corrected in the SAME attributed edit.
+    // Prose is never authority, but leaving prose that contradicts the ruling
+    // on the current row would present stale evidence as current truth. The
+    // superseded text is preserved in the ruling receipt below, so it stays
+    // recoverable without remaining visible as an unresolved claim.
+    const setBasis = supporting_explanation !== undefined;
+    if (setBasis) note1("applicability_basis", draft.applicability_basis, supporting_explanation);
 
     const row = (await client.query(
       `update property_governed_charges
-          set applies_to_new_lease=$2, applies_to_renewal=$3, applies_to_transfer=$4
+          set applies_to_new_lease=$2, applies_to_renewal=$3, applies_to_transfer=$4,
+              applicability_basis = case when $5::boolean then $6::text else applicability_basis end
         where id=$1 and record_state='draft'
         returning *`,
-      [draft.id, shape.applies_to_new_lease, shape.applies_to_renewal, shape.applies_to_transfer]
+      [draft.id, shape.applies_to_new_lease, shape.applies_to_renewal, shape.applies_to_transfer,
+       setBasis, setBasis ? supporting_explanation : null]
     )).rows[0];
     if (!row) {
       const e = new Error("the charge stopped being a draft while the ruling was being recorded");
       e.httpStatus = 409; e.publicMessage = e.message; throw e;
     }
 
-    const receipt = {
-      ruling,
-      ruled_by: { session_user_id: actor.session_user_id, acting_person_id: actor.acting_person_id,
-                  display_name: actor.display_name },
-      authority_basis: actor.authority_basis,
+    // Computed from the row AS COMMITTED, so the recorded digest can never
+    // describe terms that failed to land.
+    const resultingDigest = termsDigest(row);
+    if (resultingDigest === priorDigest) {
+      const e = new Error("this ruling would change nothing — the draft already carries these terms");
+      e.httpStatus = 409; e.publicMessage = e.message; throw e;
+    }
+
+    // ── THE APPEND-ONLY RULING, IN THE SAME TRANSACTION ───────────
+    const evidence = {
       note,
-      before,
-      after: {
-        applies_to_new_lease: row.applies_to_new_lease,
-        applies_to_renewal: row.applies_to_renewal,
-        applies_to_transfer: row.applies_to_transfer,
-        digest: termsDigest(row),
-      },
-      // The point of recording both digests: an approval bound to the BEFORE
-      // digest can no longer publish, and the refusal will name this ruling.
-      supersedes_prior_approval: before.digest !== termsDigest(row),
-      recorded_at: new Date().toISOString(),
+      superseded_supporting_explanation: setBasis ? draft.applicability_basis : null,
       what_this_is_not: "A draft has no operating effect. Nothing quotes this. " +
-                        "The live assistant is unchanged by this write.",
+                        "The live assistant is unchanged by this ruling.",
     };
-    await client.query(
-      `update property_governed_charges set publication_receipt=$2 where id=$1`,
-      [draft.id, JSON.stringify({ ruling_receipt: receipt })]);
+    const ruled = (await client.query(
+      `insert into governed_charge_rulings
+         (property_id, governed_charge_id, question_key, selected_answer,
+          actor_user_id, actor_person_id, authority_exercised,
+          prior_terms_digest, resulting_terms_digest, changed_fields_json,
+          reason_or_evidence_json, idempotency_key)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12)
+       returning id, occurred_at`,
+      [property_id, draft.id, QUESTION_KEY, ruling,
+       actor.session_user_id, actor.acting_person_id, "may_publish_pricing",
+       priorDigest, resultingDigest, JSON.stringify(changed),
+       JSON.stringify(evidence), idem])).rows[0];
 
     await client.query("commit");
-    return { ruled: true, charge_id: draft.id, receipt, new_digest: receipt.after.digest };
+    return {
+      ruled: true, idempotent_replay: false, ruling_id: ruled.id, charge_id: draft.id,
+      prior_terms_digest: priorDigest, new_digest: resultingDigest,
+      changed_fields: changed,
+      actor: { session_user_id: actor.session_user_id, acting_person_id: actor.acting_person_id,
+               display_name: actor.display_name, authority_exercised: "may_publish_pricing",
+               authority_basis: actor.authority_basis },
+      // An approval bound to the BEFORE digest can no longer publish.
+      supersedes_prior_approval: true,
+      occurred_at: ruled.occurred_at,
+    };
   } catch (e) {
     await client.query("rollback").catch(() => {});
     throw e;
