@@ -3287,6 +3287,16 @@ app.use("/", require("./src/maintenance/readiness")({ pool, readinessService }))
 const staffAgentService = require("./src/agent/staff_agent_service")
   .makeStaffAgentService({ unitTriageService, unitTurnScopeService, workAcceptanceService, readinessService });
 app.use("/", require("./src/agent/staff_agent")({ pool, staffAgentService }));
+
+// ── THE ONE UNIT TURN PAGE (BUILD 6A) ────────────────────────────────────
+//  READ-ONLY consolidation of the Build 1-5 canonical reads. Creates no state
+//  and owns no domain model; every write action on the page posts to the
+//  Build 1-5 door that owns it. All four services are required.
+const unitTurnRead = require("./src/surfaces/unit_turn_read").makeUnitTurnRead({
+  unitTriageService, unitTurnScopeService, workAcceptanceService, readinessService,
+  staffAgentService, availabilityRead: require("./src/surfaces/availability_read").availabilityRead,
+});
+app.use("/", require("./src/surfaces/unit_turn")({ pool, unitTurnRead }));
 // applications module mounted lower (after the conversion + submission services exist,
 // so /approve can close the leasing_manager application_approval gate). See below.
 const __leasePackets = leasePacketsModule({ pool, satisfyObligation, completeObligation });
