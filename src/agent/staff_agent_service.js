@@ -26,27 +26,66 @@
 //  structural guarantee: this module cannot even be built in a configuration
 //  where it would have to fall back to a raw insert.
 //
-//  ── AND IT CANNOT MAKE A UNIT READY ─────────────────────────────────
-//  There is no call to any certification path here, and after BUILD 6B there
-//  is no readiness intent to confirm either — a readiness message is a
-//  redirect to the governed Build 4 walk and never becomes a proposal.
+//  ── AND IT CANNOT TOUCH READINESS AT ALL ────────────────────────────
+//  There is no certification path here and, after BUILD 6B, no call to
+//  `readinessService.recordWalk` either. The readiness service is injected for
+//  ONE READ — `resolveWalkAuthority`, so a redirect can say plainly when the
+//  operator could not have done it anyway. Every readiness act, passed or
+//  failed, happens in the Build 4 walk.
 //
 //  ── BUILD 6B: A REDIRECT IS NOT A PROPOSAL ──────────────────────────
-//  Two things a message used to propose — accepting work and readiness — now
-//  classify as `redirect`. `captureMessage` records the message verbatim and
-//  writes NO proposal row for them. That is deliberately stronger than
-//  refusing the confirmation later: with no row, there is nothing to confirm,
-//  nothing to mis-render as pending, and nothing a future surface could
-//  quietly start honouring.
+//  Four things a message used to propose — accepting work, claiming readiness,
+//  recording a FAILED final walk, and correcting a prior confirmed action —
+//  now classify as `redirect`. `captureMessage` records the message verbatim
+//  and writes NO proposal row for any of them. That is deliberately stronger
+//  than refusing the confirmation later: with no row, there is nothing to
+//  confirm, nothing to mis-render as pending, and nothing a future surface
+//  could quietly start honouring.
+//
+//  THREE intents remain confirmable — initial_triage, turn_scope,
+//  work_completion — and each calls exactly one canonical service. A scope
+//  CORRECTION is not a special case of any of this: "actually, it needs full
+//  paint" is a new scope statement, and Build 2 supersedes the old scope and
+//  keeps it in history. That is the correction mechanism, and it already
+//  exists, which is why this module does not grow one.
 // ════════════════════════════════════════════════════════════════════
 
 "use strict";
 
 const {
   classifyIntent, photoNeedsClarification, needsClarification, statusLabel,
-  INTENT, INTENT_SERVICE, INTENT_PLAIN, RETIRED_INTENTS,
+  INTENT, INTENT_SERVICE, INTENT_PLAIN, CONFIRMABLE_INTENTS, RETIRED_INTENTS,
   CLARIFICATION_STATUS, CLARIFICATION_LABEL,
 } = require("./staff_agent_intent");
+
+//  ── WHAT A RETIRED PROPOSAL IS TOLD (BUILD 6B) ──────────────────────
+//  One entry per retired intent, each naming the structured door that owns the
+//  act. A retired row is never silently dropped and never quietly honoured —
+//  the operator is told where the action actually lives.
+const RETIRED_REFUSAL = Object.freeze({
+  work_acceptance: {
+    message: "taking on work is done on the work item, not in a message. " +
+             "Open the work item to set ownership and due timing.",
+    use_instead: "POST /operator/turn-work/:workId/accept",
+  },
+  readiness_request: {
+    message: "a message cannot certify readiness. Open the final readiness walk, " +
+             "affirm every confirmation area, and certify there — Build 4 authority " +
+             "and entry conditions apply.",
+    use_instead: "POST /operator/units/:id/readiness/walk",
+  },
+  failed_final_walk: {
+    message: "a failed final walk is recorded through the final readiness walk, so the " +
+             "failed inspection, findings, and reopened work remain governed. " +
+             "Open the walk and record it there.",
+    use_instead: "POST /operator/units/:id/readiness/walk",
+  },
+  correction: {
+    message: "open the recorded item to correct it without erasing its history. " +
+             "Each record is corrected on its own canonical path.",
+    use_instead: "the canonical correction path for the affected record",
+  },
+});
 
 function makeStaffAgentService(deps) {
   const {
@@ -56,14 +95,19 @@ function makeStaffAgentService(deps) {
   // CONSTRUCTION FAILS WITHOUT EVERY CANONICAL SERVICE. A missing dependency
   // must not degrade into "well, just insert it directly" — that is precisely
   // how a second maintenance system gets built by accident.
-  //  BUILD 6B: the acceptance requirement is now `claimCompletion`, because
-  //  that is the call this module actually makes. `acceptWork` is no longer
-  //  reachable from a message — accepting work is a tap on the work item.
+  //  BUILD 6B: each entry names the call this module actually makes.
+  //
+  //    · `acceptWork` left, because accepting work is a tap on the work item.
+  //    · `recordWalk` left, because a failed final walk is recorded in the
+  //      walk. The readiness service is still REQUIRED — the agent reads
+  //      `resolveWalkAuthority` from it so a readiness redirect can say
+  //      plainly when the operator could not certify anyway — but it is
+  //      required for a READ now, and there is no write left to fall back to.
   const required = [
     ["unitTriageService", unitTriageService, "confirmTriage"],
     ["unitTurnScopeService", unitTurnScopeService, "confirmScope"],
     ["workAcceptanceService", workAcceptanceService, "claimCompletion"],
-    ["readinessService", readinessService, "recordWalk"],
+    ["readinessService", readinessService, "resolveWalkAuthority"],
   ];
   for (const [name, svc, fn] of required) {
     if (!svc || typeof svc[fn] !== "function") {
@@ -182,13 +226,19 @@ function makeStaffAgentService(deps) {
           property_id, user_id: actor_user_id,
         });
         if (auth) {
+          //  The sentence has to match what was actually said. "You cannot
+          //  certify this unit" is wrong on a FAILED walk — nobody was trying
+          //  to certify — so the two redirects say different true things.
+          const cannot = redirect.reason_code === "failed_walk"
+            ? "You cannot perform the final readiness walk at this property:"
+            : "You cannot certify this unit:";
           redirect = {
             ...redirect,
             authorized: !!auth.authorized,
             authority: auth,
             message: auth.authorized
               ? redirect.message
-              : `${redirect.message} You cannot certify this unit: ${auth.reason}`,
+              : `${redirect.message} ${cannot} ${auth.reason}`,
           };
         }
       }
@@ -283,15 +333,8 @@ function makeStaffAgentService(deps) {
     //  structured action that owns the commitment, never silently dropped and
     //  never quietly honoured.
     if (RETIRED_INTENTS.includes(p.intent)) {
-      throw Object.assign(new Error(
-        p.intent === "work_acceptance"
-          ? "taking on work is done on the work item, not in a message. Open the work item to set ownership and due timing."
-          : "a message cannot certify readiness. Open the final readiness walk, affirm every confirmation area, " +
-            "and certify there — Build 4 authority and entry conditions apply."),
-        { httpStatus: 409,
-          use_instead: p.intent === "work_acceptance"
-            ? "POST /operator/turn-work/:workId/accept"
-            : "POST /operator/units/:id/readiness/walk" });
+      throw Object.assign(new Error(RETIRED_REFUSAL[p.intent].message),
+        { httpStatus: 409, use_instead: RETIRED_REFUSAL[p.intent].use_instead });
     }
     //  A redirect is never written as a proposal, so this is unreachable by
     //  construction. Asserted anyway: an unreachable guard costs nothing, and
@@ -310,8 +353,17 @@ function makeStaffAgentService(deps) {
     if (p.status === CLARIFICATION_STATUS) {
       throw bad("this proposal needs a clarification before it can be confirmed", { clarification: p.clarification });
     }
-    if (!p.unit_id && p.intent !== INTENT.CORRECTION) {
+    //  Every remaining confirmable intent records a fact about a unit, so a
+    //  proposal without one records nothing. (BUILD 6B removed the only intent
+    //  that was exempt from this.)
+    if (!p.unit_id) {
       throw bad("no unit was resolved for this proposal, so nothing can be recorded");
+    }
+    //  BELT AND BRACES: three intents may be confirmed. Anything else — a row
+    //  from an older build, a value a future writer adds — stops here rather
+    //  than falling through to a branch that happens to match.
+    if (!CONFIRMABLE_INTENTS.includes(p.intent)) {
+      throw bad("this intent cannot be confirmed");
     }
 
     const msg = (await client.query(
@@ -405,31 +457,8 @@ function makeStaffAgentService(deps) {
       };
       result = { id: result.claim.id, ...result };
 
-    } else if (p.intent === INTENT.FAILED_WALK) {
-      // Build 4 owns authority and entry conditions. This door creates no
-      // weaker failed-walk path — it calls the same service.
-      result = await readinessService.recordWalk(client, {
-        property_id, unit_id: p.unit_id, actor_user_id,
-        outcome: "not_ready",
-        note: msg.body,
-        photos: msg.photos || [],
-        findings_text: overrides.findings_text || proposed.findings_text || "",
-      });
-      kind = "readiness_walk";
-      summary = {
-        new_work: result.new_work.map((w) => w.work_text),
-        next_action: result.flow.controlling_next_action ? result.flow.controlling_next_action.action : null,
-      };
-      result = { id: result.walk.id, ...result };
-
-    } else if (p.intent === INTENT.CORRECTION) {
-      // Build 5 does not invent a generic correction mechanism.
-      throw Object.assign(new Error(
-        "corrections go through the canonical correction path for the affected record. " +
-        "Open the affected record and correct it there — the original stays in history."),
-        { httpStatus: 409 });
-
     } else {
+      // Unreachable: CONFIRMABLE_INTENTS was checked above.
       throw bad("this intent cannot be confirmed");
     }
 

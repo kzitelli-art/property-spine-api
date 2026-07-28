@@ -75,6 +75,9 @@ function spy() {
       unitTurnScopeService: { confirmScope: rec("confirmScope"), propose: () => ({}) },
       workAcceptanceService: { acceptWork: rec("acceptWork"), claimCompletion: rec("claimCompletion") },
       readinessService: {
+        //  Deliberately PRESENT on the double. If the agent still reached for
+        //  it, the call would be recorded here rather than failing loudly —
+        //  the assertion is that it is never called, not that it is absent.
         recordWalk: rec("recordWalk"),
         resolveWalkAuthority: async () => ({ authorized: false, reason: "not a manager at this property" }),
       },
@@ -218,8 +221,8 @@ section("3  readiness language cannot create a confirmable proposal");
 
   ok("no certification call exists anywhere in the agent",
      !/certifyReadiness|correctCertification|finishReady/.test(SVC_SRC));
-  ok("the only readiness call is recordWalk with outcome not_ready",
-     /outcome: "not_ready"/.test(SVC_SRC) && !/outcome: "ready"/.test(SVC_SRC));
+  ok("and no readiness WRITE of any kind remains",
+     !/recordWalk\(/.test(SVC_SRC) && !/outcome: "(not_)?ready"/.test(SVC_SRC));
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -502,17 +505,19 @@ section("10  the staff agent supports exactly three purposes");
      /Taking on work is a tap on the work item/.test(READ_SRC) &&
      /Readiness comes from the final readiness walk/.test(READ_SRC));
 
-  //  The three purposes are exactly the three confirmable intents that remain
-  //  (plus correction, which is a path into an existing record, and unclear,
-  //  which records nothing).
-  const CONFIRMABLE = ["initial_triage", "turn_scope", "work_completion", "failed_final_walk"];
-  for (const k of CONFIRMABLE) ok(`${k} is still a real intent`, I.INTENT_VALUES.includes(k));
-  ok("and no intent exists outside the documented set",
-     I.INTENT_VALUES.every((v) =>
-       CONFIRMABLE.concat(["redirect", "correction", "unclear"]).includes(v)),
+  //  The three purposes ARE the three confirmable intents. Nothing else.
+  const CONFIRMABLE = ["initial_triage", "turn_scope", "work_completion"];
+  ok("there are exactly three confirmable intents",
+     I.CONFIRMABLE_INTENTS.length === 3, I.CONFIRMABLE_INTENTS.join(","));
+  for (const k of CONFIRMABLE) ok(`${k} is confirmable`, I.CONFIRMABLE_INTENTS.includes(k));
+  ok("the vocabulary is exactly those three plus redirect and unclear",
+     I.INTENT_VALUES.slice().sort().join(",") ===
+       CONFIRMABLE.concat(["redirect", "unclear"]).sort().join(","),
      I.INTENT_VALUES.join(","));
   ok("every remaining intent maps to a named service or to none",
      I.INTENT_VALUES.every((v) => typeof I.INTENT_SERVICE[v] === "string"));
+  ok("each confirmable intent names exactly one canonical service",
+     CONFIRMABLE.every((v) => /BUILD [1-3]\)/.test(I.INTENT_SERVICE[v])));
   ok("redirect maps to NO service",
      /^none/i.test(I.INTENT_SERVICE.redirect) && /not a proposal/i.test(I.INTENT_SERVICE.redirect),
      I.INTENT_SERVICE.redirect);
@@ -550,9 +555,170 @@ section("10  the staff agent supports exactly three purposes");
 }
 
 // ════════════════════════════════════════════════════════════════════
+section("11  a failed final walk is the walk, not a message");
+{
+  const f = I.classifyIntent("Final walk failed. The bathroom door still doesn't latch.",
+    { unit_id: "u1", open_work: CTX_WORK });
+  ok("it is a redirect", f.intent === "redirect", f.intent);
+  ok("failed_final_walk is gone from the vocabulary",
+     !I.INTENT_VALUES.includes("failed_final_walk"));
+  ok("and is recorded as RETIRED", I.RETIRED_INTENTS.includes("failed_final_walk"));
+  ok("it points at the governed Build 4 action", f.redirect.to === "final_readiness");
+  ok("the copy states why it must stay governed",
+     /failed inspection, findings, and reopened work remain governed/.test(f.redirect.message),
+     f.redirect.message);
+  ok("and links to the Unit Turn page's final-readiness action",
+     f.redirect.link === "#final-readiness");
+  ok("no findings text is proposed", !f.proposed.findings_text);
+
+  //  THE STRUCTURAL CLAIM: recordWalk is unreachable from the agent.
+  ok("the agent module contains no recordWalk call", !/recordWalk\(/.test(SVC_SRC));
+  ok("nor any walk outcome literal", !/outcome: "(not_)?ready"/.test(SVC_SRC));
+  ok("nor a raw walk insert", !/insert\s+into\s+unit_readiness_walks/i.test(SVC_SRC));
+  ok("the readiness service is required for a READ, not a write",
+     /\["readinessService", readinessService, "resolveWalkAuthority"\]/.test(SVC_SRC));
+
+  const s = spy();
+  const svc = makeStaffAgentService(s.deps);
+  const c = fakeClient({ openWork: CTX_WORK });
+  const p = svc.captureMessage(c, {
+    property_id: "prop", actor_user_id: "user", context_unit_id: "u1",
+    text: "Final walk failed. The bathroom door still doesn't latch.",
+  }).then(async (out) => {
+    ok("capture returns the redirect", out.redirect.to === "final_readiness");
+    ok("and NO proposal row", out.proposal === null);
+    ok("no proposal was inserted", !c.inserts.includes("proposal"));
+    ok("the message is still recorded verbatim", c.inserts.includes("message"));
+    ok("recordWalk was never called",
+       !s.calls.some((x) => x.name === "recordWalk"), s.calls.map((x) => x.name).join(","));
+    ok("no canonical WRITE was called at all",
+       s.calls.length === 0, s.calls.map((x) => x.name).join(","));
+    //  The authority sentence matches what was said: nobody claimed readiness.
+    ok("an unauthorised operator is told plainly",
+       /You cannot perform the final readiness walk at this property/.test(out.redirect.message),
+       out.redirect.message);
+    ok("and it does not say 'certify', because nobody claimed readiness",
+       !/cannot certify/.test(out.redirect.message));
+
+    // A legacy failed_final_walk row still cannot be confirmed.
+    let threw = false, msg = "";
+    try {
+      await svc.confirmProposal({
+        query: async () => ({ rows: [{ id: "p3", intent: "failed_final_walk", property_id: "prop", status: "proposed", unit_id: "u1" }] }),
+      }, { proposal_id: "p3", property_id: "prop", actor_user_id: "user" });
+    } catch (e) { threw = true; msg = e.message; }
+    ok("a LEGACY failed_final_walk row cannot be confirmed", threw);
+    ok("and the refusal points at the walk", /final readiness walk/i.test(msg), msg);
+    ok("recordWalk was still never called", !s.calls.some((x) => x.name === "recordWalk"));
+  });
+  module.exports.__p11 = p;
+
+  //  Build 4 is untouched.
+  const { execSync } = require("child_process");
+  const b4 = execSync("git diff --name-only 62b25e8 -- src/maintenance/readiness_service.js src/maintenance/readiness.js src/maintenance/readiness_gate.js migrations/116_readiness_certification.sql",
+    { cwd: __dirname + "/.." }).toString().trim();
+  ok("the Build 4 walk, gate, door and migration are byte-unchanged", b4 === "", b4);
+}
+
+// ════════════════════════════════════════════════════════════════════
+section("12  there is no generic conversational correction");
+{
+  const r = I.classifyIntent("Correction: I meant 304, not 305.", { unit_id: "u1", open_work: CTX_WORK });
+  ok("a generic correction is a redirect", r.intent === "redirect", r.intent);
+  ok("correction is gone from the vocabulary", !I.INTENT_VALUES.includes("correction"));
+  ok("and is recorded as RETIRED", I.RETIRED_INTENTS.includes("correction"));
+  ok("it points at the recorded item", r.redirect.to === "recorded_item");
+  ok("with the plain instruction",
+     r.redirect.message === "Open the recorded item to correct it without erasing its history.",
+     r.redirect.message);
+  ok("and names the unit it concerns", r.redirect.unit_id === "u1");
+  ok("no correction payload is proposed", Object.keys(r.proposed).length === 0);
+  ok("the agent grows no correction framework",
+     !/correctionService|applyCorrection|supersedeProposal/.test(SVC_SRC));
+
+  //  A SCOPE CHANGE IS NOT A CORRECTION. Build 2 already supersedes scope and
+  //  keeps the original — that IS the correction path, so it stays a proposal.
+  for (const t of ["Actually, it needs full paint.", "Actually it's full paint."]) {
+    const s = I.classifyIntent(t, { unit_id: "u1" });
+    ok(`"${t}" still classifies as turn_scope`, s.intent === "turn_scope", s.intent);
+    ok("and carries the new paint level", s.proposed.paint_level === "full", s.proposed.paint_level);
+  }
+  const clean = I.classifyIntent("Actually it needs a deep clean.", { unit_id: "u1" });
+  ok("a cleaning change is turn_scope too", clean.intent === "turn_scope", clean.intent);
+  ok("and carries the level", clean.proposed.cleaning_level === "deep", clean.proposed.cleaning_level);
+  //  ORDERING IS THE DESIGN: the scope branch runs FIRST, so a message that
+  //  changes scope is a scope proposal and only what is left over redirects.
+  ok("correction is checked after the scope branch",
+     INTENT_SRC.indexOf("any(t, S.correction)") > INTENT_SRC.indexOf("PAINT_LEVEL.find"),
+     "the correction check precedes the scope branch");
+
+  const s = spy();
+  const svc = makeStaffAgentService(s.deps);
+  const c = fakeClient({ openWork: CTX_WORK });
+  const p = svc.captureMessage(c, {
+    property_id: "prop", actor_user_id: "user", context_unit_id: "u1",
+    text: "Correction: I meant 304, not 305.",
+  }).then(async (out) => {
+    ok("capture returns the redirect", out.redirect.to === "recorded_item");
+    ok("and NO proposal row", out.proposal === null);
+    ok("no proposal was inserted", !c.inserts.includes("proposal"));
+    ok("no canonical service was called", s.calls.length === 0, s.calls.map((x) => x.name).join(","));
+
+    let threw = false, msg = "";
+    try {
+      await svc.confirmProposal({
+        query: async () => ({ rows: [{ id: "p4", intent: "correction", property_id: "prop", status: "proposed", unit_id: "u1" }] }),
+      }, { proposal_id: "p4", property_id: "prop", actor_user_id: "user" });
+    } catch (e) { threw = true; msg = e.message; }
+    ok("a LEGACY correction row cannot be confirmed", threw);
+    ok("and the refusal preserves history",
+       /without erasing its history/i.test(msg), msg);
+  });
+  module.exports.__p12 = p;
+}
+
+// ════════════════════════════════════════════════════════════════════
+section("13  only triage, scope and completion can become proposals");
+{
+  //  ONE confirmable-intent list, checked before any branch runs. A row from an
+  //  older build cannot fall through into a branch that happens to match.
+  ok("the guard exists and precedes delegation",
+     SVC_SRC.indexOf("CONFIRMABLE_INTENTS.includes(p.intent)") <
+     SVC_SRC.indexOf("unitTriageService.proposeTriage"));
+  ok("the list is the single source", /CONFIRMABLE_INTENTS = Object\.freeze/.test(INTENT_SRC));
+
+  const s = spy();
+  const svc = makeStaffAgentService(s.deps);
+  const p = Promise.all(
+    ["failed_final_walk", "correction", "work_acceptance", "readiness_request", "redirect", "unclear", "invented_intent"]
+      .map(async (intent) => {
+        let threw = false;
+        try {
+          await svc.confirmProposal({
+            query: async () => ({ rows: [{ id: "x", intent, property_id: "prop", status: "proposed", unit_id: "u1" }] }),
+          }, { proposal_id: "x", property_id: "prop", actor_user_id: "user" });
+        } catch (e) { threw = true; }
+        ok(`'${intent}' cannot be confirmed`, threw);
+      })
+  ).then(() => {
+    ok("and no canonical service was reached by ANY of them",
+       s.calls.length === 0, s.calls.map((x) => x.name).join(","));
+  });
+  module.exports.__p13 = p;
+
+  //  Exactly three delegation branches remain in the source.
+  const confirm = SVC_SRC.slice(SVC_SRC.indexOf("async function confirmProposal"));
+  const branches = (confirm.match(/p\.intent === INTENT\.(TRIAGE|SCOPE|COMPLETE)/g) || []);
+  ok("three delegation branches, no more", branches.length === 3, branches.join(","));
+  ok("no retired branch survives in the source",
+     !/INTENT\.(ACCEPT|READINESS|FAILED_WALK|CORRECTION)\b/.test(SVC_SRC));
+}
+
+// ════════════════════════════════════════════════════════════════════
 //  Every async assertion must settle before RESULT prints, or a green line
 //  would be printed before the work that could turn it red.
-Promise.all([module.exports.__p1, module.exports.__p3, module.exports.__p4, module.exports.__p6])
+Promise.all([module.exports.__p1, module.exports.__p3, module.exports.__p4, module.exports.__p6,
+             module.exports.__p11, module.exports.__p12, module.exports.__p13])
   .then(() => {
     section("RESULT");
     console.log("  assertions passed: " + passed);

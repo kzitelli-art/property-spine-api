@@ -17,18 +17,30 @@
 //  correction with history.
 //
 //  ── BUILD 6B: WHAT A MESSAGE MAY DO SHRANK ──────────────────────────
-//  A staff message now serves exactly three purposes:
+//  A staff message serves exactly three purposes, and each maps to exactly
+//  one canonical service:
 //
 //      report a condition · add or correct turn scope · report completed work
 //
-//  Accepting work and certifying readiness were removed from that list. Both
-//  are consequential commitments made against a specific object, where the
-//  operator can see the proof requirement and what the commitment blocks — a
-//  sentence in a thread is too easy to send by accident and too easy to mean
-//  loosely. Neither produces a proposal any more: they produce a REDIRECT,
-//  which never enters the proposal lifecycle, so there is no row anybody could
-//  confirm. The guarantee is now that the state does not exist, rather than
-//  that a confirmation is refused later.
+//  FOUR things were removed from that list, and each removal is the same
+//  argument: a governed action already has a structured door that carries its
+//  authority, its entry conditions and its history, and a second door reached
+//  by typing a sentence is a weaker copy of it.
+//
+//      accepting work        → a tap on the work item (BUILD 3)
+//      certifying readiness  → the final readiness walk (BUILD 4)
+//      a FAILED final walk   → the same walk (BUILD 4)
+//      a generic correction  → the affected record's own correction path
+//
+//  None of them produce a proposal. They produce a REDIRECT, which never
+//  enters the proposal lifecycle, so there is no row anybody could confirm.
+//  The guarantee is that the state does not exist, not that a confirmation is
+//  refused later.
+//
+//  A failed final walk is the sharpest case. It reopens work, records findings
+//  and moves a unit's readiness — Build 4 does all three in one governed act
+//  with authority attached. A message that did the same thing would be a
+//  second final-walk door, and the two would drift.
 // ════════════════════════════════════════════════════════════════════
 
 "use strict";
@@ -36,30 +48,30 @@
 const INTENT = Object.freeze({
   TRIAGE: "initial_triage",
   SCOPE: "turn_scope",
-  REDIRECT: "redirect",
   COMPLETE: "work_completion",
-  FAILED_WALK: "failed_final_walk",
-  CORRECTION: "correction",
+  REDIRECT: "redirect",
   UNCLEAR: "unclear",
 });
 const INTENT_VALUES = Object.freeze(Object.values(INTENT));
 
-//  BUILD 6B: `redirect` maps to NO service. It is a pointer, not an action.
+//  THREE confirmable actions, three canonical services. `redirect` and
+//  `unclear` are response types and may call nothing.
 const INTENT_SERVICE = Object.freeze({
-  redirect: "none — this is a redirect to a structured action, not a proposal",
   initial_triage: "unitTriageService.confirmTriage (BUILD 1)",
   turn_scope: "unitTurnScopeService.confirmScope (BUILD 2)",
   work_completion: "workAcceptanceService.claimCompletion (BUILD 3)",
-  failed_final_walk: "readinessService.recordWalk outcome=not_ready (BUILD 4)",
-  correction: "the canonical correction path for the affected action type",
+  redirect: "none — this is a redirect to a structured action, not a proposal",
   unclear: "none — no service may be called",
 });
+const CONFIRMABLE_INTENTS = Object.freeze(["initial_triage", "turn_scope", "work_completion"]);
 
 //  RETIRED (BUILD 6B). No message produces these any more. Rows written before
 //  this build may still carry them, and those rows stay readable history — but
 //  they can never be confirmed, because the action they name is no longer
 //  something a message may do. Kept as data, not as a code path.
-const RETIRED_INTENTS = Object.freeze(["work_acceptance", "readiness_request"]);
+const RETIRED_INTENTS = Object.freeze([
+  "work_acceptance", "readiness_request", "failed_final_walk", "correction",
+]);
 
 //  ── ONE OPERATOR CONCEPT FOR "I NEED ONE MORE DETAIL" ───────────────
 //  Internally there were two: the intent `unclear` (the message did not map to
@@ -91,13 +103,13 @@ const INTENT_PLAIN = Object.freeze({
   initial_triage: "You reported a unit condition",
   turn_scope: "You added work to the turn",
   work_completion: "You reported work complete",
-  failed_final_walk: "You reported a failed final walk",
-  correction: "You corrected something",
   redirect: "You were pointed at the right place to do that",
   unclear: "Spine needs one more detail",
   // retired — history only
   work_acceptance: "You offered to take on work",
   readiness_request: "You asked about readiness",
+  failed_final_walk: "You reported a failed final walk",
+  correction: "You corrected something",
 });
 
 //  Plain operating language for a proposal's state. `clarification_required`
@@ -174,26 +186,28 @@ function classifyIntent(text, context = {}) {
   const m = t.match(UNIT_REF);
   out.unit_ref = m ? m[1] : null;
 
-  // ── CORRECTION ── highest precedence: it is about a prior action.
-  if (any(t, S.correction)) {
-    out.intent = INTENT.CORRECTION;
-    out.proposed = { corrected_unit_ref: out.unit_ref };
-    out.unknowns.push("A correction applies to the immediately preceding confirmed action. The original stays in history.");
-    return out;
-  }
-
-  // ── FAILED FINAL WALK ── before generic completion, since it contains
-  //    "failed" alongside condition words.
+  // ── A FAILED FINAL WALK IS THE WALK, NOT A MESSAGE (BUILD 6B) ──────
+  //  "Final walk failed. The bathroom door still doesn't latch." used to
+  //  propose a Build 4 failed walk. It no longer does anything of the kind.
+  //
+  //  A failed walk is not a report — it is a governed act that records the
+  //  failed inspection, creates findings, reopens work and moves the unit's
+  //  readiness, all under an authorised person's name. Reproducing that from a
+  //  sentence makes the agent a second final-walk door, and two doors onto one
+  //  act drift. The manager types the same finding INSIDE the structured
+  //  action, where it stays attached to the walk that produced it.
+  //
+  //  Checked before completion, since the sentence contains condition words.
   if (any(t, S.failedWalk)) {
-    out.intent = INTENT.FAILED_WALK;
-    // Everything after the failure statement is the finding text.
-    const after = t.replace(/^.*?(final walk (failed|didn'?t pass)|walk failed|failed the (final )?walk)\.?\s*/i, "");
-    out.proposed = { findings_text: after.trim() || null };
-    if (!after.trim()) {
-      out.clarification = "What did the final walk find?";
-      out.unknowns.push("No specific condition was named, so no work can be created.");
-    }
-    out.unknowns.push("This goes through the Build 4 failed-walk service. Its authority and entry conditions still apply.");
+    out.intent = INTENT.REDIRECT;
+    out.redirect = {
+      to: "final_readiness",
+      reason_code: "failed_walk",
+      message: "Record this through the final readiness walk so the failed inspection, " +
+               "findings, and reopened work remain governed.",
+      link: "#final-readiness",
+    };
+    out.unknowns.push("Nothing has been recorded. The findings belong inside the walk, not in a message.");
     return out;
   }
 
@@ -206,6 +220,7 @@ function classifyIntent(text, context = {}) {
     out.intent = INTENT.REDIRECT;
     out.redirect = {
       to: "final_readiness",
+      reason_code: "readiness_claim",
       message: "Readiness requires the final readiness walk. Open Final Readiness.",
       link: "#final-readiness",
     };
@@ -294,6 +309,34 @@ function classifyIntent(text, context = {}) {
     return out;
   }
 
+  // ── A GENERIC CORRECTION IS NOT AN AGENT ACTION (BUILD 6B) ─────────
+  //
+  //  Deliberately checked LAST, and that ordering is the whole design.
+  //
+  //  "Actually, it needs full paint" is not a correction mechanism — it is a
+  //  new scope statement, and the scope branch above already classified it as
+  //  `turn_scope`, which is the canonical path for changing scope. Build 2
+  //  handles that correctly and keeps the superseded scope in history.
+  //
+  //  What is left here is a message trying to generically alter some earlier
+  //  confirmed action — "I meant 304, not 305." Building a generic correction
+  //  framework for that would mean one mechanism editing records owned by four
+  //  different services, each with its own supersede rule and its own history.
+  //  So it redirects to the record itself, where correction already works.
+  if (any(t, S.correction)) {
+    out.intent = INTENT.REDIRECT;
+    const target = resolveWorkTarget(t, context);
+    out.redirect = {
+      to: "recorded_item",
+      work_id: target.work_id || null,
+      unit_id: context.unit_id || null,
+      message: "Open the recorded item to correct it without erasing its history.",
+      link: target.work_id ? `#work-${target.work_id}` : null,
+    };
+    out.unknowns.push("Nothing has been changed. A correction is made on the record it affects, and the original stays in history.");
+    return out;
+  }
+
   // ── UNCLEAR ── the honest default.
   out.clarification = out.unit_ref
     ? `What did you find in ${out.unit_ref}?`
@@ -359,6 +402,7 @@ function photoNeedsClarification(text, photos) {
 module.exports = {
   classifyIntent, resolveWorkTarget, photoNeedsClarification,
   needsClarification, statusLabel,
-  INTENT, INTENT_VALUES, INTENT_SERVICE, INTENT_PLAIN, RETIRED_INTENTS,
+  INTENT, INTENT_VALUES, INTENT_SERVICE, INTENT_PLAIN,
+  CONFIRMABLE_INTENTS, RETIRED_INTENTS,
   CLARIFICATION_STATUS, CLARIFICATION_LABEL, STATUS_PLAIN, UNIT_REF,
 };

@@ -24,7 +24,7 @@ const stub = () => ({
   unitTriageService: { confirmTriage: async () => ({}), proposeTriage: () => ({}), readUnitTriageState: async () => ({}) },
   unitTurnScopeService: { confirmScope: async () => ({}), propose: () => ({}) },
   workAcceptanceService: { acceptWork: async () => ({}), claimCompletion: async () => ({}) },
-  readinessService: { recordWalk: async () => ({}) },
+  readinessService: { recordWalk: async () => ({}), resolveWalkAuthority: async () => ({}) },
 });
 
 section("E1  NO RAW DOMAIN INSERT EXISTS IN THE AGENT PATH");
@@ -88,13 +88,15 @@ section("E3  all four canonical services are REQUIRED dependencies");
     const d = stub(); delete d.readinessService;
     try { makeStaffAgentService(d); return false; } catch (e) { return /no fallback path/i.test(e.message); }
   })());
-  //  BUILD 6B: acceptWork left this list because acceptance left the agent.
-  //  Every branch that REMAINS still calls a canonical service.
+  //  BUILD 6B: acceptWork and recordWalk left this list because acceptance and
+  //  the failed walk left the agent. THREE confirmable branches remain, and
+  //  each one still calls a canonical service.
   ok("every confirmed branch calls a canonical service",
      /unitTriageService\.confirmTriage/.test(SVC_SRC) &&
      /unitTurnScopeService\.confirmScope/.test(SVC_SRC) &&
-     /workAcceptanceService\.claimCompletion/.test(SVC_SRC) &&
-     /readinessService\.recordWalk/.test(SVC_SRC));
+     /workAcceptanceService\.claimCompletion/.test(SVC_SRC));
+  ok("and there are exactly three of them", I.CONFIRMABLE_INTENTS.length === 3,
+     I.CONFIRMABLE_INTENTS.join(","));
 }
 
 section("E4  an unconfirmed interpretation cannot write truth");
@@ -221,17 +223,29 @@ section("E10  scenario 8 — unit ambiguity and cross-property safety");
      /where id=\$1 and property_id=\$2/.test(SVC_SRC));
 }
 
-section("E11  scenario 9+10 — final walk and readiness");
+section("E11  scenario 9+10 — final walk and readiness (revised by BUILD 6B)");
 {
+  //  BUILD 5 proposed a Build 4 failed walk from this sentence. BUILD 6B
+  //  removed that: a failed walk records findings, reopens work and moves
+  //  readiness under an authorised name, and a message reproducing that is a
+  //  second final-walk door. The manager types the same finding INSIDE the
+  //  walk, where it stays attached to the inspection that produced it.
   const f = I.classifyIntent("Final walk failed. The bathroom door still doesn't latch.");
-  ok("classified as failed final walk", f.intent === "failed_final_walk", f.intent);
-  ok("the finding text is carried", /bathroom door/i.test(f.proposed.findings_text), f.proposed.findings_text);
-  ok("routes to the Build 4 service", /BUILD 4/.test(I.INTENT_SERVICE[f.intent]));
-  ok("states Build 4 authority still applies",
-     f.unknowns.some((u) => /Build 4 failed-walk service/i.test(u)));
+  ok("classified as a redirect, not a failed-walk proposal", f.intent === "redirect", f.intent);
+  ok("failed_final_walk is no longer an intent at all",
+     !I.INTENT_VALUES.includes("failed_final_walk"));
+  ok("it points at the final readiness walk", f.redirect.to === "final_readiness");
+  ok("the copy says why it must be governed",
+     /failed inspection, findings, and reopened work remain governed/.test(f.redirect.message),
+     f.redirect.message);
+  ok("and links to the final-readiness action", f.redirect.link === "#final-readiness");
+  ok("nothing is proposed", Object.keys(f.proposed).length === 0);
+  ok("and it says nothing was recorded",
+     f.unknowns.some((u) => /Nothing has been recorded/i.test(u)));
 
   const bare = I.classifyIntent("Final walk failed.");
-  ok("a bare failure asks what was found", /what did the final walk find/i.test(bare.clarification || ""), bare.clarification);
+  ok("a bare failure redirects too, rather than asking for findings",
+     bare.intent === "redirect" && bare.redirect.to === "final_readiness", bare.intent);
 
   // "304 is ready" MUST NOT certify. BUILD 6B strengthened this: it is no
   // longer a proposal that gets refused at confirmation — it never becomes a
@@ -247,8 +261,12 @@ section("E11  scenario 9+10 — final walk and readiness");
   ok("and points at the governed walk", /operator\/units\/:id\/readiness\/walk/.test(SVC_SRC));
   ok("no certification call exists anywhere in the agent",
      !/certifyReadiness|correctCertification|finishReady/.test(SVC_SRC));
-  ok("the only readiness call is recordWalk with outcome not_ready",
-     /outcome: "not_ready"/.test(SVC_SRC) && !/outcome: "ready"/.test(SVC_SRC));
+  //  BUILD 6B: there is no readiness WRITE left at all. The readiness service
+  //  is injected for one read.
+  ok("the agent never calls recordWalk", !/recordWalk\(/.test(SVC_SRC));
+  ok("nor records any walk outcome", !/outcome: "(not_)?ready"/.test(SVC_SRC));
+  ok("the only readiness call is the authority READ",
+     /readinessService\.resolveWalkAuthority/.test(SVC_SRC));
 }
 
 section("E12  scenario 11+12 — duplicate confirmation and cancellation");
@@ -280,15 +298,27 @@ section("E13  photos are evidence, never a verdict");
   ok("the migration says nothing inspects a photo", /NOTHING INSPECTS IT/.test(MIG));
 }
 
-section("E14  corrections do not invent a mechanism");
+section("E14  corrections do not invent a mechanism (revised by BUILD 6B)");
 {
+  //  BUILD 5 classified this as a `correction` intent that could never be
+  //  confirmed. BUILD 6B removed the intent entirely: a generic correction
+  //  would be one mechanism editing records owned by four services, each with
+  //  its own supersede rule. It redirects to the record instead.
   const r = I.classifyIntent("Correction—it's Unit 305, not 304.");
-  ok("classified as a correction", r.intent === "correction", r.intent);
+  ok("classified as a redirect, not a correction", r.intent === "redirect", r.intent);
+  ok("correction is no longer an intent at all", !I.INTENT_VALUES.includes("correction"));
+  ok("it points at the recorded item", r.redirect.to === "recorded_item");
+  ok("with the plain instruction",
+     /Open the recorded item to correct it without erasing its history/.test(r.redirect.message),
+     r.redirect.message);
   ok("says the original stays in history",
      r.unknowns.some((u) => /original stays in history/i.test(u)));
-  ok("the service refuses to invent a generic correction",
-     /corrections go through the canonical correction path/i.test(SVC_SRC));
-  ok("and tells the operator where to go", /Open the affected record/i.test(SVC_SRC));
+  ok("the service still refuses any stored correction row",
+     /open the recorded item to correct it/i.test(SVC_SRC));
+  //  A SCOPE change is not a generic correction — Build 2 already supersedes.
+  const s = I.classifyIntent("Actually, it needs full paint.", { unit_id: "u1" });
+  ok("a scope correction still classifies as turn_scope", s.intent === "turn_scope", s.intent);
+  ok("and carries the new paint level", s.proposed.paint_level === "full", s.proposed.paint_level);
   ok("no findings or work are moved between units",
      !/update unit_triage_findings set unit_id|update unit_triage_required_work set unit_id/i.test(SVC_SRC));
   ok("a correction is a NEW proposal, never an edit", /corrects_id/.test(MIG));
