@@ -3278,6 +3278,15 @@ app.use("/", require("./src/maintenance/work_acceptance")({ pool, workAcceptance
 const readinessService = require("./src/maintenance/readiness_service")
   .makeReadinessService({ spawnObligationFromEvent, workAcceptanceService });
 app.use("/", require("./src/maintenance/readiness")({ pool, readinessService }));
+
+// ── AUTHENTICATED STAFF AGENT CAPTURE (BUILD 5) ──────────────────────────
+//  A capture DOOR into Builds 1-4, not a second maintenance system. All four
+//  canonical services are REQUIRED — construction fails without any of them,
+//  so the agent cannot exist in a configuration where it would fall back to a
+//  raw insert.
+const staffAgentService = require("./src/agent/staff_agent_service")
+  .makeStaffAgentService({ unitTriageService, unitTurnScopeService, workAcceptanceService, readinessService });
+app.use("/", require("./src/agent/staff_agent")({ pool, staffAgentService }));
 // applications module mounted lower (after the conversion + submission services exist,
 // so /approve can close the leasing_manager application_approval gate). See below.
 const __leasePackets = leasePacketsModule({ pool, satisfyObligation, completeObligation });
