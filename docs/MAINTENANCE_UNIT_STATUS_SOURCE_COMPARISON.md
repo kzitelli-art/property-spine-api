@@ -30,6 +30,27 @@
 > After operator discovery, the contract will be revised. Only then should source be
 > compared against the final operating contract to identify real implementation gaps.
 
+> ## ⚠ STANDING LIMITATION OF BUILD 1 — READ THIS BEFORE TRUSTING ANY READINESS READ
+>
+> **Build 1 protects units that have triage evidence. It does NOT repair the legacy
+> behavior where a unit with no triage evidence may still be derived as `ready` and
+> `marketable`.**
+>
+> The availability overlay shipped in Build 1 is scoped entirely to positions carrying
+> a Build 1 triage fact — a confirmed initial walk, or an open initial-walk obligation.
+> Every other position falls through to the preexisting derivation unchanged.
+>
+> So the §5 defect below is still live in production for the whole legacy estate: a
+> unit with no turnover row and no triage record continues to read `physical_readiness:
+> "ready"` and can still reach `marketable_now` on no evidence at all.
+>
+> This is deliberate. The repair was attempted in Build 1 and withdrawn — see
+> *The single most important finding* — because it would have taken marketable
+> inventory to zero portfolio-wide. Fixing it correctly is separate, unowned work.
+>
+> **Do not read Build 1's existence as evidence that readiness is now honest. It is
+> honest only where somebody has walked the unit.**
+
 **This is an audit document, not an implementation plan.** It maps a draft
 Maintenance Unit-Status Capture operating contract against current source. It designs
 no schema, routes, services, or migrations, and it does not authorize implementation.
