@@ -127,6 +127,23 @@ function marketingState(p, liveOk) {
   //  a UNIT fact the position classifier does not own.
   // ══════════════════════════════════════════════════════════════════
   if (p.triage) {
+    // ── CERTIFIED PHYSICALLY READY (BUILD 4) ─────────────────────────
+    //  The ONLY thing in this system that raises the readiness axis to
+    //  `ready`, and it exists only because a named human signed a
+    //  certification. It is NOT derived from an empty task list.
+    //
+    //  It FALLS THROUGH rather than returning. That is the whole boundary:
+    //  certification settles the PHYSICAL READINESS axis and nothing else, so
+    //  the remaining guards still run and still win. Every guard that outranks
+    //  this block — contested, down, operating designation, evidence
+    //  disagreement, activation pending, successor commitments, a spanning
+    //  lease, possession not returned — has ALREADY returned above, so a
+    //  certified unit carrying any of them never reaches here and never reads
+    //  marketable. Returning `marketable_now` from inside this block would
+    //  have let a certification override another axis; falling through cannot.
+    if (p.triage.certified_ready) {
+      // deliberate no-op: continue to the use-type guards below
+    } else {
     //  A confirmed walk that found a blocker outranks everything below: a
     //  human stood in the unit and reported it. The reason names the
     //  confirmed blocker rather than a generic unavailability.
@@ -143,6 +160,7 @@ function marketingState(p, liveOk) {
     //  would be a wrong statement about a unit a tech just walked, so the two
     //  unknowns stay distinct.
     return { state: "readiness_unknown", reason: "walked_no_blocker_found_readiness_unconfirmed" };
+    }
   }
 
   if (!p.use_type)
@@ -298,6 +316,31 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
           and o.unit_id is not null`,
       [property_id]
     );
+    // ── LIVE READINESS CERTIFICATIONS (BUILD 4) ──────────────────────
+    //  A certification nothing supersedes, in state 'ready'. Revoked and
+    //  corrected rows are superseded by construction and never appear here, so
+    //  a revocation removes readiness by the same mechanism that granted it.
+    const cq = await pool.query(
+      `select c.unit_id, c.id, c.certified_at, c.certified_by_user_id
+         from unit_readiness_certifications c
+         join units u on u.id = c.unit_id
+        where u.property_id = $1 and c.state = 'ready'
+          and not exists (select 1 from unit_readiness_certifications s where s.supersedes_id = c.id)`,
+      [property_id]);
+    for (const r of cq.rows) {
+      const k = String(r.unit_id);
+      const prior = triageByUnit.get(k) || { open_scope: [], pending_walk: false };
+      triageByUnit.set(k, {
+        ...prior,
+        readiness: "ready",
+        readiness_reason: "certified_by_authorized_human",
+        readiness_label: "Physically ready — certified",
+        certified_ready: true,
+        certification_id: r.id,
+        certified_at: r.certified_at,
+      });
+    }
+
     for (const r of wq.rows) {
       const k = String(r.unit_id);
       if (triageByUnit.has(k)) continue;
@@ -350,6 +393,8 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
       //  blocking reason, so a manager does not reconstruct a unit's condition
       //  from work-order notes. Empty array when no confirmed walk exists —
       //  an honest blank, never a fabricated "nothing needed".
+      certified_ready: !!(withOps.triage && withOps.triage.certified_ready),
+      readiness_certification_id: withOps.triage ? (withOps.triage.certification_id || null) : null,
       triage_readiness: withOps.triage ? withOps.triage.readiness : null,
       triage_readiness_label: withOps.triage ? withOps.triage.readiness_label : null,
       open_scope: withOps.triage ? withOps.triage.open_scope : [],

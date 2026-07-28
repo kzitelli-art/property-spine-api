@@ -3270,6 +3270,14 @@ app.use("/", require("./src/maintenance/unit_turn_scope")({ pool, unitTurnScopeS
 const workAcceptanceService = require("./src/maintenance/work_acceptance_service")
   .makeWorkAcceptanceService({ spawnObligationFromEvent });
 app.use("/", require("./src/maintenance/work_acceptance")({ pool, workAcceptanceService, unitTriageService }));
+
+// ── FINAL READINESS WALK AND CERTIFICATION (BUILD 4) ─────────────────────
+//  The only path in the system that may establish `ready`, and only from an
+//  explicit human certification. Reopening prior work goes through
+//  workAcceptanceService so there is one canonical reopen path, not two.
+const readinessService = require("./src/maintenance/readiness_service")
+  .makeReadinessService({ spawnObligationFromEvent, workAcceptanceService });
+app.use("/", require("./src/maintenance/readiness")({ pool, readinessService }));
 // applications module mounted lower (after the conversion + submission services exist,
 // so /approve can close the leasing_manager application_approval gate). See below.
 const __leasePackets = leasePacketsModule({ pool, satisfyObligation, completeObligation });
