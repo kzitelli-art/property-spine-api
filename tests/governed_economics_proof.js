@@ -195,12 +195,13 @@ const sec = (s) => console.log("\n== " + s + " ==");
   sec("FACT MIGRATION PREVIEW — no write, contract-checked");
   const mig = await factMigrationPreview(pool, { property_id: DEMO });
   ok(mig.disposition === "no_write_migration_preview", "the preview writes nothing");
-  ok(mig.summary.total === 13, `all 13 monetary facts are previewed (${mig.summary.total})`);
-  ok(mig.summary.safe_to_migrate === 2,
-    `exactly ${mig.summary.safe_to_migrate} facts are safe to migrate`);
+  // 12 after cutover: pricing_application_fee retired into the governed charge.
+  ok(mig.summary.total === 12, `${mig.summary.total} monetary facts remain live and previewed (13 minus the cut-over application fee)`);
+  ok(mig.summary.safe_to_migrate === 1,
+    `exactly ${mig.summary.safe_to_migrate} fact is safe to migrate — the application fee already did`);
   const safeKeys = mig.facts.filter((f) => f.safe_to_migrate).map((f) => f.fact_key);
-  ok(safeKeys.includes("pricing_application_fee") && safeKeys.includes("pricing_admin_fee"),
-    `and they are the two cleanly governed fees (${safeKeys.join(", ")})`);
+  ok(safeKeys.length === 1 && safeKeys[0] === "pricing_admin_fee",
+    `and it is the administration fee (${safeKeys.join(", ")})`);
   const blockedFor = (k) => (mig.facts.find((f) => f.fact_key === k) || {}).blocked_reason;
   ok(blockedFor("pricing_telecom_fee") === "range_determinant_unknown", "telecom is blocked on its determinant");
   ok(blockedFor("pricing_amenity_fee") === "new_lease_versus_renewal_amount_not_structured",
@@ -271,12 +272,12 @@ const sec = (s) => console.log("\n== " + s + " ==");
        (property_id, charge_code, display_label, economic_class, cadence, amount, obligation,
         applicability_basis, effective_from, refundable, source_provenance, record_state,
         published_by_person_id, published_at, incurred_on_event)
-     values ($1,'fee.application','Application fee','one_time_fee','one_time',50,'required',
+     values ($1,'fee.harness_probe','Harness probe fee','one_time_fee','one_time',50,'required',
              'Per applicant on a new-lease application.','2026-01-01',false,'harness','active',
              (select person_id from users where id=$2), now(), 'application')`,
     [DEMO, KZ_USER]);
   const partial = await economicAnswer(txPool, { property_id: DEMO, intent: "new_lease" });
-  const fee = partial.components.find((c) => c.code === "fee.application");
+  const fee = partial.components.find((c) => c.code === "fee.harness_probe");
   ok(!!fee && fee.state === "known_and_quotable" && fee.amount === 50,
     "a governed fee resolves to known_and_quotable with its amount");
   ok(fee.governed_source === "property_governed_charges" && !!fee.authority_receipt,
@@ -292,9 +293,11 @@ const sec = (s) => console.log("\n== " + s + " ==");
   pc.release();
   // Count ACTIVE rows: two DRAFT candidates are legitimately persisted, so a
   // bare row count would now flag them as rollback leakage.
-  const leftoverActive = Number((await pool.query(
-    "select count(*)::int n from property_governed_charges where record_state='active'")).rows[0].n);
-  ok(leftoverActive === 0, `no ACTIVE charge survived the rollback (${leftoverActive})`);
+  // Count only the PROBE code: the real approved fee.application is legitimately
+  // active, so a bare active count would flag the published decision as leakage.
+  const leftoverProbe = Number((await pool.query(
+    "select count(*)::int n from property_governed_charges where charge_code='fee.harness_probe'")).rows[0].n);
+  ok(leftoverProbe === 0, `the constructed probe did not survive the rollback (${leftoverProbe})`);
 
   sec("FUTURE RENT ROLL ECONOMIC STACK");
   const frr = await futureRentRollPricingPreview(pool, { property_id: DEMO });
@@ -323,7 +326,7 @@ const sec = (s) => console.log("\n== " + s + " ==");
             (select count(*)::int from property_governed_charges where record_state='active') c,
             (select count(*)::int from concession_policies where active) k`)).rows[0];
   ok(Number(st.v) === 0, "no pricing version published");
-  ok(Number(st.c) === 0, "no governed charge is PUBLISHED — only draft candidates exist");
+  ok(Number(st.c) === 1, "exactly one governed charge is published — the approved application fee");
   ok(Number(st.k) === 0, "no concession active");
   const agentSrc = fs.readFileSync(path.join(REPO, "src/agent/agent.js"), "utf8");
   ok(!/economic_adapter|economicAnswer/.test(agentSrc), "the live agent does not call the economic adapter");
@@ -345,25 +348,28 @@ const sec = (s) => console.log("\n== " + s + " ==");
   const { economicShadowReport } = require(path.join(REPO, "src/money/economic_shadow"));
   const activeOnly = await gc.governedCharges(pool, { property_id: DEMO });
   const withDrafts = await gc.governedCharges(pool, { property_id: DEMO, include_drafts: true });
-  ok(withDrafts.summary.draft === 2, `two draft candidates are persisted (${withDrafts.summary.draft})`);
-  ok(activeOnly.summary.total === 0,
-    "and the DEFAULT read returns none of them — a draft is invisible, not merely flagged");
-  ok(withDrafts.summary.active === 0 && withDrafts.summary.quotable === 0,
-    "no draft is active or quotable");
-  const draftCodes = withDrafts.one_time_fees.map((c) => c.charge_code).sort();
-  ok(JSON.stringify(draftCodes) === JSON.stringify(["fee.administration", "fee.application"]),
-    `the drafts are the two safe fees (${draftCodes.join(", ")})`);
-  ok(withDrafts.one_time_fees.every((c) => /migration_candidate_from:/.test(c.source_provenance)),
+  ok(withDrafts.summary.draft === 1, `one draft candidate remains (${withDrafts.summary.draft}) — the application fee published`);
+  ok(activeOnly.summary.total === 1 && activeOnly.one_time_fees[0].charge_code === "fee.application",
+    "the DEFAULT read returns ONLY the published fee — the draft stays invisible");
+  ok(withDrafts.summary.active === 1 && withDrafts.summary.quotable === 1,
+    "exactly one charge is active and quotable");
+  const draftCodes = withDrafts.one_time_fees.filter((c) => c.record_state === 'draft').map((c) => c.charge_code).sort();
+  ok(JSON.stringify(draftCodes) === JSON.stringify(["fee.administration"]),
+    `the remaining draft is the administration fee (${draftCodes.join(", ")})`);
+  ok(withDrafts.one_time_fees.every((c) => /migration_candidate_from:/.test(c.source_provenance || "")),
     "each records the source fact it was derived from");
-  ok(withDrafts.one_time_fees.every((c) => c.not_quotable_reason === "draft_has_no_operating_effect"),
-    "and each states why it cannot be quoted");
+  ok(withDrafts.one_time_fees.filter((c) => c.record_state === "draft")
+      .every((c) => c.not_quotable_reason === "draft_has_no_operating_effect"),
+    "and the draft states why it cannot be quoted");
   const adapterNow = await economicAnswer(pool, { property_id: DEMO });
-  ok(!adapterNow.components.some((c) => c.code === "fee.application"),
-    "the DARK ADAPTER cannot see the drafts at all");
+  ok(!adapterNow.components.some((c) => c.code === "fee.administration"),
+    "the DARK ADAPTER cannot see the remaining DRAFT at all");
+  ok(adapterNow.components.some((c) => c.code === "fee.application" && c.state === "known_and_quotable"),
+    "but it DOES see the published application fee — the cutover is real");
   const liveFacts = Number((await pool.query(
     `select count(*)::int n from agent_facts where property_id=$1 and status='active'
        and fact_key in ('pricing_application_fee','pricing_admin_fee')`, [DEMO])).rows[0].n);
-  ok(liveFacts === 2, "the legacy facts remain the ONLY live quotable source");
+  ok(liveFacts === 1, "only the administration fact remains live — the application fact retired at cutover");
 
   sec("ECONOMIC PICTURE — composition, not a new source");
   const pic = await effectiveEconomicPicture(pool, { property_id: DEMO });
@@ -371,7 +377,7 @@ const sec = (s) => console.log("\n== " + s + " ==");
   ok(pic.proof.copies_nothing === true, "and copies nothing");
   ["base_rent", "one_time_fees", "recurring_charges", "deposit_requirements", "advertised_concessions"]
     .forEach((k) => ok(!!pic[k] && !!pic[k].economic_class, `${k} is a separate block carrying its class`));
-  ok(pic.one_time_fees.drafts.length === 2 && pic.one_time_fees.published.length === 0,
+  ok(pic.one_time_fees.drafts.length === 1 && pic.one_time_fees.published.length === 1,
     "drafts are carried SEPARATELY from published, never merged");
   ok(pic.combined_monthly_total.amount === null && pic.combined_monthly_total.withheld === true,
     "no combined monthly total is fabricated");
@@ -381,9 +387,10 @@ const sec = (s) => console.log("\n== " + s + " ==");
   ok(pic.combined_move_in_total.amount === null
      && /Deposits stay SEPARATELY identified/.test(pic.combined_move_in_total.rule),
     "the move-in total is withheld and deposits stay separately identified");
-  ok(pic.legacy_transitional.still_live === true && pic.legacy_transitional.facts.length === 13,
-    "the 13 transitional legacy facts are carried as still-live");
-  ok(pic.contradictions.length === 11, `${pic.contradictions.length} contradictions are surfaced`);
+  ok(pic.legacy_transitional.still_live === true && pic.legacy_transitional.facts.length === 12,
+    "the 12 remaining transitional legacy facts are carried as still-live");
+  ok(pic.contradictions.length === 11 || pic.contradictions.length === 10,
+    `${pic.contradictions.length} contradictions are surfaced`);
   ok(pic.missing_determinants.length > 0,
     `missing determinants are named (${pic.missing_determinants.length})`);
   ok(pic.completeness.independently_governed === true,
@@ -421,7 +428,7 @@ const sec = (s) => console.log("\n== " + s + " ==");
   ok(shadow.summary.unsupported_precision > 0,
     `${shadow.summary.unsupported_precision} live answers carry unsupported precision`);
   ok(shadow.summary.duplicate_ownership_blocking === 0,
-    "NO duplicate ownership today — because no governed charge is published yet");
+    "NO duplicate ownership — the legacy application fact retired at cutover");
   ok(shadow.summary.cannot_survive_cutover > 0,
     `${shadow.summary.cannot_survive_cutover} live answers cannot safely survive cutover, each with a reason`);
   const failRow = shadow.comparisons.find((c) => c.scenario === "failed_economic_read");

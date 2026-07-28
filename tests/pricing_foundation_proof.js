@@ -110,7 +110,8 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
   console.log("\n== FEES: exactly one live source ==");
   ok(eff.fees.source === "agent_facts" && eff.fees.ownership === "transitional_external",
     "fees are exposed as an explicitly external transitional source");
-  ok(eff.fees.facts.length === 5, `all five approved fee facts are surfaced (${eff.fees.facts.length})`);
+  // FOUR after cutover: the application fee now lives in the governed catalog.
+  ok(eff.fees.facts.length === 4, `${eff.fees.facts.length} transitional fee facts remain (the application fee cut over)`);
   ok(/fee_terms is NOT read as authority/i.test(eff.fees.owner_note),
     "pricing_terms.fee_terms is explicitly not authority during transition");
   ok(!eff.unit_types.some(t => (t.terms || []).some(x => x.fee_terms_present)),

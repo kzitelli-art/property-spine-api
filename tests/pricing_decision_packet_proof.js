@@ -70,7 +70,7 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
   console.log("\n== CONTRADICTION REPORT: graded, no second copy ==");
   const money = await moneyFactContradictions(pool, { property_id: DEMO });
   ok(money.disposition === "review_only_no_governed_copy_created", "the report says it is not a source");
-  ok(money.summary.total === 13, `all thirteen money facts are graded (${money.summary.total})`);
+  ok(money.summary.total === 12, `${money.summary.total} live money facts are graded (13 minus the cut-over application fee)`);
   ok(money.summary.unreviewed === 0, "no money fact is ungraded");
   ok(money.facts.every((f) => VERDICTS.includes(f.verdict)), "every verdict is from the fixed vocabulary");
   const pet = money.facts.find((f) => f.fact_key === "pet_policy");
