@@ -157,16 +157,20 @@ async function governedCharges(pool, { property_id, as_of = null, include_drafts
     effective_from: ymd(c.effective_from),
     effective_until: c.effective_until ? ymd(c.effective_until) : null,
     record_state: c.record_state,
+    quote_state: c.quote_state || "inactive",
+    live_quotable: (c.quote_state === "live"),
     effective_now: effective(c),
     source_provenance: c.source_provenance,
     authority_basis: c.authority_basis,
     published_by: c.published_by,
     published_at: c.published_at,
     // The single question every consumer asks.
-    quotable_precisely: effective(c) && c.amount != null,
+    // Quotable to a PROSPECT requires activation, not merely publication.
+    quotable_precisely: c.quote_state === "live" && effective(c) && c.amount != null,
     not_quotable_reason: !effective(c)
       ? (c.record_state === "draft" ? "draft_has_no_operating_effect" : "not_effective_on_this_date")
-      : c.amount == null ? c.amount_unresolved_reason : null,
+      : c.amount == null ? c.amount_unresolved_reason
+      : c.quote_state !== "live" ? "published_but_not_activated_for_quoting" : null,
   });
 
   const all = rows.map(shape);

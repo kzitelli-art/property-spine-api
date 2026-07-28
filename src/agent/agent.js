@@ -304,13 +304,15 @@ module.exports = function agentModule(deps) {
     // same commit, so there is no instant with two quotable owners and none
     // with zero.
     //
-    // Only ACTIVE, in-window rows with a RESOLVED amount are read. A draft or
+    // Only rows whose QUOTE STATE is live are read. Publication alone is not
+    // enough: a published, cutover-ready term is visible to operators and
+    // invisible here until activation. A draft or
     // an unresolved amount is invisible here exactly as it is everywhere else,
     // which is why the two draft candidates changed nothing before cutover.
     const governedRows = (await client.query(
       `select charge_code, display_label, amount, applicability_basis, published_at
          from property_governed_charges
-        where property_id=$1 and record_state='active' and amount is not null
+        where property_id=$1 and quote_state='live' and amount is not null
           and effective_from <= current_date
           and (effective_until is null or effective_until >= current_date)`,
       [property_id]

@@ -4,11 +4,22 @@
 //  The first real end-to-end economic decision. Three separate actions, each
 //  requiring authority, each producing a receipt.
 //
-//  ── THE ATOMIC RULE ──────────────────────────────────────────────────
-//  Publication and retirement are ONE transaction. There is no instant where
-//  both sources are independently quotable, and none where neither is: the
-//  governed row becomes active in the same statement block that retires the
-//  fact. Rolling back reverts both together.
+//  ── PUBLICATION IS NOT ACTIVATION ────────────────────────────────────
+//  Publishing establishes approved economic truth and sets quote_state to
+//  INACTIVE. The term is then visible to operators as cutover-ready and
+//  invisible to the live assistant.
+//
+//  ── THE ATOMIC RULE (added after the first cutover, not before) ──────
+//  cutOver() activates for quoting, retires the legacy fact, and writes the
+//  receipt in ONE transaction, then RE-READS the owner count and refuses to
+//  commit unless it is exactly one. Two owners or zero owners both roll back.
+//
+//  The application fee itself did NOT cut over this way: publication and
+//  retirement were two separate commits, and the database briefly held two
+//  authoritative-looking rows. The assistant read only the legacy fact
+//  throughout, so no customer answer was wrong — but the seam was not
+//  transactional. This is the correction, and the history is recorded rather
+//  than rewritten.
 //
 //  ── THE DIGEST IS THE APPROVAL ───────────────────────────────────────
 //  Approval binds a hash of the exact reviewed terms. Publication recomputes
@@ -85,14 +96,16 @@ async function approveAndPublish(pool, { property_id, user_id, approved_digest, 
       published_at: new Date().toISOString(),
       legacy_source_still_live: LEGACY_FACT,
       assistant_switched: false,
+      quote_state: 'inactive',
+      note_on_publication: 'Publication establishes approved economic truth. It does NOT make the term quotable — activation is a separate transaction.',
     };
 
     const row = (await client.query(
       `update property_governed_charges
-          set record_state='active', published_by_person_id=$2, published_at=now(),
+          set record_state='active', quote_state='inactive', published_by_person_id=$2, published_at=now(),
               authority_basis=$3, publication_receipt=$4
         where id=$1 and record_state='draft'
-        returning id, charge_code, amount, record_state, published_at`,
+        returning id, charge_code, amount, record_state, quote_state, published_at`,
       [draft.id, actor.acting_person_id,
        JSON.stringify({ verb: "may_publish_pricing", basis: actor.authority_basis }),
        JSON.stringify(receipt)])).rows[0];
@@ -113,25 +126,18 @@ async function approveAndPublish(pool, { property_id, user_id, approved_digest, 
  * governed charges alongside facts, so retirement is the switch.
  */
 async function cutOver(pool, { property_id, user_id, note = null } = {}) {
-  const actor = await actorFromSession(pool, { user_id, property_id, verb: "may_publish_pricing" });
+  const actor = await actorFromSession(pool, { user_id, property_id, verb: 'may_publish_pricing' });
 
   const client = await pool.connect();
   try {
-    await client.query("begin");
+    await client.query('begin');
 
+    // Lock the governed row FIRST so two concurrent cutovers serialise.
     const gov = (await client.query(
-      `select id, amount, record_state, publication_receipt from property_governed_charges
-        where property_id=$1 and charge_code=$2 and record_state='active'`,
+      `select id, amount, record_state, quote_state from property_governed_charges
+        where property_id=$1 and charge_code=$2 and record_state='active' for update`,
       [property_id, CHARGE_CODE])).rows[0];
-    if (!gov) { const e = new Error("nothing published to cut over to"); e.httpStatus = 409; throw e; }
-
-    // Retire the legacy fact IN THE SAME TRANSACTION. Before this statement
-    // the fact is the only source; after it the governed row is. There is no
-    // committed state in which both answer, and none in which neither does.
-    const retired = (await client.query(
-      `update agent_facts set status='retired'
-        where property_id=$1 and fact_key=$2 and status='active'
-        returning fact_key, status`, [property_id, LEGACY_FACT])).rows;
+    if (!gov) { const e = new Error('nothing published to cut over to'); e.httpStatus = 409; throw e; }
 
     const receipt = {
       cutover_at: new Date().toISOString(),
@@ -140,21 +146,56 @@ async function cutOver(pool, { property_id, user_id, note = null } = {}) {
       authority_basis: actor.authority_basis,
       governed_charge_id: gov.id,
       governed_amount: Number(gov.amount),
-      legacy_retired: retired.map((r) => r.fact_key),
-      atomicity: "publication already active; retirement committed in one transaction with this receipt",
-      rollback: "reinstating the fact and deactivating the charge must also be one transaction",
       note,
+      atomicity: 'activation, legacy retirement and this receipt commit in ONE transaction. ' +
+                 'If any statement fails, none commit.',
+      rollback: 'deactivate and reinstate together, in one transaction.',
     };
 
-    await client.query(
-      `update property_governed_charges set publication_receipt =
-         coalesce(publication_receipt,'{}'::jsonb) || $2::jsonb where id=$1`,
-      [gov.id, JSON.stringify({ cutover: receipt, assistant_switched: true })]);
+    // ── the three statements that must succeed or fail together ──
+    // 1. ACTIVATE for quoting.
+    const activated = (await client.query(
+      `update property_governed_charges
+          set quote_state='live', activated_at=now(), activated_by_person_id=$2, cutover_receipt=$3
+        where id=$1 and quote_state='inactive'
+        returning id, quote_state`,
+      [gov.id, actor.acting_person_id, JSON.stringify(receipt)])).rows[0];
+    if (!activated) {
+      const e = new Error('the term was not in an inactive, activatable state');
+      e.httpStatus = 409; e.publicMessage = e.message; throw e;
+    }
 
-    await client.query("commit");
+    // 2. RETIRE the legacy source.
+    const retired = (await client.query(
+      `update agent_facts set status='retired'
+        where property_id=$1 and fact_key=$2 and status='active'
+        returning fact_key`, [property_id, LEGACY_FACT])).rows;
+
+    // 3. REFUSE a committed state with two live owners or none.
+    const live = (await client.query(
+      `select (select count(*)::int from property_governed_charges
+                 where property_id=$1 and charge_code=$2 and quote_state='live') g,
+              (select count(*)::int from agent_facts
+                 where property_id=$1 and fact_key=$3 and status='active') f`,
+      [property_id, CHARGE_CODE, LEGACY_FACT])).rows[0];
+    const owners = Number(live.g) + Number(live.f);
+    if (owners !== 1) {
+      const e = new Error(owners > 1
+        ? 'refusing to commit: two live quotable owners'
+        : 'refusing to commit: no live quotable owner — that is a silent gap');
+      e.httpStatus = 409; e.publicMessage = e.message; throw e;
+    }
+
+    receipt.legacy_retired = retired.map((r) => r.fact_key);
+    receipt.live_owners_after = owners;
+    await client.query(
+      'update property_governed_charges set cutover_receipt=$2 where id=$1',
+      [gov.id, JSON.stringify(receipt)]);
+
+    await client.query('commit');
     return { cut_over: true, receipt };
   } catch (e) {
-    await client.query("rollback").catch(() => {});
+    await client.query('rollback').catch(() => {});
     throw e;
   } finally { client.release(); }
 }
