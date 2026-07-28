@@ -1455,6 +1455,40 @@ module.exports = function operatorModule(deps) {
 
   // THE ONE DECISION. Read-only; approval is a separate explicit action that
   // is deliberately NOT mounted until ownership approves.
+  // APPROVE + PUBLISH. Mounted on ownership approval 2026-07-27. Publishes
+  // ONLY fee.application and leaves the assistant on the legacy source.
+  router.post("/operator/economics/application-fee/approve", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { approveAndPublish } = require("../money/application_fee_cutover");
+      return res.json(await approveAndPublish(pool, {
+        property_id: req.operator.property_id, user_id: req.operator.id,
+        approved_digest: (req.body && req.body.approved_digest) || null,
+        note: (req.body && req.body.note) || null,
+      }));
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
+  });
+
+  // THE ATOMIC CUTOVER. Retires the legacy fact in one transaction.
+  router.post("/operator/economics/application-fee/cutover", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { cutOver } = require("../money/application_fee_cutover");
+      return res.json(await cutOver(pool, {
+        property_id: req.operator.property_id, user_id: req.operator.id,
+        note: (req.body && req.body.note) || null,
+      }));
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
+  });
+
+  router.get("/operator/economics/application-fee/one-source", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { oneSourceProof } = require("../money/application_fee_cutover");
+      return res.json(await oneSourceProof(pool, { property_id: req.operator.property_id }));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
   router.get("/operator/economics/application-fee-decision", requireOperator, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {

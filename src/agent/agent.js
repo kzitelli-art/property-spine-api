@@ -297,6 +297,35 @@ module.exports = function agentModule(deps) {
       source: r.source_type, confirmed_at: r.confirmed_at,
     }));
 
+    // ── GOVERNED CHARGES ARE FACTS TOO ────────────────────────────────
+    // A published governed charge is read here ALONGSIDE the curated facts,
+    // rendered into the same shape. This is what makes cutover atomic: the
+    // legacy fact retiring and the governed row becoming the answer are the
+    // same commit, so there is no instant with two quotable owners and none
+    // with zero.
+    //
+    // Only ACTIVE, in-window rows with a RESOLVED amount are read. A draft or
+    // an unresolved amount is invisible here exactly as it is everywhere else,
+    // which is why the two draft candidates changed nothing before cutover.
+    const governedRows = (await client.query(
+      `select charge_code, display_label, amount, applicability_basis, published_at
+         from property_governed_charges
+        where property_id=$1 and record_state='active' and amount is not null
+          and effective_from <= current_date
+          and (effective_until is null or effective_until >= current_date)`,
+      [property_id]
+    )).rows;
+    for (const g of governedRows) {
+      facts.push({
+        fact_key: g.charge_code,
+        category: "pricing",
+        rendered_text: `The ${String(g.display_label).toLowerCase()} is $${Number(g.amount).toLocaleString()}` +
+          (g.applicability_basis ? ` — ${g.applicability_basis}` : "."),
+        source: "governed_charge",
+        confirmed_at: g.published_at,
+      });
+    }
+
     let unit = null;
     if (unit_id) {
       const u = (await client.query(
