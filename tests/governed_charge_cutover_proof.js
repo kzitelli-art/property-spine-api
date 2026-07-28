@@ -252,6 +252,26 @@ ok("D · adapter.termsDigest === generalized termsDigest for identical terms",
 ok("D · adapter.termsDigest defaults charge_code for a bare row",
   adapter.termsDigest({ ...liveish, charge_code: undefined }) === nu.termsDigest(liveish));
 
+// ── LAYER F — PUBLISHED IS NOT QUOTABLE ──────────────────────────────
+// oneSourceProof counted record_state='active' as an operating owner, so the
+// instant fee.administration was published — correctly, deliberately, without
+// touching the live answer — it reported "TWO_INDEPENDENT_OWNERS — must never
+// ship" about a designed state. A proof that cries wolf over the intended
+// sequence is a proof nobody will trust at cutover.
+const proofSrc = require("fs").readFileSync(
+  require("path").join(__dirname, "../src/money/governed_charge_cutover.js"), "utf8");
+const proofFn = proofSrc.split("async function oneSourceProof")[1].split("module.exports")[0];
+
+ok("F · the owner count keys on quote_state, not record_state",
+  /govQuotable\s*=\s*gov\.filter\(\(g\) => g\.quote_state === "live"\)/.test(proofFn),
+  "the operating-owner filter is not quote_state='live'");
+ok("F · governed_active is derived from the quotable set",
+  /const govActive = govQuotable/.test(proofFn));
+ok("F · a published-but-inactive charge is reported, not counted as an owner",
+  /governed_published_inactive/.test(proofFn) && /published_not_yet_live/.test(proofFn));
+ok("F · the published-inactive note says it quotes nobody",
+  /quotes nobody yet/.test(proofFn));
+
 // ── LAYER E — assessed_per: WHAT THE CHARGE IS ASSESSED AGAINST (110) ─
 // The dimension that was missing entirely: "per applicant" and "per unit"
 // lived only in applicability_basis prose, so a structured renderer dropped

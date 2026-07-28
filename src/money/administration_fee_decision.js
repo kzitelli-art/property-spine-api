@@ -111,12 +111,23 @@ async function administrationFeeDecision(pool, { property_id, user_id = null } =
   }
   const rendered = governed ? renderChargeTerms(governed) : { quotable: false, reason: "unavailable" };
   const decided = !!ruling;
+  const legacyLive = !!(legacy && legacy.status === "active");
 
   return {
     question: decided && rendered.quotable
       ? `Publish this governed term: ${rendered.text}`
       : "Should Property Spine govern the administration fee as $99 per unit?",
-    state: governed ? governed.record_state : "unavailable",
+    // DERIVED, not the raw column. This returned governed.record_state, so the
+    // moment the term was published it emitted "active" — a value outside the
+    // card's state vocabulary, and the browser fell through to
+    // "UNAVAILABLE — COULD NOT BE READ" for a perfectly readable published
+    // term. Telling an operator the system failed when it did not is the worst
+    // direction to be wrong in. Same derivation the application card uses.
+    state: !governed ? "unavailable"
+      : governed.record_state === "retired" ? "rejected"
+      : governed.record_state === "active" && legacyLive ? "cutover_ready"
+      : governed.record_state === "active" ? "live"
+      : governed.record_state,
     // Read from the row, never asserted.
     amount: governed ? governed.amount : null,
     amount_display: governed && governed.amount != null

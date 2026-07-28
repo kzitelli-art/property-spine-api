@@ -470,7 +470,20 @@ async function oneSourceProof(pool, { property_id, charge_code } = {}) {
     `select fact_key, status, rendered_text from agent_facts
       where property_id=$1 and fact_key = any($2::text[])`, [property_id, legacyKeys])).rows;
 
-  const govActive = gov.filter((g) => g.record_state === "active");
+  // ── PUBLISHED IS NOT QUOTABLE ─────────────────────────────────────
+  // An OPERATING owner is one a resident can actually be told. The assistant
+  // reads quote_state='live' and nothing else, so a published-but-inactive
+  // charge is approved institutional truth that quotes nobody.
+  //
+  // This previously counted record_state='active' as an owner, which meant the
+  // moment fee.administration was published — correctly, deliberately, and
+  // without touching the live answer — this proof screamed
+  // "TWO_INDEPENDENT_OWNERS — must never ship" about a designed state. A proof
+  // that cries wolf over the intended sequence trains people to ignore it, and
+  // it is exactly the alarm that must be trusted at cutover.
+  const govQuotable = gov.filter((g) => g.quote_state === "live");
+  const govPublishedInactive = gov.filter((g) => g.record_state === "active" && g.quote_state !== "live");
+  const govActive = govQuotable;
   const factActive = fact.filter((f) => f.status === "active");
 
   // Any OTHER live fact whose prose carries this amount is a co-owner nobody
@@ -492,10 +505,19 @@ async function oneSourceProof(pool, { property_id, charge_code } = {}) {
   return {
     charge_code,
     legacy_keys_checked: legacyKeys,
+    // Kept for contract compatibility; now means "governed rows a resident can
+    // actually be quoted", which is what every caller assumed it meant.
     governed_active: govActive.length,
     legacy_active: factActive.length,
     quotable_sources: quotableSources,
     exactly_one: quotableSources === 1,
+    // Approved institutional truth that is deliberately not quoting anyone.
+    // Reported so the published-inactive window is visible rather than silent.
+    governed_published_inactive: govPublishedInactive.length,
+    published_not_yet_live: govPublishedInactive.map((g) => ({
+      charge_id: g.id, amount: g.amount == null ? null : Number(g.amount),
+      note: "published and approved, awaiting activation — quotes nobody yet",
+    })),
     the_source: govActive.length === 1 ? "property_governed_charges"
       : factActive.length === 1 ? "agent_facts" : "none",
     retired_history_retained: fact.some((f) => f.status === "retired"),
