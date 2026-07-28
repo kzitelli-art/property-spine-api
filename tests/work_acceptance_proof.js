@@ -200,11 +200,23 @@ section("C7  management exceptions — routine success is quiet");
   ok("a completion claim short of proof raises an exception",
      codes({ flow: flowClean, now, workStates: [state({ latest_claim: { outcome: "completed", proof_satisfied: false, proof_shortfall: "Missing a completion photo." } })] })
        .includes("proof_missing"));
-  ok("accepted with no date AND a committed move-in raises timing",
+  ok("accepted work with no WORK due date + a committed move-in raises it",
      codes({ flow: flowClean, now, nextMoveIn: { move_in_date: "2026-08-01", days_remaining: 4 }, workStates: [state()] })
-       .includes("unresolved_timing"));
-  ok("accepted with no date and NO move-in does not",
-     !codes({ flow: flowClean, now, workStates: [state()] }).includes("unresolved_timing"));
+       .includes("work_due_commitment_missing"));
+  ok("accepted with no work due date and NO move-in does not",
+     !codes({ flow: flowClean, now, workStates: [state()] }).includes("work_due_commitment_missing"));
+  // The rename exists so a manager cannot read this as "no committed move-in",
+  // which is the opposite situation and calls for the opposite response.
+  const ex = svc.workExceptions({ flow: flowClean, now,
+    nextMoveIn: { move_in_date: "2026-08-01", days_remaining: 4 }, workStates: [state()] })
+    .find((e) => e.code === "work_due_commitment_missing");
+  ok("the label names the WORK's due date, not a move-in commitment",
+     /due date for the work itself/i.test(ex.label), ex.label);
+  ok("the detail distinguishes the two dates explicitly",
+     /due date for the work/i.test(ex.detail) && /resident's move-in is committed/i.test(ex.detail), ex.detail);
+  ok("no exception code could be misread as being about a move-in commitment",
+     !codes({ flow: flowClean, now, nextMoveIn: { move_in_date: "2026-08-01", days_remaining: 4 }, workStates: [state()] })
+       .some((c) => /^unresolved_timing$|no_committed_date/.test(c)));
   ok("reopened work with a committed move-in raises an exception",
      codes({ flow: flowClean, now, nextMoveIn: { move_in_date: "2026-08-01", days_remaining: 4 },
              workStates: [state({ reopened_count: 1, due_at: "2026-07-30T17:00:00Z" })] })

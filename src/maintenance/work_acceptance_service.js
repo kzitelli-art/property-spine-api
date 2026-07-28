@@ -420,12 +420,21 @@ function makeWorkAcceptanceService(deps) {
         detail: `${flow.unassigned_count} actionable item${flow.unassigned_count === 1 ? "" : "s"} nobody has accepted.` });
     }
 
-    // Accepted, actionable, and no commitment. "Somebody will get to it" is
-    // not a date, and a turn with a committed move-in cannot run on it.
+    // Accepted, actionable, and nobody named a date for THE WORK.
+    // "Somebody will get to it" is not a date, and a turn with a committed
+    // move-in cannot run on it.
+    //
+    // NAMING: this is about the WORK's due commitment, never the resident's
+    // move-in. An earlier draft read `unresolved_timing` / "Accepted work with
+    // no committed date", which sits one line away from a move-in date on the
+    // same surface — a manager could reasonably read it as "no committed
+    // move-in", which is the opposite situation and calls for the opposite
+    // response. The code and the label both now say WORK DUE explicitly.
     const noDate = workStates.filter((s) => s.accepted && !s.due_at && s.status === "required");
     if (noDate.length && nextMoveIn) {
-      out.push({ code: "unresolved_timing", label: "Accepted work with no committed date",
-        detail: `${noDate.length} accepted item${noDate.length === 1 ? "" : "s"} has no due commitment, with a move-in on ${nextMoveIn.move_in_date}.` });
+      out.push({ code: "work_due_commitment_missing",
+        label: "Accepted work has no due date for the work itself",
+        detail: `${noDate.length} accepted item${noDate.length === 1 ? "" : "s"} has no due date for the work, and the resident's move-in is committed for ${nextMoveIn.move_in_date}.` });
     }
 
     const missed = workStates.filter(
