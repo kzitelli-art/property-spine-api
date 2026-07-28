@@ -1489,6 +1489,82 @@ module.exports = function operatorModule(deps) {
     } catch (e) { return res.status(500).json({ error: e.message }); }
   });
 
+  // ── ADMINISTRATION FEE — the SAME generalized lifecycle as the $50 ────
+  // Thin adapters only: each supplies charge_code fee.administration and its
+  // declared legacy owner, and every rule executes in
+  // governed_charge_cutover.js. Publication and activation remain SEPARATE
+  // actions, exactly as they are for the application fee — publishing
+  // establishes approved truth; only cutover makes a term quotable.
+  router.post("/operator/economics/administration-fee/approve", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { approveAndPublish } = require("../money/administration_fee_cutover");
+      return res.json(await approveAndPublish(pool, {
+        property_id: req.operator.property_id, user_id: req.operator.id,
+        approved_digest: (req.body && req.body.approved_digest) || null,
+        note: (req.body && req.body.note) || null,
+      }));
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
+  });
+
+  router.post("/operator/economics/administration-fee/cutover", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { cutOver } = require("../money/administration_fee_cutover");
+      return res.json(await cutOver(pool, {
+        property_id: req.operator.property_id, user_id: req.operator.id,
+        note: (req.body && req.body.note) || null,
+      }));
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
+  });
+
+  router.get("/operator/economics/administration-fee/one-source", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { oneSourceProof } = require("../money/administration_fee_cutover");
+      return res.json(await oneSourceProof(pool, { property_id: req.operator.property_id }));
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
+  // READINESS EVIDENCE — what stands between the recorded ruling and a
+  // publishable term. Read-only; runs the same publication contract that
+  // approveAndPublish re-runs, so the operator cannot be told it is ready and
+  // then refused.
+  router.get("/operator/economics/administration-fee/readiness", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { governedCharges, checkChargePublishable } = require("../money/governed_charges");
+      const { termsDigest } = require("../money/administration_fee_cutover");
+      const cat = await governedCharges(pool, { property_id: req.operator.property_id, include_drafts: true });
+      const row = (cat.one_time_fees || []).find((c) => c.charge_code === "fee.administration") || null;
+      if (!row) return res.json({ charge_code: "fee.administration", state: "unavailable" });
+      const ruling = (await pool.query(
+        `select id, selected_answer, occurred_at, prior_terms_digest, resulting_terms_digest,
+                changed_fields_json
+           from governed_charge_rulings
+          where property_id=$1 and governed_charge_id=$2
+          order by occurred_at desc limit 1`,
+        [req.operator.property_id, row.charge_id])).rows[0] || null;
+      const check = checkChargePublishable({ ...row, property_id: req.operator.property_id },
+        { property_id: req.operator.property_id, actor_may_publish: true });
+      return res.json({
+        charge_code: "fee.administration",
+        record_state: row.record_state, quote_state: row.quote_state,
+        current_terms_digest: termsDigest(row),
+        ruling_recorded: !!ruling,
+        ruling: ruling ? { answer: ruling.selected_answer, occurred_at: ruling.occurred_at,
+                           changed_fields: ruling.changed_fields_json,
+                           digest_after_ruling: ruling.resulting_terms_digest } : null,
+        // A digest recorded by the ruling that no longer matches the row means
+        // the draft moved again after the decision — the ruling would need
+        // revisiting before publication.
+        ruling_still_matches_row: ruling ? ruling.resulting_terms_digest === termsDigest(row) : null,
+        publishable: check.publishable,
+        blockers: check.blockers,
+      });
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+  });
+
   router.get("/operator/economics/administration-fee-decision", requireOperator, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {

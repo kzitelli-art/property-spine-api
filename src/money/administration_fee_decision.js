@@ -22,6 +22,7 @@
 
 const { resolveActorContext } = require("../identity/actor_context");
 const { governedCharges } = require("./governed_charges");
+const { renderChargeTerms, ASSESSED_PHRASE } = require("./governed_charge_language");
 
 const CHARGE_CODE = "fee.administration";
 const LEGACY_FACT = "pricing_admin_fee";
@@ -77,7 +78,7 @@ async function renewalEvidence(pool, property_id) {
 async function administrationFeeDecision(pool, { property_id, user_id = null } = {}) {
   if (!property_id) throw new Error("administrationFeeDecision requires property_id");
 
-  let charges, legacy, actor, evidence;
+  let charges, legacy, actor, evidence, ruling = null;
   try {
     charges = await governedCharges(pool, { property_id, include_drafts: true });
     legacy = (await pool.query(
@@ -93,22 +94,68 @@ async function administrationFeeDecision(pool, { property_id, user_id = null } =
   const governed = (charges.one_time_fees || []).find((c) => c.charge_code === CHARGE_CODE) || null;
   const mayDecide = !!(actor && actor.ok && actor.capabilities.may_publish_pricing);
 
+  // ── THE RECORDED RULING, IF ONE EXISTS ────────────────────────────
+  // Until a ruling was recorded this card hard-coded "Undecided" and "not yet
+  // determined". Once the ruling landed those strings became false while the
+  // row said otherwise — the same duplicated-meaning defect the application
+  // card had. Everything below now derives from the row and its ruling.
+  if (governed) {
+    try {
+      ruling = (await pool.query(
+        `select id, selected_answer, occurred_at, prior_terms_digest, resulting_terms_digest,
+                changed_fields_json, authority_exercised, actor_person_id
+           from governed_charge_rulings
+          where property_id=$1 and governed_charge_id=$2
+          order by occurred_at desc limit 1`, [property_id, governed.charge_id])).rows[0] || null;
+    } catch (e) { ruling = null; }
+  }
+  const rendered = governed ? renderChargeTerms(governed) : { quotable: false, reason: "unavailable" };
+  const decided = !!ruling;
+
   return {
-    question: "Should Property Spine govern the administration fee as $99 per unit?",
+    question: decided && rendered.quotable
+      ? `Publish this governed term: ${rendered.text}`
+      : "Should Property Spine govern the administration fee as $99 per unit?",
     state: governed ? governed.record_state : "unavailable",
-    amount: 99, amount_display: "$99",
+    // Read from the row, never asserted.
+    amount: governed ? governed.amount : null,
+    amount_display: governed && governed.amount != null
+      ? `$${Number(governed.amount).toLocaleString("en-US")}` : null,
     economic_class: "one-time fee",
-    applies_to: "Undecided — see the open question",
-    basis: "Per unit",
+    applies_to: decided
+      ? (governed.applies_to || []).map((a) => a.replace(/_/g, " ")).join(" and ") || "nothing"
+      : "Undecided — see the open question",
+    basis: governed && ASSESSED_PHRASE[governed.assessed_per]
+      ? ASSESSED_PHRASE[governed.assessed_per].replace(/^p/, "P") : null,
     effective_date: null,
 
+    // ── WHAT OWNERSHIP DECIDED ──────────────────────────────────────
+    ruling_recorded: decided,
+    ruling: decided ? {
+      answer: ruling.selected_answer,
+      label: ruling.selected_answer === "new_lease_only"
+        ? "New lease only — a renewing resident is not charged this fee"
+        : "New lease and renewal",
+      decided_at: ruling.occurred_at,
+      changed: ruling.changed_fields_json,
+      authority_exercised: ruling.authority_exercised,
+      // The prose that was superseded stays recoverable through the ruling
+      // record; it is deliberately NOT shown here as current explanation.
+      history_is_append_only: true,
+    } : null,
+
     // ── THE THING THAT MUST BE ANSWERED FIRST ───────────────────────
+    // `preselected` stays null while undecided so the card can never arrive
+    // with the answer already filled in. Once a ruling exists it carries that
+    // answer — continuing to present a decided question as open is its own
+    // kind of dishonesty.
     open_question: {
+      answered: decided,
       question: "Is the $99 administration fee charged only for a new lease, or again when an " +
                 "existing resident renews?",
       why_it_matters: "It changes what a renewing resident is told they owe, and whether renewal " +
                       "economics carry another one-time $99.",
-      preselected: null,
+      preselected: decided ? ruling.selected_answer : null,
       rulings: [
         { ruling: "new_lease_only",
           label: "New lease only",
@@ -130,7 +177,9 @@ async function administrationFeeDecision(pool, { property_id, user_id = null } =
     },
     after_cutover: {
       source: "Governed administration fee",
-      the_ai_will_say: "Depends on the ruling above — not yet determined.",
+      // Derived by the SAME renderer the assistant uses — no second wording.
+      the_ai_will_say: rendered.quotable ? rendered.text : null,
+      not_quotable_reason: rendered.quotable ? null : rendered.reason,
       legacy_retires: true,
       legacy_retires_when: "In the same transaction that activates the governed term.",
     },
@@ -139,17 +188,21 @@ async function administrationFeeDecision(pool, { property_id, user_id = null } =
       "Rent — no pricing version is published",
       "Recurring charges, deposits and concessions",
     ],
-    unresolved_issues: ["Renewal applicability is undecided."],
+    unresolved_issues: decided ? [] : ["Renewal applicability is undecided."],
 
     actions: {
-      // Deliberately false for everyone: authority is not the blocker here.
-      may_approve: false,
+      // Before the ruling this was false for EVERYONE: the blocker was the
+      // question, not authority. The question is now answered, so authority
+      // becomes the real gate again — and only for someone who holds it.
+      may_approve: decided && mayDecide,
       may_modify: mayDecide,
       may_reject: mayDecide,
-      denied_reason: mayDecide
+      denied_reason: !decided
         ? "This can’t be approved yet — the renewal question above has to be answered first."
-        : "You don’t have pricing authority for this property.",
-      approve_label: "Approve — blocked until renewal applicability is decided",
+        : mayDecide ? null : "You don’t have pricing authority for this property.",
+      approve_label: decided
+        ? "Approve — publish this governed term"
+        : "Approve — blocked until renewal applicability is decided",
       modify_label: "Modify — return to preview",
       reject_label: "Reject — keep the current source",
     },
