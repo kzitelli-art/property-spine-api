@@ -1,6 +1,7 @@
 # Property Spine — Thread Handoff
 
-**Closing state: 2026-07-28** · api `0bbd179` · app `ae7abe3`
+**Closing state: 2026-07-28** · api `eaa1bd9` (live) · app `ae7abe3` (live)
+**Independently audited 2026-07-28** — see *Audit corrections* at the foot.
 Start here. Nothing in this file requires reconstructing the prior conversation.
 
 ---
@@ -42,9 +43,14 @@ governed_active 1 · legacy_active 0 · quotable_sources 1
 verdict: one_canonical_truth
 ```
 
-Enforced by `uq_gc_one_live_owner` (partial unique index) plus an
+Enforced by `uq_gc_active_code` (one ACTIVE row per code) combined with
+`ck_gc_live_requires_active_amount` (live implies active), plus an
 inside-transaction owner recount in `cutOver()` that refuses to commit on two
 owners *or* zero.
+
+`uq_gc_one_live_owner` also exists but is **provably unreachable** — a second
+live row is blocked by `uq_gc_active_code` first. It is defence in depth, not
+the enforcer. An earlier draft of this document credited it wrongly.
 
 ## Demo authority
 
@@ -171,3 +177,38 @@ restored.
 `PRICING_GOVERNANCE.md` · `IDENTITY_AND_AUTHORITY.md` ·
 `GOVERNED_ECONOMIC_TERMS.md` · `ECONOMIC_CONVERGENCE.md` ·
 `ECONOMIC_DECISION_ROOM.md` · `AUTHORITY_RULING_EXECUTION.md`
+
+---
+
+## Audit corrections (2026-07-28)
+
+An independent verification pass re-proved the deployed state from scratch,
+assuming this document was wrong. It was, in three places.
+
+1. **The one-live-owner enforcer was misattributed.** `uq_gc_one_live_owner`
+   cannot fire: `ck_gc_live_requires_active_amount` forces live ⇒ active, and
+   `uq_gc_active_code` already forbids two active rows per code. The probe
+   confirmed the duplicate is rejected by `uq_gc_active_code`. The invariant
+   holds and is enforced — the mechanism named was wrong. Corrected above.
+2. **The commit reference was stale by one.** It named the commit before the
+   handoff commit itself. Now `eaa1bd9`, which is what Render serves.
+3. **A harness assertion had been weakened.** `contradictions.length === 11`
+   was relaxed to `11 || 10` during the cutover so it would keep passing. An
+   assertion that accepts two answers is not an assertion. It is now pinned to
+   the exact eleven fact keys **by name** — strictly stronger than the
+   original count. The real value never moved.
+
+### Code-proven, not data-proven
+
+- **Cross-property composite FK** on `property_governed_charges` is
+  structurally present but **cannot be violated in a test today** — only Demo
+  Building has governed unit types, so there is no foreign type to reference.
+- **`move_in_requirements` still mentions "application fee"** in prose (no
+  amount) and is still live. It is not a competing *value*, so the
+  one-quotable-owner invariant holds for the $50 — but the phrase survives and
+  is known cleanup.
+- **UI states approved / published-not-live / cutover-ready / rejected** cannot
+  be produced without another publication. Code-proven only.
+- **The live assistant was not asked live questions.** Doing so sends real SMS.
+  What it *would* resolve was proven by reading its exact fact-resolution query
+  against the live database instead.

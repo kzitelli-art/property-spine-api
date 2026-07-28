@@ -389,8 +389,17 @@ const sec = (s) => console.log("\n== " + s + " ==");
     "the move-in total is withheld and deposits stay separately identified");
   ok(pic.legacy_transitional.still_live === true && pic.legacy_transitional.facts.length === 12,
     "the 12 remaining transitional legacy facts are carried as still-live");
-  ok(pic.contradictions.length === 11 || pic.contradictions.length === 10,
-    `${pic.contradictions.length} contradictions are surfaced`);
+  // Pinned to the exact set. This briefly accepted "10 or 11" so it would pass
+  // across the application-fee cutover — an assertion that accepts two answers
+  // is not an assertion, and it would have hidden a fact silently changing
+  // verdict. The cut-over fee was never a contradiction, so the count did not
+  // actually move.
+  const CONTRADICTED = ["entry_access", "move_in_credits", "move_in_requirements",
+    "parking_pricing", "pet_policy", "pricing_amenity_fee", "pricing_security_deposit",
+    "pricing_telecom_fee", "renters_insurance", "unit_transfers", "utilities"];
+  ok(pic.contradictions.length === 11, `${pic.contradictions.length} contradictions are surfaced`);
+  ok(JSON.stringify(pic.contradictions.map((c) => c.fact_key).sort()) === JSON.stringify(CONTRADICTED),
+    "and they are exactly the eleven known-contradicted facts, by name");
   ok(pic.missing_determinants.length > 0,
     `missing determinants are named (${pic.missing_determinants.length})`);
   ok(pic.completeness.independently_governed === true,
