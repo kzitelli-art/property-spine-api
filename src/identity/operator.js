@@ -1489,6 +1489,16 @@ module.exports = function operatorModule(deps) {
     } catch (e) { return res.status(500).json({ error: e.message }); }
   });
 
+  router.get("/operator/economics/administration-fee-decision", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { administrationFeeDecision } = require("../money/administration_fee_decision");
+      return res.json(await administrationFeeDecision(pool, {
+        property_id: req.operator.property_id, user_id: req.operator.id,
+      }));
+    } catch (e) { return res.status(500).json({ error: "decision unavailable" }); }
+  });
+
   router.get("/operator/economics/application-fee-decision", requireOperator, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
