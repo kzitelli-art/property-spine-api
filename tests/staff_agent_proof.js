@@ -88,10 +88,11 @@ section("E3  all four canonical services are REQUIRED dependencies");
     const d = stub(); delete d.readinessService;
     try { makeStaffAgentService(d); return false; } catch (e) { return /no fallback path/i.test(e.message); }
   })());
+  //  BUILD 6B: acceptWork left this list because acceptance left the agent.
+  //  Every branch that REMAINS still calls a canonical service.
   ok("every confirmed branch calls a canonical service",
      /unitTriageService\.confirmTriage/.test(SVC_SRC) &&
      /unitTurnScopeService\.confirmScope/.test(SVC_SRC) &&
-     /workAcceptanceService\.acceptWork/.test(SVC_SRC) &&
      /workAcceptanceService\.claimCompletion/.test(SVC_SRC) &&
      /readinessService\.recordWalk/.test(SVC_SRC));
 }
@@ -143,20 +144,25 @@ section("E6  scenario 2 — full paint and deep clean");
   ok("'needs paint' asks the level", /Touch-up, partial, or full/i.test(vague.clarification), vague.clarification);
 }
 
-section("E7  scenario 3+4 — 'I'll handle it tomorrow' proposes, never accepts");
+section("E7  scenario 3+4 — 'I'll handle it tomorrow' REDIRECTS (revised by BUILD 6B)");
 {
+  //  BUILD 5 classified this as `work_acceptance` and proposed it. BUILD 6B
+  //  removed acceptance from what a message may do: ownership and due timing
+  //  are set on the work item, where the proof requirement and what the
+  //  commitment blocks are both visible. The assertion below is the BUILD 6B
+  //  contract, and the retired one is gone rather than weakened.
   const ctx = { unit_id: "u", open_work: [{ id: "w1", work_text: "Source and install refrigerator", stage: "repair", status: "required" }] };
   const r = I.classifyIntent("I'll replace the refrigerator tomorrow.", ctx);
-  ok("classified as work acceptance", r.intent === "work_acceptance", r.intent);
-  ok("the refrigerator item is identified", r.proposed.work_id === "w1", r.proposed.work_id);
-  ok("the speaker is proposed as owner", r.proposed.owner_is_speaker === true);
-  ok("nothing is accepted until confirmation",
-     r.unknowns.some((u) => /Nothing is accepted until you confirm/i.test(u)));
-  ok("routes to the Build 3 service", /BUILD 3/.test(I.INTENT_SERVICE[r.intent]));
-  // Build 3 eligibility and actionability still apply — the agent calls
-  // acceptWork, which performs both checks itself.
-  ok("acceptance delegates to acceptWork, which enforces blocked-work refusal",
-     /workAcceptanceService\.acceptWork/.test(SVC_SRC));
+  ok("classified as a redirect, not an acceptance", r.intent === "redirect", r.intent);
+  ok("work_acceptance is no longer an intent at all", !I.INTENT_VALUES.includes("work_acceptance"));
+  ok("the refrigerator item is still identified so the redirect can point at it",
+     r.redirect && r.redirect.work_id === "w1", r.redirect && r.redirect.work_id);
+  ok("it points at the work item", r.redirect && r.redirect.to === "work_item");
+  ok("and says nothing was accepted",
+     r.unknowns.some((u) => /Nothing has been accepted/i.test(u)));
+  ok("a redirect maps to NO service", /no service|not a proposal/i.test(I.INTENT_SERVICE[r.intent]));
+  ok("the agent no longer calls acceptWork at all",
+     !/workAcceptanceService\.acceptWork/.test(SVC_SRC));
   ok("the agent adds no acceptance path of its own",
      !/insert into work_acceptances/i.test(SVC_SRC));
 }
@@ -227,12 +233,16 @@ section("E11  scenario 9+10 — final walk and readiness");
   const bare = I.classifyIntent("Final walk failed.");
   ok("a bare failure asks what was found", /what did the final walk find/i.test(bare.clarification || ""), bare.clarification);
 
-  // "304 is ready" MUST NOT certify
+  // "304 is ready" MUST NOT certify. BUILD 6B strengthened this: it is no
+  // longer a proposal that gets refused at confirmation — it never becomes a
+  // proposal, so there is no row anybody could confirm.
   const r = I.classifyIntent("304 is ready.");
-  ok("classified as a readiness REQUEST, not a certification", r.intent === "readiness_request", r.intent);
-  ok("and says it does not certify",
-     r.unknowns.some((u) => /does NOT certify readiness/i.test(u)));
-  ok("the service REFUSES to confirm a readiness request",
+  ok("classified as a redirect, not a proposal", r.intent === "redirect", r.intent);
+  ok("readiness_request is no longer an intent at all", !I.INTENT_VALUES.includes("readiness_request"));
+  ok("it points at the final readiness walk", r.redirect && r.redirect.to === "final_readiness");
+  ok("and says a message cannot certify",
+     r.unknowns.some((u) => /message cannot certify readiness/i.test(u)));
+  ok("the service still REFUSES any stored readiness request",
      /a message cannot certify readiness/.test(SVC_SRC));
   ok("and points at the governed walk", /operator\/units\/:id\/readiness\/walk/.test(SVC_SRC));
   ok("no certification call exists anywhere in the agent",

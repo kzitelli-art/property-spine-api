@@ -14,6 +14,8 @@ module.exports = function staffAgent(deps) {
   const express = require("express");
   const router = express.Router();
   const staffSessions = require("../identity/staff_session_service");
+  // Plain operating language, owned by the module that defines the intents.
+  const { INTENT_PLAIN } = require("./staff_agent_intent");
 
   const { pool, staffAgentService } = deps || {};
   if (!pool) throw new Error("staff_agent module requires a pool");
@@ -93,18 +95,39 @@ module.exports = function staffAgent(deps) {
     if (!out) return;
 
     const p = out.proposal;
+
+    // ── A REDIRECT (BUILD 6B) ───────────────────────────────────────
+    //  The message was recorded. There is no proposal, so there is nothing to
+    //  confirm and nothing pending — the reply points at the structured action
+    //  that owns the commitment.
+    if (!p) {
+      return res.status(201).json({
+        message: out.message,
+        proposal: null,
+        redirect: out.redirect,
+        unit: out.unit,
+        unit_basis: out.unit_basis,
+        agent_reply: out.redirect ? out.redirect.message : "Take that action on the item itself.",
+        would_call: out.would_call,
+        nothing_recorded: out.nothing_recorded,
+        needs_clarification: false,
+      });
+    }
+
     res.status(201).json({
       message: out.message,
       proposal: p,
       unit: out.unit,
       unit_basis: out.unit_basis,
-      // The agent's reply, composed server-side.
-      agent_reply: p.status === "clarification_required"
+      // The agent's reply, composed server-side. Plain operating language —
+      // the operator never sees a raw intent name.
+      agent_reply: out.needs_clarification
         ? p.clarification
-        : `I read this as: ${p.intent.replace(/_/g, " ")}. Confirm to record it.`,
+        : `I read this as: ${INTENT_PLAIN[p.intent] || "a message"}. Confirm to record it.`,
       would_call: out.would_call,
       nothing_recorded: out.nothing_recorded,
-      needs_clarification: p.status === "clarification_required",
+      needs_clarification: out.needs_clarification,
+      clarification_label: out.clarification_label,
     });
   });
 

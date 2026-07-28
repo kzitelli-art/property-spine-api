@@ -27,14 +27,25 @@
 //  where it would have to fall back to a raw insert.
 //
 //  ── AND IT CANNOT MAKE A UNIT READY ─────────────────────────────────
-//  There is no call to any certification path here. `readiness_request` at
-//  most opens the governed Build 4 walk, which enforces its own authority.
+//  There is no call to any certification path here, and after BUILD 6B there
+//  is no readiness intent to confirm either — a readiness message is a
+//  redirect to the governed Build 4 walk and never becomes a proposal.
+//
+//  ── BUILD 6B: A REDIRECT IS NOT A PROPOSAL ──────────────────────────
+//  Two things a message used to propose — accepting work and readiness — now
+//  classify as `redirect`. `captureMessage` records the message verbatim and
+//  writes NO proposal row for them. That is deliberately stronger than
+//  refusing the confirmation later: with no row, there is nothing to confirm,
+//  nothing to mis-render as pending, and nothing a future surface could
+//  quietly start honouring.
 // ════════════════════════════════════════════════════════════════════
 
 "use strict";
 
 const {
-  classifyIntent, photoNeedsClarification, INTENT, INTENT_SERVICE,
+  classifyIntent, photoNeedsClarification, needsClarification, statusLabel,
+  INTENT, INTENT_SERVICE, INTENT_PLAIN, RETIRED_INTENTS,
+  CLARIFICATION_STATUS, CLARIFICATION_LABEL,
 } = require("./staff_agent_intent");
 
 function makeStaffAgentService(deps) {
@@ -45,10 +56,13 @@ function makeStaffAgentService(deps) {
   // CONSTRUCTION FAILS WITHOUT EVERY CANONICAL SERVICE. A missing dependency
   // must not degrade into "well, just insert it directly" — that is precisely
   // how a second maintenance system gets built by accident.
+  //  BUILD 6B: the acceptance requirement is now `claimCompletion`, because
+  //  that is the call this module actually makes. `acceptWork` is no longer
+  //  reachable from a message — accepting work is a tap on the work item.
   const required = [
     ["unitTriageService", unitTriageService, "confirmTriage"],
     ["unitTurnScopeService", unitTurnScopeService, "confirmScope"],
-    ["workAcceptanceService", workAcceptanceService, "acceptWork"],
+    ["workAcceptanceService", workAcceptanceService, "claimCompletion"],
     ["readinessService", readinessService, "recordWalk"],
   ];
   for (const [name, svc, fn] of required) {
@@ -146,6 +160,53 @@ function makeStaffAgentService(deps) {
       [thread.id, property_id, actor_user_id, String(text), photos,
        resolvedUnit ? resolvedUnit.id : null])).rows[0];
 
+    // ── REDIRECT — RECORDED, NEVER PROPOSED (BUILD 6B) ──────────────
+    //
+    //  "I'll handle the refrigerator tomorrow" and "304 is ready" are real
+    //  things a person said, so the message is kept. Neither is a proposal:
+    //  the operator is pointed at the structured action that owns the
+    //  commitment, and NO proposal row is written.
+    //
+    //  This returns BEFORE the proposal insert. There is no branch below that
+    //  can create a confirmable row for a redirect.
+    if (intent.intent === INTENT.REDIRECT) {
+      let redirect = intent.redirect;
+
+      //  WHERE THE OPERATOR LACKS AUTHORITY, SAY SO PLAINLY. The classifier is
+      //  pure and cannot know who is speaking, so the authority sentence is
+      //  added here — READ from the Build 4 service that owns the decision,
+      //  never decided locally.
+      if (redirect && redirect.to === "final_readiness" &&
+          typeof readinessService.resolveWalkAuthority === "function") {
+        const auth = await readinessService.resolveWalkAuthority(client, {
+          property_id, user_id: actor_user_id,
+        });
+        if (auth) {
+          redirect = {
+            ...redirect,
+            authorized: !!auth.authorized,
+            authority: auth,
+            message: auth.authorized
+              ? redirect.message
+              : `${redirect.message} You cannot certify this unit: ${auth.reason}`,
+          };
+        }
+      }
+
+      return {
+        thread, message,
+        proposal: null,
+        redirect,
+        unit: resolvedUnit,
+        unit_basis: unitRes.basis,
+        open_work: openWork,
+        would_call: INTENT_SERVICE[INTENT.REDIRECT],
+        nothing_recorded:
+          "Nothing operating has been recorded, and nothing is waiting on you here. " +
+          "This action is taken on the item itself.",
+      };
+    }
+
     // A photo with too little text is a question, never a finding.
     const photoQ = photoNeedsClarification(text, photos);
 
@@ -153,15 +214,18 @@ function makeStaffAgentService(deps) {
     let clarification = intent.clarification;
     const unknowns = [...intent.unknowns];
 
+    //  ONE STATUS FOR ONE OPERATOR SITUATION (BUILD 6B). `unclear` as an
+    //  intent and `clarification_required` as a status were two internal names
+    //  for "answer one question". New rows emit only the status.
     if (photoQ) {
-      status = "clarification_required";
+      status = CLARIFICATION_STATUS;
       clarification = photoQ.clarification;
       unknowns.push(photoQ.why);
     } else if (intent.intent === INTENT.UNCLEAR || clarification) {
-      status = "clarification_required";
+      status = CLARIFICATION_STATUS;
     }
     if (!resolvedUnit && unitRes.question) {
-      status = "clarification_required";
+      status = CLARIFICATION_STATUS;
       clarification = unitRes.question;
       unknowns.push(unitRes.basis);
     }
@@ -179,6 +243,9 @@ function makeStaffAgentService(deps) {
       unit_basis: unitRes.basis,
       open_work: openWork,
       would_call: INTENT_SERVICE[intent.intent],
+      // ONE operator concept, decided in one place, read by every surface.
+      needs_clarification: needsClarification(proposal),
+      clarification_label: CLARIFICATION_LABEL,
       nothing_recorded:
         "Nothing operating has been recorded. This is a proposal — confirm, correct, or cancel it.",
     };
@@ -209,10 +276,38 @@ function makeStaffAgentService(deps) {
       };
     }
     if (p.status === "cancelled") throw bad("that proposal was cancelled and cannot be confirmed");
-    if (p.intent === INTENT.UNCLEAR) {
-      throw bad("this message was not understood well enough to record anything. Answer the clarification first.");
+
+    //  ── RETIRED INTENTS (BUILD 6B) ────────────────────────────────
+    //  Rows written before this build may name an action a message may no
+    //  longer take. They stay readable history. They are refused here with the
+    //  structured action that owns the commitment, never silently dropped and
+    //  never quietly honoured.
+    if (RETIRED_INTENTS.includes(p.intent)) {
+      throw Object.assign(new Error(
+        p.intent === "work_acceptance"
+          ? "taking on work is done on the work item, not in a message. Open the work item to set ownership and due timing."
+          : "a message cannot certify readiness. Open the final readiness walk, affirm every confirmation area, " +
+            "and certify there — Build 4 authority and entry conditions apply."),
+        { httpStatus: 409,
+          use_instead: p.intent === "work_acceptance"
+            ? "POST /operator/turn-work/:workId/accept"
+            : "POST /operator/units/:id/readiness/walk" });
     }
-    if (p.status === "clarification_required") {
+    //  A redirect is never written as a proposal, so this is unreachable by
+    //  construction. Asserted anyway: an unreachable guard costs nothing, and
+    //  a future writer adding a redirect row would otherwise find a hole.
+    if (p.intent === INTENT.REDIRECT) {
+      throw bad("that message pointed at a structured action. Take the action there — there is nothing to confirm here.");
+    }
+
+    //  ONE OPERATOR SITUATION, EITHER STORED SHAPE. `unclear` as an intent and
+    //  `clarification_required` as a status both mean the same thing to a
+    //  person: answer one question first.
+    if (p.intent === INTENT.UNCLEAR) {
+      throw bad("this message was not understood well enough to record anything. Answer the clarification first.",
+        { clarification: p.clarification || null });
+    }
+    if (p.status === CLARIFICATION_STATUS) {
       throw bad("this proposal needs a clarification before it can be confirmed", { clarification: p.clarification });
     }
     if (!p.unit_id && p.intent !== INTENT.CORRECTION) {
@@ -292,25 +387,6 @@ function makeStaffAgentService(deps) {
       };
       result = { id: result.scope.id, ...result };
 
-    } else if (p.intent === INTENT.ACCEPT) {
-      // Build 3 eligibility and actionability still apply. A message
-      // expressing intent does not make blocked work acceptable.
-      result = await workAcceptanceService.acceptWork(client, {
-        work_id: overrides.work_id || proposed.work_id,
-        property_id, actor_user_id,
-        owner_user_id: overrides.owner_user_id || actor_user_id,
-        due_at: overrides.due_at || null,
-        commitment_source: overrides.due_at ? "proposed_from_text" : null,
-        note: msg.body,
-      });
-      kind = "work_acceptance";
-      summary = {
-        work: result.work.work_text,
-        due: result.acceptance.due_at || "no date committed",
-        proof_required: result.proof_requirement.label,
-      };
-      result = { id: result.acceptance.id, ...result };
-
     } else if (p.intent === INTENT.COMPLETE) {
       result = await workAcceptanceService.claimCompletion(client, {
         work_id: overrides.work_id || proposed.work_id,
@@ -345,13 +421,6 @@ function makeStaffAgentService(deps) {
         next_action: result.flow.controlling_next_action ? result.flow.controlling_next_action.action : null,
       };
       result = { id: result.walk.id, ...result };
-
-    } else if (p.intent === INTENT.READINESS) {
-      // A message CANNOT certify. Refused here, explicitly.
-      throw Object.assign(new Error(
-        "a message cannot certify readiness. Open the final readiness walk, affirm every confirmation area, " +
-        "and certify there — Build 4 authority and entry conditions apply."),
-        { httpStatus: 409, use_instead: "POST /operator/units/:id/readiness/walk" });
 
     } else if (p.intent === INTENT.CORRECTION) {
       // Build 5 does not invent a generic correction mechanism.
@@ -398,7 +467,17 @@ function makeStaffAgentService(deps) {
       [thread.id, limit])).rows;
     const proposals = (await db.query(
       "select * from staff_agent_proposals where thread_id=$1 order by created_at asc", [thread.id])).rows;
-    return { thread, messages, proposals };
+    //  ONE presentation of state, decided here so every surface agrees. Old
+    //  rows carrying either internal name read as the same operator concept.
+    return {
+      thread, messages,
+      proposals: proposals.map((p) => ({
+        ...p,
+        plain_label: INTENT_PLAIN[p.intent] || "You sent a message",
+        needs_clarification: needsClarification(p),
+        status_label: statusLabel(p),
+      })),
+    };
   }
 
   return {

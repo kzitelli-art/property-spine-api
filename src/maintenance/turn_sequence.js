@@ -50,6 +50,12 @@ const STAGE_LABEL = Object.freeze({
   unstaged: "Other work",
 });
 
+// BUILD 6B: one operator sentence for `stage_decision_required`. The column
+// keeps its name; nobody outside this file has to know it.
+const PLACEMENT_LABEL = "Needs placement in the turn flow";
+const PLACEMENT_EXPLANATION =
+  "Decide whether this work belongs before paint, before cleaning, or elsewhere.";
+
 // An item counts as OPEN when it is still required. Withdrawn and superseded
 // work does not block anything — a correction that withdrew a repair must not
 // leave paint blocked behind it forever.
@@ -160,7 +166,7 @@ function computeTurnFlow({ scope = null, work = [] } = {}) {
     // resolved", and an unplaced item makes that claim unverifiable.
     if (unplacedNeedingDecision.length) b.push({
       reason: "inherited_work_not_placed",
-      detail: "Work inherited from the initial walk has no stage in this turn. It must be placed, marked unknown and owed, or withdrawn with a reason before readiness can be reached.",
+      detail: "Work inherited from the initial walk has no place in the turn flow yet. It must be placed, marked unknown and owed, or withdrawn with a reason before readiness can be reached.",
       blocking_items: unplacedNeedingDecision.map((w) => w.work_text),
     });
     return b;
@@ -194,6 +200,13 @@ function computeTurnFlow({ scope = null, work = [] } = {}) {
       // can still do it — but it is an OPEN QUESTION, not a settled one, and
       // it holds the readiness walk until answered.
       requires_scope_decision: !staged && (w.stage_decision_required === true || scopeComplete),
+      // BUILD 6B: the same fact in operator words. `stage_decision_required` is
+      // a column name; a person reads a place in the turn flow. The field is
+      // unchanged — only the sentence printed next to it is.
+      placement_label: (!staged && (w.stage_decision_required === true || scopeComplete))
+        ? PLACEMENT_LABEL : null,
+      placement_explanation: (!staged && (w.stage_decision_required === true || scopeComplete))
+        ? PLACEMENT_EXPLANATION : null,
       stage_decision_note: w.stage_decision_note || null,
       blocks_readiness: !staged && (w.stage_decision_required === true || scopeComplete),
     };
@@ -219,9 +232,10 @@ function computeTurnFlow({ scope = null, work = [] } = {}) {
       stage: null, label: STAGE_LABEL.unstaged, items: unstaged,
       open_count: unstaged.length, blocked: false, blocked_by: [],
       requires_scope_decision_count: owed.length,
+      placement_label: owed.length ? PLACEMENT_LABEL : null,
       note: owed.length
-        ? "Inherited from the initial walk and NOT placed in this turn. A complete scope was confirmed around " + (owed.length === 1 ? "this item" : "these items") + " without deciding where " + (owed.length === 1 ? "it belongs" : "they belong") + ". Readiness is held until each is staged, marked unknown and owed, or withdrawn with a reason."
-        : "Recorded before turn staging existed. Not yet part of the sequence — no complete scope has been confirmed around it.",
+        ? "Inherited from the initial walk and NOT placed in the turn flow. A complete scope was confirmed around " + (owed.length === 1 ? "this item" : "these items") + " without deciding where " + (owed.length === 1 ? "it belongs" : "they belong") + ". The final readiness walk is held until each is placed, marked unknown and owed, or withdrawn with a reason."
+        : "Recorded before the turn sequence existed. Not yet part of the sequence — no complete scope has been confirmed around it.",
     });
   }
 
@@ -277,11 +291,13 @@ function computeTurnFlow({ scope = null, work = [] } = {}) {
       ? {
           kind: "place_inherited_work",
           work_id: i.work_id,
-          action: `Decide where ${lowerFirst(i.work_text)} belongs in this turn`,
+          action: `Place "${i.work_text}" in the turn sequence`,
           why: i.stage_decision_note
-            ? `${i.stage_decision_note} It is not placed in any stage, so the readiness walk is held until it is staged, marked unknown and owed, or withdrawn with a reason.`
-            : "This came from the initial walk and was never placed in this turn. The readiness walk is held until it is staged, marked unknown and owed, or withdrawn with a reason.",
+            ? `${i.stage_decision_note} ${PLACEMENT_EXPLANATION} The final readiness walk is held until it is placed, marked unknown and owed, or withdrawn with a reason.`
+            : `This came from the initial walk and was never placed in the turn flow. ${PLACEMENT_EXPLANATION} The final readiness walk is held until it is placed, marked unknown and owed, or withdrawn with a reason.`,
           stage: null, stage_label: i.stage_label,
+          placement_label: PLACEMENT_LABEL,
+          placement_explanation: PLACEMENT_EXPLANATION,
         }
       : {
           kind: "do_work",
@@ -399,8 +415,8 @@ function turnExceptions({ scope = null, work = [], flow = null, triage = null, n
   if (unplaced.length) {
     out.push({
       code: "inherited_work_not_placed",
-      label: "Work from the initial walk was never placed in this turn",
-      detail: `${unplaced.length} item${unplaced.length === 1 ? "" : "s"} inherited from the initial walk ${unplaced.length === 1 ? "has" : "have"} no stage: ${unplaced.map((i) => i.work_text).join("; ")}. Readiness is held until each is staged, marked unknown and owed, or withdrawn with a reason.`,
+      label: "Work from the initial walk needs placement in the turn flow",
+      detail: `${unplaced.length} item${unplaced.length === 1 ? "" : "s"} inherited from the initial walk ${unplaced.length === 1 ? "has" : "have"} no place in the turn flow: ${unplaced.map((i) => i.work_text).join("; ")}. The final readiness walk is held until each is placed, marked unknown and owed, or withdrawn with a reason.`,
     });
   }
 

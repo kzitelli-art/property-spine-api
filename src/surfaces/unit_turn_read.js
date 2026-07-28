@@ -52,19 +52,17 @@ function makeUnitTurnRead(deps) {
     }
   }
 
-  //  Plain operating language for the agent's internal intent names. The
-  //  operator should never see `initial_triage` or `readiness_request` — those
-  //  are our vocabulary, not theirs.
-  const INTENT_PLAIN = Object.freeze({
-    initial_triage: "You reported a unit condition",
-    turn_scope: "You added work to the turn",
-    work_acceptance: "You offered to take on work",
-    work_completion: "You reported work complete",
-    failed_final_walk: "You reported a failed final walk",
-    readiness_request: "You asked about readiness",
-    correction: "You corrected something",
-    unclear: "Spine needs one more detail",
-  });
+  //  Plain operating language for the agent's internal intent names, FORWARDED
+  //  from the module that defines those names. Re-declaring the map here would
+  //  let the thread and the page drift into two different vocabularies for one
+  //  message. (BUILD 6B: it was declared here in 6A; it is imported now.)
+  const {
+    INTENT_PLAIN, needsClarification, statusLabel, CLARIFICATION_LABEL,
+  } = require("../agent/staff_agent_intent");
+
+  //  BUILD 6B: `stage_decision_required` is our column name, not a sentence. An
+  //  operator sees a place in the turn flow, not a decision record.
+  const PLACEMENT_LABEL = "Needs placement in the turn flow";
 
   async function readUnitTurn(db, { property_id, unit_id, user_id }) {
     const unit = (await db.query(
@@ -81,6 +79,11 @@ function makeUnitTurnRead(deps) {
     const workFlow = await workAcceptanceService.readUnitFlow(db, { unit_id });
     const gate = await readinessService.readGateState(db, { unit_id });
     const nextMoveIn = await unitTriageService.nextCommittedMoveIn(db, { unit_id });
+
+    // The sequence engine already decided which items are unplaced. Indexed,
+    // never recomputed.
+    const flowItems = new Map(
+      (((workFlow.flow && workFlow.flow.items) || [])).map((i) => [String(i.work_id), i]));
 
     // Per-item acceptance and proof state, from the layer that owns it.
     const workStates = [];
@@ -133,7 +136,23 @@ function makeUnitTurnRead(deps) {
           ...p,
           // Internal intent names never reach the operator.
           plain_label: INTENT_PLAIN[p.intent] || "You sent a message",
+          // ONE operator concept: `clarification_required` and `unclear` are
+          // the same situation with the same response — answer one question.
+          needs_clarification: needsClarification(p),
+          status_label: statusLabel(p),
         })),
+        // The three things a message may do. Stated by the server so the app
+        // cannot advertise a fourth.
+        message_purposes: [
+          "Report a condition",
+          "Add or correct turn scope",
+          "Report completed work",
+        ],
+        message_excludes: [
+          "Taking on work is a tap on the work item, not a sentence.",
+          "Readiness comes from the final readiness walk, not from a message.",
+        ],
+        clarification_label: CLARIFICATION_LABEL,
       };
     }
 
@@ -170,6 +189,15 @@ function makeUnitTurnRead(deps) {
         certified: !!gate.certification,
         certification: gate.certification || null,
         marketability: availability ? availability.marketing_state : null,
+        //  BUILD 6B: `marketable_now` is a state name, not a sentence. The
+        //  availability read already computes the operator label — the page was
+        //  printing the enum next to it. A failed read says so; it never reads
+        //  as an empty answer.
+        marketability_label: availability
+          ? (availability.error
+              ? "Availability could not be read"
+              : (availability.marketing_label || availability.marketing_state || null))
+          : null,
         remaining_blocker: availability && !availability.marketable_now
           ? (availability.blocking_label || availability.blocking_reason) : null,
         // The distinction the whole build sequence protects.
@@ -186,17 +214,31 @@ function makeUnitTurnRead(deps) {
 
       // 3. REQUIRED WORK — one list, grouped by the existing stages.
       stages: workFlow.flow ? workFlow.flow.stages : [],
-      work: workStates.map((s) => ({
-        work_id: s.work.id, work_text: s.work.work_text, stage: s.work.stage,
-        status: s.status, accepted: s.accepted,
-        owner_user_id: s.owner_user_id, owner: s.owner_user_id ? "assigned" : "UNASSIGNED",
-        due_at: s.due_at,
-        proof_requirement: s.requirement,
-        latest_outcome: s.latest_claim ? s.latest_claim.outcome : null,
-        proof_satisfied: s.latest_claim ? s.latest_claim.proof_satisfied : null,
-        proof_shortfall: s.latest_claim ? s.latest_claim.proof_shortfall : null,
-        reopened_count: s.reopened_count,
-      })),
+      work: workStates.map((s) => {
+        // FORWARDED from the sequence flow, which decided it. Nothing here
+        // re-derives whether an item is placed.
+        const fi = flowItems.get(String(s.work.id));
+        const needsPlacement = !!(fi && fi.requires_scope_decision);
+        return {
+          work_id: s.work.id, work_text: s.work.work_text, stage: s.work.stage,
+          status: s.status, accepted: s.accepted,
+          owner_user_id: s.owner_user_id, owner: s.owner_user_id ? "assigned" : "UNASSIGNED",
+          due_at: s.due_at,
+          proof_requirement: s.requirement,
+          latest_outcome: s.latest_claim ? s.latest_claim.outcome : null,
+          proof_satisfied: s.latest_claim ? s.latest_claim.proof_satisfied : null,
+          proof_shortfall: s.latest_claim ? s.latest_claim.proof_shortfall : null,
+          reopened_count: s.reopened_count,
+          // BUILD 6B: plain language for the same underlying field. The column
+          // is unchanged; only what the operator reads changed.
+          needs_placement: needsPlacement,
+          placement_label: needsPlacement ? PLACEMENT_LABEL : null,
+          placement_action: needsPlacement
+            ? `Place "${s.work.work_text}" in the turn sequence` : null,
+          placement_explanation: fi ? fi.placement_explanation || null : null,
+          placement_note: fi ? fi.stage_decision_note || null : null,
+        };
+      }),
 
       // 4. WHAT THE OPERATOR MAY DO — every one delegates to a Build 1-5 service.
       actions: {

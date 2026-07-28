@@ -16,10 +16,19 @@
 //  One concise question costs a tap; a wrong confirmed action costs a
 //  correction with history.
 //
-//  ── AND IT CAN NEVER CERTIFY READINESS ──────────────────────────────
-//  "304 is ready" resolves to `readiness_request`, which at most proposes
-//  OPENING the governed Build 4 action. There is no intent in this file that
-//  can make a unit ready.
+//  ── BUILD 6B: WHAT A MESSAGE MAY DO SHRANK ──────────────────────────
+//  A staff message now serves exactly three purposes:
+//
+//      report a condition · add or correct turn scope · report completed work
+//
+//  Accepting work and certifying readiness were removed from that list. Both
+//  are consequential commitments made against a specific object, where the
+//  operator can see the proof requirement and what the commitment blocks — a
+//  sentence in a thread is too easy to send by accident and too easy to mean
+//  loosely. Neither produces a proposal any more: they produce a REDIRECT,
+//  which never enters the proposal lifecycle, so there is no row anybody could
+//  confirm. The guarantee is now that the state does not exist, rather than
+//  that a confirmation is refused later.
 // ════════════════════════════════════════════════════════════════════
 
 "use strict";
@@ -27,25 +36,86 @@
 const INTENT = Object.freeze({
   TRIAGE: "initial_triage",
   SCOPE: "turn_scope",
-  ACCEPT: "work_acceptance",
+  REDIRECT: "redirect",
   COMPLETE: "work_completion",
   FAILED_WALK: "failed_final_walk",
-  READINESS: "readiness_request",
   CORRECTION: "correction",
   UNCLEAR: "unclear",
 });
 const INTENT_VALUES = Object.freeze(Object.values(INTENT));
 
+//  BUILD 6B: `redirect` maps to NO service. It is a pointer, not an action.
 const INTENT_SERVICE = Object.freeze({
+  redirect: "none — this is a redirect to a structured action, not a proposal",
   initial_triage: "unitTriageService.confirmTriage (BUILD 1)",
   turn_scope: "unitTurnScopeService.confirmScope (BUILD 2)",
-  work_acceptance: "workAcceptanceService.acceptWork (BUILD 3)",
   work_completion: "workAcceptanceService.claimCompletion (BUILD 3)",
   failed_final_walk: "readinessService.recordWalk outcome=not_ready (BUILD 4)",
-  readiness_request: "readinessService.recordWalk (BUILD 4) — authority and confirmations still required",
   correction: "the canonical correction path for the affected action type",
   unclear: "none — no service may be called",
 });
+
+//  RETIRED (BUILD 6B). No message produces these any more. Rows written before
+//  this build may still carry them, and those rows stay readable history — but
+//  they can never be confirmed, because the action they name is no longer
+//  something a message may do. Kept as data, not as a code path.
+const RETIRED_INTENTS = Object.freeze(["work_acceptance", "readiness_request"]);
+
+//  ── ONE OPERATOR CONCEPT FOR "I NEED ONE MORE DETAIL" ───────────────
+//  Internally there were two: the intent `unclear` (the message did not map to
+//  a governed action) and the status `clarification_required` (it mapped, but
+//  something is missing). To an operator that is one situation with one
+//  response — answer the question — so it is presented as one thing.
+//
+//  New proposals emit ONE status. Old rows may carry either, so the reader
+//  below accepts both. No migration: rewriting history to tidy a label would
+//  edit what was recorded.
+const CLARIFICATION_STATUS = "clarification_required";
+const CLARIFICATION_LABEL = "Needs clarification";
+
+function needsClarification(p) {
+  if (!p) return false;
+  return p.status === CLARIFICATION_STATUS || p.intent === INTENT.UNCLEAR;
+}
+
+//  ── PLAIN OPERATING LANGUAGE FOR EVERY INTENT ───────────────────────
+//  Defined beside the intents themselves so there is exactly one place that
+//  decides what an operator is shown, and no surface can drift from it. The
+//  operator never sees `initial_triage` or `failed_final_walk` — those are our
+//  vocabulary, not theirs.
+//
+//  The two RETIRED intents keep labels because rows written before BUILD 6B
+//  still exist and must still read as sentences. A blank label on old history
+//  would be a surface hiding what it holds.
+const INTENT_PLAIN = Object.freeze({
+  initial_triage: "You reported a unit condition",
+  turn_scope: "You added work to the turn",
+  work_completion: "You reported work complete",
+  failed_final_walk: "You reported a failed final walk",
+  correction: "You corrected something",
+  redirect: "You were pointed at the right place to do that",
+  unclear: "Spine needs one more detail",
+  // retired — history only
+  work_acceptance: "You offered to take on work",
+  readiness_request: "You asked about readiness",
+});
+
+//  Plain operating language for a proposal's state. `clarification_required`
+//  and `unclear` collapse into ONE label here, so no surface has to know there
+//  were ever two internal names for it.
+const STATUS_PLAIN = Object.freeze({
+  proposed: "Waiting for you to confirm",
+  confirmed: "Recorded",
+  corrected: "Corrected",
+  cancelled: "Cancelled",
+  clarification_required: CLARIFICATION_LABEL,
+});
+
+function statusLabel(p) {
+  if (!p) return null;
+  if (needsClarification(p)) return CLARIFICATION_LABEL;
+  return STATUS_PLAIN[p.status] || "Sent";
+}
 
 // A unit reference like "304" or "1417-02". Deliberately narrow: a bare
 // number that is not unit-shaped should not become a unit.
@@ -127,27 +197,43 @@ function classifyIntent(text, context = {}) {
     return out;
   }
 
-  // ── READINESS REQUEST ── never a certification.
+  // ── READINESS IS A GOVERNED ACTION, NOT AN INTENT (BUILD 6B) ───────
+  //  "304 is ready" is a SAFETY REDIRECT. It never enters the proposal
+  //  lifecycle at all, so there is no row anybody could confirm — the
+  //  structural guarantee is now that the state does not exist, rather than
+  //  that a confirmation is refused later.
   if (any(t, S.readiness)) {
-    out.intent = INTENT.READINESS;
-    out.proposed = { opens_governed_final_walk: true };
-    out.unknowns.push(
-      "This does NOT certify readiness. It can at most open the governed final readiness walk, which requires its own authority and every confirmation area affirmed.");
+    out.intent = INTENT.REDIRECT;
+    out.redirect = {
+      to: "final_readiness",
+      message: "Readiness requires the final readiness walk. Open Final Readiness.",
+      link: "#final-readiness",
+    };
+    out.unknowns.push("A message cannot certify readiness. The walk affirms every required area and is performed by an authorized manager.");
     return out;
   }
 
-  // ── ACCEPTANCE ── "I'll handle it tomorrow"
+  // ── ACCEPTANCE IS A BUTTON, NOT A CONVERSATION (BUILD 6B) ──────────
+  //  "I'll handle the refrigerator tomorrow" no longer produces a proposal.
+  //  Ownership and a due commitment are consequential enough that they belong
+  //  behind a deliberate tap on the work item, where the operator can see the
+  //  proof requirement and what the commitment blocks. A sentence in a thread
+  //  is too easy to send by accident and too easy to mean loosely.
+  //
+  //  This returns a REDIRECT. It is not confirmable, and nothing downstream
+  //  can turn it into an acceptance.
   if (any(t, S.accept)) {
-    out.intent = INTENT.ACCEPT;
+    out.intent = INTENT.REDIRECT;
     const target = resolveWorkTarget(t, context);
-    out.proposed = { work_id: target.work_id, work_text: target.work_text, owner_is_speaker: true };
-    if (!target.work_id) {
-      out.intent = target.ambiguous ? INTENT.UNCLEAR : INTENT.UNCLEAR;
-      out.clarification = target.question;
-      out.unknowns.push(target.why);
-      return out;
-    }
-    out.unknowns.push("Nothing is accepted until you confirm. Ownership and any due date are recorded only on confirmation.");
+    out.redirect = {
+      to: "work_item",
+      work_id: target.work_id || null,
+      message: target.work_id
+        ? `${target.work_text} is ready to accept. Open the work item to confirm ownership and due timing.`
+        : "Open the work item on this unit to accept it and set the due timing.",
+      link: target.work_id ? `#work-${target.work_id}` : null,
+    };
+    out.unknowns.push("Nothing has been accepted. Ownership and due timing are set on the work item, not in a message.");
     return out;
   }
 
@@ -272,5 +358,7 @@ function photoNeedsClarification(text, photos) {
 
 module.exports = {
   classifyIntent, resolveWorkTarget, photoNeedsClarification,
-  INTENT, INTENT_VALUES, INTENT_SERVICE, UNIT_REF,
+  needsClarification, statusLabel,
+  INTENT, INTENT_VALUES, INTENT_SERVICE, INTENT_PLAIN, RETIRED_INTENTS,
+  CLARIFICATION_STATUS, CLARIFICATION_LABEL, STATUS_PLAIN, UNIT_REF,
 };

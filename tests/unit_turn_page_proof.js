@@ -164,9 +164,15 @@ section("F8  the truth model is unchanged underneath");
   ok("and reports a failed availability read as a failure, not an absence",
      /availability read failed/.test(READ));
 
-  // Builds 1-5 sources untouched by this build
+  // Builds 1-5 sources untouched by BUILD 6A.
+  //
+  //  The range is pinned to Build 5 → Build 6A rather than → HEAD. The claim
+  //  this asserts is about what BUILD 6A changed, and it stays true forever.
+  //  Measuring to HEAD would silently turn it into "no later build may ever
+  //  touch a service", which is a different claim and a false one: BUILD 6B
+  //  changes the staff-agent service on purpose.
   const { execSync } = require("child_process");
-  const changed = execSync("git diff --name-only 8fc4982 HEAD", { cwd: __dirname + "/.." }).toString().trim().split("\n").filter(Boolean);
+  const changed = execSync("git diff --name-only 8fc4982 62b25e8", { cwd: __dirname + "/.." }).toString().trim().split("\n").filter(Boolean);
   const touchedCore = changed.filter((f) =>
     /^src\/maintenance\/|^src\/agent\/|^migrations\//.test(f));
   ok("no Build 1-5 service or migration was modified", touchedCore.length === 0, touchedCore.join(","));
