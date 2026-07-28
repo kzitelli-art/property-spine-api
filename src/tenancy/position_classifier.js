@@ -96,6 +96,10 @@ function classifyPosition(row, { asOf, personNames } = {}) {
   const possessed = !!lastIn && (!lastOut || lastOut.effective_date < lastIn.effective_date ||
     (lastOut.effective_date === lastIn.effective_date && String(lastOut.created_at) < String(lastIn.created_at)));
   const turning = row.turn_status === "in_progress";
+  // A COMPLETED turn is an affirmative record that work was done and proved
+  // (turnovers.js refuses to mark ready while a required input is outstanding).
+  // That is evidence, and it is the only thing here that may produce `ready`.
+  const turnComplete = row.turn_status === "ready";
 
   let availability_state = "unavailable";
   let available_from = null;
@@ -190,7 +194,28 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     } : null,
     economic_tenancy_state: current ? "active" : activationPending ? "activation_pending" : future ? "forward" : "none",
     possession_state: possessed ? "delivered" : "pending",
-    physical_readiness: turning ? "turning" : "ready",
+    // ── READINESS: ABSENCE IS NOT EVIDENCE (BUILD 1) ──────────────────
+    //  This read `turning ? "turning" : "ready"`. The false branch ASSERTED
+    //  readiness, so a unit with no turnover row — never walked, never
+    //  inspected, nothing known about it — read `ready`, and availability_read
+    //  then carried it all the way to `marketable_now`. Absence of a record
+    //  became an affirmative claim you could advertise on.
+    //
+    //  That contradicted the rule availability_read states in its own header:
+    //  "Absence of a lease is not evidence of availability — it is absence of
+    //  evidence." The lease axis honored it; this axis did not.
+    //
+    //  Now three values. `ready` is claimed ONLY from an affirmative record —
+    //  a completed turn. No record means `unknown`, which is the honest blank
+    //  (§5), and downstream reads must treat it as not-marketable rather than
+    //  as a quiet pass.
+    //
+    //  Note what this does NOT do: it does not make a triage confirmation
+    //  visible here. Triage lives on the unit, not the position, and is
+    //  overlaid by availability_read the same way operating_use already is.
+    //  Keeping it out of the classifier avoids widening what this pure
+    //  function has to load.
+    physical_readiness: turning ? "turning" : (turnComplete ? "ready" : "unknown"),
     availability_state,
     available_from,
     reason,

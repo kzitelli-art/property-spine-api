@@ -35,6 +35,9 @@
 "use strict";
 
 const { datedPropertyPositions } = require("../tenancy/dated_positions");
+// ONE readiness definition, shared with the triage service. A second copy here
+// is exactly how a read and a write come to disagree.
+const { deriveReadiness } = require("../maintenance/unit_triage_service");
 
 // An operating designation is NOT a durable use. A model unit is
 // residential by purpose and unmarketable by current designation, and
@@ -96,6 +99,32 @@ function marketingState(p, liveOk) {
   if (p.physical_readiness === "turning")
     return { state: "turnover_required", reason: "turnover_in_progress" };
 
+  // ── CONFIRMED TRIAGE BLOCKERS (BUILD 1) ────────────────────────────
+  //  A confirmed first walk that found a blocker outranks anything below:
+  //  a human stood in the unit and reported it. `triage` is overlaid by
+  //  availabilityRead the same way operating_use is — a UNIT fact the
+  //  position classifier does not own.
+  if (p.triage && p.triage.readiness === "not_ready")
+    return { state: "not_ready_confirmed", reason: p.triage.readiness_reason || "confirmed_physical_blocker" };
+
+  // ── UNINSPECTED IS NOT MARKETABLE ──────────────────────────────────
+  //  physical_readiness 'unknown' means no affirmative record says this unit
+  //  is ready — no completed turn, no confirmed walk. Before BUILD 1 this
+  //  case read `ready` and fell through to marketable_now, so a unit nobody
+  //  had ever looked at was advertisable. It is now held here.
+  //
+  //  This is deliberately NOT a redesign of availability: it adds one guard
+  //  in the existing ordered chain and changes no other state's meaning.
+  //  Two different unknowns, and conflating them makes one of them a lie:
+  //  nobody has walked it yet, versus somebody walked it and found no blocker
+  //  but the walk was triage, not a readiness confirmation. Telling a manager
+  //  "no inspection recorded" about a unit their tech just walked is a wrong
+  //  statement, not a vague one.
+  if (p.physical_readiness === "unknown")
+    return p.triage
+      ? { state: "readiness_unknown", reason: "walked_no_blocker_found_readiness_unconfirmed" }
+      : { state: "readiness_unknown", reason: "initial_inspection_pending" };
+
   if (!p.use_type)
     return { state: "use_not_configured", reason: "no_governed_use_type" };
   if (!MARKETABLE_USE_TYPES.has(p.use_type))
@@ -128,6 +157,19 @@ function availableFrom(p, state, asOf) {
   if (state === "turnover_required") {
     return { available_from: null, availability_confidence: "incomplete", blocking_fact: "turnover_completion_not_scheduled" };
   }
+  // Both BUILD 1 states refuse a date, for different honest reasons: one has
+  // confirmed blockers whose cure time nobody has estimated, the other has no
+  // inspection at all. Neither invents a ready date.
+  if (state === "not_ready_confirmed") {
+    return { available_from: null, availability_confidence: "incomplete", blocking_fact: "confirmed_physical_work_outstanding" };
+  }
+  if (state === "readiness_unknown") {
+    return {
+      available_from: null,
+      availability_confidence: "incomplete",
+      blocking_fact: p.triage ? "detailed_inspection_not_completed" : "no_initial_inspection_recorded",
+    };
+  }
   if (state === "occupied") {
     const d = p.lease && p.lease.end_date ? String(p.lease.end_date).slice(0, 10) : null;
     return {
@@ -150,6 +192,8 @@ const HUMAN = {
   upcoming: "On notice",
   not_ready: "Possession not returned",
   turnover_required: "Turnover in progress",
+  not_ready_confirmed: "Not ready — confirmed physical blockers",
+  readiness_unknown: "Readiness unknown — initial inspection pending",
   activation_pending: "Lease commenced — awaiting move-in funds",
   use_not_configured: "Use type not configured",
   marketable_now: "Marketable now",
@@ -166,11 +210,61 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
        from spaces s join units u on u.id=s.unit_id where u.property_id=$1`, [property_id]
   )).rows.map((r) => [String(r.space_id), r.operating_use]));
 
+  // ── CONFIRMED TRIAGE OVERLAY (BUILD 1) ─────────────────────────────
+  //  Triage is a UNIT fact, like operating_use, so it is overlaid here rather
+  //  than widening what the pure classifier must load. Current truth is the
+  //  latest confirmation nothing supersedes.
+  //
+  //  FAIL-SOFT, NEVER FAKE-ZERO — the rule exposure.js already set: if
+  //  migration 112 has not run in this database yet (Postgres 42P01), the
+  //  overlay is simply absent and every position falls back to the
+  //  classifier's own honest `unknown`. It does NOT invent readiness, and it
+  //  does not take the whole availability read down with it.
+  const triageByUnit = new Map();
+  try {
+    const tq = await pool.query(
+      `with latest as (
+         select distinct on (c.unit_id) c.*
+           from unit_triage_confirmations c
+           join units u on u.id = c.unit_id
+          where u.property_id = $1
+            and not exists (select 1 from unit_triage_confirmations s where s.supersedes_id = c.id)
+          order by c.unit_id, c.created_at desc
+       )
+       select l.unit_id, l.vacancy_observation, l.initial_condition, l.inspection_completeness,
+              coalesce(array_remove(array_agg(distinct w.work_text)
+                       filter (where w.status = 'required'), null), '{}') as open_scope,
+              count(distinct f.id) filter (where f.withdrawn_at is null) as live_finding_count
+         from latest l
+         left join unit_triage_required_work w on w.confirmation_id = l.id
+         left join unit_triage_findings     f on f.confirmation_id = l.id
+        group by l.unit_id, l.vacancy_observation, l.initial_condition, l.inspection_completeness`,
+      [property_id]
+    );
+    for (const r of tq.rows) {
+      const openScope = r.open_scope || [];
+      // ONE definition of readiness, imported — not a second copy that can
+      // drift from the service's. Shapes are minimal but real.
+      const d = deriveReadiness({
+        confirmation: r,
+        findings: Array.from({ length: Number(r.live_finding_count) || 0 }, () => ({ withdrawn_at: null })),
+        requiredWork: openScope.map((t) => ({ status: "required", work_text: t })),
+      });
+      triageByUnit.set(String(r.unit_id), { ...d, open_scope: openScope });
+    }
+  } catch (e) {
+    if (e.code !== "42P01") throw e;   // only a missing table is tolerated
+  }
+
   const horizonEnd = new Date(new Date(`${asOf}T00:00:00Z`).getTime() + horizon_days * 86400000)
     .toISOString().slice(0, 10);
 
   const rows = dp.positions.map((p) => {
-    const withOps = { ...p, operating_use: ops.get(String(p.space_id)) || null };
+    const withOps = {
+      ...p,
+      operating_use: ops.get(String(p.space_id)) || null,
+      triage: triageByUnit.get(String(p.unit_id)) || null,
+    };
     const m = marketingState(withOps, true);
     const dates = availableFrom(withOps, m.state, asOf);
     return {
@@ -193,6 +287,16 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
       physical_readiness: p.physical_readiness,
       turnover_in_progress: p.physical_readiness === "turning",
       operating_use: withOps.operating_use,
+
+      // ── WHY, not just THAT (BUILD 1) ──
+      //  The row can now name the open scope rather than only stating a
+      //  blocking reason, so a manager does not reconstruct a unit's condition
+      //  from work-order notes. Empty array when no confirmed walk exists —
+      //  an honest blank, never a fabricated "nothing needed".
+      triage_readiness: withOps.triage ? withOps.triage.readiness : null,
+      triage_readiness_label: withOps.triage ? withOps.triage.readiness_label : null,
+      open_scope: withOps.triage ? withOps.triage.open_scope : [],
+      initial_inspection_recorded: !!withOps.triage,
 
       // consumed, never re-derived — carried so the row can explain itself
       lease_id: p.lease ? p.lease.lease_id : null,
@@ -234,6 +338,8 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
       successor_locked: inState("successor_locked").length,
       successor_pending: inState("successor_pending").length,
       turnover_required: inState("turnover_required").length,
+      not_ready_confirmed: inState("not_ready_confirmed").length,
+      readiness_unknown: inState("readiness_unknown").length,
       activation_pending: inState("activation_pending").length,
       not_ready: inState("not_ready").length,
       down: inState("down").length,

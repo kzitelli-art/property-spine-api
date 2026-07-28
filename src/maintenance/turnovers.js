@@ -24,6 +24,10 @@ module.exports = function turnovers(deps) {
   // Shared effective-possession writer (space_position.js). Records the effective
   // move_out that ENDS possession, space_id-anchored. Optional for soft partial deploy.
   const recordEffectivePossession = deps && deps.recordEffectivePossession;
+  // BUILD 1 — post-move-out initial triage. Injected and OPTIONAL, the same
+  // soft-deploy shape as recordEffectivePossession above: if it is not wired,
+  // move-out behaves exactly as before rather than failing to boot.
+  const unitTriageService = deps && deps.unitTriageService;
   const express = require("express");
   const { rankTurnPriority } = require("./turn_priority"); // ONE ranking source (shared w/ operator route)
   const router = express.Router();
@@ -178,6 +182,32 @@ module.exports = function turnovers(deps) {
         // the obligation via related_id=turnover.id, and on the event note).
       }
 
+      // ── 3b) THE INITIAL WALK (BUILD 1) ────────────────────────────────
+      //  Move-out confirmed is the operating trigger: somebody must now go
+      //  look at the unit. Born from the SAME move_out event, in the SAME
+      //  transaction, through the SAME shared engine — an obligation is never
+      //  born from anything but an event.
+      //
+      //  Born HIGH and due today because the operating expectation is
+      //  same-day inspection. If staffing prevents that it stays visibly
+      //  overdue; it never lapses, and the unit never becomes ready because
+      //  nobody walked it.
+      //
+      //  NOT excluding a preceding actor here: this route carries no operator
+      //  session (it is the older ungated door), so there is no confirmed-by
+      //  identity to exclude. The service supports the exclusion and it takes
+      //  effect wherever a session-scoped move-out door exists.
+      let initialWalk = null;
+      if (unitTriageService && typeof unitTriageService.spawnInitialWalk === "function") {
+        initialWalk = await unitTriageService.spawnInitialWalk(client, {
+          property_id: unit.property_id,
+          unit_id,
+          source_event_id: event.id,
+          unit_number: unit.unit_number,
+          exclude_user_id: null,
+        });
+      }
+
       // 4) occupancy flips to vacant (tenant leaving). The unit is NOT yet
       //    rentable — that's what the turn resolves. Occupancy and rentable
       //    readiness are separate axes (the four-axis model).
@@ -246,9 +276,15 @@ module.exports = function turnovers(deps) {
         event,
         move_out_note: moveOutNote,
         obligation,
+        initial_walk_obligation: initialWalk,
         unit: updatedUnit.rows[0],
         routed_role: route.assigned_role,
         note: "Move-out logged. Turnover opened (operating record); one obligation spawned with two proof gates (moveout_photos, deposit_review). Unit occupancy → vacant; rentable readiness pending turn.",
+        initial_walk_note: initialWalk
+          ? (initialWalk.assigned_user_id
+              ? "Initial walk assigned — same-day inspection expected."
+              : "Initial walk created but UNASSIGNED — no eligible onsite staff at this property. It stays visibly unresolved.")
+          : "Initial-walk capture is not wired in this deployment; no walk obligation created.",
       });
     } catch (e) {
       await client.query("rollback");

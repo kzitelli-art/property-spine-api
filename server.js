@@ -3251,6 +3251,13 @@ const workOrderService = makeWorkOrderService({ spawnObligationFromEvent });
 
 // ── MAINTENANCE MODULE (isolated; injected pool + shared obligation path) ──
 app.use("/", maintenanceModule({ pool, spawnObligationFromEvent, workOrderService }));
+
+// ── UNIT TRIAGE (BUILD 1: post-move-out initial triage) ──────────────────
+//  One service instance, one mount, one door. Same injection discipline as
+//  workOrderService above, and asserted at construction for the same reason.
+const unitTriageService = require("./src/maintenance/unit_triage_service")
+  .makeUnitTriageService({ spawnObligationFromEvent });
+app.use("/", require("./src/maintenance/unit_triage")({ pool, unitTriageService }));
 // applications module mounted lower (after the conversion + submission services exist,
 // so /approve can close the leasing_manager application_approval gate). See below.
 const __leasePackets = leasePacketsModule({ pool, satisfyObligation, completeObligation });
@@ -3261,7 +3268,7 @@ app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));
 app.use("/", moneyModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, reassignObligation }));
 app.use("/", orgchartModule({ pool }));
 app.use("/", roomOwnersModule({ pool }));
-app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, recordEffectivePossession }));
+app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, recordEffectivePossession, unitTriageService }));
 const deliveryHelper = require("./src/comms/delivery")({ satisfyObligation, completeObligation }); // Slice D shared completion-feed
 app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, deliveryHelper, recordEffectivePossession }));
 app.use("/", noticeModule({ pool }));   // Availability Slice A — notice writes unit_events only; no obligation spawns at notice
