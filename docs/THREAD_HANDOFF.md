@@ -170,7 +170,7 @@ restored.
 - Harnesses: `governed_economics_proof`, `demo_authority_ruling_proof`,
   `authority_resolution_proof`, `identity_authority_proof`,
   `pricing_governance_proof`, `pricing_foundation_proof`,
-  `pricing_decision_packet_proof` — **583 assertions**.
+  `pricing_decision_packet_proof` — **584 assertions**, run separately.
 
 ## Key documents
 
