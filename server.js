@@ -3258,6 +3258,13 @@ app.use("/", maintenanceModule({ pool, spawnObligationFromEvent, workOrderServic
 const unitTriageService = require("./src/maintenance/unit_triage_service")
   .makeUnitTriageService({ spawnObligationFromEvent });
 app.use("/", require("./src/maintenance/unit_triage")({ pool, unitTriageService }));
+
+// ── UNIT TURN SCOPE (BUILD 2: normal turn scope + ordered flow) ──────────
+//  Extends a confirmed BUILD 1 triage. Same injection discipline, same single
+//  authority-scoped door, asserted at construction.
+const unitTurnScopeService = require("./src/maintenance/unit_turn_scope_service")
+  .makeUnitTurnScopeService({ spawnObligationFromEvent });
+app.use("/", require("./src/maintenance/unit_turn_scope")({ pool, unitTurnScopeService, unitTriageService }));
 // applications module mounted lower (after the conversion + submission services exist,
 // so /approve can close the leasing_manager application_approval gate). See below.
 const __leasePackets = leasePacketsModule({ pool, satisfyObligation, completeObligation });
