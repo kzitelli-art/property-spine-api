@@ -150,7 +150,50 @@ section("D5  worker/certifier — performing work neither grants nor removes aut
 
     // maintenance-only cannot certify — a real authority boundary
     const t = await svc.resolveWalkAuthority(fake(tech), {});
-    ok("maintenance-only access cannot certify", t.authorized === false);
+    ok("a maintenance-only technician cannot certify", t.authorized === false);
+    ok("and the reason names the missing module", /management module access/i.test(t.reason), t.reason);
+
+    // ── ALL THREE CONDITIONS NECESSARY, NONE SUFFICIENT ──
+    //  An unrelated management-module user with NO eligible manager assignment
+    //  and no explicit delegation must be refused. Module access alone cannot
+    //  create authority.
+    const plainMgmt = { role_title: "Marketing Coordinator", allowed_modules: ["management"],
+                        primary_for_modules: [], name: "C" };
+    const c = await svc.resolveWalkAuthority(fake(plainMgmt), {});
+    ok("management-module access ALONE cannot certify", c.authorized === false, JSON.stringify(c));
+    ok("and the reason says access alone is not enough",
+       /alone does not permit/i.test(c.reason), c.reason);
+
+    //  No assignment at this property at all — property authority is required
+    //  and is checked first.
+    const none = await svc.resolveWalkAuthority(fake(null), {});
+    ok("no assignment at this property cannot certify", none.authorized === false);
+    ok("and says so", /no active assignment/i.test(none.reason), none.reason);
+
+    //  A senior property manager with proper authority CAN certify.
+    ok("a senior property manager with proper authority can certify",
+       (await svc.resolveWalkAuthority(fake({ ...seniorMgr, primary_for_modules: [] }), {})).authorized === true);
+
+    //  An eligible assistant property manager CAN certify under the temporary
+    //  delegation adapter.
+    const a = await svc.resolveWalkAuthority(fake({ ...apm, primary_for_modules: [] }), {});
+    ok("an eligible assistant property manager can certify", a.authorized === true);
+    ok("and the basis names the delegation adapter", /delegated/i.test(a.basis), a.basis);
+
+    //  EXPLICIT DELEGATION path: an unranked title that OWNS the management
+    //  module at this property is authorized — the delegation was recorded by
+    //  whoever set up the team, not inferred here.
+    const del = await svc.resolveWalkAuthority(
+      fake({ ...plainMgmt, primary_for_modules: ["management"] }), {});
+    ok("explicit delegated readiness authority can certify", del.authorized === true);
+    ok("and it is marked as delegation, not a title match", del.via_delegation === true);
+    ok("with a stated basis", /explicitly delegated/i.test(del.basis), del.basis);
+
+    //  A ranked TITLE with no module access is still refused — title alone
+    //  cannot create authority either.
+    ok("a manager title with no module access is still refused",
+       (await svc.resolveWalkAuthority(fake({ role_title: "Property Manager", allowed_modules: [], primary_for_modules: [] }), {}))
+         .authorized === false);
 
     // NO blanket worker ban: authority is asked of everyone identically
     const svcSrc = require("fs").readFileSync(require.resolve("../src/maintenance/readiness_service"), "utf8");
@@ -159,9 +202,16 @@ section("D5  worker/certifier — performing work neither grants nor removes aut
     ok("and the reason is documented",
        /Performing work is not authority and it is not disqualification/i.test(svcSrc));
 
-    // an eligible manager who also did work is still authorized
-    ok("an authorized manager remains authorized regardless of work performed",
-       (await svc.resolveWalkAuthority(fake(apm), {})).authorized === true);
+    // THE WORKER RULE: performing work neither grants nor removes authority.
+    // A person who did the work certifies only when they INDEPENDENTLY satisfy
+    // readiness authority — the check is identical either way.
+    ok("a worker who independently satisfies readiness authority CAN certify",
+       (await svc.resolveWalkAuthority(fake({ ...apm, primary_for_modules: [] }), {})).authorized === true);
+    ok("a worker who does NOT independently satisfy it cannot",
+       (await svc.resolveWalkAuthority(fake(tech), {})).authorized === false);
+    ok("the authority answer does not depend on work performed at all",
+       JSON.stringify(await svc.resolveWalkAuthority(fake({ ...apm, primary_for_modules: [] }), {})) ===
+       JSON.stringify(await svc.resolveWalkAuthority(fake({ ...apm, primary_for_modules: [] }), { user_id: "whoever" })));
 
     // no name is hardcoded
     ok("no named employee in the ladder", AUTHORITY_LADDER.every((r) => r.re instanceof RegExp));

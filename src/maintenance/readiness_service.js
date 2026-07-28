@@ -73,7 +73,7 @@ function makeReadinessService(deps) {
   //  admit anyone the assignment did not already admit.
   async function resolveWalkAuthority(client, { property_id, user_id }) {
     const r = (await client.query(
-      `select pta.role_title, pta.allowed_modules, u.name
+      `select pta.role_title, pta.allowed_modules, pta.primary_for_modules, u.name
          from property_team_assignments pta join users u on u.id = pta.user_id
         where pta.property_id=$1 and pta.user_id=$2 and pta.active=true`,
       [property_id, user_id])).rows[0];
@@ -86,13 +86,46 @@ function makeReadinessService(deps) {
         role_title: r.role_title,
       };
     }
+
+    // ── THREE CONDITIONS, ALL NECESSARY, NONE SUFFICIENT ───────────────
+    //  An earlier draft stopped at module access, which meant ANY operator
+    //  with the management module could certify readiness. That made module
+    //  access sufficient on its own — exactly what the ruling forbids.
+    //
+    //      authorized for the property        (active assignment, checked above)
+    //    + management module access           (checked above)
+    //    + eligible manager assignment
+    //      OR explicit delegated authority    (checked here)
+    //
+    //  A TITLE alone cannot create authority: an unranked title with no module
+    //  access was already refused above, and a ranked title at another property
+    //  never loads here at all.
+    //  MODULE ACCESS alone cannot create authority: that is this block.
     const rung = AUTHORITY_LADDER.find((x) => x.re.test(String(r.role_title || "")));
+
+    //  EXPLICIT DELEGATION, from an existing governed field. migration 035
+    //  defines primary_for_modules as "which modules this user OWNS (tier 1)".
+    //  Owning the management module at a property IS an explicit delegation
+    //  already recorded by whoever set up the team — so this reuses a
+    //  foundation rather than inventing a second authority model, which
+    //  BUILD 4 is forbidden from doing.
+    const delegated = (r.primary_for_modules || []).includes("management");
+
+    if (!rung && !delegated) {
+      return {
+        authorized: false,
+        role_title: r.role_title,
+        reason: "management module access alone does not permit readiness certification — an eligible manager assignment or explicit delegated readiness authority is also required",
+      };
+    }
+
     return {
       authorized: true,
       role_title: r.role_title,
       name: r.name,
-      rank: rung ? rung.rank : 4,
-      basis: rung ? rung.why : "explicitly eligible manager (management module access)",
+      rank: rung ? rung.rank : 3,
+      basis: rung ? rung.why : "explicitly delegated readiness authority (primary_for_modules includes management)",
+      via_delegation: !rung && delegated,
     };
   }
 
