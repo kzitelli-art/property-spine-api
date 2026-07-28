@@ -297,6 +297,15 @@ async function approveAndPublish(pool, { property_id, user_id, charge_code, appr
       e.httpStatus = 409; e.publicMessage = e.message; e.blockers = check.blockers; throw e;
     }
 
+    // The append-only ruling this publication rests on, read inside the same
+    // transaction so the receipt cannot name a ruling that was rolled back.
+    const priorRuling = (await client.query(
+      `select id, selected_answer, occurred_at, prior_terms_digest, resulting_terms_digest,
+              changed_fields_json, authority_exercised
+         from governed_charge_rulings
+        where property_id=$1 and governed_charge_id=$2
+        order by occurred_at desc limit 1`, [property_id, draft.id])).rows[0] || null;
+
     const receipt = {
       approved_by: { session_user_id: actor.session_user_id, acting_person_id: actor.acting_person_id,
                      display_name: actor.display_name },
@@ -310,7 +319,18 @@ async function approveAndPublish(pool, { property_id, user_id, charge_code, appr
         applies_to_new_lease: draft.applies_to_new_lease, applies_to_renewal: draft.applies_to_renewal,
         applies_to_transfer: draft.applies_to_transfer, refundable: draft.refundable,
       },
-      prior_ruling: (draft.publication_receipt && draft.publication_receipt.ruling_receipt) || null,
+      // THE RULING THIS PUBLICATION RESTS ON.
+      // This used to read a `ruling_receipt` embedded in publication_receipt.
+      // Slice E moved rulings to the append-only governed_charge_rulings table
+      // and nothing updated this line, so it silently resolved to null — a
+      // receipt that no longer named the decision behind the terms. Same shape
+      // as the recurring defect: a design changed and one caller kept honouring
+      // the old one. It now reads the real record.
+      // NOTE: the fee.administration receipt written at 2026-07-28T12:38:54Z
+      // predates this fix and carries prior_ruling: null. It is NOT rewritten —
+      // history is not cleanup material. The ruling remains durably linked by
+      // governed_charge_id.
+      prior_ruling: priorRuling,
       note,
       published_at: new Date().toISOString(),
       // Both spellings: the singular key is the shape the application-fee
