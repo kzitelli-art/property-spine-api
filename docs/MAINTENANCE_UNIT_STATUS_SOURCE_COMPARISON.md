@@ -91,9 +91,46 @@ be retired, is recorded as an open question below and was not otherwise investig
 
 ## The single most important finding
 
-*This one survives contract revision.* The second problem below is a §5 defect against
-`PHILOSOPHY.md` doctrine directly — an unobserved unit asserting a healthy state — and
-holds regardless of what the final contract says about readiness.
+> ### ⚠ UNRESOLVED ARCHITECTURE ISSUE — open, not owned by BUILD 1
+>
+> **Status: confirmed real, attempted, reverted, and deliberately left open.**
+>
+> BUILD 1 attempted a repair in `position_classifier.js`
+> (`turning ? "turning" : (turnComplete ? "ready" : "unknown")`) and it was **reverted
+> after blast-radius review**. The reason is structural, and it is the reason this
+> issue is harder than it looks:
+>
+> **Completed-turn evidence never reaches the classifier.** `turn_status` has exactly
+> one source — `src/tenancy/space_position.js:176`:
+>
+> ```sql
+> (select t.status from turnovers t
+>   where t.unit_id=u.id and t.status='in_progress' limit 1) as turn_status
+> ```
+>
+> The subquery filters to `in_progress`, so `turn_status` ∈ {`'in_progress'`, `NULL`}
+> and can never be `'ready'`. The `turnComplete` branch was unreachable; `ready` became
+> unreachable with it; **`marketable_now` would have gone to zero portfolio-wide.**
+>
+> Worse, it would have shipped green: `tests/cross_surface_invariants.js:163` defines
+> `marketable` as requiring `physical_readiness === "ready"`, so with `ready`
+> unreachable the marketable set is empty and every *"X is never marketable"* assertion
+> passes **vacuously**. Same at `availability_canonical_proof.js:59`.
+>
+> **What a real repair requires** (none of it in BUILD 1's scope):
+> the loader must carry completed-turn evidence; a decision on whether a completed
+> turnover is *sufficient* to assert readiness at all; a migration story for every
+> position that would reclassify at once; and invariant tests that fail loudly rather
+> than vacuously on an empty marketable set.
+>
+> **What BUILD 1 did instead:** an availability overlay scoped strictly to positions
+> carrying BUILD 1 triage evidence. Where no triage fact exists, availability falls
+> through to preexisting behavior unchanged. **That protects the new slice. It does not
+> repair the historical readiness architecture, and it does not reduce this issue.**
+
+*This finding survives contract revision.* The second problem below is a §5 defect
+against `PHILOSOPHY.md` doctrine directly — an unobserved unit asserting a healthy
+state — and holds regardless of what the final contract says about readiness.
 
 **Physical readiness is currently derived from the existence of a turnover row.**
 

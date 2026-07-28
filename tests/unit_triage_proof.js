@@ -170,35 +170,134 @@ section("A11  readiness may never be 'ready'");
      deriveReadiness({ confirmation: null }).readiness === "unknown");
 }
 
-section("A12  availability: uninspected is not marketable");
+section("A12  availability overlay is SCOPED to triage evidence");
 {
   const base = {
     conflict_state: "clear", is_down: false, operating_use: "standard", evidence_state: "agrees",
     availability_state: "ready_now", successor: { state: "none" }, lease: null,
     possession_state: "pending", use_type: "residential", triage: null,
   };
-  const uninspected = marketingState({ ...base, physical_readiness: "unknown" }, true);
-  ok("uninspected unit is NOT marketable_now", uninspected.state !== "marketable_now", uninspected.state);
-  ok("uninspected reads readiness_unknown", uninspected.state === "readiness_unknown");
-  ok("has a human label", !!HUMAN[uninspected.state]);
 
-  const completedTurn = marketingState({ ...base, physical_readiness: "ready" }, true);
-  ok("a COMPLETED turn is still marketable (affirmative evidence preserved)",
-     completedTurn.state === "marketable_now", completedTurn.state);
+  // ── the ruling: NO triage fact → preexisting behavior, untouched ──
+  //  This is the assertion that would have caught the reverted patch. A
+  //  generic readiness guard makes these three fail.
+  const legacyReady = marketingState({ ...base, physical_readiness: "ready" }, true);
+  ok("no triage + readiness 'ready' → marketable_now (prior behavior)",
+     legacyReady.state === "marketable_now", legacyReady.state);
 
-  const blocked = marketingState({ ...base, physical_readiness: "unknown",
-    triage: { readiness: "not_ready", readiness_reason: "severe_condition_confirmed" } }, true);
-  ok("confirmed blockers read not_ready_confirmed", blocked.state === "not_ready_confirmed");
+  const legacyUnknown = marketingState({ ...base, physical_readiness: "unknown" }, true);
+  ok("no triage + readiness 'unknown' → NOT reinterpreted by BUILD 1",
+     legacyUnknown.state === "marketable_now", legacyUnknown.state);
 
-  const walked = marketingState({ ...base, physical_readiness: "unknown",
-    triage: { readiness: "unknown", readiness_reason: "initial_triage_only" } }, true);
-  ok("walked-but-unconfirmed does not claim no inspection",
+  const legacyTurning = marketingState({ ...base, physical_readiness: "turning" }, true);
+  ok("no triage + turning → turnover_required (prior behavior)",
+     legacyTurning.state === "turnover_required", legacyTurning.state);
+
+  const occupied = marketingState({ ...base, physical_readiness: "unknown",
+    lease: { lease_id: "l1", end_date: "2027-01-01" }, notice_state: "none" }, true);
+  ok("occupied position is not reinterpreted", occupied.state === "occupied", occupied.state);
+
+  // ── with triage evidence, the three ruled cases ──
+  const blocked = marketingState({ ...base, physical_readiness: "ready",
+    triage: { readiness: "not_ready", readiness_reason: "severe_condition_confirmed", pending_walk: false } }, true);
+  ok("confirmed blocker → not_ready_confirmed", blocked.state === "not_ready_confirmed", blocked.state);
+  ok("and it NAMES the confirmed blocker", blocked.reason === "severe_condition_confirmed");
+
+  const pending = marketingState({ ...base, physical_readiness: "ready",
+    triage: { readiness: "unknown", pending_walk: true } }, true);
+  ok("walk assigned but not done → readiness_unknown", pending.state === "readiness_unknown");
+  ok("reason is initial_inspection_pending", pending.reason === "initial_inspection_pending");
+
+  const walked = marketingState({ ...base, physical_readiness: "ready",
+    triage: { readiness: "unknown", readiness_reason: "initial_triage_only", pending_walk: false } }, true);
+  ok("walked, no blocker → still does not assert ready", walked.state === "readiness_unknown");
+  ok("and does not claim nobody inspected it",
      walked.reason === "walked_no_blocker_found_readiness_unconfirmed", walked.reason);
 
   for (const st of ["readiness_unknown", "not_ready_confirmed"]) {
-    const d = availableFrom({ ...base, triage: null }, st, "2026-07-28");
+    const d = availableFrom({ ...base, triage: { pending_walk: false } }, st, "2026-07-28");
     ok("no ready date invented for " + st, d.available_from === null && d.availability_confidence === "incomplete");
   }
+  ok("both new states carry a human label",
+     !!HUMAN.readiness_unknown && !!HUMAN.not_ready_confirmed);
+}
+
+section("A14  the triage overlay can never emit 'ready'");
+{
+  const base = {
+    conflict_state: "clear", is_down: false, operating_use: "standard", evidence_state: "agrees",
+    availability_state: "ready_now", successor: { state: "none" }, lease: null,
+    possession_state: "pending", use_type: "residential",
+  };
+  // Every shape the overlay can produce, crossed with every readiness value
+  // the classifier can emit. None may yield a state that asserts readiness.
+  const triages = [
+    { readiness: "not_ready", readiness_reason: "severe_condition_confirmed", pending_walk: false },
+    { readiness: "not_ready", readiness_reason: "required_work_outstanding", pending_walk: false },
+    { readiness: "not_ready", readiness_reason: "vacancy_not_confirmed", pending_walk: false },
+    { readiness: "unknown", readiness_reason: "initial_triage_only", pending_walk: false },
+    { readiness: "unknown", readiness_reason: "initial_inspection_pending", pending_walk: true },
+  ];
+  const states = [];
+  for (const t of triages)
+    for (const pr of ["ready", "turning", "unknown"])
+      states.push(marketingState({ ...base, physical_readiness: pr, triage: t }, true));
+
+  ok("no triage-overlaid position is ever marketable_now (" + states.length + " combinations)",
+     states.every((s) => s.state !== "marketable_now"));
+  ok("every overlaid state is readiness_unknown, not_ready_confirmed or turnover_required",
+     states.every((s) => ["readiness_unknown", "not_ready_confirmed", "turnover_required"].includes(s.state)),
+     [...new Set(states.map((s) => s.state))].join(","));
+  ok("the string 'ready' is never a marketing STATE emitted by the overlay",
+     states.every((s) => s.state !== "ready"));
+}
+
+section("A15  ordinary deep cleaning does not escalate to a manager");
+{
+  // The service creates the manager move-in-risk obligation when, and only
+  // when, a committed move-in exists AND (condition is severe OR any finding
+  // carries a long-lead kind). Replicated here exactly.
+  const wouldRaiseManagerRisk = (r) =>
+    r.initial_condition === "severe" || r.findings.some((f) => !!f.long_lead_kind);
+
+  const plain = interpretObservation("304 is vacant. It needs a deep clean.");
+  const f = plain.findings.map((x) => x.finding);
+  ok("deep clean produces a cleaning finding", f.includes("Deep cleaning required"), f.join("|"));
+  ok("deep clean produces required work",
+     plain.required_work.some((w) => /Deep clean/i.test(w.work)));
+  ok("deep clean is NOT severe by itself", plain.initial_condition !== "severe", plain.initial_condition);
+  ok("deep clean carries NO long-lead kind",
+     plain.findings.every((x) => x.long_lead_kind === null),
+     JSON.stringify(plain.findings.map((x) => x.long_lead_kind)));
+  ok("deep clean produces NO long-lead blocker", plain.long_lead_blockers.length === 0);
+  ok("→ ordinary deep cleaning raises NO manager move-in risk", !wouldRaiseManagerRisk(plain));
+
+  // With infestation beside it, severity and schedule pressure come from the
+  // infestation — and the deep clean remains its own ordinary work item.
+  const withRoaches = interpretObservation("304 is empty, but there are cockroaches and it needs a deep clean.");
+  ok("infestation makes the capture severe", withRoaches.initial_condition === "severe");
+  const pest = withRoaches.findings.find((x) => /Cockroach/i.test(x.finding));
+  const clean = withRoaches.findings.find((x) => /Deep cleaning/i.test(x.finding));
+  ok("infestation finding is the severe one", !!pest && pest.severe === true);
+  ok("infestation is the schedule-controlling one", !!pest && pest.long_lead_kind === "pest_treatment");
+  ok("deep clean is STILL a separate finding", !!clean);
+  ok("deep clean is STILL not severe", !!clean && clean.severe === false);
+  ok("deep clean is STILL not long-lead", !!clean && clean.long_lead_kind === null);
+  ok("two separate work items remain", withRoaches.required_work.length === 2,
+     withRoaches.required_work.map((w) => w.work).join("|"));
+  ok("→ manager risk comes from the infestation, not the cleaning", wouldRaiseManagerRisk(withRoaches));
+
+  // Extreme sanitation is a different fact from a deep clean and stays severe.
+  const bio = interpretObservation("304 is vacant. There is sewage and feces everywhere.");
+  ok("extreme sanitation is still severe", bio.initial_condition === "severe");
+  ok("extreme sanitation is still schedule-controlling",
+     bio.long_lead_blockers.some((b) => b.kind === "major_cleanup"));
+
+  // Hoarding likewise.
+  const hoard = interpretObservation("304 is vacant. The tenant was hoarding, it is full of junk.");
+  ok("hoarding is still severe", hoard.initial_condition === "severe");
+  ok("hoarding is still schedule-controlling",
+     hoard.long_lead_blockers.some((b) => b.kind === "major_cleanup"));
 }
 
 section("A13  service construction guards");

@@ -96,10 +96,6 @@ function classifyPosition(row, { asOf, personNames } = {}) {
   const possessed = !!lastIn && (!lastOut || lastOut.effective_date < lastIn.effective_date ||
     (lastOut.effective_date === lastIn.effective_date && String(lastOut.created_at) < String(lastIn.created_at)));
   const turning = row.turn_status === "in_progress";
-  // A COMPLETED turn is an affirmative record that work was done and proved
-  // (turnovers.js refuses to mark ready while a required input is outstanding).
-  // That is evidence, and it is the only thing here that may produce `ready`.
-  const turnComplete = row.turn_status === "ready";
 
   let availability_state = "unavailable";
   let available_from = null;
@@ -194,28 +190,32 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     } : null,
     economic_tenancy_state: current ? "active" : activationPending ? "activation_pending" : future ? "forward" : "none",
     possession_state: possessed ? "delivered" : "pending",
-    // ── READINESS: ABSENCE IS NOT EVIDENCE (BUILD 1) ──────────────────
-    //  This read `turning ? "turning" : "ready"`. The false branch ASSERTED
-    //  readiness, so a unit with no turnover row — never walked, never
-    //  inspected, nothing known about it — read `ready`, and availability_read
-    //  then carried it all the way to `marketable_now`. Absence of a record
-    //  became an affirmative claim you could advertise on.
+    // ── KNOWN DEFECT, DELIBERATELY NOT REPAIRED HERE ──────────────────
+    //  The false branch ASSERTS readiness: a unit with no turnover row —
+    //  never walked, never inspected, nothing known about it — reads `ready`,
+    //  and availability_read carries that to `marketable_now`. Absence of a
+    //  record becomes an affirmative claim. That contradicts the rule
+    //  availability_read states in its own header: "Absence of a lease is not
+    //  evidence of availability — it is absence of evidence."
     //
-    //  That contradicted the rule availability_read states in its own header:
-    //  "Absence of a lease is not evidence of availability — it is absence of
-    //  evidence." The lease axis honored it; this axis did not.
+    //  A BUILD 1 patch attempted `turning ? "turning" : (turnComplete ?
+    //  "ready" : "unknown")` and was REVERTED after a blast-radius review.
+    //  The reason is structural, not stylistic: turn_status comes only from
+    //  space_position.js, whose subquery is
+    //      select t.status from turnovers t
+    //       where t.unit_id=u.id and t.status='in_progress'
+    //  so turn_status is only ever 'in_progress' or NULL. A COMPLETED turn
+    //  cannot reach this function at all. The `turnComplete` branch was
+    //  unreachable, `ready` became unreachable with it, and marketable_now
+    //  would have gone to zero portfolio-wide — while cross_surface_invariants
+    //  passed VACUOUSLY, because its `marketable` predicate requires
+    //  physical_readiness === "ready" and the set would simply be empty.
     //
-    //  Now three values. `ready` is claimed ONLY from an affirmative record —
-    //  a completed turn. No record means `unknown`, which is the honest blank
-    //  (§5), and downstream reads must treat it as not-marketable rather than
-    //  as a quiet pass.
-    //
-    //  Note what this does NOT do: it does not make a triage confirmation
-    //  visible here. Triage lives on the unit, not the position, and is
-    //  overlaid by availability_read the same way operating_use already is.
-    //  Keeping it out of the classifier avoids widening what this pure
-    //  function has to load.
-    physical_readiness: turning ? "turning" : (turnComplete ? "ready" : "unknown"),
+    //  Repairing this needs the loader to carry completed-turn evidence, and
+    //  that is a portfolio-wide change BUILD 1 does not own. Tracked as a
+    //  separate unresolved architecture issue in
+    //  docs/MAINTENANCE_UNIT_STATUS_SOURCE_COMPARISON.md.
+    physical_readiness: turning ? "turning" : "ready",
     availability_state,
     available_from,
     reason,

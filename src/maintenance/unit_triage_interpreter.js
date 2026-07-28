@@ -114,14 +114,24 @@ const PHRASES = [
 
   // ── cleaning ───────────────────────────────────────────────────────
   //  A deep clean is severe; an ordinary clean is the normal turn.
-  //  Deep clean is long-lead (it needs a crew scheduled) but NOT severe on its
-  //  own. The contract defines severe as a condition that "prevents the normal
-  //  turn from starting" — a deep clean IS the normal turn at many properties.
-  //  Scenario 2 still reads severe, correctly, via the infestation beside it.
-  //  ⚠ OPERATOR-DISCOVERY QUESTION: whether a deep clean is severe is exactly
-  //  the kind of thing that changes property by property. This line is where
-  //  that answer lands.
-  { re: /\bdeep clean(ing)?\b/i,                 finding: "Deep cleaning required",               work: "Deep clean unit",                   severe: false, long_lead: LONG_LEAD.CLEANUP },
+  //  ── DEEP CLEAN: NORMAL TURN SCOPE (ruled) ────────────────────────
+  //  Plain "deep clean" is a cleaning finding and required work, and NOTHING
+  //  more: not severe, not schedule-controlling. Severe is defined as a
+  //  condition that prevents the normal turn from starting, and a deep clean
+  //  IS the normal turn.
+  //
+  //  This matters beyond a label. `severe` and `long_lead` are the two inputs
+  //  that raise a MANAGER move-in-risk decision, so marking ordinary cleaning
+  //  as either would escalate a routine turn to management on every capture —
+  //  the fastest way to teach managers to ignore the risk read.
+  //
+  //  Deep cleaning still participates in a severe or schedule-controlling
+  //  condition when other evidence supplies it: hoarding, infestation,
+  //  biohazard or extreme sanitation, substantial abandoned contents,
+  //  specialist remediation, or a known labor/timing constraint. Each of
+  //  those carries its own row below with its own severity — the deep clean
+  //  stays a separate, ordinary work item beside them.
+  { re: /\bdeep clean(ing)?\b/i,                 finding: "Deep cleaning required",               work: "Deep clean unit",                   severe: false, long_lead: null },
   { re: /\b(filthy|disgusting|biohazard|feces|urine|sewage|rotting|maggots)\b/i,
                                                  finding: "Extreme sanitation condition observed", work: "Deep clean unit",                  severe: true,  long_lead: LONG_LEAD.CLEANUP },
   { re: /\b(needs? (a )?clean(ing)?|cleaning is needed|not clean)\b/i,

@@ -99,31 +99,51 @@ function marketingState(p, liveOk) {
   if (p.physical_readiness === "turning")
     return { state: "turnover_required", reason: "turnover_in_progress" };
 
-  // ── CONFIRMED TRIAGE BLOCKERS (BUILD 1) ────────────────────────────
-  //  A confirmed first walk that found a blocker outranks anything below:
-  //  a human stood in the unit and reported it. `triage` is overlaid by
-  //  availabilityRead the same way operating_use is — a UNIT fact the
-  //  position classifier does not own.
-  if (p.triage && p.triage.readiness === "not_ready")
-    return { state: "not_ready_confirmed", reason: p.triage.readiness_reason || "confirmed_physical_blocker" };
-
-  // ── UNINSPECTED IS NOT MARKETABLE ──────────────────────────────────
-  //  physical_readiness 'unknown' means no affirmative record says this unit
-  //  is ready — no completed turn, no confirmed walk. Before BUILD 1 this
-  //  case read `ready` and fell through to marketable_now, so a unit nobody
-  //  had ever looked at was advertisable. It is now held here.
+  // ══════════════════════════════════════════════════════════════════
+  //  BUILD 1 TRIAGE OVERLAY — SCOPED TO TRIAGE EVIDENCE, NOTHING ELSE
   //
-  //  This is deliberately NOT a redesign of availability: it adds one guard
-  //  in the existing ordered chain and changes no other state's meaning.
-  //  Two different unknowns, and conflating them makes one of them a lie:
-  //  nobody has walked it yet, versus somebody walked it and found no blocker
-  //  but the walk was triage, not a readiness confirmation. Telling a manager
-  //  "no inspection recorded" about a unit their tech just walked is a wrong
-  //  statement, not a vague one.
-  if (p.physical_readiness === "unknown")
-    return p.triage
-      ? { state: "readiness_unknown", reason: "walked_no_blocker_found_readiness_unconfirmed" }
-      : { state: "readiness_unknown", reason: "initial_inspection_pending" };
+  //  THIS PROTECTS THE NEW SLICE. IT DOES NOT REPAIR THE HISTORICAL
+  //  READINESS ARCHITECTURE, AND IT MUST NOT TRY TO.
+  //
+  //  The entire block is inside `if (p.triage)`. A position with no BUILD 1
+  //  triage fact falls straight through to the preexisting behavior,
+  //  unchanged. Legacy units, occupied positions, completed turns and units
+  //  that have never been walked are NOT reinterpreted here.
+  //
+  //  An earlier draft added a GENERIC `physical_readiness === "unknown"`
+  //  guard outside this block, paired with a classifier change. Both were
+  //  reverted. The reason is structural: completed turns cannot reach the
+  //  classifier at all — space_position.js filters turn_status to
+  //  'in_progress' — so `unknown` would have covered essentially every
+  //  position and marketable_now would have gone to zero portfolio-wide,
+  //  while cross_surface_invariants passed VACUOUSLY on an empty set.
+  //
+  //  The underlying defect — absence of a turnover row reading as `ready` —
+  //  is real, is NOT fixed here, and is tracked as a separate unresolved
+  //  architecture issue in docs/MAINTENANCE_UNIT_STATUS_SOURCE_COMPARISON.md.
+  //  BUILD 1 does not own the portfolio-wide repair.
+  //
+  //  `triage` is overlaid by availabilityRead the same way operating_use is —
+  //  a UNIT fact the position classifier does not own.
+  // ══════════════════════════════════════════════════════════════════
+  if (p.triage) {
+    //  A confirmed walk that found a blocker outranks everything below: a
+    //  human stood in the unit and reported it. The reason names the
+    //  confirmed blocker rather than a generic unavailability.
+    if (p.triage.readiness === "not_ready")
+      return { state: "not_ready_confirmed", reason: p.triage.readiness_reason || "confirmed_physical_blocker" };
+
+    //  Move-out confirmed, walk assigned, walk not yet done. Nobody has
+    //  looked, so nothing may claim this position is ready.
+    if (p.triage.pending_walk)
+      return { state: "readiness_unknown", reason: "initial_inspection_pending" };
+
+    //  Walked, no blocker found — still not readiness. Initial triage is not
+    //  a complete readiness inspection. Saying "no inspection recorded" here
+    //  would be a wrong statement about a unit a tech just walked, so the two
+    //  unknowns stay distinct.
+    return { state: "readiness_unknown", reason: "walked_no_blocker_found_readiness_unconfirmed" };
+  }
 
   if (!p.use_type)
     return { state: "use_not_configured", reason: "no_governed_use_type" };
@@ -163,11 +183,17 @@ function availableFrom(p, state, asOf) {
   if (state === "not_ready_confirmed") {
     return { available_from: null, availability_confidence: "incomplete", blocking_fact: "confirmed_physical_work_outstanding" };
   }
+  //  Only reachable from BUILD 1 triage evidence, so p.triage is always
+  //  present here. The two cases are genuinely different facts: nobody has
+  //  walked it yet, versus somebody walked it and the detailed inspection is
+  //  still owed.
   if (state === "readiness_unknown") {
     return {
       available_from: null,
       availability_confidence: "incomplete",
-      blocking_fact: p.triage ? "detailed_inspection_not_completed" : "no_initial_inspection_recorded",
+      blocking_fact: (p.triage && p.triage.pending_walk)
+        ? "initial_walk_not_completed"
+        : "detailed_inspection_not_completed",
     };
   }
   if (state === "occupied") {
@@ -250,7 +276,38 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
         findings: Array.from({ length: Number(r.live_finding_count) || 0 }, () => ({ withdrawn_at: null })),
         requiredWork: openScope.map((t) => ({ status: "required", work_text: t })),
       });
-      triageByUnit.set(String(r.unit_id), { ...d, open_scope: openScope });
+      triageByUnit.set(String(r.unit_id), { ...d, open_scope: openScope, pending_walk: false });
+    }
+
+    // ── WALK ASSIGNED BUT NOT DONE ───────────────────────────────────
+    //  Move-out confirmed spawns an initial_unit_walk obligation. Until it is
+    //  answered there is no confirmation row, so the query above returns
+    //  nothing for that unit — yet somebody has been asked to look and has
+    //  not, which is affirmative BUILD 1 evidence that readiness is unknown.
+    //
+    //  Only units NOT already carrying a confirmation are added: a completed
+    //  walk supersedes a pending one, and a stale open obligation must not
+    //  override a real confirmed answer.
+    const wq = await pool.query(
+      `select distinct o.unit_id
+         from obligations o
+         join units u on u.id = o.unit_id
+        where u.property_id = $1
+          and o.type = 'initial_unit_walk'
+          and o.status in ('open','in_progress')
+          and o.unit_id is not null`,
+      [property_id]
+    );
+    for (const r of wq.rows) {
+      const k = String(r.unit_id);
+      if (triageByUnit.has(k)) continue;
+      triageByUnit.set(k, {
+        readiness: "unknown",
+        readiness_reason: "initial_inspection_pending",
+        readiness_label: "Readiness unknown — initial inspection pending",
+        open_scope: [],
+        pending_walk: true,
+      });
     }
   } catch (e) {
     if (e.code !== "42P01") throw e;   // only a missing table is tolerated
