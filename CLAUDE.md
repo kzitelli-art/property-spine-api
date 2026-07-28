@@ -1,5 +1,7 @@
 # Property Spine — API
 
+**Before doing anything, read [`docs/THREAD_HANDOFF.md`](docs/THREAD_HANDOFF.md).** It is the current deployed state — what is live, what is draft, what is blocked, and the traps that cost time. Do not reconstruct it from git history.
+
 **Before modifying any product behavior, read the governing doctrine: [`docs/PHILOSOPHY.md`](docs/PHILOSOPHY.md).** It defines what the product is and how to decide whether a feature belongs. It is doctrine, not style.
 
 ## North Star
