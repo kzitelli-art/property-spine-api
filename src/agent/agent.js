@@ -26,6 +26,9 @@ const crypto = require("crypto");
 // The ONE governed-charge language producer. Every quotable surface uses it;
 // there is no second wording helper anywhere in a call path.
 const { renderChargeTerms } = require("../money/governed_charge_language");
+const { termsDigest } = require("../money/governed_charge_cutover");
+const { compareEconomicSources, staleReasonForOperator } =
+  require("./draft_source_identity");
 
 const PROMPT_REVISION = "stage-a-v8"; // v8: voice tuning from AI_VOICE_TUNING.md cases 1-5 — one-sentence default, no reflexive trailing question, no unowned follow-up promises ("I'm on it" removed from approved language), always AFFIRM a protected class before helping, no markdown in SMS (new deterministic strip), no self-deprecating apology, low-rate apostrophe-drop humanization.
 // v7.1: greeting fix — contentless messages get a warm greeting, never a fake verification promise. v7: flag model — human-needed operating requests are answered honestly (team can see the conversation); live model no longer creates obligations. v6: tour-pressure suppression, lived-experience selling, conversational local; dead PERSONA removed.
@@ -353,6 +356,12 @@ module.exports = function agentModule(deps) {
         rendered_text: rendered.text,
         source: "governed_charge",
         confirmed_at: g.published_at,
+        // STRUCTURED SOURCE IDENTITY for the stale-draft guarantee. The
+        // sentence alone is not enough: a material term can change without
+        // changing a word of it (an effective date, a waiver rule). Carrying
+        // the canonical terms digest into the run snapshot lets dispatch prove
+        // the economics a human reviewed are still the economics in force.
+        terms_digest: termsDigest(g),
       });
     }
 
@@ -1874,12 +1883,34 @@ Reply with ONLY the message text.`;
         [conv.id]
       )).rows;
       const draft = (await client.query(
-        `select d.id, d.generated_body, d.status, r.policy_decision, r.handoff_reason_code, r.status as run_status
+        `select d.id, d.generated_body, d.status, r.policy_decision, r.handoff_reason_code,
+                r.status as run_status, r.resolved_fact_snapshot_json
            from agent_drafts d join agent_runs r on r.id=d.agent_run_id
           where r.conversation_id=$1 and d.status='ready'
           order by d.created_at desc limit 1`,
         [conv.id]
       )).rows[0] || null;
+
+      // ── PROJECT STALENESS, DON'T STORE IT ─────────────────────────
+      // The operator must see WHY a ready draft can no longer be sent before
+      // pressing send, not discover it from a 409. This is computed from the
+      // same comparison dispatch performs, so the review surface and the
+      // dispatch guard can never disagree. Nothing is written here: a draft
+      // only becomes durably superseded when a send is actually attempted.
+      if (draft) {
+        let econ = null;
+        try {
+          const live = await resolveContext(client, { property_id: conv.property_id });
+          econ = compareEconomicSources(
+            Array.isArray(draft.resolved_fact_snapshot_json) ? draft.resolved_fact_snapshot_json : [],
+            live.facts);
+        } catch (e) { econ = null; }
+        draft.stale = !!(econ && econ.had_economic_sources && !econ.match);
+        // Operator language only — no digests, fact keys or schema words.
+        draft.stale_reason = draft.stale ? staleReasonForOperator(econ) : null;
+        draft.sendable = !draft.stale;
+        delete draft.resolved_fact_snapshot_json; // internal; never leaves the server
+      }
 
       return {
         exists: true, conversation_id: conv.id,
@@ -1948,6 +1979,34 @@ Reply with ONLY the message text.`;
       }
 
       const conv = (await client.query("select * from conversations where id=$1", [run.conversation_id])).rows[0];
+
+      // ── ECONOMIC STALE GUARANTEE ──────────────────────────────────
+      // The same shape as the thread_version check above, for money. A human
+      // reviewed this draft against a specific set of governed charges and
+      // pricing facts. If any of them moved since, the approval no longer
+      // covers what would be sent — so refuse BEFORE the outbound row is
+      // written and before any provider call, and record the refusal durably
+      // by superseding the draft. Retrying then hits the status guard above.
+      const reviewedFacts = Array.isArray(run.resolved_fact_snapshot_json)
+        ? run.resolved_fact_snapshot_json : [];
+      let liveFacts = [];
+      try { liveFacts = (await resolveContext(client, { property_id: conv.property_id })).facts; }
+      catch (e) {
+        // A read failure is not permission to send. Honest blank beats
+        // confident wrong, and an unverifiable promise is the wrong kind.
+        throw httpErr(503, "The current fee terms could not be read, so this draft can't be " +
+                           "sent right now. Try again in a moment.");
+      }
+      const econ = compareEconomicSources(reviewedFacts, liveFacts);
+      if (econ.had_economic_sources && !econ.match) {
+        await client.query(
+          "update agent_drafts set status='superseded', superseded_at=now(), updated_at=now() where id=$1",
+          [draftId]);
+        const e = httpErr(409, staleReasonForOperator(econ));
+        e.stale_reason = "economic_source_changed";
+        throw e;
+      }
+
       const mgrId = auto ? null : actorUserId;
       const bodyToSend = (!auto && editedBody && editedBody.trim()) ? editedBody.trim() : d.generated_body;
       const person = (await client.query("select id, phone from persons where id=$1", [conv.person_id])).rows[0] || {};
