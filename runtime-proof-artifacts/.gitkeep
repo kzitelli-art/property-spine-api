@@ -1,0 +1,6 @@
+# Artifacts land here at runtime. They are NEVER committed.
+#
+# This directory is git-ignored except for this file, so the path exists
+# before an export runs. An export script that has to create its own output
+# directory is one typo away from writing a database dump somewhere nobody
+# is looking for it.

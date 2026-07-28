@@ -2,3 +2,8 @@ node_modules/
 .env
 *.env.local
 tmp_*.js
+
+# Runtime baseline artifacts — database dumps, never committed.
+# Exactly this directory. Migrations are .sql too and MUST stay tracked.
+/runtime-proof-artifacts/*
+!/runtime-proof-artifacts/.gitkeep
