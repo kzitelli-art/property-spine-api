@@ -164,6 +164,10 @@ async function governedCharges(pool, { property_id, as_of = null, include_drafts
     display_label: c.display_label,
     economic_class: c.economic_class,
     amount: c.amount == null ? null : Number(c.amount),
+    // Carried because the renderer needs it: without it a non-USD charge would
+    // silently render with a dollar sign. Every row is USD today, which is
+    // exactly why this would have gone unnoticed.
+    currency: c.currency || "USD",
     amount_unresolved_reason: c.amount_unresolved_reason,
     cadence: c.cadence,
     obligation: c.obligation,
@@ -178,6 +182,13 @@ async function governedCharges(pool, { property_id, as_of = null, include_drafts
     applies_to: [c.applies_to_new_lease ? "new_lease" : null,
                  c.applies_to_renewal ? "renewal" : null,
                  c.applies_to_transfer ? "transfer" : null].filter(Boolean),
+    // The raw booleans, ALONGSIDE the display array. The array alone was a
+    // lossy projection: renderChargeTerms reads the booleans, so a shaped read
+    // rendered as "applies to nothing" and refused to quote a perfectly good
+    // live charge. A shaped charge must be renderable without re-reading the row.
+    applies_to_new_lease: !!c.applies_to_new_lease,
+    applies_to_renewal: !!c.applies_to_renewal,
+    applies_to_transfer: !!c.applies_to_transfer,
     refundable: c.refundable,
     waivable: c.waivable,
     waiver_authority_verb: c.waiver_authority_verb,

@@ -24,6 +24,7 @@
 
 const { resolveActorContext } = require("../identity/actor_context");
 const { governedCharges } = require("./governed_charges");
+const { renderChargeTerms, ASSESSED_PHRASE } = require("./governed_charge_language");
 
 const CHARGE_CODE = "fee.application";
 const LEGACY_FACT = "pricing_application_fee";
@@ -60,17 +61,32 @@ async function applicationFeeDecision(pool, { property_id, user_id = null } = {}
   else if (governed.approved_at) state = "approved";
 
   const mayApprove = !!(actor && actor.ok && actor.capabilities.may_publish_pricing);
+  // The one governed-charge language producer — the same call the assistant
+  // makes, so the card and the resident cannot be told different things.
+  const rendered = governed ? renderChargeTerms(governed) : { quotable: false, reason: "unavailable" };
 
   return {
     // ── THE DECISION ────────────────────────────────────────────────
-    question: "Should Property Spine govern the application fee as $50 per applicant " +
-              "for new-lease applications?",
+    // Every economic value below is READ FROM THE GOVERNED ROW. The card used
+    // to hard-code the amount, the basis, the applicability and a full
+    // sentence — a second copy of the term that could disagree with the row
+    // and, in the case of the sentence, already did.
+    question: rendered.quotable
+      ? `Should Property Spine govern this as: ${rendered.text}`
+      : "Should Property Spine govern the application fee?",
     state,
-    amount: governed ? governed.amount : 50,
-    amount_display: "$50",
+    amount: governed ? governed.amount : null,
+    amount_display: governed && governed.amount != null
+      ? `$${Number(governed.amount).toLocaleString("en-US")}` : null,
     economic_class: "one-time fee",
-    applies_to: "New-lease application",
-    basis: "Per applicant",
+    applies_to: rendered.quotable ? rendered.derived_from.applies_to_new_lease
+      ? (governed.incurred_on_event === "application" ? "New-lease application" : "New lease")
+      : null : null,
+    // The SAME vocabulary map the renderer uses — capitalised for a label,
+    // not re-authored. A second copy of "applicant -> per applicant" here is
+    // exactly the duplication this slice removes.
+    basis: governed && ASSESSED_PHRASE[governed.assessed_per]
+      ? ASSESSED_PHRASE[governed.assessed_per].replace(/^p/, "P") : null,
     effective_date: governed ? governed.effective_from : null,
 
     // ── WHAT CHANGES, IN PLAIN LANGUAGE ─────────────────────────────
@@ -86,7 +102,12 @@ async function applicationFeeDecision(pool, { property_id, user_id = null } = {}
     after_cutover: {
       label: state === "live" ? "The assistant says now" : "After you approve",
       source: "Governed application fee",
-      the_ai_will_say: "The application fee is $50 per applicant.",
+      // THE SAME RENDERER THE ASSISTANT USES. This was a hard-coded string
+      // that had already drifted out of step with what the assistant said —
+      // it omitted the new-lease-application qualifier. A card that claims to
+      // show the resident-facing sentence must not maintain its own copy.
+      the_ai_will_say: rendered.quotable ? rendered.text : null,
+      not_quotable_reason: rendered.quotable ? null : rendered.reason,
       legacy_retires: legacyLive,
       legacy_retires_when: "In the same release that the assistant switches over — never before, " +
                            "never after.",
@@ -122,7 +143,9 @@ async function applicationFeeDecision(pool, { property_id, user_id = null } = {}
           ? "Your sign-in isn’t linked to a staff record yet. That’s an account setup step — ask an administrator to link it, then this decision becomes available."
           : "You don’t have pricing authority for this property. Someone with an owner or asset-manager role here can decide it."),
       denied_code: mayApprove ? null : (actor && actor.failure_reason) || "no_session",
-      approve_label: "Approve — govern this fee at $50",
+      approve_label: governed && governed.amount != null
+        ? `Approve — govern this fee at $${Number(governed.amount).toLocaleString("en-US")}`
+        : "Approve — govern this fee",
       modify_label: "Modify — return to preview",
       reject_label: "Reject — keep the current source",
     },

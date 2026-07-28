@@ -23,6 +23,9 @@
 //          spawnObligationFromEvent, completeObligation }));
 
 const crypto = require("crypto");
+// The ONE governed-charge language producer. Every quotable surface uses it;
+// there is no second wording helper anywhere in a call path.
+const { renderChargeTerms } = require("../money/governed_charge_language");
 
 const PROMPT_REVISION = "stage-a-v8"; // v8: voice tuning from AI_VOICE_TUNING.md cases 1-5 — one-sentence default, no reflexive trailing question, no unowned follow-up promises ("I'm on it" removed from approved language), always AFFIRM a protected class before helping, no markdown in SMS (new deterministic strip), no self-deprecating apology, low-rate apostrophe-drop humanization.
 // v7.1: greeting fix — contentless messages get a warm greeting, never a fake verification promise. v7: flag model — human-needed operating requests are answered honestly (team can see the conversation); live model no longer creates obligations. v6: tour-pressure suppression, lived-experience selling, conversational local; dead PERSONA removed.
@@ -309,8 +312,23 @@ module.exports = function agentModule(deps) {
     // invisible here until activation. A draft or
     // an unresolved amount is invisible here exactly as it is everywhere else,
     // which is why the two draft candidates changed nothing before cutover.
+    // ── THE SENTENCE IS DERIVED FROM STRUCTURE, NOT FROM PROSE ────────
+    // This used to concatenate applicability_basis, a free-text column, so
+    // nothing that quoted a charge ever read applies_to_renewal. A row could
+    // structurally say "not at renewal" while the assistant said the opposite.
+    // renderChargeTerms builds the sentence from the governed columns only;
+    // applicability_basis is evidence and is never spoken.
+    //
+    // A charge the renderer cannot state completely is OMITTED rather than
+    // half-quoted. The prompt's own rule then applies: a fee absent from the
+    // facts is one the assistant must not estimate or infer, so an incomplete
+    // governed term degrades to "confirm with the leasing office" instead of
+    // to a confident sentence missing a material word.
     const governedRows = (await client.query(
-      `select charge_code, display_label, amount, applicability_basis, published_at
+      `select charge_code, display_label, amount, currency, cadence, obligation,
+              assessed_per, applicability_basis, applicability_scope, condition_key,
+              incurred_on_event, applies_to_new_lease, applies_to_renewal,
+              applies_to_transfer, published_at
          from property_governed_charges
         where property_id=$1 and quote_state='live' and amount is not null
           and effective_from <= current_date
@@ -318,11 +336,21 @@ module.exports = function agentModule(deps) {
       [property_id]
     )).rows;
     for (const g of governedRows) {
+      let rendered;
+      try { rendered = renderChargeTerms(g); }
+      catch (e) {
+        // A renderer fault must never take the conversation down.
+        console.error("[agent] governed charge render failed", g.charge_code, e && e.message);
+        continue;
+      }
+      if (!rendered.quotable) {
+        console.warn("[agent] governed charge not quotable, omitted:", g.charge_code, rendered.reason);
+        continue;
+      }
       facts.push({
         fact_key: g.charge_code,
         category: "pricing",
-        rendered_text: `The ${String(g.display_label).toLowerCase()} is $${Number(g.amount).toLocaleString()}` +
-          (g.applicability_basis ? ` — ${g.applicability_basis}` : "."),
+        rendered_text: rendered.text,
         source: "governed_charge",
         confirmed_at: g.published_at,
       });
