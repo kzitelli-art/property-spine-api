@@ -17,11 +17,8 @@
 // Grounded against live server.js (Jun 29 2026): ids are uuid; application table is
 // lease_applications; persons/properties/units/users/events are the real tables.
 
-const crypto = require("crypto");
-
-function tokenHash(raw) {
-  return crypto.createHash("sha256").update(String(raw)).digest("hex");
-}
+// tokenHash() removed with the mutating routes (Slice C2) — it only minted
+// role-scoped demo tokens for the reset route. Preserved in tools/demo_run_ops.js.
 
 // the legal predecessor each checkpoint advances FROM (server-owned state machine)
 const CHECKPOINT_FROM = {
@@ -54,26 +51,9 @@ module.exports = function demoModule(deps) {
     const e = new Error(msg); e.httpStatus = status; e.publicMessage = msg; return e;
   }
 
-  // append the next demo_event on the SAME client, gap-free sequence within the attempt
-  async function appendEvent(client, attempt_id, ev) {
-    const seq = await client.query(
-      "select coalesce(max(sequence_no),0)+1 as n from demo_events where demo_attempt_id=$1",
-      [attempt_id]
-    );
-    const n = seq.rows[0].n;
-    await client.query(
-      `insert into demo_events
-         (demo_attempt_id, sequence_no, event_type, actor_type, actor_person_id,
-          actor_user_id, actor_role, source_module, source_record_type, source_record_id,
-          source_event_id, payload_json)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-      [attempt_id, n, ev.event_type, ev.actor_type, ev.actor_person_id ?? null,
-       ev.actor_user_id ?? null, ev.actor_role ?? null, ev.source_module ?? null,
-       ev.source_record_type ?? null, ev.source_record_id ?? null,
-       ev.source_event_id ?? null, JSON.stringify(ev.payload_json || {})]
-    );
-    return n;
-  }
+  // appendEvent() removed with the mutating routes (Slice C2) — it was the only
+  // demo_events writer and every caller was a removed route. Preserved verbatim
+  // in tools/demo_run_ops.js.
 
   // load run + its current (active) attempt; throws 404 if none
   async function loadCurrent(client, slug) {
@@ -86,20 +66,12 @@ module.exports = function demoModule(deps) {
     return { run, attempt };
   }
 
-  // require the attempt to be at the expected checkpoint before a transition writes
-  function requireCheckpoint(attempt, expected) {
-    if (!attempt) throw httpErr(409, "No active attempt — reset the demo to begin.");
-    if (attempt.checkpoint !== expected) {
-      throw httpErr(409, `Not allowed at checkpoint '${attempt.checkpoint}'. Expected '${expected}'.`);
-    }
-  }
-
-  async function advance(client, attempt_id, checkpoint) {
-    await client.query(
-      "update demo_attempts set checkpoint=$2, updated_at=now() where id=$1",
-      [attempt_id, checkpoint]
-    );
-  }
+  // requireCheckpoint() and advance() removed with the mutating routes
+  // (Slice C2). advance() was the only demo_attempts writer; both were called
+  // exclusively by removed routes. Preserved verbatim in tools/demo_run_ops.js.
+  //
+  // With these gone, THIS MODULE CONTAINS NO INSERT, UPDATE OR DELETE AT ALL —
+  // it is a read-only projection over demo_runs / demo_attempts / demo_events.
 
   // ── the composed read: ONE object both phones render (JOIN over real records) ──
   const SCENES = [
@@ -185,312 +157,43 @@ module.exports = function demoModule(deps) {
     catch (e) { res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
   });
 
-  // RESET — close current attempt, open a fresh one with a fresh synthetic person,
-  // fresh role-scoped tokens; PRESERVES old attempts + their events.
-  router.post("/demo/runs/:slug/reset", async (req, res) => {
-    try {
-      const out = await tx(async (client) => {
-        const run = (await client.query("select * from demo_runs where slug=$1", [req.params.slug])).rows[0];
-        if (!run) throw httpErr(404, "No demo run with that slug.");
-
-        // close any active attempt
-        await client.query(
-          "update demo_attempts set status='reset', closed_at=now(), updated_at=now() where demo_run_id=$1 and status='active'",
-          [run.id]
-        );
-
-        // a manager must exist (real users row). use provided, else first user.
-        // a manager must exist (real users row). prefer an explicit one, then a
-        // leasing_manager (the role the application_approval gate routes to), then
-        // any user as a last resort. seed creates a leasing_manager so this resolves.
-        const mgrId = (req.body && req.body.manager_user_id)
-          ? req.body.manager_user_id
-          : (
-              (await client.query(
-                "select id from users where role='leasing_manager'::role_name order by created_at asc limit 1"
-              )).rows[0]?.id
-              || (await client.query("select id from users order by created_at asc limit 1")).rows[0]?.id
-            );
-        if (!mgrId) throw httpErr(409, "No users row to act as manager — POST /demo/runs/:slug/seed first (it creates one).");
-
-        // fresh synthetic tenant person (a real persons row; lifecycle 'lead')
-        const name = (req.body && req.body.tenant_name) || "Jordan Avery (demo)";
-        const phone = (req.body && req.body.tenant_phone) || null;
-        const person = (await client.query(
-          `insert into persons (name, phone, source, lifecycle_status, leasing_stage)
-           values ($1,$2,'demo','lead','lead') returning id`,
-          [name, phone]
-        )).rows[0];
-
-        // fresh role-scoped tokens (return raw once; store only hashes)
-        const tenantTok = crypto.randomBytes(24).toString("hex");
-        const mgrTok = crypto.randomBytes(24).toString("hex");
-
-        const attempt = (await client.query(
-          `insert into demo_attempts
-             (demo_run_id, status, checkpoint, tenant_person_id, manager_user_id,
-              manager_role, tenant_token_hash, manager_token_hash)
-           values ($1,'active','application_ready',$2,$3,'leasing_manager',$4,$5)
-           returning id`,
-          [run.id, person.id, mgrId, tokenHash(tenantTok), tokenHash(mgrTok)]
-        )).rows[0];
-
-        await appendEvent(client, attempt.id, {
-          event_type: "demo_reset", actor_type: "system",
-          payload_json: { tenant_person_id: person.id },
-        });
-
-        return { attempt_id: attempt.id, tenant_token: tenantTok, manager_token: mgrTok };
-      });
-      res.json(out); // raw tokens returned ONCE for link building
-    } catch (e) { res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
-  });
-
-  // APPLICATION SUBMIT — tenant completes the REAL application via the app service
-  // APPLICATION SUBMIT — tenant completes the REAL application via the app service.
-  // Full field set: identity/contact land on the persons row AND in the application's
-  // `captured` JSON; rent/deposit are real columns. Nothing faked — every field
-  // persists on the real lease_applications record.
-  router.post("/demo/runs/:slug/application-submit", async (req, res) => {
-    try {
-      await tx(async (client) => {
-        const { attempt } = await loadCurrent(client, req.params.slug);
-        requireCheckpoint(attempt, "application_ready");
-
-        const b = req.body || {};
-        const fullName = (b.applicant_name || "").trim() || "Jordan Avery";
-        const email    = (b.email || "").trim() || null;
-        const phone    = (b.phone || "").trim() || null;
-
-        // the rich applicant detail → application.captured (JSON the table is built for)
-        const captured = {
-          email, phone,
-          date_of_birth:   (b.date_of_birth || "").trim() || null,
-          current_address: (b.current_address || "").trim() || null,
-          employer:        (b.employer || "").trim() || null,
-          job_title:       (b.job_title || "").trim() || null,
-          monthly_income:  b.monthly_income != null && b.monthly_income !== "" ? Number(b.monthly_income) : null,
-          occupants:       b.occupants != null && b.occupants !== "" ? Number(b.occupants) : null,
-          desired_move_in: (b.desired_move_in || "").trim() || null,
-          pets:            typeof b.pets === "boolean" ? b.pets : ((b.pets || "") === "yes"),
-        };
-        const rent    = b.rent != null && b.rent !== "" ? Number(b.rent) : null;
-        const deposit = b.deposit != null && b.deposit !== "" ? Number(b.deposit) : null;
-
-        // keep the real person row in step with what the applicant just told us
-        await client.query(
-          `update persons set
-             name  = $2,
-             email = coalesce($3, email),
-             phone = coalesce($4, phone),
-             updated_at = now()
-           where id = $1`,
-          [attempt.tenant_person_id, fullName, email, phone]
-        );
-
-        const result = await submissionService.submitApplicationService(client, {
-          property_id: (await client.query(
-            "select property_id from demo_runs where id=$1", [attempt.demo_run_id]
-          )).rows[0].property_id,
-          person_id: attempt.tenant_person_id,
-          applicant_name: fullName,
-          unit_id: (await client.query(
-            "select unit_id from demo_runs where id=$1", [attempt.demo_run_id]
-          )).rows[0].unit_id || null,
-          rent, deposit,
-          captured,
-          source: "applicant",
-        });
-        // submitApplicationService returns { application, approval_obligation_id, ... }
-        // — NOT the application row directly. Read the nested application.
-        const app = result.application;
-        if (!app || !app.id) throw httpErr(500, "Application service returned no application record.");
-
-        await client.query(
-          "update demo_attempts set application_id=$2, updated_at=now() where id=$1",
-          [attempt.id, app.id]
-        );
-        await appendEvent(client, attempt.id, {
-          event_type: "application_submitted", actor_type: "tenant",
-          actor_person_id: attempt.tenant_person_id,
-          source_module: "application_submission", source_record_type: "lease_application",
-          source_record_id: app.id,
-          payload_json: { applicant_name: app.applicant_name },
-        });
-        await advance(client, attempt.id, "application_submitted");
-      });
-      await sendState(res, req.params.slug);
-    } catch (e) { res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
-  });
-
-  // APPLICATION APPROVE — manager approves via the REAL service (closes the gate)
-  router.post("/demo/runs/:slug/application-approve", async (req, res) => {
-    try {
-      await tx(async (client) => {
-        const { attempt } = await loadCurrent(client, req.params.slug);
-        requireCheckpoint(attempt, "application_submitted");
-        if (!attempt.application_id) throw httpErr(409, "No application on this attempt.");
-
-        const app = (await client.query(
-          "select * from lease_applications where id=$1", [attempt.application_id]
-        )).rows[0];
-        if (!app) throw httpErr(404, "Application record missing.");
-
-        // R3 (v3): demo approve calls the ONE canonical approveApplication —
-        // which itself closes the application_approval gate AND creates the
-        // terms_review birth obligation. The demo previously closed the gate
-        // only (a quiet parallel-path divergence, Rule 10); now demo approve
-        // IS real approve. Fail closed if the service isn't wired.
-        if (!applicationsService || typeof applicationsService.approveApplication !== "function") {
-          throw httpErr(503, "Approve service not wired (applicationsService). Deploy applications.js + server.js together.");
-        }
-        await applicationsService.approveApplication(client, {
-          applicationId: app.id,
-          approvedByNote: "demo manager",
-          actorUserId: attempt.manager_user_id,
-        });
-
-        await appendEvent(client, attempt.id, {
-          event_type: "application_approved", actor_type: "manager",
-          actor_user_id: attempt.manager_user_id, actor_role: attempt.manager_role,
-          source_module: "application_submission", source_record_type: "lease_application",
-          source_record_id: app.id, payload_json: { decision: "approved" },
-        });
-        await advance(client, attempt.id, "application_approved");
-      });
-      await sendState(res, req.params.slug);
-    } catch (e) { res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
-  });
-
-  // SEED — create (or confirm) the demo_run row for a slug, pointed at a REAL
-  // property + a REAL unit IN THE BACKEND DB. Idempotent (slug is unique; the demo
-  // property is found by its marker name and reused). No demo_attempt is created
-  // here — reset does that.
+  // ── FOUR MUTATING ROUTES REMOVED 2026-07-28 (Slice C2) ──────────────
   //
-  // Property resolution order:
-  //   1. explicit body.property_id (must exist) — pin to a real property if you have one
-  //   2. else: a dedicated demo property (name 'Property Spine Demo Building'),
-  //      created with one demo unit if it doesn't exist yet.
-  // This removes any dependency on the offline app's IDs — those do NOT exist in the
-  // backend DB. The demo owns its own property, matching the "dedicated DEMO property"
-  // guardrail in the plan.
-  router.post("/demo/runs/:slug/seed", async (req, res) => {
-    try {
-      const out = await tx(async (client) => {
-        const slug = req.params.slug;
-        const DEMO_PROP_NAME = "Property Spine Demo Building";
-        let propertyId = (req.body && req.body.property_id) || null;
-        let unitId = (req.body && req.body.unit_id) || null;
+  //   POST /demo/runs/:slug/seed
+  //   POST /demo/runs/:slug/reset
+  //   POST /demo/runs/:slug/application-submit
+  //   POST /demo/runs/:slug/application-approve
+  //
+  // This file has ZERO process.env references — no DEMO_MODE, no access code,
+  // no confirm token — and mounts under /demo/, which server.js lists in
+  // PUBLIC_PREFIXES. All four were therefore reachable UNAUTHENTICATED on the
+  // public internet, and all four mutate the shared operating database:
+  //
+  //   seed    accepted a CLIENT-SUPPLIED property_id, validated only that the
+  //           property existed, then wrote property_team_assignments with
+  //           can_manage_roles=true on it, and created properties/units/users.
+  //           §21 inverted: a client-provided property ID deciding where
+  //           authority is granted.
+  //   reset   accepted client-supplied manager_user_id and tenant identity and
+  //           minted durable persons rows.
+  //   submit  overwrote a real persons row name/email/phone from an
+  //           unauthenticated body and created a real lease_application.
+  //   approve invoked the canonical approveApplication attributed to a real
+  //           manager user the caller never authenticated as.
+  //
+  // They were NOT secured with another access code, a DEMO_MODE check, a slug
+  // allowlist, or a no-op — each of those leaves a demo-special write path
+  // (§17 "Demo data may exist. Demo paths may not.", §32 stop-sign).
+  //
+  // The logic is preserved verbatim, UNMOUNTED, as Class 3 tooling in
+  // tools/demo_run_ops.js. That file exports an express router and must never
+  // be mounted; nothing in src/ may require it.
+  //
+  // GET /demo/runs/:slug/state above is READ-ONLY and deliberately retained.
+  // /demo/rehearsal-reset (demo_reset.js) is a separate module, untouched in
+  // this slice: it is multiply gated, writes only through the canonical
+  // closeNotFit service, deletes nothing, and ignores client property input.
 
-        if (propertyId) {
-          const p = (await client.query(
-            "select id from properties where id=$1", [propertyId]
-          )).rows[0];
-          if (!p) throw httpErr(404, "No property with that id in the backend DB — omit property_id to use the demo property.");
-        } else {
-          // find or create the dedicated demo property
-          let prop = (await client.query(
-            "select id from properties where name=$1 order by created_at asc limit 1",
-            [DEMO_PROP_NAME]
-          )).rows[0];
-          if (!prop) {
-            prop = (await client.query(
-              `insert into properties (name, address, city, state, zip, property_type)
-                 values ($1,'1 Demo Way','Philadelphia','PA','19104','multifamily')
-               returning id`,
-              [DEMO_PROP_NAME]
-            )).rows[0];
-          }
-          propertyId = prop.id;
-        }
-
-        // resolve a unit on that property (pin one, else first, else create one)
-        if (unitId) {
-          const u = (await client.query(
-            "select id from units where id=$1 and property_id=$2", [unitId, propertyId]
-          )).rows[0];
-          if (!u) throw httpErr(404, "That unit_id is not on that property.");
-        } else {
-          let u = (await client.query(
-            "select id from units where property_id=$1 order by unit_number asc limit 1",
-            [propertyId]
-          )).rows[0];
-          if (!u) {
-            u = (await client.query(
-              `insert into units (property_id, unit_number, bedrooms, bathrooms, square_feet, market_rent)
-                 values ($1,'101',1,1,650,1500) returning id`,
-              [propertyId]
-            )).rows[0];
-          }
-          unitId = u.id;
-        }
-
-        const run = (await client.query(
-          `insert into demo_runs (slug, property_id, unit_id)
-             values ($1,$2,$3)
-           on conflict (slug) do update
-             set property_id = excluded.property_id,
-                 unit_id     = excluded.unit_id
-           returning id, slug, property_id, unit_id`,
-          [slug, propertyId, unitId]
-        )).rows[0];
-
-        // ensure a leasing_manager user exists for reset to use as the approver.
-        // the application_approval gate routes to role 'leasing_manager' (047 enum),
-        // so the demo manager should hold that role. find-or-create by a marker email.
-        const DEMO_MGR_EMAIL = "demo-manager@propertyspine.internal";
-        let mgr = (await client.query(
-          "select id from users where email=$1 limit 1", [DEMO_MGR_EMAIL]
-        )).rows[0];
-        if (!mgr) {
-          mgr = (await client.query(
-            `insert into users (name, email, phone, role)
-               values ('Demo Leasing Manager', $1, null, 'leasing_manager'::role_name)
-             returning id`,
-            [DEMO_MGR_EMAIL]
-          )).rows[0];
-        }
-
-        // BRICK ONE: the demo manager holds a REAL active Demo Building
-        // assignment  the shared issuer verifies entitlement like every
-        // other session, so the demo path obeys the one authority model
-        // (case R: without this row, the demo bootstrap fails honestly).
-        // Constraint-agnostic reactivate-or-insert (works whether the table
-        // carries a FULL unique on the pair or the partial active-only
-        // index): touch the current active row; else reactivate the most
-        // recent history row; else insert. Never creates a second row when
-        // one exists; never creates a second ACTIVE row ever.
-        const upd1 = await client.query(
-          `update property_team_assignments
-              set role_title='Demo Leasing Manager', allowed_modules='{leasing}',
-                  primary_for_modules='{leasing}', can_manage_roles=true, updated_at=now()
-            where property_id=$1 and user_id=$2 and active=true`,
-          [propertyId, mgr.id]);
-        if (upd1.rowCount === 0) {
-          const upd2 = await client.query(
-            `update property_team_assignments
-                set active=true, role_title='Demo Leasing Manager', allowed_modules='{leasing}',
-                    primary_for_modules='{leasing}', can_manage_roles=true, updated_at=now()
-              where id = (select id from property_team_assignments
-                           where property_id=$1 and user_id=$2
-                           order by updated_at desc nulls last limit 1)`,
-            [propertyId, mgr.id]);
-          if (upd2.rowCount === 0) {
-            await client.query(
-              `insert into property_team_assignments
-                 (property_id, user_id, role_title, scope_type, allowed_modules,
-                  primary_for_modules, can_manage_roles, active, updated_at)
-               values ($1, $2, 'Demo Leasing Manager', 'property', '{leasing}',
-                       '{leasing}', true, true, now())`,
-              [propertyId, mgr.id]);
-          }
-        }
-
-        return { seeded: true, run, manager_user_id: mgr.id };
-      });
-      res.json(out);
-    } catch (e) { res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
-  });
 
   // expose for tests / later transitions
   router._service = { composeState, CHECKPOINT_FROM };
