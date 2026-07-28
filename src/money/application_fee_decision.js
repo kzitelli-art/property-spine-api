@@ -74,12 +74,17 @@ async function applicationFeeDecision(pool, { property_id, user_id = null } = {}
     effective_date: governed ? governed.effective_from : null,
 
     // ── WHAT CHANGES, IN PLAIN LANGUAGE ─────────────────────────────
+    // Once the term is LIVE the before/after is history, not a proposal.
+    // Leaving it as "after you approve" would ask an operator to approve
+    // something already in use.
     today: {
-      source: "Legacy property fact",
+      label: state === "live" ? "The assistant said before" : "The assistant says today",
+      source: "Legacy property fact" + (legacyLive ? "" : " (retired)"),
       the_ai_says: legacy ? legacy.rendered_text : null,
       is_live: legacyLive,
     },
     after_cutover: {
+      label: state === "live" ? "The assistant says now" : "After you approve",
       source: "Governed application fee",
       the_ai_will_say: "The application fee is $50 per applicant.",
       legacy_retires: legacyLive,
@@ -101,13 +106,17 @@ async function applicationFeeDecision(pool, { property_id, user_id = null } = {}
 
     // ── THE ACTION ──────────────────────────────────────────────────
     actions: {
-      may_approve: mayApprove,
-      may_modify: mayApprove,
-      may_reject: mayApprove,
+      // A LIVE term is not awaiting a decision. Offering approve/reject on
+      // something already in use invites re-deciding a settled thing.
+      may_approve: mayApprove && state !== "live",
+      may_modify: mayApprove && state !== "live",
+      may_reject: mayApprove && state !== "live",
       // Operator-facing copy. The machine reason is real and stays in `audit`;
       // a person told "session_identity_not_linked_to_a_person" learns nothing
       // and cannot tell whether to ask for access or ask someone else.
-      denied_reason: mayApprove ? null : (
+      denied_reason: (mayApprove && state === "live")
+        ? "This is live and governed. Changing it means superseding it with a new decision."
+        : mayApprove ? null : (
         !actor ? "Sign in to decide this."
         : actor.reconciliation_required
           ? "Your sign-in isn’t linked to a staff record yet. That’s an account setup step — ask an administrator to link it, then this decision becomes available."
