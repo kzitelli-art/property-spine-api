@@ -80,6 +80,30 @@ function computeTurnFlow({ scope = null, work = [] } = {}) {
   const openClean = open.filter((w) => w.stage === STAGE.FINAL_CLEAN);
 
   const inspectionPartial = !!scope && scope.inspection_completeness === "partial";
+  const scopeComplete = !!scope && scope.inspection_completeness === "complete_turn_scope";
+
+  // ── INHERITED WORK THAT NOBODY PLACED (migration 114) ─────────────
+  //
+  //  `stage = NULL` is honest while a unit has only initial-triage evidence:
+  //  nobody has claimed to know the turn yet. It becomes a LIE the moment a
+  //  COMPLETE scope is confirmed around it, because the reader would otherwise
+  //  treat it as "always actionable, never blocks" — an ABSENCE silently
+  //  reading as a positive fact, the exact defect BUILD 1 exists to correct.
+  //
+  //  A known BUILD 1 blocker ("Refrigerator missing") must not sit outside the
+  //  flow forever just because a later scope failed to place it. So after a
+  //  complete scope, unplaced work BLOCKS THE READINESS WALK and surfaces an
+  //  exception until a human stages it, marks it unknown-and-owed, or
+  //  withdraws it with a reason.
+  //
+  //  It deliberately does NOT block paint or cleaning: we do not know that it
+  //  does, and inventing a dependency is the mirror-image error of ignoring
+  //  one. Unknown blocks the thing that certifies "everything is resolved",
+  //  which is precisely the claim an unplaced item makes false.
+  const unplacedOpen = open.filter((w) => !isStaged(w));
+  const unplacedNeedingDecision = unplacedOpen.filter(
+    (w) => w.stage_decision_required === true || scopeComplete
+  );
 
   // Per-stage prerequisite, evaluated once and reused so every surface gives
   // the same answer.
@@ -132,6 +156,13 @@ function computeTurnFlow({ scope = null, work = [] } = {}) {
       detail: "No complete turn scope has been confirmed for this unit.",
       blocking_items: [],
     });
+    // Known, unresolved, and nobody placed it. Readiness means "everything is
+    // resolved", and an unplaced item makes that claim unverifiable.
+    if (unplacedNeedingDecision.length) b.push({
+      reason: "inherited_work_not_placed",
+      detail: "Work inherited from the initial walk has no stage in this turn. It must be placed, marked unknown and owed, or withdrawn with a reason before readiness can be reached.",
+      blocking_items: unplacedNeedingDecision.map((w) => w.work_text),
+    });
     return b;
   }
 
@@ -159,6 +190,12 @@ function computeTurnFlow({ scope = null, work = [] } = {}) {
       sequence_exception: !!w.sequence_exception,
       sequence_exception_reason: w.sequence_exception_reason || null,
       released_from: released ? blockers.map((b) => b.reason) : [],
+      // Inherited and unplaced after a complete scope. Actionable — somebody
+      // can still do it — but it is an OPEN QUESTION, not a settled one, and
+      // it holds the readiness walk until answered.
+      requires_scope_decision: !staged && (w.stage_decision_required === true || scopeComplete),
+      stage_decision_note: w.stage_decision_note || null,
+      blocks_readiness: !staged && (w.stage_decision_required === true || scopeComplete),
     };
   });
 
@@ -177,10 +214,14 @@ function computeTurnFlow({ scope = null, work = [] } = {}) {
   });
   const unstaged = items.filter((i) => !i.stage);
   if (unstaged.length) {
+    const owed = unstaged.filter((i) => i.requires_scope_decision);
     stages.push({
       stage: null, label: STAGE_LABEL.unstaged, items: unstaged,
       open_count: unstaged.length, blocked: false, blocked_by: [],
-      note: "Recorded before turn staging existed — actionable, and not part of the sequence.",
+      requires_scope_decision_count: owed.length,
+      note: owed.length
+        ? "Inherited from the initial walk and NOT placed in this turn. A complete scope was confirmed around " + (owed.length === 1 ? "this item" : "these items") + " without deciding where " + (owed.length === 1 ? "it belongs" : "they belong") + ". Readiness is held until each is staged, marked unknown and owed, or withdrawn with a reason."
+        : "Recorded before turn staging existed. Not yet part of the sequence — no complete scope has been confirmed around it.",
     });
   }
 
@@ -200,8 +241,12 @@ function computeTurnFlow({ scope = null, work = [] } = {}) {
   //    5. no open work, readiness walk blocked — say what still holds it
   // ══════════════════════════════════════════════════════════════════
   const stageRank = (i) => (i.stage ? STAGE_ORDER.indexOf(i.stage) : -1);
+  //  Unplaced inherited work sorts FIRST among actionable items: it is the
+  //  only thing here that holds the readiness walk open regardless of stage,
+  //  and it is answered by a decision rather than by effort.
   const actionable = items.filter((i) => i.actionable)
-    .sort((a, b) => stageRank(a) - stageRank(b));
+    .sort((a, b) => (b.requires_scope_decision ? 1 : 0) - (a.requires_scope_decision ? 1 : 0)
+                 || stageRank(a) - stageRank(b));
 
   let controlling = null;
   const unowned = actionable.filter((i) => i.owner === "UNASSIGNED");
@@ -220,16 +265,34 @@ function computeTurnFlow({ scope = null, work = [] } = {}) {
     const laterBlocked = stages
       .filter((s) => s.stage && s.blocked && STAGE_ORDER.indexOf(s.stage) > stageRank(i))
       .map((s) => s.label);
-    controlling = {
-      kind: "do_work",
-      work_id: i.work_id,
-      action: asAction("Complete", i.work_text),
-      why: laterBlocked.length
-        ? `${laterBlocked.join(" and ")} remain blocked until this is resolved.`
-        : "This is the earliest actionable work in the turn.",
-      stage: i.stage, stage_label: i.stage_label,
-      blocks_downstream: laterBlocked,
-    };
+    // "Final readiness walk remain blocked" — a plural verb on a single
+    // subject. Operator-facing copy is the product; a sentence that reads like
+    // a bug erodes trust in the surface that printed it.
+    const verb = laterBlocked.length === 1 ? "remains" : "remain";
+
+    // An item nobody placed is an OPEN QUESTION, not just outstanding work.
+    // Telling the operator to "complete" it hides the thing that actually
+    // needs doing: deciding where it belongs in the turn.
+    controlling = i.requires_scope_decision
+      ? {
+          kind: "place_inherited_work",
+          work_id: i.work_id,
+          action: `Decide where ${lowerFirst(i.work_text)} belongs in this turn`,
+          why: i.stage_decision_note
+            ? `${i.stage_decision_note} It is not placed in any stage, so the readiness walk is held until it is staged, marked unknown and owed, or withdrawn with a reason.`
+            : "This came from the initial walk and was never placed in this turn. The readiness walk is held until it is staged, marked unknown and owed, or withdrawn with a reason.",
+          stage: null, stage_label: i.stage_label,
+        }
+      : {
+          kind: "do_work",
+          work_id: i.work_id,
+          action: asAction("Complete", i.work_text),
+          why: laterBlocked.length
+            ? `${laterBlocked.join(" and ")} ${verb} blocked until this is resolved.`
+            : "This is the earliest actionable work in the turn.",
+          stage: i.stage, stage_label: i.stage_label,
+          blocks_downstream: laterBlocked,
+        };
   } else {
     const blockedItems = items.filter((i) => i.blocked);
     if (blockedItems.length) {
@@ -271,7 +334,8 @@ function computeTurnFlow({ scope = null, work = [] } = {}) {
     actionable_count: items.filter((i) => i.actionable).length,
     blocked_count: items.filter((i) => i.blocked).length,
     unassigned_count: items.filter((i) => i.owner === "UNASSIGNED").length,
-    inspection_complete: !!scope && scope.inspection_completeness === "complete_turn_scope",
+    inspection_complete: scopeComplete,
+    unplaced_inherited_count: items.filter((i) => i.requires_scope_decision).length,
     readiness_walk_blocked: blockersFor(STAGE.READINESS_WALK).length > 0,
     controlling_next_action: controlling,
   };
@@ -325,6 +389,18 @@ function turnExceptions({ scope = null, work = [], flow = null, triage = null, n
       code: "flow_stalled",
       label: "A prerequisite is blocking all remaining work",
       detail: f.controlling_next_action ? f.controlling_next_action.why : "Nothing is currently actionable.",
+    });
+  }
+
+  // A COMPLETE scope that left known work unplaced is an unanswered question,
+  // not a tidy turn. A PARTIAL scope may hold unstaged work honestly — the
+  // scope is genuinely incomplete, so "not yet placed" is a true statement.
+  const unplaced = f.items.filter((i) => i.requires_scope_decision);
+  if (unplaced.length) {
+    out.push({
+      code: "inherited_work_not_placed",
+      label: "Work from the initial walk was never placed in this turn",
+      detail: `${unplaced.length} item${unplaced.length === 1 ? "" : "s"} inherited from the initial walk ${unplaced.length === 1 ? "has" : "have"} no stage: ${unplaced.map((i) => i.work_text).join("; ")}. Readiness is held until each is staged, marked unknown and owed, or withdrawn with a reason.`,
     });
   }
 

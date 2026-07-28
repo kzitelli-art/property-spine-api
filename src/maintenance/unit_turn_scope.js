@@ -101,6 +101,9 @@ module.exports = function unitTurnScope(deps) {
       const nextMoveIn = unitTriageService
         ? await unitTriageService.nextCommittedMoveIn(pool, { unit_id: u.id }) : null;
       const current = await unitTurnScopeService.readTurnFlow(pool, { unit_id: u.id });
+      // What this scope will INHERIT. Served before confirmation because an
+      // operator cannot place work they were never shown.
+      const inherited = await unitTurnScopeService.inheritedWork(pool, { unit_id: u.id });
 
       res.json({
         unit: { id: u.id, unit_number: u.unit_number },
@@ -109,6 +112,7 @@ module.exports = function unitTurnScope(deps) {
         appliance_candidates: appliances,
         next_move_in: nextMoveIn,
         existing_scope: current.scope,
+        inherited_work: inherited,
         vocabularies: {
           paint: PAINT_LABEL, cleaning: CLEANING_LABEL,
           keys: KEYS_LABEL, appliance: APPLIANCE_LABEL, inspection: INSPECTION_LABEL,
@@ -168,6 +172,8 @@ module.exports = function unitTurnScope(deps) {
         appliances: Array.isArray(b.appliances) ? b.appliances : [],
         findings: Array.isArray(b.findings) ? b.findings : [],
         required_work: Array.isArray(b.required_work) ? b.required_work : [],
+        // [{ work_id, action: 'stage'|'unknown'|'withdraw', stage?, reason? }]
+        inherited_work: Array.isArray(b.inherited_work) ? b.inherited_work : [],
         supersedes_id: b.supersedes_id || null,
         correction_reason: b.correction_reason || null,
       });
@@ -197,12 +203,15 @@ module.exports = function unitTurnScope(deps) {
           controlling_next_action: c ? c.action : null,
           why: c ? c.why : null,
           superseded_work: out.superseded_work.map((w) => w.work_text),
+          inherited_placed: (out.inherited_handled || []).map((h) => `${h.work_text} → ${h.action}`),
+          inherited_left_unplaced: (out.inherited_left_unplaced || []).map((w) => w.work_text),
           standing_caveat: out.scope.inspection_completeness === "partial"
             ? "This is a partial inspection. Areas not inspected remain unknown, and final readiness cannot be reached."
             : "Final readiness is established by the readiness walk, which this build does not perform or certify.",
         },
         scope: out.scope, appliances: out.appliances, findings: out.findings,
         required_work: out.required_work, superseded_work: out.superseded_work,
+        inherited_handled: out.inherited_handled, inherited_left_unplaced: out.inherited_left_unplaced,
         flow: out.flow, scope_obligation: out.scope_obligation, scope_owner: out.scope_owner,
         acted_on: { property_id: req.operator.property_id, actor: req.operator.name || null },
       });

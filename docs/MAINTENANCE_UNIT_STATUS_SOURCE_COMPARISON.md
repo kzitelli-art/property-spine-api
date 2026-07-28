@@ -51,6 +51,55 @@
 > **Do not read Build 1's existence as evidence that readiness is now honest. It is
 > honest only where somebody has walked the unit.**
 
+> ## ⚠ OPEN ARCHITECTURE ISSUE — GRAIN MISMATCH (raised at BUILD 2 freeze)
+>
+> **Maintenance records are UNIT-grained. The position model is SPACE-grained.**
+>
+> A lease attaches to a SPACE, never directly to a unit — that is what lets whole-unit
+> and by-the-bed leasing share one code path. `position_classifier.js` and
+> `dated_positions.js` are space-grained, and migration 100 put `position_kind` on the
+> space. But every maintenance table is `unit_id NOT NULL` with **no `space_id` column
+> at all**:
+>
+> ```
+> turnovers                    unit_id
+> unit_triage_confirmations    unit_id   (112)
+> unit_triage_findings         unit_id   (112)
+> unit_triage_required_work    unit_id   (112)
+> unit_turn_scopes             unit_id   (113)
+> unit_turn_appliances         unit_id   (113)
+> ```
+>
+> Neither 112 nor 113 contains the string `space_id`. `space_position.js:176` joins
+> turn status unit→unit.
+>
+> **Consequence: on a by-the-bed property, ONE turn scope speaks for EVERY bed in the
+> unit.** One triage confirmation, one finding set, one required-work list, one paint
+> level — for what the position model treats as several independently leasable
+> positions. Reportedly the same defect class migration 088 fixed in confirm-term.
+>
+> **This grows more expensive per build.** Builds 1 and 2 added three more unit-grained
+> tables to the three that already existed.
+>
+> **Status: ruling requested before BUILD 3** — are turn scope and triage unit facts or
+> position facts? Some may genuinely be unit facts (a refrigerator and a paint level
+> plausibly belong to the unit even when leasing is by-bed), so forcing everything to
+> space grain could be as wrong as forcing everything to unit grain. Not resolved here,
+> and BUILD 2 does not attempt to resolve it.
+
+> ## ⚠ COMPETING SCOPE MODEL IN THE FRONTEND (raised at BUILD 2 freeze)
+>
+> The app's `DEMO_DB` carries a frontend-only `/turnovers/:id/items` intercept. Before
+> BUILD 2 that was an isolated demo fixture. **Now that a real server-side turn scope
+> exists, it is a second, competing scope model that will look like it works** — an
+> operator could exercise a scope surface that never reaches the canonical service and
+> get a plausible result.
+>
+> BUILD 2's own surfaces are registered on the live seam and cannot reach
+> `demoRespond()`. This issue is about the pre-existing intercept sitting beside them,
+> not about the BUILD 2 door. Retiring or fencing it is not BUILD 2 work and has not
+> been done.
+
 **This is an audit document, not an implementation plan.** It maps a draft
 Maintenance Unit-Status Capture operating contract against current source. It designs
 no schema, routes, services, or migrations, and it does not authorize implementation.

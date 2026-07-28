@@ -54,10 +54,46 @@ const OBLIGATION_TYPES = Object.freeze({
 //  not fit the eight-value role_name enum. So this matches PATTERNS, never a
 //  named person and never a single hardcoded title.
 //
-//  REPLACEMENT CONDITION (§18 Class 4): delete this ladder when a property
-//  can configure its own turn-scope owner. Until then it is a default, not a
-//  rule, and it must never assign the person who typed the scope in merely
-//  because they performed the preceding action.
+//  ══════════════════════════════════════════════════════════════════
+//   CLASS 4 — TEMPORARY ADAPTER. NOT THE ROLE OR ELIGIBILITY MODEL.
+//  ══════════════════════════════════════════════════════════════════
+//
+//  EXACT REPLACEMENT CONDITION: delete this ladder in full — the constant and
+//  every reference to it — the moment a property can configure its own
+//  accountable turn-scope owner (a per-property assignment or setting naming
+//  the role or user who owns turn scope). Nothing else needs to change: the
+//  eligibility filter below already stands on its own, and this ladder only
+//  ORDERS people that filter has already admitted.
+//
+//  1. EXISTING ASSIGNMENT AND MODULE ELIGIBILITY REMAIN AUTHORITATIVE.
+//     property_team_assignments.active and .allowed_modules decide WHO MAY be
+//     an owner. That check runs FIRST in resolveScopeOwner and is not
+//     negotiable. This ladder never widens it.
+//
+//  2. A TITLE MATCH ALONE CANNOT GRANT AUTHORITY. The ladder is applied only
+//     to the already-eligible pool, so a person titled "Assistant Property
+//     Manager" with no management or maintenance module access is NEVER
+//     selected — they are filtered out before the ladder is consulted. Title
+//     breaks ties among the eligible; it does not create eligibility. If the
+//     eligible pool is empty the answer is null, which surfaces as UNASSIGNED.
+//
+//  3. NO NAMED EMPLOYEE IS HARDCODED. These are role-title PATTERNS. No user
+//     id, name, email or phone appears here or anywhere in this module. A
+//     property with different titles falls through to module access, and a
+//     property with nobody eligible returns UNASSIGNED rather than a guess.
+//
+//  4. THE REPORTING ACTOR IS NEVER ASSIGNED BY IMPLICATION. confirmScope
+//     passes exclude_user_id = actor_user_id, so whoever typed the scope in is
+//     preferred AGAINST. Performing the preceding action is not consent to own
+//     the next one. They are re-admitted only when they are genuinely the sole
+//     eligible person at the property — otherwise a single-staff property
+//     would always read UNASSIGNED, which would be its own kind of lie.
+//
+//  5. FREE-TEXT MATCHING IS A CONCESSION, NOT A DESIGN. role_title is free
+//     text (migration 035, deliberately, because "Lead Maintenance Tech" does
+//     not fit the eight-value role_name enum). Matching prose is fragile and
+//     is tolerated ONLY because the fallback is safe: an unmatched title loses
+//     nothing, since module access still decides eligibility.
 const SCOPE_OWNER_LADDER = [
   { rank: 1, re: /\b(assistant|asst\.?)\s+(property\s+)?manager\b/i, why: "assistant property manager (BUILD 2 default)" },
   { rank: 2, re: /\bsenior\s+(property\s+)?manager\b/i, why: "senior property manager (fallback)" },
@@ -234,6 +270,81 @@ function makeUnitTurnScopeService(deps) {
       workRows.push(row);
     }
 
+    // 4b) INHERITED WORK MUST ENTER THE FLOW (migration 114)
+    //
+    //  Every unresolved item that predates this scope — BUILD 1 triage work,
+    //  or work from an earlier scope — must be addressed EXPLICITLY. The
+    //  operator sends a decision per item: place it in a stage, mark it
+    //  unknown-and-owed, or withdraw it with a reason.
+    //
+    //  Anything they do NOT address, when they are claiming a COMPLETE scope,
+    //  is flagged rather than ignored. Silence about a known blocker is not
+    //  consent that it does not block.
+    const inheritedDecisions = Array.isArray(spec.inherited_work) ? spec.inherited_work : [];
+    const inheritedHandled = [];
+    for (const d of inheritedDecisions) {
+      if (!d || !d.work_id) continue;
+      // The item must be on this unit — a decision cannot reach across units.
+      const target = (await client.query(
+        "select id, unit_id, status from unit_triage_required_work where id=$1 and unit_id=$2",
+        [d.work_id, unit_id])).rows[0];
+      if (!target) throw bad(`inherited work item ${d.work_id} is not on this unit`);
+
+      if (d.action === "stage") {
+        if (!STAGE_VALUES.includes(d.stage)) throw bad("a staged decision needs a valid stage", { allowed: STAGE_VALUES });
+        const row = (await client.query(
+          `update unit_triage_required_work
+              set stage=$2, disturbs_painted_surfaces=$3,
+                  stage_decision_required=false, stage_decision_note=null
+            where id=$1 returning *`,
+          [d.work_id, d.stage,
+           d.disturbs_painted_surfaces === undefined ? null : d.disturbs_painted_surfaces])).rows[0];
+        inheritedHandled.push({ work_id: d.work_id, action: "staged", stage: d.stage, work_text: row.work_text });
+      } else if (d.action === "unknown") {
+        // Explicitly unknown AND OWED. It blocks readiness and shows as an
+        // exception until somebody answers it. This is the honest middle
+        // option — not a way to make the question go away.
+        if (!d.reason || !String(d.reason).trim())
+          throw bad("marking inherited work unknown requires a reason");
+        const row = (await client.query(
+          `update unit_triage_required_work
+              set stage=null, stage_decision_required=true, stage_decision_note=$2
+            where id=$1 returning *`,
+          [d.work_id, String(d.reason).trim()])).rows[0];
+        inheritedHandled.push({ work_id: d.work_id, action: "unknown_and_owed", work_text: row.work_text });
+      } else if (d.action === "withdraw") {
+        if (!d.reason || !String(d.reason).trim())
+          throw bad("withdrawing inherited work requires an attributed reason");
+        const row = (await client.query(
+          `update unit_triage_required_work
+              set status='withdrawn', withdrawn_at=now(), withdrawn_by_user_id=$2,
+                  withdrawn_reason=$3, stage_decision_required=false
+            where id=$1 returning *`,
+          [d.work_id, actor_user_id, String(d.reason).trim()])).rows[0];
+        inheritedHandled.push({ work_id: d.work_id, action: "withdrawn", work_text: row.work_text });
+      } else {
+        throw bad("invalid inherited-work action", { allowed: ["stage", "unknown", "withdraw"] });
+      }
+    }
+
+    //  The safety net. A COMPLETE scope that silently leaves known work
+    //  unplaced would let `stage = NULL` mean "does not block" — the exact
+    //  absence-reads-as-fact defect this build exists to prevent.
+    let flaggedUnplaced = [];
+    if (inspection_completeness === INSPECTION.COMPLETE) {
+      flaggedUnplaced = (await client.query(
+        `update unit_triage_required_work
+            set stage_decision_required = true,
+                stage_decision_note = coalesce(stage_decision_note,
+                  'A complete turn scope was confirmed without deciding where this item belongs in the turn.')
+          where unit_id = $1
+            and status = 'required'
+            and stage is null
+            and turn_scope_id is distinct from $2
+          returning id, work_text`,
+        [unit_id, scope.id])).rows;
+    }
+
     // 5) CORRECTION: withdraw the superseded scope's still-open work rather
     //    than deleting it. History stays; current truth moves.
     let withdrawn = [];
@@ -296,15 +407,49 @@ function makeUnitTurnScopeService(deps) {
       closedScopeTask = openTask.id;
     }
 
-    const flow = computeTurnFlow({ scope, work: workRows });
+    //  Flow is computed over ALL open work on the unit, not just the rows this
+    //  scope created. Inherited items are part of this turn whether or not this
+    //  confirmation authored them, and a flow that ignored them would be the
+    //  seam this correction closes.
+    const allOpen = (await client.query(
+      "select * from unit_triage_required_work where unit_id=$1 and status='required'",
+      [unit_id])).rows;
+    const flow = computeTurnFlow({ scope, work: allOpen });
 
     return {
       scope, appliances: applianceRows, findings: findingRows, required_work: workRows,
+      inherited_handled: inheritedHandled,
+      inherited_left_unplaced: flaggedUnplaced,
       superseded_work: withdrawn, event: ev, flow,
       scope_obligation: scopeObligation,
       scope_owner: owner,
       closed_complete_scope_obligation_id: closedScopeTask,
       unit: { id: unit_id, unit_number: tc.unit_number },
+    };
+  }
+
+  // ── WHAT THIS SCOPE WILL INHERIT ──────────────────────────────────
+  //  Served BEFORE confirmation so the operator can see, and decide about,
+  //  every unresolved item that predates this scope. An operator cannot place
+  //  work they were never shown.
+  async function inheritedWork(db, { unit_id }) {
+    const rows = (await db.query(
+      `select id, work_text, stage, status, stage_decision_required, stage_decision_note, created_at
+         from unit_triage_required_work
+        where unit_id = $1 and status = 'required'
+        order by created_at asc`, [unit_id])).rows;
+    const unplaced = rows.filter((r) => !r.stage);
+    return {
+      count: rows.length,
+      needs_decision: unplaced.length,
+      items: unplaced.map((r) => ({
+        work_id: r.id, work_text: r.work_text,
+        stage_decision_required: r.stage_decision_required,
+        stage_decision_note: r.stage_decision_note,
+      })),
+      note: unplaced.length
+        ? "These items are unresolved and have no stage. Confirming a COMPLETE scope without deciding about each one will flag it and hold the readiness walk."
+        : null,
     };
   }
 
@@ -373,7 +518,7 @@ function makeUnitTurnScopeService(deps) {
   }
 
   return {
-    propose, confirmScope, readTurnFlow, recordSequenceException,
+    propose, confirmScope, readTurnFlow, recordSequenceException, inheritedWork,
     resolveScopeOwner, applianceCandidates,
     computeTurnFlow, turnExceptions,
     OBLIGATION_TYPES, SCOPE_OWNER_LADDER,

@@ -309,6 +309,142 @@ section("B14  keys: a fact about keys, not a ruling about a person");
   ok("no billback or charge language anywhere", !/billback|charge the|deduct|deposit/i.test(j));
 }
 
+section("B15  inherited BUILD 1 work must enter the ordered flow");
+{
+  // A BUILD 1 triage item: known, unresolved, no stage.
+  const inherited = {
+    id: "b1", status: "required", work_text: "Source and install refrigerator",
+    stage: null, disturbs_painted_surfaces: null, owner_user_id: "u1", sequence_exception: false,
+  };
+  const scoped = I.proposeScope({ paint_level: "touch_up", cleaning_level: "full", keys_status: "accounted_for", inspection_completeness: "complete_turn_scope" });
+
+  // ── 4. PARTIAL inspection may honestly retain unstaged work ──
+  const partial = computeTurnFlow({
+    scope: { inspection_completeness: "partial" },
+    work: [inherited].concat(rows(scoped)),
+  });
+  const pItem = partial.items.find((i) => i.work_id === "b1");
+  ok("partial scope: inherited work needs no decision yet", pItem.requires_scope_decision === false);
+  ok("partial scope: raises no unplaced-work exception",
+     !turnExceptions({ scope: { inspection_completeness: "partial" }, work: [inherited] })
+        .some((e) => e.code === "inherited_work_not_placed"));
+
+  // ── 5. COMPLETE inspection cannot silently retain it ──
+  const complete = computeTurnFlow({ scope: COMPLETE, work: [inherited].concat(rows(scoped)) });
+  const cItem = complete.items.find((i) => i.work_id === "b1");
+  ok("complete scope: inherited work REQUIRES a decision", cItem.requires_scope_decision === true);
+  ok("complete scope: it is counted", complete.unplaced_inherited_count === 1, String(complete.unplaced_inherited_count));
+  ok("complete scope: surfaces an exception",
+     turnExceptions({ scope: COMPLETE, work: [inherited] })
+       .some((e) => e.code === "inherited_work_not_placed"));
+  ok("the exception names the item",
+     turnExceptions({ scope: COMPLETE, work: [inherited] })
+       .find((e) => e.code === "inherited_work_not_placed").detail.includes("refrigerator"));
+
+  // ── 3. it does NOT disappear from the readiness prerequisite set ──
+  ok("unplaced inherited work blocks the readiness walk", complete.readiness_walk_blocked);
+  const onlyInherited = computeTurnFlow({ scope: COMPLETE, work: [inherited] });
+  ok("even with ALL scope work resolved, it still blocks readiness", onlyInherited.readiness_walk_blocked);
+  ok("the controlling action is to PLACE it, not to 'complete' it",
+     onlyInherited.controlling_next_action.kind === "place_inherited_work",
+     onlyInherited.controlling_next_action.kind);
+  ok("and names itself as unplaced from the initial walk",
+     /never placed|not placed/i.test(onlyInherited.controlling_next_action.why),
+     onlyInherited.controlling_next_action.why);
+  ok("unplaced work outranks ordinary actionable work",
+     computeTurnFlow({ scope: COMPLETE, work: [inherited].concat(rows(scoped)) })
+       .controlling_next_action.kind === "place_inherited_work");
+  // Exactly ONE later stage blocked → singular verb. Cleaning-only scope:
+  // nothing precedes it, and only the readiness walk sits downstream.
+  const cleanOnly = I.proposeScope({ paint_level: "none", cleaning_level: "full", keys_status: "accounted_for", inspection_completeness: "complete_turn_scope" });
+  const fSing = computeTurnFlow({ scope: COMPLETE, work: rows(cleanOnly) });
+  ok("one downstream stage → singular verb",
+     /remains blocked/.test(fSing.controlling_next_action.why), fSing.controlling_next_action.why);
+  ok("and never the plural verb on a single subject",
+     !/walk remain blocked/.test(fSing.controlling_next_action.why));
+  // TWO downstream stages → plural verb
+  const twoDown = I.proposeScope({ repairs_text: "Bathroom faucet leaks", paint_level: "full", cleaning_level: "full", keys_status: "accounted_for", inspection_completeness: "complete_turn_scope" });
+  const fPlur = computeTurnFlow({ scope: COMPLETE, work: rows(twoDown) });
+  ok("two downstream stages → plural verb",
+     /remain blocked/.test(fPlur.controlling_next_action.why) && !/remains blocked/.test(fPlur.controlling_next_action.why),
+     fPlur.controlling_next_action.why);
+
+  // the seam this closes: unplaced must NOT read as "does not block"
+  ok("stage=NULL after a complete scope no longer means 'does not block'",
+     onlyInherited.readiness_walk_blocked === true);
+
+  // ── 1. placed into the repair stage, it behaves like scope work ──
+  const staged = { ...inherited, stage: "repair", disturbs_painted_surfaces: false, stage_decision_required: false };
+  const f1 = computeTurnFlow({ scope: COMPLETE, work: [staged].concat(rows(scoped)) });
+  const sItem = f1.items.find((i) => i.work_id === "b1");
+  ok("staged inherited work no longer needs a decision", sItem.requires_scope_decision === false);
+  ok("staged into repairs", sItem.stage === "repair");
+  ok("final cleaning is downstream of it",
+     f1.stages.find((x) => x.stage === STAGE.FINAL_CLEAN).blocked);
+  ok("no unplaced exception once it is staged",
+     !turnExceptions({ scope: COMPLETE, work: [staged] }).some((e) => e.code === "inherited_work_not_placed"));
+
+  // ── 2. explicitly marked unknown-and-owed still blocks ──
+  const owed = { ...inherited, stage: null, stage_decision_required: true, stage_decision_note: "Cannot place until the appliance is sourced." };
+  const f2 = computeTurnFlow({ scope: { inspection_completeness: "partial" }, work: [owed] });
+  ok("explicitly unknown-and-owed requires a decision even on a PARTIAL scope",
+     f2.items[0].requires_scope_decision === true);
+  ok("and still blocks readiness", f2.readiness_walk_blocked);
+  ok("and carries its note", f2.items[0].stage_decision_note === "Cannot place until the appliance is sourced.");
+
+  // ── withdrawn is the third honest exit ──
+  const gone = { ...inherited, status: "withdrawn" };
+  const f3 = computeTurnFlow({ scope: COMPLETE, work: [gone] });
+  ok("withdrawn inherited work stops blocking", !f3.readiness_walk_blocked);
+  ok("and is not counted as open", f3.open_count === 0);
+}
+
+section("B16  scope-owner ladder is a temporary adapter, not an authority model");
+{
+  const { makeUnitTurnScopeService } = require("../src/maintenance/unit_turn_scope_service");
+  const svc = makeUnitTurnScopeService({ spawnObligationFromEvent: async () => ({ id: "o" }) });
+  // Injected rows, not a database. This exercises the ORDERING logic only.
+  const fake = (rowsIn) => ({ query: async () => ({ rows: rowsIn }) });
+
+  const APM = { user_id: "apm", role_title: "Assistant Property Manager", name: "A", allowed_modules: ["management"] };
+  const PM = { user_id: "pm", role_title: "Property Manager", name: "P", allowed_modules: ["management"] };
+  const TECH = { user_id: "t", role_title: "Lead Maintenance Tech", name: "T", allowed_modules: ["maintenance"] };
+  const APM_NO_ACCESS = { user_id: "ghost", role_title: "Assistant Property Manager", name: "G", allowed_modules: [] };
+
+  (async () => {
+    const a = await svc.resolveScopeOwner(fake([PM, APM, TECH]), { property_id: "p" });
+    ok("assistant property manager is preferred", a && a.user_id === "apm", a && a.user_id);
+
+    // 2. a title match alone cannot grant authority
+    const b = await svc.resolveScopeOwner(fake([APM_NO_ACCESS, TECH]), { property_id: "p" });
+    ok("an APM with NO module access is never selected", b && b.user_id !== "ghost", b && b.user_id);
+    ok("the eligible tech is selected instead", b && b.user_id === "t");
+
+    const c = await svc.resolveScopeOwner(fake([APM_NO_ACCESS]), { property_id: "p" });
+    ok("title alone yields UNASSIGNED, not an owner", c === null);
+
+    const d = await svc.resolveScopeOwner(fake([]), { property_id: "p" });
+    ok("no staff at all yields UNASSIGNED", d === null);
+
+    // 4. the reporting actor is never assigned by implication
+    const e = await svc.resolveScopeOwner(fake([APM, PM]), { property_id: "p", exclude_user_id: "apm" });
+    ok("the actor who typed the scope is preferred against", e && e.user_id === "pm", e && e.user_id);
+    const f = await svc.resolveScopeOwner(fake([APM]), { property_id: "p", exclude_user_id: "apm" });
+    ok("but a sole eligible person is still the owner, not a false UNASSIGNED", f && f.user_id === "apm");
+
+    // 3. no named employee hardcoded
+    const src = require("fs").readFileSync(require.resolve("../src/maintenance/unit_turn_scope_service"), "utf8");
+    ok("no email address appears in the module", !/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(src));
+    ok("ladder is patterns, not identifiers", svc.SCOPE_OWNER_LADDER.every((r) => r.re instanceof RegExp));
+    ok("replacement condition is documented",
+       /EXACT REPLACEMENT CONDITION/.test(src) && /CLASS 4 . TEMPORARY ADAPTER/i.test(src));
+    ok("module eligibility documented as authoritative",
+       /EXISTING ASSIGNMENT AND MODULE ELIGIBILITY REMAIN AUTHORITATIVE/.test(src));
+    ok("title-cannot-grant-authority documented",
+       /A TITLE MATCH ALONE CANNOT GRANT AUTHORITY/.test(src));
+  })();
+}
+
 // ════════════════════════════════════════════════════════════════
 //  PART B — DURABLE. Requires REAL Postgres.
 // ════════════════════════════════════════════════════════════════
