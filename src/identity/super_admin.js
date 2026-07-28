@@ -6,7 +6,8 @@
 //   POST /admin/organizations              create a new org
 //   GET  /admin/organizations/:id          org detail + properties + users
 //   PATCH /admin/organizations/:id         update org metadata (name, plan, status, notes)
-//   POST /admin/organizations/:id/properties  assign an existing property to an org
+//   POST /admin/organizations/:id/properties      assign an existing property to an org
+//   POST /admin/organizations/:id/properties/new  create a NEW property tied to an org (wizard)
 //   POST /admin/organizations/:orgId/invite   create/invite the first admin user for an org
 //
 //   GET  /admin/users                      list all users platform-wide
@@ -211,6 +212,57 @@ module.exports = function superAdminModule({ pool }) {
       res.json({ ok: true, property_id, organization_id: org.id });
     } catch (e) {
       console.error("admin/org assign property error", e);
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── POST /admin/organizations/:id/properties/new ─────────────────────────
+  // Creates a BRAND-NEW property already tied to this org (onboarding wizard).
+  // Distinct from POST .../properties, which assigns an EXISTING property.
+  // Body: { name, address, city, state, zip, property_type, display_name, planned_unit_count }
+  router.post("/admin/organizations/:id/properties/new", requireSuperAdmin, async (req, res) => {
+    try {
+      const {
+        name, address, city, state, zip,
+        property_type, display_name, planned_unit_count,
+      } = req.body || {};
+
+      if (!name || !String(name).trim()) {
+        return res.status(400).json({ error: "name is required." });
+      }
+
+      const org = (await pool.query(`select id from organizations where id = $1`, [req.params.id])).rows[0];
+      if (!org) return res.status(404).json({ error: "Organization not found." });
+
+      // planned_unit_count is a planning figure only — accept a non-negative
+      // integer or leave it NULL. Never coerce garbage into a number.
+      let planned = null;
+      if (planned_unit_count !== undefined && planned_unit_count !== null && String(planned_unit_count).trim() !== "") {
+        const n = Number(planned_unit_count);
+        if (!Number.isInteger(n) || n < 0) {
+          return res.status(400).json({ error: "planned_unit_count must be a non-negative integer." });
+        }
+        planned = n;
+      }
+
+      const prop = (await pool.query(
+        `insert into properties
+           (name, display_name, address, city, state, zip, property_type,
+            planned_unit_count, organization_id)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+         returning id, name, display_name, address, city, state, zip,
+                   property_type, planned_unit_count, organization_id, created_at`,
+        [
+          name.trim(),
+          display_name && String(display_name).trim() ? display_name.trim() : null,
+          address || null, city || null, state || null, zip || null,
+          property_type || null, planned, org.id,
+        ]
+      )).rows[0];
+
+      res.status(201).json(prop);
+    } catch (e) {
+      console.error("admin/org create property error", e);
       res.status(500).json({ error: e.message });
     }
   });
