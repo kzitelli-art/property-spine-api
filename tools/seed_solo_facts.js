@@ -23,12 +23,49 @@
 // re-running retires the prior active fact of each key and writes the current one, so it
 // never duplicates. Deps: { pool }.
 
-module.exports = function factsSeedModule(deps) {
-  const { pool } = deps;
-  if (!pool) throw new Error("facts-seed requires { pool }");
-  const router = require("express").Router();
+// ════════════════════════════════════════════════════════════════════
+//  MOVED OUT OF THE SERVER RUNTIME — 2026-07-28
+//
+//  This was `src/shared/facts-seed.js`, mounted at server.js as
+//  `POST /demo/seed-solo-facts`. `/demo/` is listed in server.js
+//  PUBLIC_PREFIXES, so the route carried NO authentication at all; its only
+//  guard was DEMO_MODE, which is `true` on the live service. Anyone who could
+//  reach the API could retire every active fact of 18 keys and write fresh
+//  ones — including `fee_policy`, which asserts "a $99 admin fee per unit (at
+//  move-in and renewal)". That is a live path capable of RESURRECTING a
+//  retired claim after a transactional cutover, which the cutover itself
+//  cannot defend against because the resurrection happens later.
+//
+//  Doctrine, not preference: §17 "Demo data may exist. Demo paths may not."
+//  §32 lists "It only works in demo mode" as a stop-sign phrase.
+//
+//  ── WHAT CHANGED, EXACTLY ────────────────────────────────────────────
+//  The 18-fact payload below is BYTE-IDENTICAL to what the route carried —
+//  the file was `git mv`'d rather than retyped, so no fact text could drift
+//  in transcription. Only the entry point changed: an express router became
+//  a command-line tool that is not reachable over HTTP at all.
+//
+//  ── AND IT NO LONGER SILENTLY RESETS HISTORY ─────────────────────────
+//  The route retired whatever was active and wrote a replacement, with no
+//  record of why and no way to see it coming. This tool:
+//    • is DRY-RUN by default and prints the exact retire/insert set;
+//    • requires --confirm AND --reason="..." to write anything;
+//    • REFUSES outright to supersede a fact that is already active unless
+//      --supersede is also given, so re-running cannot quietly rewrite
+//      operating truth;
+//    • does not read DEMO_MODE. Being outside the server is the guard.
+//
+//  CLASSIFICATION: Class 3 — operations tooling outside the operator
+//  workflow. It has no HTTP surface and no route may ever import it.
+//
+//  RUN:  node tools/seed_solo_facts.js                     (dry run)
+//        node tools/seed_solo_facts.js --confirm --reason="..." [--supersede]
+// ════════════════════════════════════════════════════════════════════
 
-  const DEMO_MODE = String(process.env.DEMO_MODE || "").toLowerCase() === "true";
+function buildSeed(deps) {
+  const { pool } = deps;
+  if (!pool) throw new Error("seed_solo_facts requires { pool }");
+
   const DEMO_PROP_NAME = "Property Spine Demo Building";
   const DEMO_MGR_EMAIL = "demo-manager@propertyspine.internal";
   const SOURCE = "management_policy"; // the handbook is a management policy document
@@ -213,9 +250,17 @@ module.exports = function factsSeedModule(deps) {
     },
   ];
 
-  router.post("/demo/seed-solo-facts", async (req, res) => {
-    res.set("Cache-Control", "no-store");
-    if (!DEMO_MODE) return res.status(403).json({ error: "Disabled. (Demo-only seed.)" });
+  /**
+   * @param {object} opts
+   * @param {boolean} opts.confirm    write; otherwise dry run
+   * @param {string}  opts.reason     required to write — recorded, not decorative
+   * @param {boolean} opts.supersede  permit retiring facts that are already active
+   */
+  async function run({ confirm = false, reason = null, supersede = false } = {}) {
+    if (confirm && !reason) {
+      throw new Error("--reason is required to write. A seed that rewrites operating truth " +
+                      "without a stated reason is exactly the silent reset this tool replaced.");
+    }
 
     const client = await pool.connect();
     try {
@@ -227,13 +272,46 @@ module.exports = function factsSeedModule(deps) {
       )).rows[0];
       if (!prop) throw new Error("No demo property yet — start the demo first.");
 
+      // ── what already exists, BEFORE deciding anything ──────────────
+      const keys = FACTS.map((f) => f.fact_key);
+      const existing = (await client.query(
+        `select fact_key, left(rendered_text, 90) txt from agent_facts
+          where property_id=$1 and fact_key = any($2::text[]) and status='active' and space_id is null
+          order by fact_key`, [prop.id, keys])).rows;
+
+      const plan = {
+        property_id: prop.id,
+        would_insert: keys.length,
+        would_retire: existing.length,
+        would_retire_keys: existing.map((r) => r.fact_key),
+        already_active: existing,
+      };
+
+      if (existing.length && !supersede) {
+        await client.query("rollback");
+        return {
+          applied: false,
+          refused: "facts_already_active",
+          detail:
+            `${existing.length} of these ${keys.length} facts are ALREADY ACTIVE on this property. ` +
+            `Seeding would retire and replace them, which is a rewrite of operating truth, not a seed. ` +
+            `Re-run with --supersede if that is genuinely intended.`,
+          plan,
+        };
+      }
+
+      if (!confirm) {
+        await client.query("rollback");
+        return { applied: false, dry_run: true, plan,
+                 detail: "Dry run. Nothing was written. Add --confirm --reason=\"...\" to apply." };
+      }
+
       const mgr = (await client.query("select id from users where email=$1 limit 1", [DEMO_MGR_EMAIL])).rows[0]
         || (await client.query("select id from users where role='leasing_manager'::role_name order by created_at asc limit 1")).rows[0];
       const approvedBy = mgr ? mgr.id : null;
 
       const written = [];
       for (const f of FACTS) {
-        // one-active-per-key: retire any existing active fact of this key (property-wide)
         await client.query(
           "update agent_facts set status='retired' where property_id=$1 and fact_key=$2 and status='active' and space_id is null",
           [prop.id, f.fact_key]
@@ -248,14 +326,39 @@ module.exports = function factsSeedModule(deps) {
       }
 
       await client.query("commit");
-      return res.json({ ok: true, property_id: prop.id, seeded: written, source: "2026 Field Guide / Solo Handbook" });
+      return { applied: true, property_id: prop.id, seeded: written, reason,
+               retired_first: plan.would_retire_keys,
+               source: "2026 Field Guide / Solo Handbook" };
     } catch (e) {
-      await client.query("rollback");
-      return res.status(500).json({ error: e.message });
+      await client.query("rollback").catch(() => {});
+      throw e;
     } finally {
       client.release();
     }
-  });
+  }
 
-  return router;
-};
+  return { run, FACTS, CATEGORY_FOR };
+}
+
+module.exports = { buildSeed };
+
+// ── CLI ──────────────────────────────────────────────────────────────
+// No HTTP surface. No express. Nothing in src/ may import this file.
+if (require.main === module) {
+  const { Pool } = require("pg");
+  const argv = process.argv.slice(2);
+  const has = (f) => argv.includes(f);
+  const val = (f) => {
+    const hit = argv.find((a) => a.startsWith(`${f}=`));
+    return hit ? hit.slice(f.length + 1).replace(/^["']|["']$/g, "") : null;
+  };
+  if (!process.env.DATABASE_URL) {
+    console.error("DATABASE_URL is not set.");
+    process.exit(1);
+  }
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  buildSeed({ pool })
+    .run({ confirm: has("--confirm"), reason: val("--reason"), supersede: has("--supersede") })
+    .then((r) => { console.log(JSON.stringify(r, null, 2)); return pool.end(); })
+    .catch((e) => { console.error("ERR", e.message); pool.end(); process.exit(1); });
+}

@@ -3568,11 +3568,19 @@ app.use("/", operatorModule({ pool, agentService: agentApp._service,
 const staffBridgeModule = require("./src/identity/staffbridge");
 app.use("/", staffBridgeModule({ pool }));
 
-// ── ONE-TIME demo facts seed — loads the REAL Solo handbook facts onto the demo
-// property (the operating-onboarding fact layer, hand-confirmed once from the 2026
-// Field Guide). Demo-only (/demo/, fail-closed on DEMO_MODE). (facts-seed.js)
-const factsSeedModule = require("./src/shared/facts-seed");
-app.use("/", factsSeedModule({ pool }));
+// ── REMOVED 2026-07-28: the demo facts seed is no longer in the HTTP runtime.
+// It was mounted here as POST /demo/seed-solo-facts. `/demo/` is in
+// PUBLIC_PREFIXES above, so the route had NO authentication — its only guard
+// was DEMO_MODE, which is true on the live service. It retired every active
+// fact of 18 keys and wrote replacements, including `fee_policy` ("a $99 admin
+// fee per unit (at move-in and renewal)"), so it could resurrect a retired
+// economic claim AFTER a transactional cutover. A cutover cannot defend
+// against a write that happens later.
+// The capability survives as operations tooling with no HTTP surface:
+//   tools/seed_solo_facts.js  (dry-run by default; --confirm --reason required;
+//   refuses to supersede already-active facts without --supersede)
+// Doctrine: §17 "Demo data may exist. Demo paths may not."; §32 stop-sign.
+// Nothing in src/ may import that file.
 
 // ── DEMO SLOT AUTO-SEED (fail-soft, boot-time) ───────────────────────
 // Keeps the Demo Building's tour_availability populated so the SMS/agent
