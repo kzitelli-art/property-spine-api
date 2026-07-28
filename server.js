@@ -3265,6 +3265,11 @@ app.use("/", require("./src/maintenance/unit_triage")({ pool, unitTriageService 
 const unitTurnScopeService = require("./src/maintenance/unit_turn_scope_service")
   .makeUnitTurnScopeService({ spawnObligationFromEvent });
 app.use("/", require("./src/maintenance/unit_turn_scope")({ pool, unitTurnScopeService, unitTriageService }));
+
+// ── WORK ACCEPTANCE / PROOF / PROGRESSION (BUILD 3) ──────────────────────
+const workAcceptanceService = require("./src/maintenance/work_acceptance_service")
+  .makeWorkAcceptanceService({ spawnObligationFromEvent });
+app.use("/", require("./src/maintenance/work_acceptance")({ pool, workAcceptanceService, unitTriageService }));
 // applications module mounted lower (after the conversion + submission services exist,
 // so /approve can close the leasing_manager application_approval gate). See below.
 const __leasePackets = leasePacketsModule({ pool, satisfyObligation, completeObligation });
