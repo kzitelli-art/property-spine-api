@@ -122,9 +122,25 @@ const dispatch = agentSrc.split("async function sendDraftService")[1].split("ret
 ok("sendDraftService performs the economic comparison", /compareEconomicSources/.test(dispatch));
 ok("it refuses BEFORE the outbound comm_event is written",
   dispatch.indexOf("compareEconomicSources") < dispatch.indexOf("insert into comm_events"));
-ok("a mismatch supersedes the draft durably, not just throws",
-  /status='superseded'[\s\S]{0,400}staleReasonForOperator/.test(dispatch)
-  || /compareEconomicSources[\s\S]{0,900}status='superseded'/.test(dispatch));
+// STALENESS IS DERIVED, NOT STORED (ruling 2026-07-28). The earlier shape
+// wrote status='superseded' then threw inside tx(), which rolls back on throw
+// — so the write was always discarded. The fix was to remove the write, not
+// repair it: a currently-stale draft has not been replaced or closed, and a
+// second stored state would have to be kept in sync with the facts it derives
+// from. These assertions stop it being reintroduced.
+// Strip comments first: the source deliberately EXPLAINS the removed write,
+// so a naive text match finds the prose and reports a defect that isn't there.
+const dispatchCode = dispatch.split("\n")
+  .filter((l) => !l.trim().startsWith("//")).join("\n");
+ok("a stale refusal writes NOTHING to the draft",
+  !/status='superseded'/.test(dispatchCode), "a supersede write is back in the dispatch guard");
+ok("the only agent_drafts write left in dispatch is the successful send",
+  (dispatchCode.match(/update agent_drafts set/g) || []).length <= 1,
+  `${(dispatchCode.match(/update agent_drafts set/g) || []).length} agent_drafts writes in the dispatch path`);
+ok("`superseded` remains reserved for drafts actually replaced or closed",
+  /superseded.*reserved|reserved.*superseded/i.test(agentSrc));
+ok("the source states that staleness is derived rather than stored",
+  /STALENESS IS DERIVED, NOT STORED/.test(agentSrc));
 // The message is split across source lines, so match on the parts, not a
 // contiguous phrase — and on the 503, which is the behaviour that matters.
 ok("an unreadable source refuses to send rather than assuming freshness",

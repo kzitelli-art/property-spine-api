@@ -1972,9 +1972,27 @@ Reply with ONLY the message text.`;
       const run = (await client.query("select * from agent_runs where id=$1", [d.agent_run_id])).rows[0];
       const state = await loadThreadState(client, run.conversation_id, true); // FOR UPDATE
 
+      // ── STALENESS IS DERIVED, NOT STORED (ruling, 2026-07-28) ─────
+      // Both freshness guards below compare durable facts that already exist:
+      // the reviewed source identity recorded on the agent_run, against what
+      // is true right now. Nothing is written when a draft is found stale.
+      //
+      // The previous shape wrote status='superseded' and then threw — inside
+      // tx(), which rolls back on throw, so the write was ALWAYS discarded.
+      // Measured live on draft 1df2ca61: three refusals, all correct, and the
+      // row still read status='ready', superseded_at=null.
+      //
+      // Removing the write is the fix, not repairing it. A draft that is
+      // currently stale has not been replaced or closed — it is the preserved
+      // reviewed artifact, and its position is honestly
+      // (status: ready, stale: true, sendable: false, next: regenerate).
+      // Storing a second state would have to be kept synchronised with the
+      // facts it is derived from, which is the defect, not the cure.
+      // `superseded` stays reserved for a draft actually replaced by a newer
+      // one or deliberately closed — see the supersede-on-regenerate paths.
+
       // STALE GUARANTEE: a newer inbound exists → cannot send.
       if (Number(state.thread_version) !== Number(run.input_thread_version)) {
-        await client.query("update agent_drafts set status='superseded', superseded_at=now(), updated_at=now() where id=$1", [draftId]);
         throw httpErr(409, "A newer message arrived — this draft is stale and can't be sent. A fresh draft is being prepared.");
       }
 
@@ -1997,11 +2015,9 @@ Reply with ONLY the message text.`;
         throw httpErr(503, "The current fee terms could not be read, so this draft can't be " +
                            "sent right now. Try again in a moment.");
       }
+      // Derived, not stored — see the note above the thread_version guard.
       const econ = compareEconomicSources(reviewedFacts, liveFacts);
       if (econ.had_economic_sources && !econ.match) {
-        await client.query(
-          "update agent_drafts set status='superseded', superseded_at=now(), updated_at=now() where id=$1",
-          [draftId]);
         const e = httpErr(409, staleReasonForOperator(econ));
         e.stale_reason = "economic_source_changed";
         throw e;
