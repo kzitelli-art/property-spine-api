@@ -1,6 +1,36 @@
-# Maintenance Unit-Status Capture — Source Comparison
+# Maintenance Unit-Status Capture — Preliminary Source Audit
 
-**This is a comparison document, not an implementation plan.** It maps the completed
+> ## ⚠ STATUS: PRELIMINARY — PAUSED PENDING OPERATOR DISCOVERY
+>
+> **This document compares source against a DRAFT contract. It does not describe
+> product requirements.**
+>
+> The Maintenance Unit-Status Capture Design Contract this audit was written against
+> is **not final**. Operator discovery with Kameron has not yet been completed — how
+> vacant-unit condition is actually learned today, who enters a unit and in what
+> sequence, what "ready" means operationally, which conditions truly block marketing
+> versus touring versus move-in, and which human judgments cannot safely be inferred
+> are all **still open**.
+>
+> Therefore:
+>
+> - Every classification below (*already supported / partially supported /
+>   incompatible / missing*) is a comparison against **draft language**, not a verdict
+>   on the product. A section marked "missing" means *absent relative to a draft*, not
+>   *required and not built*.
+> - The finding, required-work, readiness, and confirmation models are **undecided**.
+>   Nothing here settles them.
+> - Nothing in this document authorizes implementation, and no part of it should be
+>   read as an implementation plan, a work list, or a backlog.
+>
+> **What is durable here** is the source evidence: what current code actually does,
+> where it fabricates, and which paths are demo-intercepted. Those observations stand
+> on their own and are independent of any contract revision.
+>
+> After operator discovery, the contract will be revised. Only then should source be
+> compared against the final operating contract to identify real implementation gaps.
+
+**This is an audit document, not an implementation plan.** It maps a draft
 Maintenance Unit-Status Capture operating contract against current source. It designs
 no schema, routes, services, or migrations, and it does not authorize implementation.
 
@@ -32,7 +62,10 @@ be retired, is recorded as an open question below and was not otherwise investig
 
 ## Summary table
 
-| Contract section | Classification |
+*Classifications are against draft contract language, not final requirements. Read
+"missing" as "absent relative to the draft", never as "required and not built."*
+
+| Draft contract section | Classification vs source |
 |---|---|
 | Actor | **Partially supported** |
 | Trigger | **Missing** |
@@ -57,6 +90,10 @@ be retired, is recorded as an open question below and was not otherwise investig
 ---
 
 ## The single most important finding
+
+*This one survives contract revision.* The second problem below is a §5 defect against
+`PHILOSOPHY.md` doctrine directly — an unobserved unit asserting a healthy state — and
+holds regardless of what the final contract says about readiness.
 
 **Physical readiness is currently derived from the existence of a turnover row.**
 
@@ -668,9 +705,15 @@ runtime **requires live proof.**
 
 ---
 
-## Implementation-dependent questions
+## Open questions
 
-Recorded, not answered. None of these is designed here.
+**Not a work list.** These are recorded, not answered, and none is designed here.
+
+Several are **product questions that operator discovery should answer, not technical
+questions source can settle** — what "ready" means operationally, which conditions
+truly block marketing versus touring versus move-in, and how work is divided, checked,
+and reopened will determine most of what follows. They are listed here only because
+the source comparison surfaced them; source structure must not lead that discussion.
 
 **On findings and readiness**
 
