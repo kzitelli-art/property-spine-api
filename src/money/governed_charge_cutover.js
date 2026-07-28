@@ -102,6 +102,12 @@ function termsDigest(t) {
     economic_class: t.economic_class,
     cadence: t.cadence,
     obligation: t.obligation,
+    // WHAT the charge is assessed against (migration 110). Previously implicit
+    // inside applicability_basis prose; now a material term in its own right,
+    // so it belongs in the approval hash. This CHANGES the digest of both
+    // existing rows — expected, and stated in the B0 receipt. Prior receipts
+    // are historical records under the earlier contract and are not rewritten.
+    assessed_per: t.assessed_per ?? null,
     applicability_basis: t.applicability_basis ?? null,
     applicability_scope: t.applicability_scope ?? null,
     unit_type_id: t.unit_type_id ?? null,

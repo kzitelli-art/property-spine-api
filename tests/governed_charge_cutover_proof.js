@@ -252,6 +252,62 @@ ok("D · adapter.termsDigest === generalized termsDigest for identical terms",
 ok("D · adapter.termsDigest defaults charge_code for a bare row",
   adapter.termsDigest({ ...liveish, charge_code: undefined }) === nu.termsDigest(liveish));
 
+// ── LAYER E — assessed_per: WHAT THE CHARGE IS ASSESSED AGAINST (110) ─
+// The dimension that was missing entirely: "per applicant" and "per unit"
+// lived only in applicability_basis prose, so a structured renderer dropped
+// them silently. These assertions are what stop that recurring.
+const { checkChargePublishable, ASSESSED_PER } = require("../src/money/governed_charges");
+
+ok("E · the vocabulary is exactly applicant | unit",
+  JSON.stringify(ASSESSED_PER) === JSON.stringify(["applicant", "unit"]),
+  JSON.stringify(ASSESSED_PER));
+
+const PUBLISHABLE = { ...DRAFT, assessed_per: "unit", applies_to_renewal: false };
+const ctxOk = { property_id: "p", actor_may_publish: true };
+const codes = (c) => checkChargePublishable({ ...c, property_id: "p" }, ctxOk).blockers.map((x) => x.code);
+
+ok("E · a complete charge with assessed_per publishes clean",
+  !codes(PUBLISHABLE).includes("assessment_basis_unresolved")
+  && !codes(PUBLISHABLE).includes("invalid_assessed_per"), JSON.stringify(codes(PUBLISHABLE)));
+
+ok("E · a RESOLVED amount with NULL assessed_per is REFUSED",
+  codes({ ...PUBLISHABLE, assessed_per: null }).includes("assessment_basis_unresolved"),
+  JSON.stringify(codes({ ...PUBLISHABLE, assessed_per: null })));
+
+ok("E · the refusal is named specifically, not folded into a generic error",
+  checkChargePublishable({ ...PUBLISHABLE, assessed_per: null, property_id: "p" }, ctxOk)
+    .blockers.find((x) => x.code === "assessment_basis_unresolved")
+    .detail.includes("per applicant"));
+
+ok("E · an UNRESOLVED amount may still carry NULL assessed_per (nothing to multiply yet)",
+  !codes({ ...PUBLISHABLE, assessed_per: null, amount: null,
+           amount_unresolved_reason: "range with no declared determinant" })
+    .includes("assessment_basis_unresolved"));
+
+ok("E · an unknown value FAILS CLOSED, it is not coerced",
+  codes({ ...PUBLISHABLE, assessed_per: "per-unit" }).includes("invalid_assessed_per"));
+ok("E · 'lease' is refused — deliberately absent until a real term needs it",
+  codes({ ...PUBLISHABLE, assessed_per: "lease" }).includes("invalid_assessed_per"));
+ok("E · 'occurrence' is refused for the same reason",
+  codes({ ...PUBLISHABLE, assessed_per: "occurrence" }).includes("invalid_assessed_per"));
+
+// The digest must move on assessed_per — otherwise the field could be changed
+// after approval without invalidating it, which is the whole point of 108/110.
+ok("E · termsDigest MOVES when assessed_per changes",
+  nu.termsDigest({ ...PUBLISHABLE, assessed_per: "applicant" })
+  !== nu.termsDigest({ ...PUBLISHABLE, assessed_per: "unit" }));
+ok("E · termsDigest distinguishes NULL from a stated basis",
+  nu.termsDigest({ ...PUBLISHABLE, assessed_per: null })
+  !== nu.termsDigest({ ...PUBLISHABLE, assessed_per: "unit" }));
+ok("E · the adapter's digest tracks assessed_per too",
+  adapter.termsDigest({ ...PUBLISHABLE, assessed_per: "applicant" })
+  !== adapter.termsDigest({ ...PUBLISHABLE, assessed_per: "unit" }));
+
+// assessed_per must NOT be inferable from prose — the whole reason it exists.
+ok("E · nothing in the publication contract reads applicability_basis to guess the basis",
+  !/applicability_basis/.test(
+    String(checkChargePublishable).match(/assessed_per[\s\S]{0,600}/)[0]));
+
 // ── REPORT ───────────────────────────────────────────────────────────
 console.log("\ngoverned_charge_cutover_proof");
 console.log(lines.join("\n"));

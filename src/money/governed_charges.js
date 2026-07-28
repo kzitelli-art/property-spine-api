@@ -16,8 +16,14 @@ const { requireResolvedActor } = require("../identity/privileged_actor_contract"
 const CLASSES = ["one_time_fee", "recurring_charge", "deposit_required"];
 const OBLIGATIONS = ["required", "conditional", "optional"];
 const EVENTS = ["application", "move_in", "renewal", "transfer", "lease_signing", "incidental"];
+// What a charge is assessed against (110). Two values, deliberately: no proven
+// governed term needs 'lease' or 'occurrence' yet, and a vocabulary entry with
+// no term behind it is speculative schema. Extend by migration when one does.
+const ASSESSED_PER = ["applicant", "unit"];
 
 const blocker = (code, detail) => ({ code, detail });
+// A resolved amount is a number the caller intends to quote precisely.
+const hasResolvedAmount = (c) => c.amount != null && !c.amount_unresolved_reason;
 
 /**
  * The publication contract for ONE charge. Pure — no database.
@@ -49,6 +55,24 @@ function checkChargePublishable(c = {}, ctx = {}) {
   if (c.economic_class === "base_rent" || c.economic_class === "deposit_held")
     b.push(blocker("class_not_in_catalog",
       "base_rent belongs to pricing_terms and deposit_held belongs to the lease. Neither may hold a catalog row."));
+
+  // ── what is this charge assessed AGAINST? (110) ──────────────────
+  // A precisely quotable amount with no assessment basis is a number nobody
+  // can multiply: "$50" without "per applicant" is not a quotable fee, it is
+  // half a fee. NULL stays legal on a DRAFT — this gate runs at publication.
+  // Never inferred from applicability_basis prose: a runtime inference would
+  // make the free text authoritative again, which is what 110 removes.
+  if (!ASSESSED_PER.includes(c.assessed_per)) {
+    if (c.assessed_per == null) {
+      if (hasResolvedAmount(c))
+        b.push(blocker("assessment_basis_unresolved",
+          "State what this charge is assessed against (per applicant, or per unit). " +
+          "An amount without an assessment basis cannot be quoted precisely."));
+    } else {
+      b.push(blocker("invalid_assessed_per",
+        `assessed_per must be one of ${ASSESSED_PER.join(", ")}, or left unset while unresolved.`));
+    }
+  }
 
   // ── an amount is a number OR an explained absence ────────────────
   const hasAmount = c.amount != null;
@@ -143,6 +167,9 @@ async function governedCharges(pool, { property_id, as_of = null, include_drafts
     amount_unresolved_reason: c.amount_unresolved_reason,
     cadence: c.cadence,
     obligation: c.obligation,
+    // What the charge is assessed against: applicant | unit | null (110).
+    // NULL is "unresolved", never "assume one" — see not_quotable_reason below.
+    assessed_per: c.assessed_per ?? null,
     applicability_basis: c.applicability_basis,
     applicability_scope: c.applicability_scope,
     unit_type: c.unit_type_label || null,
@@ -218,9 +245,9 @@ async function publishCharge(pool, { property_id, charge, actor } = {}) {
         unit_type_id, condition_key, incurred_on_event, applies_to_new_lease,
         applies_to_renewal, applies_to_transfer, refundable, waivable, waiver_authority_verb,
         effective_from, effective_until, record_state, source_provenance, authority_basis,
-        published_by_person_id, published_at, publication_receipt)
+        published_by_person_id, published_at, publication_receipt, assessed_per)
      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,
-             'active',$22,$23,$24,now(),$25) returning id`,
+             'active',$22,$23,$24,now(),$25,$26) returning id`,
     [property_id, charge.charge_code, charge.display_label, charge.economic_class, charge.cadence,
      charge.amount ?? null, charge.amount_unresolved_reason ?? null, charge.obligation,
      charge.applicability_basis ?? null, charge.applicability_scope || "property",
@@ -230,10 +257,12 @@ async function publishCharge(pool, { property_id, charge, actor } = {}) {
      charge.effective_from, charge.effective_until ?? null, charge.source_provenance || "operator_entry",
      JSON.stringify({ verb: "may_publish_pricing", basis: a.authority_basis }), a.acting_person_id,
      JSON.stringify({ session_user_id: a.session_user_id, acting_person_id: a.acting_person_id,
-                      authority_basis: a.authority_basis })])).rows[0];
+                      authority_basis: a.authority_basis }),
+     charge.assessed_per ?? null])).rows[0];
   return { charge_id: r.id, record_state: "active",
            actor: { session_user_id: a.session_user_id, acting_person_id: a.acting_person_id,
                     authority_basis: a.authority_basis } };
 }
 
-module.exports = { governedCharges, publishCharge, checkChargePublishable, CLASSES, OBLIGATIONS, EVENTS };
+module.exports = { governedCharges, publishCharge, checkChargePublishable,
+                   CLASSES, OBLIGATIONS, EVENTS, ASSESSED_PER };
