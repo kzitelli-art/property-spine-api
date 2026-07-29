@@ -20,6 +20,7 @@ const section = (t) => console.log("\n── " + t + " " + "─".repeat(Math.max
 
 const SVC_SRC = fs.readFileSync(require.resolve("../src/agent/staff_agent_service"), "utf8");
 const MIG = fs.readFileSync(__dirname + "/../migrations/117_staff_agent_capture.sql", "utf8");
+const INTENT_SRC = fs.readFileSync(require.resolve("../src/agent/staff_agent_intent"), "utf8");
 const stub = () => ({
   unitTriageService: { confirmTriage: async () => ({}), proposeTriage: () => ({}), readUnitTriageState: async () => ({}) },
   unitTurnScopeService: { confirmScope: async () => ({}), propose: () => ({}) },
@@ -306,6 +307,22 @@ section("E14  corrections do not invent a mechanism (revised by BUILD 6B)");
   //  its own supersede rule. It redirects to the record instead.
   //  ONE unit. "I meant 305, not 304" names TWO, and the multi-unit rule now
   //  asks which rather than guessing — proved separately.
+  //  ADDED AFTER A NEGATIVE-CONTROL RUN. Removing the multi-unit guard from
+  //  the classifier left THIS harness — the classifier's own — fully green;
+  //  only work_proof_photo_proof caught it. The rule was proved in the wrong
+  //  place. It is proved here too, where anyone editing classifyIntent looks.
+  const two = I.classifyIntent("Correction: I meant 305, not 304.");
+  ok("a message naming two units is unclear, not a guess", two.intent === "unclear", two.intent);
+  ok("and no unit is chosen", two.unit_ref === null, String(two.unit_ref));
+  ok("it asks which, naming both",
+     /which unit/i.test(two.clarification || "") && /304/.test(two.clarification || "") &&
+     /305/.test(two.clarification || ""), two.clarification);
+  ok("the multi-unit rule runs BEFORE the correction branch",
+     INTENT_SRC.indexOf("allRefs.length > 1") < INTENT_SRC.indexOf("any(t, S.correction)"));
+  ok("the same unit named twice is still one unit",
+     I.classifyIntent("Correction: 305, I mean 305.").unit_ref === "305",
+     String(I.classifyIntent("Correction: 305, I mean 305.").unit_ref));
+
   const r = I.classifyIntent("Correction—it's Unit 305.");
   ok("classified as a redirect, not a correction", r.intent === "redirect", r.intent);
   ok("correction is no longer an intent at all", !I.INTENT_VALUES.includes("correction"));

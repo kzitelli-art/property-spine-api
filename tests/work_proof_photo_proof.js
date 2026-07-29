@@ -211,6 +211,62 @@ section("3  RESOLUTION IS WORK-SCOPED — one photo cannot close another job");
 }
 
 // ════════════════════════════════════════════════════════════════════
+section("3B  A TYPED REFERENCE IS NOT PROOF — the defect this slice fixes");
+{
+  //  ADDED AFTER A NEGATIVE-CONTROL RUN. Reverting evaluateProof to count raw
+  //  `proof_photos` was caught by work_acceptance_proof and
+  //  release_candidate_proof — and NOT by this file, the one named for photo
+  //  proof. A harness that cannot fail on its own subject is decoration.
+  //  `PROOF` was imported here and never called; now it is exercised.
+  const WORK = { id: "w1", property_id: "p1", unit_id: "u1", stage: "paint",
+                 work_text: "Paint the living room" };
+  const REAL = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const AVAILABLE = { attachments_available: true };
+
+  //  The original defect, verbatim: a typed space closed the work.
+  const typed = PROOF.evaluateProof(WORK,
+    { outcome: "completed", proof_photos: [" "], verified_photos: [] }, AVAILABLE);
+  ok("a typed space does NOT satisfy proof", typed.satisfied === false, typed.shortfall);
+  ok("and it counts zero verified photos", typed.verified_photo_count === 0);
+
+  //  Nor does a plausible-looking id that was never resolved.
+  const unresolved = PROOF.evaluateProof(WORK,
+    { outcome: "completed", proof_photos: [REAL], verified_photos: [] }, AVAILABLE);
+  ok("an unresolved attachment id does NOT satisfy proof", unresolved.satisfied === false);
+  ok("the shortfall asks for a photo, not for better text",
+     /a completion photo/.test(unresolved.shortfall || ""), unresolved.shortfall);
+
+  //  A RESOLVED attachment does.
+  const resolved = PROOF.evaluateProof(WORK,
+    { outcome: "completed", proof_photos: [REAL], verified_photos: [REAL] }, AVAILABLE);
+  ok("a verified attachment DOES satisfy proof", resolved.satisfied === true, resolved.shortfall);
+  ok("and it counts one", resolved.verified_photo_count === 1);
+
+  //  FAIL CLOSED. No store declared → nothing is verified, whatever is passed.
+  const noStore = PROOF.evaluateProof(WORK,
+    { outcome: "completed", proof_photos: [REAL], verified_photos: [REAL] }, { attachments_available: false });
+  ok("with no attachment store, even 'verified' references count for nothing",
+     noStore.satisfied === false, noStore.shortfall);
+  ok("and it says so rather than telling the operator to add a photo",
+     noStore.photo_proof_unavailable === true && /unavailable/i.test(noStore.shortfall || ""));
+
+  //  A caller that forgets the context argument gets the safe answer.
+  const noCtx = PROOF.evaluateProof(WORK, { outcome: "completed", verified_photos: [REAL] });
+  ok("omitting the context entirely fails closed", noCtx.satisfied === false);
+
+  //  SOURCE: raw proof_photos is never counted.
+  const WP = src("src/maintenance/work_proof.js");
+  const body = WP.slice(WP.indexOf("function evaluateProof"), WP.indexOf("// Plain-language labels"));
+  ok("evaluateProof never reads claim.proof_photos", !/claim\.proof_photos/.test(body));
+  ok("it reads claim.verified_photos", /claim\.verified_photos/.test(body));
+  ok("gated on attachments_available", /attachmentsAvailable && Array\.isArray\(claim\.verified_photos\)/.test(body));
+
+  //  But the operator's raw input is still KEPT as history.
+  ok("the acceptance service still records proof_photos verbatim",
+     /proof_photos/.test(src("src/maintenance/work_acceptance_service.js")));
+}
+
+// ════════════════════════════════════════════════════════════════════
 section("4  ATOMICITY — the photo and the claim commit together or not at all");
 {
   //  A double that fails at a chosen statement, so the ordering can be
@@ -388,6 +444,36 @@ section("7  SAFE METADATA ON THE PAGE — never bytes");
   ok("the aggregate read forwards that metadata", /proof_photos: proofByWork\.get/.test(R));
   ok("and takes it from the attachment service", /workProofAttachmentService\.metadataForWork/.test(R));
   ok("the read never selects bytes itself", !/\bcontent\b/.test(code(R)));
+
+  //  ADDED AFTER A NEGATIVE-CONTROL RUN. The assertions above read the SQL.
+  //  Adding `content: r.content` to the RETURN SHAPE passed all of them — the
+  //  select stayed clean and a bytea still reached JSON. "Do not expose
+  //  database bytea values in JSON" is an explicit prohibition, so it is
+  //  checked on the value that actually leaves, not only on the query.
+  const svc7 = A.makeWorkProofAttachmentService();
+  const p7 = (async () => {
+    //  A hostile double: every row carries bytes, under several plausible names.
+    const db = { query: async () => ({ rows: [{
+      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", mime_type: "image/jpeg", byte_size: 2052,
+      created_at: "2026-07-29T00:00:00Z", uploaded_by_user_id: "user-1", uploaded_by_name: "Ray",
+      content: Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+      bytes: Buffer.from([0xff, 0xd8]), data: Buffer.from([0xff, 0xd8]),
+    }] }) };
+    const meta = await svc7.metadataForWork(db, { work_id: "w1" });
+    ok("metadataForWork returns one entry", meta.length === 1);
+    const keys = Object.keys(meta[0]);
+    ok("no returned key is content/bytes/data",
+       !keys.some((k) => /^(content|bytes|data|buffer)$/i.test(k)), keys.join(","));
+    //  Serialise it the way Express would and look for a Buffer anywhere.
+    const asJson = JSON.stringify(meta);
+    ok("no Buffer survives JSON serialisation", !/"type":"Buffer"/.test(asJson), asJson.slice(0, 120));
+    ok("and no raw byte array either", !/\bdata":\s*\[\s*\d/.test(asJson));
+    ok("what IS returned is only safe metadata",
+       keys.sort().join(",") === "attachment_id,byte_size,mime_type,uploaded_at,uploaded_by,view_path",
+       keys.sort().join(","));
+    ok("byte_size is a number, not the bytes", typeof meta[0].byte_size === "number");
+  })();
+  module.exports.__p7 = p7;
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -573,7 +659,7 @@ section("12  SCOPE STAYED CLOSED");
 }
 
 // ════════════════════════════════════════════════════════════════════
-Promise.all([module.exports.__p2, module.exports.__p3, module.exports.__p4]).then(() => {
+Promise.all([module.exports.__p2, module.exports.__p3, module.exports.__p4, module.exports.__p7]).then(() => {
   section("RESULT");
   console.log("  assertions passed: " + passed);
   console.log("  assertions failed: " + failed);
