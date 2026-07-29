@@ -734,7 +734,7 @@ really 117, which the baseline verifier decides.
 
 > **Source-complete, Built but dormant.**
 
-1676 assertions across nine harnesses, all source-level, pure-function, or
+1688 assertions across nine harnesses, all source-level, pure-function, or
 against recording doubles. No section FAILs; §9 idempotency and §16 live-first
 remain **UNPROVEN** and are named as such.
 
