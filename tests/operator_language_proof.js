@@ -417,9 +417,12 @@ section("7  stage_decision_required never appears in operator-facing copy");
 // ════════════════════════════════════════════════════════════════════
 section("8  no migration and no domain table change is introduced");
 {
-  const migs = fs.readdirSync(__dirname + "/../migrations").filter((f) => /^\d{3}_.*\.sql$/.test(f)).sort();
-  ok("the migration ceiling is still 117", migs[migs.length - 1].startsWith("117"), migs[migs.length - 1]);
-  ok("no 118 exists", !migs.some((f) => f.startsWith("118")));
+  //  Pinned to Build 6B. Build 6B added no migration, and that stays true; the
+  //  closure slice adds 118 deliberately and proves it separately.
+  const { execSync: _ex2 } = require("child_process");
+  const addedBy6B = _ex2("git diff --name-only 62b25e8 b562339 -- migrations/",
+    { cwd: __dirname + "/.." }).toString().trim();
+  ok("BUILD 6B changed no migration file", addedBy6B === "", addedBy6B);
 
   const { execSync } = require("child_process");
   const changed = execSync("git diff --name-only 62b25e8", { cwd: __dirname + "/.." })
@@ -446,6 +449,10 @@ section("8  no migration and no domain table change is introduced");
     // release-candidate FIXES — photo proof, capabilities, condition classifier
     "src/maintenance/work_proof.js", "src/maintenance/work_acceptance_service.js",
     "src/surfaces/unit_turn.js", "tests/work_acceptance_proof.js",
+    // closure slice — one photo, one completion action
+    "src/maintenance/work_proof_attachment_service.js", "src/maintenance/work_acceptance.js",
+    "migrations/118_work_proof_attachments.sql", "server.js",
+    "tests/work_proof_photo_proof.js", "tests/unit_turn_page_proof.js", "tests/staff_agent_proof.js",
   ];
   const unexpected = changed.filter((f) => !ALLOWED.includes(f));
   ok("only the language surfaces changed", unexpected.length === 0, unexpected.join(","));
@@ -548,8 +555,11 @@ section("10  the staff agent supports exactly three purposes");
   //  RELEASE CANDIDATE: the photo control is GONE, because it uploaded nothing
   //  and anything typed into it counted as proof. The panel now says so.
   ok("the fake photo control is gone", !/wk-photo/.test(APP_PAGE));
-  ok("and the panel says photo proof is unavailable",
-     /Photo proof is unavailable/.test(APP_PAGE));
+  //  The closure slice replaced the "unavailable" panel with the real control:
+  //  one file input, and Complete disabled until a photo is chosen.
+  ok("and a real file control took its place", /type="file"/.test(APP_PAGE));
+  ok("with Complete disabled until a photo is chosen",
+     /blockedByPhoto/.test(APP_PAGE) && /Add one completion photo to close this work\./.test(APP_PAGE));
 
   //  NO INTERNAL NAME REACHES THE OPERATOR.
   ok("plain language for every intent lives in ONE place", /INTENT_PLAIN/.test(INTENT_SRC));
@@ -645,7 +655,9 @@ section("11  a failed final walk is the walk, not a message");
 // ════════════════════════════════════════════════════════════════════
 section("12  there is no generic conversational correction");
 {
-  const r = I.classifyIntent("Correction: I meant 304, not 305.", { unit_id: "u1", open_work: CTX_WORK });
+  //  ONE unit. "I meant 304, not 305" names TWO, and the multi-unit rule now
+  //  asks which rather than guessing — that is proved separately below.
+  const r = I.classifyIntent("Correction: I meant the bathroom door.", { unit_id: "u1", open_work: CTX_WORK });
   ok("a generic correction is a redirect", r.intent === "redirect", r.intent);
   ok("correction is gone from the vocabulary", !I.INTENT_VALUES.includes("correction"));
   ok("and is recorded as RETIRED", I.RETIRED_INTENTS.includes("correction"));
@@ -657,6 +669,12 @@ section("12  there is no generic conversational correction");
   ok("no correction payload is proposed", Object.keys(r.proposed).length === 0);
   ok("the agent grows no correction framework",
      !/correctionService|applyCorrection|supersedeProposal/.test(SVC_SRC));
+
+  //  A correction naming TWO units asks which, rather than redirecting against
+  //  a unit the operator never settled. The multi-unit rule runs first.
+  const twoUnit = I.classifyIntent("Correction: I meant 304, not 305.", { unit_id: "u1", open_work: CTX_WORK });
+  ok("a two-unit correction asks which unit", twoUnit.intent === "unclear", twoUnit.intent);
+  ok("and names both", /304/.test(twoUnit.clarification) && /305/.test(twoUnit.clarification));
 
   //  A SCOPE CHANGE IS NOT A CORRECTION. Build 2 already supersedes scope and
   //  keeps the original — that IS the correction path, so it stays a proposal.
@@ -679,7 +697,7 @@ section("12  there is no generic conversational correction");
   const c = fakeClient({ openWork: CTX_WORK });
   const p = svc.captureMessage(c, {
     property_id: "prop", actor_user_id: "user", context_unit_id: "u1",
-    text: "Correction: I meant 304, not 305.",
+    text: "Correction: I meant the bathroom door.",
   }).then(async (out) => {
     ok("capture returns the redirect", out.redirect.to === "recorded_item");
     ok("and NO proposal row", out.proposal === null);

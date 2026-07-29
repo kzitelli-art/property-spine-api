@@ -240,8 +240,26 @@ function classifyIntent(text, context = {}) {
     return out;
   }
 
-  const m = t.match(UNIT_REF);
-  out.unit_ref = m ? m[1] : null;
+  // ── ONE UNIT, OR A QUESTION ───────────────────────────────────────
+  //
+  //  Taking the FIRST unit-shaped token out of "there are cockroaches in 304
+  //  and 305" silently drops the second and records the finding against one
+  //  unit the operator never chose. Nothing wrong is written — a human still
+  //  confirms — but they confirm against a unit the sentence did not settle.
+  //
+  //  So: more than one DISTINCT reference is a question, not a coin flip. The
+  //  same number repeated is not two units.
+  const allRefs = [...new Set((t.match(new RegExp(UNIT_REF.source, "g")) || []).map((x) => x.trim()))];
+  out.unit_ref = allRefs.length === 1 ? allRefs[0] : null;
+  if (allRefs.length > 1) {
+    out.intent = INTENT.UNCLEAR;
+    out.unit_refs = allRefs;
+    out.clarification = `Which unit — ${allRefs.slice(0, 3).join(" or ")}?`;
+    out.unknowns.push(
+      `This message names ${allRefs.length} units (${allRefs.join(", ")}). One record belongs to one unit, ` +
+      `so nothing is proposed until you say which.`);
+    return out;
+  }
 
   // ── A FAILED FINAL WALK IS THE WALK, NOT A MESSAGE (BUILD 6B) ──────
   //  "Final walk failed. The bathroom door still doesn't latch." used to

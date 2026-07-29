@@ -37,9 +37,14 @@ section("F1  the page creates NO state and NO second model");
   ok("no INSERT of any kind", !/insert\s+into/i.test(BOTH));
   ok("no UPDATE of any kind", !/update\s+\w+\s+set/i.test(BOTH));
   ok("no DELETE of any kind", !/delete\s+from/i.test(BOTH));
-  ok("no new migration was added", !fs.existsSync(__dirname + "/../migrations/118_unit_turn.sql"));
-  const migs = fs.readdirSync(__dirname + "/../migrations").filter((f) => /^\d{3}_.*\.sql$/.test(f));
-  ok("migration ceiling is still 117", migs.sort().pop().startsWith("117"), migs.sort().pop());
+  //  BUILD 6A added no migration, and that claim is pinned to Build 6A rather
+  //  than to the working tree: the closure slice adds 118 deliberately.
+  ok("BUILD 6A added no migration of its own",
+     !fs.existsSync(__dirname + "/../migrations/118_unit_turn.sql"));
+  const { execSync: _ex } = require("child_process");
+  const addedBy6A = _ex("git diff --name-only 8fc4982 62b25e8 -- migrations/", { cwd: __dirname + "/.." })
+    .toString().trim();
+  ok("BUILD 6A changed no migration file", addedBy6A === "", addedBy6A);
 }
 
 section("F2  every canonical read is REQUIRED, so nothing can be derived locally");

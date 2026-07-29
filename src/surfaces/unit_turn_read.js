@@ -36,6 +36,9 @@ function makeUnitTurnRead(deps) {
   const {
     unitTriageService, unitTurnScopeService, workAcceptanceService,
     readinessService, staffAgentService, availabilityRead,
+    //  Safe metadata only. Bytes never pass through this read — they leave
+    //  through GET /operator/turn-work/:workId/proof/:attachmentId.
+    workProofAttachmentService,
   } = deps || {};
 
   const required = [
@@ -91,9 +94,13 @@ function makeUnitTurnRead(deps) {
 
     // Per-item acceptance and proof state, from the layer that owns it.
     const workStates = [];
+    const proofByWork = new Map();
     for (const w of workFlow.work) {
       if (w.status === "withdrawn" || w.status === "superseded") continue;
       workStates.push(await workAcceptanceService.readWorkState(db, { work_id: w.id }));
+      if (workProofAttachmentService && typeof workProofAttachmentService.metadataForWork === "function") {
+        proofByWork.set(String(w.id), await workProofAttachmentService.metadataForWork(db, { work_id: w.id }));
+      }
     }
 
     // Readiness authority for THIS operator, so the page can decide whether to
@@ -244,6 +251,9 @@ function makeUnitTurnRead(deps) {
             ? `Place "${s.work.work_text}" in the turn sequence` : null,
           placement_explanation: fi ? fi.placement_explanation || null : null,
           placement_note: fi ? fi.stage_decision_note || null : null,
+          //  The completion photo, as metadata and a path. No bytes, no host,
+          //  no signature — the governed read decides who may see it.
+          proof_photos: proofByWork.get(String(s.work.id)) || [],
         };
       }),
 

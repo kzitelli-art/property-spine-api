@@ -16,7 +16,7 @@ module.exports = function workAcceptance(deps) {
   const staffSessions = require("../identity/staff_session_service");
   const { UNABLE_REASONS, OUTCOME_VALUES, UNABLE_REASON_VALUES } = require("./work_proof");
 
-  const { pool, workAcceptanceService, unitTriageService } = deps || {};
+  const { pool, upload, workProofAttachmentService, workAcceptanceService, unitTriageService } = deps || {};
   if (!pool) throw new Error("work_acceptance module requires a pool");
   if (!workAcceptanceService || typeof workAcceptanceService.acceptWork !== "function") {
     throw new Error(
@@ -52,6 +52,19 @@ module.exports = function workAcceptance(deps) {
     return next();
   }
   const operatorGate = [requireOperator, requireMaintenanceModuleAccess, refuseClientProperty];
+
+  //  READING proof is not OPERATING work. A manager reviewing a closed job
+  //  must be able to look at the evidence without holding the maintenance
+  //  module — that is the ruled read/operate split, applied to the one thing
+  //  on this door that is a read.
+  function requireTurnReadAccess(req, res, next) {
+    const mods = (req.operator && req.operator.allowed_modules) || [];
+    if (!mods.includes("maintenance") && !mods.includes("management")) {
+      return res.status(403).json({ error: "maintenance or management module access required at this property." });
+    }
+    return next();
+  }
+  const readerGate = [requireOperator, requireTurnReadAccess, refuseClientProperty];
 
   const tx = async (res, fn) => {
     const client = await pool.connect();
@@ -136,8 +149,44 @@ module.exports = function workAcceptance(deps) {
   //  CLAIM COMPLETION — POST /operator/turn-work/:workId/claim
   //  A claim without its proof is RECORDED but does NOT close the work.
   // ════════════════════════════════════════════════════════════════
-  router.post("/operator/turn-work/:workId/claim", ...operatorGate, async (req, res) => {
+  // ── ONE COMPLETION DOOR, TWO BODY SHAPES ────────────────────────────
+  //
+  //  There is no /upload, no /claim-with-photo and no /complete-with-proof.
+  //  Adding one would make "finishing work" mean two different things
+  //  depending on which route you used, and the two would drift.
+  //
+  //  multipart/form-data → the normal successful path: outcome, the optional
+  //                        functional confirmation, and ONE image field
+  //                        called `photo`.
+  //  application/json    → unable_to_complete, needs_followup, and a
+  //                        deliberately proof-short completion that stays open.
+  //
+  //  `photoUpload` only runs for multipart. A JSON claim never touches multer.
+  const photoUpload = upload && typeof upload.single === "function"
+    ? upload.single("photo") : (req, res, next) => next();
+
+  function acceptPhotoIfMultipart(req, res, next) {
+    if (!/multipart\/form-data/i.test(String(req.headers["content-type"] || ""))) return next();
+    photoUpload(req, res, (err) => {
+      if (err) {
+        //  multer's own limit, translated into something a technician can act on.
+        if (err.code === "LIMIT_FILE_SIZE") {
+          return res.status(413).json({ error: "That photo is too large. Keep it under 5 MB." });
+        }
+        if (err.code === "LIMIT_UNEXPECTED_FILE") {
+          return res.status(400).json({ error: "Send exactly one photo, in a field named \"photo\"." });
+        }
+        return res.status(400).json({ error: "That photo could not be read. Take or choose it again." });
+      }
+      return next();
+    });
+  }
+
+  router.post("/operator/turn-work/:workId/claim", ...operatorGate, acceptPhotoIfMultipart, async (req, res) => {
     const b = req.body || {};
+    //  A multipart body arrives as strings. `proof_photos` is only meaningful
+    //  as JSON; a multipart caller sends the file itself.
+    const jsonPhotos = Array.isArray(b.proof_photos) ? b.proof_photos : [];
     const out = await tx(res, (client) => workAcceptanceService.claimCompletion(client, {
       work_id: req.params.workId,
       property_id: req.operator.property_id,
@@ -145,8 +194,10 @@ module.exports = function workAcceptance(deps) {
       outcome: b.outcome,
       unable_reason: b.unable_reason || null,
       note: b.note || null,
-      proof_photos: Array.isArray(b.proof_photos) ? b.proof_photos : [],
+      proof_photos: jsonPhotos,
       functional_confirmation: b.functional_confirmation || null,
+      //  ONE file, on the same request, committed in the same transaction.
+      proof_file: req.file || null,
     }));
     if (!out) return;
 
@@ -164,6 +215,12 @@ module.exports = function workAcceptance(deps) {
             ? `NOT closed — ${out.claim.proof_shortfall} The claim is recorded and the work is still open.`
             : "Recorded. The work stays open.",
         proof_shortfall: out.claim.proof_shortfall,
+        //  The photo, as a path the page can render. No bytes, no host, no
+        //  signature — the governed read decides who may see it.
+        proof_photo: (out.proof_attachments || [])[0]
+          ? { view_path: out.proof_attachments[0].view_path,
+              uploaded_at: out.proof_attachments[0].uploaded_at }
+          : null,
         unlocked: out.unlocked_stages,
         next_action: c ? c.action : null,
         next_action_why: c ? c.why : null,
@@ -272,6 +329,47 @@ module.exports = function workAcceptance(deps) {
         unable_reason_values: UNABLE_REASON_VALUES,
       });
     } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── THE GOVERNED PROOF READ ─────────────────────────────────────────
+  //
+  //  GET /operator/turn-work/:workId/proof/:attachmentId
+  //
+  //  The ONLY way image bytes leave the database. There is no list, no browse
+  //  and no directory — you can read a photo you can already name, on a work
+  //  item at the property your session resolved, and nothing else.
+  //
+  //  Property comes from the session. The service re-checks attachment → work
+  //  → property in its own query, so the route's authority check and the
+  //  query are two independent refusals of the same wrong thing.
+  router.get("/operator/turn-work/:workId/proof/:attachmentId", ...readerGate, async (req, res) => {
+    if (!workProofAttachmentService || typeof workProofAttachmentService.readForWork !== "function") {
+      return res.status(503).json({ error: "photo proof is not available in this deployment." });
+    }
+    try {
+      const row = await workProofAttachmentService.readForWork(pool, {
+        property_id: req.operator.property_id,
+        work_id: req.params.workId,
+        attachment_id: req.params.attachmentId,
+      });
+      //  ONE answer for "does not exist", "belongs to another property" and
+      //  "belongs to another work item". Distinguishing them would confirm
+      //  that somebody else's attachment exists.
+      if (!row) return res.status(404).json({ error: "No proof photo here." });
+
+      res.setHeader("Content-Type", row.mime_type);
+      res.setHeader("Content-Length", String(row.byte_size));
+      //  Evidence is looked at, never executed or embedded from elsewhere.
+      res.setHeader("Content-Disposition", "inline");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Cache-Control", "private, no-store");
+      res.setHeader("Content-Security-Policy", "default-src 'none'; sandbox");
+      return res.end(row.content);
+    } catch (e) {
+      //  Never leak a driver message: it can carry a query, a column list or
+      //  a connection detail.
+      return res.status(500).json({ error: "The proof photo could not be read." });
+    }
   });
 
   return router;

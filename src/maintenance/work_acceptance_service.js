@@ -90,14 +90,16 @@ function makeWorkAcceptanceService(deps) {
     throw new Error("work_acceptance_service requires spawnObligationFromEvent()");
   }
   //  OPTIONAL, and its absence FAILS CLOSED rather than degrading to "trust
-  //  the string". Nothing in this build injects it — there is no attachment
-  //  store yet — so photo-requiring work stays open and says why. Making it
-  //  required would break the server for a capability that does not exist;
-  //  making its absence permissive would restore the defect it replaces.
+  //  the string". When it is absent, photo-requiring work stays open and says
+  //  why; making its absence permissive would restore the defect it replaces.
   //
-  //  Contract when it does exist:
-  //     resolveForProperty(client, { property_id, references }) -> [verified ids]
-  //  It must return only references that exist AND belong to that property.
+  //  Contract:
+  //     storeForWork(client, { work_id, property_id, unit_id,
+  //                            uploaded_by_user_id, file })   -> attachment row
+  //     resolveForWork(client, { property_id, unit_id, work_id,
+  //                              references })                -> [verified ids]
+  //  resolveForWork must return only references that exist AND match property
+  //  AND unit AND work — all four, so one photo cannot close another job.
   const bad = (m, extra) => Object.assign(new Error(m), { httpStatus: 400, ...(extra || {}) });
 
   async function loadWork(client, { work_id, property_id }) {
@@ -219,6 +221,9 @@ function makeWorkAcceptanceService(deps) {
       work_id, property_id, actor_user_id,
       outcome, unable_reason = null, note = null,
       proof_photos = [], functional_confirmation = null,
+      //  ONE uploaded image, arriving with the completion. Optional: a claim
+      //  may still be recorded without proof and left open.
+      proof_file = null,
     } = spec || {};
 
     if (!actor_user_id) throw bad("actor_user_id is required — a completion claim needs a human actor");
@@ -231,24 +236,44 @@ function makeWorkAcceptanceService(deps) {
     if (w.stage === STAGE.READINESS_WALK)
       throw bad("the final readiness walk is not performed or certified in this build");
 
-    // ── PROOF PHOTOS ARE RESOLVED, NEVER TRUSTED ──────────────────────
-    //  What arrives is whatever the client sent. It is RECORDED verbatim,
-    //  because the operator's input is history, and then it is RESOLVED
-    //  against the attachment store. Only references that actually exist and
-    //  belong to this property count toward the requirement.
+    // ── THE PHOTO IS STORED HERE, IN THIS TRANSACTION ─────────────────
     //
-    //  There is no attachment store in this build, so `attachmentService` is
-    //  never injected and nothing resolves. That is deliberate and it FAILS
-    //  CLOSED: photo-requiring work stays open and says why. The alternative —
-    //  counting the strings — is what made a single typed space close work.
+    //  `proof_file` is one uploaded image arriving on the SAME request as the
+    //  completion. It is written before the claim and inside the caller's
+    //  transaction, so the attachment and the claim commit together or neither
+    //  does. A photo that survives a failed completion is an orphan; a
+    //  completion that survives a failed photo is a closed job with no
+    //  evidence. One transaction prevents both without any cleanup path.
+    //
+    //  Property and unit come from the WORK ROW that was just loaded and
+    //  authorised — never from the request. A client cannot say which property
+    //  its photo belongs to.
+    const attachmentsAvailable = !!(attachmentService && typeof attachmentService.resolveForWork === "function");
     const photos = Array.isArray(proof_photos) ? proof_photos.filter(Boolean) : [];
-    const attachmentsAvailable = !!(attachmentService && typeof attachmentService.resolveForProperty === "function");
+    const storedAttachments = [];
+
+    if (proof_file) {
+      if (!attachmentsAvailable) {
+        throw bad("photo proof is not available in this deployment — no attachment service is wired.");
+      }
+      const stored = await attachmentService.storeForWork(client, {
+        work_id: w.id, property_id: w.property_id, unit_id: w.unit_id,
+        uploaded_by_user_id: actor_user_id, file: proof_file,
+      });
+      storedAttachments.push(stored);
+      photos.push(String(stored.id));
+    }
+
+    // ── AND THEN RESOLVED, NEVER TRUSTED ──────────────────────────────
+    //  Every reference — the one just stored and any sent by a client — is
+    //  checked against property AND unit AND work. A photo taken for one job
+    //  cannot close another, which the earlier property-only contract left
+    //  open. Raw strings are still RECORDED verbatim as history; they are
+    //  never counted.
     let verifiedPhotos = [];
     if (attachmentsAvailable) {
-      //  The store decides. It is given the property so an attachment from
-      //  another property cannot be borrowed as proof here.
-      verifiedPhotos = await attachmentService.resolveForProperty(client, {
-        property_id: w.property_id, references: photos,
+      verifiedPhotos = await attachmentService.resolveForWork(client, {
+        property_id: w.property_id, unit_id: w.unit_id, work_id: w.id, references: photos,
       });
       verifiedPhotos = Array.isArray(verifiedPhotos) ? verifiedPhotos.filter(Boolean) : [];
     }
@@ -267,6 +292,13 @@ function makeWorkAcceptanceService(deps) {
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *`,
       [w.id, w.property_id, w.unit_id, actor_user_id, outcome, unable_reason,
        note, photos, functional_confirmation, verdict.satisfied, verdict.shortfall])).rows[0];
+
+    //  Safe metadata only. `content` never leaves the attachment service.
+    const proofAttachments = storedAttachments.map((a) => ({
+      attachment_id: a.id, mime_type: a.mime_type, byte_size: a.byte_size,
+      uploaded_at: a.created_at, sha256: a.sha256,
+      view_path: `/operator/turn-work/${w.id}/proof/${a.id}`,
+    }));
 
     let closed = false;
     let unlockedStages = [];
@@ -302,6 +334,8 @@ function makeWorkAcceptanceService(deps) {
     return {
       claim, work: w, event: ev, closed,
       proof: verdict,
+      //  Metadata only — the bytes are behind the governed read route.
+      proof_attachments: proofAttachments,
       next_action_proposal: outcome === OUTCOMES.UNABLE
         ? { reason: unable_reason, label: UNABLE_REASONS[unable_reason],
             proposed_next: UNABLE_NEXT_ACTION[unable_reason],

@@ -6,12 +6,12 @@ Everything below is source-level or pure-function evidence. No Postgres was
 contacted, no HTTP request was made, no file was uploaded, and no browser
 rendered anything.
 
-**Revision — the three FAIL findings have been acted on.** Two are fixed
-outright (authority, condition classifier). The third — photo proof — has its
-**defect closed** and its **upload path stopped**: a string can no longer
-satisfy proof, the UI no longer pretends, and photo-requiring work now stays
-open. The real upload path is not built, because no existing primitive can
-carry it without a schema change. That is reported below, not faked.
+**Closure slice — the golden path can now finish.** A technician opens the
+work, adds one completion photo, and presses Complete. The photo and the
+completion commit in one transaction on one route. Migration 118 is written
+and deliberately **unapplied**.
+
+All three pressure-test FAIL findings are now closed.
 
 ---
 
@@ -58,7 +58,7 @@ Plus `docs/BUILD_1_6B_INTEGRATION_READINESS.md`, carried by the cherry-pick.
 | `index.html` | Maintenance → Turnovers entry; root mount removed |
 | `unit-turn-page.js` | mount guard; four honest states; **capability-gated controls**; **fake photo box removed** |
 
-**NO MIGRATION CHANGED. The ceiling is still 117 and no 118 exists.** Sequence
+**ONE MIGRATION ADDED — 118, narrow and deliberately unapplied.** Sequence
 rules, readiness meaning, availability guard order and the agent's three-intent
 scope are untouched. Two things changed deliberately and are the point of this
 revision: the **proof gate** (a string no longer closes work) and the
@@ -79,14 +79,15 @@ $ for t in unit_triage_proof unit_turn_scope_proof work_acceptance_proof \
   readiness_certification_proof      passed=127  failed=0
   staff_agent_proof                  passed=154  failed=0
   unit_turn_page_proof               passed=104  failed=0
-  operator_language_proof            passed=245  failed=0
-  release_candidate_proof            passed=382  failed=0
+  operator_language_proof            passed=247  failed=0
+  release_candidate_proof            passed=396  failed=0
+  work_proof_photo_proof             passed=209  failed=0
   ─────────────────────────────────────────────────────────
-  TOTAL                              1300        0
+  TOTAL                              1525        0
 ```
 
-Up from 1206. Every assertion that previously recorded one of the three
-defects has been **re-pointed at the fixed behaviour**, not deleted:
+Up from 1206 → 1300 → **1525**. Every assertion that previously recorded a
+defect has been **re-pointed at the fixed behaviour**, not deleted:
 `work_acceptance_proof` now proves that `" "`, `"x"`, `"photo.jpg"` and a
 random UUID all fail while a verified attachment succeeds;
 `release_candidate_proof` §12 now proves five concrete conditions classify
@@ -157,10 +158,10 @@ establish.
 | 11 | availability precedence | **PASS** |
 | 12 | staff-agent boundary | **PASS** *(was FAIL — fixed)* |
 | 13 | UI simplification | **PASS** |
-| 15 | photo proof | **PARTIAL** — defect closed, upload path stopped |
+| 15 | photo proof | **PASS** — source-complete *(was FAIL, then PARTIAL)* |
 | 16 | live-first seams | **UNPROVEN** |
 | 17 | by-bed grain | **PASS** |
-| 18 | new failure modes from the cleanup | **MIXED** — 4 prevented, 4 unproven |
+| 18 | new failure modes from the cleanup | **MIXED** — 7 prevented, 1 unproven |
 
 ### §5 canonical truth boundaries — PASS
 
@@ -471,119 +472,99 @@ condition.**
 
 ---
 
-## 10. Photo proof — **PARTIAL: defect closed, upload path stopped**
+## 10. Photo proof — **PASS, source-complete**
 
-### What was wrong
-
-`evaluateProof` counted `proof_photos.length`. Because `filter(Boolean)` keeps
-`" "`, a **single space** typed into a box labelled "Photo reference" closed
-work as proof-satisfied. The work then read complete to the sequence engine,
-the readiness gate and the availability read, with no evidence anywhere.
-
-### What is fixed
-
-**A photo is now a verified attachment, and the evaluator fails closed.**
+### The path
 
 ```
-node -e "…"                                       (all with the store DECLARED present)
-
-  " "                                    satisfied=false
-  "x"                                    satisfied=false
-  "photo.jpg"                            satisfied=false
-  a random UUID                          satisfied=false
-  a nonexistent media id                 satisfied=false
-  a VERIFIED same-property attachment    satisfied=true
-  verified ref, NO store declared        satisfied=false   ← contradiction fails closed
+technician opens actionable work
+  → Add completion photo  (camera or picker, one image)
+  → small preview, "Photo ready"
+  → Complete work
+  → POST /operator/turn-work/:workId/claim   multipart, field `photo`
+  → session authenticated · property derived · maintenance verified
+  → work loaded and property-checked
+  → image validated by its BYTES
+  → work_proof_attachments row inserted
+  → proof evaluated against that attachment id
+  → work_completion_claims row inserted
+  → work closed
+  → COMMIT
 ```
 
-- `evaluateProof(work, claim, context)` counts `claim.verified_photos` only,
-  and only when `context.attachments_available` is true. Both default to the
-  safe answer, so a caller that forgets the context gets "nothing verified".
-- A caller declaring **no store** while handing over "verified" references is
-  contradicting itself; the list is voided.
-- `claimCompletion` resolves references through
-  `attachmentService.resolveForProperty(client, { property_id, references })` —
-  **scoped to the work's property**, so another property's attachment cannot be
-  borrowed as proof.
-- The store is **optional and its absence fails closed**. Nothing injects it
-  today, so photo-requiring work stays **open** and the shortfall says
-  *"Missing verified photo proof (unavailable in this build)"* rather than
-  telling the operator to do something impossible.
-- The raw strings are still **recorded verbatim** on the claim. The operator's
-  input is history; it is simply never counted.
-- Proof and completion stay **separately attributed**: the claim carries
-  `claimed_by_user_id`; any future attachment carries its own uploader and time.
+**One route. One transaction. One receipt.** There is no `/upload`, no
+`/claim-with-photo`, no `/complete-with-proof`, and no two-step submit.
 
-**The UI no longer pretends.** The "Photo reference" text box is gone. No file
-control was faked in its place — a file picker that discards the file would be
-the same lie with a better icon. The panel says:
+### Migration 118 — `work_proof_attachments`
 
-> **Photo proof is unavailable.** There is no attachment store to verify a
-> photo against, so work needing a completion photo cannot be closed yet. You
-> can still record what you did — the claim is kept and the work stays open.
+| Column | |
+|---|---|
+| `id` | uuid pk |
+| `property_id` | **not null** → `properties` |
+| `unit_id` | **not null** → `units` |
+| `work_id` | **not null** → `unit_triage_required_work` |
+| `uploaded_by_user_id` | **not null** → `users` |
+| `original_filename` | text, kept for a human, never trusted |
+| `mime_type` | check `image/jpeg · image/png · image/webp` |
+| `byte_size` | check `> 0` |
+| `sha256` | check `char_length = 64` |
+| `content` | `bytea` — **Class 2 adapter** |
+| `created_at` | server time |
 
-The button now reads **"Record what was done"**, not "Complete". The message
-box's photo field is gone too.
+All three scopes are NOT NULL foreign keys, so "one photo closing an unrelated
+job" is **unrepresentable**, not merely refused. There is no `status`, no
+`caption`, no `deleted_at`, no delete route.
 
-### Why the upload path was STOPPED
+**Classification.** The attachment *contract* is **Class 1, permanent**. The
+`bytea` storage is **Class 2, temporary adapter**. *Replacement condition:*
+move the bytes behind object storage only when real proof volume or
+multi-property operation makes database storage materially burdensome —
+preserving the same attachment ids, authority contract and completion API.
 
-Every existing primitive was inspected against the required security set:
+### File rules
 
-| Primitive | durable bytes | `property_id` | staff uploader | verdict |
-|---|---|---|---|---|
-| `intake_media` (014) | ✓ `bytea` | ✗ | ✗ | cannot scope, cannot attribute |
-| `documents` (001) | ✗ (`storage_url`, "null for now") | ✓ | ✗ | no bytes, no attribution, unused in `src/` |
-| `lease_packet_documents` (034) | ✗ (`file_url`) | ✗ lease-packet scoped | ✗ | wrong scope |
-| `public_upload_sessions` (013) | ✗ (jsonb) | ✗ | ✗ unauthenticated | wrong entirely |
+Exactly one image. `image/jpeg`, `image/png`, `image/webp`. **5 MB.**
 
-`intake_media` also serves through `GET /intake/media/:id`, which is
-**password-gated**, not staff-session scoped.
+The type comes from the **magic bytes**, never the filename or the declared
+`Content-Type`. A PDF named `photo.jpg` and declared `image/jpeg` is refused; a
+PNG declared as JPEG is stored as PNG. A SHA-256 digest of exactly the stored
+bytes is recorded. Zero-byte, oversized and second files are refused with
+operator-readable messages — and none of them writes a row.
 
-**No existing table can carry property scope AND uploader attribution AND
-durable bytes.** Two of the nine security requirements — *reject attachments
-belonging to another property* and *preserve the original upload attribution
-and time* — are unimplementable without new columns.
+### The governed read
 
-The scope rule is explicit: *"If the existing attachment primitive cannot
-safely support staff-session and property-scoped proof without a migration or
-larger foundation, stop that portion and report the exact smallest
-prerequisite. Do not fake the connection."* **So it was stopped.**
+`GET /operator/turn-work/:workId/proof/:attachmentId` — the only way bytes
+leave. Staff session required; **maintenance or management** may read (a
+manager reviewing a closed job needs the evidence); property from the session;
+attachment → work → property re-checked in the query. Cross-property,
+cross-work and nonexistent all return the **same 404**, so the response never
+confirms somebody else's attachment exists. `nosniff`, `no-store`, sandboxed
+CSP, `inline`. No list route. No delete route.
 
-There is a second, independent reason not to add migration 118 now: migrations
-112–117 have **never been applied anywhere**, the live ledger has never been
-read, and the baseline is still pending. Adding an attachment schema now would
-put an unproven table into the very first live application.
+The Unit Turn read returns only `attachment_id`, `mime_type`, `byte_size`,
+`uploaded_at`, `uploaded_by`, `view_path` — never bytes. The page fetches the
+image with the session header and renders a blob, because an `<img src>`
+cannot carry it.
 
-### The exact smallest prerequisite
+### Atomicity
 
-One migration and one small module, separately owned and separately proven:
+`storeForWork` and `resolveForWork` both take the **caller's client**. The
+attachment service never opens a connection and never sees a pool. Exercised
+against a recording double:
 
-```sql
-create table if not exists operator_attachments (
-  id                 uuid primary key default gen_random_uuid(),
-  property_id        uuid not null references properties(id) on delete cascade,
-  uploaded_by_user_id uuid not null references users(id),
-  mime               text not null,
-  byte_size          integer not null,
-  bytes              bytea not null,
-  created_at         timestamptz not null default now()
-);
-```
+- happy path → attachment insert, then resolution, then the claim, **in that
+  order, on one client**
+- claim insert fails → the error propagates; the attachment was on the same
+  transaction and rolls back with it. **No orphan, and therefore no cleanup
+  path to get wrong.**
+- attachment insert fails → **no completion claim is written at all**
+- no photo → the claim is still **recorded and attributed**, the work stays
+  **open**, and the shortfall names the missing photo
 
-- `POST /operator/attachments` — multipart, staff session required, property
-  **server-derived**, mime allow-list (`image/jpeg`, `image/png`, `image/heic`),
-  size limit (the existing multer cap is 25 MB), returns an **opaque id only**.
-- `GET /operator/attachments/:id` — staff session required, refuses an id from
-  another property, refuses a nonexistent id, exposes no filesystem path.
-- `attachmentService.resolveForProperty` — the contract the claim path already
-  calls. **The seam exists and is asserted; only the store behind it is
-  missing.**
+### What is still not proven
 
-Then inject it in `server.js` and photo proof works with no further change to
-`work_proof.js` or `claimCompletion`.
-
-**Until that exists, "complete with photo" is not an operational flow — and
-the system now says so instead of closing the work.**
+That Postgres enforces the foreign keys, the check constraints and the
+rollback. Written and reachable; unproven until the baseline arrives.
 
 ## 11. Simplifications
 

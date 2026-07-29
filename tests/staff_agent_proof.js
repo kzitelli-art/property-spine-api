@@ -304,7 +304,9 @@ section("E14  corrections do not invent a mechanism (revised by BUILD 6B)");
   //  confirmed. BUILD 6B removed the intent entirely: a generic correction
   //  would be one mechanism editing records owned by four services, each with
   //  its own supersede rule. It redirects to the record instead.
-  const r = I.classifyIntent("Correction—it's Unit 305, not 304.");
+  //  ONE unit. "I meant 305, not 304" names TWO, and the multi-unit rule now
+  //  asks which rather than guessing — proved separately.
+  const r = I.classifyIntent("Correction—it's Unit 305.");
   ok("classified as a redirect, not a correction", r.intent === "redirect", r.intent);
   ok("correction is no longer an intent at all", !I.INTENT_VALUES.includes("correction"));
   ok("it points at the recorded item", r.redirect.to === "recorded_item");

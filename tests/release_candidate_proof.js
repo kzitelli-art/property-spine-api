@@ -357,15 +357,24 @@ section("8  authority");
   //  `management`. That is the ruled model: management may READ a turn, only
   //  maintenance may OPERATE it. What was broken was the SURFACE — it showed
   //  Accept / Complete / Reopen to anyone who could open the page.
-  const MAINT_ONLY = [], MAINT_OR_MGMT = [];
-  for (const f of BUILD_DOORS) {
+  //  Judge the gate each WRITE route actually uses. work_acceptance.js now also
+  //  defines a READER gate for the proof image, so "does the file mention
+  //  management" is no longer the question — "what guards the writes" is.
+  const WRITE_MAINT_ONLY = ["src/maintenance/unit_triage.js", "src/maintenance/unit_turn_scope.js",
+                            "src/maintenance/work_acceptance.js"];
+  for (const f of WRITE_MAINT_ONLY) {
     const t = src(f);
-    (/mods\.includes\("management"\)/.test(t) ? MAINT_OR_MGMT : MAINT_ONLY).push(path.basename(f));
+    const gate = (t.match(/const operatorGate = \[[^\]]*\]/) || [""])[0];
+    ok(`${path.basename(f)}'s write gate is maintenance-only`,
+       /requireMaintenanceModuleAccess/.test(gate) && !/requireTurnReadAccess/.test(gate), gate.slice(0, 90));
   }
-  ok("read doors admit management; work doors do not",
-     MAINT_OR_MGMT.includes("unit_turn.js") && MAINT_ONLY.includes("work_acceptance.js") &&
-     MAINT_ONLY.includes("unit_triage.js") && MAINT_ONLY.includes("unit_turn_scope.js"),
-     `or-mgmt=[${MAINT_OR_MGMT}] maint-only=[${MAINT_ONLY}]`);
+  ok("the Unit Turn read door admits management",
+     /mods\.includes\("management"\)/.test(src("src/surfaces/unit_turn.js")));
+  ok("the proof READ uses a reader gate, not the write gate",
+     /:attachmentId", \.\.\.readerGate/.test(src("src/maintenance/work_acceptance.js")));
+  ok("and every write route still uses the write gate",
+     ["accept", "claim", "reopen"].every((r) =>
+       new RegExp("\\/" + r + "\", \\.\\.\\.operatorGate").test(src("src/maintenance/work_acceptance.js"))));
 
   //  ── THE READ EMITS SERVER-COMPUTED CAPABILITIES ──────────────────
   const R = src("src/surfaces/unit_turn_read.js");
@@ -683,7 +692,7 @@ section("12  staff-agent boundary");
     ["304 is ready.", "redirect", "final_readiness"],
     ["I'll handle the refrigerator tomorrow.", "redirect", "work_item"],
     ["Final walk failed. The bathroom door still doesn't latch.", "redirect", "final_readiness"],
-    ["Correction: I meant 304, not 305.", "redirect", "recorded_item"],
+    ["Correction—it's Unit 305.", "redirect", "recorded_item"],
     ["The refrigerator is installed and working.", "work_completion", null],
   ];
   for (const [text, expect, to] of CASES) {
@@ -869,10 +878,10 @@ section("15  PHOTO PROOF — the load-bearing finding, now closed");
      /attachmentsAvailable && Array\.isArray\(claim\.verified_photos\)/.test(PR));
 
   //  ── THE SERVICE RESOLVES, IT DOES NOT TRUST ───────────────────────
-  ok("the claim path resolves references against an attachment store",
-     /attachmentService\.resolveForProperty/.test(ACC));
-  ok("resolution is scoped to the work's property, so another property's attachment cannot be borrowed",
-     /property_id: w\.property_id, references: photos/.test(ACC));
+  ok("the claim path resolves references against the attachment store",
+     /attachmentService\.resolveForWork/.test(ACC));
+  ok("resolution is scoped to property AND unit AND work, so no attachment can be borrowed",
+     /property_id: w\.property_id, unit_id: w\.unit_id, work_id: w\.id, references: photos/.test(ACC));
   ok("the store is OPTIONAL and its absence fails closed",
      /attachmentService = null/.test(ACC) && /attachments_available: attachmentsAvailable/.test(ACC));
   ok("the raw strings are still RECORDED as history",
@@ -880,35 +889,39 @@ section("15  PHOTO PROOF — the load-bearing finding, now closed");
   ok("proof and completion stay separately attributed",
      /claimed_by_user_id/.test(ACC));
 
-  //  ── THE UI NO LONGER PRETENDS ─────────────────────────────────────
-  ok("the fake 'Photo reference' text box is gone", !/wk-photo/.test(P));
-  ok("no file control was faked in its place either", !/type="file"/.test(P));
-  ok("the panel states photo proof is unavailable", /Photo proof is unavailable/.test(P));
-  ok("and says the work stays open", /stays open/.test(P));
-  ok("the claim sends no typed photo", /proof_photos: \[\]/.test(P));
-  ok("the message box photo field is gone too", !/mtPhoto/.test(P));
-  ok("the completion button no longer claims to complete", /Record what was done/.test(P));
+  //  ── THE UI IS NOW THE REAL PATH ───────────────────────────────────
+  ok("there is exactly ONE file input", (P.match(/type="file"/g) || []).length === 1);
+  ok("it accepts only the three image types", /accept="image\/jpeg,image\/png,image\/webp"/.test(P));
+  ok("it opens the camera on a phone", /capture="environment"/.test(P));
+  ok("the fake 'Photo reference' text box is still gone", !/wk-photo/.test(P));
+  ok("Complete is disabled until a photo is chosen", /blockedByPhoto \|\| S\.busy \? " disabled"/.test(P));
+  ok("and says so rather than erroring later", /Add one completion photo to close this work\./.test(P));
+  ok("the file rides on the completion request", /photo: file/.test(P));
+  ok("there is no separate upload action", !/uploadPhoto|uploadProof|saveAttachment/.test(P));
 
-  //  ── AN ATTACHMENT PRIMITIVE EXISTS, AND CANNOT CARRY THIS ─────────
-  const INTAKE = src("src/onboarding/intake.js");
-  ok("main HAS an attachment primitive (intake_media + multer + a serve route)",
-     /insert into intake_media/i.test(INTAKE) && /router\.get\("\/intake\/media\/:id"/.test(INTAKE));
-  const M014 = src("migrations/014_intake.sql");
-  const media = M014.slice(M014.indexOf("create table if not exists intake_media"), M014.indexOf("create table if not exists intake_events"));
-  ok("but intake_media has NO property_id — property scope is impossible", !/property_id/.test(media));
-  ok("and NO uploader column — attribution is impossible", !/user_id|uploaded_by/.test(media));
-  ok("its serve route is password-gated, not staff-session scoped",
-     /password/i.test(INTAKE.slice(INTAKE.indexOf('router.get("/intake/media/:id"'), INTAKE.indexOf('router.get("/intake/media/:id"') + 700)));
-  const D001 = src("migrations/001_baseline.sql");
-  const docs = D001.slice(D001.indexOf("create table if not exists documents"), D001.indexOf("create table if not exists documents") + 700);
-  ok("the documents table has property scope but NO durable bytes", /property_id/.test(docs) && !/bytea/.test(docs));
-  ok("no migration was added for attachments",
-     !fs.existsSync(path.join(REPO, "migrations", "118_unit_turn_attachments.sql")));
+  //  ── ONE DOOR, ONE TRANSACTION ─────────────────────────────────────
+  const DOOR = src("src/maintenance/work_acceptance.js");
+  ok("one claim route, extended to multipart", /\/claim", \.\.\.operatorGate, acceptPhotoIfMultipart/.test(DOOR));
+  for (const forbidden of ["/upload", "/claim-with-photo", "/complete-with-proof"]) {
+    ok(`no parallel ${forbidden} route`, !DOOR.includes(`"${forbidden}`));
+  }
+  ok("the attachment is stored on the caller's transaction",
+     /attachmentService\.storeForWork\(client,/.test(ACC));
+  ok("and resolved on the same one", /attachmentService\.resolveForWork\(client,/.test(ACC));
+  ok("property and unit come from the work row", /property_id: w\.property_id, unit_id: w\.unit_id/.test(ACC));
+
+  //  ── MIGRATION 118 EXISTS, NARROW, AND UNAPPLIED ───────────────────
   const migs = fs.readdirSync(path.join(REPO, "migrations")).filter((f) => /^\d{3}_.*\.sql$/.test(f)).sort();
-  ok("the migration ceiling is still 117", migs[migs.length - 1].startsWith("117"), migs[migs.length - 1]);
+  ok("the ceiling is now 118", migs[migs.length - 1].startsWith("118"), migs[migs.length - 1]);
+  ok("one table only", (src("migrations/118_work_proof_attachments.sql")
+     .match(/create table if not exists/gi) || []).length === 1);
+  ok("the number is provisional and nothing is applied",
+     /PROVISIONAL/.test(src("migrations/118_work_proof_attachments.sql")) &&
+     /NOT APPLIED ANYWHERE/.test(src("migrations/118_work_proof_attachments.sql")));
+  ok("intake_media was not modified", !/intake_media/.test(src("migrations/118_work_proof_attachments.sql")));
 
-  verdict("15 photo proof", "PARTIAL — DEFECT CLOSED, UPLOAD PATH STOPPED",
-    "a string can no longer satisfy proof and the UI no longer pretends: photo-requiring work now stays OPEN and says why. The real upload path is NOT built — no existing primitive carries property scope AND uploader attribution AND durable bytes, so it needs a schema change and was stopped per the scope rule");
+  verdict("15 photo proof", "PASS — source-complete",
+    "one file input, one claim route, one transaction: the photo and the completion commit together, resolution is scoped to property AND unit AND work, and a string still satisfies nothing. Migration 118 is written and deliberately unapplied");
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -968,8 +981,11 @@ const NEWMODES = [];
   //  1. Attachment uploaded but the completion transaction fails.
   ok("the claim runs inside the caller's transaction, so a failure rolls the claim back",
      /async function claimCompletion\(client, spec\)/.test(ACC));
-  mode("attachment uploaded, completion transaction fails", "unproven without Postgres",
-    "the claim rolls back with the transaction; a stored attachment would be orphaned, which is safe (an unreferenced blob) but leaves no cleanup path. No upload exists yet, so this cannot occur today.");
+  ok("the attachment insert is on the caller's transaction, not its own connection",
+     /attachmentService\.storeForWork\(client,/.test(ACC) &&
+     !/pool\.connect/.test(src("src/maintenance/work_proof_attachment_service.js")));
+  mode("attachment uploaded, completion transaction fails", "prevented by construction",
+    "both writes are on the caller's client, so a failed claim rolls the attachment back with it. There is no orphan and therefore no cleanup path to get wrong — exercised in work_proof_photo_proof.js §4.");
 
   //  2. Completion submitted twice with the same attachment.
   ok("a second claim is a second attributed row, never an overwrite",
@@ -980,8 +996,11 @@ const NEWMODES = [];
     "each submission appends its own attributed claim; the second closes nothing new because the work is already complete. No duplicate upload is created because the reference is reused, not re-uploaded.");
 
   //  3. Attachment deleted or unavailable after completion.
-  mode("attachment deleted after completion", "unproven — and NOT re-verified",
-    "proof is evaluated at claim time and the verdict is stored on the claim row. If an attachment later disappears, the closed work stays closed and nothing re-checks. That is a real gap in any future upload design: the reference must be immutable, or proof must be re-derived on read.");
+  ok("there is no delete route for an attachment", !/router\.delete/.test(src("src/maintenance/work_acceptance.js")));
+  ok("nor a delete operation in the service",
+     !/function delete|deleteFor|removeFor/.test(src("src/maintenance/work_proof_attachment_service.js")));
+  mode("attachment deleted after completion", "prevented — nothing can delete one",
+    "there is no delete route and no delete operation. The row is removed only by cascade when its property, unit or work item is removed, in which case the completion it proves goes with it. Proof is still evaluated once and the verdict stored, so a future storage adapter must keep references immutable.");
 
   //  4. Capabilities stale between read and write.
   ok("capabilities are recomputed on every read, never cached in the page",
@@ -1017,9 +1036,11 @@ const NEWMODES = [];
 
   //  7. A sentence naming more than one unit.
   const two = INTENT.classifyIntent("There are cockroaches in 304 and 305.", {});
-  ok("a two-unit sentence takes only the first reference", two.unit_ref === "304", two.unit_ref);
-  mode("a sentence names more than one unit", "PARTIALLY UNPROVEN",
-    "the classifier takes the FIRST unit-shaped token and the service resolves it against the property; a second unit in the same sentence is silently ignored rather than questioned. Nothing wrong is recorded — the proposal names one unit and a human confirms it — but the operator is not told the second reference was dropped.");
+  ok("a two-unit sentence asks which, rather than taking the first",
+     two.intent === "unclear" && two.unit_ref === null, two.intent);
+  ok("and names both in the question", /304/.test(two.clarification) && /305/.test(two.clarification));
+  mode("a sentence names more than one unit", "prevented",
+    "two distinct references return unclear and ask which unit. The same number twice is still one unit. Checked before every branch, so no intent slips past it.");
 
   //  8. An attachment id reused across two work items.
   mode("attachment id reused across two work items", "unproven — no store exists",

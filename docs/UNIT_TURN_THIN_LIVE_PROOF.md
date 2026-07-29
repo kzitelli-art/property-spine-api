@@ -3,7 +3,7 @@
 **The executable acceptance script. Run it only after the baseline artifacts
 have arrived and the disposable database verifies.**
 
-One golden path, four negative controls. This is not a test plan for
+One golden path, five negative controls. This is not a test plan for
 everything Builds 1–6B can do — it is the smallest run that, if it passes,
 means the unit turn works end to end, and if it fails, says exactly where.
 
@@ -19,7 +19,7 @@ HTTP, in a browser, the correct description of this work remains
 # The baseline must already be restored and verified.
 node scripts/runtime-proof/verify-baseline.js            # must exit 0
 ./scripts/runtime-proof/apply-pending-build-migrations.sh --apply
-node scripts/runtime-proof/verify-baseline.js            # 112–117 applied_and_recorded
+node scripts/runtime-proof/verify-baseline.js            # 112–118 applied_and_recorded
 ```
 
 Three people are needed, and they must be **different rows** in
@@ -136,33 +136,54 @@ happen.
 - **Assert:** work status is still `required`; the readiness walk is still blocked.
 - **DB:** `select proof_satisfied,proof_shortfall from work_completion_claims where work_id=<w>;`
 
-### Step 6 — required proof closes the work
+### Step 6 — one photo closes the work
 
-> ⚠ **THIS STEP CANNOT BE RUN TODAY, AND THAT IS THE CORRECT BEHAVIOUR.**
->
-> The fake "Photo reference" text box is gone and no attachment store exists,
-> so photo-requiring work **stays open** and the panel says why. There is
-> nothing to type that will close it — which is the point: a string is not a
-> photo.
->
-> **What to do instead:** run step 5, confirm the work is still `required`,
-> screenshot the *"Photo proof is unavailable"* panel, and record this step as
-> **BLOCKED on the attachment prerequisite** (release candidate §10).
->
-> Run it as written only once a session-scoped attachment primitive exists:
->
-> | | |
-> |---|---|
-> | **Actor** | T · **Browser** Complete work → **select a real file** → Record |
-> | **Route** | `POST <attachment upload>` then `POST /operator/turn-work/:workId/claim` |
->
-> - **Expect:** upload returns an opaque attachment id; the claim carries that
->   id; `proof_satisfied=true`; work → `complete`; the page can open the evidence.
-> - **Assert:** the same claim with a *typed* id instead of an uploaded one is
->   **refused** — the store, not the string, decides.
-> - **DB:** `select proof_photos, proof_satisfied from work_completion_claims where work_id=<w>;`
-> - **DB:** the attachment row carries its own uploader and time, separate from
->   `claimed_by_user_id` on the claim.
+| | |
+|---|---|
+| **Actor** | T (maintenance) |
+| **Browser** | Complete work → **Add completion photo** → take or choose a real image → *"it cools"* → **Complete work** |
+| **Route** | `POST /operator/turn-work/:workId/claim` — `multipart/form-data`, one field `photo` |
+
+**The operator sees:** tap Add completion photo → camera or picker → a small
+preview and *"Photo ready"* → Complete work → the receipt with the photo.
+No upload step, no Save Photo button, no attachment id, no second screen.
+
+- **Before choosing a photo:** Complete work is **disabled** and the panel
+  says *"Add one completion photo to close this work."* Confirm that. The
+  requirement must not be discovered through an error.
+- **Canonical record:** one `work_proof_attachments` row **and** one
+  `work_completion_claims` row, from the same request, in the same
+  transaction. Work → `complete`.
+- **Unit Turn read:** the item shows complete, with the photo as a small
+  governed preview; the next stage unlocks.
+- **DB:**
+  `select property_id, unit_id, work_id, uploaded_by_user_id, mime_type, byte_size, sha256, created_at from work_proof_attachments where work_id=<w>;`
+  → all present, `uploaded_by_user_id` = **T**.
+- **DB:** `select proof_photos, proof_satisfied, claimed_by_user_id from work_completion_claims where work_id=<w>;`
+  → `proof_photos` holds the **attachment id**, not a filename;
+  `proof_satisfied = true`. **Uploader and completion actor are separate
+  columns** — confirm both are recorded even when they are the same person.
+- **DB:** `select count(*) from work_proof_attachments;` after a **double-tap**
+  of Complete → still **1**. One photo, not two.
+- **Governed read:** open `GET /operator/turn-work/<w>/proof/<attachmentId>`
+  as T. Expect the image, `Content-Type` matching the stored type,
+  `X-Content-Type-Options: nosniff`, `Cache-Control: private, no-store`.
+
+### Step 6b — the file rules, exercised
+
+Each of these must be **refused** with an operator-readable message, and must
+write **no attachment row and no completion claim**:
+
+| Attempt | Expected |
+|---|---|
+| a `.txt` renamed `photo.jpg` | *"That file is not a JPEG, PNG or WebP photo."* |
+| a PDF sent with `Content-Type: image/jpeg` | same — the **bytes** decide, not the header |
+| a zero-byte file | *"That photo is empty."* |
+| a 6 MB image | *"Keep it under 5 MB."* |
+| two files in one request | refused |
+
+**DB after all five:** `select count(*) from work_proof_attachments where work_id=<w>;`
+→ unchanged.
 
 ### Step 7 — remaining work completes in sequence
 
@@ -256,7 +277,7 @@ happen.
 
 ## Negative controls
 
-Four. Each must **fail in the stated way**.
+Five. Each must **fail in the stated way**.
 
 ### N1 — duplicate proposal confirmation executes once
 
@@ -301,6 +322,21 @@ Four. Each must **fail in the stated way**.
   omits a button has proved nothing.
 - **DB:** no new `work_acceptances` row.
 
+### N5 — a photo cannot close a job it was not taken for
+
+- Complete work item **A** with a photo. Note its attachment id.
+- Submit a completion for work item **B** as JSON with
+  `proof_photos: ["<A's attachment id>"]`.
+- **Expect:** B is **NOT closed**. The shortfall names the missing photo.
+- **Assert:** resolution is scoped to property **and** unit **and** work, so
+  A's photo resolves to nothing on B.
+- Repeat with an attachment id from **another property**. Same result.
+- **DB:** `select proof_satisfied from work_completion_claims where work_id=<B>;` → `false`
+- **Cross-property read:** as T at property 1, request
+  `GET /operator/turn-work/<w2>/proof/<attachmentFromProperty2>`.
+  **Expect 404** — the same answer as a nonexistent id, so the response never
+  confirms that somebody else's attachment exists.
+
 ### N3 — "304 is ready" cannot bypass the final readiness walk
 
 - As **T**, and again as **M**, send `304 is ready.` through the message box.
@@ -322,10 +358,8 @@ browser — to **Browser verified** for the paths it covers.
 
 It does **not** cover:
 
-- **Photo proof.** Step 6 is BLOCKED, deliberately. A string can no longer
-  satisfy the gate and photo-requiring work stays open. Until a session-scoped
-  attachment primitive exists, "complete with photo" is not an operational
-  flow (release candidate §10).
+- **Storage scale.** The bytes live in Postgres — a deliberate Class 2 adapter
+  for the pilot. Nothing here tests volume.
 - **Concurrency beyond N1.** Acceptance and certification remain classified
   *unproven without Postgres* unless the extra probes in N1 are run.
 - **Attachment lifecycle.** Proof is evaluated once, at claim time, and the

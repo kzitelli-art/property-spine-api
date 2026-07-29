@@ -3267,9 +3267,23 @@ const unitTurnScopeService = require("./src/maintenance/unit_turn_scope_service"
 app.use("/", require("./src/maintenance/unit_turn_scope")({ pool, unitTurnScopeService, unitTriageService }));
 
 // ── WORK ACCEPTANCE / PROOF / PROGRESSION (BUILD 3) ──────────────────────
+// ── ONE COMPLETION PHOTO (unit-turn closure slice, migration 118) ────────
+//  The attachment CONTRACT is permanent; the `bytea` storage behind it is a
+//  Class 2 adapter, replaceable without touching ids, authority or the
+//  completion API. It is injected into the acceptance service so the photo and
+//  the claim commit in ONE transaction.
+const workProofAttachmentService = require("./src/maintenance/work_proof_attachment_service")
+  .makeWorkProofAttachmentService();
+
 const workAcceptanceService = require("./src/maintenance/work_acceptance_service")
-  .makeWorkAcceptanceService({ spawnObligationFromEvent });
-app.use("/", require("./src/maintenance/work_acceptance")({ pool, workAcceptanceService, unitTriageService }));
+  .makeWorkAcceptanceService({ spawnObligationFromEvent, attachmentService: workProofAttachmentService });
+//  `proofUpload` is this workflow's own multer instance: ONE file, 5 MB. The
+//  shared 25 MB `upload` above serves other surfaces and is deliberately not
+//  reused — a completion photo has its own limit.
+const proofUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
+app.use("/", require("./src/maintenance/work_acceptance")({
+  pool, upload: proofUpload, workProofAttachmentService, workAcceptanceService, unitTriageService,
+}));
 
 // ── FINAL READINESS WALK AND CERTIFICATION (BUILD 4) ─────────────────────
 //  The only path in the system that may establish `ready`, and only from an
@@ -3295,6 +3309,7 @@ app.use("/", require("./src/agent/staff_agent")({ pool, staffAgentService }));
 const unitTurnRead = require("./src/surfaces/unit_turn_read").makeUnitTurnRead({
   unitTriageService, unitTurnScopeService, workAcceptanceService, readinessService,
   staffAgentService, availabilityRead: require("./src/surfaces/availability_read").availabilityRead,
+  workProofAttachmentService,
 });
 app.use("/", require("./src/surfaces/unit_turn")({ pool, unitTurnRead }));
 // applications module mounted lower (after the conversion + submission services exist,
