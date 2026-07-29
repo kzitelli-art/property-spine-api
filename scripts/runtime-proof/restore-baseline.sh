@@ -16,6 +16,13 @@
 #    2. the target already has non-system tables → refuse
 #    3. the target's name looks like production   → refuse
 #
+#  ── THE TARGET URL IS NEVER IN A PROCESS ARGUMENT ───────────────────
+#  psql is launched through pg-launch.js, which translates the connection
+#  string into libpq environment variables and starts psql with no URL in its
+#  arguments. /proc/<pid>/cmdline is world-readable on Linux; /proc/<pid>/environ
+#  is not. Nothing is written to hold the credential, so there is no temporary
+#  credential material to clean up.
+#
 #  ── AND ONE THING IT WILL NEVER DO ──────────────────────────────────
 #  It does not drop, truncate or recreate anything. If the target is not
 #  empty, that is the operator's problem to resolve deliberately — a restore
@@ -23,6 +30,12 @@
 #  in the repository.
 # ════════════════════════════════════════════════════════════════════
 set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+#  Every psql call goes through the launcher, so no connection string ever
+#  reaches a process argument. TARGET is exported once, under the name the
+#  launcher reads, and the launcher removes it from psql's own environment.
+PG() { node "$HERE/pg-launch.js" --url-env RESTORE_TARGET_URL psql "$@"; }
 
 SCHEMA=""
 LEDGER=""
@@ -83,6 +96,9 @@ if [ -z "$TARGET" ]; then
 fi
 
 command -v psql >/dev/null 2>&1 || { fail "psql is not on PATH. Install the PostgreSQL client tools."; exit 2; }
+command -v node >/dev/null 2>&1 || { fail "node is not on PATH. It launches psql without putting credentials in the process list."; exit 2; }
+
+export RESTORE_TARGET_URL="$TARGET"
 
 redact() {
   local url="${TARGET:-}"
@@ -93,7 +109,7 @@ redact() {
 
 # ── CONNECT AND LOOK BEFORE WRITING ─────────────────────────────────
 PROBE_ERR="$(mktemp "${TMPDIR:-/tmp}/restore-probe.XXXXXX")"
-DB_NAME="$(psql -X -t -A -c "select current_database()" "$TARGET" 2>"$PROBE_ERR" | tr -d '[:space:]')"
+DB_NAME="$(PG -X -t -A -c "select current_database()" 2>"$PROBE_ERR" | tr -d '[:space:]')"
 if [ -z "$DB_NAME" ]; then
   redact < "$PROBE_ERR" >&2; rm -f "$PROBE_ERR"
   fail "Could not connect to the target database."
@@ -117,10 +133,10 @@ case "$(printf '%s' "$DB_NAME" | tr '[:upper:]' '[:lower:]')" in
 esac
 
 # ── REFUSAL 3: A TARGET THAT ALREADY HAS TABLES ─────────────────────
-EXISTING="$(psql -X -t -A -c "
+EXISTING="$(PG -X -t -A -c "
   select count(*) from information_schema.tables
    where table_schema not in ('pg_catalog','information_schema')
-     and table_type = 'BASE TABLE'" "$TARGET" 2>"$PROBE_ERR" | tr -d '[:space:]')"
+     and table_type = 'BASE TABLE'" 2>"$PROBE_ERR" | tr -d '[:space:]')"
 if [ -z "$EXISTING" ]; then
   redact < "$PROBE_ERR" >&2; rm -f "$PROBE_ERR"
   fail "Could not inspect the target database."
@@ -153,7 +169,7 @@ RUN_ERR="$(mktemp "${TMPDIR:-/tmp}/restore-run.XXXXXX")"
 #  The ledger is a table the schema dump creates. Loading its rows first would
 #  fail on a table that does not exist yet.
 say "  → schema…"
-if ! psql -X -v ON_ERROR_STOP=1 -q -f "$SCHEMA" "$TARGET" >/dev/null 2>"$RUN_ERR"; then
+if ! PG -X -v ON_ERROR_STOP=1 -q -f "$SCHEMA" >/dev/null 2>"$RUN_ERR"; then
   say ""
   fail "The schema restore failed. The target is left exactly as psql left it —"
   say  "    nothing was rolled back or cleaned up, because guessing which half to"
@@ -167,7 +183,7 @@ fi
 say "    ✓ schema restored"
 
 say "  → migration ledger…"
-if ! psql -X -v ON_ERROR_STOP=1 -q -f "$LEDGER" "$TARGET" >/dev/null 2>"$RUN_ERR"; then
+if ! PG -X -v ON_ERROR_STOP=1 -q -f "$LEDGER" >/dev/null 2>"$RUN_ERR"; then
   say ""
   fail "The ledger restore failed. The schema IS loaded and the ledger is NOT."
   say  "    Do not run migrations against this database — the runner would treat"
@@ -181,7 +197,7 @@ fi
 say "    ✓ ledger restored"
 rm -f "$RUN_ERR"
 
-LEDGER_ROWS="$(psql -X -t -A -c "select count(*) from public.schema_migrations" "$TARGET" 2>/dev/null | tr -d '[:space:]')"
+LEDGER_ROWS="$(PG -X -t -A -c "select count(*) from public.schema_migrations" 2>/dev/null | tr -d '[:space:]')"
 say ""
 say "  ── DONE ──────────────────────────────────────────────────────"
 say "     $DB_NAME now carries the baseline schema and ${LEDGER_ROWS:-?} ledger row(s)."

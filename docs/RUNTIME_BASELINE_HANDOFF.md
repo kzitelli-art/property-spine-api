@@ -30,7 +30,8 @@ owner runs export script
   The export script produces them together and deletes both if either fails.
   Two files from two different moments describe a database that never existed.
 - **Artifacts must never be committed.** `runtime-proof-artifacts/` is
-  git-ignored. Transfer them out of band.
+  git-ignored. Transfer them out of band. No credential is ever written there,
+  or anywhere else on disk.
 - **This does not repair migrations 001–087.** The historical chain is
   untouched. The baseline is a way to work *around* it, not a fix for it.
 - **This does not make Builds 1–6B live.** Restoring a baseline and applying
@@ -74,13 +75,29 @@ developer works entirely from a disposable database of their own.
   because an argument lands in your shell history.
 - It will not connect to anything until you run it.
 
-### One residual exposure, stated plainly
+### The connection string never reaches a process argument
 
-`pg_dump` takes the connection string as an argument, so while it runs it is
-briefly visible in the process list to anyone who can read it on that machine.
-That is a property of `pg_dump`, not something the script can hide. On a
-personal machine it does not matter. On a shared one, export from somewhere
-else.
+`pg_dump` and `psql` are launched through `scripts/runtime-proof/pg-launch.js`,
+which parses the connection string and starts the tool with libpq environment
+variables — `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`,
+`PGSSLMODE` — and **no URL in its arguments**.
+
+This matters because on Linux `/proc/<pid>/cmdline` is world-readable: a URL
+passed as an argument is visible to every user on the machine for as long as
+the dump runs, and a schema dump of a real database is not a short command.
+`/proc/<pid>/environ` is not world-readable — it is restricted to the process
+owner and root.
+
+**The exposure is narrowed, not eliminated.** Root, and other processes running
+as you, can still read the environment. What is gone is the world-readable
+window.
+
+The launcher also removes `DATABASE_URL` from the tool's own environment, so
+the secret exists in one place and one shape. It writes nothing — no `.pgpass`,
+no service file, no temporary credential of any kind — so there is nothing to
+clean up on success, on failure, or on an interrupt. The scratch files that
+capture a tool's error output are removed by a `trap` on `EXIT`, `INT` and
+`TERM`.
 
 ### About the safety warnings
 
@@ -213,6 +230,7 @@ runner.
 | `scripts/runtime-proof/restore-baseline.sh` | restore into a disposable database |
 | `scripts/runtime-proof/verify-baseline.js` | read-only verifier, console + JSON |
 | `scripts/runtime-proof/apply-pending-build-migrations.sh` | verify, then hand off to the repo's runner |
+| `scripts/runtime-proof/pg-launch.js` | runs pg_dump/psql with libpq env vars, never a URL in argv |
 | `scripts/runtime-proof/inspect-artifacts.js` | checksums and safety scan, standalone |
 | `scripts/runtime-proof/baseline_scan.js` | pure scanner — the shapes it looks for |
 | `scripts/runtime-proof/baseline_analysis.js` | pure analysis — the verdicts, testable |

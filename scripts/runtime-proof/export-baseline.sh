@@ -15,12 +15,19 @@
 #    · it will not accept a connection string as a command-line argument
 #    · it will not connect to anything until you run it
 #
-#  ── ONE RESIDUAL EXPOSURE, STATED PLAINLY ───────────────────────────
-#  pg_dump takes the connection string as an argument, so on a shared machine
-#  it is briefly visible in the process list to anyone who can read it. That
-#  is a property of pg_dump, not something this script can hide. On a personal
-#  machine it does not matter. On a shared one, export from somewhere else.
-#  It is stated here rather than left for you to discover.
+#  ── THE CONNECTION STRING IS NEVER IN A PROCESS ARGUMENT ────────────
+#  pg_dump and psql are launched through pg-launch.js, which translates the
+#  connection string into PGHOST / PGPORT / PGDATABASE / PGUSER / PGPASSWORD /
+#  PGSSLMODE and starts the tool with no URL in its arguments.
+#
+#  This matters because /proc/<pid>/cmdline is world-readable on Linux, so a
+#  URL passed as an argument is visible to every user on the machine for as
+#  long as the dump runs. /proc/<pid>/environ is not — it is restricted to the
+#  process owner and root. The exposure is narrowed to the owner's own account,
+#  not eliminated: root can still read it. Said plainly rather than glossed.
+#
+#  Nothing is written to hold the credential — no password file, no service
+#  file — so there is no temporary credential material to clean up.
 #
 #  ── ATOMICITY ───────────────────────────────────────────────────────
 #  Both dumps come from ONE invocation. If either fails, BOTH partial outputs
@@ -96,6 +103,13 @@ SCHEMA_FILE="$OUT_DIR/spine_schema_baseline.sql"
 LEDGER_FILE="$OUT_DIR/spine_schema_migrations.sql"
 MANIFEST_FILE="$OUT_DIR/manifest.txt"
 STDERR_LOG="$(mktemp "${TMPDIR:-/tmp}/export-baseline.XXXXXX")"
+INSPECT_ERR=""
+
+#  Scratch files hold whatever a PostgreSQL tool wrote to stderr. With the
+#  connection string out of the tools' arguments there is far less for them to
+#  quote back, but the guarantee should not depend on that: this removes them
+#  on success, on failure and on an interrupt alike.
+trap 'rm -f "$STDERR_LOG" "$INSPECT_ERR" 2>/dev/null || true' EXIT INT TERM
 
 # ── REDACTION ───────────────────────────────────────────────────────
 #  pg_dump errors quote the connection string back at you. Everything it
@@ -131,8 +145,8 @@ say ""
 
 # ── 1. SCHEMA ONLY ──────────────────────────────────────────────────
 say "  → schema (schema-only, no owner, no privileges)…"
-if ! pg_dump --schema-only --no-owner --no-privileges --no-acl \
-      "$DATABASE_URL" > "$SCHEMA_FILE" 2>"$STDERR_LOG"; then
+if ! node "$HERE/pg-launch.js" pg_dump --schema-only --no-owner --no-privileges --no-acl \
+      > "$SCHEMA_FILE" 2>"$STDERR_LOG"; then
   redact < "$STDERR_LOG" >&2
   abort "The schema export failed."
 fi
@@ -141,9 +155,9 @@ say "    ✓ $(basename "$SCHEMA_FILE")"
 
 # ── 2. THE MIGRATION LEDGER, AND NOTHING ELSE ───────────────────────
 say "  → migration ledger (public.schema_migrations rows only)…"
-if ! pg_dump --data-only --table=public.schema_migrations --column-inserts \
-      --no-owner --no-privileges --no-acl \
-      "$DATABASE_URL" > "$LEDGER_FILE" 2>"$STDERR_LOG"; then
+if ! node "$HERE/pg-launch.js" pg_dump --data-only --table=public.schema_migrations \
+      --column-inserts --no-owner --no-privileges --no-acl \
+      > "$LEDGER_FILE" 2>"$STDERR_LOG"; then
   redact < "$STDERR_LOG" >&2
   abort "The migration-ledger export failed."
 fi
@@ -166,9 +180,9 @@ eval "$INSPECT_OUT"
 SERVER_VERSION="unavailable (psql not on PATH)"
 DATABASE_NAME="unavailable (psql not on PATH)"
 if command -v psql >/dev/null 2>&1; then
-  SERVER_VERSION="$(psql -X -t -A -c "show server_version" "$DATABASE_URL" 2>/dev/null | tr -d '[:space:]')"
+  SERVER_VERSION="$(node "$HERE/pg-launch.js" psql -X -t -A -c "show server_version" 2>/dev/null | tr -d '[:space:]')"
   [ -n "$SERVER_VERSION" ] || SERVER_VERSION="unavailable"
-  DATABASE_NAME="$(psql -X -t -A -c "select current_database()" "$DATABASE_URL" 2>/dev/null | tr -d '[:space:]')"
+  DATABASE_NAME="$(node "$HERE/pg-launch.js" psql -X -t -A -c "select current_database()" 2>/dev/null | tr -d '[:space:]')"
   [ -n "$DATABASE_NAME" ] || DATABASE_NAME="unavailable"
 fi
 
@@ -212,7 +226,9 @@ one database, at the time above. They are only meaningful together.
 The schema file contains no table data. The ledger file contains rows from
 public.schema_migrations and no other table.
 
-No connection string appears in this manifest or in either artifact.
+No connection string appears in this manifest or in either artifact, and none
+was passed as an argument to pg_dump or psql — they were launched with libpq
+environment variables instead, so nothing appeared in the process list.
 
 The inspection is a BASIC AID. A warning count of zero means none of a small
 set of known shapes were found. It does not prove the artifacts are free of

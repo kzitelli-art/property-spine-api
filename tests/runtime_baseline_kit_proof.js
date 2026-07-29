@@ -104,6 +104,9 @@ function stubDir({ pgDumpMode = "ok", psqlValues = {} } = {}) {
 
   fs.writeFileSync(path.join(dir, "pg_dump"), `#!/usr/bin/env bash
 echo "pg_dump $*" >> "${log}"
+# Record the libpq environment the launcher handed over, so the harness can
+# prove the connection reached the tool as PG* values and not as an argument.
+{ echo "ENV pg_dump PGHOST=\${PGHOST:-} PGPORT=\${PGPORT:-} PGDATABASE=\${PGDATABASE:-} PGUSER=\${PGUSER:-} PGSSLMODE=\${PGSSLMODE:-} PGPASSWORD_SET=\$([ -n "\${PGPASSWORD:-}" ] && echo yes || echo no) DATABASE_URL_SET=\$([ -n "\${DATABASE_URL:-}" ] && echo yes || echo no)"; } >> "${log}"
 case "${pgDumpMode}" in
   ok)
     if [[ "$*" == *"--data-only"* ]]; then cat "${CLEAN_LEDGER_F}"; else cat "${CLEAN_SCHEMA_F}"; fi
@@ -130,6 +133,7 @@ esac
 
   fs.writeFileSync(path.join(dir, "psql"), `#!/usr/bin/env bash
 echo "psql $*" >> "${log}"
+{ echo "ENV psql PGHOST=\${PGHOST:-} PGDATABASE=\${PGDATABASE:-} PGUSER=\${PGUSER:-} PGPASSWORD_SET=\$([ -n "\${PGPASSWORD:-}" ] && echo yes || echo no) TARGET_URL_SET=\$([ -n "\${TARGET_DATABASE_URL:-}\${RESTORE_TARGET_URL:-}" ] && echo yes || echo no)"; } >> "${log}"
 ARGS="$*"
 if [[ "$ARGS" == *"show server_version"* ]]; then echo "${v.server_version}"; exit 0; fi
 if [[ "$ARGS" == *"current_database"* ]];  then echo "${v.current_database}"; exit 0; fi
@@ -214,7 +218,10 @@ section("2  credentials are never printed, written, or accepted as an argument")
   const oF = OUT();
   const rF = run("export-baseline.sh", ["--out-dir", oF.dir], { env: { DATABASE_URL: FAKE_URL }, bin: binF });
   ok("a failing export does not leak the password in its error", !rF.all.includes(SECRET));
-  ok("and the leaked string is visibly redacted", /redacted/i.test(rF.all));
+  ok("nor any connection string", !rF.all.includes(FAKE_URL));
+  // The tool's own diagnostic still reaches the operator — the failure is
+  // reported, not swallowed.
+  ok("the tool's own error still surfaces", /pg_dump: error/.test(rF.all), rF.all.slice(-300));
 
   // Refuses a connection string on the command line.
   const rArg = run("export-baseline.sh", [FAKE_URL], { env: { DATABASE_URL: FAKE_URL }, bin });
@@ -582,7 +589,211 @@ section("11  the documentation states the boundaries");
 }
 
 // ════════════════════════════════════════════════════════════════════
-section("12  LIVE — the scripts against a real, disposable PostgreSQL");
+section("12  no connection string ever reaches a process argument");
+{
+  const L = require("path").join(KIT, "pg-launch.js");
+  const LSRC = fs.readFileSync(L, "utf8");
+
+  // ── the launcher itself ───────────────────────────────────────────
+  const probe = fs.mkdtempSync(path.join(TMP, "launch-"));
+  const plog = path.join(probe, "argv.log");
+  fs.writeFileSync(path.join(probe, "pg_dump"), `#!/usr/bin/env bash
+printf '%s\\n' "ARGV: $*" > "${plog}"
+{ echo "PGHOST=\${PGHOST:-}"; echo "PGPORT=\${PGPORT:-}"; echo "PGDATABASE=\${PGDATABASE:-}";
+  echo "PGUSER=\${PGUSER:-}"; echo "PGPASSWORD=\${PGPASSWORD:-}"; echo "PGSSLMODE=\${PGSSLMODE:-}";
+  echo "DATABASE_URL=\${DATABASE_URL:-<unset>}"; } >> "${plog}"
+echo "dump body"
+exit 0
+`, { mode: 0o755 });
+
+  const lr = spawnSync("node", [L, "pg_dump", "--schema-only"], {
+    env: Object.assign({}, process.env, {
+      PATH: probe + path.delimiter + process.env.PATH,
+      DATABASE_URL: FAKE_URL,
+    }), encoding: "utf8",
+  });
+  ok("the launcher runs the tool", lr.status === 0, (lr.stdout || "") + (lr.stderr || ""));
+  ok("stdout passes through byte-for-byte", (lr.stdout || "").trim() === "dump body", JSON.stringify(lr.stdout));
+
+  const seen = fs.readFileSync(plog, "utf8");
+  ok("the tool's ARGV contains no connection string", !/ARGV:.*:\/\//.test(seen), seen.split("\n")[0]);
+  ok("the tool's ARGV contains no password", !seen.split("\n")[0].includes(SECRET));
+  ok("the tool's ARGV is exactly what the caller asked for",
+     seen.split("\n")[0] === "ARGV: --schema-only", seen.split("\n")[0]);
+
+  ok("PGHOST was set from the url", /PGHOST=db\.example\.invalid/.test(seen));
+  ok("PGPORT was set from the url", /PGPORT=5432/.test(seen));
+  ok("PGDATABASE was set from the url", /PGDATABASE=synthetic_db/.test(seen));
+  ok("PGUSER was set from the url", /PGUSER=spine_export_user/.test(seen));
+  ok("PGPASSWORD was set from the url", new RegExp("PGPASSWORD=" + SECRET).test(seen));
+  ok("PGSSLMODE was carried across", /PGSSLMODE=require/.test(seen));
+  ok("DATABASE_URL was REMOVED from the child environment",
+     /DATABASE_URL=<unset>/.test(seen), seen);
+
+  // ── it refuses a url in its own arguments ─────────────────────────
+  const lrArg = spawnSync("node", [L, "pg_dump", FAKE_URL], {
+    env: Object.assign({}, process.env, { PATH: probe + path.delimiter + process.env.PATH, DATABASE_URL: FAKE_URL }),
+    encoding: "utf8",
+  });
+  ok("a url in the launcher's own arguments is refused", lrArg.status !== 0);
+  ok("and the refusal says arguments are world-readable",
+     /world-readable in the process list/.test((lrArg.stdout || "") + (lrArg.stderr || "")));
+  ok("the refusal does not echo the password", !((lrArg.stdout || "") + (lrArg.stderr || "")).includes(SECRET));
+
+  // ── percent-encoded credentials and unix sockets ──────────────────
+  fs.writeFileSync(path.join(probe, "psql"), `#!/usr/bin/env bash
+printf '%s\\n' "ARGV: $*" > "${plog}"
+{ echo "PGHOST=\${PGHOST:-}"; echo "PGUSER=\${PGUSER:-}"; echo "PGPASSWORD=\${PGPASSWORD:-}"; echo "PGPORT=\${PGPORT:-}"; } >> "${plog}"
+exit 0
+`, { mode: 0o755 });
+  spawnSync("node", [L, "--url-env", "ALT_URL", "psql", "-c", "select 1"], {
+    env: Object.assign({}, process.env, {
+      PATH: probe + path.delimiter + process.env.PATH,
+      ALT_URL: "postgresql://a%40b:p%3Fss%40word@/mydb?host=/var/run/postgresql&port=55432",
+    }), encoding: "utf8",
+  });
+  const seen2 = fs.readFileSync(plog, "utf8");
+  ok("a percent-encoded user is decoded", /PGUSER=a@b/.test(seen2), seen2);
+  ok("a percent-encoded password is decoded", /PGPASSWORD=p\?ss@word/.test(seen2), seen2);
+  ok("a unix-socket host query parameter is honoured", /PGHOST=\/var\/run\/postgresql/.test(seen2));
+  ok("a port query parameter is honoured", /PGPORT=55432/.test(seen2));
+  ok("and still no url in argv", !/ARGV:.*:\/\//.test(seen2));
+
+  // ── a libpq keyword string, not a url ─────────────────────────────
+  spawnSync("node", [L, "--url-env", "ALT_URL", "psql", "-c", "select 1"], {
+    env: Object.assign({}, process.env, {
+      PATH: probe + path.delimiter + process.env.PATH,
+      ALT_URL: "host=kw.example.invalid dbname=kwdb user=kwuser password=kwsecret",
+    }), encoding: "utf8",
+  });
+  const seen3 = fs.readFileSync(plog, "utf8");
+  ok("a libpq keyword string is understood too", /PGHOST=kw\.example\.invalid/.test(seen3) && /PGUSER=kwuser/.test(seen3));
+
+  // ── an unparseable value is refused WITHOUT quoting it back ───────
+  const bad = spawnSync("node", [L, "--url-env", "ALT_URL", "psql"], {
+    env: Object.assign({}, process.env, { PATH: probe + path.delimiter + process.env.PATH, ALT_URL: "!!!" + SECRET }),
+    encoding: "utf8",
+  });
+  const badAll = (bad.stdout || "") + (bad.stderr || "");
+  ok("an unusable connection string is refused", bad.status !== 0);
+  ok("and the value is NOT echoed back", !badAll.includes(SECRET), badAll.slice(0, 200));
+  ok("it says so explicitly", /value is not shown/i.test(badAll));
+
+  // ── a tool failure still returns a useful, redacted error ─────────
+  fs.writeFileSync(path.join(probe, "pg_dump"), `#!/usr/bin/env bash
+echo "pg_dump: error: connection to server at \\"db.example.invalid\\" failed: FATAL: role does not exist" >&2
+echo "pg_dump: detail: using ${FAKE_URL}" >&2
+exit 1
+`, { mode: 0o755 });
+  const lf = spawnSync("node", [L, "pg_dump", "--schema-only"], {
+    env: Object.assign({}, process.env, { PATH: probe + path.delimiter + process.env.PATH, DATABASE_URL: FAKE_URL }),
+    encoding: "utf8",
+  });
+  const lfAll = (lf.stdout || "") + (lf.stderr || "");
+  ok("a tool failure propagates its exit code", lf.status === 1, String(lf.status));
+  ok("the tool's own diagnostic survives", /role does not exist/.test(lfAll), lfAll.slice(0, 200));
+  ok("but the leaked url is redacted", !lfAll.includes(FAKE_URL) && !lfAll.includes(SECRET));
+  ok("and the redaction is visible", /redacted/.test(lfAll));
+
+  // ── the scripts use it, and pass no url to pg_dump or psql ────────
+  const ESRC = fs.readFileSync(path.join(KIT, "export-baseline.sh"), "utf8");
+  const RSRC = fs.readFileSync(path.join(KIT, "restore-baseline.sh"), "utf8");
+  ok("the export script launches pg_dump through it", /pg-launch\.js" pg_dump/.test(ESRC));
+  ok("the export script launches psql through it", /pg-launch\.js" psql/.test(ESRC));
+  ok("the export script never passes a url to pg_dump", !/pg_dump[^\n|]*\$DATABASE_URL/.test(ESRC));
+  ok("the export script never passes a url to psql", !/\bpsql\b[^\n|]*\$DATABASE_URL/.test(ESRC));
+  ok("the restore script launches psql through it", /pg-launch\.js" --url-env \w+ psql/.test(RSRC));
+  ok("the restore script never passes a url to psql", !/\bpsql\b[^\n|]*"\$TARGET"/.test(RSRC));
+
+  // ── end to end with the stubs: the log proves the argv ────────────
+  const bin = stubDir();
+  const o = OUT();
+  const r = run("export-baseline.sh", ["--out-dir", o.dir], { env: { DATABASE_URL: FAKE_URL }, bin });
+  ok("the export still succeeds", r.code === 0, r.all.slice(-300));
+  const log = fs.readFileSync(bin.log, "utf8");
+  ok("no spawned command argument contains a connection string", !/^(pg_dump|psql) .*:\/\//m.test(log), log.slice(0, 300));
+  ok("no spawned command argument contains the password", !log.split("\n").filter((l) => /^(pg_dump|psql) /.test(l)).join("\n").includes(SECRET));
+  ok("pg_dump received PGHOST instead", /ENV pg_dump .*PGHOST=db\.example\.invalid/.test(log));
+  ok("pg_dump received the password by environment", /ENV pg_dump .*PGPASSWORD_SET=yes/.test(log));
+  ok("and DATABASE_URL was not in its environment", /ENV pg_dump .*DATABASE_URL_SET=no/.test(log));
+  ok("psql likewise saw no target url", !/ENV psql .*TARGET_URL_SET=yes/.test(log));
+
+  // ── NO TEMPORARY CREDENTIAL MATERIAL, ON SUCCESS OR FAILURE ───────
+  //  The launcher writes no password file, no .pgpass and no service file, so
+  //  there is nothing to leave behind. Proven by looking, not by asserting the
+  //  absence of code that writes one.
+  //  Looks at files the KIT could have created, not at the harness's own
+  //  scaffolding — this harness necessarily holds the test secret in its own
+  //  source and in the stub binaries it writes, and finding those would prove
+  //  nothing. The scan covers the kit's mktemp patterns, the artifact
+  //  directory, and any export output directory.
+  const KIT_TEMP = /^(export-baseline|export-inspect|restore-probe|restore-run|baseline-report)\./;
+  const holdsSecret = (p) => {
+    try {
+      const st = fs.statSync(p);
+      if (!st.isFile() || st.size > 4 * 1024 * 1024) return false;
+      return fs.readFileSync(p, "utf8").includes(SECRET);
+    } catch (_) { return false; }
+  };
+  const kitResidue = (outDirs) => {
+    const hits = [];
+    const tmp = os.tmpdir();
+    for (const f of fs.readdirSync(tmp)) {
+      if (KIT_TEMP.test(f) && holdsSecret(path.join(tmp, f))) hits.push(path.join(tmp, f));
+    }
+    for (const d of [path.join(REPO, "runtime-proof-artifacts"), ...outDirs]) {
+      let entries = [];
+      try { entries = fs.readdirSync(d); } catch (_) { continue; }
+      for (const f of entries) if (holdsSecret(path.join(d, f))) hits.push(path.join(d, f));
+    }
+    for (const home of [path.join(os.homedir(), ".pgpass"), path.join(os.homedir(), ".pg_service.conf")]) {
+      if (holdsSecret(home)) hits.push(home);
+    }
+    return hits;
+  };
+
+  ok("after a SUCCESSFUL export, no kit-created file holds the secret",
+     kitResidue([o.dir]).length === 0, kitResidue([o.dir]).join(","));
+  ok("no scratch file was left in TMPDIR at all",
+     fs.readdirSync(os.tmpdir()).filter((f) => KIT_TEMP.test(f)).length === 0,
+     fs.readdirSync(os.tmpdir()).filter((f) => KIT_TEMP.test(f)).join(","));
+  ok("no .pgpass was created", !fs.existsSync(path.join(os.homedir(), ".pgpass")) ||
+     !fs.readFileSync(path.join(os.homedir(), ".pgpass"), "utf8").includes(SECRET));
+  ok("no service file was created", !fs.existsSync(path.join(os.homedir(), ".pg_service.conf")));
+
+  const binF = stubDir({ pgDumpMode: "fail-ledger" });
+  const oF = OUT();
+  const rF2 = run("export-baseline.sh", ["--out-dir", oF.dir], { env: { DATABASE_URL: FAKE_URL }, bin: binF });
+  ok("a FAILED export exits non-zero", rF2.code !== 0);
+  ok("after a FAILED export, no kit-created file holds the secret",
+     kitResidue([oF.dir]).length === 0, kitResidue([oF.dir]).join(","));
+  ok("and its scratch files were removed too",
+     fs.readdirSync(os.tmpdir()).filter((f) => KIT_TEMP.test(f)).length === 0,
+     fs.readdirSync(os.tmpdir()).filter((f) => KIT_TEMP.test(f)).join(","));
+  ok("the export script removes scratch files on EXIT, INT and TERM alike",
+     /trap '[^']*rm -f "\$STDERR_LOG"[^']*' EXIT INT TERM/.test(
+       fs.readFileSync(path.join(KIT, "export-baseline.sh"), "utf8")));
+
+  //  The strongest form of "cleaned up" is "never written". Asserted against
+  //  the source so a future change cannot quietly introduce a credential file.
+  ok("the launcher writes no file at all",
+     !/writeFileSync|createWriteStream|appendFileSync|mkdtempSync/.test(LSRC));
+  const LCODE = LSRC.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+  //  PGPASSWORD is the whole point, so the check is for the FILE-based forms.
+  //  PGPASSWORD is the whole mechanism, so the check targets the FILE-based
+  //  forms only — and needs the word boundary, or `out.PGPASSWORD` matches
+  //  `.pgpass` and the assertion fails on the very line that makes it true.
+  const FILE_CRED = /\.pgpass\b|PGPASSFILE|pg_service\b|PGSERVICEFILE/i;
+  ok("it creates no password file and no service file",
+     !FILE_CRED.test(LCODE), (LCODE.match(new RegExp(".*" + FILE_CRED.source + ".*", "i")) || [""])[0]);
+  ok("it never prints a parsed credential",
+     !/console\.log\(.*PGPASSWORD|process\.stdout\.write\(.*PGPASSWORD/.test(LSRC));
+  ok("its diagnostic object redacts the password",
+     /PGPASSWORD["']?\s*\|\|[^)]*\)\s*\?\s*"<redacted>"|k === "PGPASSWORD"/.test(LSRC));
+}
+
+// ════════════════════════════════════════════════════════════════════
+section("13  LIVE — the scripts against a real, disposable PostgreSQL");
 //
 //  Optional, and VISIBLY SKIPPED when it cannot run rather than quietly
 //  counted as green. Set KIT_PROOF_ADMIN_URL to a superuser connection on a
