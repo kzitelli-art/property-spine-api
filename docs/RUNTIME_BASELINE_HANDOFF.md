@@ -177,14 +177,14 @@ Read-only. It opens a `read only` transaction and issues no `CREATE`, `ALTER`,
 `INSERT`, `UPDATE` or `DELETE` anywhere.
 
 1. **The migration ledger** — every identifier, the highest, duplicates, gaps,
-   and whether 112–117 are recorded. A gap is reported, not judged: a
+   and whether 112–118 are recorded. A gap is reported, not judged: a
    migration withdrawn before it ever ran leaves one legitimately.
-2. **Required foundations** — the tables and columns migrations 112–117
+2. **Required foundations** — the tables and columns migrations 112–118
    reference directly (`properties`, `units`, `spaces`, `leases`, `users`,
    `persons`, `property_team_assignments`, `staff_sessions`, `unit_events`,
    `events`, `obligations`, `turnovers`, `schema_migrations`), plus
    `gen_random_uuid()`.
-3. **Ledger-to-object agreement for 112–117**, one verdict each:
+3. **Ledger-to-object agreement for 112–118**, one verdict each:
 
    | verdict | meaning |
    |---|---|
@@ -192,6 +192,12 @@ Read-only. It opens a `read only` transaction and issues no `CREATE`, `ALTER`,
    | `pending` | neither — it simply has not run yet |
    | `recorded_without_objects` | the ledger says it ran and its objects are absent. **The runner would skip it forever.** |
    | `objects_without_ledger` | its objects exist and the ledger does not say so. **The runner would try it again.** |
+
+   **118 is provisional.** The unit-turn closure slice writes
+   `118_work_proof_attachments.sql` on the product branch, and that number is
+   correct only if the live ledger's ceiling really is 117. A collision at 118
+   is reported like any other and must be resolved by renumbering the product
+   branch — never by working around it here.
 
    Both mismatches are silent failures in opposite directions. **Neither is
    repaired automatically.** Which side is wrong is a fact about the source
@@ -206,7 +212,7 @@ Exit codes: `0` everything agreed · `1` a disagreement a human must resolve ·
 ### What the pending runner refuses
 
 - Any verifier failure.
-- Any collision touching 112–117. **Renumbering is never automatic** — the
+- Any collision touching 112–118. **Renumbering is never automatic** — the
   ledger is how this system remembers what it did.
 - Anything pending outside Builds 1–5. The repository's runner applies *every*
   pending migration in the folder; there is no supported way to ask it for a

@@ -24,7 +24,9 @@
 //  created — a migration that only ALTERs leaves no new table to look for, so
 //  its added columns are its signature.
 //
-//  Read off the migration files at the infrastructure-discovery checkpoint.
+//  Read off the migration files at the infrastructure-discovery checkpoint,
+//  plus the closure slice's 118. The kit tracks what the PRODUCT branch
+//  contains; it does not carry the migration itself.
 //  If a migration file changes, this list must change with it; the verifier
 //  cross-checks the numbers against the folder so a divergence is visible.
 const BUILD_MIGRATIONS = Object.freeze([
@@ -63,6 +65,16 @@ const BUILD_MIGRATIONS = Object.freeze([
   {
     version: "117", label: "staff_agent_capture", build: "BUILD 5",
     tables: ["staff_agent_threads", "staff_agent_messages", "staff_agent_proposals"],
+    columns: [],
+  },
+  {
+    //  The unit-turn CLOSURE SLICE: one completion photo, tied to one work
+    //  item. Its number is PROVISIONAL in the product branch — it is 118 only
+    //  if the live ledger's ceiling really is 117. That is exactly what this
+    //  verifier establishes, and a collision at 118 is reported like any other
+    //  rather than worked around.
+    version: "118", label: "work_proof_attachments", build: "CLOSURE SLICE",
+    tables: ["work_proof_attachments"],
     columns: [],
   },
 ]);

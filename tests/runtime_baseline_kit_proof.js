@@ -403,7 +403,7 @@ section("7  the verifier detects ledger/object disagreement");
 
   // NEITHER — genuinely pending, and that is not an error.
   const d = A.analyseBuildMigrations({ ledgerRows: [], tables: present, columnsByTable: {} });
-  ok("neither recorded nor present is 'pending'", d.pending.length === 6, d.pending.join(","));
+  ok("neither recorded nor present is 'pending'", d.pending.length === 7, d.pending.join(","));
   ok("and pending is NOT a disagreement", d.agrees === true);
 
   // A label mismatch is reported without being escalated.
@@ -473,7 +473,25 @@ section("8  the verifier detects a migration-number collision");
      JSON.stringify(g.number_already_spent.concat(g.duplicate_files)));
 
   const p = A.analysePendingApplication({ ledgerRows: upTo111, migrationFiles: real });
-  ok("exactly the six Build migrations would be pending", p.pending_build.length === 6, p.pending_build.join(","));
+  //  The kit branch carries 112-117; the closure slice's 118 lives on the
+  //  PRODUCT branch. The analysis module tracks seven so the verifier
+  //  recognises 118 when it meets it; this folder has six, and the pending
+  //  report describes the folder it was given.
+  ok("every Build migration in THIS folder would be pending",
+     p.pending_build.length === real.filter((x) => Number(x.slice(0, 3)) >= 112).length,
+     p.pending_build.join(","));
+  ok("and the analysis module tracks 112-118, so 118 is recognised when present",
+     A.BUILD_MIGRATIONS.map((m) => m.version).join(",") === "112,113,114,115,116,117,118",
+     A.BUILD_MIGRATIONS.map((m) => m.version).join(","));
+  ok("118 is labelled as the closure slice",
+     A.BUILD_MIGRATIONS.find((m) => m.version === "118").tables[0] === "work_proof_attachments");
+  //  A collision at 118 is reported, not worked around.
+  const c118 = A.analyseCollisions({
+    ledgerRows: [{ version: "118", name: "something_else" }],
+    migrationFiles: real.concat(["118_work_proof_attachments.sql"]),
+  });
+  ok("a live ledger already holding 118 is reported as a Build collision",
+     c118.build_collisions.length === 1, JSON.stringify(c118.build_collisions[0] || {}).slice(0, 90));
   ok("nothing outside Builds 1-5 would be pending", p.pending_other.length === 0, p.pending_other.join(","));
   ok("and that is reported as safe to run", p.safe_to_run === true);
 }
@@ -933,7 +951,7 @@ section("13  LIVE — the scripts against a real, disposable PostgreSQL");
        rep.foundations.missing_tables.includes("units"));
     ok("it does NOT claim schema_migrations is missing",
        !rep.foundations.missing_tables.includes("schema_migrations"));
-    ok("all six Build migrations read as pending", rep.build_migrations.pending.length === 6,
+    ok("all seven Build migrations read as pending", rep.build_migrations.pending.length === 7,
        rep.build_migrations.pending.join(","));
     ok("with no ledger/object disagreement", rep.build_migrations.agrees === true);
     ok("the synthetic ledger's names collide with the repository's files",

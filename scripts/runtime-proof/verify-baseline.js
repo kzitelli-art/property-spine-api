@@ -8,8 +8,8 @@
 //  Reads the restored database's catalog and reports four things:
 //
 //      1. the migration ledger — identifiers, highest, gaps, duplicates
-//      2. the foundations migrations 112-117 depend on
-//      3. ledger-to-object agreement for 112-117, one verdict each
+//      2. the foundations migrations 112-118 depend on
+//      3. ledger-to-object agreement for 112-118, one verdict each
 //      4. number collisions between the ledger and the migrations folder
 //
 //  ── IT READS. IT NEVER WRITES. ──────────────────────────────────────
@@ -223,7 +223,7 @@ function printSummary(r, fileCount) {
     if (r.ledger.gaps.length) {
       say("     (a gap is reported, not judged — a withdrawn migration leaves one legitimately)");
     }
-    say(`     112-117 recorded    : ${r.ledger.build_versions_recorded.length
+    say(`     112-118 recorded    : ${r.ledger.build_versions_recorded.length
       ? r.ledger.build_versions_recorded.join(", ") : "none"}`);
   }
 
@@ -242,7 +242,7 @@ function printSummary(r, fileCount) {
     say("     this baseline would fail partway, not cleanly.");
   }
 
-  head("LEDGER vs OBJECTS — MIGRATIONS 112-117");
+  head("LEDGER vs OBJECTS — MIGRATIONS 112-118");
   const VERDICT = {
     applied_and_recorded: "✓ applied and recorded",
     pending: "· pending — not recorded, objects absent",
@@ -280,7 +280,7 @@ function printSummary(r, fileCount) {
     }
     if (r.collisions.build_collisions.length) {
       say("");
-      say("     At least one collision touches 112-117. Renumbering is NOT done");
+      say("     At least one collision touches 112-118. Renumbering is NOT done");
       say("     automatically — stop and resolve it.");
     }
   }
