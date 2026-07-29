@@ -105,9 +105,40 @@ function proofRequirementFor(work) {
  * them — asking a tech for a completion photo of work they could not do would
  * be a form demanding a lie.
  */
-function evaluateProof(work, claim) {
+// ════════════════════════════════════════════════════════════════════
+//  A PHOTO IS A VERIFIED ATTACHMENT. A STRING IS NOT A PHOTO.
+//
+//  This module used to count `proof_photos.length`. That meant a single typed
+//  character — or a single space — closed work as proof-satisfied, because
+//  `filter(Boolean)` keeps " ". The work then read complete to the sequence
+//  engine, the readiness gate and the availability read, with no evidence
+//  behind it anywhere. That is the exact failure this build sequence exists to
+//  prevent: a confident wrong state nobody can see is wrong.
+//
+//  Photos now count ONLY if the caller has RESOLVED them against an
+//  attachment store and passes back the ones that actually exist and belong to
+//  this property. The caller is `work_acceptance_service.claimCompletion`, and
+//  it supplies `verified_photos` plus whether an attachment store exists at
+//  all. `proof_photos` is still recorded verbatim — the operator's input is
+//  history — but it is never counted.
+//
+//  FAIL CLOSED. With no attachment store, `verified_photos` is empty and
+//  `attachments_available` is false: photo-requiring work stays OPEN and says
+//  why. An open item is a true statement about a unit nobody has proven is
+//  finished. A closed one would be a false statement about the same unit.
+// ════════════════════════════════════════════════════════════════════
+const PHOTO_PROOF_UNAVAILABLE =
+  "Photo proof is unavailable in this build — there is no attachment store to " +
+  "verify a photo against, so this work stays open. Nothing has been recorded " +
+  "as proven.";
+
+function evaluateProof(work, claim, context) {
   const req = proofRequirementFor(work);
   const outcome = claim && claim.outcome;
+  //  Defaults are the SAFE ones. A caller that forgets to pass context gets
+  //  "no verified photos, no attachment store", never a free pass.
+  const ctx = context || {};
+  const attachmentsAvailable = ctx.attachments_available === true;
 
   if (outcome !== "completed") {
     return {
@@ -126,12 +157,26 @@ function evaluateProof(work, claim) {
     };
   }
 
-  const photos = Array.isArray(claim.proof_photos) ? claim.proof_photos.filter(Boolean) : [];
+  //  VERIFIED attachments only. Raw `proof_photos` is deliberately not read
+  //  here — a caller cannot satisfy proof by passing text.
+  //
+  //  And a caller that declares NO attachment store while handing over
+  //  "verified" references is contradicting itself. The two can only diverge
+  //  through a bug or a forged call, and both resolve the same way: no store,
+  //  nothing verified.
+  const verified = attachmentsAvailable && Array.isArray(claim.verified_photos)
+    ? claim.verified_photos.filter(Boolean)
+    : [];
   const confirmation = String((claim && claim.functional_confirmation) || "").trim();
   const missing = [];
 
-  if (photos.length < req.photos_min) {
-    missing.push(req.photos_min === 1 ? "a completion photo" : `${req.photos_min} photos`);
+  if (verified.length < req.photos_min) {
+    //  Say WHICH problem it is. "Add a photo" is wrong advice when adding one
+    //  is impossible; "photo proof is unavailable" is wrong when the operator
+    //  simply did not attach one.
+    missing.push(!attachmentsAvailable
+      ? "verified photo proof (unavailable in this build)"
+      : (req.photos_min === 1 ? "a completion photo" : `${req.photos_min} photos`));
   }
   // A confirmation must be a sentence, not a keystroke. Two characters is
   // somebody satisfying a gate, not somebody confirming a thing works.
@@ -139,9 +184,19 @@ function evaluateProof(work, claim) {
     missing.push("a short confirmation that it works");
   }
 
-  return missing.length
-    ? { satisfied: false, shortfall: `Missing ${missing.join(" and ")}.`, requirement: req }
-    : { satisfied: true, shortfall: null, requirement: req };
+  if (!missing.length) {
+    return { satisfied: true, shortfall: null, requirement: req, verified_photo_count: verified.length };
+  }
+  return {
+    satisfied: false,
+    shortfall: `Missing ${missing.join(" and ")}.`,
+    requirement: req,
+    verified_photo_count: verified.length,
+    //  Named separately so a surface can say the honest thing rather than
+    //  telling the operator to do something they cannot do.
+    photo_proof_unavailable: req.photos_min > 0 && !attachmentsAvailable,
+    unavailable_detail: req.photos_min > 0 && !attachmentsAvailable ? PHOTO_PROOF_UNAVAILABLE : null,
+  };
 }
 
 // Plain-language labels for the closed unable-to-complete vocabulary. The
@@ -184,6 +239,7 @@ const COMMITMENT_SOURCES = Object.freeze([
 ]);
 
 module.exports = {
+  PHOTO_PROOF_UNAVAILABLE,
   proofRequirementFor, evaluateProof,
   REQUIREMENTS, UNABLE_REASONS, UNABLE_REASON_VALUES, UNABLE_NEXT_ACTION,
   OUTCOMES, OUTCOME_VALUES, COMMITMENT_SOURCES,

@@ -54,29 +54,48 @@ section("C1  proof requirements are lightweight and stage-appropriate");
 section("C2  a claim without proof does NOT close the work");
 {
   const paint = W();
-  const bare = P.evaluateProof(paint, { outcome: "completed", proof_photos: [], functional_confirmation: null });
+  //  RELEASE CANDIDATE: a photo is a VERIFIED ATTACHMENT. `verified_photos`
+  //  are the references the service resolved against the attachment store;
+  //  `attachments_available` says whether a store exists at all. Both default
+  //  to the safe answer, so these cases state the store explicitly.
+  const STORE = { attachments_available: true };
+
+  const bare = P.evaluateProof(paint, { outcome: "completed", verified_photos: [], functional_confirmation: null }, STORE);
   ok("completed with no photo is NOT satisfied", bare.satisfied === false);
   ok("and names the shortfall", /completion photo/i.test(bare.shortfall), bare.shortfall);
 
-  const withPhoto = P.evaluateProof(paint, { outcome: "completed", proof_photos: ["p1"] });
-  ok("completed with a photo IS satisfied", withPhoto.satisfied === true, withPhoto.shortfall);
+  const withPhoto = P.evaluateProof(paint, { outcome: "completed", verified_photos: ["att-1"] }, STORE);
+  ok("completed with a VERIFIED attachment IS satisfied", withPhoto.satisfied === true, withPhoto.shortfall);
+
+  //  ── A STRING IS NOT A PHOTO ──────────────────────────────────────
+  //  The defect this replaced: `proof_photos` was counted, so one typed
+  //  character — or one space — closed the work.
+  for (const junk of [" ", "x", "photo.jpg", "3f2504e0-4f89-41d3-9a0c-0305e82c3301"]) {
+    ok(`typed ${JSON.stringify(junk)} does NOT satisfy proof`,
+       P.evaluateProof(paint, { outcome: "completed", proof_photos: [junk] }, STORE).satisfied === false);
+  }
+  //  And with no attachment store at all, nothing can satisfy it — fail closed.
+  const noStore = P.evaluateProof(paint, { outcome: "completed", verified_photos: ["att-1"] });
+  ok("with no attachment store, even a verified reference does not satisfy", noStore.satisfied === false);
+  ok("and it says photo proof is unavailable rather than asking for a photo",
+     noStore.photo_proof_unavailable === true && /unavailable/i.test(noStore.shortfall), noStore.shortfall);
 
   const appl = W({ work_text: "Source and install refrigerator", stage: STAGE.REPAIR });
-  const photoOnly = P.evaluateProof(appl, { outcome: "completed", proof_photos: ["p1"] });
+  const photoOnly = P.evaluateProof(appl, { outcome: "completed", verified_photos: ["att-1"] }, STORE);
   ok("appliance with photo but no confirmation is NOT satisfied", photoOnly.satisfied === false);
   ok("and names the missing confirmation", /works/i.test(photoOnly.shortfall), photoOnly.shortfall);
   ok("a two-character confirmation does not count",
-     P.evaluateProof(appl, { outcome: "completed", proof_photos: ["p1"], functional_confirmation: "ok" }).satisfied === false);
+     P.evaluateProof(appl, { outcome: "completed", verified_photos: ["att-1"], functional_confirmation: "ok" }, STORE).satisfied === false);
   ok("a real sentence does", P.evaluateProof(appl, {
-    outcome: "completed", proof_photos: ["p1"], functional_confirmation: "Installed and cooling." }).satisfied === true);
+    outcome: "completed", verified_photos: ["att-1"], functional_confirmation: "Installed and cooling." }, STORE).satisfied === true);
 
   for (const o of ["unable_to_complete", "needs_followup"]) {
-    const v = P.evaluateProof(paint, { outcome: o, proof_photos: ["p1"] });
+    const v = P.evaluateProof(paint, { outcome: o, verified_photos: ["att-1"] }, STORE);
     ok(`'${o}' can never satisfy proof`, v.satisfied === false);
     ok(`'${o}' does not demand a completion photo`, v.shortfall === null);
   }
   ok("the readiness walk cannot be completed at all",
-     P.evaluateProof(W({ stage: STAGE.READINESS_WALK }), { outcome: "completed", proof_photos: ["p"] }).satisfied === false);
+     P.evaluateProof(W({ stage: STAGE.READINESS_WALK }), { outcome: "completed", verified_photos: ["att-1"] }, STORE).satisfied === false);
 }
 
 section("C3  acceptance is a proposal until confirmed, and never implies ownership");
@@ -241,8 +260,10 @@ section("C8  service construction and vocabulary guards");
      !/require\(['"][^'"]*(vision|tensorflow|opencv|rekognition|clarifai|@google-cloud\/vis)/i.test(code));
   ok("nothing inspects, scores or classifies a photo",
      !/\b(classify|detectLabels|analyzeImage|scorePhoto|imageScore|inferQuality)\b/.test(code));
-  ok("proof evaluation only counts attachments",
-     /photos\.length < req\.photos_min/.test(code));
+  ok("proof evaluation only counts VERIFIED attachments",
+     /verified\.length < req\.photos_min/.test(code));
+  ok("and never reads the raw proof_photos strings when deciding",
+     !/proof_photos[^\n]*<\s*req\.photos_min/.test(code));
   ok("the doctrine is stated in the header", /no computer vision/i.test(src));
 }
 

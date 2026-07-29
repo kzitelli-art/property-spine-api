@@ -3,7 +3,7 @@
 **The executable acceptance script. Run it only after the baseline artifacts
 have arrived and the disposable database verifies.**
 
-One golden path, three negative controls. This is not a test plan for
+One golden path, four negative controls. This is not a test plan for
 everything Builds 1–6B can do — it is the smallest run that, if it passes,
 means the unit turn works end to end, and if it fails, says exactly where.
 
@@ -22,20 +22,23 @@ node scripts/runtime-proof/verify-baseline.js            # must exit 0
 node scripts/runtime-proof/verify-baseline.js            # 112–117 applied_and_recorded
 ```
 
-Two people are needed, and they must be **different rows** in
+Three people are needed, and they must be **different rows** in
 `property_team_assignments`:
 
 | Role | `allowed_modules` | `role_title` | Used for |
 |---|---|---|---|
 | **T** technician | `maintenance` | anything | steps 1–8 |
-| **M** manager | `management` *(see note)* | Senior/Assistant/Property Manager | steps 9–13 |
+| **M** manager | `maintenance` + `management` | Senior/Assistant/Property Manager | steps 9–13 |
 
-> **NOTE — read this before provisioning M.** Builds 1–3 gate on `maintenance`
-> **only**; Builds 4–6A accept `maintenance` **or** `management`. A
-> management-only M can open the Unit Turn page and will be shown Accept /
-> Complete / Reopen controls that return 403. Until that is ruled (release
-> candidate §8), **give M both modules** so this script tests the flow rather
-> than the gate. Record that you did.
+> **NOTE — provisioning.** The authority model is now ruled and implemented:
+> either module may **read** a turn; only `maintenance` may **operate** work;
+> readiness needs management + an eligible title or explicit delegation. Give
+> **M both modules** so M can operate as well as certify, and provision a
+> **third** actor for negative control N4:
+>
+> | Role | `allowed_modules` | Used for |
+> |---|---|---|
+> | **G** management-only | `management` | N4 — reads the turn, sees no work controls |
 
 Capture for every step: the HTTP request/response, a screenshot of the Unit
 Turn page, and the SQL result named in the step. A step with no receipt did not
@@ -52,17 +55,23 @@ happen.
 | **Actor** | T (maintenance) |
 | **Authority** | active assignment + `maintenance` |
 | **Browser** | Property Home → Maintenance → **Turnovers** → the message box → send |
-| **Message** | `304 is empty. There are cockroaches behind the refrigerator and the refrigerator is missing.` |
+| **Message** | `There are cockroaches behind the refrigerator.` |
 | **Route** | `POST /operator/staff-agent/message` |
 
-> **Use that sentence exactly.** A bare condition report without the vacancy
-> phrase classifies as `unclear` — release candidate §12. This step is testing
-> capture, not the classifier's gap.
+> **Use that sentence exactly** — it is the app's own placeholder example, and
+> it now classifies. A concrete thing in a concrete state reaches initial
+> triage using the page's open unit, without the operator repeating that the
+> unit is vacant.
+>
+> **Also send** `It is bad.` and confirm it comes back as a question. Vague
+> language must still ask.
 
 - **Canonical record:** one `staff_agent_messages` row (verbatim), one
   `staff_agent_proposals` row `intent='initial_triage'`, `status='proposed'`.
 - **Unit Turn read:** thread shows *"You reported a unit condition"* with
   Confirm / Cancel.
+- **Assert:** the proposal claims **no vacancy** and **no complete inspection** —
+  the unknowns say both out loud.
 - **Receipt:** *"Nothing operating has been recorded. This is a proposal."*
 - **DB:** `select intent,status from staff_agent_proposals order by created_at desc limit 1;`
   → `initial_triage | proposed`
@@ -76,7 +85,11 @@ happen.
 | **Actor** | T · **Browser** Confirm · **Route** `POST /operator/staff-agent/proposals/:id/confirm` |
 
 - **Canonical record:** `unit_triage_confirmations` 1 row; `unit_observations`
-  carries the original text; `unit_triage_findings` ≥ 2; `unit_triage_required_work` ≥ 1.
+  carries the original text; `unit_triage_findings` ≥ 1; `unit_triage_required_work` ≥ 1.
+- **Assert:** `vacancy_observation = 'uncertain'` — the message never said the
+  unit was vacant, and nothing invented it.
+- **Assert:** `inspection_completeness` is **not** a complete turn scope. One
+  observation is not an inspection.
 - **Unit Turn read:** vacancy *Confirmed vacant*; readiness **not** ready;
   required work listed; owner **UNASSIGNED**.
 - **Receipt:** *"Recorded through the same canonical service the structured door uses."*
@@ -114,7 +127,7 @@ happen.
 
 | | |
 |---|---|
-| **Actor** | T · **Browser** Complete work → leave the photo field **empty** → Complete |
+| **Actor** | T · **Browser** Complete work → **Record what was done** |
 | **Route** | `POST /operator/turn-work/:workId/claim` |
 
 - **Canonical record:** `work_completion_claims` 1 row,
@@ -125,19 +138,31 @@ happen.
 
 ### Step 6 — required proof closes the work
 
-| | |
-|---|---|
-| **Actor** | T · **Browser** Complete work → photo field + *"it cools"* → Complete |
-| **Route** | `POST /operator/turn-work/:workId/claim` |
-
-- **Canonical record:** a second claim, `proof_satisfied=true`; work → `complete`.
-- **Unit Turn read:** item shown complete; the next stage unlocks.
-- **DB:** `select status from unit_triage_required_work where id=<w>;` → `complete`
-
-> ⚠ **THIS STEP DOES NOT PROVE PHOTO PROOF.** The field is a text input; no
-> file is uploaded. Typing one character satisfies the gate (release candidate
-> §10). **Record what you typed**, and record that the proof requirement was
-> met by a string, not by evidence. Do not describe this step as proven.
+> ⚠ **THIS STEP CANNOT BE RUN TODAY, AND THAT IS THE CORRECT BEHAVIOUR.**
+>
+> The fake "Photo reference" text box is gone and no attachment store exists,
+> so photo-requiring work **stays open** and the panel says why. There is
+> nothing to type that will close it — which is the point: a string is not a
+> photo.
+>
+> **What to do instead:** run step 5, confirm the work is still `required`,
+> screenshot the *"Photo proof is unavailable"* panel, and record this step as
+> **BLOCKED on the attachment prerequisite** (release candidate §10).
+>
+> Run it as written only once a session-scoped attachment primitive exists:
+>
+> | | |
+> |---|---|
+> | **Actor** | T · **Browser** Complete work → **select a real file** → Record |
+> | **Route** | `POST <attachment upload>` then `POST /operator/turn-work/:workId/claim` |
+>
+> - **Expect:** upload returns an opaque attachment id; the claim carries that
+>   id; `proof_satisfied=true`; work → `complete`; the page can open the evidence.
+> - **Assert:** the same claim with a *typed* id instead of an uploaded one is
+>   **refused** — the store, not the string, decides.
+> - **DB:** `select proof_photos, proof_satisfied from work_completion_claims where work_id=<w>;`
+> - **DB:** the attachment row carries its own uploader and time, separate from
+>   `claimed_by_user_id` on the claim.
 
 ### Step 7 — remaining work completes in sequence
 
@@ -231,7 +256,7 @@ happen.
 
 ## Negative controls
 
-Three. Each must **fail in the stated way**.
+Four. Each must **fail in the stated way**.
 
 ### N1 — duplicate proposal confirmation executes once
 
@@ -258,6 +283,24 @@ Three. Each must **fail in the stated way**.
   authority.
 - **DB:** no new `unit_readiness_certifications` row.
 
+### N4 — a management-only operator reads the turn but cannot operate it
+
+- Sign in as **G** (`management` only, assigned to the property). Open
+  Maintenance → Turnovers → Unit 304.
+- **Expect:** the turn list and the Unit Turn page load normally. G sees
+  status, blockers, ownership, the controlling next action and management
+  attention.
+- **Assert:** **no** Accept, Complete, Unable or Reopen control is rendered,
+  and the page explains why —
+  *"Accepting, completing and reopening turn work requires maintenance-module
+  access at this property."*
+- **Assert:** `capabilities.may_operate_work` is `false` and
+  `may_view_management_attention` is `true` in the read.
+- **HIDING IS NOT THE ENFORCEMENT.** Call the write route directly as G:
+  `POST /operator/turn-work/:workId/accept`. **Expect 403.** A UI that merely
+  omits a button has proved nothing.
+- **DB:** no new `work_acceptances` row.
+
 ### N3 — "304 is ready" cannot bypass the final readiness walk
 
 - As **T**, and again as **M**, send `304 is ready.` through the message box.
@@ -279,15 +322,15 @@ browser — to **Browser verified** for the paths it covers.
 
 It does **not** cover:
 
-- **Photo proof.** Step 6 records that a string satisfied the gate. Until a
-  session-scoped attachment primitive exists, "complete with photo" is not an
-  operational flow (release candidate §10).
+- **Photo proof.** Step 6 is BLOCKED, deliberately. A string can no longer
+  satisfy the gate and photo-requiring work stays open. Until a session-scoped
+  attachment primitive exists, "complete with photo" is not an operational
+  flow (release candidate §10).
 - **Concurrency beyond N1.** Acceptance and certification remain classified
   *unproven without Postgres* unless the extra probes in N1 are run.
-- **The operate-gate mismatch.** This script sidesteps it by giving M both
-  modules. The mismatch is still there (release candidate §8).
-- **The bare-condition classifier gap.** Step 1 uses vacancy language
-  deliberately (release candidate §12).
+- **Attachment lifecycle.** Proof is evaluated once, at claim time, and the
+  verdict is stored. Nothing re-checks whether an attachment still exists.
+- **Whether one attachment may satisfy two work items.** Unruled.
 - **Anything about legacy units** with no triage evidence, or by-bed grain.
 
 Record each of those five as still-open when reporting the run. A green

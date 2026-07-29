@@ -85,10 +85,19 @@ function proposeCommitment({ text = "", actor_user_id = null, now = null } = {})
 }
 
 function makeWorkAcceptanceService(deps) {
-  const { spawnObligationFromEvent } = deps || {};
+  const { spawnObligationFromEvent, attachmentService = null } = deps || {};
   if (typeof spawnObligationFromEvent !== "function") {
     throw new Error("work_acceptance_service requires spawnObligationFromEvent()");
   }
+  //  OPTIONAL, and its absence FAILS CLOSED rather than degrading to "trust
+  //  the string". Nothing in this build injects it — there is no attachment
+  //  store yet — so photo-requiring work stays open and says why. Making it
+  //  required would break the server for a capability that does not exist;
+  //  making its absence permissive would restore the defect it replaces.
+  //
+  //  Contract when it does exist:
+  //     resolveForProperty(client, { property_id, references }) -> [verified ids]
+  //  It must return only references that exist AND belong to that property.
   const bad = (m, extra) => Object.assign(new Error(m), { httpStatus: 400, ...(extra || {}) });
 
   async function loadWork(client, { work_id, property_id }) {
@@ -222,10 +231,31 @@ function makeWorkAcceptanceService(deps) {
     if (w.stage === STAGE.READINESS_WALK)
       throw bad("the final readiness walk is not performed or certified in this build");
 
+    // ── PROOF PHOTOS ARE RESOLVED, NEVER TRUSTED ──────────────────────
+    //  What arrives is whatever the client sent. It is RECORDED verbatim,
+    //  because the operator's input is history, and then it is RESOLVED
+    //  against the attachment store. Only references that actually exist and
+    //  belong to this property count toward the requirement.
+    //
+    //  There is no attachment store in this build, so `attachmentService` is
+    //  never injected and nothing resolves. That is deliberate and it FAILS
+    //  CLOSED: photo-requiring work stays open and says why. The alternative —
+    //  counting the strings — is what made a single typed space close work.
     const photos = Array.isArray(proof_photos) ? proof_photos.filter(Boolean) : [];
+    const attachmentsAvailable = !!(attachmentService && typeof attachmentService.resolveForProperty === "function");
+    let verifiedPhotos = [];
+    if (attachmentsAvailable) {
+      //  The store decides. It is given the property so an attachment from
+      //  another property cannot be borrowed as proof here.
+      verifiedPhotos = await attachmentService.resolveForProperty(client, {
+        property_id: w.property_id, references: photos,
+      });
+      verifiedPhotos = Array.isArray(verifiedPhotos) ? verifiedPhotos.filter(Boolean) : [];
+    }
+
     const verdict = evaluateProof(w, {
-      outcome, proof_photos: photos, functional_confirmation,
-    });
+      outcome, proof_photos: photos, verified_photos: verifiedPhotos, functional_confirmation,
+    }, { attachments_available: attachmentsAvailable });
 
     // The CLAIM IS ALWAYS RECORDED. Somebody said this happened, and that is a
     // fact worth keeping even when it does not close the work. Refusing to

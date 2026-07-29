@@ -64,7 +64,11 @@ function makeUnitTurnRead(deps) {
   //  operator sees a place in the turn flow, not a decision record.
   const PLACEMENT_LABEL = "Needs placement in the turn flow";
 
-  async function readUnitTurn(db, { property_id, unit_id, user_id }) {
+  //  `allowed_modules` is SERVER-DERIVED — it comes from the session's active
+  //  property_team_assignments row, never from the request. It arrives here so
+  //  the SERVER decides which controls exist; the browser renders that decision
+  //  and reproduces none of the rule.
+  async function readUnitTurn(db, { property_id, unit_id, user_id, allowed_modules = null }) {
     const unit = (await db.query(
       "select id, unit_number, property_id from units where id=$1 and property_id=$2",
       [unit_id, property_id])).rows[0];
@@ -155,6 +159,9 @@ function makeUnitTurnRead(deps) {
         clarification_label: CLARIFICATION_LABEL,
       };
     }
+
+    //  Server-derived modules. Never from the request body.
+    const mods = Array.isArray(allowed_modules) ? allowed_modules.filter(Boolean) : [];
 
     // ── THE ONE CONTROLLING NEXT ACTION ──
     //  FORWARDED, never recomputed. Precedence follows the gates the layers
@@ -247,6 +254,36 @@ function makeUnitTurnRead(deps) {
         reopen: "POST /operator/turn-work/:workId/reopen",
         message: "POST /operator/staff-agent/message",
         final_walk: "POST /operator/units/:id/readiness/walk",
+      },
+
+      // 4b. CAPABILITIES — WHAT THIS OPERATOR MAY ACTUALLY DO
+      //
+      //  The doors do not agree on who may operate a turn: Builds 1-3 require
+      //  `maintenance`, Builds 4-6A accept `maintenance` OR `management`. So a
+      //  management-only operator could open this page and be shown Accept,
+      //  Complete, Unable and Reopen — every one of which the write door would
+      //  refuse. A surface offering an action the server will reject is the
+      //  same class of defect as a fake number.
+      //
+      //  The read now states each capability explicitly. FAIL CLOSED: with no
+      //  modules resolved, nothing is offered. Hiding a control is NOT the
+      //  enforcement — every write route still enforces for itself, and must.
+      capabilities: {
+        //  Operating work needs maintenance AND an active assignment at this
+        //  property. `allowed_modules` only exists when the session resolved an
+        //  active assignment here, so the module test carries both.
+        may_operate_work: mods.includes("maintenance"),
+        may_perform_readiness_walk: gate.gate.actionable && authority.authorized && !gate.certification,
+        may_view_management_attention: mods.includes("management"),
+        basis: mods.length
+          ? `modules at this property: ${mods.join(", ")}`
+          : "no active assignment resolved for this operator at this property",
+        //  Said plainly so the page can explain a missing control rather than
+        //  silently omitting it.
+        why_no_work_controls: mods.includes("maintenance") ? null
+          : "Accepting, completing and reopening turn work requires maintenance-module access at this property.",
+        enforcement_note:
+          "These are server decisions about what to SHOW. Every write route enforces its own authority independently.",
       },
 
       // 5. FINAL READINESS — offered only when the gate and the person allow.

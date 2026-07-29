@@ -47,6 +47,8 @@ module.exports = function unitTurn(deps) {
         property_id: req.operator.property_id,
         unit_id: req.params.unitId,
         user_id: req.operator.id,
+        // SERVER-DERIVED. From the session's active assignment, never the body.
+        allowed_modules: req.operator.allowed_modules || [],
       });
       res.json(out);
     } catch (e) { res.status(e.httpStatus || 500).json({ error: e.message }); }
@@ -72,6 +74,7 @@ module.exports = function unitTurn(deps) {
       for (const u of units) {
         const t = await unitTurnRead.readUnitTurn(pool, {
           property_id: req.operator.property_id, unit_id: u.id, user_id: req.operator.id,
+          allowed_modules: req.operator.allowed_modules || [],
         });
 
         // Exception reasons, FORWARDED from the layers that decide them.

@@ -3,9 +3,15 @@
 **Proof level: Built but dormant.**
 
 Everything below is source-level or pure-function evidence. No Postgres was
-contacted, no HTTP request was made, and no browser rendered anything. Three
-pressure-test sections return **FAIL** and two return **UNPROVEN**; none of
-those is a formality, and none is fixed by anything in this document.
+contacted, no HTTP request was made, no file was uploaded, and no browser
+rendered anything.
+
+**Revision — the three FAIL findings have been acted on.** Two are fixed
+outright (authority, condition classifier). The third — photo proof — has its
+**defect closed** and its **upload path stopped**: a string can no longer
+satisfy proof, the UI no longer pretends, and photo-requiring work now stays
+open. The real upload path is not built, because no existing primitive can
+carry it without a schema change. That is reported below, not faked.
 
 ---
 
@@ -29,28 +35,34 @@ fast-forward; no synthetic rebase was performed.
 
 ## 2. Changed files after Build 6B
 
-**API (4)**
+**API (9)**
 
-| File | Change | Category |
-|---|---|---|
-| `tests/operator_language_proof.js` | allowlist correction + RC doc paths | allowed #1 |
-| `tests/release_candidate_proof.js` | **new** — the pressure test | allowed #7 |
-| `docs/UNIT_TURN_RELEASE_CANDIDATE.md` | **new** — this file | allowed #7 |
-| `docs/UNIT_TURN_THIN_LIVE_PROOF.md` | **new** — the acceptance script | allowed #7 |
+| File | Change |
+|---|---|
+| `src/maintenance/work_proof.js` | **FIX 1** — a photo is a verified attachment, not a string; fails closed |
+| `src/maintenance/work_acceptance_service.js` | **FIX 1** — resolves references against an optional, property-scoped attachment store |
+| `src/agent/staff_agent_intent.js` | **FIX 3** — a concrete observed condition reaches initial triage |
+| `src/surfaces/unit_turn_read.js` | **FIX 2** — emits server-computed `capabilities` |
+| `src/surfaces/unit_turn.js` | **FIX 2** — passes server-derived `allowed_modules` into the read |
+| `tests/work_acceptance_proof.js` | Build 3 proof updated to verified attachments |
+| `tests/operator_language_proof.js` | allowlist correction; Build 3 range pinned |
+| `tests/release_candidate_proof.js` | pressure test + the three fixes + new failure modes |
+| `docs/UNIT_TURN_RELEASE_CANDIDATE.md`, `docs/UNIT_TURN_THIN_LIVE_PROOF.md` | this file and the acceptance script |
 
 Plus `docs/BUILD_1_6B_INTEGRATION_READINESS.md`, carried by the cherry-pick.
 
 **App (2)**
 
-| File | Change | Category |
-|---|---|---|
-| `index.html` | Maintenance → Turnovers becomes the entry; root mount removed | allowed #2 |
-| `unit-turn-page.js` | mount guard; honest empty / unavailable + retry | allowed #2, #4 |
+| File | Change |
+|---|---|
+| `index.html` | Maintenance → Turnovers entry; root mount removed |
+| `unit-turn-page.js` | mount guard; four honest states; **capability-gated controls**; **fake photo box removed** |
 
-**No migration, no service, no interpreter, no door, no aggregate read was
-modified.** Domain meaning, sequence rules, authority rules, completion
-requirements, readiness meaning, availability guard order and agent scope are
-all byte-identical to Build 6B.
+**NO MIGRATION CHANGED. The ceiling is still 117 and no 118 exists.** Sequence
+rules, readiness meaning, availability guard order and the agent's three-intent
+scope are untouched. Two things changed deliberately and are the point of this
+revision: the **proof gate** (a string no longer closes work) and the
+**capability surface** (controls render from a server decision).
 
 ---
 
@@ -63,25 +75,23 @@ $ for t in unit_triage_proof unit_turn_scope_proof work_acceptance_proof \
 
   unit_triage_proof                  passed=92   failed=0
   unit_turn_scope_proof              passed=113  failed=0
-  work_acceptance_proof              passed=76   failed=0
+  work_acceptance_proof              passed=83   failed=0
   readiness_certification_proof      passed=127  failed=0
   staff_agent_proof                  passed=154  failed=0
   unit_turn_page_proof               passed=104  failed=0
-  operator_language_proof            passed=244  failed=0
+  operator_language_proof            passed=245  failed=0
+  release_candidate_proof            passed=382  failed=0
   ─────────────────────────────────────────────────────────
-  BUILD 1–6B cumulative              910         0
-  release_candidate_proof            296         0
-  ─────────────────────────────────────────────────────────
-  RELEASE CANDIDATE total            1206        0
+  TOTAL                              1300        0
 ```
 
-**910 / 0** is the expected Build 1–6B cumulative, met exactly, with the
-allowlist correction included in the tested working tree.
-
-The 296 release-candidate assertions include the three FAIL findings, asserted
-as **facts about current behaviour** rather than suppressed. A harness that
-went green by deleting the assertion that found something would be worse than
-one that fails.
+Up from 1206. Every assertion that previously recorded one of the three
+defects has been **re-pointed at the fixed behaviour**, not deleted:
+`work_acceptance_proof` now proves that `" "`, `"x"`, `"photo.jpg"` and a
+random UUID all fail while a verified attachment succeeds;
+`release_candidate_proof` §12 now proves five concrete conditions classify
+while four vague ones still ask; §8 now proves five capability cases across
+three operator shapes.
 
 ---
 
@@ -141,15 +151,16 @@ establish.
 | 5 | canonical truth boundaries | **PASS** |
 | 6 | one governed work list | **PASS** |
 | 7 | flow liveness | **PASS** |
-| 8 | authority | **FAIL** |
+| 8 | authority | **PASS** *(was FAIL — fixed)* |
 | 9 | idempotency and concurrency | **UNPROVEN** |
 | 10 | history and correction | **PASS** |
 | 11 | availability precedence | **PASS** |
-| 12 | staff-agent boundary | **FAIL** |
+| 12 | staff-agent boundary | **PASS** *(was FAIL — fixed)* |
 | 13 | UI simplification | **PASS** |
-| 15 | photo proof | **FAIL** |
+| 15 | photo proof | **PARTIAL** — defect closed, upload path stopped |
 | 16 | live-first seams | **UNPROVEN** |
 | 17 | by-bed grain | **PASS** |
+| 18 | new failure modes from the cleanup | **MIXED** — 4 prevented, 4 unproven |
 
 ### §5 canonical truth boundaries — PASS
 
@@ -176,42 +187,48 @@ manager exception. No state disappears, falsely completes, or leaves readiness
 wrongly unblocked, and every controlling action carries a `why`. See §7 matrix
 below. *Action:* none.
 
-### §8 authority — **FAIL**
+### §8 authority — **PASS** *(was FAIL)*
 
-**Readiness authority is correct.** Three necessary conditions — active
-assignment, management module access, and either an eligible manager title or
-`primary_for_modules` delegation. Module access alone, title alone and
-performing the work each grant nothing. The agent has no readiness write.
+**The ruled model, implemented.**
 
-**The OPERATE gate disagrees across doors.**
-
-| Door | Gate |
+| | Requirement |
 |---|---|
-| `unit_triage.js` (B1) · `unit_turn_scope.js` (B2) · `work_acceptance.js` (B3) | **maintenance only** |
-| `readiness.js` (B4) · `staff_agent.js` (B5) · `unit_turn.js` (B6A) | maintenance **or** management |
+| **Read** a turn | `maintenance` **or** `management` + active assignment |
+| **Operate** work (accept · complete · unable · reopen) | `maintenance` + active assignment |
+| **Certify** readiness | active assignment + `management` + eligible manager title **or** explicit `primary_for_modules` delegation |
 
-*Source:* `src/maintenance/unit_triage.js:65-73` and equivalents; contrast
-`src/surfaces/unit_turn.js:34-40`.
+The door gates were already correct for that model — Builds 1–3 require
+`maintenance`, Builds 4–6A accept either. **What was broken was the surface:**
+it showed Accept / Complete / Reopen to anyone who could open the page.
 
-*Failure scenario:* an operator whose `allowed_modules` is `['management']`
-opens Maintenance → Turnovers, gets the turn list (6A admits management), opens
-a unit, and is shown **Accept work**, **Complete work** and **Reopen** — every
-one of which posts to a Build 1–3 door that returns 403. The page renders those
-controls unconditionally and never reads `allowed_modules`.
+The aggregate read now emits server-computed capabilities:
 
-*Consequence if wrong:* a manager sees controls that always fail. Not a truth
-violation — nothing false is recorded — but it is the surface promising an
-action the server will refuse, which is the same class of defect as a fake
-number.
+```
+capabilities: {
+  may_operate_work,                 // maintenance module at this property
+  may_perform_readiness_walk,       // gate actionable + authorised + not yet certified
+  may_view_management_attention,    // management module
+  basis, why_no_work_controls, enforcement_note
+}
+```
 
-*Action:* rule which module may operate a turn, then align the six gates and
-have the read emit a `may_operate` flag the page renders, exactly as it already
-does for `may_walk`. **This is an authority-rule change and is therefore
-documented, not implemented.**
+`allowed_modules` arrives from `req.operator` — the session's **active**
+assignment row — and never from the request body. With nothing resolved it
+**fails closed**: no modules, no controls.
 
-*When:* **before live proof.** The thin golden path uses a maintenance
-technician and a manager; if the manager is management-only, step 4 fails for
-the wrong reason and the run is wasted.
+Five capability cases asserted behaviourally: maintenance-only, management-only,
+both, empty, and not-passed-at-all.
+
+The page gates every work control on `capabilities.may_operate_work` and
+**reads no module, role or title** — asserted. When a control is absent the page
+says why rather than silently omitting it.
+
+**Hiding is not the enforcement.** All three Build 1–3 write doors are asserted
+to still enforce `maintenance` themselves, and negative control **N4** in the
+thin live proof calls the accept route directly as a management-only operator
+and requires a 403.
+
+*Action:* none before live proof. *When:* N4 exercises it.
 
 ### §9 idempotency and concurrency — **UNPROVEN**
 
@@ -272,42 +289,50 @@ and distinguishes *physically ready* from *marketable*.
 Units with no triage evidence fall straight through to prior behaviour.
 *Action:* none.
 
-### §12 staff-agent boundary — **FAIL**
+### §12 staff-agent boundary — **PASS** *(was FAIL)*
 
-**The vocabulary is correct and tight.** Confirmable: `initial_triage`,
-`turn_scope`, `work_completion`. Non-confirmable: `redirect`, `unclear`.
-All four retired intents — `work_acceptance`, `readiness_request`,
-`failed_final_walk`, `correction` — are unreachable, including from stored
-rows: seven legacy intents were driven through `confirmProposal` against
-recording doubles and **no canonical service was reached**.
+Vocabulary unchanged and still tight: confirmable `initial_triage`,
+`turn_scope`, `work_completion`; non-confirmable `redirect`, `unclear`; four
+retired intents unreachable, including from stored rows, verified by driving
+seven legacy intents through `confirmProposal` against recording doubles with
+**no canonical service reached**.
 
-Classifier ordering holds: plurals match, "actually" scope corrections stay
-`turn_scope`, a tie yields no work id, a photo with too little text is a
-question, and "already painted" is not a readiness claim.
+**The advertised sentence now works.** A *concrete thing* in a *concrete state*
+reaches initial triage using the page's open unit:
 
-**But the box advertises a sentence it cannot read.** Purpose #1 is *"Report a
-condition"* and the placeholder's own first example is
-`There are cockroaches behind the refrigerator.` With a unit already open,
-that classifies as **`unclear`**. So do *"The outlets in the bedroom are
-dead."* and *"The bathroom door does not latch."*
+| Message | Result |
+|---|---|
+| `There are cockroaches behind the refrigerator.` | `initial_triage` |
+| `The bedroom window is cracked.` | `initial_triage` |
+| `There is water under the kitchen sink.` | `initial_triage` |
+| `The bathroom door does not latch.` | `initial_triage` |
+| `The living-room carpet is stained.` | `initial_triage` |
+| `The outlets in the bedroom are dead.` | `initial_triage` |
+| `It is bad.` | `unclear` |
+| `Needs work.` | `unclear` |
+| `There is an issue.` | `unclear` |
+| `I fixed it.` | `unclear` |
 
-*Source:* `src/agent/staff_agent_intent.js` — triage is gated on `S.vacancy`,
-because Build 1 is **post-move-out initial triage**. A bare condition report
-with no vacancy phrase reaches no branch and falls to `unclear`.
+The gate is **both halves**: a nameable object from a bounded vocabulary, AND
+either an observable state, a negated verb, or a "there is/are" presence claim.
+`"There is an issue"` has the presence claim and no nameable object, so it
+still asks. This is not vague-language guessing.
 
-*Consequence if wrong:* an operator types the sentence the box suggested and is
-asked "What did you want to record?". It is an **honest** failure — nothing
-wrong is recorded, and it asks rather than guessing — but the surface
-overpromises.
+**It stays an observation.** Every condition proposal states that vacancy is
+not assumed and that one condition is not a complete inspection. The Build 1
+interpreter reads `vacancy = uncertain` when the words do not say, and
+`inspection_completeness` is never upgraded. Nothing is recorded until a human
+confirms through the existing Build 1 path.
 
-*Action:* rule whether a bare condition on an already-open unit should reach
-triage, or whether the advertised purpose should read as the vacancy-scoped
-thing it is. **Changing the classifier is an agent-scope change and is
-therefore documented, not implemented.** The cheapest honest fix is copy: an
-example that classifies.
+**Ordering holds and is asserted from source:** completion is checked before
+the condition branch (`The bathroom door is fixed.` → `work_completion`;
+`The bathroom door does not latch.` → `initial_triage`), and the condition
+branch is checked before scope, so an observed defect is never promoted to work
+somebody has decided to do.
 
-*When:* **before live proof** if the golden path opens with a condition
-report — the thin script therefore opens with a vacancy sentence.
+A condition with no unit anywhere still asks **"Which unit?"**.
+
+*Action:* none. *When:* n/a.
 
 ### §13 UI simplification — PASS
 
@@ -325,9 +350,29 @@ name, `clarification_required`, `unclear`, `property_id`, `unit_id`, snake_case
 in a rendered label, and service names are each asserted absent from the
 page's printable strings. *Action:* none.
 
-### §15 photo proof — **FAIL**. See §10 of this document.
+### §15 photo proof — **PARTIAL**. See §10 of this document.
 
 ### §16 live-first seams — **UNPROVEN**. See §5 of this document.
+
+### §18 new failure modes from the cleanup — MIXED
+
+Eight modes the three fixes could have introduced, each classified rather than
+assumed away.
+
+| Mode | Status |
+|---|---|
+| completion submitted twice with the same attachment | **duplicate-safe** — each submission appends its own attributed claim; the second closes nothing new |
+| capabilities stale between read and write | **prevented** — capabilities are recomputed every read, never cached; every write re-resolves the session |
+| assignment deactivated after page load | **prevented at the write** — `resolveStaffSession` requires `active = true`; the rendered page is stale, the authority is not |
+| condition language that also reads like completion | **prevented by ordering** — asserted from source and behaviourally |
+| attachment uploaded, completion transaction fails | **unproven without Postgres** — the claim rolls back; a stored blob would be orphaned with no cleanup path. Cannot occur today |
+| attachment deleted after completion | **unproven — and NOT re-verified.** Proof is evaluated once and the verdict stored. A future upload design must make the reference immutable or re-derive proof on read |
+| a sentence names more than one unit | **PARTIALLY UNPROVEN** — the first unit-shaped token wins and the second is silently ignored. Nothing wrong is recorded, but the operator is not told |
+| an attachment id reused across two work items | **unproven — no store exists.** `resolveForProperty` is property-scoped, not work-scoped. Whether one photo may prove two items is a product question to rule when the primitive is built |
+
+*Action:* the last four belong to whoever builds the attachment primitive,
+except the multi-unit one, which needs a ruling on whether to ask or to take
+the first. *When:* after browser proof.
 
 ### §17 by-bed grain — PASS
 
@@ -426,83 +471,119 @@ condition.**
 
 ---
 
-## 10. Photo proof — **FAIL**
+## 10. Photo proof — **PARTIAL: defect closed, upload path stopped**
 
-The single most serious finding. Traced end to end:
+### What was wrong
 
-| Step | Status |
-|---|---|
-| operator selects photo | **missing** — there is no `type="file"` anywhere in the page |
-| browser processes file | **missing** — no `FileReader`, no `FormData`, no `.files[]` |
-| upload endpoint / storage service | **missing** — the Build calls none |
-| durable reference | **missing** — `photos text[]` holds whatever string was typed |
-| completion claim | **exists** — `proof_photos: [<typed string>]` |
-| proof read | **exists** — `evaluateProof` counts `photos.length` |
-| Unit Turn page | **exists** — renders `proof_shortfall` |
+`evaluateProof` counted `proof_photos.length`. Because `filter(Boolean)` keeps
+`" "`, a **single space** typed into a box labelled "Photo reference" closed
+work as proof-satisfied. The work then read complete to the sequence engine,
+the readiness gate and the availability read, with no evidence anywhere.
 
-**The control labelled "Photo reference" is a text input.** No file is chosen,
-no bytes move, nothing is stored.
+### What is fixed
 
-### The defect, executed
+**A photo is now a verified attachment, and the evaluator fails closed.**
 
 ```
-node -e "const P=require('./src/maintenance/work_proof'); …"
+node -e "…"                                       (all with the store DECLARED present)
 
-  no photos              satisfied=false  Missing a completion photo.
-  ONE TYPED CHARACTER    satisfied=true   none      ← closes the work
-  a single SPACE         satisfied=true   none      ← closes the work
-  real-looking ref       satisfied=true   none
-  photo, no sentence     satisfied=false  Missing a short confirmation that it works.
+  " "                                    satisfied=false
+  "x"                                    satisfied=false
+  "photo.jpg"                            satisfied=false
+  a random UUID                          satisfied=false
+  a nonexistent media id                 satisfied=false
+  a VERIFIED same-property attachment    satisfied=true
+  verified ref, NO store declared        satisfied=false   ← contradiction fails closed
 ```
 
-The module already knows the difference between evidence and a keystroke **for
-text** — `functional_confirmation` shorter than 3 characters is refused with
-*"A confirmation must be a sentence, not a keystroke."* The same care is not
-applied to photos, because the array is only counted.
+- `evaluateProof(work, claim, context)` counts `claim.verified_photos` only,
+  and only when `context.attachments_available` is true. Both default to the
+  safe answer, so a caller that forgets the context gets "nothing verified".
+- A caller declaring **no store** while handing over "verified" references is
+  contradicting itself; the list is voided.
+- `claimCompletion` resolves references through
+  `attachmentService.resolveForProperty(client, { property_id, references })` —
+  **scoped to the work's property**, so another property's attachment cannot be
+  borrowed as proof.
+- The store is **optional and its absence fails closed**. Nothing injects it
+  today, so photo-requiring work stays **open** and the shortfall says
+  *"Missing verified photo proof (unavailable in this build)"* rather than
+  telling the operator to do something impossible.
+- The raw strings are still **recorded verbatim** on the claim. The operator's
+  input is history; it is simply never counted.
+- Proof and completion stay **separately attributed**: the claim carries
+  `claimed_by_user_id`; any future attachment carries its own uploader and time.
 
-*Consequence:* work closes as **proof-satisfied** with no evidence, and the
-Unit Turn page, the readiness gate and the availability read all treat it as
-genuinely closed. That is a confident wrong number in the one place the whole
-build sequence exists to prevent one.
+**The UI no longer pretends.** The "Photo reference" text box is gone. No file
+control was faked in its place — a file picker that discards the file would be
+the same lie with a better icon. The panel says:
 
-### An attachment primitive already exists — and is not used
+> **Photo proof is unavailable.** There is no attachment store to verify a
+> photo against, so work needing a completion photo cannot be closed yet. You
+> can still record what you did — the claim is kept and the work stays open.
 
-`main` carries a governed one: `multer` memory storage (`server.js:62`, 25 MB),
-the `intake_media` table (`migrations/014_intake.sql` — `mime`, `byte_size`,
-`bytes bytea`, `source_url`), and a serving route
-`GET /intake/media/:id` (`src/onboarding/intake.js:332`).
+The button now reads **"Record what was done"**, not "Complete". The message
+box's photo field is gone too.
 
-- **Build 3 does not reference it.** **Build 6A does not reference it.**
-- It is **password-gated**, not staff-session scoped: the intake page renders
-  `<img src="/intake/media/<id>?password=…">`. It cannot be reused as-is for
-  an operator surface without a session-scoped read.
+### Why the upload path was STOPPED
 
-**Do not create a second upload architecture.**
+Every existing primitive was inspected against the required security set:
 
-### Verdict and action
+| Primitive | durable bytes | `property_id` | staff uploader | verdict |
+|---|---|---|---|---|
+| `intake_media` (014) | ✓ `bytea` | ✗ | ✗ | cannot scope, cannot attribute |
+| `documents` (001) | ✗ (`storage_url`, "null for now") | ✓ | ✗ | no bytes, no attribution, unused in `src/` |
+| `lease_packet_documents` (034) | ✗ (`file_url`) | ✗ lease-packet scoped | ✗ | wrong scope |
+| `public_upload_sessions` (013) | ✗ (jsonb) | ✗ | ✗ unauthenticated | wrong entirely |
 
-> **"Complete with photo" is not an operational flow.** The UI control pretends
-> an upload occurred, and the proof gate can be satisfied by a keystroke.
+`intake_media` also serves through `GET /intake/media/:id`, which is
+**password-gated**, not staff-session scoped.
 
-*Recommended action, smallest separately-owned prerequisite:*
+**No existing table can carry property scope AND uploader attribution AND
+durable bytes.** Two of the nine security requirements — *reject attachments
+belonging to another property* and *preserve the original upload attribution
+and time* — are unimplementable without new columns.
 
-1. A **session-scoped attachment primitive** — `POST` multipart returning a
-   durable id, and a `GET` that authorises against the staff session and the
-   property, reusing `intake_media` rather than inventing storage.
-2. `work_completion_claims.proof_photos` then holds **references that resolve**,
-   and `evaluateProof` validates resolvability rather than counting.
-3. The page's text input becomes a file input.
+The scope rule is explicit: *"If the existing attachment primitive cannot
+safely support staff-session and property-scoped proof without a migration or
+larger foundation, stop that portion and report the exact smallest
+prerequisite. Do not fake the connection."* **So it was stopped.**
 
-**None of that is done here.** Steps 2 and 3 change completion requirements and
-domain meaning, which §20 forbids; step 1 is a new primitive outside this
-thread. It is a separately owned prerequisite, and it is **load-bearing**: until
-it exists, every "proof-satisfied" completion is unverified.
+There is a second, independent reason not to add migration 118 now: migrations
+112–117 have **never been applied anywhere**, the live ledger has never been
+read, and the baseline is still pending. Adding an attachment schema now would
+put an unproven table into the very first live application.
 
-*When:* **before live proof** if the golden path is to mean anything at its
-proof step. The thin script therefore captures the typed value **and** flags
-the step as not-yet-real.
+### The exact smallest prerequisite
 
----
+One migration and one small module, separately owned and separately proven:
+
+```sql
+create table if not exists operator_attachments (
+  id                 uuid primary key default gen_random_uuid(),
+  property_id        uuid not null references properties(id) on delete cascade,
+  uploaded_by_user_id uuid not null references users(id),
+  mime               text not null,
+  byte_size          integer not null,
+  bytes              bytea not null,
+  created_at         timestamptz not null default now()
+);
+```
+
+- `POST /operator/attachments` — multipart, staff session required, property
+  **server-derived**, mime allow-list (`image/jpeg`, `image/png`, `image/heic`),
+  size limit (the existing multer cap is 25 MB), returns an **opaque id only**.
+- `GET /operator/attachments/:id` — staff session required, refuses an id from
+  another property, refuses a nonexistent id, exposes no filesystem path.
+- `attachmentService.resolveForProperty` — the contract the claim path already
+  calls. **The seam exists and is asserted; only the store behind it is
+  missing.**
+
+Then inject it in `server.js` and photo proof works with no further change to
+`work_proof.js` or `claimCompletion`.
+
+**Until that exists, "complete with photo" is not an operational flow — and
+the system now says so instead of closing the work.**
 
 ## 11. Simplifications
 

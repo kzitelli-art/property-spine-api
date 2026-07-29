@@ -68,6 +68,9 @@ const printable = (s) =>
     .match(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`/g) || [])
     .join("\n");
 
+const INTENT_SRC_TEXT = read(path.join(REPO, "src/agent/staff_agent_intent.js"));
+const INTENT_SRC_ORDER = (needle) => INTENT_SRC_TEXT.indexOf(needle);
+
 const BUILD_SERVICES = [
   "src/maintenance/unit_triage_service.js", "src/maintenance/unit_turn_scope_service.js",
   "src/maintenance/work_acceptance_service.js", "src/maintenance/readiness_service.js",
@@ -349,33 +352,86 @@ section("8  authority");
 
   //  Operating a Build door needs maintenance OR management; certifying needs
   //  strictly more. The two gates must not be the same code.
-  //  ── FINDING: THE DOORS DO NOT AGREE ON WHO MAY OPERATE ───────────
-  //  Three doors accept maintenance OR management; three accept maintenance
-  //  ONLY. A management-only operator can open the Unit Turn page (Build 6A
-  //  admits management) and is shown Accept / Complete / Reopen — every one of
-  //  which posts to a Build 1-3 door that will refuse them.
+  //  ── THE DOORS STILL DIFFER — AND THE PAGE NOW REFLECTS IT ────────
+  //  Builds 1-3 require `maintenance`; Builds 4-6A accept `maintenance` OR
+  //  `management`. That is the ruled model: management may READ a turn, only
+  //  maintenance may OPERATE it. What was broken was the SURFACE — it showed
+  //  Accept / Complete / Reopen to anyone who could open the page.
   const MAINT_ONLY = [], MAINT_OR_MGMT = [];
   for (const f of BUILD_DOORS) {
     const t = src(f);
     (/mods\.includes\("management"\)/.test(t) ? MAINT_OR_MGMT : MAINT_ONLY).push(path.basename(f));
   }
-  ok("FINDING: three doors admit management, three do not",
-     MAINT_OR_MGMT.length === 3 && MAINT_ONLY.length === 3,
+  ok("read doors admit management; work doors do not",
+     MAINT_OR_MGMT.includes("unit_turn.js") && MAINT_ONLY.includes("work_acceptance.js") &&
+     MAINT_ONLY.includes("unit_triage.js") && MAINT_ONLY.includes("unit_turn_scope.js"),
      `or-mgmt=[${MAINT_OR_MGMT}] maint-only=[${MAINT_ONLY}]`);
-  ok("FINDING: the Unit Turn page admits management…",
-     MAINT_OR_MGMT.includes("unit_turn.js"));
-  ok("…but the write doors it points at do not",
-     MAINT_ONLY.includes("work_acceptance.js") && MAINT_ONLY.includes("unit_triage.js") &&
-     MAINT_ONLY.includes("unit_turn_scope.js"));
-  ok("the page offers those writes unconditionally, without checking module access",
-     /wk-accept/.test(app("unit-turn-page.js")) && !/allowed_modules/.test(app("unit-turn-page.js")));
-  //  Certification must not be satisfiable by the door gate. It reads the
-  //  ladder and the delegation flag, which no door does.
-  const authBody = RS.slice(RS.indexOf("async function resolveWalkAuthority")).slice(0, 2500);
-  ok("certification does NOT reuse the door's maintenance-or-management test",
-     !/mods\.includes\("maintenance"\)/.test(authBody));
-  ok("certification reads the ladder and the delegation flag instead",
-     /AUTHORITY_LADDER/.test(authBody) && /primary_for_modules/.test(authBody));
+
+  //  ── THE READ EMITS SERVER-COMPUTED CAPABILITIES ──────────────────
+  const R = src("src/surfaces/unit_turn_read.js");
+  ok("the read emits may_operate_work", /may_operate_work:/.test(R));
+  ok("the read emits may_perform_readiness_walk", /may_perform_readiness_walk:/.test(R));
+  ok("the read emits may_view_management_attention", /may_view_management_attention:/.test(R));
+  ok("may_operate_work requires the maintenance module",
+     /may_operate_work: mods\.includes\("maintenance"\)/.test(R));
+  ok("modules arrive SERVER-DERIVED from the session, never the request body",
+     /allowed_modules: req\.operator\.allowed_modules/.test(src("src/surfaces/unit_turn.js")) &&
+     !/allowed_modules: req\.body/.test(src("src/surfaces/unit_turn.js")));
+  ok("with no modules resolved it FAILS CLOSED",
+     /Array\.isArray\(allowed_modules\) \? allowed_modules\.filter\(Boolean\) : \[\]/.test(R));
+  ok("and the read says why controls are absent, rather than silently omitting them",
+     /why_no_work_controls/.test(R));
+  ok("it states that hiding is not the enforcement", /enforcement_note/.test(R));
+
+  //  BEHAVIOURAL: three operators, three capability sets.
+  const capStub = () => ({
+    unitTriageService: { readUnitTriageState: async () => ({}), nextCommittedMoveIn: async () => null },
+    unitTurnScopeService: { readTurnFlow: async () => ({}) },
+    workAcceptanceService: { readUnitFlow: async () => ({ work: [], flow: null }), readWorkState: async () => ({}) },
+    readinessService: {
+      readGateState: async () => ({ gate: { actionable: true }, certification: null }),
+      resolveWalkAuthority: async () => ({ authorized: true, reason: null }),
+    },
+  });
+  const capDb = { query: async () => ({ rows: [{ id: "u1", unit_number: "304", property_id: "p1" }] }) };
+  const capRead = makeUnitTurnRead(capStub());
+  const capCases = [
+    ["maintenance-only", ["maintenance"], true, false],
+    ["management-only", ["management"], false, true],
+    ["both", ["maintenance", "management"], true, true],
+    ["no assignment resolved", [], false, false],
+    ["not passed at all", null, false, false],
+  ];
+  const capChecks = capCases.map(async ([name, mods, mayOperate, mayManage]) => {
+    const out = await capRead.readUnitTurn(capDb, {
+      property_id: "p1", unit_id: "u1", user_id: "u", allowed_modules: mods,
+    });
+    ok(`${name}: may_operate_work=${mayOperate}`, out.capabilities.may_operate_work === mayOperate,
+       String(out.capabilities.may_operate_work));
+    ok(`${name}: may_view_management_attention=${mayManage}`,
+       out.capabilities.may_view_management_attention === mayManage);
+    if (!mayOperate) ok(`${name}: is told why there are no work controls`, !!out.capabilities.why_no_work_controls);
+  });
+  module.exports.__p8 = Promise.all(capChecks);
+
+  //  ── THE PAGE RENDERS THE DECISION, AND REPRODUCES NO RULE ────────
+  const P8 = app("unit-turn-page.js");
+  ok("every work control is gated on the server's may_operate_work",
+     /var mayOperate = !!\(S\.turn && S\.turn\.capabilities && S\.turn\.capabilities\.may_operate_work\)/.test(P8));
+  ok("Accept is gated", /mayOperate && w\.status === "required"/.test(P8));
+  ok("Reopen is gated", /mayOperate && w\.status === "complete"/.test(P8));
+  ok("the completion panel is gated", /if \(open && mayOperate\)/.test(P8));
+  ok("the page reads no module, role or title", !/allowed_modules|role_title|primary_for_modules/.test(P8));
+  ok("and explains a missing control instead of hiding it silently",
+     /why_no_work_controls/.test(P8));
+
+  //  HIDING IS NOT THE ENFORCEMENT. The write doors still refuse.
+  ok("the Build 3 write door still enforces maintenance for itself",
+     /mods\.includes\("maintenance"\)/.test(src("src/maintenance/work_acceptance.js")));
+  ok("the Build 1 write door still enforces maintenance for itself",
+     /mods\.includes\("maintenance"\)/.test(src("src/maintenance/unit_triage.js")));
+  ok("the Build 2 write door still enforces maintenance for itself",
+     /mods\.includes\("maintenance"\)/.test(src("src/maintenance/unit_turn_scope.js")));
 
   //  Property scope is server-derived everywhere.
   let clientProp = [];
@@ -408,8 +464,8 @@ section("8  authority");
 
   //  READINESS authority is correct and tightly held. The OPERATE gate is not
   //  consistent across the doors, and the page does not reflect the difference.
-  verdict("8 authority", "FAIL",
-    "readiness authority is correct — three necessary conditions, no weaker agent path. But the OPERATE gate disagrees across doors: the Unit Turn page admits a management-only operator and then shows Accept/Complete/Reopen controls that Builds 1-3 will 403");
+  verdict("8 authority", "PASS",
+    "read/operate/readiness are three distinct gates, each decided server-side. The page renders may_operate_work and reproduces no rule; every write door still enforces for itself, so hiding a control is not the enforcement");
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -639,28 +695,50 @@ section("12  staff-agent boundary");
     if (to) ok(`  …redirects to ${to}`, r.redirect && r.redirect.to === to, r.redirect && r.redirect.to);
   }
 
-  //  ── FINDING: THE BOX ADVERTISES A SENTENCE IT CANNOT READ ────────
-  //  "Report a condition" is purpose #1, and the placeholder's own first
-  //  example is a bare condition report. With a unit already open, none of
-  //  these classify: triage requires vacancy language, because Build 1 is
-  //  post-move-out initial triage. The operator types the suggested sentence
-  //  and is asked "What did you want to record?".
-  const BARE = [
+  //  ── FIXED: A CONCRETE CONDITION NOW CLASSIFIES ───────────────────
+  //  "Report a condition" is purpose #1, and the box's own first example used
+  //  to come back as "What did you want to record?" because triage was gated
+  //  on vacancy language. A concrete thing in a concrete state now reaches
+  //  initial triage, using the page's open unit.
+  const CONDITIONS = [
     "There are cockroaches behind the refrigerator.",
-    "The outlets in the bedroom are dead.",
+    "The bedroom window is cracked.",
+    "There is water under the kitchen sink.",
     "The bathroom door does not latch.",
+    "The living-room carpet is stained.",
+    "The outlets in the bedroom are dead.",
   ];
-  for (const b of BARE) {
-    ok(`FINDING: bare condition "${b.slice(0, 34)}…" → unclear`,
-       INTENT.classifyIntent(b, ctx).intent === "unclear", INTENT.classifyIntent(b, ctx).intent);
+  for (const c of CONDITIONS) {
+    const r = INTENT.classifyIntent(c, ctx);
+    ok(`condition "${c.slice(0, 34)}…" → initial_triage`, r.intent === "initial_triage", r.intent);
+    ok("  …and does not assume a complete inspection",
+       r.unknowns.some((u) => /completeness is NOT assumed/i.test(u)));
+    ok("  …and does not assume vacancy",
+       r.unknowns.some((u) => /Vacancy is not assumed/i.test(u)));
+    ok("  …and proposes no scope", !r.proposed.paint_level && !r.proposed.cleaning_level);
   }
-  ok("FINDING: the app's placeholder offers exactly that failing sentence",
-     /cockroaches behind the refrigerator/.test(app("unit-turn-page.js")));
-  ok("FINDING: and the server advertises 'Report a condition' as purpose #1",
+  //  VAGUE LANGUAGE STILL ASKS. The line is a nameable object in a nameable
+  //  state, not a complaint.
+  for (const v of ["It is bad.", "Needs work.", "There is an issue.", "I fixed it."]) {
+    ok(`vague "${v}" stays unclear`, INTENT.classifyIntent(v, ctx).intent === "unclear",
+       INTENT.classifyIntent(v, ctx).intent);
+  }
+  //  A condition with no unit anywhere still asks which unit.
+  const noUnit = INTENT.classifyIntent(CONDITIONS[0], {});
+  ok("a condition with no unit context asks which unit",
+     noUnit.intent === "unclear" && /which unit/i.test(noUnit.clarification || ""), noUnit.clarification);
+  ok("the app's placeholder example now classifies",
+     /cockroaches behind the refrigerator/.test(app("unit-turn-page.js")) &&
+     INTENT.classifyIntent("There are cockroaches behind the refrigerator.", ctx).intent === "initial_triage");
+  ok("and the server still advertises 'Report a condition' as purpose #1",
      /"Report a condition"/.test(src("src/surfaces/unit_turn_read.js")));
-  //  It is at least an HONEST failure — it asks rather than guessing.
-  ok("the failure mode is a question, not a wrong record",
-     !!INTENT.classifyIntent(BARE[0], ctx).clarification);
+  //  A CONDITION IS NOT A COMPLETION. Both share nouns; ordering must hold.
+  ok("a completion sentence about the same noun stays work_completion",
+     INTENT.classifyIntent("The refrigerator is installed and working.", ctx).intent === "work_completion");
+  ok("a scope sentence stays turn_scope",
+     INTENT.classifyIntent("Actually, it needs full paint.", ctx).intent === "turn_scope");
+  ok("failed-walk language still redirects",
+     INTENT.classifyIntent("Final walk failed. The bathroom door does not latch.", ctx).redirect.to === "final_readiness");
 
   //  Substring false matches — the bug class that bit twice already.
   ok("'ready' inside another word is not a readiness claim",
@@ -698,8 +776,8 @@ section("12  staff-agent boundary");
 
   module.exports.__p12 = Promise.all(pending).then(() => {
     ok("and NO canonical service was reached by any of them", calls.length === 0, calls.join(","));
-    verdict("12 staff-agent boundary", "FAIL",
-      "the vocabulary and the retired-intent guarantees are correct and tight. But 'Report a condition' is advertised as purpose #1 and the placeholder's own example does not classify — triage is vacancy-gated, so a bare condition report returns a clarification");
+    verdict("12 staff-agent boundary", "PASS",
+      "three confirmable intents, four retired intents unreachable including from stored rows, and a concrete observed condition now reaches initial triage without assuming vacancy or a complete inspection — while vague language still asks");
   });
 }
 
@@ -756,55 +834,81 @@ section("13  UI simplification");
 }
 
 // ════════════════════════════════════════════════════════════════════
-section("15  PHOTO PROOF — the load-bearing finding");
+section("15  PHOTO PROOF — the load-bearing finding, now closed");
 {
   const P = app("unit-turn-page.js");
+  const PR = src("src/maintenance/work_proof.js");
+  const ACC = src("src/maintenance/work_acceptance_service.js");
 
-  //  STEP 1-2: does the operator ever select a file?
-  const hasFileInput = /type="file"/.test(P);
-  ok("STEP 1 operator selects a photo — NO FILE INPUT EXISTS", !hasFileInput === true);
-  ok("STEP 2 browser processes the file — no FileReader, no FormData",
-     !/FileReader|FormData|\.files\[/.test(P));
-  ok("the control is a TEXT input", /class="ut-in wk-photo"/.test(P) && !/wk-photo[^>]*type="file"/.test(P));
-
-  //  STEP 3-4: is there an upload endpoint the Build uses?
-  const usesUpload = /\/intake\/media|multipart|upload/i.test(P);
-  ok("STEP 3 upload endpoint — the Build calls none", !usesUpload);
-
-  //  An upload primitive DOES exist on main. It is simply not used here.
-  const INTAKE = src("src/onboarding/intake.js");
-  ok("main HAS a governed attachment primitive (intake_media + multer + a serve route)",
-     /insert into intake_media/i.test(INTAKE) && /router\.get\("\/intake\/media\/:id"/.test(INTAKE));
-  ok("but it is password-gated, not staff-session scoped",
-     /password/i.test(INTAKE.slice(INTAKE.indexOf('router.get("/intake/media/:id"'), INTAKE.indexOf('router.get("/intake/media/:id"') + 700)));
-  ok("Build 3 does not reference it", !/intake_media/.test(src("src/maintenance/work_acceptance_service.js")));
-  ok("Build 6A does not reference it", !/intake_media/.test(src("src/surfaces/unit_turn_read.js")));
-
-  //  STEP 5-7: the claim, the proof read, the page.
-  ok("STEP 5 completion claim carries whatever string was typed",
-     /proof_photos: d\(i, "photo"\) \? \[d\(i, "photo"\)\] : \[\]/.test(P));
-  ok("STEP 6 proof is evaluated by COUNTING the array", /photos\.length < req\.photos_min/.test(src("src/maintenance/work_proof.js")));
-  ok("STEP 7 the page renders the shortfall", /proof_shortfall/.test(P));
-
-  //  ── THE DEFECT, EXECUTED ──────────────────────────────────────────
+  //  ── THE DEFECT IS GONE ────────────────────────────────────────────
   const w = { work_text: "Source and install refrigerator", stage: "repair" };
-  const typed = PROOF.evaluateProof(w, { outcome: "completed", proof_photos: ["x"], functional_confirmation: "it cools now" });
-  const space = PROOF.evaluateProof(w, { outcome: "completed", proof_photos: [" "], functional_confirmation: "it cools now" });
-  const none = PROOF.evaluateProof(w, { outcome: "completed", proof_photos: [], functional_confirmation: "it cools now" });
+  const conf = "it cools now";
+  const STORE = { attachments_available: true };
 
-  ok("no photo correctly leaves the work open", none.satisfied === false);
-  //  These two are the finding. They are asserted as FACTS about current
-  //  behaviour, and the verdict below is FAIL because of them.
-  ok("FINDING: a single typed character satisfies 'one completion photo'", typed.satisfied === true);
-  ok("FINDING: a single SPACE satisfies it too", space.satisfied === true);
+  //  Required proof obligations, executed.
+  ok('" " does not satisfy photo proof',
+     PROOF.evaluateProof(w, { outcome: "completed", proof_photos: [" "], functional_confirmation: conf }, STORE).satisfied === false);
+  ok('"photo.jpg" typed as text does not satisfy proof',
+     PROOF.evaluateProof(w, { outcome: "completed", proof_photos: ["photo.jpg"], functional_confirmation: conf }, STORE).satisfied === false);
+  ok("a random UUID does not satisfy proof",
+     PROOF.evaluateProof(w, { outcome: "completed", proof_photos: ["3f2504e0-4f89-41d3-9a0c-0305e82c3301"], functional_confirmation: conf }, STORE).satisfied === false);
+  ok("a nonexistent media id does not satisfy proof — the STORE decides, not the string",
+     PROOF.evaluateProof(w, { outcome: "completed", proof_photos: ["missing-id"], verified_photos: [], functional_confirmation: conf }, STORE).satisfied === false);
+  ok("a VERIFIED same-property attachment satisfies the one-photo requirement",
+     PROOF.evaluateProof(w, { outcome: "completed", verified_photos: ["att-1"], functional_confirmation: conf }, STORE).satisfied === true);
+  ok("with NO attachment store, nothing satisfies it — fail closed",
+     PROOF.evaluateProof(w, { outcome: "completed", verified_photos: ["att-1"], functional_confirmation: conf }).satisfied === false);
+  ok("and the shortfall says photo proof is unavailable, not 'add a photo'",
+     PROOF.evaluateProof(w, { outcome: "completed", functional_confirmation: conf }).photo_proof_unavailable === true);
 
-  //  The module already knows the difference for TEXT.
-  const shortConf = PROOF.evaluateProof(w, { outcome: "completed", proof_photos: ["x"], functional_confirmation: "ok" });
-  ok("a two-character functional confirmation is REFUSED — the same care is not applied to photos",
-     shortConf.satisfied === false);
+  //  The evaluator can no longer be satisfied by a string, structurally.
+  ok("the evaluator counts VERIFIED attachments only", /verified\.length < req\.photos_min/.test(PR));
+  ok("and never compares raw proof_photos against the minimum",
+     !/proof_photos[^\n]*<\s*req\.photos_min/.test(PR));
+  ok("a declared-absent store voids any 'verified' list handed to it",
+     /attachmentsAvailable && Array\.isArray\(claim\.verified_photos\)/.test(PR));
 
-  verdict("15 photo proof", "FAIL",
-    "'complete with photo' is not an operational flow: no file input, no upload call, and evaluateProof counts array length so one typed character — or one space — closes work as proof-satisfied");
+  //  ── THE SERVICE RESOLVES, IT DOES NOT TRUST ───────────────────────
+  ok("the claim path resolves references against an attachment store",
+     /attachmentService\.resolveForProperty/.test(ACC));
+  ok("resolution is scoped to the work's property, so another property's attachment cannot be borrowed",
+     /property_id: w\.property_id, references: photos/.test(ACC));
+  ok("the store is OPTIONAL and its absence fails closed",
+     /attachmentService = null/.test(ACC) && /attachments_available: attachmentsAvailable/.test(ACC));
+  ok("the raw strings are still RECORDED as history",
+     /note, photos, functional_confirmation, verdict\.satisfied/.test(ACC));
+  ok("proof and completion stay separately attributed",
+     /claimed_by_user_id/.test(ACC));
+
+  //  ── THE UI NO LONGER PRETENDS ─────────────────────────────────────
+  ok("the fake 'Photo reference' text box is gone", !/wk-photo/.test(P));
+  ok("no file control was faked in its place either", !/type="file"/.test(P));
+  ok("the panel states photo proof is unavailable", /Photo proof is unavailable/.test(P));
+  ok("and says the work stays open", /stays open/.test(P));
+  ok("the claim sends no typed photo", /proof_photos: \[\]/.test(P));
+  ok("the message box photo field is gone too", !/mtPhoto/.test(P));
+  ok("the completion button no longer claims to complete", /Record what was done/.test(P));
+
+  //  ── AN ATTACHMENT PRIMITIVE EXISTS, AND CANNOT CARRY THIS ─────────
+  const INTAKE = src("src/onboarding/intake.js");
+  ok("main HAS an attachment primitive (intake_media + multer + a serve route)",
+     /insert into intake_media/i.test(INTAKE) && /router\.get\("\/intake\/media\/:id"/.test(INTAKE));
+  const M014 = src("migrations/014_intake.sql");
+  const media = M014.slice(M014.indexOf("create table if not exists intake_media"), M014.indexOf("create table if not exists intake_events"));
+  ok("but intake_media has NO property_id — property scope is impossible", !/property_id/.test(media));
+  ok("and NO uploader column — attribution is impossible", !/user_id|uploaded_by/.test(media));
+  ok("its serve route is password-gated, not staff-session scoped",
+     /password/i.test(INTAKE.slice(INTAKE.indexOf('router.get("/intake/media/:id"'), INTAKE.indexOf('router.get("/intake/media/:id"') + 700)));
+  const D001 = src("migrations/001_baseline.sql");
+  const docs = D001.slice(D001.indexOf("create table if not exists documents"), D001.indexOf("create table if not exists documents") + 700);
+  ok("the documents table has property scope but NO durable bytes", /property_id/.test(docs) && !/bytea/.test(docs));
+  ok("no migration was added for attachments",
+     !fs.existsSync(path.join(REPO, "migrations", "118_unit_turn_attachments.sql")));
+  const migs = fs.readdirSync(path.join(REPO, "migrations")).filter((f) => /^\d{3}_.*\.sql$/.test(f)).sort();
+  ok("the migration ceiling is still 117", migs[migs.length - 1].startsWith("117"), migs[migs.length - 1]);
+
+  verdict("15 photo proof", "PARTIAL — DEFECT CLOSED, UPLOAD PATH STOPPED",
+    "a string can no longer satisfy proof and the UI no longer pretends: photo-requiring work now stays OPEN and says why. The real upload path is NOT built — no existing primitive carries property scope AND uploader attribution AND durable bytes, so it needs a schema change and was stopped per the scope rule");
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -853,6 +957,80 @@ section("16  live-first seams");
 }
 
 // ════════════════════════════════════════════════════════════════════
+section("18  NEW FAILURE MODES INTRODUCED BY THE CLEANUP");
+const NEWMODES = [];
+{
+  const mode = (name, status, detail) => { NEWMODES.push({ name, status, detail }); };
+  const ACC = src("src/maintenance/work_acceptance_service.js");
+  const R = src("src/surfaces/unit_turn_read.js");
+  const P = app("unit-turn-page.js");
+
+  //  1. Attachment uploaded but the completion transaction fails.
+  ok("the claim runs inside the caller's transaction, so a failure rolls the claim back",
+     /async function claimCompletion\(client, spec\)/.test(ACC));
+  mode("attachment uploaded, completion transaction fails", "unproven without Postgres",
+    "the claim rolls back with the transaction; a stored attachment would be orphaned, which is safe (an unreferenced blob) but leaves no cleanup path. No upload exists yet, so this cannot occur today.");
+
+  //  2. Completion submitted twice with the same attachment.
+  ok("a second claim is a second attributed row, never an overwrite",
+     /insert into work_completion_claims/i.test(ACC) && !/update\s+work_completion_claims\s+set/i.test(ACC));
+  ok("the work is only closed when the verdict is satisfied",
+     /if \(outcome === OUTCOMES\.COMPLETED && verdict\.satisfied\)/.test(ACC));
+  mode("completion submitted twice with the same attachment", "duplicate-safe",
+    "each submission appends its own attributed claim; the second closes nothing new because the work is already complete. No duplicate upload is created because the reference is reused, not re-uploaded.");
+
+  //  3. Attachment deleted or unavailable after completion.
+  mode("attachment deleted after completion", "unproven — and NOT re-verified",
+    "proof is evaluated at claim time and the verdict is stored on the claim row. If an attachment later disappears, the closed work stays closed and nothing re-checks. That is a real gap in any future upload design: the reference must be immutable, or proof must be re-derived on read.");
+
+  //  4. Capabilities stale between read and write.
+  ok("capabilities are recomputed on every read, never cached in the page",
+     /capabilities: \{/.test(R) && !/localStorage|sessionStorage/.test(P));
+  ok("the write door re-derives authority from the session on every request",
+     /resolveStaffSession/.test(src("src/maintenance/work_acceptance.js")));
+  mode("capabilities stale between read and write", "prevented",
+    "the page's capabilities are a render hint with a short life; every write route resolves the session and its assignment again. A revoked operator is refused at the write even with a stale page open.");
+
+  //  5. Assignment deactivated after the page loads.
+  ok("session resolution requires an ACTIVE assignment at the property",
+     /active = true/.test(src("src/identity/staff_session_service.js")));
+  mode("assignment deactivated after page load", "prevented at the write, stale in the view",
+    "the next write is refused because resolveStaffSession requires active = true. The already-rendered page keeps showing controls until it reloads — the control is stale, the authority is not.");
+
+  //  6. A concrete condition that also reads like a completion.
+  const ctx6 = { unit_id: "u1", open_work: [
+    { id: "w1", work_text: "Repair bathroom door latch", stage: "repair", status: "required" }] };
+  ok("'The bathroom door is fixed.' classifies as completion, not observation",
+     INTENT.classifyIntent("The bathroom door is fixed.", ctx6).intent === "work_completion",
+     INTENT.classifyIntent("The bathroom door is fixed.", ctx6).intent);
+  ok("'The bathroom door does not latch.' classifies as observation, not completion",
+     INTENT.classifyIntent("The bathroom door does not latch.", ctx6).intent === "initial_triage");
+  //  Measure the BRANCH, not the function definition — the definition sits
+  //  near the top of the file and says nothing about evaluation order.
+  ok("completion is checked BEFORE the condition branch",
+     INTENT_SRC_ORDER("any(t, S.complete)") < INTENT_SRC_ORDER("if (isConcreteCondition(t))"),
+     `complete=${INTENT_SRC_ORDER("any(t, S.complete)")} condition=${INTENT_SRC_ORDER("if (isConcreteCondition(t))")}`);
+  ok("and the condition branch is checked BEFORE scope, so an observation is not promoted to work",
+     INTENT_SRC_ORDER("if (isConcreteCondition(t))") < INTENT_SRC_ORDER("if (paint || clean"));
+  mode("condition language that also reads like completion", "prevented by ordering",
+    "the completion branch runs first, so 'is fixed' is a completion and 'does not latch' is an observation. Both still require a human confirmation before anything is recorded.");
+
+  //  7. A sentence naming more than one unit.
+  const two = INTENT.classifyIntent("There are cockroaches in 304 and 305.", {});
+  ok("a two-unit sentence takes only the first reference", two.unit_ref === "304", two.unit_ref);
+  mode("a sentence names more than one unit", "PARTIALLY UNPROVEN",
+    "the classifier takes the FIRST unit-shaped token and the service resolves it against the property; a second unit in the same sentence is silently ignored rather than questioned. Nothing wrong is recorded — the proposal names one unit and a human confirms it — but the operator is not told the second reference was dropped.");
+
+  //  8. An attachment id reused across two work items.
+  mode("attachment id reused across two work items", "unproven — no store exists",
+    "resolveForProperty is scoped to the property, not to the work item, so the same reference could satisfy two items. Whether that is wrong is a product question (one photo can legitimately show two finished things); it must be ruled when the attachment primitive is built.");
+
+  for (const m of NEWMODES) ok(`classified: ${m.name}`, !!m.status && !!m.detail);
+  verdict("18 new failure modes", "MIXED",
+    `${NEWMODES.filter((m) => /prevented|duplicate-safe/.test(m.status)).length} prevented, ${NEWMODES.filter((m) => /unproven/i.test(m.status)).length} unproven — every one named rather than assumed away`);
+}
+
+// ════════════════════════════════════════════════════════════════════
 section("17  by-bed grain");
 {
   const T = src("src/maintenance/unit_triage_service.js");
@@ -876,7 +1054,7 @@ section("17  by-bed grain");
 }
 
 // ════════════════════════════════════════════════════════════════════
-Promise.all([module.exports.__p12]).then(() => {
+Promise.all([module.exports.__p8, module.exports.__p12]).then(() => {
   section("STATE-TRANSITION MATRIX");
   for (const m of MATRIX) {
     console.log(`  ${m.state}`);
@@ -884,6 +1062,9 @@ Promise.all([module.exports.__p12]).then(() => {
     console.log(`     next: ${m.next_action || "(none — see exceptions)"}${m.next_kind ? "  [" + m.next_kind + "]" : ""}`);
     if (m.exceptions.length) console.log(`     manager decision: ${m.exceptions.join(", ")}`);
   }
+
+  section("NEW FAILURE MODES");
+  for (const m of NEWMODES) console.log(`  ${m.name}\n     ${m.status}`);
 
   section("IDEMPOTENCY CLASSIFICATION");
   for (const w of IDEMPOTENCY) console.log(`  ${w.write.padEnd(34)} ${w.classification}`);

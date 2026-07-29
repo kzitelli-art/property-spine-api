@@ -145,6 +145,63 @@ const S = {
   scope: [/\bneeds?\b/i, /\brequires?\b/i, /\bpaint\b/i, /\bclean\b/i],
   vacancy: [/\b(is |it'?s )?(empty|vacant)\b/i, /\bmoved out\b/i, /\bnobody(?:'s| is)? (there|inside)\b/i],
 };
+
+// ── A CONCRETE OBSERVED CONDITION ───────────────────────────────────
+//
+//  "Report a condition" was purpose #1 of the message box, and until now a
+//  bare condition report did not classify: triage was gated on vacancy
+//  language, because BUILD 1 is post-move-out initial triage. So the box's own
+//  first example — "There are cockroaches behind the refrigerator." — came
+//  back as "What did you want to record?". The surface advertised a sentence
+//  it could not read.
+//
+//  This does NOT make the classifier guess. It requires BOTH halves of an
+//  observation a person could point at:
+//
+//      a CONCRETE THING          cockroaches · window · sink · carpet · outlet
+//      and either a STATE        cracked · leaking · stained · does not latch
+//      or a PRESENCE claim       "there is …" / "there are …"
+//
+//  "It is bad", "Needs work" and "There is an issue" have no concrete thing,
+//  so they stay `unclear` and still ask. That is the line: a nameable object in
+//  a nameable state, not a vague complaint.
+//
+//  What it produces is an OBSERVATION, and nothing more. Vacancy stays
+//  whatever the BUILD 1 interpreter reads from the words — `uncertain` when
+//  the message does not say — and inspection completeness is never upgraded.
+//  An observed condition is not a complete inspection and not a turn scope.
+const CONDITION_NOUN = new RegExp(
+  "\\b(" + [
+    "cockroach(es)?", "roach(es)?", "rodent(s)?", "mice", "mouse", "rat(s)?", "ant(s)?",
+    "pest(s)?", "bed ?bug(s)?", "insect(s)?",
+    "refrigerator", "fridge", "stove", "range", "oven", "dishwasher", "microwave",
+    "washer", "dryer", "disposal", "water ?heater", "hvac", "furnace", "thermostat",
+    "window(s)?", "door(s)?", "latch(es)?", "lock(s)?", "screen(s)?", "blind(s)?",
+    "carpet(s|ing)?", "floor(s|ing)?", "tile(s)?", "baseboard(s)?", "wall(s)?",
+    "ceiling(s)?", "cabinet(s)?", "counter(top)?(s)?", "closet(s)?",
+    "sink(s)?", "faucet(s)?", "toilet(s)?", "tub(s)?", "shower(s)?", "drain(s)?", "pipe(s)?",
+    "outlet(s)?", "switch(es)?", "breaker(s)?", "light(s)?", "fixture(s)?", "smoke ?detector(s)?",
+    "water", "leak(s)?", "mold", "mildew", "odor(s)?", "hole(s)?", "crack(s)?", "stain(s)?",
+  ].join("|") + ")\\b", "i");
+
+const CONDITION_STATE = new RegExp(
+  "\\b(" + [
+    "cracked", "broken", "damaged", "missing", "leaking", "leak(s|ed)?", "dripping",
+    "stained", "torn", "ripped", "dead", "clogged", "blocked", "loose", "dirty", "filthy",
+    "mold(y|ed)?", "smell(s|y|ing)?", "stuck", "burnt", "burned", "chipped", "peeling",
+    "not working", "not draining", "not closing",
+  ].join("|") + ")\\b", "i");
+
+//  "does not latch", "doesn't drain", "won't close" — a negated verb attached
+//  to a concrete thing. The noun gate is what keeps this from matching
+//  "it doesn't work".
+const CONDITION_NEGATED = /\b(does\s+not|does\s?n'?t|will\s+not|wo\s?n'?t|can\s?n?o?'?t)\s+\w+/i;
+const CONDITION_PRESENCE = /\bthere\s+(is|are|was|were)\b/i;
+
+function isConcreteCondition(t) {
+  if (!CONDITION_NOUN.test(t)) return false;
+  return CONDITION_STATE.test(t) || CONDITION_NEGATED.test(t) || CONDITION_PRESENCE.test(t);
+}
 const any = (t, list) => list.some((re) => re.test(t));
 
 // Paint and cleaning levels, only where the words carry them.
@@ -288,6 +345,24 @@ function classifyIntent(text, context = {}) {
     return out;
   }
 
+  // ── A CONCRETE OBSERVED CONDITION (release candidate) ─────────────
+  //  Checked AFTER vacancy, so "304 is empty. There are cockroaches…" still
+  //  takes the richer vacancy path, and BEFORE scope, so an observed defect is
+  //  recorded as something SEEN rather than promoted to work somebody has
+  //  decided to do. Turning an observation into scope would skip the human.
+  if (isConcreteCondition(t)) {
+    out.intent = INTENT.TRIAGE;
+    out.proposed = { observation_text: t };
+    out.unknowns.push("This is an observed condition. Vacancy is not assumed — the initial walk records what the words actually say.");
+    out.unknowns.push("Inspection completeness is NOT assumed. One condition is not a complete inspection, and it is not a turn scope.");
+    if (!out.unit_ref && !context.unit_id) {
+      out.intent = INTENT.UNCLEAR;
+      out.clarification = "Which unit?";
+      out.unknowns.push("A condition has to be attached to a unit. None was named and none is open.");
+    }
+    return out;
+  }
+
   if (paint || clean || (any(t, S.scope) && (/\bpaint\b/i.test(t) || /\bclean\b/i.test(t)))) {
     out.intent = INTENT.SCOPE;
     out.proposed = {
@@ -400,7 +475,7 @@ function photoNeedsClarification(text, photos) {
 }
 
 module.exports = {
-  classifyIntent, resolveWorkTarget, photoNeedsClarification,
+  classifyIntent, resolveWorkTarget, photoNeedsClarification, isConcreteCondition,
   needsClarification, statusLabel,
   INTENT, INTENT_VALUES, INTENT_SERVICE, INTENT_PLAIN,
   CONFIRMABLE_INTENTS, RETIRED_INTENTS,

@@ -170,7 +170,11 @@ section("2  the Accept button still calls the Build 3 canonical service");
   ok("it still writes the canonical acceptance row",
      /insert into work_acceptances/i.test(ACCEPT_SVC_SRC));
   const { execSync } = require("child_process");
-  const since6A = execSync("git diff --name-only 62b25e8 -- src/maintenance/work_acceptance_service.js src/maintenance/work_acceptance.js migrations/115_work_acceptance_and_proof.sql",
+  //  Pinned to the Build 6A → Build 6B range. Measuring to the working tree
+  //  would silently turn this into "no later work may ever touch Build 3",
+  //  which is a different claim: the release candidate changes the proof gate
+  //  deliberately, and that change is asserted in tests/release_candidate_proof.js.
+  const since6A = execSync("git diff --name-only 62b25e8 b562339 -- src/maintenance/work_acceptance_service.js src/maintenance/work_acceptance.js migrations/115_work_acceptance_and_proof.sql",
     { cwd: __dirname + "/.." }).toString().trim();
   ok("the Build 3 acceptance service and door are byte-unchanged by BUILD 6B",
      since6A === "", since6A);
@@ -439,6 +443,9 @@ section("8  no migration and no domain table change is introduced");
     "docs/UNIT_TURN_RELEASE_CANDIDATE.md",
     "docs/UNIT_TURN_THIN_LIVE_PROOF.md",
     "tests/release_candidate_proof.js",
+    // release-candidate FIXES — photo proof, capabilities, condition classifier
+    "src/maintenance/work_proof.js", "src/maintenance/work_acceptance_service.js",
+    "src/surfaces/unit_turn.js", "tests/work_acceptance_proof.js",
   ];
   const unexpected = changed.filter((f) => !ALLOWED.includes(f));
   ok("only the language surfaces changed", unexpected.length === 0, unexpected.join(","));
@@ -538,7 +545,11 @@ section("10  the staff agent supports exactly three purposes");
   const r = I.classifyIntent("The refrigerator is installed and working.", { unit_id: "u1", open_work: CTX_WORK });
   ok("a completion message still classifies", r.intent === "work_completion", r.intent);
   ok("the primary completion action is still the button", /"Complete work"/.test(APP_PAGE));
-  ok("with photo capture on the work item", /wk-photo/.test(APP_PAGE));
+  //  RELEASE CANDIDATE: the photo control is GONE, because it uploaded nothing
+  //  and anything typed into it counted as proof. The panel now says so.
+  ok("the fake photo control is gone", !/wk-photo/.test(APP_PAGE));
+  ok("and the panel says photo proof is unavailable",
+     /Photo proof is unavailable/.test(APP_PAGE));
 
   //  NO INTERNAL NAME REACHES THE OPERATOR.
   ok("plain language for every intent lives in ONE place", /INTENT_PLAIN/.test(INTENT_SRC));
