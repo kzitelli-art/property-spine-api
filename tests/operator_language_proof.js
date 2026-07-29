@@ -424,10 +424,21 @@ section("8  no migration and no domain table change is introduced");
 
   //  The canonical services that own domain truth: only the staff agent, the
   //  page read, and the sequence LANGUAGE may change in this build.
+  //  BOOKKEEPING CORRECTION (release candidate). Build 6B's final commit added
+  //  the deferred-display-language record, and this list was written before it
+  //  existed — so the assertion failed at the frozen tip against a file BUILD
+  //  6B deliberately produced. Documentation is an intended Build 6B output;
+  //  the point of the assertion is that no SOURCE outside these files moved.
   const ALLOWED = [
     "src/agent/staff_agent_intent.js", "src/agent/staff_agent_service.js", "src/agent/staff_agent.js",
     "src/surfaces/unit_turn_read.js", "src/maintenance/turn_sequence.js",
     "tests/operator_language_proof.js", "tests/staff_agent_proof.js", "tests/unit_turn_page_proof.js",
+    "docs/BUILD_6B_DEFERRED_DISPLAY_LANGUAGE.md",
+    // release-candidate additions, documentation and proof only
+    "docs/BUILD_1_6B_INTEGRATION_READINESS.md",
+    "docs/UNIT_TURN_RELEASE_CANDIDATE.md",
+    "docs/UNIT_TURN_THIN_LIVE_PROOF.md",
+    "tests/release_candidate_proof.js",
   ];
   const unexpected = changed.filter((f) => !ALLOWED.includes(f));
   ok("only the language surfaces changed", unexpected.length === 0, unexpected.join(","));
