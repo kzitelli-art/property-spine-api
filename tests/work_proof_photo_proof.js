@@ -289,8 +289,21 @@ section("3B  A TYPED REFERENCE IS NOT PROOF — the defect this slice fixes");
         if (/from property_team_assignments/i.test(s)) {
           //  The real query filters on the module inside SQL, so an actor
           //  without it matches no row.
-          const need = /array\['maintenance'\]/.test(s) ? "maintenance" : null;
-          return { rows: need && !mods.includes(need) ? [] : [{ "?column?": 1 }] };
+          //
+          //  CORRECTED AFTER A NEGATIVE-CONTROL RUN. This used to test for the
+          //  literal `array['maintenance']` and refuse anyone lacking it —
+          //  which meant WIDENING the SQL to `maintenance OR management` was
+          //  not caught: the token was still there, so the double still
+          //  refused a manager the real query would now admit. The double has
+          //  to read the predicate, not spot a word in it.
+          const wanted = [...s.matchAll(/array\['(\w+)'\]/g)].map((m) => m[1]);
+          if (!wanted.length) return { rows: [{ "?column?": 1 }] };
+          //  Several module tests joined by OR admit anyone holding any one of
+          //  them; a single test admits only holders of that one.
+          const satisfied = wanted.length > 1 && /\bor\b/i.test(s)
+            ? wanted.some((m) => mods.includes(m))
+            : wanted.every((m) => mods.includes(m));
+          return { rows: satisfied ? [{ "?column?": 1 }] : [] };
         }
         if (/from unit_triage_required_work/i.test(s) && /where w\.id/i.test(s)) {
           return { rows: [{ id: "w1", property_id: "p1", unit_id: "u1", status: "required",
@@ -481,8 +494,25 @@ section("4B  MAINTENANCE IS REQUIRED TO RECORD A COMPLETION");
   ok("it requires the maintenance module in SQL",
      /allowed_modules @> array\['maintenance'\]::text\[\]/.test(SVC));
   ok("and an ACTIVE assignment", /active=true/.test(SVC));
-  ok("management alone does not satisfy it",
-     !/array\['maintenance'\]::text\[\]\s*\n?\s*or allowed_modules @> array\['management'\]::text\[\]\)\s*\n\s*\[property_id, user_id\]\)\)\.rows\[0\];\s*\n\s*if \(!r\) throw Object\.assign\(\s*\n\s*new Error\(\s*\n\s*"recording a completion/.test(SVC));
+  //  REPLACED AFTER A NEGATIVE-CONTROL RUN. The previous form was a long
+  //  brittle regex over the whole function body that matched nothing and
+  //  therefore passed unconditionally. Read the ONE query instead.
+  const authQuery = SVC.slice(SVC.indexOf("async function assertMaintenanceOperator"),
+                              SVC.indexOf("//  Is this item actionable"));
+  ok("the completion authority query names exactly one module",
+     (authQuery.match(/array\['(\w+)'\]/g) || []).length === 1,
+     (authQuery.match(/array\['(\w+)'\]/g) || []).join(","));
+  ok("and that module is maintenance", /array\['maintenance'\]/.test(authQuery));
+  ok("management does NOT appear in it", !/management/.test(authQuery.replace(/\/\/.*$/gm, "")));
+  ok("there is no OR widening it", !/\bor allowed_modules\b/.test(authQuery));
+  //  The ACCEPTANCE query is separate and deliberately still broader — a
+  //  manager may assign and accept work. Only recording completion narrowed.
+  const acceptQuery = SVC.slice(SVC.indexOf("async function assertEligible"),
+                                SVC.indexOf("async function assertMaintenanceOperator"));
+  ok("acceptance eligibility is a DIFFERENT, broader query",
+     /array\['management'\]/.test(acceptQuery));
+  ok("so narrowing completion did not narrow acceptance",
+     acceptQuery.indexOf("or allowed_modules") > -1);
   ok("claimCompletion calls it with the WORK ROW's property",
      /assertMaintenanceOperator\(client, \{ property_id: w\.property_id, user_id: actor_user_id \}\)/.test(SVC));
   const claimBody = SVC.slice(SVC.indexOf("async function claimCompletion"), SVC.indexOf("// ── REOPEN"));
