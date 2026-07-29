@@ -427,7 +427,24 @@ section("8  no migration and no domain table change is introduced");
   const { execSync } = require("child_process");
   const changed = execSync("git diff --name-only 62b25e8", { cwd: __dirname + "/.." })
     .toString().trim().split("\n").filter(Boolean);
-  ok("no migration file was touched", !changed.some((f) => f.startsWith("migrations/")), changed.join(","));
+  //  BOOKKEEPING CORRECTION (closure slice). This assertion used to read "no
+  //  migration file was touched" — true through the release candidate, and
+  //  false the moment the closure slice committed 118. It went stale silently
+  //  because `git diff` cannot see an UNTRACKED file, so it still passed while
+  //  the migration sat unstaged and failed only after the commit. Pinning the
+  //  Build 6B claim above was not enough; this one had to say what is now true.
+  //
+  //  What still matters is unchanged: exactly ONE migration is added, it is
+  //  118, and no historical migration is edited or repaired.
+  const migrationsTouched = changed.filter((f) => f.startsWith("migrations/"));
+  ok("exactly one migration file is added since Build 6B's base",
+     migrationsTouched.length === 1, migrationsTouched.join(","));
+  ok("and it is the closure slice's 118",
+     migrationsTouched[0] === "migrations/118_work_proof_attachments.sql", migrationsTouched[0]);
+  const historical = execSync("git diff --name-only 62b25e8 -- migrations/", { cwd: __dirname + "/.." })
+    .toString().trim().split("\n").filter(Boolean)
+    .filter((f) => Number(f.replace("migrations/", "").slice(0, 3)) < 118);
+  ok("no historical migration is edited or repaired", historical.length === 0, historical.join(","));
 
   //  The canonical services that own domain truth: only the staff agent, the
   //  page read, and the sequence LANGUAGE may change in this build.
