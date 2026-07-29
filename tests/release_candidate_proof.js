@@ -372,9 +372,22 @@ section("8  authority");
      /mods\.includes\("management"\)/.test(src("src/surfaces/unit_turn.js")));
   ok("the proof READ uses a reader gate, not the write gate",
      /:attachmentId", \.\.\.readerGate/.test(src("src/maintenance/work_acceptance.js")));
-  ok("and every write route still uses the write gate",
-     ["accept", "claim", "reopen"].every((r) =>
-       new RegExp("\\/" + r + "\", \\.\\.\\.operatorGate").test(src("src/maintenance/work_acceptance.js"))));
+  //  HARDENING: /claim now spreads claimGate and runs refuseClientProperty
+  //  AFTER multer, because on a multipart request req.body does not exist
+  //  until multer has parsed it. Same three checks, correct order.
+  const DOOR_G = src("src/maintenance/work_acceptance.js");
+  for (const r of ["accept", "reopen"]) {
+    ok("the /" + r + " route uses the write gate",
+       new RegExp("\\/" + r + "\", \\.\\.\\.operatorGate").test(DOOR_G));
+  }
+  ok("the /claim route authenticates and checks maintenance BEFORE multer",
+     /\/claim",\s*\.\.\.claimGate, acceptPhotoIfMultipart/.test(DOOR_G));
+  ok("and its claim gate is maintenance-only",
+     /const claimGate = \[requireOperator, requireMaintenanceModuleAccess\]/.test(DOOR_G));
+  ok("with the property refusal AFTER the body exists",
+     /acceptPhotoIfMultipart, refuseClientProperty/.test(DOOR_G));
+  ok("so multer can never run for an unauthenticated caller",
+     DOOR_G.indexOf("const claimGate") < DOOR_G.indexOf("acceptPhotoIfMultipart, refuseClientProperty"));
 
   //  ── THE READ EMITS SERVER-COMPUTED CAPABILITIES ──────────────────
   const R = src("src/surfaces/unit_turn_read.js");
@@ -901,7 +914,8 @@ section("15  PHOTO PROOF — the load-bearing finding, now closed");
 
   //  ── ONE DOOR, ONE TRANSACTION ─────────────────────────────────────
   const DOOR = src("src/maintenance/work_acceptance.js");
-  ok("one claim route, extended to multipart", /\/claim", \.\.\.operatorGate, acceptPhotoIfMultipart/.test(DOOR));
+  ok("one claim route, extended to multipart",
+     /\/claim",\s*\.\.\.claimGate, acceptPhotoIfMultipart, refuseClientProperty/.test(DOOR));
   for (const forbidden of ["/upload", "/claim-with-photo", "/complete-with-proof"]) {
     ok(`no parallel ${forbidden} route`, !DOOR.includes(`"${forbidden}`));
   }

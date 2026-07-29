@@ -89,9 +89,16 @@ function makeWorkAcceptanceService(deps) {
   if (typeof spawnObligationFromEvent !== "function") {
     throw new Error("work_acceptance_service requires spawnObligationFromEvent()");
   }
-  //  OPTIONAL, and its absence FAILS CLOSED rather than degrading to "trust
-  //  the string". When it is absent, photo-requiring work stays open and says
-  //  why; making its absence permissive would restore the defect it replaces.
+  //  ── REQUIRED, NOT OPTIONAL ANY MORE ───────────────────────────────
+  //  The completion photo is the release candidate's primary golden path, so a
+  //  deployment without an attachment service is one where finishing work is
+  //  IMPOSSIBLE — every photo-requiring item stays open forever. That is a
+  //  configuration mistake, and it must be loud at construction rather than
+  //  discovered by a technician standing in a unit.
+  //
+  //  `evaluateProof` still fails closed on a missing store. That stays as
+  //  defence in depth: this check makes the bad configuration unreachable,
+  //  and the fail-closed path makes it harmless if it is ever reached anyway.
   //
   //  Contract:
   //     storeForWork(client, { work_id, property_id, unit_id,
@@ -100,6 +107,16 @@ function makeWorkAcceptanceService(deps) {
   //                              references })                -> [verified ids]
   //  resolveForWork must return only references that exist AND match property
   //  AND unit AND work — all four, so one photo cannot close another job.
+  for (const fn of ["storeForWork", "resolveForWork"]) {
+    if (!attachmentService || typeof attachmentService[fn] !== "function") {
+      throw new Error(
+        `work_acceptance_service requires attachmentService.${fn}(). The completion ` +
+        "photo is the primary completion path; without an attachment service every " +
+        "photo-requiring item would stay open forever. Build it with " +
+        "makeWorkAcceptanceService({ spawnObligationFromEvent, attachmentService })."
+      );
+    }
+  }
   const bad = (m, extra) => Object.assign(new Error(m), { httpStatus: 400, ...(extra || {}) });
 
   async function loadWork(client, { work_id, property_id }) {
@@ -126,6 +143,38 @@ function makeWorkAcceptanceService(deps) {
       [property_id, user_id])).rows[0];
     if (!r) throw Object.assign(
       new Error("you are not eligible to accept work at this property"), { httpStatus: 403 });
+  }
+
+  //  ── RECORDING A COMPLETION REQUIRES MAINTENANCE. THE CHECK LIVES HERE. ──
+  //
+  //  The ruled authority model splits READ from OPERATE: a manager may read the
+  //  turn and look at the proof photo, and may not operate the work. The
+  //  structured door enforced that with `requireMaintenanceModuleAccess`; the
+  //  staff-agent door admits maintenance OR management, and could confirm a
+  //  `work_completion` proposal straight into this service. Two doors, two
+  //  answers to "may this person close a job" — and the conversational one was
+  //  the weaker.
+  //
+  //  A gate on a route only governs that route. Putting it in the canonical
+  //  service means EVERY caller passes it: the structured door, the staff
+  //  agent, and anything written later that nobody has thought of yet.
+  //
+  //  Property comes from the WORK ROW, never from the request, and the actor is
+  //  the authenticated session's user. `management` is not accepted here — not
+  //  because managers are untrusted, but because a completion is a claim about
+  //  physical work by the person who did it.
+  async function assertMaintenanceOperator(client, { property_id, user_id }) {
+    const r = (await client.query(
+      `select 1 from property_team_assignments
+        where property_id=$1 and user_id=$2 and active=true
+          and allowed_modules @> array['maintenance']::text[]`,
+      [property_id, user_id])).rows[0];
+    if (!r) throw Object.assign(
+      new Error(
+        "recording a completion requires maintenance-module access at this property. " +
+        "Management access can read this turn and view completion photos, but cannot " +
+        "record that work was finished. Nothing was recorded."),
+      { httpStatus: 403, required_module: "maintenance" });
   }
 
   //  Is this item actionable RIGHT NOW under the sequence rules? Accepting
@@ -232,6 +281,12 @@ function makeWorkAcceptanceService(deps) {
       throw bad("unable_to_complete requires a reason", { allowed: UNABLE_REASON_VALUES });
 
     const w = await loadWork(client, { work_id, property_id });
+    //  AUTHORITY FIRST, and against the WORK ROW's property — before any status
+    //  check, before the photo is stored, before anything is written. A refused
+    //  actor must not learn the item's status, and must not have their image
+    //  written to a table on the way to a 403.
+    await assertMaintenanceOperator(client, { property_id: w.property_id, user_id: actor_user_id });
+
     if (w.status !== "required") throw bad(`this work is ${w.status} and cannot be claimed`);
     if (w.stage === STAGE.READINESS_WALK)
       throw bad("the final readiness walk is not performed or certified in this build");

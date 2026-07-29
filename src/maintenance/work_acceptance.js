@@ -21,8 +21,35 @@ module.exports = function workAcceptance(deps) {
   if (!workAcceptanceService || typeof workAcceptanceService.acceptWork !== "function") {
     throw new Error(
       "work_acceptance module requires workAcceptanceService (build it with " +
-      "makeWorkAcceptanceService({ spawnObligationFromEvent }) and inject it)"
+      "makeWorkAcceptanceService({ spawnObligationFromEvent, attachmentService }) and inject it)"
     );
+  }
+  //  ── THE PHOTO PATH IS NOT OPTIONAL ──────────────────────────────────
+  //  "A technician opens the work, adds one completion photo, and presses
+  //  Complete" is the primary path of this release candidate. A deployment
+  //  missing multer or the attachment service is one where that path can never
+  //  succeed — the button is there, the upload silently does not happen, and
+  //  every photo-requiring item stays open. Refusing to start is the honest
+  //  response to a configuration that cannot do its main job.
+  //
+  //  This proves the SOURCE COMPOSITION is complete. It proves nothing about
+  //  migration 118 existing in any database.
+  if (!upload || typeof upload.single !== "function") {
+    throw new Error(
+      "work_acceptance module requires upload (a multer instance with .single()). " +
+      "Without it the completion photo can never be received and no photo-requiring " +
+      "work could ever be closed. Inject { upload: multer({ ... }) }."
+    );
+  }
+  for (const fn of ["storeForWork", "resolveForWork", "readForWork"]) {
+    if (!workProofAttachmentService || typeof workProofAttachmentService[fn] !== "function") {
+      throw new Error(
+        `work_acceptance module requires workProofAttachmentService.${fn}(). ` +
+        "Build it with makeWorkProofAttachmentService() and inject it — the completion " +
+        "photo is stored, resolved and read through it, and no part of the primary " +
+        "completion path works without all three."
+      );
+    }
   }
 
   async function requireOperator(req, res, next) {
@@ -182,7 +209,21 @@ module.exports = function workAcceptance(deps) {
     });
   }
 
-  router.post("/operator/turn-work/:workId/claim", ...operatorGate, acceptPhotoIfMultipart, async (req, res) => {
+  //  ── ORDER MATTERS, AND IT WAS WRONG ─────────────────────────────────
+  //
+  //  `refuseClientProperty` reads `req.body.property_id`. On a multipart claim
+  //  there IS no `req.body` until multer has parsed it, so the refusal ran
+  //  against an empty object and a conflicting `property_id` in a multipart
+  //  field sailed past it. It never selected a different property — the service
+  //  takes property from the work row — but a rule that silently does nothing
+  //  is worse than no rule, because it reads as enforcement.
+  //
+  //  Authentication and MODULE entitlement stay ahead of multer, so an
+  //  unauthorised caller can never make the server parse a 5 MB image. The
+  //  property refusal moves after it, where the body it judges exists.
+  const claimGate = [requireOperator, requireMaintenanceModuleAccess];
+  router.post("/operator/turn-work/:workId/claim",
+    ...claimGate, acceptPhotoIfMultipart, refuseClientProperty, async (req, res) => {
     const b = req.body || {};
     //  A multipart body arrives as strings. `proof_photos` is only meaningful
     //  as JSON; a multipart caller sends the file itself.

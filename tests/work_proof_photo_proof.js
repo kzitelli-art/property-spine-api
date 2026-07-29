@@ -267,11 +267,18 @@ section("3B  A TYPED REFERENCE IS NOT PROOF — the defect this slice fixes");
 }
 
 // ════════════════════════════════════════════════════════════════════
-section("4  ATOMICITY — the photo and the claim commit together or not at all");
+//  Shared by sections 4 and 4B: the transaction double. Module scope, because
+//  atomicity and authority are two questions about the SAME transaction and
+//  must be asked of the same recording client.
 {
   //  A double that fails at a chosen statement, so the ordering can be
   //  observed rather than assumed.
-  function clientThatFailsOn(pattern) {
+  //  `modules` is what property_team_assignments would return for this actor.
+  //  claimCompletion now asks, so the double must answer — which means every
+  //  transaction below states the actor's authority out loud instead of
+  //  assuming it.
+  function clientThatFailsOn(pattern, modules) {
+    const mods = modules === undefined ? ["maintenance"] : modules;
     const issued = [];
     return {
       issued,
@@ -279,6 +286,12 @@ section("4  ATOMICITY — the photo and the claim commit together or not at all"
         const s = String(sql);
         issued.push(s.replace(/\s+/g, " ").slice(0, 60));
         if (pattern && pattern.test(s)) throw new Error("simulated failure: " + pattern);
+        if (/from property_team_assignments/i.test(s)) {
+          //  The real query filters on the module inside SQL, so an actor
+          //  without it matches no row.
+          const need = /array\['maintenance'\]/.test(s) ? "maintenance" : null;
+          return { rows: need && !mods.includes(need) ? [] : [{ "?column?": 1 }] };
+        }
         if (/from unit_triage_required_work/i.test(s) && /where w\.id/i.test(s)) {
           return { rows: [{ id: "w1", property_id: "p1", unit_id: "u1", status: "required",
                             stage: "repair", work_text: "Source and install refrigerator" }] };
@@ -299,6 +312,13 @@ section("4  ATOMICITY — the photo and the claim commit together or not at all"
       },
     };
   }
+  module.exports.__mkClient = clientThatFailsOn;
+}
+const clientThatFailsOn = module.exports.__mkClient;
+
+// ════════════════════════════════════════════════════════════════════
+section("4  ATOMICITY — the photo and the claim commit together or not at all");
+{
 
   const ATT = A.makeWorkProofAttachmentService();
   const mk = () => makeWorkAcceptanceService({
@@ -375,6 +395,113 @@ section("4  ATOMICITY — the photo and the claim commit together or not at all"
 }
 
 // ════════════════════════════════════════════════════════════════════
+section("4B  MAINTENANCE IS REQUIRED TO RECORD A COMPLETION");
+{
+  //  The ruled model splits READ from OPERATE. The structured door already
+  //  required maintenance; the staff-agent door admits maintenance OR
+  //  management and could confirm a work_completion proposal straight into
+  //  claimCompletion. Two doors, two answers to "may this person close a
+  //  job", and the conversational one was weaker.
+  //
+  //  The check now lives in the CANONICAL SERVICE, so both doors — and
+  //  anything written later — pass it. These assertions call the service
+  //  directly: no route, no session, no middleware.
+  const ATT2 = A.makeWorkProofAttachmentService();
+  const mk2 = () => makeWorkAcceptanceService({
+    spawnObligationFromEvent: async () => ({}), attachmentService: ATT2,
+  });
+
+  const p4b = (async () => {
+    for (const [who, mods] of [["management-only", ["management"]],
+                               ["no modules at all", []],
+                               ["leasing-only", ["leasing"]]]) {
+      const c = clientThatFailsOn(null, mods);
+      let err = null;
+      try {
+        await mk2().claimCompletion(c, {
+          work_id: "w1", property_id: "p1", actor_user_id: "mgr-1", outcome: "completed",
+          functional_confirmation: "it cools now", proof_file: file(JPEG, "a.jpg", "image/jpeg"),
+        });
+      } catch (e) { err = e; }
+      ok(`a ${who} actor is REFUSED`, !!err, err && err.message);
+      ok(`  …with 403, not 400 or 500`, err && err.httpStatus === 403, err && String(err.httpStatus));
+      ok(`  …and the message explains what is needed`,
+         err && /maintenance-module access/.test(err.message), err && err.message);
+      ok(`  …and says nothing was recorded`,
+         err && /Nothing was recorded/.test(err.message));
+      //  NOTHING SURVIVES THE REFUSAL.
+      const wrote = (re) => c.issued.some((x) => re.test(x));
+      ok(`  …no photo was stored`, !wrote(/insert into work_proof_attachments/i), c.issued.join(" | "));
+      ok(`  …no completion claim was written`, !wrote(/insert into work_completion_claims/i));
+      ok(`  …no event was written`, !wrote(/insert into events/i));
+      ok(`  …no obligation was closed`, !wrote(/update obligations/i));
+      ok(`  …no work state changed`, !wrote(/update unit_triage_required_work/i));
+    }
+
+    //  A MAINTENANCE actor still completes normally.
+    const good = clientThatFailsOn(null, ["maintenance"]);
+    const out = await mk2().claimCompletion(good, {
+      work_id: "w1", property_id: "p1", actor_user_id: "tech-1", outcome: "completed",
+      functional_confirmation: "it cools now", proof_file: file(JPEG, "a.jpg", "image/jpeg"),
+    });
+    ok("a maintenance actor completes through the canonical service", !!out.claim);
+    ok("and the photo was stored",
+       good.issued.some((x) => /insert into work_proof_attachments/i.test(x)));
+
+    //  maintenance + management is still maintenance.
+    const both = clientThatFailsOn(null, ["maintenance", "management"]);
+    const out2 = await mk2().claimCompletion(both, {
+      work_id: "w1", property_id: "p1", actor_user_id: "pm-1", outcome: "completed",
+      functional_confirmation: "it cools now", proof_file: file(JPEG, "a.jpg", "image/jpeg"),
+    });
+    ok("an actor holding BOTH modules completes normally", !!out2.claim);
+
+    //  AUTHORITY IS DECIDED BEFORE ANYTHING ELSE IS READ.
+    const order = clientThatFailsOn(null, ["management"]);
+    try {
+      await mk2().claimCompletion(order, {
+        work_id: "w1", property_id: "p1", actor_user_id: "mgr-1", outcome: "completed",
+        proof_file: file(JPEG, "a.jpg", "image/jpeg"),
+      });
+    } catch (_) {}
+    const loaded = order.issued.findIndex((x) => /from unit_triage_required_work/i.test(x));
+    const asked = order.issued.findIndex((x) => /from property_team_assignments/i.test(x));
+    ok("the work row is loaded first, so property comes from IT",
+       loaded > -1 && loaded < asked, order.issued.join(" | "));
+    ok("and authority is the very next thing asked",
+       asked === loaded + 1, order.issued.join(" | "));
+    ok("the refusal is the LAST statement issued — nothing followed it",
+       asked === order.issued.length - 1, order.issued.join(" | "));
+  })();
+  module.exports.__p4b = p4b;
+
+  //  SOURCE: the check is in the service, keyed on the work row and the actor.
+  const SVC = src("src/maintenance/work_acceptance_service.js");
+  ok("the service defines assertMaintenanceOperator", /async function assertMaintenanceOperator/.test(SVC));
+  ok("it requires the maintenance module in SQL",
+     /allowed_modules @> array\['maintenance'\]::text\[\]/.test(SVC));
+  ok("and an ACTIVE assignment", /active=true/.test(SVC));
+  ok("management alone does not satisfy it",
+     !/array\['maintenance'\]::text\[\]\s*\n?\s*or allowed_modules @> array\['management'\]::text\[\]\)\s*\n\s*\[property_id, user_id\]\)\)\.rows\[0\];\s*\n\s*if \(!r\) throw Object\.assign\(\s*\n\s*new Error\(\s*\n\s*"recording a completion/.test(SVC));
+  ok("claimCompletion calls it with the WORK ROW's property",
+     /assertMaintenanceOperator\(client, \{ property_id: w\.property_id, user_id: actor_user_id \}\)/.test(SVC));
+  const claimBody = SVC.slice(SVC.indexOf("async function claimCompletion"), SVC.indexOf("// ── REOPEN"));
+  ok("and calls it BEFORE the photo is stored",
+     claimBody.indexOf("assertMaintenanceOperator") < claimBody.indexOf("storeForWork"));
+  ok("and before the claim is inserted",
+     claimBody.indexOf("assertMaintenanceOperator") < claimBody.indexOf("insert into work_completion_claims"));
+
+  //  THE AGENT DOOR STILL ADMITS MANAGEMENT — it just cannot complete.
+  const AGENT = src("src/agent/staff_agent.js");
+  ok("the staff-agent door still admits management for its other purposes",
+     /mods\.includes\("maintenance"\) && !mods\.includes\("management"\)/.test(AGENT));
+  ok("and its completion branch goes through the canonical service",
+     /workAcceptanceService\.claimCompletion/.test(src("src/agent/staff_agent_service.js")));
+  ok("so the agent inherits the refusal rather than defining its own",
+     !/allowed_modules @> array\['maintenance'\]/.test(src("src/agent/staff_agent_service.js")));
+}
+
+// ════════════════════════════════════════════════════════════════════
 section("5  ONE CANONICAL COMPLETION DOOR");
 {
   const D = src("src/maintenance/work_acceptance.js");
@@ -385,7 +512,7 @@ section("5  ONE CANONICAL COMPLETION DOOR");
     ok(`no parallel ${forbidden} route`, !routes.some((r) => r.includes(forbidden)), routes.join(" "));
   }
   ok("the claim route accepts multipart on the same path",
-     /router\.post\("\/operator\/turn-work\/:workId\/claim", \.\.\.operatorGate, acceptPhotoIfMultipart/.test(D));
+     /router\.post\("\/operator\/turn-work\/:workId\/claim",\s*\.\.\.claimGate, acceptPhotoIfMultipart/.test(D));
   ok("multer runs ONLY for multipart", /multipart\\\/form-data.*test\(String\(req\.headers\["content-type"\]/.test(D));
   ok("a JSON claim never touches multer", /if \(!\/multipart[\s\S]{0,80}return next\(\);/.test(D));
   ok("exactly one file field is accepted", /upload\.single\("photo"\)/.test(D));
@@ -477,7 +604,7 @@ section("7  SAFE METADATA ON THE PAGE — never bytes");
 }
 
 // ════════════════════════════════════════════════════════════════════
-section("8  AUTHORITY — read, operate, certify stay three things");
+section("8  AUTHORITY — read, operate, read proof, certify: four answers");
 {
   const D = src("src/maintenance/work_acceptance.js");
   ok("writes use the maintenance-only gate", /operatorGate = \[requireOperator, requireMaintenanceModuleAccess/.test(D));
@@ -485,17 +612,89 @@ section("8  AUTHORITY — read, operate, certify stay three things");
      /readerGate = \[requireOperator, requireTurnReadAccess/.test(D));
   ok("the read gate accepts either module",
      /mods\.includes\("maintenance"\) && !mods\.includes\("management"\)/.test(D));
-  ok("the claim route uses the WRITE gate", /\/claim", \.\.\.operatorGate/.test(D));
+  //  ── ORDER, NOT JUST MEMBERSHIP ───────────────────────────────────
+  //  refuseClientProperty reads req.body.property_id. Multer creates
+  //  req.body. Running the refusal first meant it judged an empty object on
+  //  every multipart claim — enforcement that silently did nothing.
+  ok("the claim gate is maintenance-only",
+     /const claimGate = \[requireOperator, requireMaintenanceModuleAccess\]/.test(D));
+  ok("authentication runs before multer", /\.\.\.claimGate, acceptPhotoIfMultipart/.test(D));
+  ok("so an unauthenticated caller can never make the server parse 5 MB",
+     D.indexOf("const claimGate = [requireOperator") < D.indexOf("acceptPhotoIfMultipart, refuseClientProperty"));
+  ok("the property refusal runs AFTER multipart parsing",
+     /acceptPhotoIfMultipart, refuseClientProperty/.test(D));
+  ok("and it is still the SAME refusal, not a second one",
+     (D.match(/function refuseClientProperty/g) || []).length === 1);
+  ok("the refusal still compares against the session property",
+     /String\(claimed\) !== String\(req\.operator\.property_id\)/.test(D));
+  ok("a matching property_id is allowed through but is never authority",
+     /claimed && String\(claimed\) !== String\(req\.operator\.property_id\)/.test(D));
+  ok("and the service still takes property from the WORK ROW",
+     /property_id: w\.property_id/.test(src("src/maintenance/work_acceptance_service.js")));
   ok("the accept route uses the WRITE gate", /\/accept", \.\.\.operatorGate/.test(D));
   ok("the reopen route uses the WRITE gate", /\/reopen", \.\.\.operatorGate/.test(D));
   ok("a client-supplied property is refused on every door", /refuseClientProperty/.test(D));
 
+  //  ── THE READ EMITS THE WHOLE MATRIX ──────────────────────────────
+  //
+  //    maintenance only                       read ✓  operate ✓  proof ✓  certify ✗
+  //    management only, no manager authority  read ✓  operate ✗  proof ✓  certify ✗
+  //    management only, manager or delegated  read ✓  operate ✗  proof ✓  certify ✓ (gate actionable)
+  //    maintenance + management, delegated    read ✓  operate ✓  proof ✓  certify ✓ (gate actionable)
+  //    neither                                read ✗  operate ✗  proof ✗  certify ✗
+  //
+  //  Four different questions, not one ladder. Operating is maintenance;
+  //  certifying is a management authority maintenance never confers; reading
+  //  the proof is either. Rank grants none of them.
+  const R8 = src("src/surfaces/unit_turn_read.js");
+  ok("the read emits may_operate_work on the maintenance module",
+     /may_operate_work: mods\.includes\("maintenance"\)/.test(R8));
+  ok("and may_read_proof on EITHER module",
+     /may_read_proof: mods\.includes\("maintenance"\) \|\| mods\.includes\("management"\)/.test(R8));
+  ok("which is exactly the gate the proof route applies",
+     /!mods\.includes\("maintenance"\) && !mods\.includes\("management"\)/.test(D));
+  ok("certification is NOT derived from the module list alone",
+     /may_perform_readiness_walk: gate\.gate\.actionable && authority\.authorized/.test(R8));
+  ok("holding maintenance never confers certification",
+     !/may_perform_readiness_walk:[^,]*mods\.includes\("maintenance"\)/.test(R8));
+  ok("and the read says why a walk is unavailable, not just that it is",
+     /why_no_readiness_walk/.test(R8));
+  ok("the reason distinguishes 'gate not actionable' from 'not your authority'",
+     /The readiness gate is not actionable yet/.test(R8) &&
+     /eligible manager assignment or an explicit delegation/.test(R8));
+  ok("why_no_work_controls tells a manager what they CAN still do",
+     /Management access can read this turn and view completion photos/.test(R8));
+  ok("and the enforcement note names the service, not only the doors",
+     /refused inside the canonical service itself/.test(R8));
+
   //  The page shows a management-only operator no maintenance controls, and
-  //  hiding is not the enforcement — the door above still refuses.
+  //  hiding is not the enforcement — the door above still refuses, and the
+  //  canonical service refuses independently of every door.
   const P = app("unit-turn-page.js");
   ok("the file input is inside the capability-gated panel",
      P.indexOf("if (open && mayOperate)") < P.indexOf("wk-file"));
   ok("the page reads no module or role", !/allowed_modules|role_title/.test(P));
+
+  //  ── THE UI IS FROZEN, AND IT ALREADY SAYS THE RIGHT THING ────────
+  //  A management-only operator never sees Complete, so the 403 is a
+  //  belt-and-braces case rather than the normal one — but if it ever fires,
+  //  the server sentence must reach the operator unaltered. It does, through
+  //  the existing error path. NO APP CHANGE WAS NEEDED for this hardening.
+  ok("a failed write is rendered from the SERVER message",
+     /e\.publicMessage \|\| e\.message/.test(P));
+  ok("under an honest headline", /headline \|\| "Not recorded\."/.test(P));
+  ok("the app invents no authorization copy of its own",
+     !/maintenance-module access/.test(P));
+  ok("the completion action still sends exactly one file on one request",
+     /photo: file/.test(P) && (P.match(/claimWorkCompletion\(/g) || []).length === 2);
+  ok("still one file input", (P.match(/wk-file/g) || []).length >= 1 && !/wk-file-2|photos\[\]/.test(P));
+  ok("still one Complete button", (P.match(/wk-done/g) || []).length >= 1);
+  //  `uploaded_at` / `uploaded_by` are metadata field names on the stored
+  //  photo, not an upload affordance — and the comments explaining that there
+  //  is no upload step must not fail an assertion that there is no upload step.
+  ok("no upload button, attachment screen or progress step appeared",
+     !/(Upload|Save Photo|Attach|Add file)\s*(<\/button|")/i.test(code(P)) &&
+     !/attachmentScreen|progressStep|mediaLibrary|uploadPhoto|savePhoto/i.test(code(P)));
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -563,17 +762,42 @@ section("10  MIGRATION 118 — narrow, and not applied");
     ok(`column present: ${col}`, new RegExp("\\b" + col + "\\s").test(M));
   }
   ok("the primary key is a uuid", /id\s+uuid primary key default gen_random_uuid\(\)/.test(M));
-  ok("property, unit and work are ALL not null and foreign keys",
+  ok("property, unit and work are ALL not null",
      /property_id\s+uuid not null references properties/.test(M) &&
      /unit_id\s+uuid not null references units/.test(M) &&
-     /work_id\s+uuid not null references unit_triage_required_work/.test(M));
+     /work_id\s+uuid not null/.test(M));
+
+  //  ── THE SCOPE IS ONE FACT, NOT THREE ──────────────────────────────
+  //  Three separate keys proved three objects EXIST. They did not prove they
+  //  belong together: work at property A + unit at property B + property A all
+  //  satisfied their own key while describing an attachment that belongs to
+  //  nothing. The composite key makes that combination unrepresentable, in
+  //  Postgres, including through raw SQL that never touches the service.
+  ok("a composite foreign key ties work, property and unit together",
+     /foreign key \(work_id, property_id, unit_id\)\s*\n\s*references unit_triage_required_work \(id, property_id, unit_id\)/.test(M));
+  ok("it cascades with the work item", /references unit_triage_required_work \(id, property_id, unit_id\)\s*\n\s*on delete cascade/.test(M));
+  ok("and the parent has the unique index the key needs",
+     /create unique index if not exists uq_utrw_id_property_unit\s*\n\s*on unit_triage_required_work \(id, property_id, unit_id\)/.test(M));
+  ok("the index is created BEFORE the table that references it",
+     M.indexOf("uq_utrw_id_property_unit") < M.indexOf("create table if not exists work_proof_attachments"));
+  ok("the weaker single-column work key is gone — the composite contains it",
+     !/work_id\s+uuid not null references unit_triage_required_work\(id\)/.test(M));
+  ok("property and unit keep their own keys — different tables",
+     /references properties\(id\)/.test(M) && /references units\(id\)/.test(M));
   ok("the uploader is not null and a foreign key",
      /uploaded_by_user_id\s+uuid not null references users/.test(M));
   ok("the image is bytea", /content\s+bytea not null/.test(M));
   ok("mime is constrained to three types",
      /check \(mime_type in \('image\/jpeg','image\/png','image\/webp'\)\)/.test(M));
   ok("byte_size must be positive", /check \(byte_size > 0\)/.test(M));
-  ok("the digest is fixed length", /char_length\(sha256\) = 64/.test(M));
+  ok("byte_size is bounded at 5 MB in the schema too",
+     /check \(byte_size <= 5 \* 1024 \* 1024\)/.test(M));
+  ok("and byte_size must EQUAL the stored bytes",
+     /check \(byte_size = octet_length\(content\)\)/.test(M));
+  ok("the digest must be lowercase hex, exactly 64",
+     new RegExp("check \\(sha256 ~ '\\^\\[0-9a-f\\]\\{64\\}\\$'\\)").test(M));
+  ok("and the old length-only check is gone — 64 spaces used to pass",
+     !/char_length\(sha256\) = 64/.test(M));
   ok("created_at is server-generated", /created_at\s+timestamptz not null default now\(\)/.test(M));
 
   //  WHAT MUST NOT BE THERE.
@@ -595,6 +819,153 @@ section("10  MIGRATION 118 — narrow, and not applied");
   const migs = fs.readdirSync(path.join(REPO, "migrations")).filter((f) => /^\d{3}_.*\.sql$/.test(f)).sort();
   ok("the ceiling is now 118", migs[migs.length - 1].startsWith("118"), migs[migs.length - 1]);
   ok("and there is no 119", !migs.some((f) => f.startsWith("119")));
+}
+
+// ════════════════════════════════════════════════════════════════════
+section("10B  THE MIGRATION'S VERDICTS — stated as rows, not as prose");
+{
+  const M = src("migrations/118_work_proof_attachments.sql");
+  //  Each SQL constraint is mirrored here as the predicate it is, and
+  //  candidate rows are run through it. This says WHAT POSTGRES WOULD DO
+  //  and asserts the constraint that would do it is present in the file.
+  //
+  //  IT DOES NOT PROVE POSTGRES DOES IT. No server has parsed this file.
+  //  These verdicts become real at the first migration run against the
+  //  owner's baseline, and not one moment sooner.
+
+  //  The parent rows the composite key points at.
+  const WORK_ROWS = [{ id: "w1", property_id: "p1", unit_id: "u1" },
+                     { id: "w2", property_id: "p2", unit_id: "u2" }];
+
+  //  fk_wpa_work_scope: (work_id, property_id, unit_id) must match a row.
+  const scopeOk = (r) => WORK_ROWS.some((w) =>
+    w.id === r.work_id && w.property_id === r.property_id && w.unit_id === r.unit_id);
+  //  ck_wpa_size_matches_content, the 5 MB bound, and the digest format.
+  const sizeMatches = (r) => r.byte_size === r.content.length;
+  const sizeBounded = (r) => r.byte_size > 0 && r.byte_size <= 5 * 1024 * 1024;
+  const digestOk = (r) => /^[0-9a-f]{64}$/.test(r.sha256);
+  const accepted = (r) => scopeOk(r) && sizeMatches(r) && sizeBounded(r) && digestOk(r);
+
+  const GOOD_DIGEST = "a".repeat(64);
+  const row = (over) => Object.assign({
+    work_id: "w1", property_id: "p1", unit_id: "u1",
+    byte_size: 2052, content: Buffer.alloc(2052), sha256: GOOD_DIGEST,
+  }, over);
+
+  ok("a matching work/property/unit row is ACCEPTED", accepted(row()) === true);
+
+  //  Every id below is REAL. Only the combination is wrong — which is
+  //  exactly the row three separate foreign keys used to allow.
+  ok("work w1 with property p2 is REFUSED (real ids, wrong combination)",
+     accepted(row({ property_id: "p2" })) === false);
+  ok("work w1 with unit u2 is REFUSED", accepted(row({ unit_id: "u2" })) === false);
+  ok("work w2 under property p1 is REFUSED", accepted(row({ work_id: "w2" })) === false);
+  ok("and the fully-consistent other work item is accepted",
+     accepted(row({ work_id: "w2", property_id: "p2", unit_id: "u2" })) === true);
+  ok("three separate keys would have allowed the bad combination",
+     ["w1", "p2", "u2"].every((id) =>
+       WORK_ROWS.some((w) => w.id === id || w.property_id === id || w.unit_id === id)));
+
+  ok("a byte_size that disagrees with the bytes is REFUSED",
+     accepted(row({ byte_size: 99 })) === false);
+  ok("understating the size is refused too",
+     accepted(row({ byte_size: 1, content: Buffer.alloc(2052) })) === false);
+  ok("oversized bytes are REFUSED",
+     accepted(row({ byte_size: 6 * 1024 * 1024, content: Buffer.alloc(6 * 1024 * 1024) })) === false);
+  ok("exactly 5 MB is accepted — the bound is inclusive",
+     accepted(row({ byte_size: 5 * 1024 * 1024, content: Buffer.alloc(5 * 1024 * 1024) })) === true);
+  ok("zero bytes are REFUSED", accepted(row({ byte_size: 0, content: Buffer.alloc(0) })) === false);
+
+  ok("a malformed digest is REFUSED", accepted(row({ sha256: "not-a-digest" })) === false);
+  ok("64 SPACES are refused — the old length check accepted them",
+     accepted(row({ sha256: " ".repeat(64) })) === false);
+  ok("an UPPERCASE digest is refused — one canonical form",
+     accepted(row({ sha256: "A".repeat(64) })) === false);
+  ok("63 hex characters are refused", accepted(row({ sha256: "a".repeat(63) })) === false);
+  ok("65 hex characters are refused", accepted(row({ sha256: "a".repeat(65) })) === false);
+
+  //  And the constraints that would deliver those verdicts are in the file.
+  ok("the composite scope key is declared",
+     /constraint fk_wpa_work_scope/.test(M));
+  ok("the size-matches-content constraint is declared",
+     /constraint ck_wpa_size_matches_content/.test(M));
+  ok("the 5 MB bound is declared", /byte_size <= 5 \* 1024 \* 1024/.test(M));
+  ok("the digest format is declared", M.includes("[0-9a-f]{64}"));
+  ok("NOTHING here has run against Postgres — the file is unapplied",
+     /NOT APPLIED ANYWHERE/.test(M));
+}
+
+// ════════════════════════════════════════════════════════════════════
+section("10C  THE DOOR REFUSES TO START WHEN THE PHOTO PATH IS UNWIRED");
+{
+  //  The real router, really constructed. Not a regex over source.
+  const makeDoor = require("../src/maintenance/work_acceptance");
+  const multer = require("multer");
+  const ATT_OK = { storeForWork() {}, resolveForWork() {}, readForWork() {} };
+  const SVC_OK = { acceptWork() {}, claimCompletion() {}, readWorkState() {},
+                   readUnitFlow() {}, workExceptions() {}, proposeCommitment() {}, reopenWork() {} };
+  const build = (over) => {
+    try {
+      return { router: makeDoor(Object.assign({
+        pool: {}, upload: multer({ storage: multer.memoryStorage() }),
+        workProofAttachmentService: ATT_OK, workAcceptanceService: SVC_OK,
+      }, over)), error: null };
+    } catch (e) { return { router: null, error: e.message }; }
+  };
+
+  ok("a fully wired door builds", build({}).error === null, build({}).error);
+
+  const noMulter = build({ upload: null });
+  ok("NO multer → refuses to build", noMulter.error !== null);
+  ok("  …and names upload", /requires upload/.test(noMulter.error || ""), noMulter.error);
+  ok("  …and says the photo could never be received",
+     /never be received/.test(noMulter.error || ""));
+  ok("a multer-shaped object without .single() is also refused",
+     build({ upload: {} }).error !== null);
+
+  for (const fn of ["storeForWork", "resolveForWork", "readForWork"]) {
+    const partial = Object.assign({}, ATT_OK);
+    delete partial[fn];
+    const r = build({ workProofAttachmentService: partial });
+    ok(`attachment service missing ${fn} → refuses to build`, r.error !== null);
+    ok(`  …and names ${fn}`, new RegExp(fn).test(r.error || ""), r.error);
+  }
+  const none = build({ workProofAttachmentService: null });
+  ok("NO attachment service at all → refuses to build", none.error !== null);
+  ok("  …and explains the whole path depends on it",
+     /completion path works without all three/.test(none.error || ""), none.error);
+
+  //  ── AND THE REAL MIDDLEWARE ORDER, FROM THE REAL ROUTER ─────────
+  const r = build({}).router;
+  const layer = r.stack.find((l) => l.route && l.route.path.endsWith("/claim"));
+  const names = layer.route.stack.map((x) => x.name);
+  ok("the claim route exists", !!layer);
+  ok("authentication is first", names[0] === "requireOperator", names.join(" -> "));
+  ok("module entitlement is second — before any 5 MB is parsed",
+     names[1] === "requireMaintenanceModuleAccess", names.join(" -> "));
+  ok("multipart parsing is third", names[2] === "acceptPhotoIfMultipart", names.join(" -> "));
+  ok("the property refusal runs AFTER parsing, when req.body exists",
+     names[3] === "refuseClientProperty", names.join(" -> "));
+  ok("and the handler runs last", names.length === 5, names.join(" -> "));
+  ok("the read gate is NOT on the claim route",
+     !names.includes("requireTurnReadAccess"), names.join(" -> "));
+
+  //  The other write routes keep the original order — they are JSON only.
+  for (const p of ["/accept", "/reopen"]) {
+    const l = r.stack.find((x) => x.route && x.route.path.endsWith(p));
+    const n = l.route.stack.map((x) => x.name);
+    ok(`${p} still refuses a client property before its handler`,
+       n[2] === "refuseClientProperty", n.join(" -> "));
+    ok(`${p} never touches multer`, !n.includes("acceptPhotoIfMultipart"), n.join(" -> "));
+  }
+
+  //  The governed READ uses the reader gate, not the write gate.
+  const pr = r.stack.find((x) => x.route && x.route.path.includes("/proof/"));
+  const pn = pr.route.stack.map((x) => x.name);
+  ok("the proof read admits management via requireTurnReadAccess",
+     pn.includes("requireTurnReadAccess"), pn.join(" -> "));
+  ok("and does NOT require the maintenance module",
+     !pn.includes("requireMaintenanceModuleAccess"), pn.join(" -> "));
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -659,7 +1030,8 @@ section("12  SCOPE STAYED CLOSED");
 }
 
 // ════════════════════════════════════════════════════════════════════
-Promise.all([module.exports.__p2, module.exports.__p3, module.exports.__p4, module.exports.__p7]).then(() => {
+Promise.all([module.exports.__p2, module.exports.__p3, module.exports.__p4,
+             module.exports.__p4b, module.exports.__p7]).then(() => {
   section("RESULT");
   console.log("  assertions passed: " + passed);
   console.log("  assertions failed: " + failed);

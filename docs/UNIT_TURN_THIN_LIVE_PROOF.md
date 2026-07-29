@@ -38,7 +38,7 @@ Three people are needed, and they must be **different rows** in
 >
 > | Role | `allowed_modules` | Used for |
 > |---|---|---|
-> | **G** management-only | `management` | N4 — reads the turn, sees no work controls |
+> | **G** management-only | `management` | N4, N9 — reads the turn and the proof photos, cannot operate through EITHER door |
 
 Capture for every step: the HTTP request/response, a screenshot of the Unit
 Turn page, and the SQL result named in the step. A step with no receipt did not
@@ -277,7 +277,7 @@ write **no attachment row and no completion claim**:
 
 ## Negative controls
 
-Five. Each must **fail in the stated way**.
+Nine. Each must **fail in the stated way**.
 
 ### N1 — duplicate proposal confirmation executes once
 
@@ -320,7 +320,15 @@ Five. Each must **fail in the stated way**.
 - **HIDING IS NOT THE ENFORCEMENT.** Call the write route directly as G:
   `POST /operator/turn-work/:workId/accept`. **Expect 403.** A UI that merely
   omits a button has proved nothing.
-- **DB:** no new `work_acceptances` row.
+- Also call `POST /operator/turn-work/:workId/claim` directly as G, with a real
+  photo attached. **Expect 403** — *"recording a completion requires
+  maintenance-module access at this property … Nothing was recorded."*
+- **DB:** no new `work_acceptances` row, no new `work_completion_claims` row,
+  and **no new `work_proof_attachments` row** — the refusal precedes the store,
+  so the image never reaches the database.
+- **Assert:** `capabilities.may_read_proof` is `true` for G. Refusing to operate
+  is not refusing to look; G must still be able to open a completion photo on a
+  closed job.
 
 ### N5 — a photo cannot close a job it was not taken for
 
@@ -336,6 +344,85 @@ Five. Each must **fail in the stated way**.
   `GET /operator/turn-work/<w2>/proof/<attachmentFromProperty2>`.
   **Expect 404** — the same answer as a nonexistent id, so the response never
   confirms that somebody else's attachment exists.
+
+### N9 — a management-only operator cannot complete through the staff agent
+
+*This is the control for the finding that the conversational door was weaker
+than the structured one.*
+
+- As **G** (`management` only), open the staff agent and send a completion
+  message for an open work item — e.g. *"Finished the fridge in 304."*
+- **Expect:** the message is captured and a `work_completion` proposal is
+  produced. Capture is not authority; nothing is recorded yet.
+- Confirm the proposal.
+- **Expect 403** with the same words the structured door gives:
+  *"recording a completion requires maintenance-module access at this property.
+  Management access can read this turn and view completion photos, but cannot
+  record that work was finished. Nothing was recorded."*
+- **DB, all of these:**
+  - `select count(*) from work_completion_claims where work_id=<W>;` → **unchanged**
+  - `select count(*) from work_proof_attachments where work_id=<W>;` → **unchanged**
+  - `select status from unit_triage_required_work where id=<W>;` → still `required`
+  - `select status from obligations where related_id=<W>;` → still open
+  - `select status from staff_agent_proposals where id=<P>;` → **still `pending`**,
+    not `confirmed` — the whole transaction rolled back around the refusal
+  - no new row in `events`
+- Then repeat the **same message and confirmation as T** (`maintenance`).
+  **Expect it to succeed.** A control that refuses everyone proves nothing.
+
+### N10 — a conflicting `property_id` is refused on a multipart claim
+
+*The refusal used to run before multer, so on a multipart request it judged a
+body that did not exist yet.*
+
+- As **T**, submit a completion for a real work item as `multipart/form-data`
+  with a real photo **and** a form field `property_id=<another property's id>`.
+- **Expect 403** — *"property authority is server-derived; a client-supplied
+  property_id cannot select a different property."*
+- **DB:** no new `work_proof_attachments` row and no new
+  `work_completion_claims` row. The refusal runs after parsing but before the
+  transaction, so the parsed image is discarded rather than stored.
+- Repeat as **JSON** with the same conflicting `property_id`. **Expect 403.**
+- Repeat with `property_id` set to **the correct** property. **Expect success** —
+  a matching value is permitted and is still not the authority; the property
+  used comes from the session and the loaded work row.
+- Repeat with **no** `property_id` at all. **Expect success** — the ordinary case.
+- **Assert unauthenticated callers never reach multer:** send a 5 MB multipart
+  claim with **no** `x-staff-session`. **Expect 401**, and expect it *quickly* —
+  authentication and module entitlement both run ahead of parsing.
+
+### N11 — the database refuses a mis-scoped or mis-measured attachment
+
+*Everything below is refused by `migrations/118` itself, through raw SQL that
+never touches the service. Until this control runs, these are the only
+constraints in the slice that no code has ever executed.*
+
+Insert directly with `psql`, as the migration user, against the restored
+baseline:
+
+- A row whose `work_id`, `property_id` and `unit_id` are **each real** but do
+  not belong together. **Expect** violation of `fk_wpa_work_scope`. This is the
+  row three separate foreign keys used to allow.
+- A row where `byte_size` disagrees with `octet_length(content)`, in both
+  directions. **Expect** violation of `ck_wpa_size_matches_content`.
+- A row larger than 5 MB. **Expect** the `byte_size <= 5 * 1024 * 1024` check to
+  refuse it.
+- A row whose `sha256` is 64 spaces, 64 uppercase hex characters, 63 characters
+  or 65. **Expect** the format check to refuse each one.
+- A correct row. **Expect it to be accepted** — the control must be able to pass.
+- **Also confirm** `uq_utrw_id_property_unit` exists on
+  `unit_triage_required_work`; without it the composite key cannot be created
+  and migration 118 would fail at apply time.
+
+### N12 — the API refuses to start with the photo path unwired
+
+- Start the server with the attachment service not injected, and again with
+  multer not injected.
+- **Expect:** the process **fails to start**, naming the missing dependency and
+  saying the completion photo could never be received or stored.
+- **Assert:** it does **not** start and quietly serve a Complete button that can
+  never close anything.
+- Restore the wiring. **Expect a normal start.**
 
 ### N3 — "304 is ready" cannot bypass the final readiness walk
 

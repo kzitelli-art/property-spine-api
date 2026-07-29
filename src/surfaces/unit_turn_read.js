@@ -278,11 +278,30 @@ function makeUnitTurnRead(deps) {
       //  The read now states each capability explicitly. FAIL CLOSED: with no
       //  modules resolved, nothing is offered. Hiding a control is NOT the
       //  enforcement — every write route still enforces for itself, and must.
+      //  ── THE RULED MATRIX, IN ONE PLACE ──────────────────────────────
+      //
+      //    maintenance only                       read ✓  operate ✓  proof ✓  certify ✗
+      //    management only, no manager authority  read ✓  operate ✗  proof ✓  certify ✗
+      //    management only, manager or delegated  read ✓  operate ✗  proof ✓  certify ✓ (gate actionable)
+      //    maintenance + management, delegated    read ✓  operate ✓  proof ✓  certify ✓ (gate actionable)
+      //    neither                                read ✗  operate ✗  proof ✗  certify ✗
+      //
+      //  READING PROOF IS NOT OPERATING. A manager reviewing a closed job must
+      //  be able to look at the photo; they may not record that work was done.
+      //  CERTIFYING IS NOT OPERATING EITHER, and it runs the other way — it is
+      //  a management authority the maintenance module does not confer.
       capabilities: {
         //  Operating work needs maintenance AND an active assignment at this
         //  property. `allowed_modules` only exists when the session resolved an
         //  active assignment here, so the module test carries both.
         may_operate_work: mods.includes("maintenance"),
+        //  Maintenance OR management — the same test the governed read route
+        //  applies, stated here so the page never renders a thumbnail whose
+        //  bytes the server would refuse.
+        may_read_proof: mods.includes("maintenance") || mods.includes("management"),
+        //  Unchanged implementation. Certification needs management authority
+        //  the module list alone does not settle: an eligible manager
+        //  assignment or an explicit delegation, AND an actionable gate.
         may_perform_readiness_walk: gate.gate.actionable && authority.authorized && !gate.certification,
         may_view_management_attention: mods.includes("management"),
         basis: mods.length
@@ -291,9 +310,16 @@ function makeUnitTurnRead(deps) {
         //  Said plainly so the page can explain a missing control rather than
         //  silently omitting it.
         why_no_work_controls: mods.includes("maintenance") ? null
-          : "Accepting, completing and reopening turn work requires maintenance-module access at this property.",
+          : "Accepting, completing and reopening turn work requires maintenance-module access at this property. " +
+            "Management access can read this turn and view completion photos.",
+        why_no_readiness_walk: (gate.gate.actionable && authority.authorized && !gate.certification)
+          ? null
+          : (authority.authorized
+              ? "The readiness gate is not actionable yet."
+              : "Certifying readiness requires an eligible manager assignment or an explicit delegation at this property."),
         enforcement_note:
-          "These are server decisions about what to SHOW. Every write route enforces its own authority independently.",
+          "These are server decisions about what to SHOW. Every write route enforces its own authority independently, " +
+          "and recording a completion is refused inside the canonical service itself — not only at the door.",
       },
 
       // 5. FINAL READINESS — offered only when the gate and the person allow.

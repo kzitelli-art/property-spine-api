@@ -191,7 +191,13 @@ section("C6  unable-to-complete keeps work open and dispatches nothing");
 
 section("C7  management exceptions — routine success is quiet");
 {
-  const svc = makeWorkAcceptanceService({ spawnObligationFromEvent: async () => ({ id: "o" }) });
+  //  The attachment service is REQUIRED at construction now — a deployment
+  //  without it could never close photo-requiring work. Wired here as a stub;
+  //  this section exercises workExceptions, which never touches it.
+  const svc = makeWorkAcceptanceService({
+    spawnObligationFromEvent: async () => ({ id: "o" }),
+    attachmentService: { storeForWork: async () => ({}), resolveForWork: async () => [] },
+  });
   const now = "2026-07-28T12:00:00.000Z";
   const state = (over) => ({
     work: { id: "w", work_text: "Paint full unit" }, status: "required",
@@ -250,6 +256,26 @@ section("C8  service construction and vocabulary guards");
   let threw = false;
   try { makeWorkAcceptanceService({}); } catch (e) { threw = true; }
   ok("service refuses to build without the shared obligation engine", threw);
+  //  ── THE PHOTO PATH IS MANDATORY WIRING ────────────────────────────
+  //  Not "optional, fails closed" any more. A deployment missing the
+  //  attachment service is one where the primary completion path can never
+  //  succeed, and it must not start quietly.
+  const wire = (over) => {
+    try {
+      makeWorkAcceptanceService({ spawnObligationFromEvent: async () => ({}), ...over });
+      return null;
+    } catch (e) { return e.message; }
+  };
+  ok("refuses to build with NO attachment service",
+     /attachmentService.storeForWork/.test(wire({}) || ""), wire({}));
+  ok("refuses to build without storeForWork",
+     /storeForWork/.test(wire({ attachmentService: { resolveForWork: async () => [] } }) || ""));
+  ok("refuses to build without resolveForWork",
+     /resolveForWork/.test(wire({ attachmentService: { storeForWork: async () => ({}) } }) || ""));
+  ok("and the error says WHY, not just what is missing",
+     /stay open forever/i.test(wire({}) || ""), wire({}));
+  ok("builds when both are wired",
+     wire({ attachmentService: { storeForWork: async () => ({}), resolveForWork: async () => [] } }) === null);
   ok("three outcomes, exactly", P.OUTCOME_VALUES.length === 3);
   ok("'accepted' is NOT a work status", !P.OUTCOME_VALUES.includes("accepted"));
   const src = require("fs").readFileSync(require.resolve("../src/maintenance/work_proof"), "utf8");

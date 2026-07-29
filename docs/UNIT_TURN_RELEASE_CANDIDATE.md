@@ -188,28 +188,63 @@ manager exception. No state disappears, falsely completes, or leaves readiness
 wrongly unblocked, and every controlling action carries a `why`. See §7 matrix
 below. *Action:* none.
 
-### §8 authority — **PASS** *(was FAIL)*
+### §8 authority — **PASS** *(was FAIL; hardened again after a second finding)*
 
-**The ruled model, implemented.**
+**The ruled model, by operator shape.** Not by door — by who the person is.
 
-| | Requirement |
-|---|---|
-| **Read** a turn | `maintenance` **or** `management` + active assignment |
-| **Operate** work (accept · complete · unable · reopen) | `maintenance` + active assignment |
-| **Certify** readiness | active assignment + `management` + eligible manager title **or** explicit `primary_for_modules` delegation |
+| Operator | Read turn | Operate work | Read proof photo | Certify readiness |
+|---|---|---|---|---|
+| `maintenance` only | ✓ | ✓ | ✓ | ✗ |
+| `management` only, **no** eligible manager assignment or delegation | ✓ | ✗ | ✓ | ✗ |
+| `management` only, **with** eligible manager assignment or explicit delegation | ✓ | ✗ | ✓ | ✓ when the gate is actionable |
+| `maintenance` **+** `management` with eligible assignment or delegation | ✓ | ✓ | ✓ | ✓ when the gate is actionable |
+| neither module | ✗ | ✗ | ✗ | ✗ |
 
-The door gates were already correct for that model — Builds 1–3 require
-`maintenance`, Builds 4–6A accept either. **What was broken was the surface:**
-it showed Accept / Complete / Reopen to anyone who could open the page.
+Read the columns as three different questions, not one ladder:
 
-The aggregate read now emits server-computed capabilities:
+- **Operate** is `maintenance`. A manager does not gain it by outranking anyone.
+- **Read proof** is `maintenance` **or** `management`. Looking at evidence for a
+  closed job is a read, and a manager reviewing work must be able to do it.
+- **Certify** runs the *other* way: it is a management authority, and holding
+  `maintenance` never confers it. It additionally needs an eligible manager
+  assignment or an explicit `primary_for_modules` delegation **and** an
+  actionable readiness gate. Its implementation is unchanged and correct.
+
+**FINDING (hardening): the conversational door was weaker than the structured one.**
+The structured completion route required `maintenance`. The staff-agent door
+admits `maintenance` **or** `management`, and a `work_completion` proposal
+confirmed through it called `workAcceptanceService.claimCompletion` directly. A
+management-only operator could therefore close a job by talking to the agent
+that the work door would have refused them. Two doors, two answers to *may this
+person close a job*, and the conversational one won.
+
+**Fixed at the canonical boundary, not on a route.** `claimCompletion` now calls
+`assertMaintenanceOperator(client, { property_id: w.property_id, user_id:
+actor_user_id })` — property from the **loaded work row**, actor from the
+authenticated session — before the photo is stored and before anything is
+written. Every caller passes it: the structured door, the staff agent, and
+anything written later that nobody has thought of yet. A gate on a route governs
+that route; a check in the service governs the fact.
+
+A refused completion returns **403**, writes no attachment, no claim, no event,
+closes no obligation, changes no work state, and leaves the proposal
+unconfirmed — the agent's transaction rolls back around it. The message says
+that management access can read the turn and view completion photos but cannot
+record that work was finished.
+
+**Management keeps the rest of the staff agent.** Reporting conditions and scope
+through the agent stays available where those actions are governed. Only
+recording a completion is refused.
+
+The aggregate read emits server-computed capabilities:
 
 ```
 capabilities: {
   may_operate_work,                 // maintenance module at this property
+  may_read_proof,                   // maintenance OR management
   may_perform_readiness_walk,       // gate actionable + authorised + not yet certified
   may_view_management_attention,    // management module
-  basis, why_no_work_controls, enforcement_note
+  basis, why_no_work_controls, why_no_readiness_walk, enforcement_note
 }
 ```
 
@@ -224,12 +259,13 @@ The page gates every work control on `capabilities.may_operate_work` and
 **reads no module, role or title** — asserted. When a control is absent the page
 says why rather than silently omitting it.
 
-**Hiding is not the enforcement.** All three Build 1–3 write doors are asserted
-to still enforce `maintenance` themselves, and negative control **N4** in the
-thin live proof calls the accept route directly as a management-only operator
-and requires a 403.
+**Hiding is not the enforcement, and neither is the door.** All three Build 1–3
+write doors are asserted to still enforce `maintenance` themselves; the service
+now refuses independently of all of them. Negative control **N4** in the thin
+live proof calls the accept route directly as a management-only operator and
+requires a 403; **N9** does the same for a staff-agent completion confirmation.
 
-*Action:* none before live proof. *When:* N4 exercises it.
+*Action:* none before live proof. *When:* N4 and N9 exercise it.
 
 ### §9 idempotency and concurrency — **UNPROVEN**
 
@@ -418,26 +454,30 @@ required the operator to infer the sequence.**
 
 ## 8. Authority matrix
 
-| Actor | Operate a turn | Certify readiness | Source |
-|---|---|---|---|
-| Maintenance technician (`maintenance`) | ✓ all six doors | ✗ *"requires management module access"* | `readiness_service.js` |
-| Management-only (`management`) | **✗ B1–B3, ✓ B4–B6A** — see §8 FAIL | depends on title/delegation | door gates |
-| Management access, no assignment | ✗ | ✗ *"no active assignment at this property"* | `resolveWalkAuthority` |
-| Manager title, no management access | ✗ certify | ✗ *"requires management module access"* | `resolveWalkAuthority` |
-| Manager at another property | ✗ | ✗ — the query is property-scoped | `resolveWalkAuthority` |
-| Inactive assignment | ✗ | ✗ | `resolveWalkAuthority` |
-| Work performer, no readiness authority | ✓ operate | ✗ — performing grants nothing | asserted |
-| Work performer who also holds authority | ✓ | ✓ — held independently, not earned | asserted |
-| Senior property manager + management | ✓ | ✓ ladder rank 1 | `AUTHORITY_LADDER` |
-| Assistant property manager + management | ✓ | ✓ ladder rank 2 (delegated) | `AUTHORITY_LADDER` |
-| Delegated via `primary_for_modules` | ✓ | ✓ explicit delegation | `resolveWalkAuthority` |
+| Actor | Read turn | Operate a turn | Read proof photo | Certify readiness | Source |
+|---|---|---|---|---|---|
+| Maintenance technician (`maintenance`) | ✓ | ✓ all six doors | ✓ | ✗ *"requires management module access"* | `readiness_service.js` |
+| Management-only (`management`) | ✓ | **✗ — refused by the canonical service, not only the door** | ✓ | depends on title/delegation | `assertMaintenanceOperator` |
+| Management-only, **via the staff agent** | ✓ | **✗ 403 — the conversational door is no longer weaker** | ✓ | depends on title/delegation | `assertMaintenanceOperator` |
+| Management access, no assignment | ✗ | ✗ | ✗ | ✗ *"no active assignment at this property"* | `resolveWalkAuthority` |
+| Manager title, no management access | ✗ | ✗ | ✗ | ✗ *"requires management module access"* | `resolveWalkAuthority` |
+| Manager at another property | ✗ | ✗ | ✗ | ✗ — the query is property-scoped | `resolveWalkAuthority` |
+| Inactive assignment | ✗ | ✗ | ✗ | ✗ | `resolveWalkAuthority` |
+| Work performer, no readiness authority | ✓ | ✓ | ✓ | ✗ — performing grants nothing | asserted |
+| Work performer who also holds authority | ✓ | ✓ | ✓ | ✓ — held independently, not earned | asserted |
+| Senior property manager + management | ✓ | only with `maintenance` | ✓ | ✓ ladder rank 1 | `AUTHORITY_LADDER` |
+| Assistant property manager + management | ✓ | only with `maintenance` | ✓ | ✓ ladder rank 2 (delegated) | `AUTHORITY_LADDER` |
+| Delegated via `primary_for_modules` | ✓ | only with `maintenance` | ✓ | ✓ explicit delegation | `resolveWalkAuthority` |
 
 Title matching asserted: *Senior Property Manager*, *Assistant Property
 Manager*, *Property Manager*, *Asst. Manager* reach the ladder; *Maintenance
 Technician*, *Leasing Consultant*, *Regional Director* and blank do not.
 
 **Module access ≠ readiness authority. Title ≠ readiness authority. Performing
-work ≠ readiness authority.** The agent creates no weaker path.
+work ≠ readiness authority.** And **rank ≠ operating authority** — a senior
+property manager without `maintenance` cannot record that a job is finished, in
+either door. **The agent creates no weaker path**, and that is now enforced by
+`claimCompletion` itself rather than asserted about the doors.
 
 ---
 
@@ -446,6 +486,9 @@ work ≠ readiness authority.** The agent creates no weaker path.
 | Component | Class | Exit condition |
 |---|---|---|
 | Migrations 112–117 | **1** permanent | — |
+| Migration 118 — attachment contract (columns, keys, checks) | **1** permanent | — |
+| Migration 118 — `content bytea` storage | **2** temporary adapter | **Move behind object storage when real proof volume or multi-property operation makes database storage materially burdensome.** Attachment ids, the authority contract and the completion API are unchanged when that happens — only where the bytes sit. |
+| `assertMaintenanceOperator` in the completion service | **1** permanent | — |
 | Triage interpreter (Build 1, pure) | **1** permanent | — |
 | Triage canonical service | **1** permanent | — |
 | Turn-scope interpreter + service | **1** permanent | — |
@@ -656,19 +699,32 @@ migration collisions → apply pending Build migrations → run
 
 **Known from source:** `DATABASE_URL`; an authenticated staff session
 (`x-staff-session`); an active `property_team_assignments` row; `maintenance`
-module access to operate and management + title/delegation to certify;
-`gen_random_uuid()`; migration ceiling ≥ 111; pinned API origin
+module access to **operate and to record a completion**; `maintenance` **or**
+`management` to read the turn and view a completion photo; `management` +
+eligible manager assignment or explicit delegation to certify readiness;
+`gen_random_uuid()`; migration ceiling ≥ 117; pinned API origin
 `https://property-spine-api.onrender.com`.
 
-**No new environment variable. No photo storage. No background process.** The
-18 Build-added source files reference zero `process.env` values.
+**Mandatory wiring.** The API now refuses to start unless multer and all three
+attachment-service functions (`storeForWork`, `resolveForWork`, `readForWork`)
+are injected. A deployment missing either is one where the primary completion
+path can never succeed — the Complete button would be present and no photo
+would ever be stored — so it fails loudly at construction instead of quietly at
+6pm in a unit. This proves the **source composition** is complete. It proves
+nothing about migration 118 existing in any database.
+
+**No new environment variable. No external photo storage. No background
+process.** The Build-added source files reference zero `process.env` values;
+the completion photo lives in Postgres `bytea` as a declared Class 2 adapter.
 
 **Assumed:** `gen_random_uuid()` exists on the baseline (the verifier checks
 before anything is applied); the Render deployment serves the same database the
 baseline is exported from.
 
-**Still unknown:** the live ledger's contents; whether 112–117 are free *there*;
+**Still unknown:** the live ledger's contents; whether 112–118 are free *there*;
 whether any real person carries the module permissions the golden path needs.
+Migration 118's number is **provisional** — correct only if the live ceiling is
+really 117, which the baseline verifier decides.
 
 **No configuration value has been manufactured anywhere in this document.**
 
@@ -676,9 +732,25 @@ whether any real person carries the module permissions the golden path needs.
 
 ## 14. Proof level
 
-> **Built but dormant.**
+> **Source-complete, Built but dormant.**
 
-1206 assertions across eight harnesses, all source-level or pure-function.
-Three sections FAIL and two are UNPROVEN. Nothing in Builds 1–6B has recorded a
-real fact about a real unit, and nothing here may be described as live,
-deployed, enforced or proven.
+1676 assertions across nine harnesses, all source-level, pure-function, or
+against recording doubles. No section FAILs; §9 idempotency and §16 live-first
+remain **UNPROVEN** and are named as such.
+
+Nothing in Builds 1–6B or the closure slice has recorded a real fact about a
+real unit. Nothing here may be described as live, deployed, enforced or proven.
+
+### What the hardening did and did not settle
+
+| Claim | Status |
+|---|---|
+| A management-only actor cannot record a completion through **either** door | **source-complete** — enforced in `claimCompletion`, exercised against a recording client, unproven against Postgres |
+| A conflicting `property_id` is refused on a **multipart** claim | **source-complete** — the real router's middleware order is asserted from the built router, not from a regex |
+| Migration 118 refuses a cross-property or cross-unit attachment | **written only** — the composite key exists in the file; no server has parsed it |
+| `byte_size` equals the stored bytes, ≤ 5 MB, digest is lowercase hex | **written only** — same |
+| The API refuses to start with the photo path unwired | **source-complete** — the real module factory is constructed and observed to throw |
+
+**"Written only" is not a synonym for done.** Five of the strongest guarantees
+in this slice are constraint text in an unapplied migration. They become real at
+negative control **N11**, and not one moment sooner.
