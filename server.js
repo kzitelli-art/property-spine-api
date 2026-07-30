@@ -3251,6 +3251,67 @@ const workOrderService = makeWorkOrderService({ spawnObligationFromEvent });
 
 // ── MAINTENANCE MODULE (isolated; injected pool + shared obligation path) ──
 app.use("/", maintenanceModule({ pool, spawnObligationFromEvent, workOrderService }));
+
+// ── UNIT TRIAGE (BUILD 1: post-move-out initial triage) ──────────────────
+//  One service instance, one mount, one door. Same injection discipline as
+//  workOrderService above, and asserted at construction for the same reason.
+const unitTriageService = require("./src/maintenance/unit_triage_service")
+  .makeUnitTriageService({ spawnObligationFromEvent });
+app.use("/", require("./src/maintenance/unit_triage")({ pool, unitTriageService }));
+
+// ── UNIT TURN SCOPE (BUILD 2: normal turn scope + ordered flow) ──────────
+//  Extends a confirmed BUILD 1 triage. Same injection discipline, same single
+//  authority-scoped door, asserted at construction.
+const unitTurnScopeService = require("./src/maintenance/unit_turn_scope_service")
+  .makeUnitTurnScopeService({ spawnObligationFromEvent });
+app.use("/", require("./src/maintenance/unit_turn_scope")({ pool, unitTurnScopeService, unitTriageService }));
+
+// ── WORK ACCEPTANCE / PROOF / PROGRESSION (BUILD 3) ──────────────────────
+// ── ONE COMPLETION PHOTO (unit-turn closure slice, migration 118) ────────
+//  The attachment CONTRACT is permanent; the `bytea` storage behind it is a
+//  Class 2 adapter, replaceable without touching ids, authority or the
+//  completion API. It is injected into the acceptance service so the photo and
+//  the claim commit in ONE transaction.
+const workProofAttachmentService = require("./src/maintenance/work_proof_attachment_service")
+  .makeWorkProofAttachmentService();
+
+const workAcceptanceService = require("./src/maintenance/work_acceptance_service")
+  .makeWorkAcceptanceService({ spawnObligationFromEvent, attachmentService: workProofAttachmentService });
+//  `proofUpload` is this workflow's own multer instance: ONE file, 5 MB. The
+//  shared 25 MB `upload` above serves other surfaces and is deliberately not
+//  reused — a completion photo has its own limit.
+const proofUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
+app.use("/", require("./src/maintenance/work_acceptance")({
+  pool, upload: proofUpload, workProofAttachmentService, workAcceptanceService, unitTriageService,
+}));
+
+// ── FINAL READINESS WALK AND CERTIFICATION (BUILD 4) ─────────────────────
+//  The only path in the system that may establish `ready`, and only from an
+//  explicit human certification. Reopening prior work goes through
+//  workAcceptanceService so there is one canonical reopen path, not two.
+const readinessService = require("./src/maintenance/readiness_service")
+  .makeReadinessService({ spawnObligationFromEvent, workAcceptanceService });
+app.use("/", require("./src/maintenance/readiness")({ pool, readinessService }));
+
+// ── AUTHENTICATED STAFF AGENT CAPTURE (BUILD 5) ──────────────────────────
+//  A capture DOOR into Builds 1-4, not a second maintenance system. All four
+//  canonical services are REQUIRED — construction fails without any of them,
+//  so the agent cannot exist in a configuration where it would fall back to a
+//  raw insert.
+const staffAgentService = require("./src/agent/staff_agent_service")
+  .makeStaffAgentService({ unitTriageService, unitTurnScopeService, workAcceptanceService, readinessService });
+app.use("/", require("./src/agent/staff_agent")({ pool, staffAgentService }));
+
+// ── THE ONE UNIT TURN PAGE (BUILD 6A) ────────────────────────────────────
+//  READ-ONLY consolidation of the Build 1-5 canonical reads. Creates no state
+//  and owns no domain model; every write action on the page posts to the
+//  Build 1-5 door that owns it. All four services are required.
+const unitTurnRead = require("./src/surfaces/unit_turn_read").makeUnitTurnRead({
+  unitTriageService, unitTurnScopeService, workAcceptanceService, readinessService,
+  staffAgentService, availabilityRead: require("./src/surfaces/availability_read").availabilityRead,
+  workProofAttachmentService,
+});
+app.use("/", require("./src/surfaces/unit_turn")({ pool, unitTurnRead }));
 // applications module mounted lower (after the conversion + submission services exist,
 // so /approve can close the leasing_manager application_approval gate). See below.
 const __leasePackets = leasePacketsModule({ pool, satisfyObligation, completeObligation });
@@ -3261,7 +3322,7 @@ app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));
 app.use("/", moneyModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, reassignObligation }));
 app.use("/", orgchartModule({ pool }));
 app.use("/", roomOwnersModule({ pool }));
-app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, recordEffectivePossession }));
+app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, recordEffectivePossession, unitTriageService }));
 const deliveryHelper = require("./src/comms/delivery")({ satisfyObligation, completeObligation }); // Slice D shared completion-feed
 app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, deliveryHelper, recordEffectivePossession }));
 app.use("/", noticeModule({ pool }));   // Availability Slice A — notice writes unit_events only; no obligation spawns at notice
