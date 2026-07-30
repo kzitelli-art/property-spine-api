@@ -316,13 +316,21 @@ const CAPTURE_STATE_IS_WORK = Object.freeze({
  *                 answer to "is this overdue?"
  *   now / graceMinutes
  *
- * Returns { state, label, is_work, reason }.
+ * Returns { state, label, is_work, reason, capture_due_at }.
+ *
+ * capture_due_at (S4 ruling): the CONCRETE deadline this resolver measures
+ * against — effective end + grace — authored here and nowhere else, so a
+ * surface may never say "overdue" without the timestamp that explains it.
+ * Present exactly when an honest end time exists (overdue and scheduled);
+ * null for settled / judgment-owed / untrackable, where no time gate is the
+ * governing fact. Additive: existing consumers read the original four fields.
  */
 function resolveCaptureState({ isTerminal = false, attendance = null, standing = null,
                                tourEndedAt = null, occurredAt = null, origin = null,
                                now = null, graceMinutes = 0 } = {}) {
-  const out = (state, reason) => ({
+  const out = (state, reason, captureDueAt) => ({
     state, label: CAPTURE_STATE_LABEL[state], is_work: CAPTURE_STATE_IS_WORK[state], reason,
+    capture_due_at: captureDueAt || null,
   });
 
   if (isTerminal) return out(CAPTURE_STATE.SETTLED, "outcome already recorded");
@@ -357,10 +365,11 @@ function resolveCaptureState({ isTerminal = false, attendance = null, standing =
   if (!Number.isFinite(end)) {
     return out(CAPTURE_STATE.UNTRACKABLE, "unreadable end time");
   }
+  const captureDueAt = new Date(end + graceMinutes * 60000).toISOString();
   if (nowMs > end + graceMinutes * 60000) {
-    return out(CAPTURE_STATE.OVERDUE, "the tour has ended and nothing was captured");
+    return out(CAPTURE_STATE.OVERDUE, "the tour has ended and nothing was captured", captureDueAt);
   }
-  return out(CAPTURE_STATE.SCHEDULED, "not yet due");
+  return out(CAPTURE_STATE.SCHEDULED, "not yet due", captureDueAt);
 }
 
 // ── A STANDING IS NOT A LABEL ─────────────────────────────────────────

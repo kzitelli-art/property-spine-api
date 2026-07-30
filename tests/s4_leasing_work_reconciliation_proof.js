@@ -257,8 +257,10 @@ async function buildFixture(c) {
     "capture row navigates to the canonical tour destination");
   ok(cap.accountable_user_id === null && cap.assignment_state === "unassigned",
     "hostless capture row is honestly unassigned (confirmed_by is never treated as owner)");
-  ok(cap.due_at === null && cap.due_state === "overdue",
-    "no invented deadline: due_at null; overdue only from the canonical capture resolver");
+  const slotEnd = (await pool.query(`select ends_at from tour_availability where id=$1`, [SLOTS.owed])).rows[0].ends_at;
+  const expectedDue = new Date(new Date(slotEnd).getTime() + 15 * 60000).toISOString();
+  ok(cap.due_at === expectedDue && cap.due_state === "overdue",
+    `overdue carries the resolver's OWN deadline (slot end + grace): ${cap.due_at}`);
   ok(out.tour_capture.owed_shown === 1 && out.tour_capture.untrackable_not_shown === 1,
     "untrackable tour is counted, not shown, never silent");
 

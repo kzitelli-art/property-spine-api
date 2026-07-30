@@ -105,6 +105,7 @@ const out = desk.composeLeasingDesk({
       leasing_agent_id: null, host_name: null,
       person_id: "person-tour", person_name: "Walked In",
       conversation_id: "conv-tour", capture_state: "overdue",
+      capture_due_at: "2026-07-19T15:15:00Z",
       created_at: "2026-07-19T12:00:00Z",
       activity_candidates: [{ at: "2026-07-19T15:00:00Z", label: "tour_completed" }] },
   ],
@@ -171,9 +172,15 @@ ck("capture row with no canonical host is honestly unassigned", () => {
   assert.strictEqual(cap.accountable_user_name, null);
   assert.strictEqual(cap.assignment_state, "unassigned");
 });
-ck("capture row invents no deadline: due_at null, overdue only from the canonical resolver", () => {
-  assert.strictEqual(cap.due_at, null);
+ck("capture row projects the resolver's OWN deadline beside its overdue", () => {
+  assert.strictEqual(cap.due_at, "2026-07-19T15:15:00.000Z");
   assert.strictEqual(cap.due_state, "overdue");
+});
+ck("overdue is NEVER emitted without an authored deadline (ruled)", () => {
+  const stray = desk.normalizeTourCaptureRow({ tour_id: "tour-x", person_id: "p-x", person_name: "X",
+    capture_state: "overdue", capture_due_at: null, created_at: "2026-07-19T12:00:00Z" });
+  assert.strictEqual(stray.due_at, null);
+  assert.strictEqual(stray.due_state, "none");
 });
 ck("untrackable tours are counted, never silently calm", () =>
   assert.deepStrictEqual(out.tour_capture, { owed_shown: 1, untrackable_not_shown: 2 }));

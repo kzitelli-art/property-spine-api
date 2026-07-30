@@ -367,6 +367,7 @@ async function loadTourCaptureRows(client, propertyId) {
       person_name: r.person_name,
       conversation_id: r.conversation_id || null,
       capture_state: cs.state,
+      capture_due_at: cs.capture_due_at || null,
       created_at: r.created_at,
       activity_candidates: [
         { at: r.conversation_last_message_at, label: "conversation_message" },

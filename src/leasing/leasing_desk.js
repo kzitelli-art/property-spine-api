@@ -516,10 +516,12 @@ function normalizeStageFollowupRow(row) {
 // Ruled behavior:
 //   · owner is the canonical assigned tour host (leasing_agent_id) or honest
 //     unassigned — never confirmed_by, which proves confirmation, not hosting;
-//   · no invented capture SLA: due_at is null (no authored deadline timestamp
-//     exists), and due_state is "overdue" ONLY because the canonical resolver
-//     already authors exactly that judgment for these rows on the Tours board
-//     (tour ended + existing grace, nothing captured) — else "none";
+//   · the deadline is the resolver's OWN: capture_due_at is authored by
+//     resolveCaptureState (effective end + the existing grace) — no new SLA
+//     is invented, the deadline it already measures against is exposed. A
+//     row may read "overdue" ONLY with that authored timestamp beside it;
+//     without one, due_at is null and due_state is "none" (ruled: never
+//     emit overdue with no authored deadline explaining it);
 //   · the primary action navigates to the EXISTING canonical tour-outcome
 //     destination; no second capture workflow or write path.
 function normalizeTourCaptureRow(row) {
@@ -553,8 +555,8 @@ function normalizeTourCaptureRow(row) {
     assignment_state: accountableUserId ? "assigned" : "unassigned",
     owner_name: valueOrNull(row.host_name),
     owner_basis: accountableUserId ? "tour_host" : "unassigned",
-    due_at: null,
-    due_state: row.capture_state === "overdue" ? "overdue" : "none",
+    due_at: toIsoOrNull(row.capture_due_at),
+    due_state: (row.capture_state === "overdue" && row.capture_due_at) ? "overdue" : "none",
     created_at: toIsoOrNull(row.created_at),
     source: "tour_capture",
     tour_id: row.tour_id,
