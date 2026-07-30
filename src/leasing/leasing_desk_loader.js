@@ -56,6 +56,8 @@ async function loadApplicationRows(client, propertyId, deps) {
     let applicant_name = summary.applicant_name || null;
     let person_id = null;
     let conversion_id = null;
+    let unit_id = null;
+    let lease_id = null;
 
     if (canResolve && applicationReview.buildReviewDetail) {
       const detail = await applicationReview.buildReviewDetail(
@@ -97,6 +99,12 @@ async function loadApplicationRows(client, propertyId, deps) {
           : (detail.applicant_name != null ? detail.applicant_name : applicant_name));
         person_id = (applicantDetail.person_id != null ? applicantDetail.person_id
           : (detail.person_id != null ? detail.person_id : null));
+        // S4 passthroughs of the SAME canonical detail read: the application's
+        // governed unit, and the direct leases.application_id lookup (089)
+        // Application Review already serves. Null preserved when absent.
+        unit_id = (unitDetail.unit_id != null ? unitDetail.unit_id
+          : (detail.unit_id != null ? detail.unit_id : null));
+        lease_id = detail.lease_id != null ? detail.lease_id : null;
         // conversion_id is NOT part of the review-detail contract today. Left as
         // an honest null rather than guessed at; a row without a conversion is
         // already handled downstream (send_application degrades to Unavailable).
@@ -110,16 +118,51 @@ async function loadApplicationRows(client, propertyId, deps) {
       person_id,
       applicant_name,
       person_name: applicant_name,
+      unit_id,
       unit_label,
+      lease_id,
       next_action,        // composer omits rows whose next_action is null
       // ownership/due come from the follow-up rail's obligation, not the app row;
       // an application-lifecycle row has no independent due in this slice.
+      owner_user_id: null,
       owner_name: null,
       owner_basis: null,
       due_at: null,
       due_state: null,
       created_at: summary.created_at || null,
     });
+  }
+
+  // ── S4 batched enrichment (both in-snapshot, one query each) ─────────
+  // Semantic application timestamps for latest-activity (never updated_at),
+  // and the deterministic conversation correlation — conversations are
+  // unique(property_id, person_id), so person_id resolves at most one.
+  const appIds = rows.map((r) => r.application_id).filter(Boolean);
+  const tsById = new Map();
+  if (appIds.length) {
+    const tq = await client.query(
+      `select id, applicant_signed_at, countersigned_at, activated_at
+         from lease_applications where id = any($1::uuid[])`, [appIds]);
+    for (const t of tq.rows) tsById.set(String(t.id), t);
+  }
+  const personIds = [...new Set(rows.map((r) => r.person_id).filter(Boolean).map(String))];
+  const convByPerson = new Map();
+  if (personIds.length) {
+    const cq = await client.query(
+      `select person_id, id, last_message_at from conversations
+        where property_id = $1 and person_id = any($2::uuid[])`, [propertyId, personIds]);
+    for (const c of cq.rows) convByPerson.set(String(c.person_id), c);
+  }
+  for (const row of rows) {
+    const ts = tsById.get(String(row.application_id)) || {};
+    const conv = row.person_id ? (convByPerson.get(String(row.person_id)) || null) : null;
+    row.conversation_id = conv ? conv.id : null;
+    row.activity_candidates = [
+      { at: conv ? conv.last_message_at : null, label: "conversation_message" },
+      { at: ts.applicant_signed_at, label: "application_signed" },
+      { at: ts.countersigned_at, label: "application_countersigned" },
+      { at: ts.activated_at, label: "application_activated" },
+    ];
   }
   return rows;
 }
@@ -135,6 +178,7 @@ const FOLLOWUP_SQL = `
          p.id as person_id, p.name as person_name,
          c.origin_tour_id, lco.rung,
          tu.unit_id, un.unit_number,
+         cv.id as conversation_id, cv.last_message_at as conversation_last_message_at,
          subst.applicant_substatus,
          case when lco.rung = 'leasing_task' then 'sibling' else 'anchor' end as anchor_or_sibling,
          o.status, o.label, o.due_at, o.created_at,
@@ -150,6 +194,9 @@ const FOLLOWUP_SQL = `
     join leasing_conversions c on c.id = lco.conversion_id
     join persons p             on p.id = c.person_id
     left join users ou         on ou.id = lco.owner_user_id
+    -- S4: deterministic correlation — conversations are unique(property_id,
+    -- person_id), so this join can never multiply rows.
+    left join conversations cv on cv.property_id = c.property_id and cv.person_id = c.person_id
     left join lateral (
       select t.unit_id from leasing_tours t where t.id = c.origin_tour_id limit 1
     ) tu on true
@@ -230,20 +277,107 @@ async function loadFollowupRows(client, propertyId, deps) {
     application_id: r.application_id || null,
     person_id: r.person_id,
     person_name: r.person_name,
+    unit_id: r.unit_id || null,
     unit_number: r.unit_number || null,
+    conversation_id: r.conversation_id || null,
     rung: r.rung,
     label: r.label,
     applicant_substatus: r.applicant_substatus || null,
+    owner_user_id: r.owner_user_id || null,
     owner_name: r.owner_name,
     owner_basis: r.owner_user_id ? basisByOwner[r.owner_user_id] : "unassigned",
     due_at: r.due_at,
     due_state: r.due_state,
     next_move_code: r.next_move_code,
     created_at: r.created_at,
+    // S4: latest MEANINGFUL activity candidates — semantic timestamps only.
+    // The obligation's authoring moment is explicit activity; the generic
+    // updated_at is deliberately not a candidate.
+    activity_candidates: [
+      { at: r.conversation_last_message_at, label: "conversation_message" },
+      { at: r.created_at, label: "obligation_activity" },
+    ],
     // D: explicit shadow flag the composer honors (never suppresses on
     // conversion-share alone). Both id keys travel on the row already.
     display_shadow_of_application: SHADOW_RUNGS.has(r.rung),
   }));
+}
+
+// ── S4: TOUR-CAPTURE ROWS ───────────────────────────────────────────────────
+// Tours that HAPPENED with no recorded outcome. Judged by the ONE canonical
+// capture resolver (tour_outcome.resolveCaptureState) with the SAME inputs the
+// Tours board feeds it — terminal flag, the slot's honest end time, the tour's
+// own occurrence time (walk-ins), origin, and the board's existing grace — so
+// the desk and the board cannot hold two opinions about the same tour.
+//
+// Only capture_state 'overdue' becomes a desk row: the tour ended and nothing
+// was captured — that is capture OWED, provably. 'untrackable' (no honest end
+// time, so no honest answer) is NOT shown as owed work here — claiming it is
+// owed would fabricate a judgment the resolver refuses to make — but its count
+// travels on the envelope so unknown never reads as calm. The Tours board
+// remains where untrackable tours are repaired.
+const TW = require("../shared/tour_window");
+
+// Mirrors the Tours board's capture grace (operator.js). Class-2 adapter there
+// and here: replace BOTH with property-level capture-grace config together.
+const TOUR_CAPTURE_GRACE_MINUTES = 15;
+
+const TOUR_CAPTURE_SQL = `
+  select t.id as tour_id, t.unit_id, un.unit_number,
+         t.leasing_agent_id, u.name as host_name,
+         t.checked_in_at, t.completed_at, t.origin, t.created_at,
+         av.ends_at as scheduled_end_at,
+         l.person_id, p.name as person_name,
+         cv.id as conversation_id, cv.last_message_at as conversation_last_message_at
+    from leasing_tours t
+    join leasing_leads l on l.id = t.lead_id
+    join persons p       on p.id = l.person_id
+    left join users u    on u.id = t.leasing_agent_id
+    left join units un   on un.id = t.unit_id
+    left join tour_availability av on av.id = t.slot_id
+    left join conversations cv
+           on cv.property_id = t.property_id and cv.person_id = l.person_id
+   where t.property_id = $1
+     and not (${TW.isTerminalExpr("t")})`;
+
+async function loadTourCaptureRows(client, propertyId) {
+  const tourOutcome = require("./tour_outcome");
+  const rows = (await client.query(TOUR_CAPTURE_SQL, [propertyId])).rows;
+  const owed = [];
+  let untrackable = 0;
+  for (const r of rows) {
+    const cs = tourOutcome.resolveCaptureState({
+      isTerminal: false, // terminal rows are excluded in SQL by the same rule
+      attendance: null,
+      standing: null,
+      tourEndedAt: r.scheduled_end_at || null,
+      occurredAt: r.checked_in_at || r.completed_at || null,
+      origin: r.origin || null,
+      graceMinutes: TOUR_CAPTURE_GRACE_MINUTES,
+    });
+    if (cs.state === tourOutcome.CAPTURE_STATE.UNTRACKABLE) { untrackable++; continue; }
+    if (cs.state !== tourOutcome.CAPTURE_STATE.OVERDUE) continue; // future/settled: nothing owed yet
+    owed.push({
+      tour_id: r.tour_id,
+      unit_id: r.unit_id || null,
+      unit_number: r.unit_number || null,
+      leasing_agent_id: r.leasing_agent_id || null,
+      host_name: r.host_name || null,
+      person_id: r.person_id,
+      person_name: r.person_name,
+      conversation_id: r.conversation_id || null,
+      capture_state: cs.state,
+      capture_due_at: cs.capture_due_at || null,
+      created_at: r.created_at,
+      activity_candidates: [
+        { at: r.conversation_last_message_at, label: "conversation_message" },
+        // completed_at is a semantic completion moment when present; the
+        // generic updated_at is deliberately never a candidate.
+        { at: r.completed_at, label: "tour_completed" },
+      ],
+    });
+  }
+  return { owed, untrackable };
 }
 
 // ── RECENTLY CLOSED ──────────────────────────────────────────────────────────
@@ -320,6 +454,7 @@ async function loadLeasingDesk(deps, propertyId, opts) {
 
     const applicationRows = await loadApplicationRows(client, propertyId, deps);
     const followupRows = await loadFollowupRows(client, propertyId, deps);
+    const tourCapture = await loadTourCaptureRows(client, propertyId);
     const recentlyClosedRows = await loadRecentlyClosed(client, propertyId, windowHours, deps);
 
     // ── TEST RECORDS ARE NOT WORK ────────────────────────────────────
@@ -343,6 +478,7 @@ async function loadLeasingDesk(deps, propertyId, opts) {
     const showQa = String(process.env.LEASING_DESK_SHOW_INTERNAL_QA || "").toLowerCase() === "true";
     let hidden = 0;
     let appRows = applicationRows, folRows = followupRows, closedRows = recentlyClosedRows;
+    let tourRows = tourCapture.owed;
     if (!showQa) {
       const qa = new Set((await client.query(
         `select person_id from person_property_classifications
@@ -356,6 +492,7 @@ async function loadLeasingDesk(deps, propertyId, opts) {
       appRows = keep(applicationRows);
       folRows = keep(followupRows);
       closedRows = keep(recentlyClosedRows);
+      tourRows = keep(tourCapture.owed);
     }
 
     // ── WHAT THE FILTER CANNOT JUDGE ─────────────────────────────────
@@ -375,7 +512,7 @@ async function loadLeasingDesk(deps, propertyId, opts) {
     //  A row with NO person at all is counted separately. That is not a
     //  classification gap, it is an integrity one — work on a board with
     //  nobody attached to it.
-    const shown = [...appRows, ...folRows, ...closedRows];
+    const shown = [...appRows, ...folRows, ...tourRows, ...closedRows];
     const shownIds = [...new Set(shown.map((r) => r && r.person_id).filter(Boolean).map(String))];
     let ungoverned = 0;
     if (shownIds.length) {
@@ -393,6 +530,8 @@ async function loadLeasingDesk(deps, propertyId, opts) {
       propertyId,
       applicationRows: appRows,
       followupRows: folRows,
+      tourCaptureRows: tourRows,
+      tourCaptureUntrackable: tourCapture.untrackable,
       recentlyClosedRows: closedRows,
       recentlyClosedWindowHours: windowHours,
     });
@@ -415,8 +554,10 @@ module.exports = {
   // exported for targeted proofs:
   loadApplicationRows,
   loadFollowupRows,
+  loadTourCaptureRows,
   loadRecentlyClosed,
   FOLLOWUP_SQL,
+  TOUR_CAPTURE_SQL,
   CLOSED_SQL,
   SHADOW_RUNGS,
 };
