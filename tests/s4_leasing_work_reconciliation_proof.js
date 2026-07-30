@@ -45,8 +45,8 @@ const ok = (c, m) => { if (c) { passed++; console.log("   PASS  " + m); } else {
 const U = (n) => `f4f4f4f4-0000-4000-8000-${String(n).padStart(12, "0")}`;
 const P = U(1);                    // property
 const USER_KATIE = U(10);
-const PEOPLE = { appr: U(21), wait: U(22), block: U(23), lease: U(24), dec: U(25), act: U(26), draft: U(27), post: U(31), una: U(32), owed: U(41), untrk: U(42), done: U(43), futr: U(44) };
-const APPS = { appr: U(101), wait: U(102), block: U(103), lease: U(104), dec: U(105), act: U(106), draft: U(107), orph: U(108) };
+const PEOPLE = { appr: U(21), wait: U(22), block: U(23), lease: U(24), dec: U(25), act: U(26), draft: U(27), qa: U(28), post: U(31), una: U(32), owed: U(41), untrk: U(42), done: U(43), futr: U(44) };
+const APPS = { appr: U(101), wait: U(102), block: U(103), lease: U(104), dec: U(105), act: U(106), draft: U(107), orph: U(108), qa: U(109) };
 const TOURS = { owed: U(201), untrk: U(202), done: U(203), futr: U(204), conv1: U(205), conv2: U(206) };
 const SLOTS = { owed: U(211), futr: U(212) };
 const LEADS = { owed: U(221), untrk: U(222), done: U(223), futr: U(224), conv1: U(225), conv2: U(226) };
@@ -80,7 +80,8 @@ async function buildFixture(c) {
                  values ($1, $2, 'Leasing Agent', 'property', '{leasing}', '{leasing}', false, true)`, [P, USER_KATIE]);
   for (const [k, id] of Object.entries(PEOPLE)) {
     await c.query(`insert into persons (id, name, lifecycle_status) values ($1, $2, 'prospect')`, [id, `Person ${k}`]);
-    await c.query(`insert into person_property_classifications (property_id, person_id, record_class, classification_source) values ($1, $2, 'production', 'system')`, [P, id]);
+    const cls = k === "qa" ? "internal_qa" : "production";
+    await c.query(`insert into person_property_classifications (property_id, person_id, record_class, classification_source) values ($1, $2, $3, 'system')`, [P, id, cls]);
   }
 
   // conversations for the waiting + owed-tour people (deterministic join proof)
@@ -110,6 +111,7 @@ async function buildFixture(c) {
   await app(APPS.act, PEOPLE.act, "active");                                       // → exited
   await app(APPS.draft, PEOPLE.draft, "draft");                                    // → review_application (available)
   await app(APPS.orph, null, "draft");                                             // → uncorrelated, still visible
+  await app(APPS.qa, PEOPLE.qa, "submitted");                                      // → QA person: rail hides, records mirror AR
 
   // packets: issued one for WAIT (status 'sent' ⇒ awaiting), draft one for BLOCK
   const packet = (id, appId, status, sent) => c.query(
@@ -223,14 +225,53 @@ async function buildFixture(c) {
   console.log(`tour capture owed / untrack : ${out.tour_capture.owed_shown} / ${out.tour_capture.untrackable_not_shown}`);
 
   console.log("\n══ assertions ══");
-  ok(review.applications.length === 8, "AR population is the full 8-record lease_applications set");
-  // every AR record is either on the rail or omitted for a server-authored lifecycle reason
-  const explained = included.filter((i) => railAppIds.has(String(i.id))).length + omitted.length;
+  ok(review.applications.length === 9, "AR population is the full 9-record lease_applications set");
+  // every AR record is on the rail, omitted for a server-authored lifecycle
+  // reason, or hidden from the RAIL ONLY by the declared internal_qa hygiene
+  // (in which case it must still be mirrored in Application Records — S5).
+  const onRail = included.filter((i) => railAppIds.has(String(i.id))).length;
+  const qaHiddenFromRail = included.filter((i) => !railAppIds.has(String(i.id)));
+  const explained = onRail + qaHiddenFromRail.length + omitted.length;
   ok(explained === review.applications.length,
-    `every AR record is on the rail or has a server-authored omission reason (${explained}/${review.applications.length})`);
+    `every AR record is on the rail, lifecycle-exited, or QA-hidden with a receipt (${onRail}+${qaHiddenFromRail.length}+${omitted.length}/${review.applications.length})`);
+  ok(qaHiddenFromRail.length === 1 && String(qaHiddenFromRail[0].id) === APPS.qa && out.internal_qa_hidden === 1,
+    "the ONLY rail-hygiene omission is the declared internal_qa record, receipted on the envelope");
   ok(omitted.every((o) => o.reason.startsWith("exited_lifecycle")),
-    "the ONLY omissions are genuine lifecycle exits (active/closed) — nothing else may disappear");
+    "the ONLY lifecycle omissions are genuine exits (active/closed) — nothing else may disappear");
   ok(omitted.length === 2, "exactly the declined and active applications exited");
+
+  // ── S5: APPLICATION RECORDS — exact Applications Review parity ──────
+  const rec = out.application_records;
+  const recIds = rec.records.map((r) => String(r.application_id)).sort();
+  const arIds = review.applications.map((a) => String(a.application_id)).sort();
+  ok(JSON.stringify(recIds) === JSON.stringify(arIds) && new Set(recIds).size === recIds.length,
+    `every AR record appears in Application Records EXACTLY once (${recIds.length}/${arIds.length})`);
+  ok(rec.counts.total === 9 && rec.counts.active === 7 && rec.counts.exited === 2 && rec.counts.unresolved === 0,
+    `records counts server-authored: ${JSON.stringify(rec.counts)}`);
+  const qaRec = rec.records.find((r) => String(r.application_id) === APPS.qa);
+  ok(!!qaRec && !railAppIds.has(APPS.qa),
+    "the QA-classified application is mirrored in records while the rail keeps its hygiene");
+  const decRec = rec.records.find((r) => String(r.application_id) === APPS.dec);
+  const actRec = rec.records.find((r) => String(r.application_id) === APPS.act);
+  ok(!!decRec && decRec.record_state === "exited" && decRec.exit_code === "closed" && !!decRec.exit_label,
+    "the declined application remains accessible as an exited RECORD with its exit label");
+  ok(!!actRec && actRec.record_state === "exited" && actRec.exit_code === "active",
+    "the activated application remains accessible as an exited RECORD");
+  const arWait = review.applications.find((a) => String(a.application_id) === APPS.wait);
+  const recWait = rec.records.find((r) => String(r.application_id) === APPS.wait);
+  ok(!!recWait && recWait.completeness === arWait.completeness
+    && recWait.packet_status === arWait.packet_status && recWait.main_blocker === arWait.main_blocker
+    && recWait.missing_count === arWait.missing_count,
+    "record facts mirror the review list verbatim (completeness · packet · blocker)");
+  ok(recWait.record_state === "active" && recWait.active_stage === "lease_sent" && recWait.waiting_on === "prospect",
+    "an active record names its rail stage — active-here ⇔ on-the-rail");
+  const orphRec = rec.records.find((r) => String(r.application_id) === APPS.orph);
+  ok(!!orphRec && orphRec.person_id === null, "the personless application is a record with honest nulls");
+  ok(rec.records.every((r) => r.primary_action && r.primary_action.kind === "navigation"
+      && r.primary_action.target.type === "application" && String(r.primary_action.target.id) === String(r.application_id)),
+    "every record — active or exited — opens the SAME canonical review detail");
+  ok(out.operating_counts.total_active === out.stage_counts.total,
+    "Active Work counts remain active-only — records never inflate the rail");
 
   const wait = railRows.find((r) => String(r.application_id) === APPS.wait);
   ok(!!wait, "the waiting-on-prospect application IS on the rail (restored)");

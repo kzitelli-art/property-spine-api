@@ -568,6 +568,63 @@ function normalizeTourCaptureRow(row) {
   };
 }
 
+// ── S5: APPLICATION RECORDS — the Applications Review mirror ────────────────
+// One record per lease_applications row, EXACTLY the review-list population,
+// including exited history. This is a RECORDS view, never a second active
+// rail: record_state is server-authored from the same resolver truth the
+// stages use (stageForApplicationNext), so active-here ⇔ on-the-rail by
+// construction, and nothing is re-derived in the browser.
+const EXIT_LABELS = Object.freeze({
+  active: "Lease active — tenant file open.",
+  closed: "Application closed.",
+  term_confirmed: "Lease term confirmed — moved to move-in.",
+});
+
+function normalizeApplicationRecord(row) {
+  if (!row || !row.application_id) return null;
+  const next = row.next_action || null;
+  const stage = stageForApplicationNext(next);
+  const exited = !!(next && next.code) && !stage;
+  const recordState = stage ? "active" : (exited ? "exited" : "unresolved");
+  return {
+    application_id: row.application_id,
+    person_id: valueOrNull(row.person_id),
+    person_name: valueOrNull(row.person_name || row.applicant_name),
+    unit_id: valueOrNull(row.unit_id),
+    unit_number: valueOrNull(row.unit_number || row.unit_label),
+    conversion_id: valueOrNull(row.conversion_id),
+    lease_id: valueOrNull(row.lease_id),
+    conversation_id: valueOrNull(row.conversation_id),
+    status: valueOrNull(row.status), // NON-AUTHORITATIVE — record_state below is the truth
+    record_state: recordState,
+    active_stage: stage || null,
+    exit_code: exited ? next.code : null,
+    exit_label: exited ? (EXIT_LABELS[next.code] || valueOrNull(next.label)) : null,
+    state_label: next ? valueOrNull(next.label) : null,
+    operating_state: stage ? (next.state || "available") : null,
+    waiting_on: stage ? (WAITING_PARTY_BY_CODE[next.code] || null) : null,
+    blocker_code: next ? valueOrNull(next.blocker_code) : null,
+    blocker_label: next ? blockerLabelFor(next.blocker_code) : null,
+    next_action_code: next ? valueOrNull(next.code) : null,
+    // The review list's own facts, mirrored verbatim.
+    completeness: valueOrNull(row.completeness),
+    missing_count: row.missing_count == null ? null : row.missing_count,
+    packet_status: valueOrNull(row.packet_status),
+    concession_status: valueOrNull(row.concession_status),
+    main_blocker: valueOrNull(row.main_blocker),
+    created_at: toIsoOrNull(row.created_at),
+    // Every record — active or exited — opens the SAME canonical review
+    // detail, where every canonical action already lives. Nothing to
+    // recreate; a terminal record's detail renders its terminal truth.
+    primary_action: {
+      code: "open_application_review",
+      label: "Open",
+      kind: "navigation",
+      target: { type: "application", id: row.application_id },
+    },
+  };
+}
+
 function identityKeys(row) {
   const keys = [];
   if (row && row.conversion_id) keys.push(`conversion:${row.conversion_id}`);
@@ -667,6 +724,7 @@ function normalizeClosedReceipt(row) {
 function composeLeasingDesk({
   propertyId,
   applicationRows = [],
+  applicationRecordRows = null, // S5: the UNFILTERED review-list mirror; null → applicationRows
   followupRows = [],
   tourCaptureRows = [],
   tourCaptureUntrackable = 0,
@@ -776,6 +834,28 @@ function composeLeasingDesk({
     unassigned: all.filter((row) => !row.owner_name).length,
   };
 
+  // ── S5: Application Records — one record per review-list row, exactly ──
+  // Order is the review list's own (created desc, as loaded); the composer
+  // neither sorts nor drops. A duplicate application_id would be a source
+  // defect, refused loudly rather than silently collapsed.
+  const recordRows = Array.isArray(applicationRecordRows) ? applicationRecordRows : applicationRows;
+  const records = recordRows.map(normalizeApplicationRecord).filter(Boolean);
+  const seenRecordIds = new Set();
+  for (const record of records) {
+    const key = String(record.application_id);
+    if (seenRecordIds.has(key)) throw new Error("Application Records received the same application twice.");
+    seenRecordIds.add(key);
+  }
+  const application_records = {
+    records,
+    counts: {
+      total: records.length,
+      active: records.filter((record) => record.record_state === "active").length,
+      exited: records.filter((record) => record.record_state === "exited").length,
+      unresolved: records.filter((record) => record.record_state === "unresolved").length,
+    },
+  };
+
   return {
     property_id: propertyId,
     generated_at: new Date(generatedAt).toISOString(),
@@ -783,6 +863,7 @@ function composeLeasingDesk({
     stage_counts,
     stage_labels: LEASING_STAGE_LABELS,
     operating_counts,
+    application_records,
     // Honest visibility for the capture set the rail does NOT show: tours the
     // canonical resolver cannot time (untrackable) are repaired on the Tours
     // board, but their count must never silently read as "nothing owed".
@@ -820,6 +901,8 @@ module.exports = {
   blockerLabelFor,
   latestActivityFrom,
   normalizeTourCaptureRow,
+  normalizeApplicationRecord,
+  EXIT_LABELS,
   stageForApplicationNext,
   stageForFollowup,
   dedupeLifecycleRows,

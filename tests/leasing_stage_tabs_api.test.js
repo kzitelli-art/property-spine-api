@@ -210,6 +210,55 @@ ck("executed-lease row's action uses the ruled navigation verb", () =>
 ck("confirm-term row's action uses the ruled navigation verb", () =>
   assert.strictEqual(out.stages.lease_sent.find((r) => r.conversion_id === "c-term").primary_action.label, "Open"));
 
+// ── S5: Application Records — the Applications Review mirror ────────
+ck("every application appears in records exactly once — including exited", () => {
+  const ids = out.application_records.records.map((r) => r.application_id).sort();
+  assert.deepStrictEqual(ids,
+    ["app-active", "app-blocked", "app-lease", "app-multi-lease", "app-multi-review", "app-review", "app-term", "app-wait"]);
+});
+ck("records counts are server-authored and internally consistent", () => {
+  const c = out.application_records.counts;
+  assert.deepStrictEqual(c, { total: 8, active: 7, exited: 1, unresolved: 0 });
+});
+ck("an exited record carries its exit code and server exit label", () => {
+  const exited = out.application_records.records.find((r) => r.application_id === "app-active");
+  assert.strictEqual(exited.record_state, "exited");
+  assert.strictEqual(exited.exit_code, "active");
+  assert.strictEqual(exited.exit_label, desk.EXIT_LABELS.active);
+  assert.strictEqual(exited.active_stage, null);
+});
+ck("an active record names its stage — active-here ⇔ on-the-rail", () => {
+  const activeRec = out.application_records.records.find((r) => r.application_id === "app-wait");
+  assert.strictEqual(activeRec.record_state, "active");
+  assert.strictEqual(activeRec.active_stage, "lease_sent");
+  assert.strictEqual(activeRec.waiting_on, "prospect");
+});
+ck("every record opens the SAME canonical review detail", () =>
+  assert.ok(out.application_records.records.every((r) =>
+    r.primary_action.kind === "navigation" && r.primary_action.target.type === "application"
+    && r.primary_action.target.id === r.application_id && r.primary_action.label === "Open")));
+ck("Active Work counts remain ACTIVE-ONLY (records never inflate the rail)", () => {
+  assert.strictEqual(out.operating_counts.total_active, out.stage_counts.total);
+  assert.strictEqual(out.application_records.counts.active, 7);
+  // 7 active records vs 6 rail application rows: c-multi holds TWO active
+  // applications collapsing to ONE rail relationship — records count
+  // applications, the rail counts relationships. Both are true.
+});
+ck("a duplicate application in the records source is refused loudly", () => {
+  let threw = null;
+  try {
+    desk.composeLeasingDesk({ propertyId: "p", applicationRecordRows: [
+      app("dup-1", "c-a", "review_application"), app("dup-1", "c-b", "review_application")] });
+  } catch (e) { threw = e.message; }
+  assert.ok(/same application twice/.test(threw || ""));
+});
+ck("a record with no resolver answer is honestly unresolved, never guessed", () => {
+  const rec = desk.normalizeApplicationRecord({ application_id: "app-x", next_action: null, status: "draft" });
+  assert.strictEqual(rec.record_state, "unresolved");
+  assert.strictEqual(rec.active_stage, null);
+  assert.strictEqual(rec.exit_code, null);
+});
+
 // ── rolling-deploy compatibility: legacy bands untouched ────────────
 ck("legacy bands still present", () =>
   assert.ok(out.bands && Array.isArray(out.bands.ready_to_advance)));
