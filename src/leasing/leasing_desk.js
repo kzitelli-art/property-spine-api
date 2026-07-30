@@ -43,12 +43,78 @@ const APPLICATION_SHADOW_RUNGS = new Set([
 
 // Leasing Work is a lifecycle conveyor, not a severity bucket.
 // These codes remain in Leasing Work's final tab until the tenancy anchor exists.
+// S4 ruling: the acknowledgment codes belong here too — the resolver emits them
+// ONLY after the packet was actually issued (PK_AWAITING in applications.js), so
+// "the prospect has the document and staff is waiting" is third-stage truth.
 const LEASE_SENT_STAGE_CODES = new Set([
   "executed_lease_required",
   "verify_executed_lease",
   "review_conflict",
   "confirm_term",
+  "awaiting_acknowledgment",
+  "await_resident_acknowledgment",
 ]);
+
+// S4 ruling: the third machine stage keeps its code but presents as "Lease" —
+// preparation/terms/packet states live in it before anything was actually sent,
+// so a universal "Lease sent" heading would claim an issuance that may not have
+// happened. Row state labels carry the precise truth ("sent" wording only on
+// states that prove issuance).
+const LEASING_STAGE_LABELS = Object.freeze({
+  post_tour: "Post-tour",
+  application: "Application",
+  lease_sent: "Lease",
+});
+
+// S4 ruling: waiting party is server-authored per code, never inferred from
+// button availability, elapsed time, or message direction. Only codes with a
+// real authoring site appear here; every other row is an honest null. Today
+// exactly one workflow authors a wait — the issued terms packet awaiting the
+// resident — so `prospect` is the only emitted value. staff / ai /
+// external_evidence join this map only when a canonical workflow authors them.
+const WAITING_PARTY_BY_CODE = Object.freeze({
+  awaiting_acknowledgment: "prospect",
+  await_resident_acknowledgment: "prospect",
+});
+
+// S4 ruling: blocker_code stays machine-stable; the label is server-owned and
+// mapped HERE — the browser must not translate blocker codes independently.
+// An unmapped code yields null (honest blank), never an invented sentence.
+const BLOCKER_LABELS = Object.freeze({
+  executed_lease_conflict: "The executed lease conflicts with the confirmed terms. Review the conflict before proceeding.",
+  inconsistent_application_state: "A lease packet exists without a current terms confirmation. Governed correction required.",
+  packet_voided: "The prior lease packet was voided. Regenerate it before resident review.",
+  packet_status_not_issuable: "The current lease packet is not in an issuable state. Regenerate it.",
+  packet_lineage_unproven: "The packet's terms lineage is unproven. Regenerate it from the confirmed terms.",
+  packet_confirmation_mismatch: "The packet was generated from different terms than the current confirmation. Regenerate it.",
+  packet_stale: "The packet no longer matches the canonical application terms. Regenerate it before resident review.",
+});
+
+function blockerLabelFor(code) {
+  if (code == null || code === "") return null;
+  return BLOCKER_LABELS[code] || null;
+}
+
+// S4: latest MEANINGFUL activity — the server selects the greatest supported
+// SEMANTIC timestamp with its label. Candidates arrive from the loader with
+// labels drawn from the closed source vocabulary (conversation_message,
+// tour_completed, tour_outcome_captured, application_signed,
+// application_countersigned, application_activated, obligation_activity).
+// Generic updated_at columns are deliberately never candidates: a technical
+// row update is not operating activity. No candidates → honest nulls.
+function latestActivityFrom(candidates) {
+  let bestAt = null;
+  let bestLabel = null;
+  for (const c of Array.isArray(candidates) ? candidates : []) {
+    if (!c || !c.at || !c.label) continue;
+    const t = new Date(c.at).getTime();
+    if (!Number.isFinite(t)) continue;
+    if (bestAt == null || t > bestAt) { bestAt = t; bestLabel = c.label; }
+  }
+  return bestAt == null
+    ? { latest_activity_at: null, latest_activity_label: null }
+    : { latest_activity_at: new Date(bestAt).toISOString(), latest_activity_label: bestLabel };
+}
 
 // Once the canonical resolver says the application is complete/active/closed,
 // it has left acquisition. Move-in and Future Rent Roll own the next projection.
@@ -80,7 +146,10 @@ function dealKey(row) {
   if (row && row.conversion_id) return `conversion:${row.conversion_id}`;
   if (row && row.application_id) return `application:${row.application_id}`;
   if (row && row.obligation_id) return `obligation:${row.obligation_id}`;
-  throw new Error("Leasing Desk row requires conversion_id, application_id, or obligation_id.");
+  // S4: an owed tour-outcome capture predates the conversion (capture is what
+  // creates it), so the tour is the only durable identity the deal has yet.
+  if (row && row.tour_id) return `tour:${row.tour_id}`;
+  throw new Error("Leasing Desk row requires conversion_id, application_id, obligation_id, or tour_id.");
 }
 
 function applicationDeskKey(row) {
@@ -304,6 +373,12 @@ function normalizeFollowupAction(row) {
 }
 
 function normalizeFollowupRow(row) {
+  const action = normalizeFollowupAction(row);
+  // S4: a capability-held action is a genuinely blocked ROW — the server has
+  // already refused the one thing this row offers, with an authored reason.
+  // That is the only followup-rail blocker authoring site today.
+  const held = action && action.kind === "blocked";
+  const accountableUserId = valueOrNull(row.owner_user_id);
   return {
     desk_key: obligationDeskKey(row),
     deal_key: dealKey(row),
@@ -316,9 +391,15 @@ function normalizeFollowupRow(row) {
     obligation_id: row.obligation_id,
     state_code: valueOrNull(row.rung) || "other_leasing_work",
     state_label: valueOrNull(row.label) || "Other leasing work",
-    blocker_code: null,
+    operating_state: held ? "blocked" : "available",
+    waiting_on: null, // no rail workflow authors a waiting party yet (S4 ruling)
+    blocker_code: held ? valueOrNull(action.reason_code) : null,
+    blocker_label: held ? valueOrNull(action.reason) : null,
     next_action_code: valueOrNull(row.next_move_code),
-    primary_action: normalizeFollowupAction(row),
+    primary_action: action,
+    accountable_user_id: accountableUserId,
+    accountable_user_name: valueOrNull(row.owner_name),
+    assignment_state: accountableUserId ? "assigned" : "unassigned",
     owner_name: valueOrNull(row.owner_name),
     owner_basis: valueOrNull(row.owner_basis) || "unassigned",
     due_at: toIsoOrNull(row.due_at),
@@ -326,6 +407,14 @@ function normalizeFollowupRow(row) {
     created_at: toIsoOrNull(row.created_at),
     source: "followup_rail",
     rung: valueOrNull(row.rung),
+    // S4 correlations — passthrough of already-canonical reads, null preserved
+    // when no canonical relationship exists (never synthesized).
+    tour_id: valueOrNull(row.origin_tour_id),
+    conversation_id: valueOrNull(row.conversation_id),
+    unit_id: valueOrNull(row.unit_id),
+    lease_packet_id: null,
+    lease_id: null,
+    ...latestActivityFrom(row.activity_candidates),
   };
 }
 
@@ -349,6 +438,14 @@ function normalizeStageApplicationRow(row) {
   const stage = stageForApplicationNext(next);
   if (!stage) return null;
 
+  // S4 ruling: waiting is ACTIVE work and stays on the rail. The row keeps its
+  // PRECISE canonical code as state_code (never the generic word "waiting");
+  // operating_state carries the machine state and waiting_on the authored
+  // party. Genuinely exited states (complete / active tenancy / closed) are
+  // already removed above by stageForApplicationNext.
+  const operatingState = next.state || "available";
+  const waiting = operatingState === "waiting";
+  const accountableUserId = valueOrNull(row.owner_user_id);
   return {
     desk_key: applicationDeskKey(row),
     deal_key: dealKey(row),
@@ -359,17 +456,33 @@ function normalizeStageApplicationRow(row) {
     unit_number: valueOrNull(row.unit_number || row.unit_label),
     application_id: row.application_id,
     obligation_id: valueOrNull(row.obligation_id || next.obligation_id),
-    state_code: next.state || "available",
+    state_code: waiting ? next.code : (next.state || "available"),
     state_label: valueOrNull(next.label) || "Application in progress.",
+    operating_state: operatingState,
+    waiting_on: WAITING_PARTY_BY_CODE[next.code] || null,
     blocker_code: valueOrNull(next.blocker_code),
+    blocker_label: blockerLabelFor(next.blocker_code),
     next_action_code: next.code,
     primary_action: normalizeStageApplicationAction(row, next),
+    accountable_user_id: accountableUserId,
+    accountable_user_name: valueOrNull(row.owner_name),
+    assignment_state: accountableUserId ? "assigned" : "unassigned",
     owner_name: valueOrNull(row.owner_name),
     owner_basis: valueOrNull(row.owner_basis),
     due_at: toIsoOrNull(row.due_at),
     due_state: valueOrNull(row.due_state),
     created_at: toIsoOrNull(row.created_at),
     source: "application_lifecycle",
+    // S4 correlations. tour_id stays null on this rail — no application-to-tour
+    // link is stored, and none may be inferred (ruling). lease_packet_id is the
+    // resolver's own packet passthrough; lease_id is the direct
+    // leases.application_id read Application Review already serves.
+    tour_id: null,
+    conversation_id: valueOrNull(row.conversation_id),
+    unit_id: valueOrNull(row.unit_id),
+    lease_packet_id: valueOrNull(next.packet_id),
+    lease_id: valueOrNull(row.lease_id),
+    ...latestActivityFrom(row.activity_candidates),
   };
 }
 
@@ -391,6 +504,66 @@ function normalizeStageFollowupRow(row) {
   const stage = stageForFollowup(row);
   if (!stage) return null;
   return { ...normalizeFollowupRow(row), stage };
+}
+
+// ── S4: TOUR-CAPTURE ROWS (third row source) ────────────────────────────────
+// A tour that HAPPENED with no recorded outcome is owed work the desk never
+// showed: the follow-up rail only begins once capture creates the conversion,
+// so the owing period was invisible. The loader selects these with the ONE
+// canonical capture resolver (tour_outcome.resolveCaptureState — the same
+// judgment the Tours board renders); this normalizer only shapes the row.
+//
+// Ruled behavior:
+//   · owner is the canonical assigned tour host (leasing_agent_id) or honest
+//     unassigned — never confirmed_by, which proves confirmation, not hosting;
+//   · no invented capture SLA: due_at is null (no authored deadline timestamp
+//     exists), and due_state is "overdue" ONLY because the canonical resolver
+//     already authors exactly that judgment for these rows on the Tours board
+//     (tour ended + existing grace, nothing captured) — else "none";
+//   · the primary action navigates to the EXISTING canonical tour-outcome
+//     destination; no second capture workflow or write path.
+function normalizeTourCaptureRow(row) {
+  if (!row || !row.tour_id) return null;
+  const accountableUserId = valueOrNull(row.leasing_agent_id);
+  return {
+    desk_key: `tour:${row.tour_id}`,
+    deal_key: dealKey({ tour_id: row.tour_id }),
+    conversion_id: null,
+    stage: "post_tour",
+    person_id: valueOrNull(row.person_id),
+    person_name: valueOrNull(row.person_name),
+    unit_number: valueOrNull(row.unit_number),
+    application_id: null,
+    obligation_id: null,
+    state_code: "tour_outcome_owed",
+    state_label: "Tour happened — outcome not captured.",
+    operating_state: "available",
+    waiting_on: null,
+    blocker_code: null,
+    blocker_label: null,
+    next_action_code: "capture_tour_outcome",
+    primary_action: {
+      code: "capture_tour_outcome",
+      label: "Open",
+      kind: "navigation",
+      target: { type: "tour", id: row.tour_id },
+    },
+    accountable_user_id: accountableUserId,
+    accountable_user_name: valueOrNull(row.host_name),
+    assignment_state: accountableUserId ? "assigned" : "unassigned",
+    owner_name: valueOrNull(row.host_name),
+    owner_basis: accountableUserId ? "tour_host" : "unassigned",
+    due_at: null,
+    due_state: row.capture_state === "overdue" ? "overdue" : "none",
+    created_at: toIsoOrNull(row.created_at),
+    source: "tour_capture",
+    tour_id: row.tour_id,
+    conversation_id: valueOrNull(row.conversation_id),
+    unit_id: valueOrNull(row.unit_id),
+    lease_packet_id: null,
+    lease_id: null,
+    ...latestActivityFrom(row.activity_candidates),
+  };
 }
 
 function identityKeys(row) {
@@ -493,12 +666,17 @@ function composeLeasingDesk({
   propertyId,
   applicationRows = [],
   followupRows = [],
+  tourCaptureRows = [],
+  tourCaptureUntrackable = 0,
   recentlyClosedRows = [],
   recentlyClosedWindowHours = 72,
   generatedAt = new Date(),
 } = {}) {
   if (!propertyId) throw new Error("composeLeasingDesk requires propertyId.");
   if (!Array.isArray(applicationRows) || !Array.isArray(followupRows) || !Array.isArray(recentlyClosedRows)) {
+    throw new TypeError("Leasing Desk sources must be arrays.");
+  }
+  if (!Array.isArray(tourCaptureRows)) {
     throw new TypeError("Leasing Desk sources must be arrays.");
   }
 
@@ -554,7 +732,9 @@ function composeLeasingDesk({
     .map(normalizeStageFollowupRow)
     .filter(Boolean);
 
-  const allStageRows = dedupeLifecycleRows([...stageApplications, ...stageFollowups]);
+  const stageTourCaptures = tourCaptureRows.map(normalizeTourCaptureRow).filter(Boolean);
+
+  const allStageRows = dedupeLifecycleRows([...stageApplications, ...stageFollowups, ...stageTourCaptures]);
   const stages = {
     post_tour: allStageRows.filter((row) => row.stage === "post_tour").sort(compareRows),
     application: allStageRows.filter((row) => row.stage === "application").sort(compareRows),
@@ -565,6 +745,19 @@ function composeLeasingDesk({
     application: stages.application.length,
     lease_sent: stages.lease_sent.length,
     total: stages.post_tour.length + stages.application.length + stages.lease_sent.length,
+  };
+
+  // S4: the operating counts the home card and the destination BOTH read —
+  // derived from the same deduped rail rows the destination renders, so the
+  // two surfaces reconcile by construction. Legacy `counts` below still
+  // describes the pre-S4 bands during the rolling deploy.
+  const operating_counts = {
+    total_active: allStageRows.length,
+    waiting: allStageRows.filter((row) => row.operating_state === "waiting").length,
+    blocked: allStageRows.filter((row) => row.operating_state === "blocked").length,
+    due_today: allStageRows.filter((row) => row.due_state === "today").length,
+    overdue: allStageRows.filter((row) => row.due_state === "overdue").length,
+    unassigned: allStageRows.filter((row) => row.assignment_state === "unassigned").length,
   };
 
   const bands = {
@@ -586,6 +779,15 @@ function composeLeasingDesk({
     generated_at: new Date(generatedAt).toISOString(),
     stages,
     stage_counts,
+    stage_labels: LEASING_STAGE_LABELS,
+    operating_counts,
+    // Honest visibility for the capture set the rail does NOT show: tours the
+    // canonical resolver cannot time (untrackable) are repaired on the Tours
+    // board, but their count must never silently read as "nothing owed".
+    tour_capture: {
+      owed_shown: stageTourCaptures.length,
+      untrackable_not_shown: Number(tourCaptureUntrackable) || 0,
+    },
     bands,
     counts,
     receipts: {
@@ -610,6 +812,12 @@ module.exports = {
   LEASE_SENT_STAGE_CODES,
   EXITED_LEASING_CODES,
   LEASING_STAGE_CODES,
+  LEASING_STAGE_LABELS,
+  WAITING_PARTY_BY_CODE,
+  BLOCKER_LABELS,
+  blockerLabelFor,
+  latestActivityFrom,
+  normalizeTourCaptureRow,
   stageForApplicationNext,
   stageForFollowup,
   dedupeLifecycleRows,
