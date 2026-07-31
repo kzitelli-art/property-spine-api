@@ -205,4 +205,165 @@ async function renewalsCohort(pool, { property_id, horizon_days = DEFAULT_HORIZO
   };
 }
 
-module.exports = { renewalsCohort, DEFAULT_HORIZON_DAYS };
+// ════════════════════════════════════════════════════════════════════
+//  SLICE 6 — THE COMPLETE OPERATING RAIL
+//
+//  renewalsCohortEnriched() takes the R1 cohort above (the successor-aware
+//  population — unchanged) and joins each OPEN row to the canonical operating
+//  facts, then runs the pure renewal_lifecycle machine to author stage,
+//  operating state, waiting party, blocker, due state, economics view, and
+//  the single primary action.
+//
+//  It reads only canonical sources:
+//    · renewal_cases        — the append-only operating record (active row)
+//    · lease_offers         — scope='renewal' (offer status / sent / expires)
+//    · obligations          — module='leasing', related_type='renewal'
+//                             (accountable owner, due_at)
+//  Governed renewal economics do NOT exist yet (Slice 8); every row therefore
+//  reports proposed_rent=null and economics_source=null honestly. The wiring
+//  is in place so that when Slice 8 lands, the same projection fills.
+//
+//  The home card and the destination BOTH read this one function, so their
+//  counts can never disagree (the spec's count rule).
+// ════════════════════════════════════════════════════════════════════
+
+const { renewalLifecycle } = require("./renewal_lifecycle");
+
+async function renewalsCohortEnriched(pool, opts = {}) {
+  if (!opts || !opts.property_id) throw new Error("renewalsCohortEnriched requires property_id");
+  const base = await renewalsCohort(pool, opts);
+  const asOf = base.as_of;
+  const property_id = base.property_id;
+  const openRows = base.rows;
+
+  if (openRows.length === 0) {
+    return {
+      ...base,
+      rows: [],
+      counts: emptyCounts(),
+    };
+  }
+
+  const leaseIds = openRows.map((r) => r.lease_id).filter(Boolean);
+
+  // ── Active renewal case per current lease (latest, non-terminal) ──
+  const caseRows = leaseIds.length
+    ? (await pool.query(
+        `select current_lease_id, renewal_stage, operating_state, waiting_on,
+                blocker_code, decision_status, notice_status, terminal_state,
+                obligation_id, renewal_lease_id
+           from renewal_cases
+          where property_id = $1
+            and current_lease_id = any($2::uuid[])
+            and superseded_by is null
+            and terminal_state is null`,
+        [property_id, leaseIds]
+      )).rows
+    : [];
+  const caseByLease = new Map(caseRows.map((r) => [String(r.current_lease_id), r]));
+
+  // ── Renewal-scoped offers, latest per lease (scope_ref carries lease id) ──
+  const offerRows = leaseIds.length
+    ? (await pool.query(
+        `select distinct on (scope_ref) scope_ref, status, communicated_at, expires_at
+           from lease_offers
+          where property_id = $1
+            and scope = 'renewal'
+            and scope_ref = any($2::text[])
+          order by scope_ref, coalesce(communicated_at, created_at) desc`,
+        [property_id, leaseIds.map(String)]
+      )).rows
+    : [];
+  const offerByLease = new Map(offerRows.map((r) => [String(r.scope_ref), r]));
+
+  // ── Accountable owner + due from the renewal obligation ──
+  const oblRows = leaseIds.length
+    ? (await pool.query(
+        `select related_id, assigned_user_id, assigned_role, due_at, status
+           from obligations
+          where property_id = $1
+            and module = 'leasing'
+            and related_type = 'renewal'
+            and related_id = any($2::uuid[])`,
+        // related_id is the renewal_case id; we also map by lease via the case
+        [property_id, caseRows.map((c) => c.obligation_id).filter(Boolean)]
+      )).rows
+    : [];
+  const oblById = new Map(oblRows.map((r) => [String(r.related_id), r]));
+
+  const enriched = openRows.map((r) => {
+    const rc = caseByLease.get(String(r.lease_id)) || null;
+    const offer = offerByLease.get(String(r.lease_id)) || null;
+    const obl = rc && rc.obligation_id ? oblById.get(String(rc.obligation_id)) : null;
+
+    const ownerUserId = obl ? obl.assigned_user_id : (rc && rc.obligation_id ? null : null);
+    const dueAt = obl && obl.due_at ? ymd(obl.due_at) : null;
+
+    const life = renewalLifecycle(
+      {
+        days_until_expiration: r.days_until_expiration,
+        renewal_case: rc,
+        offer: offer
+          ? { status: offer.status, sent_at: ymd(offer.communicated_at), expires_at: ymd(offer.expires_at) }
+          : null,
+        owner: ownerUserId ? { user_id: ownerUserId } : null,
+        due_at: dueAt,
+        current_rent: r.current_rent,
+        // Slice 8 governed economics — not yet authored anywhere:
+        governed_proposed_rent: null,
+        economics_source: null,
+        economics_as_of: null,
+      },
+      asOf
+    );
+
+    return {
+      ...r,
+      // ownership is now a real fact, not the R1 constant
+      owner_user_id: ownerUserId || null,
+      owner_state: ownerUserId ? "assigned" : "UNASSIGNED",
+      assignment_state: ownerUserId ? "assigned" : "unassigned",
+      responsibility_role: obl ? obl.assigned_role : null,
+      // server-authored lifecycle
+      ...life,
+    };
+  });
+
+  const counts = deriveCounts(enriched, asOf);
+
+  return {
+    ...base,
+    rows: enriched,
+    // The reconciled home + destination counts (same projection, one source).
+    counts,
+    // keep uniform, but recompute no_owner_anywhere against real ownership
+    uniform: {
+      ...base.uniform,
+      no_owner_anywhere: enriched.length > 0 && enriched.every((r) => !r.owner_user_id),
+    },
+  };
+}
+
+function emptyCounts() {
+  return {
+    total_active: 0, due_today: 0, overdue: 0, unassigned: 0,
+    waiting: 0, blocked: 0, offer_sent: 0, decision_required: 0,
+  };
+}
+
+function deriveCounts(rows) {
+  const c = emptyCounts();
+  c.total_active = rows.length;
+  for (const r of rows) {
+    if (r.due_state === "due_today") c.due_today++;
+    if (r.due_state === "overdue") c.overdue++;
+    if (!r.owner_user_id) c.unassigned++;
+    if (r.operating_state === "waiting") c.waiting++;
+    if (r.operating_state === "blocked") c.blocked++;
+    if (r.offer_status === "sent") c.offer_sent++;
+    if (r.renewal_stage === "decision_required") c.decision_required++;
+  }
+  return c;
+}
+
+module.exports = { renewalsCohort, renewalsCohortEnriched, DEFAULT_HORIZON_DAYS };

@@ -50,7 +50,7 @@ module.exports = function operatorModule(deps) {
   const { rankTurnPriority } = require("../maintenance/turn_priority"); // shared Turn-Priority ranking (slice 1)
   const { buildReviewList, buildReviewDetail } = require("../applications/application_review"); // application review reads (slice 2)
   const { loadLeasingDesk } = require("../leasing/leasing_desk_loader"); // Leasing Desk composition (one repeatable-read snapshot)
-  const { renewalsCohort } = require("../leasing/renewals_read");        // R1 renewal-work cohort (read-only, server-authored)
+  const { renewalsCohort, renewalsCohortEnriched } = require("../leasing/renewals_read"); // R1 cohort + Slice 6 operating rail
   const { currentRentRoll } = require("../surfaces/rent_roll_canonical");   // canonical Current Rent Roll (migration route)
   const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts"); // factual Future Rent Roll (migration route)
   const { institutionalRentRoll, institutionalCsv } = require("../surfaces/rent_roll_institutional"); // formal as-of schedule + CSV
@@ -1756,8 +1756,12 @@ module.exports = function operatorModule(deps) {
   router.get("/operator/leasing/renewals", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
-      const out = await renewalsCohort(pool, {
-        property_id: req.operator.property_id,   // session only — never req.query
+      // Slice 6: the enriched cohort — the same successor-aware population,
+      // now with server-authored stage, operating state, waiting party,
+      // blocker, owner, due, economics view, primary action, and reconciled
+      // home counts. Property scope is the session's, never req.query.
+      const out = await renewalsCohortEnriched(pool, {
+        property_id: req.operator.property_id,
         horizon_days: 90,
       });
       const asOf = (await pool.query("select current_date as d")).rows[0].d;
