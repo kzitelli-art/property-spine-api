@@ -51,6 +51,7 @@ module.exports = function operatorModule(deps) {
   const { buildReviewList, buildReviewDetail } = require("../applications/application_review"); // application review reads (slice 2)
   const { loadLeasingDesk } = require("../leasing/leasing_desk_loader"); // Leasing Desk composition (one repeatable-read snapshot)
   const { renewalsCohort, renewalsCohortEnriched } = require("../leasing/renewals_read"); // R1 cohort + Slice 6 operating rail
+  const { loadAiLeasingStrategyProjection } = require("../leasing/ai_leasing_strategy_projection"); // read-only strategy status + conversation attribution
   const { currentRentRoll } = require("../surfaces/rent_roll_canonical");   // canonical Current Rent Roll (migration route)
   const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts"); // factual Future Rent Roll (migration route)
   const { institutionalRentRoll, institutionalCsv } = require("../surfaces/rent_roll_institutional"); // formal as-of schedule + CSV
@@ -1166,9 +1167,28 @@ module.exports = function operatorModule(deps) {
       // no new loader resource and no session change.
       const today = await todayCounts(propertyId);
 
+      // AI LEASING STRATEGIES — one additive, read-only projection. The queue
+      // remains the operating surface; this supplies only governed identity,
+      // validation/deployment state, and exact opportunity assignment. No
+      // score, winner, recommendation, or traffic-changing control is exposed.
+      const aiLeasingStrategy = await loadAiLeasingStrategyProjection(pool, {
+        propertyId,
+        conversationIds: rows.map((row) => row.conversation_id),
+      });
+      for (const row of rows) {
+        row.ai_strategy = aiLeasingStrategy.conversation_assignments[String(row.conversation_id)] || null;
+      }
+
       return res.json({
         property_id: propertyId, as_of: asOf, projection_version: "conversation_board_v1",
-        scope, counts, sources, today, conversations: rows, next_cursor: nextCursor, limit,
+        scope, counts, sources, today,
+        ai_leasing_strategies: {
+          contract_version: aiLeasingStrategy.contract_version,
+          state: aiLeasingStrategy.state,
+          strategies: aiLeasingStrategy.strategies,
+          performance: aiLeasingStrategy.performance,
+        },
+        conversations: rows, next_cursor: nextCursor, limit,
       });
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
   });
