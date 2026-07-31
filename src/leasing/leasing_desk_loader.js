@@ -130,6 +130,14 @@ async function loadApplicationRows(client, propertyId, deps) {
       due_at: null,
       due_state: null,
       created_at: summary.created_at || null,
+      // S5: the review list's own facts travel with the row so Application
+      // Records can mirror Applications Review without a second read.
+      status: summary.status || null,
+      completeness: summary.completeness || null,
+      missing_count: summary.missing_count == null ? null : summary.missing_count,
+      packet_status: summary.packet_status || null,
+      concession_status: summary.concession_status || null,
+      main_blocker: summary.main_blocker || null,
     });
   }
 
@@ -529,6 +537,12 @@ async function loadLeasingDesk(deps, propertyId, opts) {
     const desk = composeLeasingDesk({
       propertyId,
       applicationRows: appRows,
+      // S5: Application Records is the EXACT Applications Review mirror, so it
+      // is composed from the UNFILTERED application rows — the review list
+      // itself applies no internal_qa filter, and record parity (every AR
+      // record exactly once) outranks the rail's QA hygiene, which still
+      // governs the ACTIVE stages above.
+      applicationRecordRows: applicationRows,
       followupRows: folRows,
       tourCaptureRows: tourRows,
       tourCaptureUntrackable: tourCapture.untrackable,
