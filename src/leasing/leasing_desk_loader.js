@@ -483,6 +483,18 @@ async function loadLeasingDesk(deps, propertyId, opts) {
     //  CLASS 2 — the env escape hatch exists because this ships days before
     //  a live demo. Remove LEASING_DESK_SHOW_INTERNAL_QA once the demo runs
     //  on production-classified people; the exclusion itself is Class 1.
+    //
+    //  BACKLOG (recorded 2026-07-31, S5 owner ruling — do not resolve inside
+    //  a merge): this filter applies to the ACTIVE rail only. S5's Application
+    //  Records view is deliberately the UNFILTERED Applications Review mirror
+    //  (application_records below, built from applicationRows before this
+    //  cut), so an internal_qa person's application is invisible on the rail
+    //  but visible as a record. That is intentional for S5 — exact legacy
+    //  parity outranked rail hygiene for that view — but it means the product
+    //  now has TWO different answers to "can an authenticated operator see an
+    //  internal_qa application," decided by which view they're in. The
+    //  product needs ONE intentional rule here, not two views quietly
+    //  disagreeing. Do not fix ad hoc; give it its own ruling.
     const showQa = String(process.env.LEASING_DESK_SHOW_INTERNAL_QA || "").toLowerCase() === "true";
     let hidden = 0;
     let appRows = applicationRows, folRows = followupRows, closedRows = recentlyClosedRows;
