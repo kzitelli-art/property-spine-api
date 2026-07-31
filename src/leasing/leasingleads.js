@@ -26,6 +26,9 @@ const staffSessions = require("../identity/staff_session_service.js"); // BRICK 
 const staffIdentity = require("../identity/staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 const { recordPersonFact } = require("../identity/person_facts.js"); // 092: the ONE person × property fact write
 const crypto = require("crypto");
+const aiLeasingStrategy = require("./ai_leasing_strategy");
+const aiLeasingStrategyRuntime = require("./ai_leasing_strategy_runtime");
+const AI_FIRST_RESPONSE_PROMPT_REVISION = "leasing-first-response-v2";
 // Rule-0 capture-first attribution buckets (Fable ruling): two materially different
 // truths, never folded together. A MISSING/blank tag = no channel data arrived.
 // A SUPPLIED-but-unrecognized tag = a real source-mapping gap (raw value preserved
@@ -334,7 +337,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // confident wrong (§5): an invented tour time is a prospect-facing lie.
   // If pricing/availability is unknown, the AI says so rather than inventing it.
   // Deterministic fallback if the model is unavailable.
-  async function draftFirstResponse({ name, unitLabel, propertyName, rent, slots }) {
+  async function draftFirstResponse({ name, unitLabel, propertyName, rent, slots, strategyEnvelope = null }) {
     const slotList = Array.isArray(slots) ? slots.filter(s => s && s.label) : [];
     const haveSlots = slotList.length > 0;
     const slotPhrase = haveSlots ? slotList.slice(0, 2).map(s => s.label).join(" or ") : null;
@@ -359,8 +362,15 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     // `slotPhrase` stays available for the model branch below, which may offer
     // real times if the prospect's message already signalled tour intent.
     void slotPhrase;
-    if (!anthropic) return fallback;
+    if (!anthropic) return { body: fallback, strategyApplied: false };
     try {
+      const runtimeStrategyEnvelope = strategyEnvelope
+        ? aiLeasingStrategyRuntime.validatedEnvelopeForRuntime(strategyEnvelope, {
+            surface: "first_response", model: INGEST_MODEL,
+            promptRevision: AI_FIRST_RESPONSE_PROMPT_REVISION,
+          })
+        : null;
+      const strategyDirective = runtimeStrategyEnvelope ? aiLeasingStrategy.buildStrategyDirective(runtimeStrategyEnvelope) : "";
       const slotInstruction = haveSlots
         ? `We DO have real tour times available (${slotPhrase}), but DO NOT list them in this first message and DO NOT ask the prospect to pick one. Make an open offer to show them around instead. They just filled out a form seconds ago; naming two specific times and asking "which works better" reads as pushy and has driven a real prospect away. Save the specific times for when they say yes.`
         : `We have NO confirmed tour times to offer right now. DO NOT invent, guess, or imply any tour time.`;
@@ -373,11 +383,12 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         `AT MOST ONE exclamation mark in the entire message. Never use an em dash or en dash. Never use markdown. ` +
         `If unit or rent is unknown, DO NOT invent it — say you're confirming. Never invent a tour time, price, or availability. ` +
         `Do NOT try to close a lease, ask for an application, or request documents. ` +
+        (strategyDirective ? `${strategyDirective} ` : "") +
         `Unit: ${unitLabel || "(unknown — confirming)"}. Rent: ${rent ? "$" + rent : "(unknown — confirming)"}. Reply with ONLY the message text.`;
       const r = await anthropic.messages.create({ model: INGEST_MODEL, max_tokens: 200, messages: [{ role: "user", content: prompt }] });
       const text = (r.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
-      return text || fallback;
-    } catch (e) { console.error("leasing draftFirstResponse:", e.message); return fallback; }
+      return { body: text || fallback, strategyApplied: !!(text && runtimeStrategyEnvelope) };
+    } catch (e) { console.error("leasing draftFirstResponse:", e.message); return { body: fallback, strategyApplied: false }; }
   }
 
   // ════════════════════════════════════════════════════════════════════
@@ -404,7 +415,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
 
     let conversationId = null;
     const client = await pool.connect();
-    let person, createdPerson, lead, reusedOpportunity, prop;
+    let person, createdPerson, lead, reusedOpportunity, prop, strategyEnvelope = null;
     try {
       await client.query("begin");
 
@@ -548,6 +559,15 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       conversationId = await ensureConversation(client, {
         propertyId: propertyId, personId: person.id, unitId: lead.unit_id || null,
       });
+      const strategyAssignment = await aiLeasingStrategyRuntime.assignForConversationWithoutBlockingCapture(client, {
+        conversationId,
+        leasingLeadId: lead.id,
+        propertyId,
+        source: sourceName,
+        assignmentKey: `${propertyId}:${lead.id}`,
+        actorUserId: null,
+      });
+      strategyEnvelope = strategyAssignment.envelope || null;
 
       await client.query("commit");
 
@@ -611,18 +631,40 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         // draftFirstResponse never fabricates a time: it offers real slots or asks
         // for preferred timing.
         const offerSlots = await readOfferableSlots(pool, { propertyId, limit: 2 });
-        const body = await draftFirstResponse({ name: person.name, unitLabel, propertyName: prop.display_name, rent, slots: offerSlots });
+        const drafted = await draftFirstResponse({
+          name: person.name, unitLabel, propertyName: prop.display_name,
+          rent, slots: offerSlots, strategyEnvelope,
+        });
+        const body = drafted.body;
+        const authoredAt = new Date();
         draftBody = body;
 
         // THREADED outbound: conversation_id + sender_role so the message lives on the
         // person's one thread (the door reads it). provider_status stays NULL — the
         // projection treats that as NOT delivered, which is the truth until a carrier
         // confirms dispatch.
-        const commEvent = (await pool.query(
-          `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification, sender_role)
-           values ($1,$2,$3,$4,'text','outbound',$5,'leasing','ai') returning id`,
-          [propertyId, person.id, lead.unit_id, conversationId, body])).rows[0];
-        if (conversationId) await pool.query(`update conversations set last_message_at = now() where id=$1`, [conversationId]);
+        const messageClient = await pool.connect();
+        let commEvent;
+        try {
+          await messageClient.query("begin");
+          commEvent = (await messageClient.query(
+            `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification, sender_role)
+             values ($1,$2,$3,$4,'text','outbound',$5,'leasing','ai') returning id`,
+            [propertyId, person.id, lead.unit_id, conversationId, body])).rows[0];
+          if (conversationId) await messageClient.query(`update conversations set last_message_at = now() where id=$1`, [conversationId]);
+          if (drafted.strategyApplied && strategyEnvelope) {
+            await aiLeasingStrategy.recordAiMessageAttribution(messageClient, {
+              commEventId: commEvent.id, conversationId, leasingLeadId: lead.id, propertyId,
+              assignmentEventId: strategyEnvelope.assignment_event_id,
+              authorshipScope: "full_message", humanModified: false,
+              authoredAt,
+            });
+          }
+          await messageClient.query("commit");
+        } catch (e) {
+          await messageClient.query("rollback");
+          throw e;
+        } finally { messageClient.release(); }
 
         if (attemptSms) {
           const wire = await commBoundary.sendPropertySms({

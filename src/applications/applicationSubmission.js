@@ -79,6 +79,21 @@ module.exports = function applicationSubmissionModule(deps) {
     }
   }
   function httpErr(status, msg) { const e = new Error(msg); e.httpStatus = status; e.publicMessage = msg; return e; }
+
+  // Evidence lineage is opportunity-scoped. Resolve the one canonical open
+  // leasing opportunity for this Person × Property pair. Absence remains null:
+  // an internal application may exist without a leasing lead, but it can never
+  // be credited to an AI strategy after the fact.
+  async function resolveOpenLeasingLeadId(client, { property_id, person_id }) {
+    if (!property_id || !person_id) return null;
+    const row = (await client.query(
+      `select id from leasing_leads
+        where property_id=$1 and person_id=$2 and status not in ('leased','lost')
+        order by received_at desc, id desc limit 1`,
+      [property_id, person_id]
+    )).rows[0];
+    return row ? row.id : null;
+  }
   // plain transaction for SERVICES (no res): begin/commit/rollback, returns fn's value
   async function runTx(fn) {
     const client = await pool.connect();
@@ -154,6 +169,7 @@ module.exports = function applicationSubmissionModule(deps) {
     captured = {}, source = "applicant",
     conversion_id = null,
     progress_obligation_id = null,   // the applicant_followup rung to close (public path)
+    leasing_lead_id = null,          // optional caller hint; verified below
     submitted_by = null,             // staff actor for internal path
   }) {
     if (!property_id) throw httpErr(400, "property_id is required.");
@@ -183,15 +199,28 @@ module.exports = function applicationSubmissionModule(deps) {
     const prop = (await client.query("select id from properties where id=$1", [property_id])).rows[0];
     if (!prop) throw httpErr(404, "No property with that id.");
 
+    let resolvedLeasingLeadId = leasing_lead_id || await resolveOpenLeasingLeadId(client, { property_id, person_id });
+    if (resolvedLeasingLeadId) {
+      const lead = (await client.query(
+        `select id from leasing_leads where id=$1 and property_id=$2 and person_id=$3`,
+        [resolvedLeasingLeadId, property_id, person_id]
+      )).rows[0];
+      if (!lead) {
+        throw httpErr(409,
+          "The application leasing opportunity does not match this person and property. " +
+          "Application evidence is never inferred across opportunities.");
+      }
+    }
+
     // 1) the application RECORD — 'submitted'
     const ins = await client.query(
       `insert into lease_applications
-         (property_id, unit_id, person_id, status, applicant_name, unit_label,
+         (property_id, unit_id, person_id, leasing_lead_id, status, applicant_name, unit_label,
           rent, deposit, guarantor_name, captured, source, conversion_id)
-       values ($1,$2,$3,'submitted',$4,$5,$6,$7,$8,$9,$10,$11)
+       values ($1,$2,$3,$4,'submitted',$5,$6,$7,$8,$9,$10,$11,$12)
        returning *`,
-      [property_id, unit_id, person_id, applicant_name, unit_label, rent, deposit,
-       guarantor_name, JSON.stringify(captured || {}), source, conversion_id]
+      [property_id, unit_id, person_id, resolvedLeasingLeadId, applicant_name, unit_label,
+       rent, deposit, guarantor_name, JSON.stringify(captured || {}), source, conversion_id]
     );
     const app = ins.rows[0];
 

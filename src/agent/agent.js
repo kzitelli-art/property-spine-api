@@ -29,6 +29,8 @@ const { renderChargeTerms } = require("../money/governed_charge_language");
 const { termsDigest } = require("../money/governed_charge_cutover");
 const { compareEconomicSources, staleReasonForOperator } =
   require("./draft_source_identity");
+const aiLeasingStrategy = require("../leasing/ai_leasing_strategy");
+const aiLeasingStrategyRuntime = require("../leasing/ai_leasing_strategy_runtime");
 
 const PROMPT_REVISION = "stage-a-v8"; // v8: voice tuning from AI_VOICE_TUNING.md cases 1-5 — one-sentence default, no reflexive trailing question, no unowned follow-up promises ("I'm on it" removed from approved language), always AFFIRM a protected class before helping, no markdown in SMS (new deterministic strip), no self-deprecating apology, low-rate apostrophe-drop humanization.
 // v7.1: greeting fix — contentless messages get a warm greeting, never a fake verification promise. v7: flag model — human-needed operating requests are answered honestly (team can see the conversation); live model no longer creates obligations. v6: tour-pressure suppression, lived-experience selling, conversational local; dead PERSONA removed.
@@ -889,6 +891,25 @@ Reply with ONLY the message text.`;
       //         run, create/refresh the review obligation. NO model call here. ──
       const tx1 = await tx(async (client) => {
         const conv = await ensureConversation(client, { person_id: b.person_id, property_id: b.property_id });
+        // Strategy assignment is opportunity-scoped, not lifetime-conversation-scoped.
+        // The one-open-opportunity constraint makes this read deterministic; if no
+        // open leasing lead exists, the message is still captured and generic AI remains.
+        const strategyLead = (await client.query(
+          `select id from leasing_leads
+            where person_id=$1 and property_id=$2 and status not in ('leased','lost')
+            order by received_at desc, id desc limit 1 for update`,
+          [b.person_id, b.property_id]
+        )).rows[0] || null;
+        const strategyAssignment = strategyLead
+          ? await aiLeasingStrategyRuntime.assignForConversationWithoutBlockingCapture(client, {
+              conversationId: conv.id,
+              leasingLeadId: strategyLead.id,
+              propertyId: b.property_id,
+              source: null,
+              assignmentKey: `${b.property_id}:${strategyLead.id}`,
+              actorUserId: null,
+            })
+          : { assigned: false, created: false, reason: "no_open_leasing_opportunity", envelope: null };
         const state = await loadThreadState(client, conv.id, true); // FOR UPDATE
 
         // persist the canonical inbound comm_event (the real record). sms_sid is
@@ -1014,9 +1035,12 @@ Reply with ONLY the message text.`;
         const run = (await client.query(
           `insert into agent_runs
              (conversation_id, inbound_comm_event_id, input_thread_version, generation_no,
-              generation_reason, request_idempotency_key, status, prompt_revision, policy_revision, model)
-           values ($1,$2,$3,$4,'initial_inbound',$5,'pending',$6,$7,$8) returning *`,
-          [conv.id, inbound.id, newVersion, genNo, idem, PROMPT_REVISION, POLICY_REVISION, MODEL]
+              generation_reason, request_idempotency_key, status, prompt_revision, policy_revision, model,
+              ai_leasing_strategy_assignment_event_id, ai_leasing_strategy_leasing_lead_id)
+           values ($1,$2,$3,$4,'initial_inbound',$5,'pending',$6,$7,$8,$9,$10) returning *`,
+          [conv.id, inbound.id, newVersion, genNo, idem, PROMPT_REVISION, POLICY_REVISION, MODEL,
+           strategyAssignment.envelope ? strategyAssignment.envelope.assignment_event_id : null,
+           strategyAssignment.envelope ? strategyAssignment.envelope.leasing_lead_id : null]
         )).rows[0];
 
         // review obligation BORN HERE (survives a crash before the model returns)
@@ -1048,7 +1072,9 @@ Reply with ONLY the message text.`;
                  version: newVersion, property_id: b.property_id,
                  unit_id: (selectedUnit && selectedUnit.id) || b.unit_id || null,
                  selected_unit: selectedUnit, selection_failed: selectionFailed,
-                 person_id: b.person_id, review_obligation_id: obId, inboundText: b.body };
+                 person_id: b.person_id, review_obligation_id: obId, inboundText: b.body,
+                 strategy_envelope: strategyAssignment.envelope || null,
+                 strategy_leasing_lead_id: strategyAssignment.envelope ? strategyAssignment.envelope.leasing_lead_id : null };
       });
 
       if (tx1.skipModel) {
@@ -1063,6 +1089,8 @@ Reply with ONLY the message text.`;
 
       // ── model call OUTSIDE any transaction ──
       let generated = null, providerReqId = null, genErr = null, factSnapshot = [], snapshotHash = "";
+      let strategyApplied = false;
+      let runtimeStrategyEnvelope = null;
       let offeredUnits = null; // real units surfaced by the inventory tool this run (offered ≠ selected)
       let offerableSlots = []; // real tour slots the model MAY present this run (candidates)
       let presentedSlotIds = null; // the EXACT slot ids the model chose to state (offer_tour_slots) — confirmable
@@ -1102,6 +1130,10 @@ Reply with ONLY the message text.`;
             finally { c.release(); }
           })());
           const built = buildMessages({ facts: ctx.facts, unit: ctx.unit, history, propertyName: propName });
+          runtimeStrategyEnvelope = aiLeasingStrategyRuntime.validatedEnvelopeForRuntime(tx1.strategy_envelope, {
+            surface: "ongoing_reply", model: MODEL, promptRevision: PROMPT_REVISION,
+          });
+          built.system = aiLeasingStrategyRuntime.appendStrategyDirective(built.system, runtimeStrategyEnvelope);
           // If they already have an upcoming tour, shift the goal from earn-a-tour
           // to be-their-contact (and below, tour tools are withheld).
           const _tourAddendum = await upcomingTourAddendum(tx1.conversation_id);
@@ -1565,6 +1597,11 @@ Reply with ONLY the message text.`;
           }
 
           generated = (r.content || []).filter(x => x.type === "text").map(x => x.text).join("").trim();
+          strategyApplied = aiLeasingStrategyRuntime.modelGenerationUsedStrategy({
+            envelope: runtimeStrategyEnvelope,
+            modelReturnedText: !!generated,
+            finalBodyOrigin: "model",
+          });
           if (!generated) console.error("[agent/diag] EMPTY GENERATION", JSON.stringify({ stop_reason: r.stop_reason, block_types: (r.content || []).map(x => x.type), usage: r.usage || null }));
         } else {
           genErr = "no_model_client";
@@ -1638,6 +1675,9 @@ Reply with ONLY the message text.`;
         if (!genErr) { generated = FALLBACK_GENERAL; policyDecision = "safe"; policyCode = "empty_recovered"; }
         // (a true genErr still routes to the failed/human path in TX2 below.)
       }
+      strategyApplied = aiLeasingStrategyRuntime.finalBodyRetainsStrategyCredit({
+        strategyApplied, policyCode, generationError: genErr,
+      });
 
       // ── PROSPECT-TEXT GUARANTEES (§2): markdown, then AI-style dashes, then
       //    humanization. Deterministic; the prompt rules alone won't do it.
@@ -1663,10 +1703,10 @@ Reply with ONLY the message text.`;
 
         // record the resolved fact snapshot + hash + provider id on the run.
         await client.query(
-          "update agent_runs set resolved_fact_snapshot_json=$2, fact_snapshot_hash=$3, provider_request_id=$4, policy_decision=$5, handoff_reason_code=$6, offered_units_json=coalesce($7::jsonb, offered_units_json), selected_unit_id=coalesce($8, selected_unit_id) where id=$1",
+          "update agent_runs set resolved_fact_snapshot_json=$2, fact_snapshot_hash=$3, provider_request_id=$4, policy_decision=$5, handoff_reason_code=$6, offered_units_json=coalesce($7::jsonb, offered_units_json), selected_unit_id=coalesce($8, selected_unit_id), ai_leasing_strategy_applied=$9 where id=$1",
           [run.id, JSON.stringify(factSnapshot), snapshotHash, providerReqId, policyDecision, policyCode,
            offeredUnits ? JSON.stringify(offeredUnits) : null,
-           (tx1.selected_unit && tx1.selected_unit.id) || null]
+           (tx1.selected_unit && tx1.selected_unit.id) || null, strategyApplied]
         );
 
         if (genErr || (!generated && policyDecision !== "blocked")) {
@@ -2045,6 +2085,22 @@ Reply with ONLY the message text.`;
       )).rows[0];
       await client.query("update conversations set last_message_at = now() where id=$1", [conv.id]);
 
+      if (run.ai_leasing_strategy_applied && run.ai_leasing_strategy_assignment_event_id) {
+        const normalizedEdit = (!auto && editedBody && editedBody.trim()) ? editedBody.trim() : null;
+        const humanModified = !!(normalizedEdit && normalizedEdit !== d.generated_body);
+        await aiLeasingStrategy.recordAiMessageAttribution(client, {
+          commEventId: outbound.id,
+          conversationId: conv.id,
+          leasingLeadId: run.ai_leasing_strategy_leasing_lead_id,
+          propertyId: conv.property_id,
+          assignmentEventId: run.ai_leasing_strategy_assignment_event_id,
+          agentRunId: run.id,
+          authorshipScope: humanModified ? "ai_draft_source" : "full_message",
+          humanModified,
+          authoredAt: d.created_at,
+        });
+      }
+
       // mark the draft dispatched; record what was actually sent (immutable generated_body preserved)
       await client.query(
         `update agent_drafts set status='dispatched', dispatch_body=$2, dispatched_comm_event_id=$3,
@@ -2178,6 +2234,22 @@ Reply with ONLY the message text.`;
           [person_id, property_id]
         )).rows[0];
         if (!conv) throw httpErr(404, "No conversation.");
+        const strategyLead = (await client.query(
+          `select id from leasing_leads
+            where person_id=$1 and property_id=$2 and status not in ('leased','lost')
+            order by received_at desc, id desc limit 1 for update`,
+          [person_id, property_id]
+        )).rows[0] || null;
+        const strategyAssignment = strategyLead
+          ? await aiLeasingStrategyRuntime.assignForConversationWithoutBlockingCapture(client, {
+              conversationId: conv.id,
+              leasingLeadId: strategyLead.id,
+              propertyId: property_id,
+              source: null,
+              assignmentKey: `${property_id}:${strategyLead.id}`,
+              actorUserId: null,
+            })
+          : { assigned: false, created: false, reason: "no_open_leasing_opportunity", envelope: null };
         const state = await loadThreadState(client, conv.id, true);
         if (state.mode === "human_takeover" || state.mode === "closed") {
           throw httpErr(409, `Thread is ${state.mode}; AI is off. Re-enable before regenerating.`);
@@ -2199,20 +2271,26 @@ Reply with ONLY the message text.`;
         const run = (await client.query(
           `insert into agent_runs
              (conversation_id, inbound_comm_event_id, input_thread_version, generation_no,
-              generation_reason, status, prompt_revision, policy_revision, model)
-           values ($1,$2,$3,$4,'manager_regenerate','pending',$5,$6,$7) returning *`,
-          [conv.id, inbound, state.thread_version, Number(maxGen) + 1, PROMPT_REVISION, POLICY_REVISION, MODEL]
+              generation_reason, status, prompt_revision, policy_revision, model,
+              ai_leasing_strategy_assignment_event_id, ai_leasing_strategy_leasing_lead_id)
+           values ($1,$2,$3,$4,'manager_regenerate','pending',$5,$6,$7,$8,$9) returning *`,
+          [conv.id, inbound, state.thread_version, Number(maxGen) + 1, PROMPT_REVISION, POLICY_REVISION, MODEL,
+           strategyAssignment.envelope ? strategyAssignment.envelope.assignment_event_id : null,
+           strategyAssignment.envelope ? strategyAssignment.envelope.leasing_lead_id : null]
         )).rows[0];
 
         // the inbound text + context coordinates
         const inb = (await client.query("select body, unit_id from comm_events where id=$1", [inbound])).rows[0];
         return { conv, run, version: state.thread_version, inboundText: inb.body, unit_id: inb.unit_id,
-                 property_id, person_id, review_obligation_id: state.current_review_obligation_id };
+                 property_id, person_id, review_obligation_id: state.current_review_obligation_id,
+                 strategy_envelope: strategyAssignment.envelope || null };
       });
 
       // model OUTSIDE txn (reuse the same generation path)
       const pre = preGenerationPolicy(prep.inboundText);
       let generated = null, providerReqId = null, genErr = null, factSnapshot = [], snapshotHash = "";
+      let strategyApplied = false;
+      let runtimeStrategyEnvelope = null;
       try {
         const c0 = await pool.connect();
         let ctx;
@@ -2236,10 +2314,19 @@ Reply with ONLY the message text.`;
           try { propName = (await c2.query("select coalesce(display_name, name) as name from properties where id=$1", [prep.property_id])).rows[0]?.name || null; }
           finally { c2.release(); }
           const built = buildMessages({ facts: ctx.facts, unit: ctx.unit, history, propertyName: propName });
+          runtimeStrategyEnvelope = aiLeasingStrategyRuntime.validatedEnvelopeForRuntime(prep.strategy_envelope, {
+            surface: "regenerated_reply", model: MODEL, promptRevision: PROMPT_REVISION,
+          });
+          built.system = aiLeasingStrategyRuntime.appendStrategyDirective(built.system, runtimeStrategyEnvelope);
           built.system += await upcomingTourAddendum(prep.conv.id);
           const r = await anthropic.messages.create({ model: MODEL, max_tokens: 320, system: built.system, messages: built.messages });
           providerReqId = (r && r.id) || null;
           generated = (r.content || []).filter(x => x.type === "text").map(x => x.text).join("").trim();
+          strategyApplied = aiLeasingStrategyRuntime.modelGenerationUsedStrategy({
+            envelope: runtimeStrategyEnvelope,
+            modelReturnedText: !!generated,
+            finalBodyOrigin: "model",
+          });
           if (!generated) console.error("[agent/diag] EMPTY GENERATION", JSON.stringify({ stop_reason: r.stop_reason, block_types: (r.content || []).map(x => x.type), usage: r.usage || null }));
         } else { genErr = "no_model_client"; }
       } catch (e) { genErr = (e && e.message) || "generation_failed"; }
@@ -2266,6 +2353,9 @@ Reply with ONLY the message text.`;
         else { generated = FALLBACK_GENERAL; policyDecision = "safe"; policyCode = "general_recovered"; }
       }
       if (!generated || !generated.trim()) { if (!genErr) { generated = FALLBACK_GENERAL; policyDecision = "safe"; policyCode = "empty_recovered"; } }
+      strategyApplied = aiLeasingStrategyRuntime.finalBodyRetainsStrategyCredit({
+        strategyApplied, policyCode, generationError: genErr,
+      });
       if (generated) generated = finishProspectText(generated);
       if (modelHandoff && policyDecision === "safe") { policyDecision = "requires_handoff"; policyCode = policyCode ? `${policyCode}+model_handoff:${modelHandoff}` : `model_handoff:${modelHandoff}`; }
 
@@ -2278,8 +2368,8 @@ Reply with ONLY the message text.`;
           return { superseded: true };
         }
         await client.query(
-          "update agent_runs set resolved_fact_snapshot_json=$2, fact_snapshot_hash=$3, provider_request_id=$4, policy_decision=$5, handoff_reason_code=$6 where id=$1",
-          [run.id, JSON.stringify(factSnapshot), snapshotHash, providerReqId, policyDecision, policyCode]
+          "update agent_runs set resolved_fact_snapshot_json=$2, fact_snapshot_hash=$3, provider_request_id=$4, policy_decision=$5, handoff_reason_code=$6, ai_leasing_strategy_applied=$7 where id=$1",
+          [run.id, JSON.stringify(factSnapshot), snapshotHash, providerReqId, policyDecision, policyCode, strategyApplied]
         );
         if (genErr || (!generated && policyDecision !== "blocked")) {
           await client.query("update agent_runs set status='failed' where id=$1", [run.id]);
