@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | Governing contract | `docs/RESIDENT_SMS_WORK_ORDER_CONTRACT.md` @ **`5eef41f`** (v3, owner-signed) |
-| Final implementation | **`45cc561`** |
+| Final implementation | **`d51443d`** (harness fix; product source unchanged since `45cc561`) |
 | Branch | `claude/getting-up-to-speed-nyf4ww` |
 | Base | `origin/main` @ `421168f` (Slice 8 merged in cleanly) |
 | Migration | **none** for this slice |
@@ -85,7 +85,7 @@ GOVERNED OPERATING CONTEXT (NOT proven — see above)
 |---|---|---|
 | Pure | `node tests/resident_sms_work_order_proof.js` (Part A) | **15/15** |
 | Real Postgres | same file, Part B — 22 cases | **75 passed / 1 failed → fixed at `45cc561`** |
-| Real Postgres + real HTTP | `node tests/resident_sms_route_proof.js` | **29/29** |
+| Real Postgres + real HTTP | `node tests/resident_sms_route_proof.js` | **29/29 — but see §2a: one of those 29 was a false green** |
 | Regression (DB-free) | 35 harnesses | **28 green / 8 red — identical to baseline** |
 | App suite | `./run_harnesses.sh` | **753/753** |
 
@@ -94,12 +94,51 @@ GOVERNED OPERATING CONTEXT (NOT proven — see above)
 > document is not final until the exact-head run is pasted in below.**
 >
 > ```text
-> [ awaiting raw output — node tests/resident_sms_work_order_proof.js @ 45cc561 ]
-> [ awaiting raw output — node tests/resident_sms_route_proof.js       @ 45cc561 ]
+> [ awaiting raw output — node tests/resident_sms_work_order_proof.js @ d51443d ]
+> [ awaiting raw output — node tests/resident_sms_route_proof.js       @ d51443d ]
 > ```
+>
+> The route harness MUST be rerun: §2a fixed a false green in it, so the
+> earlier 29/29 no longer describes the current file. Product source is
+> unchanged since `45cc561` — `git diff 45cc561 d51443d -- src/ server.js
+> migrations/` is empty — so only the harnesses changed.
 
 **All 22 contract cases accounted for:** 17 at service level, 5 (cases 5, 9, 10,
 11, 14) at the HTTP boundary. None reported as proven that was not.
+
+## 2a. ONE ASSERTION IN THE 29/29 RUN WAS A FALSE GREEN
+
+Found by adversarial review *after* that run, confirmed on Postgres 16, fixed at
+**`d51443d`**. Recorded here because a green number that was not earned is
+exactly what this document exists to prevent.
+
+`comm_events.occurred_at` defaults to `now()`, and Postgres `now()` returns the
+**transaction** start time. Both harnesses run inside one transaction — the
+savepoint shim rewrites the module's commits into `RELEASE SAVEPOINT`, so no
+real `COMMIT` ever occurs. **Every row a run writes therefore shares one
+identical `occurred_at`**, and `order by occurred_at desc limit 1` selects an
+arbitrary row.
+
+Case 11's sole guard for §7.1.4 (*"do not ask the resident to choose"*) used that
+query. It was reading **case 14's browser-door reply** — different case,
+different door, three cases earlier — and applying a negative-only regex to it.
+It would have passed had the code regressed to *"Reply 1 for the leak or 2 for
+the smell."*
+
+- Fixed by asserting **positively**, against the transport double's in-memory
+  send log (genuinely ordered), with the negative regex demoted to a secondary
+  guard. Discrimination verified: the correct reply passes; case 14's reply now
+  fails; a choice-offering regression fails on both counts.
+- Case 9's question lookup re-keyed by `created_object_id`. It had been safe only
+  because exactly one `clarification_question` existed at that point — an
+  accident that the next added case would have broken.
+
+**Proof impact:** case 11's *"no choice offered"* claim is **not** established by
+the earlier route run and must not be reported as such until the rerun. The
+§7.1.4 *branch* is still pinned by elimination (the surrounding assertions would
+have failed had another branch executed) — but **what the resident was told was
+never checked**. Every other assertion in that run keyed on identity or persisted
+counts and stands.
 
 ## 3. EVIDENCE LEVEL PER CLAIM
 
