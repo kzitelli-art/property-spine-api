@@ -45,11 +45,15 @@
 //   · No pre-existing row is read, updated or deleted. Fixtures are created
 //     fresh, uniquely named per run, and rolled back.
 //   · Demo Building and every real property are untouched.
-//   · The SMS transport double RECORDS every attempted send and always
-//     returns sent:false. It cannot reach Twilio because it never imports the
-//     transport at all. "Sent nothing" is then ASSERTED against that record,
-//     not assumed — plus a second assertion that no outbound row ever acquired
-//     a provider SID.
+//   · The SMS transport double RECORDS every attempted send and reports a
+//     successful queue WITHOUT importing the Twilio client at all, so a real
+//     wire is unreachable by construction. It must report success: a refused
+//     or failed send stamps sms_status refused/failed, which §7.1 correctly
+//     treats as "never asked" and excludes from the gate — cases 10 and 11
+//     would then silently exercise the wrong branch. The guarantee is
+//     therefore not "zero sends" but "zero REAL sends", and it is asserted
+//     twice: every send used this run's own fixture line, and every provider
+//     SID in the run carries an unmistakable harness prefix.
 //   · Zero DELETE / DROP / TRUNCATE statements.
 // ════════════════════════════════════════════════════════════════════
 "use strict";
@@ -109,13 +113,21 @@ if (!process.env.DATABASE_URL) {
 
   // ── test doubles for the OUTSIDE WORLD only ───────────────────────
   const sent = [];                    // every attempted send, recorded
+  const HARNESS_SID = "SM_HARNESS_NEVER_REAL_";
   const smsDouble = {
     enabled: () => true,
     validateWebhook: () => true,      // transport auth is stubbed; domain logic is real
+    // Returns a SUCCESSFUL-looking send. That matters: a refused or failed
+    // send stamps sms_status refused/failed, which §7.1 correctly treats as
+    // "this question was never asked" and excludes from the gate. Cases 10
+    // and 11 are about answering a question that WAS asked, so the transport
+    // has to succeed for them to exercise the branch they name.
+    // Nothing real can leave: this object never imports the Twilio client,
+    // and every sid it mints carries an unmistakable harness prefix that is
+    // asserted below.
     sendSms: async ({ to, from, body }) => {
       sent.push({ to, from, body });
-      // A real send must be impossible, not merely unlikely.
-      return { sent: false, reason: "harness_transport_never_sends", sid: null };
+      return { sent: true, status: "queued", sid: `${HARNESS_SID}${sent.length}` };
     },
   };
 
@@ -160,6 +172,22 @@ if (!process.env.DATABASE_URL) {
       `insert into tenant_invites (person_id, property_id, token, status, expires_at)
        values ($1,$2,$3,'used', now() + interval '30 days')`,
       [person.id, prop.id, `tok-invite-${RUN}`]);
+
+    // SMS CONSENT — discovered by the first real run, not by reading source.
+    //
+    // Without an opted_in contact_preferences row, canSendSmsForRecord refuses
+    // every outbound with customer_care_requires_opted_in_consent, and
+    // sendPropertySms stamps the outbound sms_status='refused'. That is
+    // CORRECT product behaviour — but it means the clarification question is
+    // marked as never-delivered, and §7.1 then (correctly) excludes it from
+    // the gate. Cases 10 and 11 assume a question that WAS delivered, so
+    // without consent they were silently exercising the never-asked branch
+    // instead of the branch they name. The fixture, not the product, was wrong.
+    await c.query(
+      `insert into contact_preferences (person_id, channel, consent_state, source, updated_at)
+       values ($1,'text','opted_in','harness fixture', now())
+       on conflict (person_id, channel) do update set consent_state='opted_in'`,
+      [person.id]);
 
     // The receiving line must resolve to OUR fixture property and nothing
     // else. resolveInboundSmsContext does `where sms_number=$1 limit 1`, so a
@@ -320,13 +348,18 @@ if (!process.env.DATABASE_URL) {
        "and the resident is NOT asked to pick between options the system cannot durably hold");
 
     // ══ transport safety, asserted rather than assumed ══
-    section("safety · the harness could not have sent a real message");
-    ok(sent.length === 0,
-       `the SMS transport double recorded ZERO attempted sends (${sent.length})`);
-    const anySid = Number((await c.query(
-      `select count(*)::int n from comm_events where property_id=$1 and sms_sid is not null and direction='outbound'`,
-      [prop.id])).rows[0].n);
-    ok(anySid === 0, "no outbound row acquired a provider SID — nothing reached a wire");
+    section("safety · nothing reached a real wire");
+    // The double now reports success, so sends DO occur — against the double.
+    // The guarantee is therefore not "zero sends" but "zero REAL sends", and
+    // it is proven two ways rather than asserted once.
+    ok(sent.length > 0, `sends were routed through the double and recorded (${sent.length})`);
+    ok(sent.every((s) => s.to && s.from === LINE),
+       "every send used the fixture property's own line — never a real property's number");
+    const sids = (await c.query(
+      `select sms_sid from comm_events where property_id=$1 and direction='outbound' and sms_sid is not null`,
+      [prop.id])).rows.map((r) => r.sms_sid);
+    ok(sids.length > 0 && sids.every((s) => String(s).startsWith(HARNESS_SID)),
+       `every provider SID is harness-minted (${sids.length} checked) — no Twilio SID exists anywhere in this run`);
 
     console.log(`\n════ ${pass} passed, ${fail} failed ════`);
     if (failures.length) console.error("FAILURES:\n" + failures.map((f) => "  ✗ " + f).join("\n"));
