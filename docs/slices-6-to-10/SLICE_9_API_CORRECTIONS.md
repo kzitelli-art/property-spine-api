@@ -454,3 +454,83 @@ client, never opening its own. Operations: `markSubmitted`,
 arbitrary-column update API. Then cut over all eight statements across the five
 files, and add a source audit that fails when an unapproved source writes
 `lease_applications.status` directly.
+
+---
+
+## ROLLOUT PROOF — WHAT IS AND IS NOT PROVEN
+
+Correction to earlier handback language. I wrote that the rollout was "proven
+end to end." It was not, and could not be.
+
+**Proven, locally, in deployment order:**
+```
+migration sequencing
+compatibility behaviour after 124 (old writers succeed AND author milestones)
+strict refusal behaviour after staged 125
+```
+
+**NOT proven, and not provable in a local Postgres proof:**
+```
+every active production instance running Deployment A
+BEFORE migration 125 executes
+```
+That is a production drain condition. It is an operational gate, verified
+against the deployed fleet, not a test result.
+
+## HISTORICAL-NULL BASELINE RECEIPT — `tools/application_milestone_baseline.js`
+
+125 refuses future bad writes without manufacturing missing historical
+milestones. Correct — and it creates a blind spot: a defective row written
+during the rolling window lands in the same "milestone is null" population as
+the legitimate historical exceptions, then survives enforcement unnoticed
+forever.
+
+The receipt closes it. Captured immediately after 124, re-verified before 125.
+Digest is over the **sorted** id list, so it is comparable across runs and
+cannot be quietly reordered into agreement.
+
+| Category | Zero required? |
+|---|---|
+| submission-reached without `submitted_at` | no — legitimate historical |
+| approval-reached without `approved_at` | no — legitimate historical |
+| terminal without `terminal_at`/`terminal_code` | no — legitimate historical |
+| `terminal_code` mismatched | **YES** |
+| non-terminal carrying terminal metadata | **YES** |
+
+**Rule: the population may shrink, never grow.** A new id is a rollout-window
+truth gap.
+
+### Proven against real Postgres
+
+```
+capture after 124   compat trigger present · strict absent
+                    submission_reached_without_submitted_at   6
+                    approval_reached_without_approved_at      4
+                    terminal_without_terminal_metadata        1
+                    terminal_code_mismatched                  0   (must be zero)
+                    nonterminal_carrying_terminal_metadata    0   (must be zero)
+
+verify, unchanged   "population did not grow" — PASS, exit 0
+verify, after a defective row written with the compat trigger disabled
+                    BLOCKER, offending id named, exit 1
+```
+
+The second case is the point: that row is indistinguishable from a historical
+exception by shape alone. Only the id-level baseline catches it.
+
+## STILL OUTSTANDING
+
+```
+canonical lifecycle authority + 8 writer cutovers   IN PROGRESS (workflow)
+milestones must use transaction_timestamp(), never JS new Date()
+canonical journey builder
+Funnel 2 re-grained to opportunity
+lead_events terminal truth
+repeatable-read evidence snapshot
+metric contract enforcement (metric_kind, invalid-shape refusal)
+report-window enforcement (reject client as_of, 366-day cap)
+timezone hardening
+bounded reads + scale proof
+API contract freeze
+renderer
+```
