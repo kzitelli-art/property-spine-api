@@ -44,10 +44,36 @@ Two of the four are now discharged with receipts. Two remain.
 |---|---|---|
 | 1 | Live Neon migration ledger queried, real ceiling recorded | ✅ **DONE** — deployed ceiling is **120** (`120_ai_leasing_strategy_foundation`), read from the live ledger in the Render Shell. This slice adds no migration, so the ceiling is unchanged by it. |
 | 2 | Deployed `comm_events.sms_sid` unique index confirmed present in Neon | ✅ **DONE** — `idx_comm_sms_sid`, confirmed live: `CREATE UNIQUE INDEX idx_comm_sms_sid ON public.comm_events USING btree (sms_sid) WHERE (sms_sid IS NOT NULL)`. |
-| 3 | Exact `satisfyObligation` close behavior verified | ⚠️ **SOURCE-VERIFIED, NOT DATA-VERIFIED.** See §4.1. Owner decides whether this suffices. |
-| 4 | Corrected routine and emergency obligation transitions specified field by field | ✅ **DONE** — §6.2 and §6.3 below. Requires owner sign-off, not further discovery. |
+| 3 | Exact `satisfyObligation` close behavior verified | ⚠️ **SOURCE-VERIFIED, NOT DATA-VERIFIED.** Owner must run the `pg_trigger` query in §4.1. |
+| 4 | Corrected routine and emergency obligation transitions specified field by field | ✅ **SIGNED OFF** 2026-08-01, subject to the six guarantees in §6.0. |
+| 5 | Demo Building legacy-unlinked count is zero | ⛔ **OPEN** — acceptance gate added 2026-08-01. Query in §14.2. |
 
-Implementation remains blocked on **#3** and on owner sign-off of **#4**.
+**Owner has signed off on the contract proceeding to implementation, conditional
+on exactly two live checks:**
+
+1. **`pg_trigger` on `obligations` returns zero rows** (§4.1).
+2. **Demo Building legacy-unlinked open clarification obligations = 0** (§14.2),
+   with other properties counted and reported.
+
+Both require the Render Shell. Until both are satisfied, **no patch.**
+
+## 6.0 THE SIX GUARANTEES (owner sign-off conditions)
+
+§§6.2–6.3 are approved provided the implementation guarantees all six:
+
+1. One coherent repair obligation remains open.
+2. The urgency question is removed **without** completing the repair.
+3. Type, label, required inputs, deadlines, and proof requirements move
+   **atomically**.
+4. Work-order urgency and obligation state **agree**.
+5. Every transition writes **immutable history**.
+6. Invalid or stale transitions **fail closed**.
+
+Each is enforced by a named mechanism, not by care: (1) and (2) by the explicit
+`required_inputs` set in §6.2/§6.3 plus the ordering hazard note; (3) by the
+single-UPDATE requirement in §6.1; (4) by both writes living inside T2; (5) by
+`transitionObligation` refusing a call with no event; (6) by the
+expected-type/expected-status stale rejection and the transition whitelist.
 
 ---
 
@@ -267,30 +293,73 @@ Mirror `reassignObligation`'s exact shape (`server.js:374`): take an open
 `client`, `select ... for update`, refuse when `status='complete'`, perform one
 UPDATE, write a durable event, return the updated row.
 
-```
+**Owner ruling, 2026-08-01: constrain it. Do NOT create a generic unrestricted
+obligation mutation function.** It must require the expected current type and
+status, enforce an allowed transition, require all type-coupled replacement
+fields, reject stale state, and write a transition event.
+
+A whitelist table, not a free-form update:
+
+```js
+// The ONLY transitions this slice permits. A pair absent from this table is
+// refused — adding one is a deliberate edit here, reviewed on its own terms,
+// never an argument a caller can pass.
+const OBLIGATION_TRANSITIONS = {
+  "confirm_urgency->maintenance_repair": {
+    event_type: "work_order_urgency_resolved",
+    requires: ["label", "required_inputs", "priority", "severity"],
+  },
+  "confirm_urgency->emergency_repair": {
+    event_type: "work_order_urgency_escalated",
+    // due_at and escalates_to_role are REQUIRED here, not defaulted: an
+    // emergency obligation with no deadline and no escalation path is the
+    // incoherence this slice exists to fix.
+    requires: ["label", "required_inputs", "priority", "severity",
+               "escalates_to_role", "due_at"],
+  },
+};
+
 transitionObligation(client, {
   obligation_id,
-  type,                 // required — the new obligation type
-  label,                // required — must be updated with the type, never left stale
-  required_inputs,      // required — the complete new set, not a delta
-  priority, severity, escalates_to_role, due_at,   // optional, default unchanged
-  reason,               // optional operator-language note
-  event_type,           // required — the durable transition event to write
-  event_note,           // required — structured JSON payload
+  expected_type,      // required — refuse unless the row currently matches
+  expected_status,    // required — refuse unless the row currently matches
+  to_type,            // required — (expected_type -> to_type) must be whitelisted
+  label,              // required
+  required_inputs,    // required — the complete new set, never a delta
+  priority, severity, escalates_to_role, due_at,   // required per the table above
+  reason,             // optional operator-language note
+  event_note,         // required — structured JSON payload
 })
 ```
 
-Rules it must enforce:
+Rules it must enforce, each failing closed:
 
-- Refuses a `complete` obligation (mirrors `reassignObligation`).
-- **`label` and `required_inputs` are required, not optional.** The defect in
-  §3.11 is precisely a type that moved while its label did not; the signature
-  must make that impossible rather than merely discouraged.
-- Writes the transition event in the same transaction. An unaudited UPDATE is the
-  defect being fixed, so a transition with no event is not a valid call.
+- **Stale-state rejection.** `select … for update`, then refuse unless
+  `row.type === expected_type` **and** `row.status === expected_status`. This is
+  optimistic concurrency, and it is what makes the slice safe against the race
+  in §7.6: if an operator resolved the urgency while the resident's reply was in
+  flight, the transition refuses instead of applying a second time.
+- **Whitelisted pairs only.** `(expected_type -> to_type)` absent from
+  `OBLIGATION_TRANSITIONS` is refused. There is no "any type to any type" path,
+  no override argument, and no default branch.
+- **Type-coupled fields are mandatory per target**, per the `requires` list. A
+  missing one is a refusal, never a silent inherit-previous. §3.11's defect was
+  a type that moved while its label did not; the signature must make that
+  unrepresentable rather than merely discouraged.
+- **Refuses a `complete` obligation** (mirrors `reassignObligation`).
+- **Writes the transition event in the same transaction**, with the event type
+  taken from the table — not from the caller. An unaudited UPDATE is the defect
+  being fixed, so a transition with no event is not a valid call, and a caller
+  cannot mislabel the history it writes.
 - Uses the array-parameter form for `required_inputs` (as `satisfyObligation`
   does at `server.js:305`), not the `"{a,b}"` string-literal form
   `spawnObligationFromEvent` uses at line 217. Both work; pick one and note it.
+
+**Atomicity requirement (owner ruling).** Type, label, required inputs,
+deadlines, and proof requirements move in **one** UPDATE. Do not split them
+across statements: a partially-moved obligation is precisely the incoherent
+state §6 exists to eliminate, and an intermediate commit would make it
+observable.
 
 ### 6.2 Field-by-field — clarification resolves as NON-EMERGENCY
 
@@ -423,7 +492,29 @@ select o.id, o.related_id as work_order_id, ce.id as question_event_id
    and ce.person_id   = $2
    and ce.direction   = 'outbound'
    and ce.created_object_type = 'work_order'
+   and coalesce(ce.sms_status, '') not in ('failed', 'refused', 'undelivered')
 ```
+
+**On the delivery-state filter (owner ruling, 2026-08-01).** The gate is not
+"a question row exists." It is *"we asked this person this question about this
+work order, and the clarification remains unresolved."* A question whose
+delivery definitively failed was never asked, so it cannot make a later message
+into an answer.
+
+**`sms_status IS NULL` is NOT a failure and must remain eligible.** Two live
+cases depend on this:
+
+- The **browser door** (`/tenant/messages`, `channel='portal'`) delivers its
+  question in the HTTP response. No SMS is ever attempted, so `sms_status` stays
+  null forever. Excluding null would make every browser-door question ineligible
+  and silently break the door this slice is supposed to leave intact.
+- An SMS whose stamp has not yet landed is unknown, not failed.
+
+The only definitive-failure values `sendPropertySms` writes are `failed` and
+`refused` (`communications_boundary.js` — verified: those are the only two
+literals it stamps). `undelivered` is included as forward-cover for the
+provider-status vocabulary declared in `migrations/048`. Do not add `queued` or
+`sent` — neither is a failure.
 
 1. Run the query above.
 2. **Zero** → normal path: `classifyMessage` + `classifyUrgency` → `createWorkOrder`.
@@ -683,19 +774,30 @@ no linked question.** The corrected §7.1 lookup will return zero for all of the
 and §7.6 will route their answers to preserve-and-flag rather than into
 `appendClarification`.
 
-That is the correct fail-safe direction — a human sees it, nothing is corrupted —
-but it must be a stated behavior rather than an accident:
+**RULED, 2026-08-01 (owner).** An open `confirm_urgency` obligation with no
+linked outbound question is **legacy-unlinked** and **cannot participate in
+automated SMS enrichment**. It is not a defect to be patched around; it is a
+category the automation refuses to act on.
 
-> **Ruling required.** For any work order whose clarifying question predates this
-> slice, a resident's answer is preserved and flagged, never auto-applied. These
-> obligations drain naturally as operators resolve them; no backfill is
-> specified, and none should be invented from message bodies.
+- **Demo Building — acceptance prerequisite: ZERO legacy-unlinked open
+  clarification obligations.** Any that exist are resolved through attributed
+  operations before this slice ships. **Do not delete them. Do not manufacture
+  links.**
+- **All other properties — count and report.** Do not backfill by guessing from
+  timestamps or message text. A human may either resolve the urgency directly, or
+  send a new canonical clarification question, which creates the required durable
+  association going forward.
 
-Note the population is probably small: `runInbound` today never calls
-`createWorkOrder`, so it has never produced a `confirm_urgency` obligation at
-all. Any that exist came from the operator path. **Owner should confirm the count
-before accepting the fail-safe** — the check is one query, and if it is large the
-fallback deserves a better answer than "a human handles each one."
+The count query (Render Shell, read-only):
+
+```
+node -e "const{Pool}=require('pg');const p=new Pool({connectionString:process.env.DATABASE_URL,ssl:{rejectUnauthorized:false}});p.query(\"select o.property_id, count(*)::int as legacy_unlinked from obligations o where o.type='confirm_urgency' and o.status='open' and o.related_type='work_order' and not exists (select 1 from comm_events ce where ce.direction='outbound' and ce.created_object_type='work_order' and ce.created_object_id=o.related_id) group by o.property_id order by 2 desc\").then(r=>{console.table(r.rows);p.end()})"
+```
+
+Expected to be small — `runInbound` today never calls `createWorkOrder`, so it
+has never produced a `confirm_urgency` obligation at all; any that exist came
+from the operator path. **This is now an acceptance gate, not a curiosity:**
+Demo Building must read zero before implementation proceeds.
 
 ### 14.3 `needs_human` defaults to FALSE, so today's save-first is already leaky
 
@@ -736,3 +838,67 @@ which §8 forbids.
 
 Recorded so that if this lookup later moves onto a hot path, the absence is a
 known decision rather than an oversight.
+
+---
+
+## 15. DELIVERY FAILURE MUST BE ACTIONABLE
+
+**Owner ruling, 2026-08-01.** When T2 commits but the outbound SMS send fails,
+the work order remains valid — the claim was captured and the record is real.
+But the failed outbound must surface as an **actionable delivery failure**.
+*"Claim captured successfully, resident never acknowledged"* must not become
+another invisible state.
+
+### 15.1 The obvious mechanism does not work — verified
+
+The intuitive implementation is to set `needs_human = true` on the **outbound**
+comm_event, reusing `idx_comm_needs_human`. **That would be invisible.** Both
+consumers of the exception queue filter to inbound only:
+
+- `src/surfaces/desks.js:154` — `where property_id = $1 and direction = 'inbound' and conversation_id is not null`
+- `src/surfaces/board.js:136` — identical predicate
+
+A flagged outbound row would be counted by neither. The operator would see
+nothing, and the state this ruling exists to prevent would be created *by the
+mechanism intended to prevent it.*
+
+### 15.2 Required behavior for this slice
+
+On a definitive send failure (`sendPropertySms` returns `sent:false`), after T2
+has already committed:
+
+1. `sendPropertySms` stamps the outbound row as it does today —
+   `sms_status='failed'|'refused'`, `sms_error=<reason>`. Unchanged.
+2. **Set `needs_human = true` on the INBOUND comm_event** — the row T2 just
+   cleared. This is honest, not a dance: T2 cleared it because the claim had been
+   processed; the send failure is a *new* fact that arose afterwards, and it means
+   a human must still deal with this message. The resident sent something and, from
+   their side, received nothing. That is exactly "needs a human."
+3. This is a separate small transaction after T2. It must not be able to roll back
+   T2 — a failed re-flag must never un-create a valid work order. If step 3 itself
+   fails, log loudly; the outbound stamp from step 1 remains as evidence.
+
+This gets visibility with **zero changes to the two shared surfaces**, which is
+why it is preferred over widening their predicates in this slice.
+
+### 15.3 What this deliberately does not do, and the better answer
+
+Re-flagging the inbound row makes the failure **visible** but does not give it an
+**accountable owner**. PHILOSOPHY §11 is explicit that operating exceptions
+belong to the obligation engine and that "open work must not disappear inside
+conversation history."
+
+The §11-correct evolution is a durable obligation for the failed notification —
+with a type, a role, and honest `UNASSIGNED` via the existing
+`spawnObligationFromEvent` path. It is **not** specified here because it needs an
+obligation type and an owning role, and inventing either without a ruling would
+be exactly the kind of quiet decision this contract refuses elsewhere.
+
+> **Open ruling for a later slice.** Should a failed resident notification create
+> a durable obligation, and if so under what type and owning role? Until that is
+> answered, §15.2 is the floor: visible, honest, and reusing a surface that
+> already works.
+
+Note also that nothing in slice one *clears* the re-raised `needs_human` when a
+human resolves it out of band. That is acceptable — the same is already true of
+every other message in that queue — but it is a known edge, not an oversight.
