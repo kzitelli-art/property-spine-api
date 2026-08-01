@@ -150,9 +150,16 @@ const BILLBACK_DECISIONS = ["bill_back", "do_not_bill_back"];
 const BILLBACK_OBLIGATION_TYPE = "billback_decision";
 
 function makeWorkOrderService(deps) {
-  const { spawnObligationFromEvent } = deps;
+  const { spawnObligationFromEvent, satisfyObligation, transitionObligation } = deps;
   if (typeof spawnObligationFromEvent !== "function") {
     throw new Error("work_order_service requires spawnObligationFromEvent()");
+  }
+  // appendClarification resolves an urgency question, which means satisfying
+  // the stale required input and retyping the obligation. Both are shared
+  // engine services — this module must never hand-roll either, or the
+  // clarification path becomes a second obligation implementation.
+  if (typeof satisfyObligation !== "function" || typeof transitionObligation !== "function") {
+    throw new Error("work_order_service requires satisfyObligation() and transitionObligation()");
   }
 
   // ── Obligation spec per urgency — the routing intent for EVERY WO. ──
@@ -509,41 +516,156 @@ function makeWorkOrderService(deps) {
   //  Original description is NEVER overwritten. If the clarification (via the
   //  narrow classifier) establishes an emergency, escalate the SAME work order
   //  and the SAME obligation.
+  //  THREE OUTCOMES, one canonical implementation, shared by the SMS door and
+  //  the browser door alike. The prior version had five defects: it never
+  //  transitioned needs_confirmation -> regular, never satisfied the stale
+  //  urgency_confirmation input, updated the obligation's type without its
+  //  label, escalated via an unaudited UPDATE that wrote no event, and fell
+  //  back to manager_override on an unknown emergency type where createWorkOrder
+  //  throws. All five are closed here rather than worked around by any caller.
+  //
+  //  outcome: 'unresolved' | 'resolved_regular' | 'escalated_emergency' | 'already_emergency'
   async function appendClarification(client, { work_order_id, person_id = null, text, classifyUrgency }) {
     const wo = (await client.query("select * from work_orders where id=$1 for update", [work_order_id])).rows[0];
     if (!wo) throw Object.assign(new Error("work order not found"), { httpStatus: 404 });
 
-    // append-only note event — original description untouched
+    // append-only note event — original description untouched, always written
     await client.query(
       `insert into events (property_id, person_id, unit_id, type, note)
        values ($1,$2,$3,'work_order_clarification',$4)`,
       [wo.property_id, person_id, wo.unit_id, JSON.stringify({ work_order_id, text })]);
 
-    let escalated = false;
-    // only escalate UP, and only from a non-emergency state
-    if (typeof classifyUrgency === "function" && wo.urgency_status !== "emergency") {
-      const c = classifyUrgency(text);
-      if (c.urgency === "emergency") {
-        const emDef = EMERGENCY_TYPES[c.emergency_type] || EMERGENCY_TYPES.manager_override;
-        await client.query(
-          `update work_orders
-              set is_emergency=true, urgency_status='emergency',
-                  urgency_basis=$2, urgency_decided_by='resident_clarification',
-                  urgency_decided_at=now(), needs_pm_review=true, updated_at=now()
-            where id=$1`,
-          [work_order_id, c.basis]);
-        // escalate the SAME obligation in place (same open loop)
-        await client.query(
-          `update obligations
-              set type='emergency_repair', priority='high', severity='emergency',
-                  escalates_to_role='property_manager', due_at=$2, updated_at=now()
-            where related_type='work_order' and related_id=$1 and status='open'`,
-          [work_order_id, urgencyToDueAt(emDef.urgency)]);
-        escalated = true;
+    // The open obligation for THIS work order. Absent (legacy rows, or already
+    // resolved) → the note stands alone; we never invent one.
+    const obligation = (await client.query(
+      `select * from obligations
+        where related_type='work_order' and related_id=$1 and status='open'
+        order by created_at asc limit 1`, [work_order_id])).rows[0] || null;
+
+    const finish = async (outcome, escalated) => {
+      const updated = (await client.query("select * from work_orders where id=$1", [work_order_id])).rows[0];
+      return { workOrder: updated, escalated, outcome, obligation_id: obligation ? obligation.id : null };
+    };
+
+    // §6.5 — already emergency. No downgrade, ever. Note only.
+    if (wo.urgency_status === "emergency") return finish("already_emergency", false);
+    if (typeof classifyUrgency !== "function") return finish("unresolved", false);
+
+    const c = classifyUrgency(text);
+
+    // §6.4 — the answer did not settle the question. Change nothing else.
+    // A clarification that leaves needs_confirmation intact is an honest
+    // outcome, not a failure: the resident replied, and we still do not know.
+    if (c.urgency === "needs_confirmation") return finish("unresolved", false);
+
+    // SELF-REVIEW FIX — work-order and obligation state must AGREE (contract
+    // guarantee #4). The first cut updated work_orders whenever the
+    // clarification resolved, and transitioned the obligation only when one
+    // happened to be in `confirm_urgency`. That produces the exact mismatch
+    // this slice exists to eliminate: a work order escalated to emergency
+    // whose obligation is still a routine repair with normal priority and no
+    // deadline — or a work order moved to regular with no accountable repair
+    // obligation behind it at all.
+    //
+    // So the two move together or neither moves. If this work order is not in
+    // the state this flow governs (no open obligation, or one that is no
+    // longer `confirm_urgency` because someone already resolved it), the
+    // clarification is recorded as a note and the message is flagged for a
+    // human. Fail closed, never half-applied.
+    const canTransition = !!obligation && obligation.type === "confirm_urgency";
+    if (!canTransition) return finish("unresolved", false);
+
+    if (c.urgency === "emergency") {
+      // §6.6 — ONE closed vocabulary. The prior `|| manager_override` fallback
+      // silently invented an emergency type where createWorkOrder refuses one.
+      // Both entry points now fail the same way on the same input.
+      const emDef = EMERGENCY_TYPES[c.emergency_type];
+      if (!emDef) throw Object.assign(
+        new Error("emergency_type required for emergency work order"),
+        { httpStatus: 400, allowed: Object.keys(EMERGENCY_TYPES) });
+
+      await client.query(
+        `update work_orders
+            set is_emergency=true, urgency_status='emergency',
+                urgency_basis=$2, urgency_decided_by='resident_clarification',
+                urgency_decided_at=now(), needs_pm_review=true, updated_at=now()
+          where id=$1`,
+        [work_order_id, c.basis]);
+
+      {
+        // Satisfy the stale input FIRST so the audit records that the question
+        // was answered, then retype. Both inside the caller's transaction: in
+        // between, the row reads confirm_urgency with no inputs outstanding —
+        // a state completeObligation would happily close. It must never be
+        // observable, and with one transaction it never is.
+        if ((obligation.required_inputs || []).includes("urgency_confirmation")) {
+          await satisfyObligation(client, {
+            obligation_id: obligation.id, input: "urgency_confirmation",
+            proof: "resident clarification",
+          });
+        }
+        await transitionObligation(client, {
+          obligation_id: obligation.id,
+          expected_type: "confirm_urgency", expected_status: "open",
+          to_type: "emergency_repair",
+          label: `EMERGENCY: ${emDef.label} — needs on-call to own it`,
+          required_inputs: ["closeout_proof"],
+          priority: urgencyToPriority(emDef.urgency),
+          severity: "emergency",
+          escalates_to_role: "property_manager",
+          due_at: urgencyToDueAt(emDef.urgency),
+          reason: "resident clarification established an emergency",
+          // §3.12 — emergency_type has no work_orders column. This event note
+          // is its ONLY durable home on a clarification-driven escalation.
+          event_note: {
+            emergency_type: c.emergency_type, emergency_label: emDef.label,
+            prior_urgency_status: wo.urgency_status, new_urgency_status: "emergency",
+            urgency_basis: c.basis, urgency_decided_by: "resident_clarification",
+          },
+        });
       }
+      return finish("escalated_emergency", true);
     }
-    const updated = (await client.query("select * from work_orders where id=$1", [work_order_id])).rows[0];
-    return { workOrder: updated, escalated };
+
+    // §6.2 — resolved as routine. The repair obligation STAYS OPEN; answering
+    // the urgency question never closes the work.
+    if (c.urgency === "regular" && wo.urgency_status === "needs_confirmation") {
+      await client.query(
+        `update work_orders
+            set urgency_status='regular', is_emergency=false, needs_pm_review=false,
+                urgency_basis=$2, urgency_decided_by='resident_clarification',
+                urgency_decided_at=now(), updated_at=now()
+          where id=$1`,
+        [work_order_id, c.basis]);
+
+      {
+        if ((obligation.required_inputs || []).includes("urgency_confirmation")) {
+          await satisfyObligation(client, {
+            obligation_id: obligation.id, input: "urgency_confirmation",
+            proof: "resident clarification",
+          });
+        }
+        const spec = obligationSpecFor("regular", null, { id: work_order_id }, {
+          property_id: wo.property_id, unit_id: wo.unit_id, source_event_id: null,
+        });
+        await transitionObligation(client, {
+          obligation_id: obligation.id,
+          expected_type: "confirm_urgency", expected_status: "open",
+          to_type: "maintenance_repair",
+          label: spec.label,
+          required_inputs: spec.required_inputs,
+          priority: spec.priority, severity: spec.severity,
+          reason: "resident clarification established a routine repair",
+          event_note: {
+            prior_urgency_status: wo.urgency_status, new_urgency_status: "regular",
+            urgency_basis: c.basis, urgency_decided_by: "resident_clarification",
+          },
+        });
+      }
+      return finish("resolved_regular", false);
+    }
+
+    return finish("unresolved", false);
   }
 
   // ── Tenant authorization — every tenant read/write of a work order runs through
