@@ -14,7 +14,18 @@ not merely failing to prove things. It was concealing these.
 
 ## ITEM 1 — `obligations.status = 'missed'` is unwritable
 
-**Status: BLOCKING. Requires a migration. Not written.**
+**Status: CLOSED 2026-08-01 — resolved by the two-axis model, PROVEN on the
+isolated database.** Migration 126 adds `missed_at`, `missed_threshold_at` and
+`missed_recognition_key`; `ck_obl_status` was never touched. Conversion rail
+15/15 at `3e44e8b`. See `SLICE_MISSED_TIMELINESS.md`. **Not merged.**
+
+The removal condition below is met: a crossed window now writes durable history
+(event + threshold + timestamp), lifecycle is left intact, and scenario 8
+asserts the two-axis model rather than a `missed` lifecycle value.
+
+<details><summary>Original finding, kept for the record</summary>
+
+**Status when found: BLOCKING. Requires a migration. Not written.**
 
 ### The fact
 
@@ -139,6 +150,8 @@ threshold plus timestamp — the lifecycle status is left intact, and
 than a `missed` lifecycle value. **Scenario 8's current assertion
 (`ob.status === "missed"`) encodes the rejected model and must itself be
 rewritten as part of that slice.**
+
+</details>
 
 ---
 

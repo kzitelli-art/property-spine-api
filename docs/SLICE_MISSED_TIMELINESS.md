@@ -1,7 +1,9 @@
-# Slice proposal — record the miss durably (ITEM 1)
+# Slice — record the miss durably (ITEM 1)
 
-**Status: REVISED PROPOSAL (rev 2, 2026-08-01). Nothing built. No migration
-written.** Awaiting approval of the contract in Part 5 before any code.
+**Status: PROVEN against real Postgres, 2026-08-01.** Migration 126 applied to
+the isolated Neon branch `ep-small-morning-aqxjnmz9-pooler`; conversion rail
+**15/15, exit 0**, at commit `3e44e8b` on `claude/slice-missed-timeliness`.
+Not merged.
 
 Governed by the ITEM 1 ruling in `BLOCKING_DESIGN_ITEMS.md`: lifecycle status
 stays `open | in_progress | complete | escalated`; missedness is a separate
@@ -11,6 +13,30 @@ Rev 2 applies the lifecycle ruling (Part 3), replaces the two-state projection
 with three states (Part 4 — my rev-1 clock fallback was a conflation and is
 withdrawn), names the claim honestly as a manual recognition primitive rather
 than automatic detection (Part 2), and adds the service contract (Part 5).
+
+---
+
+## Proof receipt
+
+```
+HARNESS   test_conversion_rail.db.js
+COMMIT    3e44e8bbcd22e167ece77d2c2661845e24f1c4cc (RENDER_GIT_COMMIT)
+BRANCH    claude/slice-missed-timeliness
+DATABASE  neondb @ ep-small-morning-aqxjnmz9-pooler...:5432 (user neondb_owner)
+ISOLATED  yes — target differs from DATABASE_URL
+EXPECTED  15 assertions
+ASSERTIONS COMPLETE · 15 run · 15 passed · 0 failed
+EXIT      0
+```
+
+Alongside, same run: closure-boundary gate PASS (exit 0), one-implementation
+14/14 (exit 0), import smoke 8/8 (exit 0). Migration 126 reported
+`→ applying... ✓ applied and recorded`.
+
+**What is NOT proven:** no HTTP run, no browser verification. Per §33 this sits
+at **Proven (real DB)**, not Browser verified. The slice adds no operator
+surface, so there is nothing yet to verify in a browser — the sweeper and the
+recovery/timeliness projections, both excluded here, are what will need it.
 
 ---
 
