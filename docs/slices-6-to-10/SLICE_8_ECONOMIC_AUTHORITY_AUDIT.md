@@ -308,7 +308,57 @@ inventory stays type-priced. Slice 8 must not add a space-level rent column
 When a by-bed property cannot be priced at the bed level, the surface says so
 honestly rather than implying the type price is a bed price.
 
-### Rulings still open before build
+### 2. `units.market_rent` — **RULED 2026-08-01: observed evidence only, never fallback**
+
+Keep the column as **observed / imported evidence**. It may support historical,
+imported, or comparison surfaces **only when clearly labelled with provenance
+and as-of date**.
+
+It must not remain, in any form:
+
+- AI quote authority;
+- governed-pricing fallback;
+- application-term fallback;
+- renewal-price fallback.
+
+**No published pricing sheet means no governed quote.** Falling back to
+`units.market_rent` would recreate the exact competing truth this slice exists
+to eliminate.
+
+### 3. AI cutover posture — **RULED 2026-08-01: refuse to quote, confirmed**
+
+```text
+no published governed pricing → AI does not quote rent → honest handoff
+```
+
+The visible behaviour change is **intentional**. Property Spine refuses to
+quote rather than speak an imported or stale number as approved economics.
+
+The cutover still waits for the `agent.js` thread to finish, and lands in a
+**separate rebased PR with the full agent regression set**.
+
+### 4. Approver identity — **RULED 2026-08-01: person is canonical**
+
+Keep `published_by_person_id` as the canonical business actor. **Do not** add a
+competing `approved_by_user_id` merely to mirror the written spec.
+
+```text
+person identity = canonical operating actor
+user identity   = authentication provenance
+```
+
+The publication receipt may expose the authenticated user id as session
+provenance where useful. Two independently authoritative fields are forbidden.
+
+### 5. Effective rent — **RULED 2026-08-01: computed, snapshotted only on commitment**
+
+Do not store `effective_rent` as another mutable pricing value. Continue
+computing it through the canonical server service. Persist an **immutable
+snapshot only** when economics become **quoted, offered, confirmed, or
+contracted** — preserving one governed source while letting contractual and
+reporting records retain what was actually communicated or signed.
+
+### Superseded note
 
 2. **Legacy column retirement.** When the AI moves to governed pricing, does
    `units.market_rent` get (a) retired outright, (b) kept as observed-only
@@ -335,9 +385,9 @@ honestly rather than implying the type price is a bed price.
 
 ## Recommendation
 
-Accept this audit. Ruling 1 is settled (by-bed deferred). Rulings 2–5 remain
-open; **ruling 3 is the one with live prospect-facing consequences** and should
-be answered before the AI cutover step is scheduled.
+**All five rulings are settled as of 2026-08-01.** Steps 1–4 are built and
+proven; step 5 (the AI cutover) is held for the `agent.js` thread and lands in
+its own rebased PR with the full agent regression set, under ruling 3.
 
 Build order that keeps every step independently provable: **mount publish →
 lineage columns → concession read/approve → renewal socket → AI cutover last**,
