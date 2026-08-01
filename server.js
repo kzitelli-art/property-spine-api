@@ -255,12 +255,14 @@ async function spawnObligationFromEvent(client, spec) {
 //    INPUTS_OUTSTANDING — completing while required_inputs remain (the gate)
 // ════════════════════════════════════════════════════════════════════
 
-function obligationError(code, message, extra = {}) {
-  const e = new Error(message);
-  e.code = code;
-  Object.assign(e, extra);
-  return e;
-}
+// The obligation TYPE-CHANGE service and its shared error factory live in
+// src/shared/obligation_transitions.js so that the harness can exercise the
+// REAL implementation instead of a hand-copied one (tests/_engine.js is a
+// verbatim copy of the older engine functions, kept in sync by discipline —
+// a pattern this deliberately does not extend).
+const {
+  OBLIGATION_TRANSITIONS, transitionObligation, obligationError,
+} = require("./src/shared/obligation_transitions");
 
 // Satisfy ONE required input: record proof as a durable event, remove the
 // input from required_inputs. Returns { obligation, satisfied_input, remaining }.
@@ -398,6 +400,7 @@ async function reassignObligation(client, { obligation_id, assigned_role, escala
 
   return r.rows[0];
 }
+
 
 // ── health: confirms server is up AND can reach the database ──
 app.get("/health", async (_req, res) => {
@@ -3247,7 +3250,9 @@ app.post("/ingest/:runId/approve", async (req, res) => {
 //  maintenance.js and tenantlink.js destructured `workOrderService` out of
 //  their deps and called it — so every create threw TypeError on undefined and
 //  returned a bare 500. One service instance, two mounts, no second path.
-const workOrderService = makeWorkOrderService({ spawnObligationFromEvent });
+const workOrderService = makeWorkOrderService({
+  spawnObligationFromEvent, satisfyObligation, transitionObligation,
+});
 
 // ── MAINTENANCE MODULE (isolated; injected pool + shared obligation path) ──
 app.use("/", maintenanceModule({ pool, spawnObligationFromEvent, workOrderService }));

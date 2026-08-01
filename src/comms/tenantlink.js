@@ -811,62 +811,192 @@ Rules: classification "emergency" only for active danger or major damage in prog
   //  doors differ ONLY in how the reply travels back (HTTP vs SMS wire);
   //  the objects created are identical, by construction.
   // ════════════════════════════════════════════════════════════════════
-  async function runInbound({ personId, propertyId, body, channel, smsSid }) {
-    const place = await placeOf(personId, propertyId);
-    const convo = (await pool.query(
-      `insert into conversations (property_id, person_id, unit_id, lease_id)
-       values ($1,$2,$3,$4)
-       on conflict (property_id, person_id) do update set last_message_at = now()
-       returning id`,
-      [propertyId, personId, place ? place.unit_id : null, place ? place.lease_id : null])).rows[0];
+  // ── THE ANSWER-RECOGNITION GATE (§7.2) ────────────────────────────
+  //  Given the exact question we asked and what the resident said back,
+  //  decide ONE of four verdicts. Identity plus one open question is NOT
+  //  evidence that a message answers it — a resident with a pending question
+  //  is still perfectly capable of reporting something unrelated.
+  //  FAIL-SOFT DEFAULT IS 'unclear': if the model is absent or errors, the
+  //  message is preserved and flagged, never guessed onto a work order.
+  const ANSWER_VERDICTS = ["answers_question", "separate_problem", "both", "unclear"];
+  async function recognizeAnswer({ question, reply }) {
+    if (!anthropic) return "unclear";
+    try {
+      const r = await anthropic.messages.create({
+        model: INGEST_MODEL || "claude-sonnet-4-6",
+        max_tokens: 60,
+        messages: [{ role: "user", content:
+          `A property manager asked a resident this question about an open maintenance request:\n"${String(question).slice(0, 500)}"\n\n` +
+          `The resident replied:\n"${String(reply).slice(0, 1000)}"\n\n` +
+          `Reply with ONE word, no punctuation:\n` +
+          `answers_question — the reply answers the question asked\n` +
+          `separate_problem — the reply reports a DIFFERENT maintenance issue and does not answer\n` +
+          `both — it answers AND raises a separate issue\n` +
+          `unclear — you cannot tell` }],
+      });
+      const text = (r.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim().toLowerCase();
+      const hit = ANSWER_VERDICTS.find((v) => text.includes(v));
+      return hit || "unclear";
+    } catch (e) {
+      console.error("recognizeAnswer failed (preserving and flagging):", e.message);
+      return "unclear";
+    }
+  }
 
-    // ① SAVE FIRST. Whatever happens after this, the message exists.
-    //    (For SMS this also lands the sid — the webhook dedupe anchor.)
-    const inbound = (await pool.query(
-      `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, sms_sid)
-       values ($1,$2,$3,$4,$5,'inbound',$6,$7) returning id`,
-      [propertyId, personId, place ? place.unit_id : null, convo.id, channel, body, smsSid || null])).rows[0];
+  // Find the clarification question WE ASKED THIS PERSON, joined to the
+  // still-open confirm_urgency obligation for that exact work order (§7.1).
+  //
+  // NOT keyed on obligations.person_id — that column holds
+  // affected_person_id ?? reported_by_person_id, i.e. whose home it is, not
+  // who we texted. Those differ whenever a neighbour reports a problem, and
+  // keying on it would classify a reporter's own answer as a new problem.
+  //
+  // A question whose delivery DEFINITIVELY failed was never asked. NULL
+  // sms_status is not a failure — the browser door never sends an SMS at all,
+  // so its questions must stay eligible.
+  async function pendingClarifications(client, { propertyId, personId }) {
+    return (await client.query(
+      `select o.id as obligation_id, o.related_id as work_order_id,
+              ce.id as question_event_id, ce.body as question_body
+         from comm_events ce
+         join obligations o
+           on o.related_type = 'work_order'
+          and o.related_id   = ce.created_object_id
+          and o.property_id  = ce.property_id   -- scope is explicit, never implied by uuid uniqueness
+          and o.status       = 'open'
+          and o.type         = 'confirm_urgency'
+        where ce.property_id = $1
+          and ce.person_id   = $2
+          and ce.direction   = 'outbound'
+          and ce.created_object_type = 'work_order'
+          and coalesce(ce.sms_status,'') not in ('failed','refused','undelivered')
+        order by ce.occurred_at desc`,
+      [propertyId, personId])).rows;
+  }
 
-    // ② Classify (fail-soft to human queue).
-    const c = await classifyMessage(body);
+  // §7.6 — a zero result has two meanings. "We asked, and someone else has
+  // since resolved it" must not become a duplicate work order for an issue
+  // already in hand.
+  async function hasAnsweredQuestionAlreadyResolved(client, { propertyId, personId }) {
+    const r = (await client.query(
+      `select 1 from comm_events ce
+        where ce.property_id = $1 and ce.person_id = $2
+          and ce.direction = 'outbound' and ce.created_object_type = 'work_order'
+          and coalesce(ce.sms_status,'') not in ('failed','refused','undelivered')
+        limit 1`, [propertyId, personId])).rows[0];
+    return !!r;
+  }
 
-    // ③ Act — the matrix. AI may open work orders (needs_pm_review always
-    //    true) and answer balance from the live lease. Nothing else.
-    let createdType = null, createdId = null, reply;
+  // ── THE PROCESSING STEP (T2 body) ─────────────────────────────────
+  //  Runs entirely inside ONE transaction owned by the caller. Every write
+  //  that represents "we did something about this claim" lives here, so a
+  //  failure leaves the claim preserved and flagged and nothing half-done.
+  async function processInboundClaim(client, { personId, propertyId, body, place, smsSid }) {
     const unitLabel = place ? `Unit ${place.unit_number}` : "your unit";
+    const c = await classifyMessage(body);
+    let createdType = null, createdId = null, reply = null;
 
-    if (c.classification === "emergency") {
-      // NOTE (migration 098): operating_category and gl_category are gone — a
-      // work order does not author money meaning. The resident who texted is
-      // both the reporter and the affected resident. tenant_caused is left NULL
-      // because nobody has observed it; an unobserved fact stays unknown.
-      // FLAGGED: this is a RAW insert around workOrderService.createWorkOrder,
-      // so it produces no event and no routing obligation. Rerouting it through
-      // the canonical service is the correct fix and is resident-facing, so it
-      // needs a decision rather than a quiet change.
-      const wo = (await pool.query(
-        `insert into work_orders (property_id, unit_id, reported_by_person_id, affected_person_id,
-                                  title, description,
-                                  status, source, field_category, needs_pm_review)
-         values ($1,$2,$3,$3,$4,$5,'open','tenant',$6,true) returning id`,
-        [propertyId, place ? place.unit_id : null, personId,
-         "EMERGENCY: " + (c.suggested_title || c.field_category || "tenant report"),
-         body, c.field_category])).rows[0];
-      createdType = "work_order"; createdId = wo.id;
-      reply = "Emergency received — management has been notified in the system. If there is immediate danger to anyone, call 911 first.";
-    } else if (c.classification === "maintenance" && c.confidence >= 0.7 && !c.needs_human) {
-      // Same shape and same flag as the emergency branch above.
-      const wo = (await pool.query(
-        `insert into work_orders (property_id, unit_id, reported_by_person_id, affected_person_id,
-                                  title, description,
-                                  status, source, field_category, needs_pm_review)
-         values ($1,$2,$3,$3,$4,$5,'open','tenant',$6,true) returning id`,
-        [propertyId, place ? place.unit_id : null, personId,
-         c.suggested_title || `${c.field_category} request`,
-         body, c.field_category])).rows[0];
-      createdType = "work_order"; createdId = wo.id;
-      reply = `Got it — ${c.field_category.replace("_", "/")} request opened for ${unitLabel}. We'll keep you updated right here.`;
-    } else if (c.classification === "balance" && c.confidence >= 0.7 && !c.needs_human && place) {
+    // 1) Is this an answer to a question we asked? (§7.1)
+    const pending = await pendingClarifications(client, { propertyId, personId });
+
+    if (pending.length > 1) {
+      // §7.1.4 — never guess between them, never ask the resident to choose:
+      // no column can durably hold the offered options.
+      c.needs_human = true;
+      return { c, createdType: null, createdId: null, needsHuman: true,
+        reply: "Thanks — you have more than one open request with us, so I'm passing this to the team to make sure it lands on the right one." };
+    }
+
+    if (pending.length === 1) {
+      const p = pending[0];
+      const verdict = await recognizeAnswer({ question: p.question_body, reply: body });
+
+      if (verdict === "answers_question") {
+        const out = await workOrderService.appendClarification(client, {
+          work_order_id: p.work_order_id, person_id: personId, text: body, classifyUrgency,
+        });
+        createdType = "work_order"; createdId = p.work_order_id;
+        c.needs_human = out.outcome === "unresolved";
+        if (out.outcome === "escalated_emergency") {
+          reply = "Thank you — I've marked this as an emergency and management has been notified in the system. If there is immediate danger to anyone, call 911 first.";
+        } else if (out.outcome === "resolved_regular") {
+          reply = `Thanks — that helps. Your ${unitLabel} request is recorded as a routine repair and stays open with the team.`;
+        } else {
+          reply = "Thanks — I've added that to your request. Your manager will follow up here.";
+        }
+        return { c, createdType, createdId, reply, needsHuman: c.needs_human };
+      }
+
+      if (verdict === "both" || verdict === "unclear") {
+        // Preserve and flag. Touch NO work order — an uncertain reading must
+        // never enrich a record or open a second one.
+        c.needs_human = true;
+        return { c, createdType: null, createdId: null, needsHuman: true,
+          reply: "Got it — your manager will follow up with you right here." };
+      }
+      // verdict === 'separate_problem' → fall through to the normal path (§7.3)
+    } else if (await hasAnsweredQuestionAlreadyResolved(client, { propertyId, personId })) {
+      // §7.6 — we asked this person something, and the obligation is no longer
+      // open. Their reply is an answer to a question already resolved, not a
+      // new problem. Preserve and flag rather than duplicate the work.
+      c.needs_human = true;
+      return { c, createdType: null, createdId: null, needsHuman: true,
+        reply: "Thanks — your manager will follow up with you right here." };
+    }
+
+    // 2) Normal path. Work orders now go through THE canonical service, so
+    //    every one produces an event and a routing obligation. The two raw
+    //    inserts this replaces produced neither.
+    const isMaintenanceClaim = c.classification === "emergency"
+      || (c.classification === "maintenance" && c.confidence >= 0.7 && !c.needs_human);
+
+    if (isMaintenanceClaim) {
+      const u = classifyUrgency(body);
+      let urgency_status = u.urgency;
+      let emergency_type = u.emergency_type;
+      let clarifying_question = u.clarifying_question;
+
+      // §7.4 — the model called it an emergency but the narrow urgency
+      // classifier produced no valid type. NEVER invent one to satisfy the
+      // service: open at needs_confirmation and ask.
+      if (c.classification === "emergency" && !emergency_type && urgency_status !== "needs_confirmation") {
+        urgency_status = "needs_confirmation";
+        emergency_type = null;
+        clarifying_question = clarifying_question
+          || "Just to be sure — is this an emergency that needs someone right away, or can it wait for normal hours?";
+      }
+
+      const created = await workOrderService.createWorkOrder(client, {
+        property_id: propertyId, unit_id: place ? place.unit_id : null,
+        reported_by_person_id: personId, affected_person_id: personId,
+        title: urgency_status === "emergency"
+          ? "EMERGENCY: " + (c.suggested_title || c.field_category || "tenant report")
+          : (c.suggested_title || `${c.field_category} request`),
+        description: body,                 // stored VERBATIM by the service
+        field_category: c.field_category,
+        source: "tenant",
+        urgency_status, urgency_basis: u.basis,
+        urgency_decided_by: "system",
+        emergency_type,
+        // The provider's own message id makes a redelivery idempotent at the
+        // service layer too, not only at the boundary dedupe.
+        idempotency_key: smsSid || null,
+      });
+      createdType = "work_order"; createdId = created.workOrder.id;
+
+      // §7.5 — truthful acknowledgment only. No response time, no technician,
+      // no dispatch or assignment claim.
+      if (urgency_status === "emergency") {
+        reply = "Emergency received — management has been notified in the system. If there is immediate danger to anyone, call 911 first.";
+      } else if (urgency_status === "needs_confirmation") {
+        reply = `Got it — I've opened a request for ${unitLabel}. ${clarifying_question}`;
+      } else {
+        reply = `Got it — ${String(c.field_category || "maintenance").replace("_", "/")} request opened for ${unitLabel}. We'll keep you updated right here.`;
+      }
+      return { c, createdType, createdId, reply, needsHuman: c.needs_human };
+    }
+
+    if (c.classification === "balance" && c.confidence >= 0.7 && !c.needs_human && place) {
       createdType = "balance_inquiry";
       const bal = place.balance == null ? null : Number(place.balance);
       reply = bal == null
@@ -874,27 +1004,97 @@ Rules: classification "emergency" only for active danger or major damage in prog
         : bal <= 0
           ? `You're all paid up — current balance $${bal.toFixed(2)}.${place.rent ? ` Rent is $${Number(place.rent).toFixed(2)}/month.` : ""}`
           : `Your current balance is $${bal.toFixed(2)}.${place.rent ? ` Rent is $${Number(place.rent).toFixed(2)}/month.` : ""}`;
-    } else {
-      // document / lease_question / general / unknown / low confidence /
-      // sensitive — the honest human queue. No pretending.
-      c.needs_human = true;
-      reply = "Got it — your manager will follow up with you right here.";
+      return { c, createdType, createdId, reply, needsHuman: c.needs_human };
     }
 
-    // ④ Record what the system did ON the inbound message (the audit).
-    await pool.query(
-      `update comm_events set classification=$1, created_object_type=$2,
-              created_object_id=$3, needs_human=$4, ai_summary=$5 where id=$6`,
-      [c.classification, createdType, createdId, c.needs_human, c.summary, inbound.id]);
+    // document / lease_question / general / unknown / low confidence /
+    // sensitive — the honest human queue. No pretending.
+    c.needs_human = true;
+    return { c, createdType: null, createdId: null, needsHuman: true,
+      reply: "Got it — your manager will follow up with you right here." };
+  }
 
-    // ⑤ Reply on the same thread (same channel the message arrived on).
-    const out = (await pool.query(
-      `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification)
-       values ($1,$2,$3,$4,$5,'outbound',$6,'auto_reply') returning id, occurred_at`,
-      [propertyId, personId, place ? place.unit_id : null, convo.id, channel, reply])).rows[0];
-    await pool.query(`update conversations set last_message_at = now() where id = $1`, [convo.id]);
+  async function runInbound({ personId, propertyId, body, channel, smsSid }) {
+    const place = await placeOf(personId, propertyId);
 
-    return { inbound, out, reply, c, createdType, createdId, convo, place };
+    // ══ T1 ══ The claim is durable AND VISIBLE before any processing.
+    //  needs_human starts TRUE deliberately. The column defaults to false, so
+    //  the previous save-first left a resident's message committed and
+    //  INVISIBLE to the exception queue whenever anything downstream threw.
+    //  Starting true and clearing on success inverts that: the only way a
+    //  message becomes unflagged is that its processing actually committed.
+    const t1 = await pool.connect();
+    let convo, inbound;
+    try {
+      await t1.query("begin");
+      convo = (await t1.query(
+        `insert into conversations (property_id, person_id, unit_id, lease_id)
+         values ($1,$2,$3,$4)
+         on conflict (property_id, person_id) do update set last_message_at = now()
+         returning id`,
+        [propertyId, personId, place ? place.unit_id : null, place ? place.lease_id : null])).rows[0];
+      inbound = (await t1.query(
+        `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, sms_sid, needs_human)
+         values ($1,$2,$3,$4,$5,'inbound',$6,$7,true) returning id`,
+        [propertyId, personId, place ? place.unit_id : null, convo.id, channel, body, smsSid || null])).rows[0];
+      await t1.query("commit");
+    } catch (e) {
+      await t1.query("rollback").catch(() => {});
+      throw e;
+    } finally { t1.release(); }
+
+    // ══ T2 ══ Everything that represents acting on the claim, atomically.
+    //  On failure: the claim stands, stays flagged, no reply is sent, and no
+    //  work order is represented as created. No replay-resume in this slice.
+    const t2 = await pool.connect();
+    let result, out;
+    try {
+      await t2.query("begin");
+      result = await processInboundClaim(t2, { personId, propertyId, body, place, smsSid });
+
+      await t2.query(
+        `update comm_events set classification=$1, created_object_type=$2,
+                created_object_id=$3, needs_human=$4, ai_summary=$5 where id=$6`,
+        [result.c.classification, result.createdType, result.createdId,
+         !!result.needsHuman, result.c.summary, inbound.id]);
+
+      // The outbound reply INTENT. created_object_* is what makes a future
+      // reply recognisable as an answer to THIS question about THIS work
+      // order — the linkage the whole gate depends on.
+      out = (await t2.query(
+        `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification, created_object_type, created_object_id)
+         values ($1,$2,$3,$4,$5,'outbound',$6,'auto_reply',$7,$8) returning id, occurred_at`,
+        [propertyId, personId, place ? place.unit_id : null, convo.id, channel,
+         result.reply, result.createdType, result.createdId])).rows[0];
+      await t2.query(`update conversations set last_message_at = now() where id = $1`, [convo.id]);
+      await t2.query("commit");
+    } catch (e) {
+      await t2.query("rollback").catch(() => {});
+      console.error("runInbound T2 failed — claim preserved and flagged, no reply sent:", e.message);
+      throw e;
+    } finally { t2.release(); }
+
+    return { inbound, out, reply: result.reply, c: result.c,
+             createdType: result.createdType, createdId: result.createdId, convo, place };
+  }
+
+  // §15.2 — a committed claim whose acknowledgment never reached the resident
+  //  must not read as handled. The outbound row carries the delivery failure
+  //  (sendPropertySms stamps it), but BOTH exception-queue readers filter
+  //  direction='inbound' (surfaces/desks.js, surfaces/board.js) — so flagging
+  //  the outbound row would surface to nobody. Re-flag the INBOUND row: the
+  //  resident sent something and, from their side, got nothing back.
+  //  Deliberately separate from T2 and never able to roll it back: a failed
+  //  re-flag must not un-create a valid work order.
+  async function flagUndeliveredReply({ inboundEventId, reason }) {
+    if (!inboundEventId) return;
+    try {
+      await pool.query(
+        `update comm_events set needs_human = true where id = $1`, [inboundEventId]);
+      console.error(`resident reply undelivered (${reason}) — inbound ${inboundEventId} re-flagged for a human.`);
+    } catch (e) {
+      console.error("flagUndeliveredReply FAILED — delivery failure may be invisible:", e.message);
+    }
   }
 
   // ── Browser door: thin wrapper over the shared core. Same response
@@ -1033,10 +1233,27 @@ Rules: classification "emergency" only for active danger or major damage in prog
         // Ack Twilio (empty TwiML — the reply travels by REST, not TwiML,
         // so it carries a sid + status receipt like every other text).
         emptyTwiml(res);
-        await commBoundary.sendPropertySms({
-          property_id: prop.id, recipient: person.phone, body: r.reply,
-          purpose: "ai_reply", person_id: person.id, eventId: r.out.id,
-        });
+        // §15.2 — the work order is valid, but if the resident was never told,
+        // that must be ACTIONABLE, not silent.
+        //
+        // SELF-REVIEW FIX: the first cut only handled `sent:false`. But
+        // sendPropertySms awaits sms.sendSms, which can THROW rather than
+        // return — and the outer catch below merely logs. T2 has already
+        // cleared needs_human by then, so a throwing transport produced
+        // exactly the invisible "captured, never acknowledged" state this
+        // ruling forbids. A throw is a failed delivery like any other.
+        let wire;
+        try {
+          wire = await commBoundary.sendPropertySms({
+            property_id: prop.id, recipient: person.phone, body: r.reply,
+            purpose: "ai_reply", person_id: person.id, eventId: r.out.id,
+          });
+        } catch (sendErr) {
+          wire = { sent: false, reason: `transport_threw: ${sendErr.message}` };
+        }
+        if (!wire.sent) {
+          await flagUndeliveredReply({ inboundEventId: r.inbound.id, reason: wire.reason || "unknown" });
+        }
       } catch (e) {
         console.error("inbound-sms:", e);
         // Ack anyway if we still can — a 500 makes Twilio retry, and if the
