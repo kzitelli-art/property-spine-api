@@ -513,35 +513,17 @@ async function markTenantSigned(client, { applicationId, applicantSignedAt = nul
   const g = await gate(client, applicationId, STATUS.TENANT_SIGNED);
   if (g.done) return g.done;
 
+  // The placeholder sits INSIDE the coalesce, so each fragment carries its
+  // own closing paren as `tail`.
   const extraSets = [];
-  if (applicantSignedAt) extraSets.push({ sql: "applicant_signed_at=coalesce(applicant_signed_at, ", value: applicantSignedAt, close: true });
-  if (guarantorSignedAt) extraSets.push({ sql: "guarantor_signed_at=coalesce(guarantor_signed_at, ", value: guarantorSignedAt, close: true });
-
-  // coalesce needs its closing paren after the placeholder; advance() appends
-  // the placeholder to `sql`, so the fragment carries the tail itself.
-  const built = extraSets.map((s) => ({ sql: s.sql, value: s.value, tail: ")" }));
-  return advanceWithTails(client, { app: g.app, target: STATUS.TENANT_SIGNED, extraSets: built, milestones: [] });
-}
-
-// advance() variant for fragments whose parameter sits INSIDE a coalesce.
-// Same single statement, same rules — only the placeholder position differs.
-async function advanceWithTails(client, { app, target, extraSets = [], milestones = [] }) {
-  const sets = ["status=$1"];
-  const values = [target];
-  for (const s of extraSets) {
-    if (s.value === undefined) { sets.push(s.sql); continue; }
-    values.push(s.value);
-    sets.push(`${s.sql}$${values.length}${s.tail || ""}`);
+  if (applicantSignedAt) {
+    extraSets.push({ sql: "applicant_signed_at=coalesce(applicant_signed_at, ", value: applicantSignedAt, tail: ")" });
   }
-  sets.push("updated_at=now()");
-  values.push(app.id);
-  const upd = await client.query(
-    `update lease_applications set ${sets.join(", ")} where id=$${values.length} returning *`,
-    values
-  );
-  return receipt(upd.rows[0], {
-    from_status: app.status, to_status: target, milestones_authored: milestones,
-  });
+  if (guarantorSignedAt) {
+    extraSets.push({ sql: "guarantor_signed_at=coalesce(guarantor_signed_at, ", value: guarantorSignedAt, tail: ")" });
+  }
+
+  return advance(client, { app: g.app, target: STATUS.TENANT_SIGNED, extraSets, milestones: [] });
 }
 
 // ════════════════════════════════════════════════════════════════════
