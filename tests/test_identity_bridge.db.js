@@ -64,6 +64,13 @@ const S = {};
 const RUN = Date.now();
 const em = (local) => `${local}${RUN}@proof.internal`;
 const tok = (name) => `proof-${name}-token-${RUN}`;
+// request_id is an IDEMPOTENCY key that outlives the run in
+// user_person_bridge_audit. A fixed one makes linkBridge take its replay
+// branch on the second run — and that branch returns { replayed, audit }
+// with NO person_id, so out.person_id was undefined and every downstream
+// use of the resulting person inserted a null. B3, B5 and the suite crash
+// were all this one cause.
+const req = (name) => `req-${name}-${RUN}`;
 
 async function seed() {
   await tx(async (c) => {
@@ -183,7 +190,7 @@ async function call(port, method, urlPath, { token, body } = {}) {
     const out = await tx((c) => bridgeSvc.linkBridge(c, {
       user_id: S.kandice, create_staff_person: { name: "Kandice", property_id: S.prop },
       reason_code: "proof_seed", evidence_type: "operator_attestation",
-      performed_by_user_id: S.admin, request_id: "req-kandice-1" }));
+      performed_by_user_id: S.admin, request_id: req("kandice-1") }));
     S.kandicePerson = out.person_id;
     const chk = await read((c) => c.query(`
       select u.person_id,
@@ -199,7 +206,7 @@ async function call(port, method, urlPath, { token, body } = {}) {
     const before = await read((c) => c.query(`select count(*)::int n from user_person_bridge_audit`));
     const out = await tx((c) => bridgeSvc.linkBridge(c, {
       user_id: S.kandice, create_staff_person: { name: "Kandice" },
-      reason_code: "proof_seed", performed_by_user_id: S.admin, request_id: "req-kandice-1" }));
+      reason_code: "proof_seed", performed_by_user_id: S.admin, request_id: req("kandice-1") }));
     const after = await read((c) => c.query(`select count(*)::int n from user_person_bridge_audit`));
     assert(out.replayed === true && after.rows[0].n === before.rows[0].n);
   });
@@ -398,7 +405,7 @@ async function call(port, method, urlPath, { token, body } = {}) {
       body: { user_id: S.john, create_staff_person: { name: "John Banks" },
               reason_code: "http_proof",
               performed_by_user_id: S.nonadmin,        // an attacker's claim — must be ignored
-              request_id: "req-john-http-1" } });
+              request_id: req("john-http-1") } });
     assert(r.status === 200, JSON.stringify(r.json));
     const a = (await read((c) => c.query(
       `select performed_by_user_id from user_person_bridge_audit
