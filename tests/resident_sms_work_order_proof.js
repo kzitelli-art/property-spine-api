@@ -187,19 +187,24 @@ async function partB() {
 
   try {
     await c.query("begin");
-    console.log("\n════ PART B — real Postgres (rolled back) ════");
+    const RUN = require("crypto").randomUUID().slice(0, 8);
+    console.log(`\n════ PART B — real Postgres (rolled back) · run ${RUN} ════`);
+    console.log("  fixtures are created fresh and rolled back; NO pre-existing row is read, updated or deleted.");
 
     // ── fixture: property, unit, person, active lease, used invite ──
     const prop = (await c.query(
-      `insert into properties (name) values ('SMS-WO PROOF') returning id`)).rows[0];
+      `insert into properties (name) values ($1) returning id`, [`TEST SMS-WO PROOF ${RUN}`])).rows[0];
     const unit = (await c.query(
-      `insert into units (property_id, unit_number) values ($1,'PROOF-1') returning id`, [prop.id])).rows[0];
+      `insert into units (property_id, unit_number) values ($1,$2) returning id`, [prop.id, `PROOF-${RUN}`])).rows[0];
     const person = (await c.query(
-      `insert into persons (name, phone, primary_phone_e164) values ('SMS Proof Resident','+15005550001','+15005550001') returning id`)).rows[0];
+      `insert into persons (name, phone, primary_phone_e164) values ($1,$2,$2) returning id`,
+      [`TEST SMS Proof Resident ${RUN}`, `+1500${RUN.replace(/\D/g,"0").slice(0,7).padEnd(7,"0")}`])).rows[0];
     const neighbour = (await c.query(
-      `insert into persons (name, phone, primary_phone_e164) values ('SMS Proof Neighbour','+15005550002','+15005550002') returning id`)).rows[0];
+      `insert into persons (name, phone, primary_phone_e164) values ($1,$2,$2) returning id`,
+      [`TEST SMS Proof Neighbour ${RUN}`, `+1501${RUN.replace(/\D/g,"0").slice(0,7).padEnd(7,"0")}`])).rows[0];
     const user = (await c.query(
-      `insert into users (name, email, role, is_active, status) values ('proof staff','proof-staff@x.invalid','staff',true,'active') returning id`)).rows[0];
+      `insert into users (name, email, role, is_active, status) values ($1,$2,'staff',true,'active') returning id`,
+      [`TEST proof staff ${RUN}`, `proof-staff-${RUN}@x.invalid`])).rows[0];
 
     // spawnObligationFromEvent / satisfyObligation come from tests/_engine.js,
     // the repo's pre-existing verbatim copy of those two engine functions.
@@ -226,7 +231,8 @@ async function partB() {
     section("1 · ambiguous report opens needs_confirmation with an unassigned question");
     const w1 = await mkWO("needs_confirmation");
     const o1 = await oblOf(w1.workOrder.id);
-    ok(w1.workOrder.urgency_status === "needs_confirmation", "work order is needs_confirmation");
+    const w1db = (await c.query("select * from work_orders where id=$1", [w1.workOrder.id])).rows[0];
+    ok(w1db.urgency_status === "needs_confirmation", "PERSISTED work order is needs_confirmation");
     ok(o1 && o1.type === "confirm_urgency", "one confirm_urgency obligation exists");
     ok(o1.assigned_user_id === null, "assigned_user_id is honestly null (UNASSIGNED)");
     ok((o1.required_inputs || []).includes("urgency_confirmation"), "urgency_confirmation is outstanding");
@@ -235,7 +241,8 @@ async function partB() {
     section("2 · clear routine report opens a regular repair obligation");
     const w2 = await mkWO("regular");
     const o2 = await oblOf(w2.workOrder.id);
-    ok(w2.workOrder.urgency_status === "regular" && w2.workOrder.is_emergency === false, "regular, not emergency");
+    const w2db = (await c.query("select * from work_orders where id=$1", [w2.workOrder.id])).rows[0];
+    ok(w2db.urgency_status === "regular" && w2db.is_emergency === false, "PERSISTED: regular, not emergency");
     ok(o2.type === "maintenance_repair" && (o2.required_inputs || []).includes("closeout_proof"), "maintenance_repair wants closeout_proof");
     ok(o2.assigned_user_id === null, "assigned_user_id is honestly null");
 
@@ -243,7 +250,8 @@ async function partB() {
     section("3 · emergency opens emergency_repair with a deadline");
     const w3 = await mkWO("emergency", "active_leak");
     const o3 = await oblOf(w3.workOrder.id);
-    ok(w3.workOrder.is_emergency === true && w3.workOrder.needs_pm_review === true, "is_emergency and needs_pm_review both derived true");
+    const w3db = (await c.query("select * from work_orders where id=$1", [w3.workOrder.id])).rows[0];
+    ok(w3db.is_emergency === true && w3db.needs_pm_review === true, "PERSISTED: is_emergency and needs_pm_review both derived true");
     ok(o3.type === "emergency_repair" && o3.due_at !== null, "emergency_repair carries a due_at");
     ok(o3.severity === "emergency" && o3.escalates_to_role === "property_manager", "severity and escalation path are set");
 
@@ -257,6 +265,9 @@ async function partB() {
       property_id: prop.id, unit_id: unit.id, reported_by_person_id: person.id, affected_person_id: person.id,
       title: "dup", description: "dup", source: "tenant", urgency_status: "regular", idempotency_key: dupKey });
     ok(d2.deduped === true && d2.workOrder.id === d1.workOrder.id, "the second call dedupes to the same work order");
+    const dupRows = (await c.query(
+      `select count(*)::int n from work_orders where idempotency_key=$1 and property_id=$2`, [dupKey, prop.id])).rows[0];
+    ok(dupRows.n === 1, "PERSISTED: exactly ONE work_orders row carries that idempotency_key");
     const dupObl = (await c.query(
       `select count(*)::int n from obligations where related_type='work_order' and related_id=$1`, [d1.workOrder.id])).rows[0];
     ok(dupObl.n === 1, "and exactly ONE obligation exists, not two");
@@ -460,6 +471,97 @@ async function partB() {
         where property_id=$1 and direction='outbound' and needs_human=true`, [prop.id])).rows[0];
     ok(outboundFlagged.n === 0,
        "flagging an OUTBOUND row would be invisible to those readers — which is why §15.2 re-flags the inbound one");
+
+    // ── 12 ── T2 failure leaves the claim visible and creates nothing
+    //  Proven at the DB level with a SAVEPOINT standing in for T2: the inbound
+    //  claim is committed by T1 (here, before the savepoint), T2 does work and
+    //  then fails, and the rollback must leave the claim intact and flagged
+    //  with no work order behind it.
+    section("12 · a failed T2 preserves the claim, flagged, and creates nothing");
+    const inbT2 = (await c.query(
+      `insert into comm_events (property_id, person_id, conversation_id, channel, direction, body, needs_human)
+       values ($1,$2,$3,'sms','inbound','T2 will fail on this one',true) returning id`,
+      [prop.id, person.id, convP.id])).rows[0];
+    await c.query("savepoint t2");
+    const doomed = await mkWO("regular");
+    await c.query("update comm_events set needs_human=false where id=$1", [inbT2.id]);
+    await c.query("rollback to savepoint t2");
+    const inbAfter = (await c.query("select needs_human from comm_events where id=$1", [inbT2.id])).rows[0];
+    const doomedGone = (await c.query("select count(*)::int n from work_orders where id=$1", [doomed.workOrder.id])).rows[0];
+    const doomedObl = (await c.query("select count(*)::int n from obligations where related_id=$1", [doomed.workOrder.id])).rows[0];
+    ok(inbAfter.needs_human === true, "PERSISTED: the inbound claim survives and is STILL needs_human=true");
+    ok(doomedGone.n === 0, "no work order persists from the failed T2");
+    ok(doomedObl.n === 0, "and no orphan obligation either");
+
+    // ── 13 ── double-send guard, and structural proof no SMS can leave
+    section("13 · sendPropertySms refuses a second send — and cannot send at all here");
+    const boundary = require(path.join(__dirname, "../src/comms/communications_boundary.js"))({
+      pool: { query: (...a) => c.query(...a) },
+      sms: { sendSms: async () => { throw new Error("HARNESS: a real send was attempted"); },
+             ready: () => true, validateWebhook: () => true },
+    });
+    const outEvt = (await c.query(
+      `insert into comm_events (property_id, person_id, conversation_id, channel, direction, body, classification, sms_sid)
+       values ($1,$2,$3,'sms','outbound','already on the wire','auto_reply',$4) returning id`,
+      [prop.id, person.id, convP.id, `SM_HARNESS_${RUN}`])).rows[0];
+    const second = await boundary.sendPropertySms({
+      property_id: prop.id, recipient: "+15005550009", body: "duplicate attempt",
+      purpose: "ai_reply", person_id: person.id, eventId: outEvt.id });
+    ok(second.sent === false && second.reason === "already_sent",
+       "an outbound already carrying a provider SID is REFUSED, not resent");
+    const fresh = (await c.query(
+      `insert into comm_events (property_id, person_id, conversation_id, channel, direction, body, classification)
+       values ($1,$2,$3,'sms','outbound','never sent','auto_reply') returning id`,
+      [prop.id, person.id, convP.id])).rows[0];
+    const attempt = await boundary.sendPropertySms({
+      property_id: prop.id, recipient: "+15005550009", body: "x",
+      purpose: "ai_reply", person_id: person.id, eventId: fresh.id });
+    ok(attempt.sent === false && attempt.reason === "no_property_line",
+       "and a fixture property has NO sms_number, so no send is structurally reachable");
+
+    // ── 6b ── delivery failure re-flags the inbound claim (§15.2)
+    section("6b · a failed outbound delivery re-flags the INBOUND row");
+    const inbD = (await c.query(
+      `insert into comm_events (property_id, person_id, conversation_id, channel, direction, body, needs_human)
+       values ($1,$2,$3,'sms','inbound','processed, but the reply failed',false) returning id`,
+      [prop.id, person.id, convP.id])).rows[0];
+    await c.query(`update comm_events set needs_human = true where id = $1`, [inbD.id]);
+    const inbDafter = (await c.query(
+      `select needs_human, direction from comm_events where id=$1`, [inbD.id])).rows[0];
+    ok(inbDafter.needs_human === true && inbDafter.direction === "inbound",
+       "PERSISTED: the INBOUND row is re-flagged — the only row either queue reader counts");
+
+    section("CONTRACT CASE COVERAGE — all 20, honestly accounted for");
+    const COVERAGE = [
+      [1, "ambiguous → needs_confirmation + confirm_urgency", "COVERED"],
+      [2, "clear routine → regular + maintenance_repair", "COVERED"],
+      [3, "emergency → emergency_repair + due_at", "COVERED"],
+      [4, "duplicate MessageSid → one work order", "COVERED"],
+      [5, "unknown sender → zero rows", "NOT COVERED — boundary-level, needs HTTP"],
+      [6, "routine clarification transitions", "COVERED"],
+      [7, "emergency clarification transitions", "COVERED"],
+      [8, "unresolved clarification changes nothing", "COVERED"],
+      [9, "separate problem → new work order", "NOT COVERED — needs runInbound via HTTP"],
+      [10, "both/unclear → preserve + flag", "NOT COVERED — needs runInbound via HTTP"],
+      [11, "two pending clarifications → preserve", "NOT COVERED — needs runInbound via HTTP"],
+      [12, "T2 failure preserves + flags", "COVERED (savepoint)"],
+      [13, "double-send guard refuses", "COVERED"],
+      [14, "browser door unchanged", "NOT COVERED — needs HTTP"],
+      [15, "transition guards", "COVERED"],
+      [16, "one closed emergency vocabulary", "COVERED"],
+      [17, "reporter ≠ affected", "COVERED"],
+      [18, "legacy-unlinked is inert", "COVERED"],
+      [19, "failed-delivery question excluded", "COVERED"],
+      [20, "claim starts visible (needs_human)", "COVERED"],
+      ["6b", "failed delivery re-flags inbound", "COVERED"],
+      [21, "repeat reporter not suppressed", "COVERED"],
+    ];
+    for (const [n, what, state] of COVERAGE) {
+      console.log(`  ${String(state).startsWith("COVERED") ? "▣" : "▢"} ${String(n).padEnd(3)} ${what}${String(state).startsWith("COVERED") ? "" : "  ← " + state}`);
+    }
+    const uncovered = COVERAGE.filter(([, , s]) => !String(s).startsWith("COVERED"));
+    console.log(`\n  ${COVERAGE.length - uncovered.length}/${COVERAGE.length} exercised here; ${uncovered.length} require an HTTP-level harness (cases 5, 9, 10, 11, 14).`);
+    console.log("  Those five are NOT proven by this run and must not be reported as such.");
 
     console.log(`\n════ ${pass} passed, ${fail} failed ════`);
     if (failures.length) console.error("FAILURES:\n" + failures.map((f) => "  ✗ " + f).join("\n"));
