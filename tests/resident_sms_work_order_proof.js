@@ -197,33 +197,11 @@ async function partB() {
     const unit = (await c.query(
       `insert into units (property_id, unit_number) values ($1,$2) returning id`, [prop.id, `PROOF-${RUN}`])).rows[0];
     const person = (await c.query(
-      `insert into persons (name, phone, primary_phone_e164) values ($1,$2,$2) returning id`,
+      `insert into persons (name, phone, primary_phone_e164, lifecycle_status) values ($1,$2,$2,'tenant') returning id`,
       [`TEST SMS Proof Resident ${RUN}`, `+1500${RUN.replace(/\D/g,"0").slice(0,7).padEnd(7,"0")}`])).rows[0];
     const neighbour = (await c.query(
-      `insert into persons (name, phone, primary_phone_e164) values ($1,$2,$2) returning id`,
+      `insert into persons (name, phone, primary_phone_e164, lifecycle_status) values ($1,$2,$2,'tenant') returning id`,
       [`TEST SMS Proof Neighbour ${RUN}`, `+1501${RUN.replace(/\D/g,"0").slice(0,7).padEnd(7,"0")}`])).rows[0];
-    const user = (await c.query(
-      `insert into users (name, email, role, is_active, status) values ($1,$2,'staff',true,'active') returning id`,
-      [`TEST proof staff ${RUN}`, `proof-staff-${RUN}@x.invalid`])).rows[0];
-
-    // spawnObligationFromEvent / satisfyObligation come from tests/_engine.js,
-    // the repo's pre-existing verbatim copy of those two engine functions.
-    // transitionObligation comes from the REAL shared module — deliberately
-    // not added to the copy. See the self-review note in the PR.
-    const { spawnObligationFromEvent, satisfyObligation } = require(path.join(__dirname, "./_engine.js"));
-    const { transitionObligation } = require(path.join(__dirname, "../src/shared/obligation_transitions.js"));
-    const { makeWorkOrderService } = require(path.join(__dirname, "../src/maintenance/work_order_service.js"));
-    const { classifyUrgency } = require(path.join(__dirname, "../src/maintenance/maintenance_urgency.js"));
-    const svc = makeWorkOrderService({ spawnObligationFromEvent, satisfyObligation, transitionObligation });
-
-    const mkWO = async (urgency_status, emergency_type = null) => svc.createWorkOrder(c, {
-      property_id: prop.id, unit_id: unit.id,
-      reported_by_person_id: person.id, affected_person_id: person.id,
-      title: "proof", description: "proof body", field_category: "plumbing",
-      source: "tenant", urgency_status, emergency_type, urgency_basis: "proof",
-    });
-    const oblOf = async (woId) => (await c.query(
-      `select * from obligations where related_type='work_order' and related_id=$1 order by created_at asc limit 1`, [woId])).rows[0];
     const evTypes = async (woId) => (await c.query(
       `select type from events where note like '%'||$1||'%' order by occurred_at asc`, [woId])).rows.map((r) => r.type);
 
