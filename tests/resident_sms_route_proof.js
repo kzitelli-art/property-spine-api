@@ -45,8 +45,11 @@
 //   · No pre-existing row is read, updated or deleted. Fixtures are created
 //     fresh, uniquely named per run, and rolled back.
 //   · Demo Building and every real property are untouched.
-//   · The SMS transport double THROWS if anything tries to actually send.
-//     It also records attempts, so "sent nothing" is asserted, not assumed.
+//   · The SMS transport double RECORDS every attempted send and always
+//     returns sent:false. It cannot reach Twilio because it never imports the
+//     transport at all. "Sent nothing" is then ASSERTED against that record,
+//     not assumed — plus a second assertion that no outbound row ever acquired
+//     a provider SID.
 //   · Zero DELETE / DROP / TRUNCATE statements.
 // ════════════════════════════════════════════════════════════════════
 "use strict";
@@ -157,6 +160,15 @@ if (!process.env.DATABASE_URL) {
       `insert into tenant_invites (person_id, property_id, token, status, expires_at)
        values ($1,$2,$3,'used', now() + interval '30 days')`,
       [person.id, prop.id, `tok-invite-${RUN}`]);
+
+    // The receiving line must resolve to OUR fixture property and nothing
+    // else. resolveInboundSmsContext does `where sms_number=$1 limit 1`, so a
+    // collision with a real property's number would silently route this
+    // harness's traffic at a real building. Proven, not assumed.
+    const lineOwners = (await c.query(
+      `select id from properties where sms_number = $1`, [LINE])).rows;
+    ok(lineOwners.length === 1 && lineOwners[0].id === prop.id,
+       "the fixture receiving line resolves to exactly ONE property — this run's own");
 
     // ── mount the REAL router, exactly as server.js does ────────────
     const express = require("express");
