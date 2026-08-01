@@ -206,7 +206,8 @@ in-transaction state, not the committed outcome. It is still worth confirming.
 ### 5.1 Transaction boundary
 
 ```
-T1  insert inbound comm_event, needs_human = TRUE   → COMMIT
+T1  upsert conversations (the comm_event FK requires it)
+    insert inbound comm_event, needs_human = TRUE   → COMMIT
 T2  BEGIN
       canonical work-order create  OR  clarification resolution
       → events and obligation create/transition
@@ -405,14 +406,56 @@ a second caller makes it reachable, not fixing a live defect.
 
 ### 7.1 Decision order inside T2
 
-1. Query pending clarifications:
-   `select … from obligations where property_id=$1 and person_id=$2 and type='confirm_urgency' and status='open' and related_type='work_order'`
+**Corrected 2026-08-01 — see §14.1. The obvious lookup is wrong.**
+
+Find the questions **we asked this person**, not the obligations that happen to
+name them:
+
+```sql
+select o.id, o.related_id as work_order_id, ce.id as question_event_id
+  from comm_events ce
+  join obligations o
+    on o.related_type = 'work_order'
+   and o.related_id   = ce.created_object_id
+   and o.status       = 'open'
+   and o.type         = 'confirm_urgency'
+ where ce.property_id = $1
+   and ce.person_id   = $2
+   and ce.direction   = 'outbound'
+   and ce.created_object_type = 'work_order'
+```
+
+1. Run the query above.
 2. **Zero** → normal path: `classifyMessage` + `classifyUrgency` → `createWorkOrder`.
-3. **Exactly one** → run the answer-recognition gate (§7.2).
+   But first apply §7.6 — a zero result has two different meanings.
+3. **Exactly one** → run the answer-recognition gate (§7.2), passing
+   `question_event_id`'s body as the question context.
 4. **More than one** → preserve, `needs_human=true`, make no work-order change,
    make no automated association, reply truthfully that more than one request is
    open and the team will review. **Do not ask the resident to choose** — the
    system cannot durably preserve a set of offered choices (§3.14).
+
+**Do NOT key this lookup on `obligations.person_id`.** That column holds
+`affected_person_id ?? reported_by_person_id` (`work_order_service.js:330`) — the
+person whose home it is, not the person we texted. §14.1 explains why that
+distinction silently misroutes.
+
+### 7.6 A zero result has two meanings — distinguish them
+
+Zero pending clarifications does not by itself mean "new problem." Re-run the
+query without the `o.status='open' and o.type='confirm_urgency'` join
+conditions. If an outbound question to this person exists but its work order no
+longer carries an open `confirm_urgency` obligation, the resident is answering a
+question **that has already been resolved by someone else** — most likely an
+operator, while the reply was in flight.
+
+- Question exists, obligation already resolved → **preserve, `needs_human=true`,
+  no work-order change.** Do not create a second work order for an issue that is
+  already being handled.
+- No outbound question to this person at all → genuine new-request path.
+
+Without this split, the in-flight race produces a duplicate work order for an
+issue already in progress, and nothing in the system would ever notice.
 
 ### 7.2 Answer-recognition gate
 
@@ -544,6 +587,20 @@ Required cases:
     that omits `label` or `required_inputs`.
 16. **An unknown `emergency_type` throws identically** from `appendClarification`
     and `createWorkOrder` (§6.6).
+17. **Reporter ≠ affected (§14.1).** A work order created with a *different*
+    `reported_by_person_id` and `affected_person_id`, at `needs_confirmation`.
+    The reporter answers. The gate must find the question and enrich that work
+    order — not create a second one. This case fails against any implementation
+    that keys the lookup on `obligations.person_id`.
+18. **Question predating the slice (§14.2).** An open `confirm_urgency`
+    obligation whose outbound question carries no `created_object_id`. The
+    resident's answer is preserved and flagged, and no work order changes.
+19. **Answer to an already-resolved question (§7.6).** The question exists, but
+    an operator resolved the obligation first. Preserved and flagged; **exactly
+    one** work order exists afterwards, not two.
+20. **Mid-failure visibility (§14.3).** Force a failure between the inbound
+    insert and the branch; assert the committed row has `needs_human = true`.
+    This must fail against pre-change `main`, where it commits `false`.
 
 ---
 
@@ -573,3 +630,109 @@ Stop and report rather than proceeding if any of these occur:
 - The `pg_trigger` check in §4.1 returns any row.
 - Fixing `appendClarification` would change behavior for a caller outside the
   tenant maintenance path in a way not specified here.
+- The pre-existing-obligation population in §14.2 turns out to be non-empty in a
+  way that makes the fallback behavior unacceptable.
+
+---
+
+## 14. SELF-REVIEW — DEFECTS FOUND IN THIS CONTRACT
+
+Written 2026-08-01, after the rulings, by re-reading the contract against live
+source rather than trusting it. Four defects, all confirmed. §7.1 and §5.1 above
+are already corrected; the reasoning is recorded here so a later edit does not
+undo it without knowing what it cost.
+
+### 14.1 The pending-clarification lookup was keyed on the wrong person
+
+The original §7.1 queried `obligations` by `person_id`. That column is set to
+`affected_person_id ?? reported_by_person_id` (`work_order_service.js:330`), and
+`obligationSpecFor` inherits it — deliberately, because as the service's own
+comment says, "the obligation hangs off the affected relationship."
+
+But **the clarifying question is sent to the reporter**, not the affected
+resident. `work_order_service.js:213` is explicit that these are two people and
+frequently not the same one: *"a neighbour reports a leak coming through a shared
+wall."*
+
+So for any work order where reporter ≠ affected, the gate would query for the
+texting neighbour, match nothing, and classify their answer to our own question
+as a brand-new maintenance problem — creating a second work order and leaving the
+original question unanswered forever.
+
+This is **latent, not live**, in slice one: `runInbound`'s existing raw inserts
+pass the texter as *both* `reported_by_person_id` and `affected_person_id`
+(`tenantlink.js:851`, `values ($1,$2,$3,$3,…)`), so the two ids coincide today.
+It becomes live the moment any surface creates a work order with a distinct
+reporter — which the canonical service explicitly supports and which routing this
+slice through `createWorkOrder` makes more likely, not less.
+
+Corrected by keying on the **outbound question** instead: the comm_event we sent
+carries `person_id` = the person we asked. "Did we ask *you* this?" is the
+question the gate is actually trying to answer, and it is the only lookup that
+stays correct when reporter and affected diverge.
+
+### 14.2 The linkage the corrected lookup depends on does not exist yet
+
+§7.5 requires setting `created_object_type`/`created_object_id` on the outbound
+reply. Confirmed absent today — `runInbound`'s outbound insert
+(`tenantlink.js:891`) writes `classification='auto_reply'` and nothing else; the
+`created_object_*` columns are set only on the **inbound** row (line 885).
+
+Consequence: **every `confirm_urgency` obligation that exists at deploy time has
+no linked question.** The corrected §7.1 lookup will return zero for all of them,
+and §7.6 will route their answers to preserve-and-flag rather than into
+`appendClarification`.
+
+That is the correct fail-safe direction — a human sees it, nothing is corrupted —
+but it must be a stated behavior rather than an accident:
+
+> **Ruling required.** For any work order whose clarifying question predates this
+> slice, a resident's answer is preserved and flagged, never auto-applied. These
+> obligations drain naturally as operators resolve them; no backfill is
+> specified, and none should be invented from message bodies.
+
+Note the population is probably small: `runInbound` today never calls
+`createWorkOrder`, so it has never produced a `confirm_urgency` obligation at
+all. Any that exist came from the operator path. **Owner should confirm the count
+before accepting the fail-safe** — the check is one query, and if it is large the
+fallback deserves a better answer than "a human handles each one."
+
+### 14.3 `needs_human` defaults to FALSE, so today's save-first is already leaky
+
+`migrations/028_tenant_messages.sql:33` —
+`needs_human boolean not null default false`.
+
+`runInbound` inserts the inbound row at step ① and only sets `needs_human` at
+step ④, after classification and the work-order branch. There is no transaction.
+So **today**, any failure between those two steps commits a resident's message
+with `needs_human = false` — invisible to the exception queue that
+`idx_comm_needs_human` serves, on **both** the SMS door and the browser door.
+
+This is not a hypothetical introduced by the new design; it is a live latent
+defect in the current code, and it is exactly the failure mode Ruling One's T1
+flag closes. Recorded because it strengthens the ruling and because it means the
+browser door gets a real fix out of this slice, not merely "preserved behavior."
+
+**Browser-door consequence, stated explicitly.** On success the
+`/tenant/messages` response shape is unchanged, to the byte. On failure it
+changes: today the caller gets a 500 with an invisible orphan row; after this
+slice it gets a 500 with the message durably preserved and *visibly flagged*.
+That is a behavior change, it is an improvement, and §3.4's "browser-door
+behavior must be preserved" should be read as covering the success contract, not
+as forbidding this.
+
+### 14.4 No index supports the pending-clarification lookup
+
+`obligations` carries only single-column indexes — `idx_obl_property`,
+`idx_obl_status`, `idx_obl_role`, `idx_obl_due` (`001_baseline.sql:352–355`).
+Nothing composite covers `(property_id, person_id, type, status)`, and the
+corrected §7.1 lookup now drives from `comm_events` instead.
+
+For slice one this is acceptable and **no index should be added**: the join is
+bounded by one property and one person, on tables already indexed by
+`property_id`, and it runs once per inbound resident message — a volume measured
+in messages per day, not per second. Adding an index would also mean a migration,
+which §8 forbids.
+
+Recorded so that if this lookup later moves onto a hot path, the absence is a
+known decision rather than an oversight.
