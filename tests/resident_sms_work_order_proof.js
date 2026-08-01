@@ -221,6 +221,10 @@ async function partB() {
     const oblOf = async (woId) => (await c.query(
       `select * from obligations where related_type='work_order' and related_id=$1 order by created_at asc limit 1`,
       [woId])).rows[0];
+    // MEMBERSHIP ONLY — never order-dependent. Every row this run writes shares
+    // one occurred_at (Postgres now() is transaction time and the whole run is
+    // one transaction), so the ORDER BY here is decorative. Callers use
+    // .includes(); do NOT add an assertion that depends on this sequence.
     const evTypes = async (woId) => (await c.query(
       `select type from events where note like '%'||$1||'%' order by occurred_at asc`, [woId])).rows.map((r) => r.type);
 

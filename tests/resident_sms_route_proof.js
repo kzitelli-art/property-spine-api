@@ -291,9 +291,14 @@ if (!process.env.DATABASE_URL) {
     const pend9 = await openConfirm();
     ok(pend9.length === 1,
        `exactly one open confirm_urgency question exists (${pend9.length}) — the gate's single-question path`);
+    // Keyed by IDENTITY, never by time. See the OCCURRED_AT HAZARD note below:
+    // every row in this run shares one occurred_at, so an ORDER BY here would
+    // pick an arbitrary row. This was previously safe only because exactly one
+    // clarification_question existed at this point — an accident, not a design.
     const question9 = (await c.query(
       `select * from comm_events where property_id=$1 and direction='outbound'
-        and classification='clarification_question' order by occurred_at desc limit 1`, [prop.id])).rows[0];
+        and classification='clarification_question' and created_object_id=$2`,
+      [prop.id, pend9[0].related_id])).rows[0];
     ok(!!question9 && question9.created_object_id === pend9[0].related_id,
        "the outbound question is durably linked to its work order — the linkage the gate needs");
 
@@ -341,11 +346,28 @@ if (!process.env.DATABASE_URL) {
       `select needs_human, body from comm_events where property_id=$1 and direction='inbound'
         and sms_sid=$2`, [prop.id, `SM_AMBIG_${RUN}`])).rows[0];
     ok(flagged11 && flagged11.needs_human === true, "PERSISTED: the claim is preserved and flagged");
-    const reply11 = (await c.query(
-      `select body from comm_events where property_id=$1 and direction='outbound'
-        order by occurred_at desc limit 1`, [prop.id])).rows[0];
-    ok(reply11 && !/\b1\b|\b2\b|reply with|choose|which one/i.test(reply11.body),
-       "and the resident is NOT asked to pick between options the system cannot durably hold");
+    // ── OCCURRED_AT HAZARD (found by adversarial review, confirmed on PG16) ──
+    //  comm_events.occurred_at defaults to now(), and Postgres now() is the
+    //  TRANSACTION start time. This harness runs entirely inside ONE
+    //  transaction — the savepoint shim means no real COMMIT ever happens — so
+    //  EVERY row written by this run carries an IDENTICAL occurred_at.
+    //  `order by occurred_at desc limit 1` therefore selects an arbitrary row.
+    //
+    //  The previous version of this assertion did exactly that, and read case
+    //  14's browser-door reply instead of case 11's. It would have passed even
+    //  if the code regressed to "Reply 1 for the leak or 2 for the smell" —
+    //  a total false green on the ONE guard for §7.1.4's "do not ask the
+    //  resident to choose". Never order by occurred_at in this file.
+    //
+    //  The transport double's `sent` array IS correctly ordered: it is an
+    //  in-memory append log, so its last entry is genuinely the last reply
+    //  dispatched. Assert POSITIVELY on it — the negative regex alone cannot
+    //  distinguish the right reply from three other branches' replies.
+    const reply11 = sent[sent.length - 1];
+    ok(!!reply11 && /more than one open request/i.test(reply11.body),
+       "the resident is told the TRUTH — that more than one request is open and the team will review");
+    ok(!!reply11 && !/\b1\b|\b2\b|reply with|choose|which one/i.test(reply11.body),
+       "and is NOT asked to pick between options the system cannot durably hold");
 
     // ══ transport safety, asserted rather than assumed ══
     section("safety · nothing reached a real wire");
