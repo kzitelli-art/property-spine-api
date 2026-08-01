@@ -409,6 +409,36 @@ async function partB() {
       severity: "emergency", escalates_to_role: "property_manager", due_at: new Date() }),
       /is now confirm_urgency/, "expected-type mismatch fails closed on a real row");
 
+    // ── 21 ── §7.6 must not suppress a repeat reporter's NEW request
+    //  Regression pin for a defect found in self-review: every outbound reply
+    //  about a work order carries created_object_type='work_order', including
+    //  the ordinary "request opened" acknowledgment. Scoping §7.6 on that
+    //  column alone matched every resident who had ever had ANY work order and
+    //  silently stopped creating new ones for them forever.
+    section("21 · a repeat reporter is not silenced by their own history");
+    const wPrev = await mkWO("regular");                       // an ORDINARY past request
+    await c.query(
+      `insert into comm_events (property_id, person_id, conversation_id, channel, direction, body, classification, created_object_type, created_object_id)
+       values ($1,$2,$3,'sms','outbound','Got it — request opened.','auto_reply','work_order',$4)`,
+      [prop.id, person.id, conv17.id, wPrev.workOrder.id]);
+    const suppressed = (await c.query(
+      `select 1 from comm_events ce
+        where ce.property_id=$1 and ce.person_id=$2 and ce.direction='outbound'
+          and ce.classification='clarification_question'
+          and ce.created_object_type='work_order'
+          and exists (select 1 from work_orders w where w.id=ce.created_object_id
+                        and w.property_id=ce.property_id
+                        and w.urgency_decided_by='resident_clarification')
+        limit 1`, [prop.id, person.id])).rows;
+    ok(suppressed.length === 0,
+       "an ordinary acknowledgment does NOT count as an answered question — the next request still opens");
+    const broadMatch = (await c.query(
+      `select count(*)::int n from comm_events ce
+        where ce.property_id=$1 and ce.person_id=$2 and ce.direction='outbound'
+          and ce.created_object_type='work_order'`, [prop.id, person.id])).rows[0];
+    ok(broadMatch.n >= 1,
+       "…even though the broad created_object_type match (the defective predicate) DOES hit");
+
     // ── 20 ── needs_human starts true (the invisible-orphan fix)
     section("20 · an unprocessed claim is visible, not an invisible orphan");
     const convP = (await c.query(

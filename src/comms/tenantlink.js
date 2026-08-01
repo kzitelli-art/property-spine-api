@@ -874,16 +874,34 @@ Rules: classification "emergency" only for active danger or major damage in prog
       [propertyId, personId])).rows;
   }
 
-  // §7.6 — a zero result has two meanings. "We asked, and someone else has
-  // since resolved it" must not become a duplicate work order for an issue
-  // already in hand.
+  // A clarification QUESTION is marked as one when it is sent. Every outbound
+  // reply about a work order carries created_object_type='work_order' —
+  // including the ordinary "request opened" acknowledgment — so that column
+  // alone cannot distinguish "we asked you something" from "we told you
+  // something." Scoping §7.6 on it would have matched every resident who has
+  // ever had ANY work order, and suppressed all their future requests.
+  const CLARIFICATION_QUESTION = "clarification_question";
+
+  // §7.6 — a zero result has two meanings. "We asked a question, and someone
+  // else resolved it before the reply landed" must not become a duplicate work
+  // order for an issue already in hand. Narrow by construction: only a real
+  // clarification question counts, and only while its work order still has no
+  // newer question outstanding.
   async function hasAnsweredQuestionAlreadyResolved(client, { propertyId, personId }) {
     const r = (await client.query(
       `select 1 from comm_events ce
         where ce.property_id = $1 and ce.person_id = $2
-          and ce.direction = 'outbound' and ce.created_object_type = 'work_order'
+          and ce.direction = 'outbound'
+          and ce.classification = $3
+          and ce.created_object_type = 'work_order'
           and coalesce(ce.sms_status,'') not in ('failed','refused','undelivered')
-        limit 1`, [propertyId, personId])).rows[0];
+          -- the question was answered by someone else: its work order carries a
+          -- resident_clarification decision, but no open question remains.
+          and exists (select 1 from work_orders w
+                       where w.id = ce.created_object_id
+                         and w.property_id = ce.property_id
+                         and w.urgency_decided_by = 'resident_clarification')
+        limit 1`, [propertyId, personId, CLARIFICATION_QUESTION])).rows[0];
     return !!r;
   }
 
@@ -953,6 +971,7 @@ Rules: classification "emergency" only for active danger or major damage in prog
     if (isMaintenanceClaim) {
       const u = classifyUrgency(body);
       let urgency_status = u.urgency;
+      let askedClarification = false;
       let emergency_type = u.emergency_type;
       let clarifying_question = u.clarifying_question;
 
@@ -990,10 +1009,11 @@ Rules: classification "emergency" only for active danger or major damage in prog
         reply = "Emergency received — management has been notified in the system. If there is immediate danger to anyone, call 911 first.";
       } else if (urgency_status === "needs_confirmation") {
         reply = `Got it — I've opened a request for ${unitLabel}. ${clarifying_question}`;
+        askedClarification = true;   // this outbound IS a question — mark it as one
       } else {
         reply = `Got it — ${String(c.field_category || "maintenance").replace("_", "/")} request opened for ${unitLabel}. We'll keep you updated right here.`;
       }
-      return { c, createdType, createdId, reply, needsHuman: c.needs_human };
+      return { c, createdType, createdId, reply, needsHuman: c.needs_human, askedClarification };
     }
 
     if (c.classification === "balance" && c.confidence >= 0.7 && !c.needs_human && place) {
@@ -1063,9 +1083,11 @@ Rules: classification "emergency" only for active danger or major damage in prog
       // order — the linkage the whole gate depends on.
       out = (await t2.query(
         `insert into comm_events (property_id, person_id, unit_id, conversation_id, channel, direction, body, classification, created_object_type, created_object_id)
-         values ($1,$2,$3,$4,$5,'outbound',$6,'auto_reply',$7,$8) returning id, occurred_at`,
+         values ($1,$2,$3,$4,$5,'outbound',$6,$7,$8,$9) returning id, occurred_at`,
         [propertyId, personId, place ? place.unit_id : null, convo.id, channel,
-         result.reply, result.createdType, result.createdId])).rows[0];
+         result.reply,
+         result.askedClarification ? CLARIFICATION_QUESTION : "auto_reply",
+         result.createdType, result.createdId])).rows[0];
       await t2.query(`update conversations set last_message_at = now() where id = $1`, [convo.id]);
       await t2.query("commit");
     } catch (e) {
