@@ -518,6 +518,27 @@ module.exports = function communicationsBoundary({ pool, sms }) {
       } catch (e) { console.error("sendPropertySms stamp:", e.message); }
     }
 
+    // ── DOUBLE-SEND GUARD ──────────────────────────────────────────
+    //  An outbound intent that already carries a provider SID, or whose
+    //  status records a completed send, has been ON THE WIRE. Sending it
+    //  again texts a real resident twice. There is no retry logic in this
+    //  slice, so nothing today drives a second call — which is exactly why
+    //  the guard belongs here now rather than alongside the first retry:
+    //  it is the precondition that makes adding retry safe, and a guard that
+    //  depends on every caller remembering is not a guard.
+    //  Note the vocabulary is deliberately narrow: 'refused' and 'failed' are
+    //  NOT completed sends and must remain resendable.
+    const SENT_STATUSES = ["queued", "sent", "sending", "delivered", "accepted"];
+    if (eventId) {
+      const prior = (await q.query(
+        "select sms_sid, sms_status from comm_events where id = $1", [eventId]
+      )).rows[0];
+      if (prior && (prior.sms_sid || SENT_STATUSES.includes(String(prior.sms_status || "")))) {
+        console.error(`sendPropertySms REFUSED property=${property_id} purpose=${purpose} reason=already_sent event=${eventId}`);
+        return { sent: false, reason: "already_sent", sid: null };
+      }
+    }
+
     // Server-derived property line. No line → NO SEND, never a
     // Messaging Service default fallback.
     const from = await propertyLine(q, property_id);
