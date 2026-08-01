@@ -44,16 +44,30 @@ alter table obligations add column if not exists missed_at timestamptz;
 -- Stored separately from due_at so a later reschedule cannot rewrite history.
 alter table obligations add column if not exists missed_threshold_at timestamptz;
 
--- the idempotency key of the request that caused the recognition, so a
--- recognition is traceable to its cause and a replay is identifiable.
+-- THE RECOGNITION IDEMPOTENCY KEY. The key of the request that caused this
+-- recognition, so a recognition is traceable to its cause and a replay is
+-- identifiable. Its contract, enforced by the service's single conditional
+-- update and by ck_oblig_missed_triple below:
+--   · written ATOMICALLY with missed_at and missed_threshold_at, in the same
+--     UPDATE — never in a second statement that could fail alone;
+--   · WRITE-ONCE. The update is guarded by `missed_at is null`, so only the
+--     first recognition can set it;
+--   · a repeated call — with the SAME key or a DIFFERENT one — returns the
+--     existing recognition and PRESERVES THE FIRST KEY. A later caller can
+--     never overwrite who or what first recognised the miss.
 alter table obligations add column if not exists missed_recognition_key text;
 
--- A recognition is INCOHERENT without the threshold it recognised. The two
--- timestamp columns move together or not at all.
+-- A recognition is INCOHERENT without the threshold it recognised, and
+-- untraceable without the key of the request that caused it. All THREE columns
+-- move together or not at all — the database refuses a half-written recognition
+-- even if some future writer bypasses the service.
 do $$ begin
-  if not exists (select 1 from pg_constraint where conname = 'ck_oblig_missed_pair') then
-    alter table obligations add constraint ck_oblig_missed_pair
-      check ((missed_at is null) = (missed_threshold_at is null));
+  if not exists (select 1 from pg_constraint where conname = 'ck_oblig_missed_triple') then
+    alter table obligations add constraint ck_oblig_missed_triple
+      check (
+        (missed_at is null) = (missed_threshold_at is null)
+        and (missed_at is null) = (missed_recognition_key is null)
+      );
   end if;
 end $$;
 
@@ -67,9 +81,12 @@ do $$ begin
   end if;
 end $$;
 
--- the recovery queue: obligations recognised as missed whose work is still not
--- done. This is the read that replaces "it left the queue" — it did not leave,
--- it moved.
-create index if not exists idx_oblig_missed_open
-  on obligations (property_id, missed_at)
-  where missed_at is not null and status <> 'complete';
+-- ── NO INDEX IN THIS MIGRATION. DELIBERATE. ─────────────────────────
+--  A recovery-queue index on (property_id, missed_at) was drafted and REMOVED:
+--  no query in this slice uses that shape. Every read the primitive and its
+--  harness perform is `where id = $1`. An index for a capability this slice
+--  explicitly excludes — the sweeper and the recovery/timeliness projections —
+--  would be speculative schema, added for a query that does not exist yet.
+--
+--  It belongs with the build that introduces the recovery-queue read, judged
+--  against that query's real shape rather than a guess at it.
