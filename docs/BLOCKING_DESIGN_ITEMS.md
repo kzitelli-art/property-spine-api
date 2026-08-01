@@ -84,17 +84,61 @@ Three layers model a missed obligation. The shared status column does not.
 | B | Leave the obligation `open`; record missed on the link + ledger only | no | link says `closed_at` set and `outcome='missed'` while the obligation says open — two records disagreeing, the exact shape `work_order_service.js` documents as having already misclassified money once |
 | C | Close as `complete` | no | asserts work was done that was not. §5 violation. **Reject.** |
 
-**A is the only option that neither lies nor leaves two records disagreeing.**
+### RULING 2026-08-01 — DERIVE the miss. Do NOT widen `ck_obl_status`.
 
-Note that `099`'s "do not widen `ck_obl_status`, it is shared by every
-obligation in the system" is weaker than it reads: two of its four permitted
-values have never been used, so the vocabulary is already partly aspirational
-rather than load-bearing. That is an argument for care, not for permanence.
+My analysis above framed this as "A is the only option that neither lies nor
+leaves two records disagreeing." **That framing was wrong, and the ruling
+rejects it.** I treated `missed` as a fourth lifecycle value competing with the
+existing three. It is not the same KIND of fact.
+
+Lifecycle status is mutually exclusive. Missedness is not — it is orthogonal to
+it. An obligation may be:
+
+- open **and** missed;
+- in progress **and** missed;
+- escalated **because** it was missed;
+- complete now, **having been** missed earlier.
+
+Putting `missed` into the lifecycle enum erases every one of those distinctions
+and creates another overloaded field — the exact defect ITEM 2 documents for
+`conversation_owner_user_id`. Option A would have traded one overloaded column
+for another.
+
+**The durable model is two axes, not one:**
+
+```
+lifecycle status        →  open | in_progress | complete | escalated
+timeliness / recovery   →  on_time | due | missed
+```
+
+When the recovery window is crossed the system must:
+
+1. preserve an immutable `obligation_missed` (recovery-window-missed) event;
+2. record the exact threshold and the time it was crossed;
+3. escalate, reassign or surface the obligation **through the canonical engine**;
+4. leave the lifecycle status intact;
+5. let projections render `missed` from the durable event or an explicit
+   `missed_at` fact.
+
+**`now() > due_at` must not remain the only source.** A purely computed read
+makes historical truth shift with the clock and never records WHEN the system
+recognised the miss. The current-state read may be derived; the first missed
+transition must become durable history.
+
+### Next step (separate governed slice, not started)
+
+Audit every read and write of `status='missed'` and the intent behind scenario 8
+first. Then propose the SMALLEST design that records the miss durably without
+overloading lifecycle status.
 
 ### Removal condition
 
-Closed when a migration makes the missed path writable (or a ruling replaces it),
-and `tests/test_conversion_rail.db.js` scenario 8 passes against real Postgres.
+Closed when a crossed recovery window writes durable history — event plus
+threshold plus timestamp — the lifecycle status is left intact, and
+`tests/test_conversion_rail.db.js` scenario 8 asserts the two-axis model rather
+than a `missed` lifecycle value. **Scenario 8's current assertion
+(`ob.status === "missed"`) encodes the rejected model and must itself be
+rewritten as part of that slice.**
 
 ---
 
