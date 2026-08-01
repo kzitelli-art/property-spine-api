@@ -86,9 +86,15 @@ async function seed() {
          values ($1,'leasing_agent',$2,'human_staff',true,'active') returning id`,
         [name, person])).rows[0].id;
       if (!eligible) return uid;   // deliberately attribution-only — see scenario 4b
+      // assignments.role is a CLOSED vocabulary (ck_assign_role, widened in
+      // 041): 'leasing', not 'leasing_agent'. The resolver deliberately does
+      // NOT read this role — role/module are COVERAGE questions belonging to
+      // resolveSendActionBasis (staff_identity_resolver.js:189-193) — so the
+      // value only has to be a legal one, and inventing a role here would not
+      // buy eligibility anyway.
       await c.query(
         `insert into assignments (person_id, property_id, role, is_active)
-         values ($1,$2,'leasing_agent',true)`, [person, prop.id]);
+         values ($1,$2,'leasing',true)`, [person, prop.id]);
       await c.query(
         `insert into property_team_assignments (property_id, user_id, role_title, allowed_modules, active)
          values ($1,$2,'Leasing Agent', array['leasing'], true)`, [prop.id, uid]);
@@ -220,6 +226,11 @@ async function main() {
       assert(tf.owner_user_id !== id, `ownership was invented — rung fell through to ${who}`);
     }
     const ob = (await pool.query(`select * from obligations where id=$1`, [tf.obligation_id])).rows[0];
+    // WEAK EVIDENCE, KEPT DELIBERATELY. spawnRung never passes assigned_user_id
+    // at all, so this holds for an OWNED rung too — it does not by itself prove
+    // the unowned case. It is here to catch a future spawn path that starts
+    // stamping the obligation row, which must not stamp an ineligible user.
+    // The load-bearing proof of UNASSIGNED is the ledger event below.
     assert(ob.assigned_user_id === null, "obligation carries an assigned user despite no eligible owner");
     assert(ob.status === "open", "the unowned obligation must still be OPEN and visible, not hidden");
 
@@ -235,20 +246,23 @@ async function main() {
     assert(ev.ownership_origin === null,
       `an unowned rung has no ownership origin; got ${ev.ownership_origin}`);
 
-    // ── PINNED, NOT ENDORSED — an open question this scenario exposes ──
-    //  leasingconversion.js:274 writes conversation_owner_user_id from
-    //  actual_tour_host_user_id VERBATIM, without passing it through
-    //  eligibleOwner. So on this row the conversion says "Drew owns the
-    //  conversation" while the obligation it spawned says UNASSIGNED. Two
-    //  fields describing one thing, disagreeing.
+    // ── PINNED, NOT ENDORSED ──
+    //  The conversion row preserves the actual-host ATTRIBUTION currently
+    //  stored in conversation_owner_user_id. That is the whole of the claim
+    //  made here.
     //
-    //  That may be intentional (the field is the relationship's attribution
-    //  anchor, and handoffConversation reads it as "from") or it may be a
-    //  confident-wrong owner on an operator surface. Deciding is an authority
-    //  ruling, not a test change, so nothing in the product is touched here.
-    //  The value is PINNED so the answer cannot change silently.
+    //  This is NOT an assertion that Drew is the accountable owner, and the
+    //  present semantics of this field are UNRESOLVED. leasingconversion.js:274
+    //  writes it from actual_tour_host_user_id verbatim, never through
+    //  eligibleOwner, while the column's name — and the desk label "owned by"
+    //  (property-spine-app/index.html:21832, :21867) — say owner. Property
+    //  Spine keeps attribution, eligible assignment, task ownership and
+    //  authenticated authority separate; this field currently straddles them.
+    //  Resolving that is an authority ruling, not a test change, so nothing in
+    //  the product is touched here. The value is pinned only so the answer
+    //  cannot move silently.
     assert(dc.conversation_owner_user_id === ctx.drew,
-      `conversation_owner_user_id changed behaviour: expected the verbatim actual host (${ctx.drew}), got ${dc.conversation_owner_user_id} — re-open the ownership-vs-attribution ruling before editing this line`);
+      `the stored actual-host attribution changed: expected ${ctx.drew}, got ${dc.conversation_owner_user_id} — this field's semantics are an open ruling; do not edit this line to make a change pass`);
   });
 
   // ── 6 (run before 5 to test absence on the untouched owner): owner absence does NOT silently transfer ──
