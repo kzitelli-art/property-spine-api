@@ -7,6 +7,7 @@
 //
 //  Run:  DATABASE_URL=... node test_conversion_rail.db.js
 // ════════════════════════════════════════════════════════════════════
+const receipt = require("./_run_receipt.js");
 const { Pool } = require("pg");
 const engine = require("./_engine.js");
 const buildModule = require("../src/leasing/leasingconversion.js");
@@ -96,6 +97,7 @@ async function seed() {
 }
 
 async function main() {
+  receipt.begin(__filename);
   console.log("\n══════════ CONVERSION RAIL — DB-BACKED PROOF (real Postgres) ══════════\n");
   await seed();
 
@@ -250,10 +252,26 @@ async function main() {
 
   console.log("\n──────────────────────────────────────────────────────────────");
   console.log(`  ${pass} / ${pass + fail} scenarios passed`);
-  console.log("──────────────────────────────────────────────────────────────\n");
+  console.log("──────────────────────────────────────────────────────────────");
 
   await pool.end();
-  if (fail > 0) process.exitCode = 1;
+  // expectedAtLeast is the real guard: this harness ran ZERO assertions for
+  // 204 commits and reported nothing at all. A run that executes fewer
+  // scenarios than the rail defines is INVALID, not merely quiet.
+  process.exitCode = receipt.complete({
+    harness: __filename, passed: pass, failed: fail, expectedAtLeast: 10,
+  });
 }
 
-main().catch(e => { console.error(e); process.exitCode = 1; });
+main().catch((e) => {
+  // The defect this harness suffered was PRE-ASSERTION DEATH: it threw at
+  // construction and printed nothing an eye would flag. A crash now reports
+  // itself in the same vocabulary as a failed run, and says plainly that zero
+  // assertions executed.
+  console.error("\n════════════════════════════════════════════════════════════════");
+  console.error("  ✗ RUN INVALID — the harness died before completing its assertions.");
+  console.error("    Assertions executed: " + (pass + fail) + "  (a run that proves nothing)");
+  console.error("    Cause: " + (e && e.message ? e.message : e));
+  console.error("════════════════════════════════════════════════════════════════\n");
+  process.exitCode = 1;
+});
