@@ -26,11 +26,23 @@ src/agent/agent.js (read only)             src/agent/pricing_adapter.js
 
 ---
 
+## Domain classification
+
+Corrected 2026-08-01 on owner review. The first draft of this audit said "four
+of six do not exist" while naming only three — an inaccurate headline the rest
+of the document does not support. The accurate classification is:
+
+| Classification | Domains |
+|---|---|
+| **Absent** | Rent Survey · Listings · Market Context |
+| **Partial** | Lead Demand · Conversion |
+| **Live but timezone-blocked** | Tour Demand |
+
 ## Headline findings
 
-1. **Four of the six proposed domains do not exist in any form.** Rent Survey,
-   Listings, and Market Context have **no table, no route, no integration, no
-   fixture** — not even scaffolding. Only a deliberate contract seam exists.
+1. **Three of the six domains are absent.** Rent Survey, Listings, and Market
+   Context have **no table, no route, no integration, no fixture** — not even
+   scaffolding. Only a deliberate contract seam exists.
 2. **Tour Demand is the strongest evidence source in the product** and is
    already canonical — but it is **blocked by a missing timezone**, so no
    operating-date metric can be defined for any property except one.
@@ -430,7 +442,154 @@ second consumer.
 
 ---
 
-## Owner rulings required before implementation
+## OWNER RULINGS — settled 2026-08-01
+
+All eight are decided. These govern; the "recommendations" below are the
+superseded audit proposals, retained for provenance only.
+
+### 1. Property timezone — approved
+
+Add `properties.operating_timezone`. Nullable · valid IANA only · **no universal
+default**. Backfill Demo Building to `America/New_York` only, because that fact
+is already explicitly encoded. **Do not guess for any other property.**
+
+Final resolver order:
+```
+properties.operating_timezone → explicit QA/test override (non-production) → null
+```
+**After the Demo backfill, remove the hardcoded property-UUID mapping.** Hidden
+production configuration is not preserved indefinitely as a fallback.
+
+Every dated metric returns `operating_timezone`, `window_start`, `window_end`,
+`as_of`. No configured timezone ⇒ `state: unavailable`,
+`reason: property_operating_timezone_not_configured`.
+
+### 2. A scheduled tour is a claim; a completed tour is proof
+
+```
+scheduled / confirmed / checked-in → appointment demand and operating pipeline
+completed                          → conversion proof
+no-show                            → exposure
+cancelled                          → lost appointment
+rescheduled                        → continuation of the same appointment journey
+```
+**Lead-to-tour conversion uses completed tours only.** Scheduled tours remain an
+important demand metric but must never be called completed conversion.
+
+### 3. Rename both lead-to-tour metrics
+
+`lead_to_tour_pct` is retired. Two distinct codes:
+
+- `attributed_opportunity_to_completed_tour_rate` — denominator: distinct
+  opportunities attributed to that source; numerator: those reaching a
+  **completed** tour.
+- `all_opportunity_to_completed_tour_rate` — denominator: all deduplicated
+  opportunities; numerator: those reaching a **completed** tour.
+
+One opportunity may carry multiple source touches, so **source rows may overlap
+and must not be presented as additive.** Every response discloses the
+attribution model.
+
+### 4. Reschedules count by chain
+
+One root chain = one appointment journey. Return separately:
+`appointment_journeys`, `booking_attempts`, `reschedule_count`, `final_status`.
+A chain that eventually completes counts as **one** completed journey, not
+several tours. A broken, cyclic, or ambiguous chain is reported **untrackable**,
+never silently counted.
+
+### 5. Missing tour outcomes are explicit unknowns
+
+A completed tour without post-tour capture **stays in the completed-tour
+denominator**, is never silently excluded, carries `outcome_state: "unknown"`,
+and feeds a separate capture-completeness metric. Excluding them would
+artificially improve conversion reporting.
+
+### 6. Do not parse prospect-intent free text into metrics
+
+Slice 9 Lead Demand is **lead volume · source · received date/window · response
+time** only. Free-text `budget` and `unit_type` values are **not aggregated**.
+The original text may remain visible as qualitative evidence, but no NLP or
+keyword parser may turn *"around $1,800"* or *"2 bed maybe 3"* into a claimed
+structured measurement. Typed prospect intent is a separate future design and
+migration.
+
+### 7. Slice 9 is internal evidence only
+
+Build **Tour Demand · Lead Demand · Conversion**. Leave **Rent Survey ·
+Listings · Market Context** as honest *Not connected*. **No empty future
+tables, no sample competitors, no fake listing statuses, no placeholder
+integrations.** Those three require separately authorised external
+integrations.
+
+### 8. Correlation rule
+
+No conversion attribution via person-name, timing, unit similarity, or browser
+heuristics. For tour → application: direct canonical correlation ⇒ countable;
+missing correlation ⇒ **untrackable**. Return `correlated_count`,
+`uncorrelated_count`, `correlation_rate`. An uncorrelated application stays
+visible but is never assigned to a tour funnel by inference.
+
+---
+
+## Required metric contract
+
+Every metric uses one shared server contract:
+
+```
+metric_code · definition_version · state
+property_id · operating_timezone
+window_start · window_end · as_of
+cohort_basis
+numerator · denominator · rate
+deduplication_key · exclusions · unknown_count · untrackable_count
+source_tables · provenance
+```
+
+**A metric with no valid denominator returns `rate: null`. Never `0%`.**
+
+## Authorised build sequence
+
+```
+1. Property operating timezone
+2. Shared metric-definition contract
+3. Tour Demand projection
+4. Lead Demand projection
+5. Four conversion funnels
+6. Market & Pricing evidence renderer
+7. Stop
+```
+
+The four funnels:
+```
+opportunity        → completed tour
+completed tour     → submitted application
+submitted application → approved application
+approved application  → executed lease
+```
+Each carries its own explicit cohort definition. **The four rates may not be
+multiplied or directly compared unless their cohort bases match.**
+
+## UI boundary
+
+Inside Market & Pricing, a `Demand` section containing Lead Demand, Tour
+Demand, Conversion. Each metric shows value, numerator/denominator, window,
+as-of date, and definition. **Do not add these analytics to the Leasing home
+during Slice 9.**
+
+## Fair-housing boundary — allowlist accepted
+
+Permitted: lead count, source, response time, tour status, application status,
+execution status, dates and durations.
+Prohibited: neighborhood grades, school-quality ratings, family-friendly
+classifications, demographic desirability, protected-class segmentation, proxy
+scoring.
+
+---
+
+## Superseded audit recommendations (provenance only)
+
+### Owner rulings required before implementation
 
 1. **Property timezone.** Approve adding `properties.operating_timezone` as a
    Slice 9 prerequisite. Without it, no dated evidence metric is definable
