@@ -258,6 +258,12 @@ Catalogued, not fixed.
 | 3 | **No assertion floor on 104 of 107 files** | Only `test_conversion_rail`, `test_identity_bridge` and `test_release3` pass `expectedAtLeast` to `receipt.complete()`, which fails a run that executed fewer assertions than expected (`_run_receipt.js:128–133`). Everywhere else the pattern is `process.exit(fail ? 1 : 0)` — correct for failures, but **exit 0 when zero assertions ran**. Any harness whose assertions sit inside a loop over query results reports success on an empty result set. | **Yes.** This is the conversion-rail defect generalised; the floor was built but applied to three files. |
 | 4 | **`psql` pipes in shell setup scripts** | `setup_clean_qa_record.sh:31,45,51,56,61` and `setup_fresh_record_and_prove.sh:18,50` pipe `curl` into `head`/`grep`, so `$?` reports the **last** command in the pipeline, not `curl`. `setup_fresh_record_and_prove.sh` sets `set -e`; **`setup_clean_qa_record.sh` does not**, so a failed step there continues silently with an empty variable. | **Yes.** |
 
+**Row 5 is recorded in the appendix**, not inline: `migrations/090_admin_users.sql`
+suppresses an enum alter with `exception when others then null`, and the ledger
+then records the version as applied. See *Appendix — A090-2*, which also states
+the general consequence for `db_preflight.js`: a ledger maximum is not evidence
+of applied schema.
+
 **Reviewed and found benign:** 15 empty `catch (_) {}` blocks across `tests/`.
 Every one wraps a `rollback`, `pool.end()`, `res.json()` or cleanup call in a
 `finally`/error path — swallowing a secondary failure while an error is already
@@ -488,6 +494,13 @@ default rather than by refusal. Not a write to business state, but an
 authority-minting path pointed at the real property unless an environment
 variable overrides it.
 
+**A second unguarded Solo path is recorded in the appendix.**
+`migrations/090_admin_users.sql` writes portfolio-scope assignment rows with
+`can_manage_roles=true` to **every property that existed when it ran**, Solo
+included, with no exclusion list — and unlike `accept_brick_one.js`, no
+environment variable overrides it. It executes once per database, not per boot.
+See *Appendix — A090-3*.
+
 ### 2. Demo Building — legitimate isolated demo context
 
 **`a50fbdd0-3642-431e-b532-0dcd6ab8a4fe`** — 69 references, the most-referenced
@@ -550,3 +563,286 @@ Created by name at runtime, no fixed ID:
 
 **Proof level of this document: Locally exercised** — source inspection and
 static analysis only. No claim here is Proven.
+
+---
+
+# Appendix — Source findings discovered while tracing migration 090
+
+**Why this appendix is separated.** These four findings surfaced while tracing
+`migrations/090_admin_users.sql` to answer a question about admin provisioning.
+They are outside the Phase 1 guard-coverage mandate. They are kept here, apart
+from Sections A–C, so this report does not quietly widen into a general source
+audit. Two of them extend an existing section; where they do, that section
+carries a pointer back here rather than absorbing the row inline.
+
+**Nothing in this appendix was executed.** No database was contacted, no
+migration applied, no harness run. Proof level is stated per finding and is
+never higher than *Locally exercised*.
+
+| # | Finding | Extends | Proof level |
+|---|---|---|---|
+| A090-1 | Promised `property_manager → admin` update does not exist; `role_name='admin'` has no consumer | — | Locally exercised (source-verified) |
+| A090-2 | `exception when others then null` + ledger skip = durable false green | Section A false-green table, as row 5 | Locally exercised (source-verified) |
+| A090-3 | One-time durable portfolio grants across all then-existing properties, Solo included | Section C | Locally exercised (source-verified) |
+| A090-4 | Non-deterministic active-property selection on staff re-login | — | Locally exercised (source-verified) |
+
+---
+
+## A090-1 — The promised role transition does not exist, and the new enum value has no consumer
+
+The file header states the intended design (`migrations/090_admin_users.sql:17–21`):
+
+> *ACTUAL SOLUTION: avoid the new enum value in the INSERT entirely. We insert
+> with `role='property_manager'` (existing value), then UPDATE to `'admin'`
+> after the enum alter is committed.*
+
+**No such UPDATE exists.** The file is 99 lines and contains exactly three
+operations: the enum alter in a DO block (`:29–31`), the `users` INSERT
+(`:36–45`), and two `property_team_assignments` INSERTs (`:50–73`, `:76–99`).
+There is no `update users set role`.
+
+Two reinforcing details:
+
+- The conflict path at `:40–45` sets `phone`, `auth_provider`, `is_active`,
+  `status` and `updated_at`. **`role` is not in the set list**, so a re-run
+  would also preserve the existing role rather than correct it.
+- No other migration assigns the value. The only other `'admin'` string under
+  `migrations/` is `006_unit_occupancy_state.sql:55`, an unrelated
+  `operating_use` check constraint (`'standard','model','employee','admin','unknown'`)
+  — a different column with a different meaning.
+
+**No repository consumer of `role_name='admin'` was found.** Every apparent hit
+belongs to a different vocabulary:
+
+| Site | What it actually is |
+|---|---|
+| `src/shared/snapshot_loader.js:56` | `IMPORT_ROLES`, a JS `Set` used for spreadsheet-import matching. Contains `"admin"` and `"manager"` — neither is a `role_name` value at all. |
+| `src/identity/super_admin.js` | Reads `users.platform_role`, a **different column** with its own vocabulary (`super_admin`, `org_admin`, `member`). |
+| `src/identity/staffbridge.js:10,21` | Comments only; the bridge-admin roles it names are `owner \| asset_manager \| …`. |
+
+So on current source the enum carries a member that no row is written with and
+no code reads.
+
+**Scope limit — read this before acting on it.** This is a *current-source*
+finding. It is not proof of the live enum's exact contents, and not proof of
+what the two admin rows presently hold in production. A prior manual correction,
+a hand-run statement, or a later migration applied outside this tree would not
+appear here. Note also that `THREAD_HANDOFF.md`'s trap list enumerates
+`role_name` as `owner, asset_manager, property_manager, leasing_agent,
+maintenance, accountant, ai, system` — omitting both `admin` (090) *and*
+`leasing_manager` (047). Whether that reflects the live enum or an incomplete
+note cannot be settled from source. Establishing the live values requires the
+read-only database pass.
+
+---
+
+## A090-2 — Swallowed enum failure recorded as applied (extends the Section A false-green table)
+
+**This is row 5 of the false-green inventory in Section A.** It is recorded here
+rather than inline so the appendix boundary holds.
+
+| # | Source | Mechanism | Live? |
+|---|---|---|---|
+| 5 | **`migrations/090_admin_users.sql:29–31`** | `alter type role_name add value if not exists 'admin'` is wrapped in `do $$ … exception when others then null; end $$`. `ADD VALUE IF NOT EXISTS` **already** handles the intended duplicate case, so the handler adds nothing but suppression — and `when others` swallows every unrelated class: insufficient privilege, lock timeout, and the in-transaction restriction the header itself spends `:7–15` worrying about. On failure the DO block still returns success, the file continues, and `migrations/migrate.js` commits the transaction (`:192`) and records version 090. | **Yes.** Compare `001_baseline.sql:52`, which catches the *named* `duplicate_object`. `when others` is the unbounded form of the same idiom. |
+
+**Why the failure becomes durable rather than transient.** `migrate.js:178–181`
+skips any version already present in the ledger (`applied.has(version)` →
+`continue`). Once 090 is recorded, it is never retried. A swallowed enum failure
+is therefore **permanently misreported as applied**, and every subsequent boot
+skips it — there is no self-healing path short of editing the ledger.
+
+Today's blast radius is small only because nothing consumes the value
+(A090-1). That is a coincidence of the missing UPDATE, not a property of the
+design.
+
+### General consequence — a ledger max is not evidence of applied schema
+
+Three mechanisms already catalogued in this report compose:
+
+1. `exception when others then null` — a statement can fail without failing its file.
+2. `applied.has(version)` skip (`migrations/migrate.js:178–181`) — a recorded version is never re-attempted.
+3. Root `migrate.js` green exit (false-green row 1) — a run can exit 0 having applied nothing at all.
+
+Together they mean **the ledger can record a version as applied when no work was
+performed.** `max(version)` from `schema_migrations` therefore proves only that
+a row was written, not that the schema it names exists.
+
+This is the specific correspondence `db_preflight.js` must establish when a
+connection string arrives: not the ledger maximum alone, but **ledger entries
+against observed schema objects** — for 090, that means checking `pg_enum` for
+the `admin` member and the two `users` rows' actual `role` values, not
+inferring either from the presence of version 090.
+
+**Proof level: Locally exercised (source-verified).** The mechanism is read from
+source. It has not been reproduced against a real isolated database, and must
+not be described as *Proven* until it is, with a preserved run receipt.
+
+---
+
+## A090-3 — One-time durable portfolio grants across all then-existing properties (extends Section C)
+
+**Extends Section C.** Recorded here rather than inline, per the appendix boundary.
+
+The two assignment statements partition on `p.sms_number is null` (`:65`) and
+`p.sms_number is not null` (`:91`). **Together these exhaust the `properties`
+table** — every row satisfies exactly one. There is no exclusion list, no
+`NEVER_DELETE` check, and no Solo guard.
+
+Each matched property receives one row per admin with `scope_type='portfolio'`,
+all four modules in **both** `allowed_modules` and `primary_for_modules`,
+`can_manage_roles=true`, `active=true` — the strongest shape
+`property_team_assignments` can express.
+
+**Real Solo `9e2bb96e-08e2-41db-81c2-91055ceb50a3` is included with no
+exclusion.** Section C records that Solo access is otherwise read-and-guard: the
+two seed tools that name it both `throw` (`tools/seed_demo_inventory.js:71`,
+`tools/seed_demo_agent_facts.js:43`). This migration checks nothing. It is a
+second unguarded Solo path alongside `tools/accept_brick_one.js:26` already
+noted in Section C.1 — and unlike that one, it is not overridable by an
+environment variable.
+
+**Correction to preserve — this is not a per-boot write.** `migrate.js:178–181`
+skips applied versions, so **090 executes once per database**, at the boot where
+it is first applied. It creates durable rows and is never re-run. The
+`ON CONFLICT DO UPDATE` branches (`:66–73`, `:92–99`) would re-assert the grants,
+but the ledger prevents them from ever executing again.
+
+Three consequences follow from that, and they change how this should be
+remediated:
+
+- It is a **one-time durable grant**, not a recurring writer. Removing or
+  editing the migration file changes nothing about rows already written.
+- **Properties created after 090 was applied do not inherit the grants.** New
+  properties get no admin assignment from this path.
+- It is therefore a **point-in-time blanket grant, not an ongoing policy.** The
+  portfolio-wide authority it describes is true of the property set as it stood
+  at one moment and drifts out of date from that moment onward.
+
+Whether the rows are presently in production, and which properties existed when
+090 ran, cannot be settled from source.
+
+---
+
+## A090-4 — Non-deterministic active-property selection on staff re-login
+
+Recorded as its own named finding rather than filed under connection plumbing:
+the defect is in the login path, and it is not a connection-configuration issue.
+
+### The chain
+
+```text
+both assignment batches use transaction_timestamp()
+→ can_manage_roles ties
+→ updated_at ties
+→ query has no deterministic third key
+→ arbitrary property row may win
+→ invite/session is scoped using that property_id
+```
+
+**Step 1 — the timestamps are identical.** `property_team_assignments.updated_at`
+defaults to `now()` (`migrations/035_phone_first_team.sql:81`), and both conflict
+branches set `updated_at = now()` explicitly (`:73`, `:99`). `now()` is
+`transaction_timestamp()` — transaction start, not statement time — and
+`migrate.js` wraps **the entire file** in one transaction (`:186` begin → `:192`
+commit). Both batches therefore receive the **same** `updated_at`.
+
+This makes the comments at `:48–49` and `:75` — *"Demo Building inserted last so
+its sms_number wins the login OTP routing"*, *"SMS-capable properties last (wins
+updated_at → picked for OTP login)"* — **inert**. The intended ordering is not
+represented durably in the data. Statement order within a transaction does not
+produce distinguishable `now()` values.
+
+This is the trap `THREAD_HANDOFF.md` already documents, appearing in a migration
+rather than a test harness: *"`now()` is TRANSACTION time. Any harness that wraps
+a run in one transaction gives every row an identical `occurred_at`, so
+`order by occurred_at desc limit 1` returns an arbitrary row."*
+
+**Steps 2–4 — no deterministic tiebreak exists.** `src/identity/teamaccess.js:207–211`:
+
+```sql
+select property_id from property_team_assignments
+ where user_id=$1 and active=true
+ order by can_manage_roles desc, updated_at desc
+ limit 1
+```
+
+Two sort keys, and for these two accounts **both tie on every candidate row** —
+090 wrote `can_manage_roles=true` everywhere, and `updated_at` is identical per
+step 1. There is no third key: no `created_at`, no `property_id`, no
+deterministic fallback. Postgres returns whichever row the plan emits first,
+which can change across plan changes or after vacuum. The surrounding comment
+concedes the design is provisional, but its *"preferring one where they can
+manage roles"* clause does no work here, because every candidate ties on it.
+
+**Step 5 — the arbitrary pick scopes the session.** `a.property_id` is used for
+the prior-invite lookup (`:220–224`), for superseding prior invites (`:235–238`),
+and as the `property_id` of the newly minted login invite (`:240–246`). The OTP
+body and the outbound send both read from that same invite row (`:272–283`).
+
+### Severity
+
+**No privilege escalation is evidenced.** Both users already hold portfolio-scope
+authority on every property 090 touched, so an arbitrary pick does not grant
+access they lack.
+
+**The risk is wrong operating context.** The login path can select an arbitrary
+*authorized* property as the active session context. If that property scopes
+subsequent reads and writes, an admin can be operating against a different
+property than they believe they are — a wrong-context risk, not an authority
+breach.
+
+**Real Solo `9e2bb96e-…` is in the candidate set** (per A090-3, Solo receives a
+grant with no exclusion). An admin session can therefore land on Solo by plan
+choice alone.
+
+### Open question answered — does `teamaccess` filter to properties with an `sms_number`?
+
+**No. It does not.**
+
+The query at `src/identity/teamaccess.js:207–211` selects from
+`property_team_assignments` with no join to `properties` and no predicate on
+`sms_number`. The only filters are `user_id` and `active=true`. **A property
+with no line is fully eligible to win the pick.**
+
+The downstream behaviour when that happens is silent, which is what makes it
+hard to diagnose:
+
+1. The OTP is sent via `commBoundary.sendPropertySms` scoped to the picked
+   `property_id` (`teamaccess.js:277–281`).
+2. `src/comms/communications_boundary.js:396` returns
+   `{ allowed: false, reason: "no_property_line" }` when the property has no
+   `from` line; `:546–548` stamps the refusal and returns
+   `{ sent: false, reason: "no_property_line" }`.
+3. `teamaccess.js:285` lists `no_property_line` among the **tolerated** reasons,
+   so `delivery` stays `"link_only"` rather than becoming `"sms_failed"`.
+4. The endpoint returns **HTTP 200** with `receipt: "SMS transport not active."`
+
+For a staff re-login the client holds no link, only the echoed token
+(`:301`, `isRelogin` → `out.token`). In non-production the code is surfaced as
+`dev_code` (`:304`), so the flow still completes and the defect is invisible.
+**In production `dev_code` is withheld**, so the caller receives a 200 and a
+token but no code, and the login cannot complete.
+
+Because the property pick is arbitrary (steps 2–4 above), this presents as an
+**intermittent login failure with no obvious cause** — the same user, the same
+number, succeeding or failing depending on which assignment row the planner
+returned. `src/leasing/demo_preflight.js:100` already names the underlying
+refusal: *"Property has no `sms_number`. The outbound gate refuses with
+`no_property_line` and never falls back to the Messaging Service default."*
+
+**What source does not establish:** whether Real Solo currently has an
+`sms_number`. Migration 090's two branches split on exactly that column, but the
+value is not fixed in source. So *whether* landing on Solo specifically produces
+`no_property_line` is not determinable here. The structural finding stands
+independently: the pick is unfiltered, an unlined property can win, and the
+resulting failure is silent.
+
+**Proof level: Locally exercised (source-verified).** The chain is read from
+source across four files. No login was exercised, no database contacted.
+
+---
+
+**Proof level of this appendix: Locally exercised.** Source inspection and static
+analysis only. No claim in this appendix is Proven. In particular, nothing here
+establishes the live enum contents, the live `role` values of the two admin
+rows, which properties received grants, or any property's current `sms_number`.
