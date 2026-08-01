@@ -24,12 +24,6 @@
 // =============================================================
 
 const express = require("express");
-// THE ONE CANONICAL LIFECYCLE WRITER. Every write that moves
-// lease_applications.status in this file goes through it: it owns the status
-// literals and authors the milestone instants (submitted_at, approved_at) in
-// the SAME statement, which is what migration 125 refuses to let a caller
-// split. It takes THIS file's transaction client and opens nothing of its own.
-const lifecycle = require("./application_lifecycle");
 
 module.exports = function applicationsModule(deps) {
   const { pool, spawnObligationFromEvent, satisfyObligation, completeObligation } = deps;
@@ -372,18 +366,14 @@ module.exports = function applicationsModule(deps) {
       const prop = (await client.query("select id from properties where id=$1", [req.params.propertyId])).rows[0];
       if (!prop) { await client.query("rollback"); return res.status(404).json({ receipt: "No property with that id." }); }
 
-      // BIRTH belongs to the lifecycle authority — the same one the canonical
-      // submitApplicationService uses, so this second door cannot drift from
-      // the first while its retirement is undecided. It owns the 'submitted'
-      // literal and carries submitted_at in that one insert (125 rejects an
-      // insert-then-stamp), and it returns the full row (`returning *`), so
-      // `app` carries everything it carried before plus submitted_at.
-      const birth = await lifecycle.createSubmittedApplication(client, {
-        property_id: req.params.propertyId, unit_id, person_id,
-        applicant_name, unit_label, rent, deposit, guarantor_name,
-        captured: JSON.stringify(captured || {}),
-      });
-      const app = birth.application;
+      const ins = await client.query(
+        `insert into lease_applications
+           (property_id, unit_id, person_id, status, applicant_name, unit_label, rent, deposit, guarantor_name, captured)
+         values ($1,$2,$3,'submitted',$4,$5,$6,$7,$8,$9) returning *`,
+        [req.params.propertyId, unit_id, person_id, applicant_name, unit_label, rent, deposit, guarantor_name,
+         JSON.stringify(captured || {})]
+      );
+      const app = ins.rows[0];
       await recordEvent(client, { property_id: app.property_id, person_id, unit_id, type: "application_submitted",
         note: `Application submitted — ${applicant_name}${unit_label ? " · " + unit_label : ""}` });
 
@@ -391,11 +381,6 @@ module.exports = function applicationsModule(deps) {
       res.json({ receipt: `Application created for ${applicant_name}.`, application: shape(app, null) });
     } catch (e) {
       await client.query("rollback");
-      // A lifecycle refusal is a controlled answer, not a server fault. The
-      // guards above make these unreachable today (they hold the same contract
-      // the authority holds); this is the same translator line the approve
-      // route already carries, so a backstop refusal surfaces honestly.
-      if (e.httpStatus) return res.status(e.httpStatus).json(e.body);
       console.error("application create:", e);
       res.status(500).json({ receipt: "Could not create the application.", error: e.message });
     } finally { client.release(); }
@@ -466,20 +451,11 @@ module.exports = function applicationsModule(deps) {
       required_inputs: [TERMS_INPUT],
     });
 
-    // THE LIVE APPROVAL ADVANCE — 'submitted' straight to 'lease_ready',
-    // authoring approved_at in the SAME statement as the status and the gate
-    // link (125 refuses the split). The authority writes approved_at only when
-    // the row genuinely crosses into approval: re-approving from 'approved'
-    // leaves the existing instant alone rather than fabricating a new one, and
-    // a historical row whose submitted_at is null keeps it null. The caller's
-    // transaction client is passed straight through, and the receipt carries
-    // the full post-update row, so `upd.rows[0]` becomes `r.application`
-    // unchanged in shape — including the terms_review_obligation_id just
-    // written, which outstanding() reads off it.
-    const r = await lifecycle.markLeaseReady(client, {
-      applicationId: app.id,
-      termsReviewObligationId: obligation.id,
-    });
+    const upd = await client.query(
+      `update lease_applications set status='lease_ready', terms_review_obligation_id=$1, updated_at=now()
+         where id=$2 returning *`,
+      [obligation.id, app.id]
+    );
 
     // v3 followup: approval is the ONLY authorized cause of the terms-review
     // chase (R1: new rung, never the historical signature rung — a chase for
@@ -488,7 +464,7 @@ module.exports = function applicationsModule(deps) {
       await conversionService.ensureTermsReviewFollowup(client, { conversion_id: app.conversion_id });
     }
 
-    return { application: r.application, obligation };
+    return { application: upd.rows[0], obligation };
   }
 
   // Legacy key-gated adapter (Class 2 door — coarse operator-key authority;

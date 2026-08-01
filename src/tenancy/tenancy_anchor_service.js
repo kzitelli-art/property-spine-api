@@ -45,11 +45,6 @@
 //  Then inject BOTH into applications.js AND operator.js as deps.
 // ════════════════════════════════════════════════════════════════════
 
-// THE ONE canonical writer of lease_applications.status. This service anchors
-// the tenancy (lease, obligations, events); the lifecycle statement itself —
-// status + its milestone instant, in one statement — belongs there.
-const lifecycle = require("../applications/application_lifecycle");
-
 module.exports = function tenancyAnchorService(deps) {
   const {
     spawnObligationFromEvent,
@@ -314,10 +309,10 @@ module.exports = function tenancyAnchorService(deps) {
     } catch (e) { if (e.code !== "ALREADY_COMPLETE") throw e; }
 
     // ── NOW promote: application → active, person → tenant ──
-    // The lifecycle write goes through the canonical authority on THIS
-    // transaction's client: it authors status + activated_at in one statement
-    // and returns the post-update row `shape()` below reads.
-    const updApp = (await lifecycle.markActive(client, { applicationId: app.id })).application;
+    const updApp = (await client.query(
+      `update lease_applications
+          set status='active', activated_at=now(), updated_at=now()
+        where id=$1 returning *`, [app.id])).rows[0];
     if (app.person_id) {
       await client.query("update persons set lifecycle_status='tenant' where id=$1", [app.person_id]).catch(() => {});
     }

@@ -72,10 +72,7 @@ async function setup(admin) {
       id uuid primary key,
       property_id uuid not null,
       unit_id uuid,
-      proposed_terms_confirmation_id uuid,
-      -- the evaluator asks the lifecycle authority whether this row may reach
-      -- 'accepted_term_required'; a row without a status is not a row
-      status text not null default 'lease_ready'
+      proposed_terms_confirmation_id uuid
     );
     create table ${qSchema}.executed_lease_records (
       id uuid primary key,
