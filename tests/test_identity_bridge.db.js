@@ -48,6 +48,23 @@ async function expectThrow(fn, frag) {
 // ── seed handles ──
 const S = {};
 
+// ── PER-RUN UNIQUENESS. This harness COMMITS its fixtures (tx() below ends in
+//  `commit`, not `rollback`) and never deletes them, so every row it writes
+//  outlives the run. With FIXED emails and FIXED session tokens it was
+//  therefore SINGLE-USE per database: the first run passed, and every run after
+//  it died in seed on users_email_key before a single assertion executed.
+//
+//  Stale session tokens were the quieter half of the same bug — staff_sessions
+//  is unique on token_digest, not token, so a duplicate literal token inserted
+//  within its 6-hour window could resolve to a PRIOR run's user.
+//
+//  tests/test_release3.db.js already solved this with a per-run token; this is
+//  the same pattern, not a new one. Nothing about any assertion changes — the
+//  fixtures are merely made distinguishable between runs.
+const RUN = Date.now();
+const em = (local) => `${local}${RUN}@proof.internal`;
+const tok = (name) => `proof-${name}-token-${RUN}`;
+
 async function seed() {
   await tx(async (c) => {
     S.prop = (await c.query(`insert into properties (name) values ('Bridge Proof Property') returning id`)).rows[0].id;
@@ -58,18 +75,18 @@ async function seed() {
                       values ($1,$2,$3::role_name${extra ? ",'" + extra.split("=")[1] + "'" : ""}) returning id`,
         [name, email, role])).rows[0].id;
 
-    S.admin      = await mkUser("Admin PM", "admin@proof.internal", "property_manager");
-    S.kandice    = await mkUser("Kandice", "kandice@proof.internal", "leasing_agent");
-    S.katie      = await mkUser("Katie", "katie@proof.internal", "leasing_manager");
-    S.john       = await mkUser("John Banks", "john@proof.internal", "maintenance");       // stays unbridged
-    S.suspended  = await mkUser("Sam Suspended", "sam@proof.internal", "leasing_agent");
-    S.invited    = await mkUser("Ivy Invited", "ivy@proof.internal", "leasing_agent");
-    S.frozen     = await mkUser("Frank Frozen", "frank@proof.internal", "leasing_agent");  // unknown future status
-    S.inactive   = await mkUser("Ida Inactive", "ida@proof.internal", "leasing_agent");
-    S.svc        = await mkUser("Twilio Webhook", "svc@proof.internal", "system");
-    S.dupA       = await mkUser("Dup A", "dupa@proof.internal", "leasing_agent");
-    S.dupB       = await mkUser("Dup B", "dupb@proof.internal", "leasing_agent");
-    S.nonadmin   = await mkUser("Norm Nonadmin", "norm@proof.internal", "leasing_agent");
+    S.admin      = await mkUser("Admin PM", em("admin"), "property_manager");
+    S.kandice    = await mkUser("Kandice", em("kandice"), "leasing_agent");
+    S.katie      = await mkUser("Katie", em("katie"), "leasing_manager");
+    S.john       = await mkUser("John Banks", em("john"), "maintenance");       // stays unbridged
+    S.suspended  = await mkUser("Sam Suspended", em("sam"), "leasing_agent");
+    S.invited    = await mkUser("Ivy Invited", em("ivy"), "leasing_agent");
+    S.frozen     = await mkUser("Frank Frozen", em("frank"), "leasing_agent");  // unknown future status
+    S.inactive   = await mkUser("Ida Inactive", em("ida"), "leasing_agent");
+    S.svc        = await mkUser("Twilio Webhook", em("svc"), "system");
+    S.dupA       = await mkUser("Dup A", em("dupa"), "leasing_agent");
+    S.dupB       = await mkUser("Dup B", em("dupb"), "leasing_agent");
+    S.nonadmin   = await mkUser("Norm Nonadmin", em("norm"), "leasing_agent");
 
     await c.query(`update users set status='suspended' where id=$1`, [S.suspended]);
     await c.query(`update users set status='invited'   where id=$1`, [S.invited]);
@@ -93,13 +110,13 @@ async function seed() {
        values ($1,$2,'Senior Maintenance Tech')`, [S.prop, S.john]);
 
     // real admin staff session (HTTP proofs)
-    S.adminToken = "proof-admin-token";
+    S.adminToken = tok("admin");
     await c.query(`insert into staff_sessions (user_id, property_id, token, expires_at)
                    values ($1,$2,$3, now() + interval '6 hours')`, [S.admin, S.prop, S.adminToken]);
-    S.nonadminToken = "proof-nonadmin-token";
+    S.nonadminToken = tok("nonadmin");
     await c.query(`insert into staff_sessions (user_id, property_id, token, expires_at)
                    values ($1,$2,$3, now() + interval '6 hours')`, [S.nonadmin, S.prop, S.nonadminToken]);
-    S.katieToken = "proof-katie-token"; // leasing_manager — the DEMO_MODE widening subject
+    S.katieToken = tok("katie"); // leasing_manager — the DEMO_MODE widening subject
     await c.query(`insert into staff_sessions (user_id, property_id, token, expires_at)
                    values ($1,$2,$3, now() + interval '6 hours')`, [S.katie, S.prop, S.katieToken]);
   });
@@ -212,7 +229,9 @@ async function call(port, method, urlPath, { token, body } = {}) {
     assert(a.length === 2 && a[0].effective_to !== null && a[1].action === "unlinked" && a[1].effective_to !== null);
   });
   await T("B7  candidates endpoint SUGGESTS by exact email only and WRITES NOTHING", async () => {
-    await tx((c) => c.query(`insert into persons (name, email) values ('Katie P','katie@proof.internal')`));
+    // the person's email must match S.katie's USER email exactly — that exact
+    // match is the whole subject of this assertion, so both move together.
+    await tx((c) => c.query(`insert into persons (name, email) values ('Katie P',$1)`, [em("katie")]));
     const before = (await read((c) => c.query(`select count(*)::int n from user_person_bridge_audit`))).rows[0].n;
     const out = await read((c) => bridgeSvc.bridgeCandidates(c, S.katie));
     const after = (await read((c) => c.query(`select count(*)::int n from user_person_bridge_audit`))).rows[0].n;
@@ -363,12 +382,14 @@ async function call(port, method, urlPath, { token, body } = {}) {
     assert(a.status === 403, `expected 403, got ${a.status} — the widening must not exist`);
   });
   await T("F3b a SERVICE account holding an admin role is still refused (kind defense)", async () => {
+    const botToken = tok("bot");
     const bot = (await read((c) => c.query(
-      `insert into users (name, email, role) values ('Bot PM','botpm@proof.internal','property_manager') returning id`))).rows[0].id;
+      `insert into users (name, email, role) values ('Bot PM',$1,'property_manager') returning id`,
+      [em("botpm")]))).rows[0].id;
     await tx((c) => bridgeSvc.classifyAccount(c, { user_id: bot, account_kind: "service_account", performed_by_user_id: S.admin }));
     await tx((c) => c.query(`insert into staff_sessions (user_id, property_id, token, expires_at)
-                             values ($1,$2,'proof-bot-token', now() + interval '6 hours')`, [bot, S.prop]));
-    const r = await call(prod.port, "GET", "/operator/admin/bridge/coverage", { token: "proof-bot-token" });
+                             values ($1,$2,$3, now() + interval '6 hours')`, [bot, S.prop, botToken]));
+    const r = await call(prod.port, "GET", "/operator/admin/bridge/coverage", { token: botToken });
     assert(r.status === 403);
   });
   await T("F4  performed_by is SERVER-DERIVED — a body-supplied performed_by_user_id is ignored", async () => {
