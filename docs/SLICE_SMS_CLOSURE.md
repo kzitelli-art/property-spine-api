@@ -1,11 +1,12 @@
 # SLICE CLOSURE — Resident SMS → Canonical Work Order
 
-**Status: PROOF COMPLETE, MERGE NOT RECOMMENDED AS-IS.** See §0.
+**Status: PROOF COMPLETE AND VERIFIED ON REAL POSTGRES + REAL HTTP.**
+**MERGE NOT RECOMMENDED AS-IS — split first. See §0.**
 
 | | |
 |---|---|
 | Governing contract | `docs/RESIDENT_SMS_WORK_ORDER_CONTRACT.md` @ **`5eef41f`** (v3, owner-signed) |
-| Final implementation | **`d51443d`** (harness fix; product source unchanged since `45cc561`) |
+| Final implementation | **`7a1f213`** · product source frozen since `45cc561` (`git diff 45cc561 7a1f213 -- src/ server.js migrations/` is empty) |
 | Branch | `claude/getting-up-to-speed-nyf4ww` |
 | Base | `origin/main` @ `421168f` (Slice 8 merged in cleanly) |
 | Migration | **none** for this slice |
@@ -84,29 +85,34 @@ GOVERNED OPERATING CONTEXT (NOT proven — see above)
 | Layer | Command | Result |
 |---|---|---|
 | Pure | `node tests/resident_sms_work_order_proof.js` (Part A) | **15/15** |
-| Real Postgres | same file, Part B — 22 cases | **75 passed / 1 failed → fixed at `45cc561`** |
-| Real Postgres + real HTTP | `node tests/resident_sms_route_proof.js` | **29/29 — but see §2a: one of those 29 was a false green** |
+| Real Postgres | same file, Part B | **78 passed / 0 failed** @ `d51443d` |
+| Real Postgres + real HTTP | `node tests/resident_sms_route_proof.js` | **31 passed / 0 failed** @ `7a1f213` |
 | Regression (DB-free) | 35 harnesses | **28 green / 8 red — identical to baseline** |
 | App suite | `./run_harnesses.sh` | **753/753** |
 
-> **PENDING:** raw output at exact head `45cc561` is not yet captured. The
-> numbers above for Part B are from `dd698ec` plus the single fix. **This
-> document is not final until the exact-head run is pasted in below.**
->
-> ```text
-> [ awaiting raw output — node tests/resident_sms_work_order_proof.js @ d51443d ]
-> [ awaiting raw output — node tests/resident_sms_route_proof.js       @ d51443d ]
-> ```
->
-> The route harness MUST be rerun: §2a fixed a false green in it, so the
-> earlier 29/29 no longer describes the current file. Product source is
-> unchanged since `45cc561` — `git diff 45cc561 d51443d -- src/ server.js
-> migrations/` is empty — so only the harnesses changed.
+**CAPTURED.** Both figures are from runs executed in the Render Shell against
+the live Neon database, on the branch, with `RENDER_GIT_COMMIT` confirmed.
+Product source is identical across both runs (frozen since `45cc561`), so the
+Part B result at `d51443d` and the route result at `7a1f213` describe the same
+product code; only harness files moved between them.
+
+Case 11's decisive assertions, previously a false green (§2a), now read:
+
+```text
+── 11 · two pending questions — preserved, flagged, no choice offered
+  ok    two or more clarification questions are now open (2)
+  ok    PERSISTED: no work order created or modified
+  ok    every pending question is still open — none was guessed at
+  ok    PERSISTED: the claim is preserved and flagged
+  ok    exactly one reply was written for this message (1)
+  ok    the resident is told the TRUTH — that more than one request is open
+  ok    and is NOT asked to pick between options the system cannot durably hold
+```
 
 **All 22 contract cases accounted for:** 17 at service level, 5 (cases 5, 9, 10,
 11, 14) at the HTTP boundary. None reported as proven that was not.
 
-## 2a. ONE ASSERTION IN THE 29/29 RUN WAS A FALSE GREEN
+## 2a. TWO HARNESS DEFECTS FOUND AND CLOSED AFTER THE FIRST GREEN RUN
 
 Found by adversarial review *after* that run, confirmed on Postgres 16, fixed at
 **`d51443d`**. Recorded here because a green number that was not earned is
@@ -133,12 +139,28 @@ the smell."*
   because exactly one `clarification_question` existed at that point — an
   accident that the next added case would have broken.
 
-**Proof impact:** case 11's *"no choice offered"* claim is **not** established by
-the earlier route run and must not be reported as such until the rerun. The
-§7.1.4 *branch* is still pinned by elimination (the surrounding assertions would
-have failed had another branch executed) — but **what the resident was told was
-never checked**. Every other assertion in that run keyed on identity or persisted
-counts and stands.
+### The second defect — the corrected assertion was racing the send
+
+The rewritten assertion then failed on the rerun, and the tell was in the
+output: `recorded (4)` where five sends were expected. The route acks Twilio
+with `emptyTwiml(res)` **before** it awaits `sendPropertySms` — deliberately, so
+a slow carrier never causes a retry — so the HTTP response returning does not
+mean the send has been recorded. Reading the in-memory send log saw the
+*previous* message's reply.
+
+The first fix was right about **ordering** and wrong about **timing**. Both
+properties matter. Now keyed off the outbound ROW, which is written inside T2
+and committed before the response returns: identity-diffed around the call,
+immune to both the degenerate `occurred_at` and the ack-before-send race, and
+additionally asserting that exactly one reply row was written.
+
+**Note the asymmetry:** the ORIGINAL buggy assertion would have passed this
+rerun, because reading a stale row is exactly what it did. The corrected one
+failed honestly and exposed a second defect. That is the argument for positive,
+identity-keyed assertions over negative regexes.
+
+**Proof impact: none outstanding.** Both defects were in harness code, never in
+product source. Case 11 is now genuinely proven at `7a1f213`.
 
 ## 3. EVIDENCE LEVEL PER CLAIM
 
