@@ -45,6 +45,19 @@ const CATEGORIES = [
     sql: `select id from lease_applications where status = any($1)
             and (terminal_at is null or terminal_code is null)`,
     params: [TERMINAL] },
+  // Terminal rows are EXCLUDED from both of these. A withdrawn application
+  // may legitimately preserve a prior approval milestone — going terminal
+  // never erases history that was authored while the row was progressive.
+  { key: "pre_submission_status_carrying_submitted_at", must_be_zero: true,
+    sql: `select id from lease_applications
+           where submitted_at is not null
+             and not (status = any($1)) and not (status = any($2))`,
+    params: [SUBMISSION_REACHED, TERMINAL] },
+  { key: "pre_approval_status_carrying_approved_at", must_be_zero: true,
+    sql: `select id from lease_applications
+           where approved_at is not null
+             and not (status = any($1)) and not (status = any($2))`,
+    params: [APPROVAL_REACHED, TERMINAL] },
   { key: "terminal_code_mismatched", must_be_zero: true,
     sql: `select id from lease_applications
            where terminal_code is not null and terminal_code <> status`,

@@ -145,3 +145,57 @@ drop trigger if exists trg_application_authors_milestones on lease_applications;
 create trigger trg_application_authors_milestones
   before insert or update on lease_applications
   for each row execute function ps_application_authors_milestones();
+
+-- ── FALSE MILESTONE SHAPES ──────────────────────────────────────────
+--  Crossing rules alone are not enough. These shapes could be produced by an
+--  ordinary UPDATE that never crosses a boundary, and each would directly
+--  corrupt a Slice 9 funnel:
+--
+--    draft carrying submitted_at        → a never-submitted row enters a
+--                                         submission-origin cohort
+--    draft/submitted carrying approved_at → an unapproved row enters an
+--                                         approval-origin cohort
+--    a terminal row ACQUIRING a previously-null milestone through a runtime
+--    update → history invented after the fact
+--
+--  What is explicitly still ALLOWED, because it is real history:
+--    submitted → declined  keeps submitted_at
+--    approved  → withdrawn keeps submitted_at and approved_at
+--  Those milestones were authored while the row was progressive; going
+--  terminal never erases them.
+--
+--  A later evidence-backed historical repair must be an explicit migration or
+--  governed repair mechanism — never an ordinary application update.
+alter table lease_applications drop constraint if exists ck_la_milestone_shape;
+alter table lease_applications add constraint ck_la_milestone_shape
+  check (
+    -- submitted_at only on a submission-reached status, or on a terminal row
+    -- that legitimately retains it from its progressive life.
+    (submitted_at is null
+     or ps_app_reached_submission(status)
+     or ps_app_is_terminal(status))
+    and
+    (approved_at is null
+     or ps_app_reached_approval(status)
+     or ps_app_is_terminal(status))
+  );
+
+create or replace function ps_application_no_retro_milestone() returns trigger as $$
+begin
+  -- A terminal row cannot ACQUIRE a milestone it did not already have.
+  -- Retaining one is history; gaining one is invention.
+  if ps_app_is_terminal(old.status) then
+    if old.submitted_at is null and new.submitted_at is not null then
+      raise exception 'a terminal application cannot acquire submitted_at through a runtime update (application %) — use an explicit governed repair', old.id;
+    end if;
+    if old.approved_at is null and new.approved_at is not null then
+      raise exception 'a terminal application cannot acquire approved_at through a runtime update (application %) — use an explicit governed repair', old.id;
+    end if;
+  end if;
+  return new;
+end $$ language plpgsql;
+
+drop trigger if exists trg_application_no_retro_milestone on lease_applications;
+create trigger trg_application_no_retro_milestone
+  before update on lease_applications
+  for each row execute function ps_application_no_retro_milestone();
