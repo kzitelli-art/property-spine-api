@@ -411,11 +411,28 @@ async function partB() {
     section("15 · transition guards hold against real rows");
     const w15 = await mkWO("needs_confirmation");
     const o15 = await oblOf(w15.workOrder.id);
+    // The guards fire in order: whitelist (before any DB read), then coupled
+    // fields, then the row read, then complete, then stale state. To prove the
+    // STALE guard against a real row the transition key must stay whitelisted —
+    // otherwise the whitelist refuses first and the stale guard is never
+    // reached. The first version of this case passed expected_type
+    // 'maintenance_repair', making the key maintenance_repair->emergency_repair,
+    // and proved the whitelist a second time while claiming to prove staleness.
+    // Both are asserted separately now.
     await throws(() => transitionObligation(c, {
       obligation_id: o15.id, expected_type: "maintenance_repair", expected_status: "open",
       to_type: "emergency_repair", label: "x", required_inputs: [], priority: "high",
       severity: "emergency", escalates_to_role: "property_manager", due_at: new Date() }),
-      /is now confirm_urgency/, "expected-type mismatch fails closed on a real row");
+      /not permitted/, "a non-whitelisted key is refused BEFORE the row is even read");
+    await throws(() => transitionObligation(c, {
+      obligation_id: o15.id, expected_type: "confirm_urgency", expected_status: "complete",
+      to_type: "maintenance_repair", label: "Maintenance request",
+      required_inputs: ["closeout_proof"], priority: "normal", severity: "normal" }),
+      /is now confirm_urgency\/open, not the expected confirm_urgency\/complete/,
+      "STALE STATE fails closed against a REAL row — the row is not what the caller believed");
+    const o15after = await oblOf(w15.workOrder.id);
+    ok(o15after.type === "confirm_urgency" && o15after.status === "open",
+       "and neither refusal mutated the row");
 
     // ── 21 ── §7.6 must not suppress a repeat reporter's NEW request
     //  Regression pin for a defect found in self-review: every outbound reply
