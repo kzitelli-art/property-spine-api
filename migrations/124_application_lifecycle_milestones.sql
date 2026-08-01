@@ -64,6 +64,29 @@ alter table lease_applications add constraint ck_la_terminal_pair
   check ((terminal_at is null and terminal_code is null)
       or (terminal_at is not null and terminal_code is not null));
 
+-- ── STATUS GROUPS — BOUNDARIES, NOT LABELS ──────────────────────────
+--  The first version of this trigger checked the exact strings 'submitted'
+--  and 'approved'. That missed the two paths the product actually uses: the
+--  submission service INSERTS directly at 'submitted', and the approval
+--  service advances straight to 'lease_ready'. A milestone rule that only
+--  fires on a label it never sees enforces nothing.
+--
+--  These are membership tests, so a future status added to a group is covered
+--  without a new trigger.
+create or replace function ps_app_reached_submission(p_status text) returns boolean as $$
+  select p_status in ('submitted','approved','lease_ready','tenant_signed',
+                      'countersigned','accepted_term_required','active');
+$$ language sql immutable;
+
+create or replace function ps_app_reached_approval(p_status text) returns boolean as $$
+  select p_status in ('approved','lease_ready','tenant_signed',
+                      'countersigned','accepted_term_required','active');
+$$ language sql immutable;
+
+create or replace function ps_app_is_terminal(p_status text) returns boolean as $$
+  select p_status in ('declined','withdrawn','expired');
+$$ language sql immutable;
+
 -- ── WRITE-ONCE ENFORCEMENT ──────────────────────────────────────────
 create or replace function ps_application_milestones_write_once() returns trigger as $$
 begin
@@ -79,6 +102,12 @@ begin
   if old.terminal_code is not null and new.terminal_code is distinct from old.terminal_code then
     raise exception 'terminal_code is write-once and cannot be changed (application %)', old.id;
   end if;
+  -- A terminal application is closed. A later pursuit is a NEW application,
+  -- so one row never represents two attempts (ruling A).
+  if ps_app_is_terminal(old.status) and not ps_app_is_terminal(new.status) then
+    raise exception 'a terminal application (%) cannot reopen into % — a later pursuit is a new application',
+      old.status, new.status;
+  end if;
   return new;
 end $$ language plpgsql;
 
@@ -87,36 +116,56 @@ create trigger trg_application_milestones_write_once
   before update on lease_applications
   for each row execute function ps_application_milestones_write_once();
 
--- ── TRANSITIONS MUST AUTHOR THEIR MILESTONE ─────────────────────────
---  A status change that crosses a milestone boundary must carry the timestamp
---  in the SAME statement. This is what stops a future writer from advancing an
---  application and leaving evidence to guess when it happened.
---
---  Scoped to rows that already participate in the milestone regime, so
---  historical rows with null milestones are not retroactively blocked from
---  ordinary maintenance.
-create or replace function ps_application_transition_authors_milestone() returns trigger as $$
+-- ── MILESTONE BOUNDARIES MUST BE AUTHORED, ON INSERT *AND* UPDATE ───
+--  The database is the backstop. It does not rely on every current writer
+--  behaving, and it covers an application BORN into a lifecycle state.
+create or replace function ps_application_authors_milestones() returns trigger as $$
+declare
+  old_submitted boolean := false;
+  old_approved  boolean := false;
+  old_terminal  boolean := false;
 begin
-  if new.status is distinct from old.status then
-    if new.status = 'submitted' and old.status = 'draft' and new.submitted_at is null then
-      raise exception 'crossing into submitted must author submitted_at in the same transaction (application %)', new.id;
+  if tg_op = 'UPDATE' then
+    old_submitted := ps_app_reached_submission(old.status);
+    old_approved  := ps_app_reached_approval(old.status);
+    old_terminal  := ps_app_is_terminal(old.status);
+  end if;
+
+  -- Crossing INTO submission (including birth at submitted).
+  if ps_app_reached_submission(new.status) and not old_submitted
+     and new.submitted_at is null then
+    raise exception 'reaching % requires submitted_at in the same statement (application %)',
+      new.status, new.id;
+  end if;
+
+  -- Crossing INTO approval (including a direct jump to lease_ready).
+  if ps_app_reached_approval(new.status) and not old_approved
+     and new.approved_at is null then
+    raise exception 'reaching % requires approved_at in the same statement (application %)',
+      new.status, new.id;
+  end if;
+
+  -- Terminal disposition. Terminal status alone does NOT prove submission or
+  -- approval: a draft may be withdrawn without ever being submitted, and its
+  -- submitted_at correctly stays null.
+  if ps_app_is_terminal(new.status) and not old_terminal then
+    if new.terminal_at is null or new.terminal_code is null then
+      raise exception 'a terminal disposition requires terminal_at and terminal_code in the same statement (application %)', new.id;
     end if;
-    if new.status = 'approved' and old.status is distinct from 'approved' and new.approved_at is null then
-      raise exception 'crossing into approved must author approved_at in the same transaction (application %)', new.id;
-    end if;
-    if new.status in ('declined','withdrawn','expired')
-       and old.status not in ('declined','withdrawn','expired')
-       and (new.terminal_at is null or new.terminal_code is null) then
-      raise exception 'a terminal disposition must author terminal_at and terminal_code in the same transaction (application %)', new.id;
+    if new.terminal_code <> new.status then
+      raise exception 'terminal_code (%) must match the terminal status (%) (application %)',
+        new.terminal_code, new.status, new.id;
     end if;
   end if;
+
   return new;
 end $$ language plpgsql;
 
 drop trigger if exists trg_application_transition_authors_milestone on lease_applications;
-create trigger trg_application_transition_authors_milestone
-  before update of status on lease_applications
-  for each row execute function ps_application_transition_authors_milestone();
+drop trigger if exists trg_application_authors_milestones on lease_applications;
+create trigger trg_application_authors_milestones
+  before insert or update on lease_applications
+  for each row execute function ps_application_authors_milestones();
 
 -- ── CONDITIONAL BACKFILL ────────────────────────────────────────────
 --  1. approved_at ← decided_at, ONLY where the current row proves approval was

@@ -358,3 +358,68 @@ delete LIFECYCLE_ORDER / reached() from evidence    NOT STARTED
 eleven negative controls                            NOT STARTED
 app renderer                                        NOT STARTED
 ```
+
+---
+
+## MIGRATION 124 AMENDED — structural holes closed (2026-08-01)
+
+Amended in place rather than superseded: 124 is branch-only and has never been
+recorded in any shared environment (verified — no `main` history for the file).
+
+Four holes, all confirmed against the live code before fixing:
+
+| Hole | Reality that exposed it |
+|---|---|
+| Enforced on `UPDATE` only | `applicationSubmission.js` **INSERTs directly at `'submitted'`** — the trigger never fired |
+| Matched exact labels `submitted` / `approved` | `applications.js:455` advances **straight to `'lease_ready'`** — approval was never caught |
+| No jump detection | `submitted → lease_ready` crossed the approval boundary unchecked |
+| `terminal_code` unconstrained vs status | `status='declined'` with `terminal_code='withdrawn'` was accepted |
+
+**Now enforced by three immutable group functions** (`ps_app_reached_submission`,
+`ps_app_reached_approval`, `ps_app_is_terminal`) so boundaries are membership
+tests, not string matches — a future status added to a group is covered without
+a new trigger. The authoring trigger fires **`before insert or update`**.
+
+Also added: a terminal application **cannot reopen** into a non-terminal status
+(a later pursuit is a new application record).
+
+### Ten negative controls, all correct
+
+```
+1  INSERT submitted without submitted_at          REJECTED
+2  INSERT lease_ready without milestones          REJECTED
+3  INSERT submitted with submitted_at             accepted
+4  submitted → lease_ready without approved_at    REJECTED
+5  submitted → lease_ready with approved_at       accepted
+6  terminal status with mismatched code           REJECTED
+7  terminal with matching code                    accepted
+8  declined → submitted (reopen)                  REJECTED
+9  approved_at survives the decline               RETAINED
+10 draft → withdrawn, never submitted             accepted, submitted_at NULL
+```
+
+Control 10 matters: terminal status alone does not prove submission. A
+withdrawn draft keeps `submitted_at` null rather than acquiring a fabricated
+one.
+
+### ⚠️ 124 AND THE WRITER CUTOVER ARE NOW INSEPARABLE
+
+Because the trigger fires on INSERT, **migration 124 breaks the live
+submission path until the writers author milestones.**
+`applicationSubmission.js` inserts at `'submitted'` with no `submitted_at`,
+and will now be refused by the database.
+
+This is the backstop working as intended — but it means **124 must not be
+merged, or deployed, ahead of the canonical lifecycle writer.** They land
+together or not at all. The next session must complete the writer cutover
+before this branch is mergeable.
+
+## NEXT — canonical lifecycle authority
+
+`src/applications/application_lifecycle.js`, accepting an existing transaction
+client, never opening its own. Operations: `markSubmitted`,
+`markApprovedOrLeaseReady`, `markTenantSigned`, `markCountersigned`,
+`markAcceptedTermRequired`, `markActive`, `markTerminal`. No generic
+arbitrary-column update API. Then cut over all eight statements across the five
+files, and add a source audit that fails when an unapproved source writes
+`lease_applications.status` directly.
