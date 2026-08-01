@@ -25,9 +25,11 @@ const buildStaffBridge = require("../src/identity/staffbridge.js");
 const buildConversion = require("../src/leasing/leasingconversion.js");
 
 const CONN = receipt.harnessConnectionString();
-// every `await T(...)` in this file; a run reporting fewer is INVALID,
-// not merely quiet — the failure mode this receipt exists to catch.
-const EXPECTED = 35;
+// The OBSERVED full-run count. A grep for `await T(` finds only 35 — the rest
+// go through the check() helper — so the first estimate was a floor set below
+// the real total, which would have let a truncated run pass the guard. 44 is
+// what a run that reaches the end actually executes.
+const EXPECTED = 44;
 const pool = new Pool({ connectionString: CONN });
 
 let pass = 0, fail = 0;
@@ -270,15 +272,39 @@ async function call(port, method, urlPath, { token, body } = {}) {
       user_id: S.katie, create_staff_person: { name: "Katie", property_id: S.prop },
       reason_code: "proof_seed", performed_by_user_id: S.admin });
     S.katiePerson = katieOut.person_id;
-    const mkAsg = (pid, prop) => c.query(
-      `insert into assignments (person_id, property_id, role, scope) values ($1,$2,'leasing','leasing')`, [pid, prop]);
-    await mkAsg(S.kandicePerson, S.prop);
-    await mkAsg(S.katiePerson, S.prop);
+    // ── THE FULL PRODUCTION AUTHORITY SHAPE ──────────────────────────
+    //  resolveStaffIdentity requires FIVE things, not four. The AUTHORITY VETO
+    //  (staff_identity_resolver.js:189-205, added 2026-07-26) additionally
+    //  demands an ACTIVE property_team_assignments row for the same user at the
+    //  same property: "an owner must be able to do the work."
+    //
+    //  This fixture predates that veto. It gave people a bridge, an active
+    //  account and an active assignment — and stopped there — so the resolver
+    //  correctly answered no_property_authority and the harness read it as a
+    //  regression. Nothing in the resolver is bypassed or relaxed here; the
+    //  fixture now supplies the fifth condition the product has required since
+    //  July. assignments keys on person_id; property_team_assignments keys on
+    //  user_id — hence both handles.
+    //
+    //  John is deliberately NOT routed through this helper. He keeps a team row
+    //  with no bridge and no assignment, which is exactly the 004↔035
+    //  divergence F5 exists to report.
+    const mkAsg = async (pid, uid, prop) => {
+      await c.query(
+        `insert into assignments (person_id, property_id, role, scope) values ($1,$2,'leasing','leasing')`, [pid, prop]);
+      await c.query(
+        `insert into property_team_assignments (property_id, user_id, role_title, allowed_modules, active)
+         values ($1,$2,'Leasing Agent', array['leasing'], true)`, [prop, uid]);
+    };
+    await mkAsg(S.kandicePerson, S.kandice, S.prop);
+    await mkAsg(S.katiePerson, S.katie, S.prop);
     for (const [key, uid] of [["susP", S.suspended], ["invP", S.invited], ["froP", S.frozen], ["inaP", S.inactive]]) {
       const o = await bridgeSvc.linkBridge(c, {
         user_id: uid, create_staff_person: { name: key }, reason_code: "proof_seed",
         performed_by_user_id: S.admin });
-      S[key] = o.person_id; await mkAsg(o.person_id, S.prop);
+      // their ACCOUNT is the failure subject, so everything else must be valid —
+      // otherwise the assertion could pass for the wrong reason.
+      S[key] = o.person_id; await mkAsg(o.person_id, uid, S.prop);
     }
     const dp = await bridgeSvc.linkBridge(c, {
       user_id: S.dupA, create_staff_person: { name: "Dup Person" }, reason_code: "proof_seed",
@@ -286,7 +312,7 @@ async function call(port, method, urlPath, { token, body } = {}) {
     S.dupPerson = dp.person_id;
     await bridgeSvc.linkBridge(c, { user_id: S.dupB, person_id: S.dupPerson,
       reason_code: "proof_seed_conflict", performed_by_user_id: S.admin });
-    await mkAsg(S.dupPerson, S.prop);
+    await mkAsg(S.dupPerson, S.dupA, S.prop);
     // an INACTIVE assignment subject: bridged person, assignment exists but off
     const iaOut = await bridgeSvc.classifyAccount(c, { user_id: S.nonadmin, account_kind: "human_staff", performed_by_user_id: S.admin });
     const iap = await bridgeSvc.linkBridge(c, { user_id: S.nonadmin,
@@ -294,6 +320,10 @@ async function call(port, method, urlPath, { token, body } = {}) {
     S.normPerson = iap.person_id;
     await c.query(`insert into assignments (person_id, property_id, role, scope, is_active)
                    values ($1,$2,'leasing','leasing', false)`, [S.normPerson, S.prop]);
+    // the ASSIGNMENT being off is the subject — team authority is present so
+    // the resolver fails him for that reason and not for a missing fifth row.
+    await c.query(`insert into property_team_assignments (property_id, user_id, role_title, allowed_modules, active)
+                   values ($1,$2,'Leasing Agent', array['leasing'], true)`, [S.prop, S.nonadmin]);
   });
 
   // ────────────────────────────────────────────────────────────────
@@ -306,10 +336,10 @@ async function call(port, method, urlPath, { token, body } = {}) {
     assert(r.state === expectState, `expected ${expectState}, got ${r.state} (${r.basis})`);
   });
 
-  await check("C1  resolved: bridge + human_staff + active account + active assignment HERE", S.kandice, "resolved");
+  await check("C1  resolved: bridge + human_staff + active account + active assignment HERE + active team authority", S.kandice, "resolved");
   await T("C1b resolved result carries user/person/assignment/role/basis", async () => {
     const r = await rs(S.kandice);
-    assert(r.person_id && r.assignment_id && r.role === "leasing" && r.basis === "bridge_plus_active_assignment");
+    assert(r.person_id && r.assignment_id && r.role === "leasing" && r.basis === "bridge_plus_active_assignment_plus_authority");
   });
   await check("C2  unbridged: no person_id", S.john, "unbridged");
   await check("C3  user_inactive: is_active=false fails closed", S.inactive, "user_inactive");
