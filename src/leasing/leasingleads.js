@@ -28,6 +28,7 @@ const { recordPersonFact } = require("../identity/person_facts.js"); // 092: the
 const crypto = require("crypto");
 const aiLeasingStrategy = require("./ai_leasing_strategy");
 const aiLeasingStrategyRuntime = require("./ai_leasing_strategy_runtime");
+const aiLeasingOperatingContext = require("./ai_leasing_operating_context"); // GOVERNED OPERATING CONTEXT LEASING v1
 const AI_FIRST_RESPONSE_PROMPT_REVISION = "leasing-first-response-v2";
 // Rule-0 capture-first attribution buckets (Fable ruling): two materially different
 // truths, never folded together. A MISSING/blank tag = no channel data arrived.
@@ -337,7 +338,32 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // confident wrong (§5): an invented tour time is a prospect-facing lie.
   // If pricing/availability is unknown, the AI says so rather than inventing it.
   // Deterministic fallback if the model is unavailable.
-  async function draftFirstResponse({ name, unitLabel, propertyName, rent, slots, strategyEnvelope = null }) {
+  // OPERATING-CONTEXT READ-FAILURE RULING (mandatory corrections #6, #7).
+  //
+  // #7 — what happens when governed rules cannot be verified: this path has no
+  // draft/review step (unlike ongoing/regenerated replies) — it sends
+  // immediately, by design, so "prepare but don't send" isn't available without
+  // building a whole new review gate, a materially bigger change than this
+  // correction. The safe alternative that's already available: if the
+  // property's governed policies/SOPs/guardrails cannot be verified, do NOT
+  // let a free-text model call run ungoverned — skip the model call entirely
+  // and use the SAME deterministic, fact-only fallback this function already
+  // sends when the model is unavailable or errors (a fixed template with only
+  // verified unit/rent data, never free text). That fallback is guardrail-safe
+  // by construction: nothing it can say is something a guardrail would need to
+  // constrain. "Fail open" (send an ungoverned model reply as if zero rules
+  // existed) was rejected — an unverified governance state is not the same
+  // fact as a verified empty one (PHILOSOPHY.md §5).
+  //
+  // #6 — provenance: this surface has no agent_runs row (that table only
+  // exists for the ongoing/regenerated draft flow), so exact-rule-snapshot
+  // persistence the way agent.js does it doesn't apply here. Rather than
+  // stay silent about that gap, the caller (intakeProspect) records
+  // ai_operating_context_hash and ai_operating_context_unavailable on the
+  // SAME lead_events row it already writes for this send — real, durable,
+  // queryable provenance using the existing event trail, narrower than a full
+  // snapshot but honest about what it is.
+  async function draftFirstResponse({ name, unitLabel, propertyName, propertyId = null, rent, slots, strategyEnvelope = null }) {
     const slotList = Array.isArray(slots) ? slots.filter(s => s && s.label) : [];
     const haveSlots = slotList.length > 0;
     const slotPhrase = haveSlots ? slotList.slice(0, 2).map(s => s.label).join(" or ") : null;
@@ -362,7 +388,22 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     // `slotPhrase` stays available for the model branch below, which may offer
     // real times if the prospect's message already signalled tour intent.
     void slotPhrase;
-    if (!anthropic) return { body: fallback, strategyApplied: false };
+    if (!anthropic) return { body: fallback, strategyApplied: false, operatingContextApplied: false, operatingContextHash: null, operatingContextUnavailable: false };
+
+    let operatingRules = [];
+    let operatingDirective = "";
+    let operatingContextHash = null;
+    try {
+      operatingRules = propertyId ? await aiLeasingOperatingContext.loadActiveRules(pool, propertyId) : [];
+      operatingDirective = aiLeasingOperatingContext.buildOperatingContextDirective(operatingRules);
+      operatingContextHash = aiLeasingOperatingContext.snapshotHash(operatingRules);
+    } catch (e) {
+      // Read (or over-budget) failure: see the ruling above the function.
+      // Never call the model without a verified governance state.
+      console.error("leasing operating context unavailable for first response:", e.message);
+      return { body: fallback, strategyApplied: false, operatingContextApplied: false, operatingContextHash: null, operatingContextUnavailable: true };
+    }
+
     try {
       const runtimeStrategyEnvelope = strategyEnvelope
         ? aiLeasingStrategyRuntime.validatedEnvelopeForRuntime(strategyEnvelope, {
@@ -384,11 +425,20 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         `If unit or rent is unknown, DO NOT invent it — say you're confirming. Never invent a tour time, price, or availability. ` +
         `Do NOT try to close a lease, ask for an application, or request documents. ` +
         (strategyDirective ? `${strategyDirective} ` : "") +
+        (operatingDirective ? `${operatingDirective} ` : "") +
         `Unit: ${unitLabel || "(unknown — confirming)"}. Rent: ${rent ? "$" + rent : "(unknown — confirming)"}. Reply with ONLY the message text.`;
       const r = await anthropic.messages.create({ model: INGEST_MODEL, max_tokens: 200, messages: [{ role: "user", content: prompt }] });
       const text = (r.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
-      return { body: text || fallback, strategyApplied: !!(text && runtimeStrategyEnvelope) };
-    } catch (e) { console.error("leasing draftFirstResponse:", e.message); return { body: fallback, strategyApplied: false }; }
+      return {
+        body: text || fallback, strategyApplied: !!(text && runtimeStrategyEnvelope),
+        operatingContextApplied: !!text, operatingContextHash, operatingContextUnavailable: false,
+      };
+    } catch (e) {
+      console.error("leasing draftFirstResponse:", e.message);
+      // Model failure, not a governance-read failure — operating rules WERE
+      // verified, they just were never used because no model reply exists.
+      return { body: fallback, strategyApplied: false, operatingContextApplied: false, operatingContextHash: null, operatingContextUnavailable: false };
+    }
   }
 
   // ════════════════════════════════════════════════════════════════════
@@ -632,7 +682,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         // for preferred timing.
         const offerSlots = await readOfferableSlots(pool, { propertyId, limit: 2 });
         const drafted = await draftFirstResponse({
-          name: person.name, unitLabel, propertyName: prop.display_name,
+          name: person.name, unitLabel, propertyName: prop.display_name, propertyId,
           rent, slots: offerSlots, strategyEnvelope,
         });
         const body = drafted.body;
@@ -678,7 +728,12 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
             await c2.query("begin");
             await recordLeadEvent(c2, {
               leadId: lead.id, type: "ai_text_sent", actorType: "ai", commEventId: commEvent.id,
-              metadata: { sent: wire.sent, reason: wire.reason || null },
+              metadata: {
+                sent: wire.sent, reason: wire.reason || null,
+                ai_operating_context_hash: drafted.operatingContextHash || null,
+                ai_operating_context_applied: !!drafted.operatingContextApplied,
+                ai_operating_context_unavailable: !!drafted.operatingContextUnavailable,
+              },
               statusPatch: { first_response_at: new Date().toISOString() },
             });
             await c2.query("commit");
@@ -697,7 +752,12 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
             await c2.query("begin");
             await recordLeadEvent(c2, {
               leadId: lead.id, type: "ai_response_prepared", actorType: "ai", commEventId: commEvent.id,
-              metadata: { sent: false, prepared: true, channel: b.response_channel || "demo_browser" },
+              metadata: {
+                sent: false, prepared: true, channel: b.response_channel || "demo_browser",
+                ai_operating_context_hash: drafted.operatingContextHash || null,
+                ai_operating_context_applied: !!drafted.operatingContextApplied,
+                ai_operating_context_unavailable: !!drafted.operatingContextUnavailable,
+              },
               statusPatch: { first_response_at: new Date().toISOString() },
             });
             await c2.query("commit");

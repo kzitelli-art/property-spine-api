@@ -56,6 +56,7 @@ module.exports = function operatorModule(deps) {
   const { institutionalRentRoll, institutionalCsv } = require("../surfaces/rent_roll_institutional"); // formal as-of schedule + CSV
   const { availabilityRead } = require("../surfaces/availability_read");   // Availability over the shared classifier
   const { effectivePropertyPricing } = require("../money/effective_pricing"); // the Pricing & Concessions truth sheet
+  const aiLeasingOperatingContext = require("../leasing/ai_leasing_operating_context"); // GOVERNED OPERATING CONTEXT LEASING v1
   // ── THE ONE CANONICAL TENANCY-ANCHOR SERVICE (Fable ruling) ──────────
   // The SAME countersign + confirm-term implementation applications.js calls.
   // Injected from server.js (built once from the obligation engine). The two
@@ -276,6 +277,101 @@ module.exports = function operatorModule(deps) {
     required_documents:"documents", office_contact:"routing", communication_instructions:"routing",
   };
   const SOURCE_TYPES = ["management_policy","lease_or_addendum","verified_operator_confirmation","other_documented_source"];
+
+  // ════════════════════════════════════════════════════════════════════
+  // GOVERNED OPERATING CONTEXT — leasing consumer, shared knowledge + operating rules.
+  // Strategy is read-only here: editing a strategy means creating a new immutable
+  // version and rerunning behavioral validation, never mutating a live prompt.
+  // Property and actor are always derived from the staff session.
+  //
+  // AUTHORITY (mandatory correction #1): reads only need leasing-module access,
+  // same as agent-facts today. WRITES need more — an ordinary leasing user
+  // rewriting the guardrails that constrain the AI's fair-housing and pricing
+  // behavior is not a module-access question, it's a governance question. This
+  // reuses `can_manage_roles`, the SAME "explicit governed override" already
+  // gating the application-approval override elsewhere in this file
+  // (POST /operator/leasing/applications/:id/approve) — not a new authority
+  // mechanism, the existing one applied to a new write.
+  // ════════════════════════════════════════════════════════════════════
+  function requireGovernanceAuthority(req, res, next) {
+    if (req.operator && req.operator.can_manage_roles === true) return next();
+    console.error("[ai-rules governance refused]", JSON.stringify({
+      user_id: req.operator && req.operator.id, property_id: req.operator && req.operator.property_id,
+      role: req.operator && req.operator.role, role_title: req.operator && req.operator.role_title,
+      route: req.originalUrl, at: new Date().toISOString(),
+    }));
+    return res.status(403).json({ error: "not_permitted" });
+  }
+
+  router.get("/operator/leasing/ai-settings", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const out = await aiLeasingOperatingContext.listSettings(pool, {
+        propertyId: req.operator.property_id,
+      });
+      return res.json(out);
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    }
+  });
+
+  router.post("/operator/leasing/ai-rules", requireOperator, requireLeasingModuleAccess, requireGovernanceAuthority, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const rule = await aiLeasingOperatingContext.createRule(client, {
+        propertyId: req.operator.property_id,
+        actorUserId: req.operator.id,
+        input: req.body,
+      });
+      await client.query("commit");
+      return res.json({ receipt: `${rule.rule_kind} created.`, rule });
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    } finally { client.release(); }
+  });
+
+  router.post("/operator/leasing/ai-rules/:ruleId/replace", requireOperator, requireLeasingModuleAccess, requireGovernanceAuthority, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await aiLeasingOperatingContext.replaceRule(client, {
+        ruleId: req.params.ruleId,
+        propertyId: req.operator.property_id,
+        actorUserId: req.operator.id,
+        retiredByUserId: req.operator.id,
+        retirementReason: (req.body && typeof req.body.retirement_reason === "string") ? req.body.retirement_reason : null,
+        input: req.body,
+      });
+      await client.query("commit");
+      return res.json({ receipt: `${out.replacement.rule_kind} replaced.`, ...out });
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    } finally { client.release(); }
+  });
+
+  router.post("/operator/leasing/ai-rules/:ruleId/retire", requireOperator, requireLeasingModuleAccess, requireGovernanceAuthority, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await aiLeasingOperatingContext.retireRule(client, {
+        ruleId: req.params.ruleId,
+        propertyId: req.operator.property_id,
+        retiredByUserId: req.operator.id,
+        retirementReason: (req.body && typeof req.body.retirement_reason === "string") ? req.body.retirement_reason : null,
+      });
+      await client.query("commit");
+      return res.json({ receipt: "Rule retired.", ...out });
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    } finally { client.release(); }
+  });
 
   // GET /operator/agent-facts — active + retired facts for the SESSION's property.
   // ── TURN-PRIORITY (session-scoped) — GET /operator/leasing/turn-priority ──
