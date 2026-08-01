@@ -229,6 +229,59 @@ async function renewalsCohort(pool, { property_id, horizon_days = DEFAULT_HORIZO
 
 const { renewalLifecycle } = require("./renewal_lifecycle");
 
+// ── SLICE 8 — GOVERNED RENEWAL ECONOMICS ────────────────────────────
+//  Reads the CANONICAL pricing service, never pricing_terms directly, so a
+//  renewal rent and the Market & Pricing rent are the same number by
+//  construction rather than by agreement.
+//
+//  A published type may carry several renewal terms (6 / 12 / 18 months). A
+//  renewal has no chosen term until a human chooses one, so selecting a term
+//  here would be inventing a decision and calling it a fact. Exactly one
+//  unambiguous renewal rent fills the socket; anything else reports null and
+//  names why.
+//
+//  Returns Map<unit_id, { rent, source, as_of, version_id, reason }>.
+async function governedRenewalEconomics(pool, { property_id, as_of, unitIds }) {
+  const out = new Map();
+  if (!unitIds.length) return out;
+
+  const { effectivePropertyPricing } = require("../money/effective_pricing");
+  const pricing = await effectivePropertyPricing(pool, { property_id, as_of });
+
+  const typeRows = (await pool.query(
+    "select id, unit_type_id from units where property_id=$1 and id = any($2::uuid[])",
+    [property_id, unitIds]
+  )).rows;
+  const typeByUnit = new Map(typeRows.map((r) => [String(r.id), r.unit_type_id ? String(r.unit_type_id) : null]));
+
+  const byType = new Map((pricing.unit_types || []).map((t) => [String(t.unit_type_id), t]));
+  const versionId = pricing.published_version ? pricing.published_version.version_id : null;
+
+  for (const unitId of unitIds.map(String)) {
+    const blank = (reason) => out.set(unitId, { rent: null, source: null, as_of: pricing.as_of, version_id: null, reason });
+
+    if (!versionId) { blank("no_published_pricing_version"); continue; }
+    const typeId = typeByUnit.get(unitId);
+    if (!typeId) { blank("unit_type_not_governed"); continue; }
+    const t = byType.get(typeId);
+    if (!t || t.offer_state !== "offered") { blank("unit_type_not_priced"); continue; }
+
+    const rents = [...new Set((t.terms || [])
+      .map((x) => x.renewal_rent)
+      .filter((v) => v != null)
+      .map(Number))];
+
+    if (rents.length === 0) { blank("no_renewal_rent_in_governed_terms"); continue; }
+    if (rents.length > 1) { blank("multiple_governed_renewal_terms"); continue; }
+
+    out.set(unitId, {
+      rent: rents[0], source: "governed_pricing_version",
+      as_of: pricing.as_of, version_id: versionId, reason: null,
+    });
+  }
+  return out;
+}
+
 async function renewalsCohortEnriched(pool, opts = {}) {
   if (!opts || !opts.property_id) throw new Error("renewalsCohortEnriched requires property_id");
   const base = await renewalsCohort(pool, opts);
@@ -291,9 +344,17 @@ async function renewalsCohortEnriched(pool, opts = {}) {
     : [];
   const oblById = new Map(oblRows.map((r) => [String(r.related_id), r]));
 
+  // One resolution for the whole cohort — the same governed sheet every row
+  // is measured against, read once.
+  const econByUnit = await governedRenewalEconomics(pool, {
+    property_id, as_of: asOf,
+    unitIds: [...new Set(openRows.map((r) => r.unit_id).filter(Boolean).map(String))],
+  });
+
   const enriched = openRows.map((r) => {
     const rc = caseByLease.get(String(r.lease_id)) || null;
     const offer = offerByLease.get(String(r.lease_id)) || null;
+    const econ = r.unit_id ? (econByUnit.get(String(r.unit_id)) || null) : null;
     const obl = rc && rc.obligation_id ? oblById.get(String(rc.obligation_id)) : null;
 
     const ownerUserId = obl ? obl.assigned_user_id : (rc && rc.obligation_id ? null : null);
@@ -309,10 +370,12 @@ async function renewalsCohortEnriched(pool, opts = {}) {
         owner: ownerUserId ? { user_id: ownerUserId } : null,
         due_at: dueAt,
         current_rent: r.current_rent,
-        // Slice 8 governed economics — not yet authored anywhere:
-        governed_proposed_rent: null,
-        economics_source: null,
-        economics_as_of: null,
+        // Slice 8: resolved from the canonical pricing service. Null carries a
+        // reason; it is never an unexplained blank.
+        governed_proposed_rent: econ ? econ.rent : null,
+        economics_source: econ ? econ.source : null,
+        economics_as_of: econ ? econ.as_of : null,
+        economics_unavailable_reason: econ ? econ.reason : "governed_economics_not_resolved",
       },
       asOf
     );
@@ -326,6 +389,10 @@ async function renewalsCohortEnriched(pool, opts = {}) {
       responsibility_role: obl ? obl.assigned_role : null,
       // server-authored lifecycle
       ...life,
+      // Slice 8 lineage: which governed sheet this proposed rent came from.
+      // Null whenever proposed_rent is null — a rent with no version never
+      // claims one.
+      economics_version_id: econ ? econ.version_id : null,
     };
   });
 

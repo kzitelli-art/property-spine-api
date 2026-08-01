@@ -1690,6 +1690,52 @@ module.exports = function operatorModule(deps) {
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null }); }
   });
 
+  // ── SLICE 8 — GOVERNED CONCESSION READ ──────────────────────────────
+  //  Slice 7's audit recorded that concessions had governed tables but no
+  //  operator read. Read-only: authors nothing, approves nothing. Effective
+  //  state is server-authored so no surface has to decide for itself whether
+  //  a dated concession is live today.
+  router.get("/operator/pricing/concessions", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { governedConcessions } = require("../money/concessions_read");
+      return res.json(await governedConcessions(pool, {
+        property_id: req.operator.property_id,   // session only, never the query
+        as_of: req.query.as_of || null,
+      }));
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null }); }
+  });
+
+  // ── SLICE 8 — PUBLISH A GOVERNED PRICING VERSION ────────────────────
+  //  publishVersion() has existed and been complete since 062; it simply had
+  //  no route, which is why every property reads published_version: null and
+  //  the governed sheet has never been the thing anyone quotes from.
+  //
+  //  Authority is NOT this route's business: publishVersion calls
+  //  pricingAuthority and throws 403 without may_publish_pricing, refuses an
+  //  unapproved or mismatched review receipt (409), and refuses self-review by
+  //  a grant holder (403). The route adds session scope and nothing else.
+  //
+  //  dry_run defaults TRUE. A malformed or accidental POST rehearses against
+  //  real constraints and triggers, then rolls back. Publishing requires
+  //  saying dry_run:false out loud.
+  router.post("/operator/pricing/publish", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { publishVersion } = require("../money/pricing_lifecycle");
+      const b = req.body || {};
+      const out = await publishVersion(pool, {
+        property_id: req.operator.property_id,   // session only, never the body
+        user_id: req.operator.id,                // session only, never the body
+        draft_version_id: b.draft_version_id || null,
+        proposal: b.proposal || {},
+        review_receipt_id: b.review_receipt_id || null,
+        dry_run: b.dry_run !== false,
+      });
+      return res.json(out);
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null }); }
+  });
+
   // Shadow comparison. Sends nothing, writes nothing.
   router.post("/operator/pricing/shadow-quote", requireOperator, async (req, res) => {
     res.set("Cache-Control", "no-store");
