@@ -405,8 +405,12 @@ async function markTermConfirmationRequiredFromExecutedLease(client, {
   // supersedes_record_id" is an absence of contradiction, not evidence of
   // currency, and it silently passes for a record the application has already
   // moved off.
-  if (before.executed_lease_record_id
-      && String(before.executed_lease_record_id) !== String(executedLeaseRecordId)) {
+  // The pointer must be NON-NULL and exact. Guarding only "non-null AND
+  // mismatched" let a null pointer pass, which is the same defect wearing a
+  // different shape: an application with no pointer has no current record, so
+  // nothing can be its current record.
+  if (!before.executed_lease_record_id
+      || String(before.executed_lease_record_id) !== String(executedLeaseRecordId)) {
     throw refuse("executed_lease_record_not_current",
       "That executed-lease record is not the one this application currently points at.",
       { application_id: applicationId });
