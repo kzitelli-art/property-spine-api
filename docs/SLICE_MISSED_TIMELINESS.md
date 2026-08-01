@@ -1,7 +1,7 @@
 # Slice — record the miss durably (ITEM 1)
 
 **Status: PROVEN against real Postgres, 2026-08-01.** Migration 126 applied to
-the isolated Neon branch `ep-small-morning-aqxjnmz9-pooler`; conversion rail
+a disposable isolated Neon branch; conversion rail
 **15/15, exit 0**, at commit `3e44e8b` on `claude/slice-missed-timeliness`.
 Not merged.
 
@@ -22,12 +22,19 @@ than automatic detection (Part 2), and adds the service contract (Part 5).
 HARNESS   test_conversion_rail.db.js
 COMMIT    3e44e8bbcd22e167ece77d2c2661845e24f1c4cc (RENDER_GIT_COMMIT)
 BRANCH    claude/slice-missed-timeliness
-DATABASE  neondb @ ep-small-morning-aqxjnmz9-pooler...:5432 (user neondb_owner)
+DATABASE  <redacted>  (isolated Neon branch, disposable, auto-delete)
 ISOLATED  yes — target differs from DATABASE_URL
 EXPECTED  15 assertions
 ASSERTIONS COMPLETE · 15 run · 15 passed · 0 failed
 EXIT      0
 ```
+
+Host, database and user are redacted deliberately: a proof receipt gets pasted
+into chat and issues, and connection detail does not belong in a committed file.
+What the receipt must establish is that the target was NOT production — the
+harness guard enforces that structurally (it refuses when the target resolves to
+the same host/port/database as DATABASE_URL), and the unredacted run output
+carried `ISOLATED yes`.
 
 Alongside, same run: closure-boundary gate PASS (exit 0), one-implementation
 14/14 (exit 0), import smoke 8/8 (exit 0). Migration 126 reported
