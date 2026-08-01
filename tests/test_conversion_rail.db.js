@@ -5,13 +5,20 @@
 //  the REAL obligation engine (extracted verbatim from server.js) and the REAL
 //  migration 047. No in-memory simulation. Each scenario is a transaction.
 //
-//  Run:  DATABASE_URL=... node test_conversion_rail.db.js
+//  Run:  HARNESS_DATABASE_URL="..." node test_conversion_rail.db.js
 // ════════════════════════════════════════════════════════════════════
+const receipt = require("./_run_receipt.js");
 const { Pool } = require("pg");
 const engine = require("./_engine.js");
 const buildModule = require("../src/leasing/leasingconversion.js");
+// THE CLOSURE AUTHORITY. leasingconversion.js fails CLOSED without it
+// (leasingconversion.js:35-37) — and this harness was not passing it, so it
+// threw at BUILD time and no assertion in this file had run for as long as
+// that guard has existed. Mounted here exactly as server.js:3284 mounts it.
+const { createConversionClosureAuthority } = require("../src/leasing/conversion_obligation_closure.js");
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const CONN = receipt.harnessConnectionString();
+const pool = new Pool({ connectionString: CONN });
 
 // Mount the module to get its service layer (router._service), injecting the
 // REAL engine functions exactly as server.js does.
@@ -19,6 +26,7 @@ const router = buildModule({
   pool,
   spawnObligationFromEvent: engine.spawnObligationFromEvent,
   completeObligation: engine.completeObligation,
+  closureAuthority: createConversionClosureAuthority(),
 });
 const svc = router._service;
 
@@ -56,16 +64,51 @@ async function seed() {
     )).rows[0];
     // users table: insert minimal — discover its required columns first.
     // baseline users has at least id, name, role likely. Use name only + role if needed.
-    async function mkUser(name) {
-      // try name+role; fall back to name only
-      try { return (await c.query(`insert into users (name) values ($1) returning id`, [name])).rows[0].id; }
-      catch { return (await c.query(`insert into users (name, role) values ($1,'leasing_agent') returning id`, [name])).rows[0].id; }
+    // ── ELIGIBLE STAFF, built through the SAME chain production requires ──
+    //  resolveStaffIdentity returns "resolved" only for a user that is:
+    //    1. active + status active + account_kind 'human_staff'
+    //    2. BRIDGED to a durable person (users.person_id)
+    //    3. holding an ACTIVE assignments row at this property
+    //    4. holding an ACTIVE property_team_assignments row — the authority
+    //       VETO added 2026-07-26: an owner must be able to do the work
+    //    5. unconflicted (exactly one active user per person)
+    //
+    //  The old mkUser created ONLY a bare users row, so every "host" in this
+    //  file was an attributed CLAIM and never an eligible OWNER. That is why
+    //  scenario 4 expected Katie to own the rung and production honestly
+    //  refused: attribution does not confer operating authority. Nothing about
+    //  the resolver is bypassed or weakened here — the fixture now supplies the
+    //  real thing.
+    async function mkUser(name, { eligible = true } = {}) {
+      const person = (await c.query(
+        `insert into persons (name, lifecycle_status) values ($1,'lead') returning id`, [name])).rows[0].id;
+      const uid = (await c.query(
+        `insert into users (name, role, person_id, account_kind, is_active, status)
+         values ($1,'leasing_agent',$2,'human_staff',true,'active') returning id`,
+        [name, person])).rows[0].id;
+      if (!eligible) return uid;   // deliberately attribution-only — see scenario 4b
+      // assignments.role is a CLOSED vocabulary (ck_assign_role, widened in
+      // 041): 'leasing', not 'leasing_agent'. The resolver deliberately does
+      // NOT read this role — role/module are COVERAGE questions belonging to
+      // resolveSendActionBasis (staff_identity_resolver.js:189-193) — so the
+      // value only has to be a legal one, and inventing a role here would not
+      // buy eligibility anyway.
+      await c.query(
+        `insert into assignments (person_id, property_id, role, is_active)
+         values ($1,$2,'leasing',true)`, [person, prop.id]);
+      await c.query(
+        `insert into property_team_assignments (property_id, user_id, role_title, allowed_modules, active)
+         values ($1,$2,'Leasing Agent', array['leasing'], true)`, [prop.id, uid]);
+      return uid;
     }
     ctx.property_id = prop.id;
     ctx.katie  = await mkUser("Katie Leung");     // actual host in most scenarios
     ctx.warren = await mkUser("Warren Diaz");      // scheduled host
     ctx.candace= await mkUser("Candace Riley");    // handoff successor
     ctx.olivia = await mkUser("Olivia Grant");     // leasing manager (gate)
+    // Scenario 4b's host: a real, active, bridged staff account that holds NO
+    // assignment at this property. Attributable, not authorised.
+    ctx.drew  = await mkUser("Drew Halloran", { eligible: false });
     const person = (await c.query(
       `insert into persons (name, lifecycle_status) values ('Ava Morgan','lead') returning id`
     )).rows[0];
@@ -73,6 +116,10 @@ async function seed() {
     // a second prospect for the no-host-confirmation scenario
     ctx.person2_id = (await c.query(
       `insert into persons (name, lifecycle_status) values ('Marcus Webb','lead') returning id`
+    )).rows[0].id;
+    // a third prospect, toured by the ineligible host (scenario 4b)
+    ctx.person3_id = (await c.query(
+      `insert into persons (name, lifecycle_status) values ('Priya Raman','lead') returning id`
     )).rows[0].id;
     const tour = (await c.query(
       // leasing_tours.lead_id is NOT NULL in the real schema (migration 038) — a
@@ -90,6 +137,7 @@ async function seed() {
 }
 
 async function main() {
+  receipt.begin(__filename, { url: CONN, expected: 12 });
   console.log("\n══════════ CONVERSION RAIL — DB-BACKED PROOF (real Postgres) ══════════\n");
   await seed();
 
@@ -139,6 +187,83 @@ async function main() {
     firstObId = tf.obligation_id;
     // history origin row present
     assert(view.ownership_history[0].kind === "origin" && view.ownership_history[0].to_user_id === ctx.katie, "no origin history");
+  });
+
+  // ── 4b. THE OTHER HALF OF THE SAME RULE: attribution without authority ──
+  //  Scenario 4 proves an ELIGIBLE actual host becomes the owner. This proves
+  //  the converse, which is the rule that actually protects the board: a host
+  //  who really did give the tour but holds no active assignment at this
+  //  property is still ATTRIBUTED the tour — and the follow-up is left honestly
+  //  UNASSIGNED rather than handed to him, or quietly reassigned to some other
+  //  staff member the system happens to know about.
+  //
+  //  Drew is the ONLY candidate here (no scheduled host is supplied), so there
+  //  is nothing legitimate to fall back to. If anything but null appears as the
+  //  rung owner, ownership was invented.
+  await T("4b · ineligible actual host → attribution kept, obligation honestly UNASSIGNED, no invented owner", async () => {
+    const out = await tx(c => svc.createConversionFromTour(c, {
+      person_id: ctx.person3_id, property_id: ctx.property_id, origin_tour_id: ctx.tour_id,
+      actual_tour_host_user_id: ctx.drew,
+      feedback_recorded_by_user_id: ctx.drew,
+      tour_outcome: "interested",
+    }));
+    const dc = out.conversion;
+
+    // ATTRIBUTION SURVIVES. The record still says who gave the tour.
+    assert(dc.actual_tour_host_user_id === ctx.drew, "actual host attribution was dropped for an ineligible user");
+    const hist = (await pool.query(
+      `select * from leasing_conversation_handoffs where conversion_id=$1 order by created_at`, [dc.id])).rows;
+    assert(hist[0] && hist[0].kind === "origin" && hist[0].to_user_id === ctx.drew,
+      "origin history must still name the person who gave the tour");
+
+    // AUTHORITY DOES NOT. The rung is unowned.
+    const view = await read(c => svc.readConversion(c, dc.id));
+    const tf = view.rungs.find(r => r.rung === "tour_followup");
+    assert(tf, "no tour_followup rung");
+    assert(tf.owner_user_id === null,
+      `rung must be UNASSIGNED; got owner ${tf.owner_user_id}`);
+    for (const [who, id] of [["Katie", ctx.katie], ["Warren", ctx.warren],
+                             ["Candace", ctx.candace], ["Olivia", ctx.olivia], ["Drew", ctx.drew]]) {
+      assert(tf.owner_user_id !== id, `ownership was invented — rung fell through to ${who}`);
+    }
+    const ob = (await pool.query(`select * from obligations where id=$1`, [tf.obligation_id])).rows[0];
+    // WEAK EVIDENCE, KEPT DELIBERATELY. spawnRung never passes assigned_user_id
+    // at all, so this holds for an OWNED rung too — it does not by itself prove
+    // the unowned case. It is here to catch a future spawn path that starts
+    // stamping the obligation row, which must not stamp an ineligible user.
+    // The load-bearing proof of UNASSIGNED is the ledger event below.
+    assert(ob.assigned_user_id === null, "obligation carries an assigned user despite no eligible owner");
+    assert(ob.status === "open", "the unowned obligation must still be OPEN and visible, not hidden");
+
+    // THE LEDGER SAYS SO IN ITS OWN WORDS — 'unassigned' is recorded as a
+    // deliberate state, not left as an absent field nobody wrote.
+    const ev = (await pool.query(
+      `select * from leasing_conversion_obligation_events
+        where conversion_obligation_id=$1 and event_type='created'`, [tf.id])).rows[0];
+    assert(ev, "no birth event written for the unowned rung");
+    assert(ev.next_owner_user_id === null, "birth event names an owner the rung does not have");
+    assert(ev.owner_eligibility_state === "unassigned",
+      `birth event eligibility should be 'unassigned'; got ${ev.owner_eligibility_state}`);
+    assert(ev.ownership_origin === null,
+      `an unowned rung has no ownership origin; got ${ev.ownership_origin}`);
+
+    // ── PINNED, NOT ENDORSED ──
+    //  The conversion row preserves the actual-host ATTRIBUTION currently
+    //  stored in conversation_owner_user_id. That is the whole of the claim
+    //  made here.
+    //
+    //  This is NOT an assertion that Drew is the accountable owner, and the
+    //  present semantics of this field are UNRESOLVED. leasingconversion.js:274
+    //  writes it from actual_tour_host_user_id verbatim, never through
+    //  eligibleOwner, while the column's name — and the desk label "owned by"
+    //  (property-spine-app/index.html:21832, :21867) — say owner. Property
+    //  Spine keeps attribution, eligible assignment, task ownership and
+    //  authenticated authority separate; this field currently straddles them.
+    //  Resolving that is an authority ruling, not a test change, so nothing in
+    //  the product is touched here. The value is pinned only so the answer
+    //  cannot move silently.
+    assert(dc.conversation_owner_user_id === ctx.drew,
+      `the stored actual-host attribution changed: expected ${ctx.drew}, got ${dc.conversation_owner_user_id} — this field's semantics are an open ruling; do not edit this line to make a change pass`);
   });
 
   // ── 6 (run before 5 to test absence on the untouched owner): owner absence does NOT silently transfer ──
@@ -244,10 +369,26 @@ async function main() {
 
   console.log("\n──────────────────────────────────────────────────────────────");
   console.log(`  ${pass} / ${pass + fail} scenarios passed`);
-  console.log("──────────────────────────────────────────────────────────────\n");
+  console.log("──────────────────────────────────────────────────────────────");
 
   await pool.end();
-  if (fail > 0) process.exitCode = 1;
+  // expectedAtLeast is the real guard: this harness ran ZERO assertions for
+  // 204 commits and reported nothing at all. A run that executes fewer
+  // scenarios than the rail defines is INVALID, not merely quiet.
+  process.exitCode = receipt.complete({
+    harness: __filename, passed: pass, failed: fail, expectedAtLeast: 12,
+  });
 }
 
-main().catch(e => { console.error(e); process.exitCode = 1; });
+main().catch((e) => {
+  // The defect this harness suffered was PRE-ASSERTION DEATH: it threw at
+  // construction and printed nothing an eye would flag. A crash now reports
+  // itself in the same vocabulary as a failed run, and says plainly that zero
+  // assertions executed.
+  console.error("\n════════════════════════════════════════════════════════════════");
+  console.error("  ✗ RUN INVALID — the harness died before completing its assertions.");
+  console.error("    Assertions executed: " + (pass + fail) + "  (a run that proves nothing)");
+  console.error("    Cause: " + (e && e.message ? e.message : e));
+  console.error("════════════════════════════════════════════════════════════════\n");
+  process.exitCode = 1;
+});

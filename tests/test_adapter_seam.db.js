@@ -4,13 +4,14 @@
 //  Proves the Outlook/Acuity adapter connects to leasingscheduling.js (048)
 //  through schedulingAdapterSeam.js, for BOTH an individual notice and a
 //  multi-appointment digest. Real Postgres. Run:
-//    DATABASE_URL=... node test_adapter_seam.db.js
+//    HARNESS_DATABASE_URL="..." node test_adapter_seam.db.js
 // ════════════════════════════════════════════════════════════════════
 const { Pool } = require('pg');
 const { parseAcuityMessage, parseDigestOccurrences } = require('../src/shared/outlookAcuitySync.js');
 const { ingestSchedulingSourceEvent, translateEnvelope } = require('../src/shared/schedulingAdapterSeam.js');
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const CONN = receipt.harnessConnectionString();
+const pool = new Pool({ connectionString: CONN });
 
 let pass = 0, fail = 0;
 async function T(l, fn) { try { await fn(); console.log('  PASS  ' + l); pass++; } catch (e) { console.log('  FAIL  ' + l + '  →  ' + (e && e.message || e)); fail++; } }

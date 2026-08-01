@@ -3,13 +3,15 @@
 //  Covers contract scenarios 1-4 (Acuity), 12 (Twilio idempotency),
 //  13 (unified timeline shape). Real Postgres, real migrations 047+048.
 //
-//  Run: DATABASE_URL=... node test_scheduling_interactions.db.js
+//  Run: HARNESS_DATABASE_URL="..." node test_scheduling_interactions.db.js
 // ════════════════════════════════════════════════════════════════════
+const receipt = require("./_run_receipt.js");
 const { Pool } = require("pg");
 const buildScheduling = require("../src/leasing/leasingscheduling.js");
 const buildInteractions = require("../src/leasing/leasinginteractions.js");
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const CONN = receipt.harnessConnectionString();
+const pool = new Pool({ connectionString: CONN });
 
 // Fake-but-faithful Twilio transport: same { enabled, sendSms } shape as sms.js.
 let __sid = 1000;

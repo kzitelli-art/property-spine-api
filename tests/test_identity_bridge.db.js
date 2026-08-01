@@ -8,9 +8,10 @@
 //  067 migrations applied through the real schema_migrations ledger.
 //  No in-memory simulation.
 //
-//  Run:  DATABASE_URL=... node tests/test_identity_bridge.db.js
+//  Run:  HARNESS_DATABASE_URL="..." node tests/test_identity_bridge.db.js
 // ════════════════════════════════════════════════════════════════════
 "use strict";
+const receipt = require("./_run_receipt.js");
 const { Pool } = require("pg");
 const http = require("http");
 const express = require("express");
@@ -23,7 +24,13 @@ const resolver = require("../src/identity/staff_identity_resolver.js");
 const buildStaffBridge = require("../src/identity/staffbridge.js");
 const buildConversion = require("../src/leasing/leasingconversion.js");
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const CONN = receipt.harnessConnectionString();
+// The OBSERVED full-run count. A grep for `await T(` finds only 35 — the rest
+// go through the check() helper — so the first estimate was a floor set below
+// the real total, which would have let a truncated run pass the guard. 44 is
+// what a run that reaches the end actually executes.
+const EXPECTED = 44;
+const pool = new Pool({ connectionString: CONN });
 
 let pass = 0, fail = 0;
 function ok(l) { console.log("  PASS  " + l); pass++; }
@@ -48,6 +55,30 @@ async function expectThrow(fn, frag) {
 // ── seed handles ──
 const S = {};
 
+// ── PER-RUN UNIQUENESS. This harness COMMITS its fixtures (tx() below ends in
+//  `commit`, not `rollback`) and never deletes them, so every row it writes
+//  outlives the run. With FIXED emails and FIXED session tokens it was
+//  therefore SINGLE-USE per database: the first run passed, and every run after
+//  it died in seed on users_email_key before a single assertion executed.
+//
+//  Stale session tokens were the quieter half of the same bug — staff_sessions
+//  is unique on token_digest, not token, so a duplicate literal token inserted
+//  within its 6-hour window could resolve to a PRIOR run's user.
+//
+//  tests/test_release3.db.js already solved this with a per-run token; this is
+//  the same pattern, not a new one. Nothing about any assertion changes — the
+//  fixtures are merely made distinguishable between runs.
+const RUN = Date.now();
+const em = (local) => `${local}${RUN}@proof.internal`;
+const tok = (name) => `proof-${name}-token-${RUN}`;
+// request_id is an IDEMPOTENCY key that outlives the run in
+// user_person_bridge_audit. A fixed one makes linkBridge take its replay
+// branch on the second run — and that branch returns { replayed, audit }
+// with NO person_id, so out.person_id was undefined and every downstream
+// use of the resulting person inserted a null. B3, B5 and the suite crash
+// were all this one cause.
+const req = (name) => `req-${name}-${RUN}`;
+
 async function seed() {
   await tx(async (c) => {
     S.prop = (await c.query(`insert into properties (name) values ('Bridge Proof Property') returning id`)).rows[0].id;
@@ -58,18 +89,18 @@ async function seed() {
                       values ($1,$2,$3::role_name${extra ? ",'" + extra.split("=")[1] + "'" : ""}) returning id`,
         [name, email, role])).rows[0].id;
 
-    S.admin      = await mkUser("Admin PM", "admin@proof.internal", "property_manager");
-    S.kandice    = await mkUser("Kandice", "kandice@proof.internal", "leasing_agent");
-    S.katie      = await mkUser("Katie", "katie@proof.internal", "leasing_manager");
-    S.john       = await mkUser("John Banks", "john@proof.internal", "maintenance");       // stays unbridged
-    S.suspended  = await mkUser("Sam Suspended", "sam@proof.internal", "leasing_agent");
-    S.invited    = await mkUser("Ivy Invited", "ivy@proof.internal", "leasing_agent");
-    S.frozen     = await mkUser("Frank Frozen", "frank@proof.internal", "leasing_agent");  // unknown future status
-    S.inactive   = await mkUser("Ida Inactive", "ida@proof.internal", "leasing_agent");
-    S.svc        = await mkUser("Twilio Webhook", "svc@proof.internal", "system");
-    S.dupA       = await mkUser("Dup A", "dupa@proof.internal", "leasing_agent");
-    S.dupB       = await mkUser("Dup B", "dupb@proof.internal", "leasing_agent");
-    S.nonadmin   = await mkUser("Norm Nonadmin", "norm@proof.internal", "leasing_agent");
+    S.admin      = await mkUser("Admin PM", em("admin"), "property_manager");
+    S.kandice    = await mkUser("Kandice", em("kandice"), "leasing_agent");
+    S.katie      = await mkUser("Katie", em("katie"), "leasing_manager");
+    S.john       = await mkUser("John Banks", em("john"), "maintenance");       // stays unbridged
+    S.suspended  = await mkUser("Sam Suspended", em("sam"), "leasing_agent");
+    S.invited    = await mkUser("Ivy Invited", em("ivy"), "leasing_agent");
+    S.frozen     = await mkUser("Frank Frozen", em("frank"), "leasing_agent");  // unknown future status
+    S.inactive   = await mkUser("Ida Inactive", em("ida"), "leasing_agent");
+    S.svc        = await mkUser("Twilio Webhook", em("svc"), "system");
+    S.dupA       = await mkUser("Dup A", em("dupa"), "leasing_agent");
+    S.dupB       = await mkUser("Dup B", em("dupb"), "leasing_agent");
+    S.nonadmin   = await mkUser("Norm Nonadmin", em("norm"), "leasing_agent");
 
     await c.query(`update users set status='suspended' where id=$1`, [S.suspended]);
     await c.query(`update users set status='invited'   where id=$1`, [S.invited]);
@@ -93,13 +124,13 @@ async function seed() {
        values ($1,$2,'Senior Maintenance Tech')`, [S.prop, S.john]);
 
     // real admin staff session (HTTP proofs)
-    S.adminToken = "proof-admin-token";
+    S.adminToken = tok("admin");
     await c.query(`insert into staff_sessions (user_id, property_id, token, expires_at)
                    values ($1,$2,$3, now() + interval '6 hours')`, [S.admin, S.prop, S.adminToken]);
-    S.nonadminToken = "proof-nonadmin-token";
+    S.nonadminToken = tok("nonadmin");
     await c.query(`insert into staff_sessions (user_id, property_id, token, expires_at)
                    values ($1,$2,$3, now() + interval '6 hours')`, [S.nonadmin, S.prop, S.nonadminToken]);
-    S.katieToken = "proof-katie-token"; // leasing_manager — the DEMO_MODE widening subject
+    S.katieToken = tok("katie"); // leasing_manager — the DEMO_MODE widening subject
     await c.query(`insert into staff_sessions (user_id, property_id, token, expires_at)
                    values ($1,$2,$3, now() + interval '6 hours')`, [S.katie, S.prop, S.katieToken]);
   });
@@ -123,6 +154,7 @@ async function call(port, method, urlPath, { token, body } = {}) {
 }
 
 (async () => {
+  receipt.begin(__filename, { url: CONN, expected: EXPECTED });
   console.log("\n═══ STAFF IDENTITY BRIDGE — PROOF SUITE (067) ═══\n");
   await seed();
   const bridgeSvc = buildStaffBridge({ pool })._service;
@@ -166,7 +198,7 @@ async function call(port, method, urlPath, { token, body } = {}) {
     const out = await tx((c) => bridgeSvc.linkBridge(c, {
       user_id: S.kandice, create_staff_person: { name: "Kandice", property_id: S.prop },
       reason_code: "proof_seed", evidence_type: "operator_attestation",
-      performed_by_user_id: S.admin, request_id: "req-kandice-1" }));
+      performed_by_user_id: S.admin, request_id: req("kandice-1") }));
     S.kandicePerson = out.person_id;
     const chk = await read((c) => c.query(`
       select u.person_id,
@@ -182,7 +214,7 @@ async function call(port, method, urlPath, { token, body } = {}) {
     const before = await read((c) => c.query(`select count(*)::int n from user_person_bridge_audit`));
     const out = await tx((c) => bridgeSvc.linkBridge(c, {
       user_id: S.kandice, create_staff_person: { name: "Kandice" },
-      reason_code: "proof_seed", performed_by_user_id: S.admin, request_id: "req-kandice-1" }));
+      reason_code: "proof_seed", performed_by_user_id: S.admin, request_id: req("kandice-1") }));
     const after = await read((c) => c.query(`select count(*)::int n from user_person_bridge_audit`));
     assert(out.replayed === true && after.rows[0].n === before.rows[0].n);
   });
@@ -212,7 +244,9 @@ async function call(port, method, urlPath, { token, body } = {}) {
     assert(a.length === 2 && a[0].effective_to !== null && a[1].action === "unlinked" && a[1].effective_to !== null);
   });
   await T("B7  candidates endpoint SUGGESTS by exact email only and WRITES NOTHING", async () => {
-    await tx((c) => c.query(`insert into persons (name, email) values ('Katie P','katie@proof.internal')`));
+    // the person's email must match S.katie's USER email exactly — that exact
+    // match is the whole subject of this assertion, so both move together.
+    await tx((c) => c.query(`insert into persons (name, email) values ('Katie P',$1)`, [em("katie")]));
     const before = (await read((c) => c.query(`select count(*)::int n from user_person_bridge_audit`))).rows[0].n;
     const out = await read((c) => bridgeSvc.bridgeCandidates(c, S.katie));
     const after = (await read((c) => c.query(`select count(*)::int n from user_person_bridge_audit`))).rows[0].n;
@@ -238,15 +272,39 @@ async function call(port, method, urlPath, { token, body } = {}) {
       user_id: S.katie, create_staff_person: { name: "Katie", property_id: S.prop },
       reason_code: "proof_seed", performed_by_user_id: S.admin });
     S.katiePerson = katieOut.person_id;
-    const mkAsg = (pid, prop) => c.query(
-      `insert into assignments (person_id, property_id, role, scope) values ($1,$2,'leasing','leasing')`, [pid, prop]);
-    await mkAsg(S.kandicePerson, S.prop);
-    await mkAsg(S.katiePerson, S.prop);
+    // ── THE FULL PRODUCTION AUTHORITY SHAPE ──────────────────────────
+    //  resolveStaffIdentity requires FIVE things, not four. The AUTHORITY VETO
+    //  (staff_identity_resolver.js:189-205, added 2026-07-26) additionally
+    //  demands an ACTIVE property_team_assignments row for the same user at the
+    //  same property: "an owner must be able to do the work."
+    //
+    //  This fixture predates that veto. It gave people a bridge, an active
+    //  account and an active assignment — and stopped there — so the resolver
+    //  correctly answered no_property_authority and the harness read it as a
+    //  regression. Nothing in the resolver is bypassed or relaxed here; the
+    //  fixture now supplies the fifth condition the product has required since
+    //  July. assignments keys on person_id; property_team_assignments keys on
+    //  user_id — hence both handles.
+    //
+    //  John is deliberately NOT routed through this helper. He keeps a team row
+    //  with no bridge and no assignment, which is exactly the 004↔035
+    //  divergence F5 exists to report.
+    const mkAsg = async (pid, uid, prop) => {
+      await c.query(
+        `insert into assignments (person_id, property_id, role, scope) values ($1,$2,'leasing','leasing')`, [pid, prop]);
+      await c.query(
+        `insert into property_team_assignments (property_id, user_id, role_title, allowed_modules, active)
+         values ($1,$2,'Leasing Agent', array['leasing'], true)`, [prop, uid]);
+    };
+    await mkAsg(S.kandicePerson, S.kandice, S.prop);
+    await mkAsg(S.katiePerson, S.katie, S.prop);
     for (const [key, uid] of [["susP", S.suspended], ["invP", S.invited], ["froP", S.frozen], ["inaP", S.inactive]]) {
       const o = await bridgeSvc.linkBridge(c, {
         user_id: uid, create_staff_person: { name: key }, reason_code: "proof_seed",
         performed_by_user_id: S.admin });
-      S[key] = o.person_id; await mkAsg(o.person_id, S.prop);
+      // their ACCOUNT is the failure subject, so everything else must be valid —
+      // otherwise the assertion could pass for the wrong reason.
+      S[key] = o.person_id; await mkAsg(o.person_id, uid, S.prop);
     }
     const dp = await bridgeSvc.linkBridge(c, {
       user_id: S.dupA, create_staff_person: { name: "Dup Person" }, reason_code: "proof_seed",
@@ -254,7 +312,24 @@ async function call(port, method, urlPath, { token, body } = {}) {
     S.dupPerson = dp.person_id;
     await bridgeSvc.linkBridge(c, { user_id: S.dupB, person_id: S.dupPerson,
       reason_code: "proof_seed_conflict", performed_by_user_id: S.admin });
-    await mkAsg(S.dupPerson, S.prop);
+    await mkAsg(S.dupPerson, S.dupA, S.prop);
+    // ── ADMIN PM NEEDS THE SAME SHAPE ────────────────────────────────
+    //  staffbridge.js:55-63 records a DELIBERATE TIGHTENING: an admin session
+    //  is resolved through resolveStaffSession, which "now also requires live
+    //  property authority — one meaning of authorization everywhere."
+    //
+    //  The fixture gave Admin PM a staff_sessions row and nothing else, so he
+    //  had a session but no authority, and the gate correctly refused him
+    //  (F4/F5). He now carries the full shape every other resolving user does:
+    //  classified human_staff (B3), bridged to a durable person, active
+    //  assignment here, active team-authority row here. The gate is not
+    //  weakened, resolveStaffSession is not bypassed, and nothing is
+    //  special-cased for the harness.
+    const adminOut = await bridgeSvc.linkBridge(c, {
+      user_id: S.admin, create_staff_person: { name: "Admin PM", property_id: S.prop },
+      reason_code: "proof_seed", performed_by_user_id: S.admin });
+    S.adminPerson = adminOut.person_id;
+    await mkAsg(S.adminPerson, S.admin, S.prop);
     // an INACTIVE assignment subject: bridged person, assignment exists but off
     const iaOut = await bridgeSvc.classifyAccount(c, { user_id: S.nonadmin, account_kind: "human_staff", performed_by_user_id: S.admin });
     const iap = await bridgeSvc.linkBridge(c, { user_id: S.nonadmin,
@@ -262,6 +337,10 @@ async function call(port, method, urlPath, { token, body } = {}) {
     S.normPerson = iap.person_id;
     await c.query(`insert into assignments (person_id, property_id, role, scope, is_active)
                    values ($1,$2,'leasing','leasing', false)`, [S.normPerson, S.prop]);
+    // the ASSIGNMENT being off is the subject — team authority is present so
+    // the resolver fails him for that reason and not for a missing fifth row.
+    await c.query(`insert into property_team_assignments (property_id, user_id, role_title, allowed_modules, active)
+                   values ($1,$2,'Leasing Agent', array['leasing'], true)`, [S.prop, S.nonadmin]);
   });
 
   // ────────────────────────────────────────────────────────────────
@@ -274,10 +353,10 @@ async function call(port, method, urlPath, { token, body } = {}) {
     assert(r.state === expectState, `expected ${expectState}, got ${r.state} (${r.basis})`);
   });
 
-  await check("C1  resolved: bridge + human_staff + active account + active assignment HERE", S.kandice, "resolved");
+  await check("C1  resolved: bridge + human_staff + active account + active assignment HERE + active team authority", S.kandice, "resolved");
   await T("C1b resolved result carries user/person/assignment/role/basis", async () => {
     const r = await rs(S.kandice);
-    assert(r.person_id && r.assignment_id && r.role === "leasing" && r.basis === "bridge_plus_active_assignment");
+    assert(r.person_id && r.assignment_id && r.role === "leasing" && r.basis === "bridge_plus_active_assignment_plus_authority");
   });
   await check("C2  unbridged: no person_id", S.john, "unbridged");
   await check("C3  user_inactive: is_active=false fails closed", S.inactive, "user_inactive");
@@ -332,10 +411,19 @@ async function call(port, method, urlPath, { token, body } = {}) {
   // ────────────────────────────────────────────────────────────────
   console.log("\nE. THE ROSTER — only fully-resolving people; honest exclusions");
   // ────────────────────────────────────────────────────────────────
-  await T("E1  roster = Kandice + Katie only (excludes unbridged, inactive-account, inactive-assignment, conflicted, service)", async () => {
+  await T("E1  roster = the fully-resolving people only (excludes unbridged, inactive-account, inactive-assignment, conflicted, service)", async () => {
     const rows = await read((c) => resolver.listEligibleStaff(c, S.prop));
     const names = rows.map((r) => r.name).sort();
-    assert(JSON.stringify(names) === JSON.stringify(["Kandice", "Katie"]), `got: ${names.join(", ")}`);
+    // Admin PM joins Kandice and Katie because he now holds the real authority
+    // shape at this property (see the roster block). That is the TRUTHFUL
+    // roster, not a relaxed assertion: an assigned admin genuinely is eligible
+    // staff here. Every EXCLUSION this case exists to prove is unchanged —
+    // unbridged John, the four bad accounts, the conflicted pair and the
+    // service account must all still be absent.
+    assert(JSON.stringify(names) === JSON.stringify(["Admin PM", "Kandice", "Katie"]), `got: ${names.join(", ")}`);
+    for (const excluded of ["John Banks", "Sam Suspended", "Ivy Invited", "Frank Frozen",
+                            "Ida Inactive", "Twilio Webhook", "Dup A", "Dup B", "Norm Nonadmin"])
+      assert(!names.includes(excluded), `${excluded} must not appear in the roster`);
   });
   await T("E2  roster at the other property is honestly empty", async () => {
     const rows = await read((c) => resolver.listEligibleStaff(c, S.prop2));
@@ -363,12 +451,14 @@ async function call(port, method, urlPath, { token, body } = {}) {
     assert(a.status === 403, `expected 403, got ${a.status} — the widening must not exist`);
   });
   await T("F3b a SERVICE account holding an admin role is still refused (kind defense)", async () => {
+    const botToken = tok("bot");
     const bot = (await read((c) => c.query(
-      `insert into users (name, email, role) values ('Bot PM','botpm@proof.internal','property_manager') returning id`))).rows[0].id;
+      `insert into users (name, email, role) values ('Bot PM',$1,'property_manager') returning id`,
+      [em("botpm")]))).rows[0].id;
     await tx((c) => bridgeSvc.classifyAccount(c, { user_id: bot, account_kind: "service_account", performed_by_user_id: S.admin }));
     await tx((c) => c.query(`insert into staff_sessions (user_id, property_id, token, expires_at)
-                             values ($1,$2,'proof-bot-token', now() + interval '6 hours')`, [bot, S.prop]));
-    const r = await call(prod.port, "GET", "/operator/admin/bridge/coverage", { token: "proof-bot-token" });
+                             values ($1,$2,$3, now() + interval '6 hours')`, [bot, S.prop, botToken]));
+    const r = await call(prod.port, "GET", "/operator/admin/bridge/coverage", { token: botToken });
     assert(r.status === 403);
   });
   await T("F4  performed_by is SERVER-DERIVED — a body-supplied performed_by_user_id is ignored", async () => {
@@ -377,7 +467,7 @@ async function call(port, method, urlPath, { token, body } = {}) {
       body: { user_id: S.john, create_staff_person: { name: "John Banks" },
               reason_code: "http_proof",
               performed_by_user_id: S.nonadmin,        // an attacker's claim — must be ignored
-              request_id: "req-john-http-1" } });
+              request_id: req("john-http-1") } });
     assert(r.status === 200, JSON.stringify(r.json));
     const a = (await read((c) => c.query(
       `select performed_by_user_id from user_person_bridge_audit
@@ -426,9 +516,16 @@ async function call(port, method, urlPath, { token, body } = {}) {
   // ────────────────────────────────────────────────────────────────
   console.log("\nH. LOOP-B SIBLINGS — suppressed; nothing invisible, nothing lost");
   // ────────────────────────────────────────────────────────────────
+  // THE CLOSURE AUTHORITY. leasingconversion.js fails CLOSED without it, and
+  // this call omitted it — the SAME construction defect that left
+  // test_conversion_rail.db.js dead for 204 commits. Here it killed the run at
+  // section H, after 39 assertions had already passed, so the earlier sections
+  // still reported while everything from H onward silently never ran.
+  // Mounted exactly as server.js:3284 mounts it.
   const convRouter = buildConversion({ pool,
     spawnObligationFromEvent: engine.spawnObligationFromEvent,
-    completeObligation: engine.completeObligation });
+    completeObligation: engine.completeObligation,
+    closureAuthority: require("../src/leasing/conversion_obligation_closure.js").createConversionClosureAuthority() });
   const convSvc = convRouter._service || convRouter.services;
   await T("H1  multi-move conversion spawns the ANCHOR only; zero leasing_task obligations; extras recorded as a durable event", async () => {
     const prospect = (await read((c) => c.query(
@@ -498,7 +595,8 @@ async function call(port, method, urlPath, { token, body } = {}) {
     assert(failed, "the gate must catch the planted join");
   });
 
-  console.log(`\n═══ RESULT: ${pass} passed · ${fail} failed ═══\n`);
   await pool.end();
-  process.exit(fail ? 1 : 0);
-})().catch((e) => { console.error("SUITE CRASHED:", e); process.exit(1); });
+  process.exit(receipt.complete({
+    harness: __filename, passed: pass, failed: fail, expectedAtLeast: EXPECTED,
+  }));
+})().catch((e) => { process.exit(receipt.died(__filename, e, pass + fail)); });
