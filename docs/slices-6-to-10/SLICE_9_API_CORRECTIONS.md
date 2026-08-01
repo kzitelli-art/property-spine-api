@@ -253,3 +253,108 @@ Eight statements across five files. Consolidatable. **Proceed.**
    marks submission on a given path, it satisfies ruling 1's "existing semantic
    fact" test far better than row-creation time — and would rescue historical
    `submitted_at` coverage. To be evaluated during the writer audit.
+
+---
+
+## FINAL TWO RULINGS (settled 2026-08-01)
+
+### A. `expired` is an application terminal disposition
+
+`terminal_code` vocabulary is **`declined | withdrawn | expired`**.
+`expired` carries `outcome_class: closed_without_target`.
+
+An expired application is **not reopened in place** — a later pursuit is a new
+application record, so one row never represents two attempts.
+
+Three objects stay distinct:
+
+| Object | Meaning |
+|---|---|
+| expired **invitation** | replaceable link; **not** an application terminal |
+| expired **offer / packet** | may be superseded; **not** automatically terminal |
+| expired **application** | this attempt closed without execution ⇒ `terminal_code = expired` |
+
+Funnel treatment: `approved_at` present + `terminal_code = expired` ⇒ Funnel 3
+**still converted** (approval was reached; later expiry does not erase it), and
+Funnel 4 records expiration as terminal before execution. `approved_at` null +
+expired ⇒ terminal without approval.
+
+Backfill: `terminal_at = decided_at`, `terminal_code = 'expired'` where
+`decided_at` exists and the row is consistently an application-level
+expiration. **Never** derive `approved_at` from expired status alone.
+
+`accepted_term_required` is **not terminal** — blocked/waiting work.
+
+### B. `lead_events.application_started` is NOT submission evidence — ruled NO
+
+Two reasons, both accepted:
+
+1. **Started ≠ submitted.** A person can open an application and never submit.
+   Reinterpreting it would inflate the Funnel 3 denominator and make
+   incomplete applications look submitted.
+2. **It is vocabulary, not canonical evidence.** The AI-leasing audit already
+   found `application_started` has no canonical opportunity-linked event
+   source. The submission service writes `events.type = application_submitted`,
+   but that generic event carries no `application_id`, so it cannot be matched
+   historically when multiple attempts are possible.
+
+**Forbidden correlation:** same person · same property · nearest timestamp ·
+same unit · matching note text. That is inferred lineage.
+
+Future authority is `lease_applications.submitted_at`, authored in the
+submission transaction, with `leasing_lead_id` supplying opportunity
+correlation. Historical backfill only from direct application-specific
+evidence carrying `application_id`, or a deterministically proven
+born-submitted path. Everything else stays null ⇒ `partial` / untrackable.
+
+No new lead event is added for Slice 9.
+
+---
+
+## MIGRATION 124 — LANDED AND PROVEN AT THE DATABASE LEVEL
+
+`124_application_lifecycle_milestones.sql` applies clean and idempotent.
+Adds `submitted_at`, `approved_at`, `terminal_at`, `terminal_code` with
+write-once triggers, transition-authoring triggers, and the conditional
+backfill.
+
+Enforcement probed against real Postgres — all eight behave correctly:
+
+| # | Probe | Result |
+|---|---|---|
+| 1 | clear `submitted_at` | REJECTED — write-once |
+| 2 | move `submitted_at` | REJECTED — write-once |
+| 3 | cross into `approved` with no `approved_at` | REJECTED |
+| 4 | cross into `approved` **with** `approved_at` | accepted |
+| 5 | terminal status with no `terminal_code` | REJECTED |
+| 6 | terminal with both code and instant | accepted |
+| 7 | **`approved_at` after withdrawal** | **RETAINED** |
+| 8 | invalid `terminal_code` | REJECTED |
+
+Probe 7 is the review's headline defect closed at the database level: an
+application approved and later withdrawn **keeps its approval milestone**.
+
+Backfill deliberately NOT performed: `submitted_at` (no proven direct-submit
+path yet), withdrawn terminal time (no ruling establishes `decided_at` as the
+withdrawal instant), and `approved_at` for withdrawn/expired rows (original
+approval time is not recoverable from current status).
+
+## REMAINING WORK ON THIS BRANCH
+
+```
+migration 124 schema            DONE, proven
+writer audit                    DONE, stop condition cleared
+─────────────────────────────────────────────────────────────
+author milestones in the 8 writers across 5 files   NOT STARTED
+canonical appointment-journey builder               NOT STARTED
+re-grain funnel 2 to opportunity                    NOT STARTED
+pending/terminal from lead_events                   NOT STARTED
+READ ONLY REPEATABLE READ snapshot + savepoints     NOT STARTED
+metric_contract: metric_kind + refusals             NOT STARTED
+reject client as_of; 366-day cap                    NOT STARTED
+timezone hardening (append-only, payload idempotency) NOT STARTED
+bounded reads + scale fixture + EXPLAIN             NOT STARTED
+delete LIFECYCLE_ORDER / reached() from evidence    NOT STARTED
+eleven negative controls                            NOT STARTED
+app renderer                                        NOT STARTED
+```
