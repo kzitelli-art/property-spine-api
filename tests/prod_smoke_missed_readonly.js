@@ -50,20 +50,39 @@ const pool = new Pool({ connectionString: CONN });
   await c.query("begin transaction read only");
 
   // ── §0. PROVE the session cannot write, before trusting anything else ──
+  //
+  //  THE SAVEPOINT IS LOAD-BEARING. A failed statement puts the whole
+  //  transaction into an aborted state, and catching the error in JavaScript
+  //  does NOT restore it — every later query would fail with 25P02
+  //  (in_failed_sql_transaction). The first version of this file omitted the
+  //  savepoint, so it would have died at §1 on its very first real run. It never
+  //  ran, so nothing said so: built-but-dormant code that reads as a safety
+  //  check. ROLLBACK TO SAVEPOINT is the supported way to continue after a
+  //  deliberate failure.
   let readOnlyProven = false;
+  await c.query("savepoint ro_probe");
   try {
     await c.query("create temp table __smoke_should_never_exist (x int)");
+    // reached only if the server ALLOWED the write — not read-only.
+    await c.query("rollback to savepoint ro_probe");
   } catch (e) {
     readOnlyProven = (e.code === "25006");
+    await c.query("rollback to savepoint ro_probe");
   }
-  if (!readOnlyProven) {
-    console.error("  ✗ ABORT — the session is NOT read-only. Nothing was checked.");
-    console.error("    A write was attempted and did not fail as expected.");
+  await c.query("release savepoint ro_probe");
+
+  // Independent second signal: ask the server what it thinks it is, so the
+  // proof does not rest on one error code alone.
+  const mode = (await c.query("show transaction_read_only")).rows[0].transaction_read_only;
+
+  if (!readOnlyProven || mode !== "on") {
+    console.error("  ✗ ABORT — the session is NOT provably read-only. Nothing was checked.");
+    console.error(`    write refused with 25006: ${readOnlyProven}   transaction_read_only: ${mode}`);
     await c.query("rollback").catch(() => {});
     c.release(); await pool.end();
     process.exit(1);
   }
-  ok("§0  session is READ ONLY — a write attempt was refused by Postgres (25006)");
+  ok(`§0  session is READ ONLY — write refused (25006) and transaction_read_only=${mode}`);
 
   // ── §1. the migration is recorded exactly once ──
   const mig = (await c.query(
@@ -129,15 +148,24 @@ const pool = new Pool({ connectionString: CONN });
     !/update\s+obligations[\s\S]{0,200}set[\s\S]{0,120}\bstatus\s*=/i.test(src));
 
   // ── §6. production state: this migration created no rows, and no row is half-written ──
-  const counts = (await c.query(
-    `select count(*)::int total,
-            count(missed_at)::int recognised,
-            count(*) filter (where (missed_at is null) <> (missed_threshold_at is null))::int incoherent_pair,
-            count(*) filter (where (missed_at is null) <> (missed_recognition_key is null))::int incoherent_key
-       from obligations`)).rows[0];
-  console.log(`\n        obligations=${counts.total}  recognised_missed=${counts.recognised}`);
-  check("§6  no half-written recognition (timestamps agree)", counts.incoherent_pair === 0);
-  check("§6  no half-written recognition (key agrees)", counts.incoherent_key === 0);
+  // GATED ON THE COLUMNS EXISTING. Querying missed_at unconditionally would
+  // make the "migration not applied" case die with a confusing 42703 instead of
+  // reporting cleanly — the smoke must be able to say "not applied" as a
+  // finding, not as a crash.
+  const total = (await c.query("select count(*)::int n from obligations")).rows[0].n;
+  if (cols.length === 3) {
+    const counts = (await c.query(
+      `select count(missed_at)::int recognised,
+              count(*) filter (where (missed_at is null) <> (missed_threshold_at is null))::int incoherent_pair,
+              count(*) filter (where (missed_at is null) <> (missed_recognition_key is null))::int incoherent_key
+         from obligations`)).rows[0];
+    console.log(`\n        obligations=${total}  recognised_missed=${counts.recognised}`);
+    check("§6  no half-written recognition (timestamps agree)", counts.incoherent_pair === 0);
+    check("§6  no half-written recognition (key agrees)", counts.incoherent_key === 0);
+  } else {
+    console.log(`\n        obligations=${total}  recognised_missed=SKIPPED — columns absent`);
+    bad("§6  recognition coherence", "skipped: migration 126 is not fully present");
+  }
 
   const statusMix = (await c.query(
     "select status, count(*)::int n from obligations group by status order by n desc")).rows;
