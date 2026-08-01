@@ -1560,9 +1560,11 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // Property operating timezone — resolved through the ONE shared resolver
   // (property_timezone.js), the SAME truth operator.js uses. Honest null for an
   // unconfigured property; booking/offers refuse rather than invent local times.
-  const { resolvePropertyOperatingTimeZone } = require("../shared/property_timezone");
+  const { loadPropertyOperatingTimeZone } = require("../shared/property_timezone");
+  // ASYNC as of Slice 9: the operating timezone is a governed column, not a
+  // hardcoded allowlist. Every caller here was already async.
   function propertyTimezone(propertyId) {
-    return resolvePropertyOperatingTimeZone(propertyId); // null = unconfigured
+    return loadPropertyOperatingTimeZone(pool, propertyId); // null = unconfigured
   }
 
   // ── OFFERABLE SLOTS READER — the slots the agent may OFFER this turn,
@@ -1571,7 +1573,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   //    book (honest refusal, never an invented local time). Returns real open,
   //    future slots with a stable id + human label.
   async function readOfferableSlots(client, { propertyId, limit = 4 }) {
-    const tz = propertyTimezone(propertyId);
+    const tz = await propertyTimezone(propertyId);
     if (!tz) return null; // unconfigured tz → no offer set (honest)
     const rows = (await (client || pool).query(
       `select id, starts_at, ends_at, unit_id
