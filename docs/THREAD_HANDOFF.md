@@ -88,6 +88,16 @@ node -e "const{Pool}=require('pg');const p=new Pool({connectionString:process.en
 
 ## Traps that cost time
 
+### A BRANCH DEPLOY MIGRATES PRODUCTION — see BLOCKING_DESIGN_ITEMS.md ITEM 5
+
+`prestart` runs `migrate.js` against the service's own `DATABASE_URL`. Deploying
+a branch to the production Render service to test it and applying that branch's
+migrations to production are THE SAME OPERATION. That is how `121` reached
+production while `main` still lacks the file — the very "GAP at 121" documented
+below. **Until an isolated preview service or an explicit migration gate exists,
+do not deploy a feature branch to the production service.**
+
+
 ### NEVER reset, rebase or force-push a shared branch without diffing origin first
 
 2026-08-01: a design doc was committed onto `claude/getting-up-to-speed-nyf4ww`

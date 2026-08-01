@@ -59,11 +59,21 @@ const pool = new Pool({ connectionString: CONN });
   //  ran, so nothing said so: built-but-dormant code that reads as a safety
   //  check. ROLLBACK TO SAVEPOINT is the supported way to continue after a
   //  deliberate failure.
+  //  THE PROBE IS A ZERO-ROW UPDATE ON A PERMANENT TABLE. It was previously
+  //  `create temp table`, which tested the wrong property: DDL permission rather
+  //  than WRITE permission, and read-only protection is defined in terms of
+  //  writes to NON-TEMPORARY tables. This probe targets exactly the thing that
+  //  matters, and is harmless in both directions:
+  //    · read-only session   → rejected with 25006, nothing written;
+  //    · read/write session  → succeeds, and `where false` matches zero rows,
+  //                            so it STILL writes nothing.
+  //  There is no arrangement of server settings in which this probe can alter
+  //  production.
   let readOnlyProven = false;
   await c.query("savepoint ro_probe");
   try {
-    await c.query("create temp table __smoke_should_never_exist (x int)");
-    // reached only if the server ALLOWED the write — not read-only.
+    await c.query("update public.obligations set status = status where false");
+    // reached only if the server ALLOWED the write — not a read-only session.
     await c.query("rollback to savepoint ro_probe");
   } catch (e) {
     readOnlyProven = (e.code === "25006");
