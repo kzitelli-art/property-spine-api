@@ -1690,6 +1690,23 @@ module.exports = function operatorModule(deps) {
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null }); }
   });
 
+  // ── SLICE 9 — MARKET EVIDENCE (demand + conversion) ─────────────────
+  //  Read-only. Property scope from the session, never the query. The window
+  //  is property-local and server-resolved: the browser cannot know when a
+  //  day starts at a property, so it does not get to say.
+  router.get("/operator/pricing/evidence", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { marketEvidenceProjection } = require("../evidence/evidence_projection");
+      return res.json(await marketEvidenceProjection(pool, {
+        property_id: req.operator.property_id,   // session only, never the query
+        start_local: req.query.start_local || null,
+        end_local: req.query.end_local || null,
+        as_of: req.query.as_of || null,
+      }));
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null }); }
+  });
+
   // ── SLICE 8 — GOVERNED CONCESSION READ ──────────────────────────────
   //  Slice 7's audit recorded that concessions had governed tables but no
   //  operator read. Read-only: authors nothing, approves nothing. Effective

@@ -183,10 +183,10 @@ async function main() {
     const unknownRead = await svc.readOfferableSlots(pool, { propertyId: propA.id, limit: 20 });
     check("4. UNKNOWN property tz → readOfferableSlots returns null (no invented labels)",
       unknownRead === null, `got ${unknownRead === null ? "null" : JSON.stringify(unknownRead && unknownRead.slice(0,1))}`);
-    // Slice 9: propertyTimezone is ASYNC — the operating timezone is a governed
+    // Slice 9: loadPropertyOperatingTimezone is ASYNC — the operating timezone is a governed
     // column read (properties.operating_timezone), no longer a hardcoded map.
-    const unknownTz = await svc.propertyTimezone(propA.id);
-    check("4. UNKNOWN property tz → propertyTimezone returns null (honest, not Eastern)",
+    const unknownTz = await svc.loadPropertyOperatingTimezone(propA.id);
+    check("4. UNKNOWN property tz → loadPropertyOperatingTimezone returns null (honest, not Eastern)",
       unknownTz === null, `got ${unknownTz}`);
 
     // Configured tz: the timezone is now CONFIGURED DATA, not a code allowlist,
