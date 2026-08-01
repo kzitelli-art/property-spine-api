@@ -40,6 +40,11 @@
 const express = require("express");
 const crypto = require("crypto");
 
+// THE ONE CANONICAL WRITER of lease_applications.status. Every status crossing
+// in this module goes through it; it receives THIS module's already-open
+// transaction client and never opens a connection of its own.
+const lifecycle = require("./application_lifecycle");
+
 // Non-recoverable digest of a bearer token. We store ONLY this; the raw token
 // lives solely in the issued URL. SHA-256 is sufficient for a high-entropy
 // (192-bit) random token — there is nothing to brute-force.
@@ -213,16 +218,22 @@ module.exports = function applicationSubmissionModule(deps) {
     }
 
     // 1) the application RECORD — 'submitted'
-    const ins = await client.query(
-      `insert into lease_applications
-         (property_id, unit_id, person_id, leasing_lead_id, status, applicant_name, unit_label,
-          rent, deposit, guarantor_name, captured, source, conversion_id)
-       values ($1,$2,$3,$4,'submitted',$5,$6,$7,$8,$9,$10,$11,$12)
-       returning *`,
-      [property_id, unit_id, person_id, resolvedLeasingLeadId, applicant_name, unit_label,
-       rent, deposit, guarantor_name, JSON.stringify(captured || {}), source, conversion_id]
-    );
-    const app = ins.rows[0];
+    //    BIRTH belongs to the lifecycle authority. It owns the 'submitted'
+    //    literal and authors submitted_at in the SAME insert, which is exactly
+    //    what migration 125 demands of a crossing into the submission group —
+    //    an insert followed by a timestamp update is refused twice over. The
+    //    caller's transaction client is passed straight through; the authority
+    //    opens nothing and commits nothing. It returns the full inserted row
+    //    (`returning *`), so `app` carries everything it carried before, plus
+    //    submitted_at.
+    const birth = await lifecycle.createSubmittedApplication(client, {
+      property_id, unit_id, person_id,
+      leasing_lead_id: resolvedLeasingLeadId,
+      applicant_name, unit_label, rent, deposit, guarantor_name,
+      captured: JSON.stringify(captured || {}),
+      source, conversion_id,
+    });
+    const app = birth.application;
 
     // 2) the durable event
     await recordEvent(client, {
@@ -889,12 +900,25 @@ module.exports = function applicationSubmissionModule(deps) {
       note: `Application ${reason}${note ? " — " + note : ""}`,
     });
 
-    const upd = (await client.query(
-      `update lease_applications
-          set status=$1, decision_reason=$2, decision_by_user_id=$3, decided_at=now(), updated_at=now()
-        where id=$4 returning *`,
-      [reason, note || reason, decided_by_user_id, app.id]
-    )).rows[0];
+    // THE DISPOSITION — the lifecycle authority writes it, atomically:
+    // status + terminal_code + terminal_at + decision_reason + decider +
+    // decided_at in ONE statement. 125 refuses a terminal status arriving
+    // without terminal_at/terminal_code, and ck_la_terminal_correspondence
+    // forces terminal_code = status, so `reason` lands in both from one
+    // argument. `note || reason` stays the DIFFERENT free-text account of the
+    // decision. Milestones are left alone: approved_at survives a denial from
+    // 'approved', and a row whose submitted_at is null keeps it null — nothing
+    // is backfilled. A null decider is persisted as null.
+    // Ordering is unchanged: this stays the LAST write in the transaction,
+    // because the downstream creators closeApprovalGate documents self-verify
+    // by reading status.
+    const disposition = await lifecycle.markTerminal(client, {
+      applicationId: app.id,
+      terminalCode: reason,
+      decisionReason: note || reason,
+      decidedByUserId: decided_by_user_id,
+    });
+    const upd = disposition.application;
 
     return { receipt: `Application ${reason}.`, application: upd };
   }, res));
