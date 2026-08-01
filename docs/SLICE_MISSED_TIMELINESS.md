@@ -1,9 +1,16 @@
 # Slice proposal — record the miss durably (ITEM 1)
 
-**Status: PROPOSAL. Nothing built. No migration written.**
+**Status: REVISED PROPOSAL (rev 2, 2026-08-01). Nothing built. No migration
+written.** Awaiting approval of the contract in Part 5 before any code.
+
 Governed by the ITEM 1 ruling in `BLOCKING_DESIGN_ITEMS.md`: lifecycle status
 stays `open | in_progress | complete | escalated`; missedness is a separate
 timeliness axis; the first missed transition must become durable history.
+
+Rev 2 applies the lifecycle ruling (Part 3), replaces the two-state projection
+with three states (Part 4 — my rev-1 clock fallback was a conflation and is
+withdrawn), names the claim honestly as a manual recognition primitive rather
+than automatic detection (Part 2), and adds the service contract (Part 5).
 
 ---
 
@@ -98,75 +105,174 @@ encodes the model the ruling rejects.
 
 ---
 
-## Part 2 — The smallest design
+## Part 2 — What this slice IS (name the claim honestly)
 
-### 2.1 What it does
+**This is NOT automated missed-window detection.** No sweeper exists (§1.5) and
+this slice does not build one.
 
-1. **Delete the `status='missed'` write** and the dead `!== "missed"` half of the
-   guard. Lifecycle is left exactly as it was.
-2. **One migration**, adding to `obligations` (no enum widened, no constraint
-   touched):
-   - `missed_at timestamptz` — when the system recognised the miss;
-   - `missed_threshold_at timestamptz` — the `due_at` that was crossed.
-   Both nullable, both **write-once** (stamped only when `missed_at is null`), so
-   a later touch cannot rewrite when the miss happened.
-3. **An immutable `obligation_missed` event** in the existing `events` table,
-   carrying `{obligation_id, threshold_at, missed_at, declared_by, source}`.
-   The event is the history; the two columns are a read accelerator whose truth
-   is the event.
-4. **A named timeliness projection**, derived in this order:
-   - `missed_at is not null` → **`missed`** (durable — does not move with the clock);
-   - else `due_at < now()` → **`due`**;
-   - else → **`on_time`**.
-   The current-state read stays derived, as the ruling permits; the first
-   transition is durable, as the ruling requires.
-5. **Escalation and reassignment continue through the canonical engine.** This
-   slice adds no new routing.
+**This is the durable missed-RECOGNITION primitive** — one canonical service that
+a future sweeper and the existing human paths can both call. It delivers:
 
-### 2.2 What it deliberately does NOT do
+- a canonical `recognizeObligationMissed` service;
+- a manual / human-triggered path that calls it;
+- durable columns and immutable event history;
+- coherent projections;
+- idempotency and stale-state protection.
 
-- **No sweeper.** Nothing detects crossings today (§1.5). Building one is a real
-  capability with its own ownership, cadence and idempotency questions. This
-  slice makes the miss durable *at the point it is already declared*; the sweeper
-  is the natural follow-on and should be judged on its own.
-- **No re-pointing of the eight clock-derived reads.** They are current-state
-  reads, which the ruling permits to stay derived. Unifying their vocabulary is a
-  separate cleanup.
-- **No change to `leasing_conversion_obligations.outcome`** or the 069 ledger.
-  Both already record the miss correctly.
+Automatic recognition is a **later slice**, involving cadence, ownership,
+retries, locking and recovery behaviour. Nothing here may be described as
+automatic detection.
 
-### 2.3 THE OPEN QUESTION — needs a ruling before implementation
+---
 
-**What lifecycle does a rail-closed missed rung hold?**
+## Part 3 — Lifecycle ruling (2026-08-01)
 
-The rail declares the *window* closed; the *work* was never done. Scenario 8
-asserts the obligation leaves the open queue, while the ruling says lifecycle
-stays intact. Those pull in opposite directions, and this is the one genuine
-decision left.
+**A missed obligation retains its existing lifecycle status.**
 
-| | Lifecycle | Consequence |
-|---|---|---|
-| **A (recommended)** | stays `open` | Honest: the work genuinely was not done. It remains visible, now flagged `missed` with durable history. Queue reads segregate by *timeliness*, not by lifecycle. **Changes queue behaviour** — these rungs stop disappearing. |
-| B | `escalated` | Legal value today, and "escalated because it was missed" is the ruling's own phrasing. But nothing currently escalates it *to* anyone, so it would be a label without a recipient. |
-| C | `complete` | Leaves the queue cleanly, but asserts work was done that was not. §5 violation. **Reject.** |
+| Was | Stays |
+|---|---|
+| `open` | `open` |
+| `in_progress` | `in_progress` |
 
-I recommend **A**, with the caveat stated plainly: it means missed follow-ups
-stay on the board instead of vanishing. That is arguably the point — a missed
-resident follow-up disappearing is how the loop got lost in the first place — but
-it is a visible operator-facing change and belongs to you, not to me.
+It does **not** become `complete`. It does **not** become `escalated` merely to
+make it leave a queue. It stays visible **because the underlying work still has
+not happened.**
 
-### 2.4 Scenario 8 must be rewritten as part of this slice
+The conversion rung's local window and the operating obligation are different
+truths:
 
-Its part-4 assertion (`ob.status === "missed"`) encodes the rejected model. Under
-this design it becomes: lifecycle unchanged, `missed_at` and
-`missed_threshold_at` stamped, an `obligation_missed` event present with the
-crossed threshold, the timeliness projection reading `missed`, and — unchanged —
-no next rung spawned and the link still carrying `outcome='missed'` with
-`closed_at`.
+```
+rung window          →  closed as missed
+operating obligation →  still open and actionable
+```
 
-### 2.5 Migration number
+That is not a contradiction. **The window ended; the work did not disappear.**
 
-**Do not assume.** The isolated branch measured ceiling **122**
+If the lead or workflow later becomes genuinely terminal, a separate governed
+closure path may resolve the obligation. **Missing a deadline alone cannot close
+it.**
+
+This aligns with the operating doctrine: a missed commitment should move the
+signal and remain actionable rather than disappear cosmetically.
+
+---
+
+## Part 4 — Timeliness model (three states, not two)
+
+My earlier proposal read `missed` from the durable fact **first and the clock as
+fallback**. That was wrong, and the ruling corrects it: a clock fallback keeps
+conflating a live calculation with a durable institutional fact. With no sweeper,
+it would have meant an obligation became "missed" merely because somebody opened
+a page after the deadline — inventing an institutional recognition that never
+occurred.
+
+```
+before threshold                                  →  on_time / due
+clock crossed threshold, NO durable recognition   →  overdue
+missed_at exists                                  →  missed
+```
+
+- **`overdue`** is a clock-derived *operating condition*. It moves with the clock,
+  and that is correct for what it is.
+- **`missed`** is a durable *institutional fact*: the recovery window was
+  recognised as missed, by someone or something, at a recorded time.
+
+`missed` is **never** derived from the clock. Until something writes `missed_at`,
+the honest answer is `overdue`.
+
+---
+
+## Part 5 — The service contract
+
+### `recognizeObligationMissed(client, spec)`
+
+**Required inputs** — the service refuses without them:
+
+| Input | Why |
+|---|---|
+| `obligation_id` | the subject |
+| `expected_status` | stale-state protection — a concurrent resolution loses rather than double-applies |
+| `threshold_at` | the deadline being recognised as crossed, stated by the caller |
+| `recognized_by_user_id` **or** `system_actor` | who recognised it; never anonymous |
+| `reason` / `source` | why, and by which path |
+| `idempotency_key` | a repeat recognises nothing new |
+
+**Guarantees:**
+
+1. **Atomic.** `missed_at`, `missed_threshold_at` and the immutable
+   `obligation_missed` event are written in ONE transaction, or none of them are.
+2. **Threshold actually crossed.** Refuses if the obligation has not in fact
+   passed `threshold_at`. A recognition cannot be asserted into existence.
+3. **Stale state fails closed.** If the obligation no longer matches
+   `expected_status`, refuse — same discipline as `transitionObligation`.
+4. **Write-once.** `missed_at` is stamped only when null. A later call cannot
+   rewrite *when* the miss happened.
+5. **Idempotent.** A repeat with the same key writes nothing and creates no
+   second event.
+6. **Lifecycle untouched.** The service never writes `obligations.status`.
+7. **Never rewrites `due_at`**, and never erases later completion history. An
+   obligation completed *after* being missed keeps both facts.
+
+### Migration (not written)
+
+Adds to `obligations`, nullable, write-once by service discipline:
+
+- `missed_at timestamptz` — when the miss was recognised;
+- `missed_threshold_at timestamptz` — the deadline that was crossed.
+
+**No enum widened. No constraint touched.** `ck_obl_status` is left exactly as it
+is — that is the whole point of the ruling.
+
+**Migration number: query `schema_migrations` and cross-check unmerged
+branches.** The isolated branch measured ceiling **122**
 (`governed_economics_lineage`) on 2026-08-01, and a parallel thread holds
-unmerged numbers. Query `schema_migrations` and cross-check open branches before
-claiming one.
+unmerged numbers. Do not assume 123.
+
+---
+
+## Part 6 — Scenario 8, rewritten
+
+It must no longer expect `status='missed'`, and must no longer expect the
+obligation to leave the queue. It proves:
+
+1. the conversion link records `outcome='missed'`;
+2. the rail ledger (069) records the missed resolution and its time;
+3. **the obligation retains its prior lifecycle status**;
+4. `missed_at` and `missed_threshold_at` are durable;
+5. exactly **one** immutable `obligation_missed` event exists;
+6. the obligation **remains visible** for recovery;
+7. repeating the recognition is **idempotent** — no second event.
+
+---
+
+## Part 7 — Explicitly OUT of this slice
+
+- **The sweeper.** Automatic detection: cadence, ownership, retries, locking,
+  recovery behaviour. Its own slice.
+- **Consolidating the eight clock-derived reads.** Audited and documented in §1.3,
+  deliberately not normalised here — normalising eight surfaces while introducing
+  the primitive would broaden the build. A follow-on projection slice can unify
+  `overdue`, `missed_window` and `missed_commitment` into one canonical timeliness
+  read **after** the durable primitive is proven.
+
+---
+
+## Part 8 — Process lesson (recorded, 2026-08-01)
+
+**Never force-push or reuse a shared branch without comparing it to origin
+first.**
+
+This proposal was first committed onto `claude/getting-up-to-speed-nyf4ww`, after
+resetting it to `origin/main`. The push was rejected as non-fast-forward. That
+branch held **19 unmerged commits** — the entire resident-SMS slice. A `--force`
+would have destroyed them.
+
+The rejection was luck, not process. The rule:
+
+```
+git fetch origin <branch>
+git log --oneline origin/main..origin/<branch>     # what would be lost
+```
+
+before any reset, rebase or force-push of a branch that is not exclusively yours.
+Unrelated work gets its own branch — as this proposal now has.

@@ -88,6 +88,24 @@ node -e "const{Pool}=require('pg');const p=new Pool({connectionString:process.en
 
 ## Traps that cost time
 
+### NEVER reset, rebase or force-push a shared branch without diffing origin first
+
+2026-08-01: a design doc was committed onto `claude/getting-up-to-speed-nyf4ww`
+after resetting it to `origin/main`. The push was rejected as non-fast-forward.
+That branch held **19 unmerged commits** — the entire resident-SMS slice. A
+`--force` would have destroyed them. The rejection was luck, not process.
+
+Before touching any branch that is not exclusively yours:
+
+```
+git fetch origin <branch>
+git log --oneline origin/main..origin/<branch>     # exactly what would be lost
+```
+
+Unrelated work gets its own branch. Two threads have been running in parallel all
+week; assume every shared branch name is occupied until you have checked.
+
+
 **New, learned the hard way on 2026-08-01:**
 
 - **The Render Shell has no `.git`.** `git rev-parse HEAD`, `git fetch`, and
