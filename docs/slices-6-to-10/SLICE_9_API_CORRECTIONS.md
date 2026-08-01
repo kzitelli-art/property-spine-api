@@ -402,17 +402,48 @@ Control 10 matters: terminal status alone does not prove submission. A
 withdrawn draft keeps `submitted_at` null rather than acquiring a fabricated
 one.
 
-### ⚠️ 124 AND THE WRITER CUTOVER ARE NOW INSEPARABLE
+### ⚠️ SUPERSEDED — "merge together" was not sufficient
 
-Because the trigger fires on INSERT, **migration 124 breaks the live
-submission path until the writers author milestones.**
-`applicationSubmission.js` inserts at `'submitted'` with no `submitted_at`,
-and will now be refused by the database.
+Merging the migration and the writers in one commit does **not** remove the
+risk. A rolling deployment runs the migration while the PREVIOUS application
+instance is still serving traffic, and that instance inserts at `'submitted'`
+with no `submitted_at`. Real prospect applications would fail for the length
+of the rollout. Only **sequencing** removes it.
 
-This is the backstop working as intended — but it means **124 must not be
-merged, or deployed, ahead of the canonical lifecycle writer.** They land
-together or not at all. The next session must complete the writer cutover
-before this branch is mergeable.
+**124 is now expansion only. Enforcement moved to 125.**
+
+| | Deployment A | Deployment B |
+|---|---|---|
+| Migrations | 123, **124 expansion** | **125 enforcement** |
+| Code | canonical lifecycle writer + all 8 cutovers + corrected evidence API | none |
+| Gate | every instance running A | proven in production |
+
+`124` must stay compatible with today's writers — proven below. `125` must not
+apply until every production instance runs A.
+
+#### Proven in deployment order against real Postgres
+
+```
+after 124 expansion:
+  old-style INSERT at 'submitted', no submitted_at      exit 0  (REQUIRED)
+  old-style approval jump to 'lease_ready'              exit 0  (REQUIRED)
+
+after 125 enforcement:
+  old-style INSERT submitted, no submitted_at           REJECTED
+  old-style jump to lease_ready, no approved_at         REJECTED
+  historical declined -> withdrawn                      REJECTED
+  historical declined + terminal_code 'withdrawn'       REJECTED (constraint)
+  historical declined + MATCHING declined metadata      accepted
+  terminal row, unrelated field, same status            accepted
+  non-terminal row given terminal metadata              REJECTED
+  declined -> expired                                   REJECTED
+  11 historical rows with null milestones               survived untouched
+```
+
+Two holes closed this round: terminal status is now immutable **entirely**
+(not merely "cannot become non-terminal"), and terminal correspondence is a
+**standing table constraint**, so a historical row cannot later acquire a
+mismatched `terminal_code` without changing status.
 
 ## NEXT — canonical lifecycle authority
 
