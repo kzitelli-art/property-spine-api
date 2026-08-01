@@ -24,6 +24,9 @@
 // ════════════════════════════════════════════════════════════════════
 
 const { normalizeAndHash } = require("./proposed_terms_service");
+// The canonical lifecycle authority — status and its milestones are authored
+// only here (Path D).
+const lifecycle = require("./application_lifecycle");
 
 // The normalization contract this service is built against. 085's
 // normalizeAndHash is version 1. If that normalizer changes, this
@@ -534,11 +537,19 @@ async function evaluateExecutedLeaseAdmission(client, {
   // Operator-facing meaning is "term confirmation required" — never
   // "accepted" or "countersigned", which imply a legal act after the
   // lease was already executed.
-  await client.query(
-    `update lease_applications
-        set status='accepted_term_required', countersigned_at=now(), updated_at=now()
-      where id=$1`, [app.id]);
-
+  //
+  // PATH D — the status write moved BELOW, after the event and the obligation
+  // it depends on. Two defects went with the old ordering:
+  //
+  //  1. It wrote countersigned_at=now() — the exact legal-semantic fact this
+  //     comment says the act is NOT. Admission is neither acceptance nor
+  //     countersigning, and the real execution instant already lives on
+  //     executed_lease_records.executed_at. That was a fabricated fact on
+  //     every admission.
+  //  2. It set status unconditionally, with no guard on the current status,
+  //     so re-running admission on an already-ACTIVE tenancy would drag the
+  //     application backwards out of active. The authority returns
+  //     already_beyond_target and writes nothing.
   const ev = (await client.query(
     `insert into events (property_id, person_id, unit_id, type, note)
      values ($1,$2,$3,'executed_lease_admitted',$4) returning id`,
@@ -577,6 +588,31 @@ async function evaluateExecutedLeaseAdmission(client, {
         termObligation = ex.rows[0] || null;
       } else { throw e; }
     }
+  }
+
+  // THE STATUS TRANSITION, last — it verifies the term_required obligation
+  // above and the application's own executed-lease pointer (set in Phase 1),
+  // so status can never claim a term confirmation that has no work behind it.
+  //
+  // This function's contract is that a disagreement never throws: Phase 1's
+  // evidence must commit either way. A transition refusal is exactly such a
+  // disagreement — the application is not in a state that admits term
+  // confirmation — so it is reported as a blocker, not raised. Genuine
+  // failures (a broken client, a constraint violation) still propagate.
+  try {
+    await lifecycle.markTermConfirmationRequiredFromExecutedLease(client, {
+      applicationId: app.id,
+      executedLeaseRecordId: record.id,
+      termRequiredObligationId: termObligation ? termObligation.id : null,
+    });
+  } catch (e) {
+    if (e && e.transition_state === "refused") {
+      blockers.push({ code: "lifecycle_transition_refused", detail: e.message,
+        transition_code: e.code, from_status: e.from_status || null });
+      return { admitted: false, blockers, sources, record_id: record.id,
+        term_obligation_id: termObligation ? termObligation.id : null };
+    }
+    throw e;
   }
 
   return {
