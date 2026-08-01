@@ -460,9 +460,16 @@ async function call(port, method, urlPath, { token, body } = {}) {
   // ────────────────────────────────────────────────────────────────
   console.log("\nH. LOOP-B SIBLINGS — suppressed; nothing invisible, nothing lost");
   // ────────────────────────────────────────────────────────────────
+  // THE CLOSURE AUTHORITY. leasingconversion.js fails CLOSED without it, and
+  // this call omitted it — the SAME construction defect that left
+  // test_conversion_rail.db.js dead for 204 commits. Here it killed the run at
+  // section H, after 39 assertions had already passed, so the earlier sections
+  // still reported while everything from H onward silently never ran.
+  // Mounted exactly as server.js:3284 mounts it.
   const convRouter = buildConversion({ pool,
     spawnObligationFromEvent: engine.spawnObligationFromEvent,
-    completeObligation: engine.completeObligation });
+    completeObligation: engine.completeObligation,
+    closureAuthority: require("../src/leasing/conversion_obligation_closure.js").createConversionClosureAuthority() });
   const convSvc = convRouter._service || convRouter.services;
   await T("H1  multi-move conversion spawns the ANCHOR only; zero leasing_task obligations; extras recorded as a durable event", async () => {
     const prospect = (await read((c) => c.query(
