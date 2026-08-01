@@ -1,5 +1,180 @@
 # Property Spine — Thread Handoff
 
+**Current as of `main` @ `8290adf` · 2026-08-01.**
+Rewritten from the repository and from executed runs, not from the prior
+handoff — which had gone 33 commits stale and was being read by every new
+session as current truth.
+
+---
+
+## What is LIVE on `main`
+
+| Slice | Landed | Proof level |
+|---|---|---|
+| S4 unified leasing work · S5 application records | #17, #18 | real Postgres + authenticated HTTP |
+| Unit turn (migrations 112–118) | #16 | see `UNIT_TURN_RELEASE_CANDIDATE.md` — built-but-dormant at the time |
+| Slice 6 renewals operating rail (119) | #20/#21 | real DB + HTTP + browser |
+| Slice 7 Market & Pricing workspace | #22 | see `slices-6-to-10/SLICE_7_CLOSURE.md` |
+| AI leasing strategy foundation (120) | #23 | dormant runtime — activation gated on a replay corpus that has never run |
+| AI leasing visible status | #24 | — |
+| Slice 8 governed economics lineage (122) | #25 | see the Slice 8 branch's own proof |
+| **Resident SMS → canonical work order** | **#27** | **real Postgres + real HTTP · `docs/SLICE_SMS_CLOSURE.md`** |
+
+### What the SMS slice changed (read this before touching inbound messaging)
+
+- `runInbound` is **two transactions**. T1 commits the inbound claim already
+  flagged `needs_human=true`; T2 does all processing atomically and clears the
+  flag only on commit. A failed T2 preserves the claim, flagged, and sends no
+  reply.
+- The two **raw `work_orders` inserts are gone**. Tenant work orders flow
+  through `createWorkOrder`, so every one produces an event and a routing
+  obligation. The raw inserts produced neither.
+- `appendClarification` was repaired in the **shared canonical service**, so the
+  browser door (`POST /tenant/messages`) got the same fix.
+- **`src/shared/obligation_transitions.js`** is the canonical obligation retype.
+  Two whitelisted transitions only; requires expected type + status so stale
+  state fails closed. **Use it — do not hand-roll an obligation `UPDATE`.**
+- Clarification association keys on the **outbound question we sent**, never
+  `obligations.person_id` (that column holds the *affected* person, not the
+  person we texted — they differ whenever a neighbour reports).
+
+---
+
+## MIGRATION LEDGER — there is a GAP at 121
+
+```text
+repo on main:  … 118, 119, 120, [121 MISSING], 122
+```
+
+**121 is not lost.** `121_ai_leasing_operating_context.sql` is parked on
+`claude/getting-up-to-speed-nyf4ww` and was deliberately kept off `main`
+because it has never been applied to a database or exercised over HTTP.
+When it eventually merges it will apply **after** 122. They touch unrelated
+tables, so that is harmless — but it must not be a surprise.
+
+**Before claiming any migration number, scan every branch — not `ls migrations/`,
+which only shows what is merged. That is how duplicate numbers get created.**
+
+```bash
+git fetch --all -q && for b in $(git branch -r | grep -v HEAD); do \
+  git ls-tree -r --name-only $b migrations/; done \
+  | grep -oE '^migrations/[0-9]{3}' | sort -u | tail -5
+```
+
+Claimed at time of writing: **123, 124** (Slice 9) · **125** (Slice 9, staged
+*outside* `migrations/` at `docs/slices-6-to-10/deployment_b/`, so a scan of
+`migrations/` will NOT see it). **126 is the next free number.**
+
+Verify the *deployed* ledger separately — the repo is not the database:
+
+```bash
+node -e "const{Pool}=require('pg');const p=new Pool({connectionString:process.env.DATABASE_URL,ssl:{rejectUnauthorized:false}});p.query('select version,name from schema_migrations order by version desc limit 5').then(r=>{console.table(r.rows);p.end()})"
+```
+
+---
+
+## What is PARKED (real work, unmerged)
+
+- **`claude/getting-up-to-speed-nyf4ww`** — Governed Operating Context: migration
+  121, `ai_leasing_operating_context.js`, operator ai-rules/ai-settings routes,
+  agent.js + leasingleads.js wiring. **Never applied to a database, never called
+  over HTTP.** Its companion UI is on the app repo's branch of the same name and
+  is explicitly not approved design. Needs its own real-DB + HTTP proof.
+- **`claude/slice-9-demand-evidence`** — migrations 123/124 (+125 staged), the
+  evidence rail, and a timezone cutover that makes `withinSendWindow` and
+  `localHourAtProperty` **async**.
+
+---
+
+## Traps that cost time
+
+**New, learned the hard way on 2026-08-01:**
+
+- **The Render Shell has no `.git`.** `git rev-parse HEAD`, `git fetch`, and
+  `git worktree` all fail there with *"not a git repository"*. Use
+  `echo $RENDER_GIT_COMMIT` to see what is deployed. To run a harness from an
+  unmerged branch, point the service's **Settings → Branch** at it, Manual
+  Deploy, run, then switch back.
+- **`users.role` is a Postgres enum (`role_name`)**, not free text. Valid:
+  `owner, asset_manager, property_manager, leasing_agent, maintenance,
+  accountant, ai, system`. There is no `staff`.
+- **`now()` is TRANSACTION time.** Any harness that wraps a run in one
+  transaction gives every row an identical `occurred_at`, so
+  `order by occurred_at desc limit 1` returns an arbitrary row. Key assertions
+  by **identity**, never by timestamp. This produced a false green that passed
+  while reading a different test case's row.
+- **Outbound SMS requires `contact_preferences.consent_state='opted_in'`.**
+  Without it every send is refused and stamped `sms_status='refused'` — which
+  the clarification gate then correctly treats as *never asked*. A fixture that
+  omits consent silently exercises the wrong branch.
+- **The inbound-SMS route acks Twilio BEFORE it awaits the send** (so a slow
+  carrier never causes a retry). An HTTP response returning does **not** mean the
+  message was sent.
+- **Both exception-queue readers filter `direction='inbound'`**
+  (`surfaces/desks.js`, `surfaces/board.js`). Flagging an *outbound* row with
+  `needs_human` surfaces to nobody.
+
+**Still true from before:**
+
+- **Migration numbers collide across contributors.** Two `106` files broke every
+  API deploy until renumbered.
+- The ledger keys on **version**; the runner refuses a different file reusing a
+  recorded version.
+- `POST /operator/session` body field is **`proof`**, not `token`.
+- `DATABASE_URL` in `api/.env` is dead — pull it from the Render env per session.
+
+**Corrected — the prior handoff was wrong about these:**
+
+- `window.__psLive.beginOperatorSession(...)` **no longer exists.** The
+  `__psLive` surface today exposes turn/triage/readiness/agent methods; verify
+  against `property-spine-app/index.html` before relying on any of them.
+- The app repo branch is **not** `r1/renewals-live-read`. Check `git branch -r`.
+- The Solo property id **does** appear in source (four files:
+  `identity/operator.js`, `leasing/demo_preflight.js`, `surfaces/owner.js`,
+  `onboarding/deal_registry.js`) — all reads or delete-guards. The rule that it
+  is never *written* still holds, but "appears in no code" was false and must not
+  be used as a search heuristic.
+
+---
+
+## Known debt
+
+- **`tests/_engine.js` is a hand-maintained verbatim copy** of
+  `spawnObligationFromEvent` / `satisfyObligation` from `server.js`. Its own
+  header says *"server.js is the SOURCE OF TRUTH… update this copy to match"* —
+  a rule kept in sync by discipline, which is the shape of the documented
+  `deriveCategories` incident. `transitionObligation` was deliberately **not**
+  added to it; it lives in `src/shared/obligation_transitions.js` and is imported
+  by both server and harness. Extracting the two older functions is the right fix.
+- **A failed resident notification has visibility but no accountable owner.**
+  It re-flags the inbound row; PHILOSOPHY §11 wants an obligation. Needs an
+  obligation type and an owning role — an owner ruling, not an implementation
+  choice.
+- The AI leasing strategy replay corpus (migration 120) has still never run
+  against real model output.
+
+---
+
+## Key documents
+
+`docs/SLICE_SMS_CLOSURE.md` · `docs/RESIDENT_SMS_WORK_ORDER_CONTRACT.md` ·
+`docs/slices-6-to-10/` (00_GOVERNING_HANDOFF, SLICE_6/7_CLOSURE,
+ACCEPTANCE_CHECKLIST) · `docs/PHILOSOPHY.md` · `docs/PRICING_GOVERNANCE.md` ·
+`docs/IDENTITY_AND_AUTHORITY.md`
+
+---
+---
+
+# ⚠ EVERYTHING BELOW IS THE PRIOR HANDOFF, AS WRITTEN 2026-07-27
+
+It is preserved because it is the only written record of the pricing,
+governed-charge and administration-fee rulings, and deleting it would lose
+them. **It has NOT been re-verified since, and it is 33 commits stale.**
+Slice 8 (migration 122) has since changed governed economics, so treat the
+economic sections in particular as historical rather than current. Where it
+conflicts with anything above, the section above wins.
+
+
 **Closing state: 2026-07-28** · api `eaa1bd9` (live) · app `ae7abe3` (live)
 **Independently audited 2026-07-28** — see *Audit corrections* at the foot.
 Start here. Nothing in this file requires reconstructing the prior conversation.
