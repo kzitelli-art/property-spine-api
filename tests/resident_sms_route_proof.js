@@ -337,6 +337,11 @@ if (!process.env.DATABASE_URL) {
     ok(pending11.length >= 2, `two or more clarification questions are now open (${pending11.length})`);
 
     const woBefore11 = await countWO();
+    // Identity snapshot: the outbound row is written INSIDE T2, which commits
+    // before the HTTP response returns, so diffing ids is race-free.
+    const outBefore11 = new Set((await c.query(
+      `select id from comm_events where property_id=$1 and direction='outbound'`,
+      [prop.id])).rows.map((r) => r.id));
     const r11 = await inboundSms(RESIDENT_PHONE, "yes that one", `SM_AMBIG_${RUN}`);
     ok(r11.status === 200, "acked");
     ok(await countWO() === woBefore11, "PERSISTED: no work order created or modified");
@@ -359,11 +364,23 @@ if (!process.env.DATABASE_URL) {
     //  a total false green on the ONE guard for §7.1.4's "do not ask the
     //  resident to choose". Never order by occurred_at in this file.
     //
-    //  The transport double's `sent` array IS correctly ordered: it is an
-    //  in-memory append log, so its last entry is genuinely the last reply
-    //  dispatched. Assert POSITIVELY on it — the negative regex alone cannot
-    //  distinguish the right reply from three other branches' replies.
-    const reply11 = sent[sent.length - 1];
+    //  SECOND CORRECTION, from the rerun: the transport double's `sent` array
+    //  is correctly ORDERED but arrives too LATE to read here. The route acks
+    //  Twilio with emptyTwiml(res) BEFORE it awaits sendPropertySms — by
+    //  design, so a slow carrier never makes Twilio retry — so the HTTP
+    //  response returning does NOT mean the send has been recorded. Reading
+    //  sent[sent.length-1] therefore saw the PREVIOUS message's reply, and the
+    //  run reported `recorded (4)` where five sends were expected.
+    //
+    //  The outbound ROW, by contrast, is written inside T2 and committed
+    //  before the response returns. So diff the outbound ids around the call
+    //  and assert on the row that appeared: identity-keyed, race-free, and
+    //  immune to the degenerate occurred_at above.
+    const newOutbound = (await c.query(
+      `select id, body from comm_events where property_id=$1 and direction='outbound'`,
+      [prop.id])).rows.filter((r) => !outBefore11.has(r.id));
+    ok(newOutbound.length === 1, `exactly one reply was written for this message (${newOutbound.length})`);
+    const reply11 = newOutbound[0];
     ok(!!reply11 && /more than one open request/i.test(reply11.body),
        "the resident is told the TRUTH — that more than one request is open and the team will review");
     ok(!!reply11 && !/\b1\b|\b2\b|reply with|choose|which one/i.test(reply11.body),
@@ -374,7 +391,10 @@ if (!process.env.DATABASE_URL) {
     // The double now reports success, so sends DO occur — against the double.
     // The guarantee is therefore not "zero sends" but "zero REAL sends", and
     // it is proven two ways rather than asserted once.
-    ok(sent.length > 0, `sends were routed through the double and recorded (${sent.length})`);
+    // NOTE: this count can lag the number of replies WRITTEN, because the route
+    // acks before awaiting the send. It is a lower bound, deliberately asserted
+    // as such rather than pinned to a number that would flap.
+    ok(sent.length > 0, `sends were routed through the double and recorded (${sent.length}, lower bound)`);
     ok(sent.every((s) => s.to && s.from === LINE),
        "every send used the fixture property's own line — never a real property's number");
     const sids = (await c.query(
