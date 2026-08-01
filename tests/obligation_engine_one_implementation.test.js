@@ -66,6 +66,29 @@ for (const k of FNS.filter((f) => f !== "obligationError")) {
   ok(/dedupe_key/.test(seen.sql) && seen.params.includes("abc123"),
      "dedupe_key reaches the INSERT — the idempotency column the copy had dropped");
 
+  // A harness that dies before its first assertion proves nothing, and looks
+  // like nothing. tests/test_conversion_rail.db.js was in exactly that state
+  // for 204 commits: leasingconversion.js fails closed without a closure
+  // authority, the harness never passed one, so it threw at BUILD time. It was
+  // the only DB-backed proof of the conversion rail.
+  //
+  // This asserts the module can be CONSTRUCTED the way server.js constructs
+  // it. It needs no database, so it runs in the DB-free sweep and catches the
+  // next dependency added to a mounted module before that module's harness
+  // silently stops running.
+  {
+    const build = require(path.join(__dirname, "../src/leasing/leasingconversion.js"));
+    const { createConversionClosureAuthority } = require(path.join(__dirname, "../src/leasing/conversion_obligation_closure.js"));
+    let built = false;
+    try {
+      build({ pool: {}, spawnObligationFromEvent: engine.spawnObligationFromEvent,
+              completeObligation: engine.completeObligation,
+              closureAuthority: createConversionClosureAuthority() });
+      built = true;
+    } catch (e) { console.error("    build error: " + e.message); }
+    ok(built, "the conversion rail mounts with the same deps server.js gives it — its harness can reach an assertion");
+  }
+
   console.log(`\n  ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();

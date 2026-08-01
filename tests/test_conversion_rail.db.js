@@ -10,6 +10,11 @@
 const { Pool } = require("pg");
 const engine = require("./_engine.js");
 const buildModule = require("../src/leasing/leasingconversion.js");
+// THE CLOSURE AUTHORITY. leasingconversion.js fails CLOSED without it
+// (leasingconversion.js:35-37) — and this harness was not passing it, so it
+// threw at BUILD time and no assertion in this file had run for as long as
+// that guard has existed. Mounted here exactly as server.js:3284 mounts it.
+const { createConversionClosureAuthority } = require("../src/leasing/conversion_obligation_closure.js");
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -19,6 +24,7 @@ const router = buildModule({
   pool,
   spawnObligationFromEvent: engine.spawnObligationFromEvent,
   completeObligation: engine.completeObligation,
+  closureAuthority: createConversionClosureAuthority(),
 });
 const svc = router._service;
 
