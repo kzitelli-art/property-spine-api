@@ -223,3 +223,34 @@ the handoff path walks around it. This is a task-ownership defect rather than a
 Related, weaker: `spawnRung` never sets `obligations.assigned_user_id` for any
 rung, so the shared obligations row reads unassigned from birth even when the
 link table names an eligible owner.
+
+---
+
+## ITEM 4 — an ambiguously configured SMS line does not fail honestly
+
+**Status: BLOCKING before a second line type exists. Latent, not live. Requires
+a migration. Not written.** Full context in
+[`COMMUNICATION_LINE_ARCHITECTURE.md`](COMMUNICATION_LINE_ARCHITECTURE.md).
+
+`properties.sms_number` has **no unique index** — migration `030` is only
+`add column if not exists sms_number text`. The inbound lookup is:
+
+```sql
+select id, name, address, sms_number from properties where sms_number = $1 limit 1
+```
+
+`limit 1`, no `order by`. If two properties ever share a number, inbound binds to
+an arbitrary one and a resident's message lands on another property's ledger —
+confidently, with no signal. Unknown lines fail honestly; **ambiguous ones do
+not**.
+
+Currently latent: the guarded route (`tenantlink.js:383-391`, 409 on clash) is
+the only production writer, verified by grep. It is one row of defense in
+application code with no database backstop, bypassed by any seed, migration,
+admin tool, or direct SQL.
+
+**Repair:** unique index on `sms_number where sms_number is not null`, plus a
+count-based refusal replacing `limit 1`. Small, but a migration.
+
+**Removal condition:** closed when the database refuses duplicate lines and
+inbound refuses to guess between them.
