@@ -311,3 +311,70 @@ count-based refusal replacing `limit 1`. Small, but a migration.
 
 **Removal condition:** closed when the database refuses duplicate lines and
 inbound refuses to guess between them.
+
+---
+
+## ITEM 5 — deploying ANY branch to the production Render service migrates production
+
+**Status: PERMANENT DEPLOYMENT BLOCKER. Until this is separated, no feature
+branch may be deployed to the production Render service.**
+
+### The fact
+
+`package.json` runs `prestart: node migrations/migrate.js`, and Render's start
+command is `npm start`. `migrate.js` connects to the service's own
+`DATABASE_URL` — which, on the production service, is production.
+
+> **Deploying a branch to test it and migrating production are currently the
+> same operation.**
+
+There is no confirmation, no gate, and no distinction between "I want to run a
+harness against this code" and "I want this schema change to be live."
+
+### It has already happened, twice, and we documented it without seeing it
+
+- **Migration 121.** `main` has never contained `121_ai_leasing_operating_context`
+  — it lives only on the unmerged resident-SMS branch. Production has it applied.
+  It reached production because that branch was deployed for testing. This sat in
+  `THREAD_HANDOFF.md` as "the migration GAP at 121" and was read as a curiosity.
+- **Migration 126.** The `claude/slice-missed-timeliness` branch was deployed to
+  the production service to run harnesses against the isolated database. That
+  deploy will have run `prestart` against production with `126` in the tree.
+  Verification pending; this is why the activation preflight leads with "is 126
+  already present."
+
+The second one is the sharper lesson: the mechanism was already written down in
+our own handoff, and it still was not connected to the deploy being performed.
+
+### Why this outranks convenience
+
+Every guard built this session — `HARNESS_DATABASE_URL` with no fallback, the
+same-target refusal, the structurally read-only production smoke — protects
+against a harness writing to production. **None of them protects against a
+deploy migrating it**, because that path does not go through any harness. The
+protection is one layer short of the actual risk.
+
+### Required separation (not built)
+
+One of:
+
+- an isolated **preview service** with its own database, so branch deploys never
+  see production credentials; or
+- an **explicit migration gate** — `prestart` refuses to apply migrations unless
+  a deliberate variable is set, so a deploy that would change schema fails loudly
+  instead of proceeding silently.
+
+The gate is the smaller change and directly inverts the current default: today
+migration is implicit and silent; it should be explicit and loud.
+
+### Interim rule, effective now
+
+**No feature branch is deployed to the production Render service.** Harnesses run
+against the isolated database from whatever is already deployed, or from a
+service that does not hold production credentials.
+
+### Removal condition
+
+Closed when a branch deploy provably cannot alter production schema — verified by
+deploying a branch carrying an unapplied migration and confirming production's
+ledger is unchanged.
