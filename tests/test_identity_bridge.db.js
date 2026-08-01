@@ -313,6 +313,23 @@ async function call(port, method, urlPath, { token, body } = {}) {
     await bridgeSvc.linkBridge(c, { user_id: S.dupB, person_id: S.dupPerson,
       reason_code: "proof_seed_conflict", performed_by_user_id: S.admin });
     await mkAsg(S.dupPerson, S.dupA, S.prop);
+    // ── ADMIN PM NEEDS THE SAME SHAPE ────────────────────────────────
+    //  staffbridge.js:55-63 records a DELIBERATE TIGHTENING: an admin session
+    //  is resolved through resolveStaffSession, which "now also requires live
+    //  property authority — one meaning of authorization everywhere."
+    //
+    //  The fixture gave Admin PM a staff_sessions row and nothing else, so he
+    //  had a session but no authority, and the gate correctly refused him
+    //  (F4/F5). He now carries the full shape every other resolving user does:
+    //  classified human_staff (B3), bridged to a durable person, active
+    //  assignment here, active team-authority row here. The gate is not
+    //  weakened, resolveStaffSession is not bypassed, and nothing is
+    //  special-cased for the harness.
+    const adminOut = await bridgeSvc.linkBridge(c, {
+      user_id: S.admin, create_staff_person: { name: "Admin PM", property_id: S.prop },
+      reason_code: "proof_seed", performed_by_user_id: S.admin });
+    S.adminPerson = adminOut.person_id;
+    await mkAsg(S.adminPerson, S.admin, S.prop);
     // an INACTIVE assignment subject: bridged person, assignment exists but off
     const iaOut = await bridgeSvc.classifyAccount(c, { user_id: S.nonadmin, account_kind: "human_staff", performed_by_user_id: S.admin });
     const iap = await bridgeSvc.linkBridge(c, { user_id: S.nonadmin,
@@ -394,10 +411,19 @@ async function call(port, method, urlPath, { token, body } = {}) {
   // ────────────────────────────────────────────────────────────────
   console.log("\nE. THE ROSTER — only fully-resolving people; honest exclusions");
   // ────────────────────────────────────────────────────────────────
-  await T("E1  roster = Kandice + Katie only (excludes unbridged, inactive-account, inactive-assignment, conflicted, service)", async () => {
+  await T("E1  roster = the fully-resolving people only (excludes unbridged, inactive-account, inactive-assignment, conflicted, service)", async () => {
     const rows = await read((c) => resolver.listEligibleStaff(c, S.prop));
     const names = rows.map((r) => r.name).sort();
-    assert(JSON.stringify(names) === JSON.stringify(["Kandice", "Katie"]), `got: ${names.join(", ")}`);
+    // Admin PM joins Kandice and Katie because he now holds the real authority
+    // shape at this property (see the roster block). That is the TRUTHFUL
+    // roster, not a relaxed assertion: an assigned admin genuinely is eligible
+    // staff here. Every EXCLUSION this case exists to prove is unchanged —
+    // unbridged John, the four bad accounts, the conflicted pair and the
+    // service account must all still be absent.
+    assert(JSON.stringify(names) === JSON.stringify(["Admin PM", "Kandice", "Katie"]), `got: ${names.join(", ")}`);
+    for (const excluded of ["John Banks", "Sam Suspended", "Ivy Invited", "Frank Frozen",
+                            "Ida Inactive", "Twilio Webhook", "Dup A", "Dup B", "Norm Nonadmin"])
+      assert(!names.includes(excluded), `${excluded} must not appear in the roster`);
   });
   await T("E2  roster at the other property is honestly empty", async () => {
     const rows = await read((c) => resolver.listEligibleStaff(c, S.prop2));
