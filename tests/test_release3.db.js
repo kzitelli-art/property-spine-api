@@ -4,6 +4,7 @@
 //  Run after the R2 suites on the same clean-room DB.
 // ════════════════════════════════════════════════════════════════════
 "use strict";
+const receipt = require("./_run_receipt.js");
 const { Pool } = require("pg");
 const http = require("http");
 const express = require("express");
@@ -13,7 +14,11 @@ const buildConversion = require("../src/leasing/leasingconversion.js");
 const buildOperator = require("../src/identity/operator.js");
 const buildBridge = require("../src/identity/staffbridge.js");
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 10 });
+const CONN = receipt.harnessConnectionString();
+// every `await T(...)` in this file; a run reporting fewer is INVALID,
+// not merely quiet — the failure mode this receipt exists to catch.
+const EXPECTED = 23;
+const pool = new Pool({ connectionString: CONN, max: 10 });
 let pass = 0, fail = 0;
 async function T(name, fn) {
   try { await fn(); pass++; console.log("  PASS ", name); }
@@ -42,6 +47,7 @@ async function call(port, method, path, { token, body } = {}) {
 }
 
 (async () => {
+  receipt.begin(__filename, { url: CONN, expected: EXPECTED });
   console.log("═══ RELEASE 3 — RECOVERY + REASSIGNMENT + EVENT LEDGER ═══");
   const RUN = Date.now();
   const S = {};
@@ -441,11 +447,11 @@ async function call(port, method, path, { token, body } = {}) {
 
   // ═══ LEDGER IMMUTABILITY (behavioral) ═══
   await T("I1  no route mutates history: the operator router exposes no update/delete on the event ledger", async () => {
-    const src = require("fs").readFileSync(require("path").join(__dirname, "..", "operator.js"), "utf8");
+    const src = require("fs").readFileSync(require("path").join(__dirname, "..", "src", "identity", "operator.js"), "utf8");
     assert(!/delete\s+from\s+leasing_conversion_obligation_events/i.test(src)
         && !/update\s+leasing_conversion_obligation_events/i.test(src),
       "operator.js never updates or deletes ledger rows");
-    const rail = require("fs").readFileSync(require("path").join(__dirname, "..", "leasingconversion.js"), "utf8");
+    const rail = require("fs").readFileSync(require("path").join(__dirname, "..", "src", "leasing", "leasingconversion.js"), "utf8");
     assert(!/delete\s+from\s+leasing_conversion_obligation_events/i.test(rail)
         && !/update\s+leasing_conversion_obligation_events/i.test(rail),
       "the rail never updates or deletes ledger rows");
@@ -453,6 +459,7 @@ async function call(port, method, path, { token, body } = {}) {
 
   srv.close();
   await pool.end();
-  console.log(`═══ RESULT: ${pass} passed · ${fail} failed ═══`);
-  process.exit(fail ? 1 : 0);
-})().catch((e) => { console.log("SUITE CRASHED:", e.message); process.exit(1); });
+  process.exit(receipt.complete({
+    harness: __filename, passed: pass, failed: fail, expectedAtLeast: EXPECTED,
+  }));
+})().catch((e) => { process.exit(receipt.died(__filename, e, pass + fail)); });

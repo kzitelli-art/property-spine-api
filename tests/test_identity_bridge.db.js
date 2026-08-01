@@ -8,9 +8,10 @@
 //  067 migrations applied through the real schema_migrations ledger.
 //  No in-memory simulation.
 //
-//  Run:  DATABASE_URL=... node tests/test_identity_bridge.db.js
+//  Run:  HARNESS_DATABASE_URL="..." node tests/test_identity_bridge.db.js
 // ════════════════════════════════════════════════════════════════════
 "use strict";
+const receipt = require("./_run_receipt.js");
 const { Pool } = require("pg");
 const http = require("http");
 const express = require("express");
@@ -23,7 +24,11 @@ const resolver = require("../src/identity/staff_identity_resolver.js");
 const buildStaffBridge = require("../src/identity/staffbridge.js");
 const buildConversion = require("../src/leasing/leasingconversion.js");
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const CONN = receipt.harnessConnectionString();
+// every `await T(...)` in this file; a run reporting fewer is INVALID,
+// not merely quiet — the failure mode this receipt exists to catch.
+const EXPECTED = 35;
+const pool = new Pool({ connectionString: CONN });
 
 let pass = 0, fail = 0;
 function ok(l) { console.log("  PASS  " + l); pass++; }
@@ -147,6 +152,7 @@ async function call(port, method, urlPath, { token, body } = {}) {
 }
 
 (async () => {
+  receipt.begin(__filename, { url: CONN, expected: EXPECTED });
   console.log("\n═══ STAFF IDENTITY BRIDGE — PROOF SUITE (067) ═══\n");
   await seed();
   const bridgeSvc = buildStaffBridge({ pool })._service;
@@ -526,7 +532,8 @@ async function call(port, method, urlPath, { token, body } = {}) {
     assert(failed, "the gate must catch the planted join");
   });
 
-  console.log(`\n═══ RESULT: ${pass} passed · ${fail} failed ═══\n`);
   await pool.end();
-  process.exit(fail ? 1 : 0);
-})().catch((e) => { console.error("SUITE CRASHED:", e); process.exit(1); });
+  process.exit(receipt.complete({
+    harness: __filename, passed: pass, failed: fail, expectedAtLeast: EXPECTED,
+  }));
+})().catch((e) => { process.exit(receipt.died(__filename, e, pass + fail)); });

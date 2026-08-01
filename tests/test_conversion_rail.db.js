@@ -5,7 +5,7 @@
 //  the REAL obligation engine (extracted verbatim from server.js) and the REAL
 //  migration 047. No in-memory simulation. Each scenario is a transaction.
 //
-//  Run:  DATABASE_URL=... node test_conversion_rail.db.js
+//  Run:  HARNESS_DATABASE_URL="..." node test_conversion_rail.db.js
 // ════════════════════════════════════════════════════════════════════
 const receipt = require("./_run_receipt.js");
 const { Pool } = require("pg");
@@ -17,7 +17,8 @@ const buildModule = require("../src/leasing/leasingconversion.js");
 // that guard has existed. Mounted here exactly as server.js:3284 mounts it.
 const { createConversionClosureAuthority } = require("../src/leasing/conversion_obligation_closure.js");
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const CONN = receipt.harnessConnectionString();
+const pool = new Pool({ connectionString: CONN });
 
 // Mount the module to get its service layer (router._service), injecting the
 // REAL engine functions exactly as server.js does.
@@ -136,7 +137,7 @@ async function seed() {
 }
 
 async function main() {
-  receipt.begin(__filename);
+  receipt.begin(__filename, { url: CONN, expected: 12 });
   console.log("\n══════════ CONVERSION RAIL — DB-BACKED PROOF (real Postgres) ══════════\n");
   await seed();
 
