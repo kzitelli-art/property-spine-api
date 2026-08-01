@@ -76,3 +76,30 @@ update properties
 create index if not exists idx_properties_operating_timezone
   on properties (operating_timezone)
   where operating_timezone is not null;
+
+-- ── AUDIT: every timezone change, with actor and reason ─────────────
+--  Ruling 1B. A column with no authoring path leaves every property except
+--  the backfilled one permanently unavailable, and an authoring path with no
+--  audit is an unattributable change to what "today" means at a property.
+create table if not exists property_operating_timezone_changes (
+  id                uuid primary key default gen_random_uuid(),
+  property_id       uuid not null references properties(id) on delete cascade,
+  before_timezone   text,                       -- null = first configuration
+  after_timezone    text not null,
+  -- person = canonical business actor; user = authentication provenance.
+  -- The same distinction Slice 8 ruling 4 settled for pricing approval.
+  actor_person_id   uuid references persons(id),
+  actor_user_id     uuid not null references users(id),
+  reason            text,
+  idempotency_key   text,
+  changed_at        timestamptz not null default now()
+);
+
+create index if not exists idx_pot_changes_property
+  on property_operating_timezone_changes (property_id, changed_at desc);
+
+-- A retried command returns the original receipt instead of writing a second
+-- history row. Partial so rows without a key are unconstrained.
+create unique index if not exists uq_pot_changes_idempotency
+  on property_operating_timezone_changes (property_id, idempotency_key)
+  where idempotency_key is not null;

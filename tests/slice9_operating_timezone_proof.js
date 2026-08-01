@@ -69,7 +69,12 @@ const asPool = (c) => ({ query: (...a) => c.query(...a) });
   try {
     await c.query("begin");
     const P = asPool(c);
-    const propId = (await c.query("select id from properties limit 1")).rows[0].id;
+    // Deterministic, and NEVER the Demo Building — section H asserts about
+    // Demo's backfilled value, so the probe must not be the row it mutates.
+    const propId = (await c.query(
+      `select id from properties
+        where id <> 'a50fbdd0-3642-431e-b532-0dcd6ab8a4fe'
+        order by created_at nulls last, id limit 1`)).rows[0].id;
 
     section("C  no universal default — unconfigured is honestly null");
     await c.query("update properties set operating_timezone=null where id=$1", [propId]);

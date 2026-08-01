@@ -1561,9 +1561,10 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // (property_timezone.js), the SAME truth operator.js uses. Honest null for an
   // unconfigured property; booking/offers refuse rather than invent local times.
   const { loadPropertyOperatingTimeZone } = require("../shared/property_timezone");
-  // ASYNC as of Slice 9: the operating timezone is a governed column, not a
-  // hardcoded allowlist. Every caller here was already async.
-  function propertyTimezone(propertyId) {
+  // Slice 9 ruling 1A: the name says ASYNC. A sync-looking name returning a
+  // Promise already cost one regression in a proof fixture; the next caller
+  // does not get to make that mistake.
+  function loadPropertyOperatingTimezone(propertyId) {
     return loadPropertyOperatingTimeZone(pool, propertyId); // null = unconfigured
   }
 
@@ -1573,7 +1574,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   //    book (honest refusal, never an invented local time). Returns real open,
   //    future slots with a stable id + human label.
   async function readOfferableSlots(client, { propertyId, limit = 4 }) {
-    const tz = await propertyTimezone(propertyId);
+    const tz = await loadPropertyOperatingTimezone(propertyId);
     if (!tz) return null; // unconfigured tz → no offer set (honest)
     const rows = (await (client || pool).query(
       `select id, starts_at, ends_at, unit_id
@@ -2605,7 +2606,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     consumeTourOffer,          // mark an offer consumed on booking
     attachOutboundToOffer,     // best-effort provenance link to the dispatched outbound
     propertyAgentBookingEnabled, // permanent per-property booking capability
-    propertyTimezone,          // shared honest-null tz resolver
+    loadPropertyOperatingTimezone,  // ASYNC — governed column read, honest null
   };
   // TEST-ONLY (Class 3, inert at runtime): exposes the opener drafter so the
   // voice harness asserts against the REAL emitted text, not a copy. No route,
