@@ -28,6 +28,14 @@
 --  IDEMPOTENT throughout; migrate.js owns the transaction.
 -- ════════════════════════════════════════════════════════════════════
 
+-- ── DROP THE DEPLOYMENT-A COMPATIBILITY ADAPTER ─────────────────────
+--  124 installed a temporary write-if-null trigger so old instances still
+--  authored correct milestones during the rolling window. Its removal
+--  condition is exactly here: every instance now runs the canonical writer,
+--  so the adapter is replaced by refusal.
+drop trigger if exists trg_app_compat_author_milestones on lease_applications;
+drop function if exists ps_app_compat_author_milestones();
+
 -- ── STATUS GROUPS — BOUNDARIES, NOT LABELS ──────────────────────────
 create or replace function ps_app_reached_submission(p_status text) returns boolean as $$
   select p_status in ('submitted','approved','lease_ready','tenant_signed',

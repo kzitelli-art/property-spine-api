@@ -115,3 +115,72 @@ create index if not exists idx_la_terminal_at  on lease_applications (property_i
   where terminal_at is not null;
 create index if not exists idx_la_leasing_lead on lease_applications (leasing_lead_id)
   where leasing_lead_id is not null;
+
+-- ── TEMPORARY COMPATIBILITY AUTHORING (removed by 125) ──────────────
+--  CLASS 3 — temporary deployment adapter.
+--  REMOVAL CONDITION: dropped by 125_application_lifecycle_enforcement.sql
+--  once every production instance runs the canonical lifecycle writer.
+--
+--  Expansion alone keeps old instances WORKING, but it also lets them write
+--  new submitted / approved / terminal rows with NULL milestones for the
+--  length of the rollout. Those transitions happen after the schema exists,
+--  and afterwards they are not safely reconstructable — the old approval path
+--  writes lease_ready and updated_at but no approval instant at all.
+--
+--  This trigger is NOT historical backfill and NOT inference. PostgreSQL is
+--  witnessing the real transition at the moment it occurs, so
+--  transaction_timestamp() IS the milestone. Write-if-null only.
+--
+--  It deliberately does NOT:
+--    · rewrite an existing milestone;
+--    · fill submitted_at merely because a row became terminal;
+--    · infer approval for an already-terminal or historical row;
+--    · refuse any old writer shape.
+--
+--  It overlaps with the canonical writer during Deployment A. Both use
+--  write-if-null semantics inside the same transaction and therefore agree on
+--  transaction_timestamp(). The explicit writer is the permanent authority;
+--  this is scaffolding with a stated end.
+create or replace function ps_app_compat_author_milestones() returns trigger as $$
+declare
+  old_submitted boolean := false;
+  old_approved  boolean := false;
+  old_terminal  boolean := false;
+  ts timestamptz := transaction_timestamp();
+begin
+  if tg_op = 'UPDATE' then
+    old_submitted := old.status in ('submitted','approved','lease_ready','tenant_signed',
+                                    'countersigned','accepted_term_required','active');
+    old_approved  := old.status in ('approved','lease_ready','tenant_signed',
+                                    'countersigned','accepted_term_required','active');
+    old_terminal  := old.status in ('declined','withdrawn','expired');
+  end if;
+
+  -- Crossing INTO submission, including birth at submitted.
+  if new.status in ('submitted','approved','lease_ready','tenant_signed',
+                    'countersigned','accepted_term_required','active')
+     and not old_submitted and new.submitted_at is null then
+    new.submitted_at := ts;
+  end if;
+
+  -- Crossing INTO approval, including the live direct jump to lease_ready.
+  if new.status in ('approved','lease_ready','tenant_signed',
+                    'countersigned','accepted_term_required','active')
+     and not old_approved and new.approved_at is null then
+    new.approved_at := ts;
+  end if;
+
+  -- Crossing INTO a terminal disposition. Terminal status alone never implies
+  -- submission or approval — a draft withdrawn here keeps submitted_at null.
+  if new.status in ('declined','withdrawn','expired') and not old_terminal then
+    if new.terminal_at is null then new.terminal_at := ts; end if;
+    if new.terminal_code is null then new.terminal_code := new.status; end if;
+  end if;
+
+  return new;
+end $$ language plpgsql;
+
+drop trigger if exists trg_app_compat_author_milestones on lease_applications;
+create trigger trg_app_compat_author_milestones
+  before insert or update on lease_applications
+  for each row execute function ps_app_compat_author_milestones();
