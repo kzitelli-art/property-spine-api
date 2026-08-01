@@ -39,6 +39,10 @@
 
 const express = require("express");
 const crypto = require("crypto");
+// The canonical lifecycle authority. Status and its milestone are authored
+// together in one insert — migration 125 refuses a row that reaches submission
+// without submitted_at, so insert-then-update is rejected by the database.
+const lifecycle = require("./application_lifecycle");
 
 // Non-recoverable digest of a bearer token. We store ONLY this; the raw token
 // lives solely in the issued URL. SHA-256 is sufficient for a high-entropy
@@ -212,17 +216,18 @@ module.exports = function applicationSubmissionModule(deps) {
       }
     }
 
-    // 1) the application RECORD — 'submitted'
-    const ins = await client.query(
-      `insert into lease_applications
-         (property_id, unit_id, person_id, leasing_lead_id, status, applicant_name, unit_label,
-          rent, deposit, guarantor_name, captured, source, conversion_id)
-       values ($1,$2,$3,$4,'submitted',$5,$6,$7,$8,$9,$10,$11,$12)
-       returning *`,
-      [property_id, unit_id, person_id, resolvedLeasingLeadId, applicant_name, unit_label,
-       rent, deposit, guarantor_name, JSON.stringify(captured || {}), source, conversion_id]
-    );
-    const app = ins.rows[0];
+    // 1) the application RECORD — 'submitted', through the canonical authority.
+    //    Same columns, same values, same transaction. What changes is that
+    //    submitted_at is now authored in the SAME statement as the status
+    //    rather than left null for evidence to reconstruct from created_at.
+    //    The payload is a closed allowlist: this caller cannot name a
+    //    lifecycle column, and unknown keys are refused rather than ignored.
+    const born = await lifecycle.createSubmittedApplication(client, {
+      property_id, unit_id, person_id, leasing_lead_id: resolvedLeasingLeadId,
+      applicant_name, unit_label, rent, deposit, guarantor_name,
+      captured: captured || {}, source, conversion_id,
+    });
+    const app = born.application;
 
     // 2) the durable event
     await recordEvent(client, {
