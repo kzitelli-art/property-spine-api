@@ -146,7 +146,7 @@ async function refusedCode(c, fn) {
 
     section("C  birth authors submitted_at in one statement");
     const born = await L.createSubmittedApplication(c, {
-      columns: { id: uuid(), property_id: prop, person_id: person, applicant_name: "Iso Proof" },
+      property_id: prop, person_id: person, applicant_name: "Iso Proof",
     });
     ok("status is submitted", born.application.status === "submitted");
     ok("submitted_at authored", born.application.submitted_at != null);
@@ -300,6 +300,91 @@ async function refusedCode(c, fn) {
       String((await row(aw)).terminal_at) === String(before.terminal_at));
     ok("different terminal disposition refused",
       (await refusedCode(c, () => L.markTerminal(c, { applicationId: aw, terminalCode: "declined" }))) === "terminal_disposition_immutable");
+
+    section("N  the birth payload is a CLOSED allowlist");
+    const birthRefused = (payload) => refusedCode(c, () => L.createSubmittedApplication(c, payload));
+    const base = { property_id: prop, person_id: person, applicant_name: "Iso Proof" };
+    ok("missing property_id refused",
+      (await birthRefused({ person_id: person, applicant_name: "x" })) === "birth_payload_missing_required");
+    ok("missing person_id refused",
+      (await birthRefused({ property_id: prop, applicant_name: "x" })) === "birth_payload_missing_required");
+    ok("missing applicant_name refused",
+      (await birthRefused({ property_id: prop, person_id: person })) === "birth_payload_missing_required");
+    ok("caller-supplied status refused",
+      (await birthRefused({ ...base, status: "active" })) === "birth_payload_unknown_field");
+    ok("caller-supplied approved_at refused",
+      (await birthRefused({ ...base, approved_at: stamp })) === "birth_payload_unknown_field");
+    ok("caller-supplied terminal metadata refused",
+      (await birthRefused({ ...base, terminal_code: "declined" })) === "birth_payload_unknown_field");
+    ok("caller-supplied id refused",
+      (await birthRefused({ ...base, id: uuid() })) === "birth_payload_unknown_field");
+    ok("a malicious SQL identifier key is refused, not interpolated",
+      (await birthRefused({ ...base, ["x, status) values ('active') --"]: 1 })) === "birth_payload_unknown_field");
+    const lifeSrc = fs.readFileSync(MODULE_PATH, "utf8").replace(/^\s*\/\/.*$/gm, "");
+    // Object.keys(payload) IS used — to REJECT unknown keys. The property that
+    // matters is that the identifier list interpolated into SQL derives only
+    // from the module constant.
+    ok("the SQL identifier list derives only from BIRTH_FIELDS",
+      /const present = BIRTH_FIELDS\.filter/.test(lifeSrc)
+      && /insert into lease_applications \(\$\{present\.join/.test(lifeSrc));
+    ok("no payload-derived key is ever interpolated into SQL",
+      !/\$\{Object\.keys/.test(lifeSrc) && !/\$\{cols\.join|\$\{keys\.join/.test(lifeSrc));
+    const capt = await L.createSubmittedApplication(c, { ...base, captured: { a: 1 } });
+    ok("captured is normalized from an object", capt.application.captured != null);
+
+    section("O  already_at_target still verifies companion truth");
+    // lease_ready sitting with no pointer is malformed, not idempotent.
+    const bad1 = await mkApp("lease_ready", { submitted_at: stamp, approved_at: stamp });
+    const bo1 = await mkObl(bad1, "terms_review", "open");
+    ok("lease_ready with no stored pointer + replay refused",
+      (await refusedCode(c, () => L.markLeaseReadyFromApproval(c,
+        { applicationId: bad1, termsReviewObligationId: bo1 }))) === "lease_ready_companion_mismatch");
+    const good1 = await mkApp("submitted", { submitted_at: stamp });
+    const go1 = await mkObl(good1, "terms_review", "open");
+    await L.markLeaseReadyFromApproval(c, { applicationId: good1, termsReviewObligationId: go1 });
+    const other1 = await mkObl(good1, "terms_review", "open");
+    ok("lease_ready replay with a DIFFERENT obligation refused",
+      (await refusedCode(c, () => L.markLeaseReadyFromApproval(c,
+        { applicationId: good1, termsReviewObligationId: other1 }))) === "lease_ready_companion_mismatch");
+    const rep1 = await L.markLeaseReadyFromApproval(c, { applicationId: good1, termsReviewObligationId: go1 });
+    ok("valid lease_ready replay is already_at_target, zero write",
+      rep1.transition_state === "already_at_target" && rep1.milestones_authored_now.length === 0);
+
+    // accepted_term_required replay must still verify record + obligation.
+    const good2 = await mkApp("accepted_term_required", { submitted_at: stamp, approved_at: stamp });
+    const elr2 = await mkExecuted(good2, space0.id, "verified", "h9");
+    await c.query("update lease_applications set executed_lease_record_id=$2 where id=$1", [good2, elr2]);
+    const to9 = await mkObl(good2, "term_required", "open");
+    const badRec = await mkExecuted(good2, space0.id, "voided", "h10");
+    ok("accepted_term_required replay with a voided record refused",
+      (await refusedCode(c, () => L.markTermConfirmationRequiredFromExecutedLease(c,
+        { applicationId: good2, executedLeaseRecordId: badRec, termRequiredObligationId: to9 }))) === "executed_lease_record_not_verified");
+    const wrongObl = await mkObl(good2, "terms_review", "open");
+    ok("accepted_term_required replay with the wrong term obligation refused",
+      (await refusedCode(c, () => L.markTermConfirmationRequiredFromExecutedLease(c,
+        { applicationId: good2, executedLeaseRecordId: elr2, termRequiredObligationId: wrongObl }))) === "term_required_obligation_wrong_type");
+    const rep2 = await L.markTermConfirmationRequiredFromExecutedLease(c,
+      { applicationId: good2, executedLeaseRecordId: elr2, termRequiredObligationId: to9 });
+    ok("valid admission replay is already_at_target, zero write",
+      rep2.transition_state === "already_at_target" && rep2.application.status === "accepted_term_required");
+
+    // active replay must still verify lease lineage + completed obligation.
+    const good3 = await mkApp("active", { submitted_at: stamp, approved_at: stamp });
+    const l3 = uuid();
+    await c.query(
+      `insert into leases (id, property_id, space_id, application_id, start_date, end_date, rent, lease_status)
+       values ($1,$2,$3,$4,'2026-09-01','2027-08-31',1500,'active')`, [l3, prop, space0.id, good3]);
+    const to10 = await mkObl(good3, "term_required", "complete");
+    ok("active replay with a FOREIGN lease refused",
+      (await refusedCode(c, () => L.markActiveFromConfirmedTerm(c,
+        { applicationId: good3, leaseId: lease, termRequiredObligationId: to10 }))) === "lease_lineage_mismatch");
+    const openObl = await mkObl(good3, "term_required", "open");
+    ok("active replay with an incomplete term obligation refused",
+      (await refusedCode(c, () => L.markActiveFromConfirmedTerm(c,
+        { applicationId: good3, leaseId: l3, termRequiredObligationId: openObl }))) === "term_required_obligation_wrong_status");
+    const rep3 = await L.markActiveFromConfirmedTerm(c, { applicationId: good3, leaseId: l3, termRequiredObligationId: to10 });
+    ok("valid activation replay is already_at_target, zero write",
+      rep3.transition_state === "already_at_target" && rep3.milestones_authored_now.length === 0);
 
     if (UNDER_125) {
       section("L  staged 125 refuses false milestone shapes");

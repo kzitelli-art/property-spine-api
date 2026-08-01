@@ -206,7 +206,7 @@ async function requireObligation(client, { obligationId, applicationId, type, st
       `A ${type} obligation id is required to reach this state.`, { application_id: applicationId });
   }
   const o = (await client.query(
-    "select id, related_id, related_type, type, status from obligations where id=$1",
+    "select id, related_id, related_type, type, status from obligations where id=$1 for update",
     [obligationId])).rows[0];
   if (!o) {
     throw refuse(`${label}_obligation_not_found`, `That ${type} obligation does not exist.`,
@@ -233,19 +233,56 @@ async function requireObligation(client, { obligationId, applicationId, type, st
 //     ONE insert. status and submitted_at land together, because migration
 //     125 refuses a row that reaches submission without its milestone —
 //     insert-then-update is rejected by the database, not merely discouraged.
-//     Caller-supplied columns pass through so existing birth payload behaviour
-//     and database defaults are preserved.
+//
+//     ── CLOSED PAYLOAD, FIXED COLUMN LIST ────────────────────────────
+//     An earlier revision took { columns } and interpolated Object.keys()
+//     straight into the SQL. That let a caller name any column — including
+//     approved_at, terminal_code or an arbitrary identifier — and it silently
+//     dropped the required-field guards. The payload is now a closed
+//     allowlist, unknown keys are REFUSED rather than ignored, and no
+//     caller-controlled string ever reaches the SQL text: the column list is
+//     assembled from BIRTH_FIELDS, a module constant.
 // ════════════════════════════════════════════════════════════════════
-async function createSubmittedApplication(client, { columns = {} } = {}) {
+const BIRTH_FIELDS = Object.freeze([
+  "property_id", "unit_id", "person_id", "leasing_lead_id", "applicant_name",
+  "unit_label", "rent", "deposit", "guarantor_name", "captured", "source",
+  "conversion_id",
+]);
+const BIRTH_REQUIRED = Object.freeze(["property_id", "person_id", "applicant_name"]);
+
+// captured arrives either as an object or already-serialized JSON, as the
+// prior authority accepted. Normalize once, here.
+function normalizeCaptured(v) {
+  if (v == null) return null;
+  if (typeof v === "string") return v;
+  try { return JSON.stringify(v); } catch (_) { return null; }
+}
+
+async function createSubmittedApplication(client, payload = {}) {
   assertClient(client);
-  const cols = Object.keys(columns).filter((k) => k !== "status" && k !== "submitted_at");
-  const vals = cols.map((k) => columns[k]);
-  const placeholders = cols.map((_, i) => `$${i + 1}`);
+
+  const unknown = Object.keys(payload).filter((k) => !BIRTH_FIELDS.includes(k));
+  if (unknown.length) {
+    throw refuse("birth_payload_unknown_field",
+      `Unknown application field(s): ${unknown.join(", ")}. Lifecycle columns are authored by this module, never supplied.`);
+  }
+  const missing = BIRTH_REQUIRED.filter((k) => payload[k] == null || payload[k] === "");
+  if (missing.length) {
+    throw refuse("birth_payload_missing_required",
+      `An application requires ${missing.join(", ")}.`);
+  }
+
+  // Identifiers come ONLY from BIRTH_FIELDS. Absent fields are omitted rather
+  // than sent as explicit null, so NOT NULL columns keep their database
+  // defaults (captured, for one) instead of being overwritten with null.
+  const present = BIRTH_FIELDS.filter((f) => payload[f] !== undefined && payload[f] !== null);
+  const values = present.map((f) => (f === "captured" ? normalizeCaptured(payload[f]) : payload[f]));
+  const placeholders = present.map((_, i) => `$${i + 1}`);
 
   const after = (await client.query(
-    `insert into lease_applications (${[...cols, "status", "submitted_at"].join(", ")})
-     values (${[...placeholders, "'submitted'", "transaction_timestamp()"].join(", ")})
-     returning *`, vals)).rows[0];
+    `insert into lease_applications (${present.join(", ")}, status, submitted_at)
+     values (${placeholders.join(", ")}, 'submitted', transaction_timestamp())
+     returning *`, values)).rows[0];
 
   return receipt(null, after, STATUS.SUBMITTED, "applied");
 }
@@ -261,11 +298,28 @@ async function markLeaseReadyFromApproval(client, { applicationId, termsReviewOb
   const target = STATUS.LEASE_READY;
   const a = assessTransition(before.status, target);
 
-  if (a.transition_state === "already_at_target") return noWriteReceipt(before, target, "already_at_target");
   if (a.transition_state === "already_beyond_target") return noWriteReceipt(before, target, "already_beyond_target");
   if (a.transition_state === "refused") {
     throw refuse(a.code, `Cannot reach lease_ready from ${before.status}.`,
       { application_id: applicationId, from_status: before.status, to_status: target });
+  }
+
+  // ALREADY AT TARGET IS NOT A FREE PASS. A row sitting at lease_ready whose
+  // terms_review pointer is missing, or points somewhere else, is malformed —
+  // blessing it as a successful idempotent replay would launder exactly the
+  // defect the companion rule exists to prevent.
+  if (a.transition_state === "already_at_target") {
+    if (!before.terms_review_obligation_id
+        || String(before.terms_review_obligation_id) !== String(termsReviewObligationId)) {
+      throw refuse("lease_ready_companion_mismatch",
+        "This application is already lease_ready but its terms_review obligation does not match the one supplied.",
+        { application_id: applicationId, from_status: before.status, to_status: target });
+    }
+    await requireObligation(client, {
+      obligationId: termsReviewObligationId, applicationId,
+      type: "terms_review", statuses: ["open", "in_progress"], label: "terms_review",
+    });
+    return noWriteReceipt(before, target, "already_at_target");
   }
   if (before.status !== STATUS.SUBMITTED && before.status !== STATUS.APPROVED) {
     throw refuse("lease_ready_origin_not_permitted",
@@ -313,13 +367,13 @@ async function markTermConfirmationRequiredFromExecutedLease(client, {
   const target = STATUS.ACCEPTED_TERM_REQUIRED;
   const a = assessTransition(before.status, target);
 
-  if (a.transition_state === "already_at_target") return noWriteReceipt(before, target, "already_at_target");
   if (a.transition_state === "already_beyond_target") return noWriteReceipt(before, target, "already_beyond_target");
   if (a.transition_state === "refused") {
     throw refuse(a.code, `Cannot reach ${target} from ${before.status}.`,
       { application_id: applicationId, from_status: before.status, to_status: target });
   }
-  if (!ADMISSION_ORIGINS.includes(before.status)) {
+  const replay = a.transition_state === "already_at_target";
+  if (!replay && !ADMISSION_ORIGINS.includes(before.status)) {
     throw refuse("admission_origin_not_permitted",
       `${target} may only be reached from ${ADMISSION_ORIGINS.join(", ")}, not ${before.status}.`,
       { application_id: applicationId, from_status: before.status, to_status: target });
@@ -331,7 +385,7 @@ async function markTermConfirmationRequiredFromExecutedLease(client, {
       { application_id: applicationId });
   }
   const rec = (await client.query(
-    "select id, application_id, record_state from executed_lease_records where id=$1",
+    "select id, application_id, record_state from executed_lease_records where id=$1 for update",
     [executedLeaseRecordId])).rows[0];
   if (!rec) {
     throw refuse("executed_lease_record_not_found", "That executed-lease record does not exist.",
@@ -346,14 +400,15 @@ async function markTermConfirmationRequiredFromExecutedLease(client, {
       `That executed-lease record is ${rec.record_state}; only a verified record admits term confirmation.`,
       { application_id: applicationId });
   }
-  // It must be the CURRENTLY LIVE verified record — a superseded one is real
-  // history but no longer the operative evidence.
-  const superseded = (await client.query(
-    "select 1 from executed_lease_records where supersedes_record_id=$1 limit 1",
-    [executedLeaseRecordId])).rows[0];
-  if (superseded) {
-    throw refuse("executed_lease_record_superseded",
-      "That executed-lease record has been superseded and is no longer the live evidence.",
+  // CURRENT is the application's OWN pointer plus the record's own state —
+  // the direct operating facts. "No row happens to reference this through
+  // supersedes_record_id" is an absence of contradiction, not evidence of
+  // currency, and it silently passes for a record the application has already
+  // moved off.
+  if (before.executed_lease_record_id
+      && String(before.executed_lease_record_id) !== String(executedLeaseRecordId)) {
+    throw refuse("executed_lease_record_not_current",
+      "That executed-lease record is not the one this application currently points at.",
       { application_id: applicationId });
   }
 
@@ -361,6 +416,8 @@ async function markTermConfirmationRequiredFromExecutedLease(client, {
     obligationId: termRequiredObligationId, applicationId,
     type: "term_required", statuses: ["open", "in_progress"], label: "term_required",
   });
+
+  if (replay) return noWriteReceipt(before, target, "already_at_target");
 
   // STATUS ONLY. No countersigned_at, no executed_at, no submitted_at, no approved_at.
   const after = (await client.query(
@@ -382,13 +439,13 @@ async function markActiveFromConfirmedTerm(client, { applicationId, leaseId, ter
   const target = STATUS.ACTIVE;
   const a = assessTransition(before.status, target);
 
-  if (a.transition_state === "already_at_target") return noWriteReceipt(before, target, "already_at_target");
   if (a.transition_state === "already_beyond_target") return noWriteReceipt(before, target, "already_beyond_target");
   if (a.transition_state === "refused") {
     throw refuse(a.code, `Cannot reach active from ${before.status}.`,
       { application_id: applicationId, from_status: before.status, to_status: target });
   }
-  if (before.status !== STATUS.ACCEPTED_TERM_REQUIRED) {
+  const replayActive = a.transition_state === "already_at_target";
+  if (!replayActive && before.status !== STATUS.ACCEPTED_TERM_REQUIRED) {
     throw refuse("active_origin_not_permitted",
       `active may only be reached from accepted_term_required, not ${before.status}.`,
       { application_id: applicationId, from_status: before.status, to_status: target });
@@ -399,7 +456,7 @@ async function markActiveFromConfirmedTerm(client, { applicationId, leaseId, ter
       { application_id: applicationId });
   }
   const lease = (await client.query(
-    "select id, application_id from leases where id=$1", [leaseId])).rows[0];
+    "select id, application_id from leases where id=$1 for update", [leaseId])).rows[0];
   if (!lease) throw refuse("lease_not_found", "That lease does not exist.", { application_id: applicationId });
   if (String(lease.application_id) !== String(applicationId)) {
     throw refuse("lease_lineage_mismatch", "That lease belongs to a different application.",
@@ -410,6 +467,8 @@ async function markActiveFromConfirmedTerm(client, { applicationId, leaseId, ter
     obligationId: termRequiredObligationId, applicationId,
     type: "term_required", statuses: ["complete"], label: "term_required",
   });
+
+  if (replayActive) return noWriteReceipt(before, target, "already_at_target");
 
   const after = (await client.query(
     `update lease_applications

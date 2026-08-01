@@ -112,6 +112,50 @@ async function capture(pool) {
   };
 }
 
+// ── DEPLOYMENT-PHASE GATE ───────────────────────────────────────────
+//  A receipt captured in the wrong phase proves nothing. Recording the phase
+//  in a note and continuing is how a baseline taken AFTER enforcement — when
+//  the population can no longer grow — gets mistaken for one taken before it.
+function phaseProblems(receipt, phase) {
+  const p = [];
+  const m = receipt.migration_124 || {};
+  if (!m.version || !m.applied_at) {
+    p.push("migration 124 is not recorded as applied in schema_migrations");
+  }
+  if (!receipt.triggers.compatibility_authoring_present) {
+    p.push("the 124 compatibility trigger is absent — this is not Deployment A");
+  }
+  if (receipt.triggers.strict_enforcement_present) {
+    p.push("strict 125 enforcement is already present — the pre-B window has closed");
+  }
+  return p.map((detail) => ({ category: `deployment_phase_${phase}`, severity: "blocker", detail, ids: [] }));
+}
+
+// ── RECEIPT INTEGRITY ───────────────────────────────────────────────
+//  A baseline is a security artifact for Deployment B. Trusting its stored
+//  counts and digests without recomputing them lets a hand-edited file widen
+//  the accepted population.
+function receiptProblems(baseline) {
+  const p = [];
+  if (baseline.receipt_version !== "application_milestone_baseline_v1") {
+    p.push(`unexpected receipt_version: ${baseline.receipt_version}`);
+  }
+  if (!baseline.migration_124 || !baseline.migration_124.applied_at) {
+    p.push("baseline carries no migration 124 identity");
+  }
+  for (const c of CATEGORIES) {
+    const b = baseline.categories && baseline.categories[c.key];
+    if (!b) { p.push(`baseline is missing category ${c.key}`); continue; }
+    if (!Array.isArray(b.ids)) { p.push(`${c.key}: ids is not an array`); continue; }
+    if (b.count !== b.ids.length) p.push(`${c.key}: stored count ${b.count} != ${b.ids.length} ids`);
+    const sorted = [...b.ids].sort();
+    if (sorted.join(",") !== b.ids.join(",")) p.push(`${c.key}: ids are not sorted`);
+    if (new Set(b.ids).size !== b.ids.length) p.push(`${c.key}: ids contain duplicates`);
+    if (digest(b.ids) !== b.sha256_of_sorted_ids) p.push(`${c.key}: digest does not reconcile with ids`);
+  }
+  return p.map((detail) => ({ category: "receipt_integrity", severity: "blocker", detail, ids: [] }));
+}
+
 function verify(baseline, current) {
   const problems = [];
   for (const c of CATEGORIES) {
@@ -155,7 +199,13 @@ function verify(baseline, current) {
       const receipt = await capture(pool);
       const zeroViolations = CATEGORIES.filter((c) => c.must_be_zero)
         .filter((c) => receipt.categories[c.key].count !== 0);
+      const phase = phaseProblems(receipt, "capture");
       process.stdout.write(JSON.stringify(receipt, null, 2) + "\n");
+      if (phase.length) {
+        console.error("\nBLOCKER — wrong deployment phase for a capture:");
+        for (const x of phase) console.error(`  ${x.detail}`);
+        process.exit(1);
+      }
       if (zeroViolations.length) {
         console.error(`\nBLOCKER: ${zeroViolations.map((c) => c.key).join(", ")} must be zero at capture time.`);
         process.exit(1);
@@ -168,7 +218,11 @@ function verify(baseline, current) {
       if (!path) { console.error("usage: --verify <baseline.json>"); process.exit(1); }
       const baseline = JSON.parse(fs.readFileSync(path, "utf8"));
       const current = await capture(pool);
-      const problems = verify(baseline, current);
+      const problems = [
+        ...receiptProblems(baseline),
+        ...phaseProblems(current, "verify"),
+        ...verify(baseline, current),
+      ];
 
       console.log("── application milestone baseline verification ──");
       console.log(`baseline captured_at : ${baseline.captured_at}`);
