@@ -23,14 +23,14 @@ history.
 |---|---|---|
 | 6 | Renewals Operating Rail | **CLOSED** — live-proven, browser verified |
 | 7 | Market & Pricing Workspace | **CLOSED** — live-proven, browser verified |
-| 8 | Governed Rents and Concessions | **AUDIT DELIVERED** — build not started |
+| 8 | Governed Rents and Concessions | **STEPS 1–4 BUILT & PROVEN** — step 5 held |
 | 9 | Market Evidence | Not started |
 | 10 | Economic Closure and Orchestration | Not started |
 | — | **By-bed pricing** | **NEXT FOCUS after 8–10** (ruled 2026-08-01) |
 
-Slices 1–5 are closed. Slice 8 was formally authorized by `SLICE_7_CLOSURE.md`.
-As of this note there is **no branch, no commit, and no closure doc** for 8, 9,
-or 10 in either repository.
+Slices 1–5 are closed. Slice 8 steps 1–4 are on branch
+`claude/new-session-via3v4` (API), pushed, **not merged, no PR**. Slices 9 and
+10 have no branch, no commit, and no closure doc in either repository.
 
 ## Closed slice identity
 
@@ -223,4 +223,10 @@ thread lands second owns the merge.
 App build stamp for the visible-status slice:
 `window.__PS_BUILD.code_sha` = `9422d454d5fa60ec6df65d0ee2ea593017f877df`.
 
-Next free migration number: **121**.
+Next free migration number: **123**.
+
+> Migration numbering, 2026-08-01: main is at 120. The AI-leasing thread claims
+> **121** (`121_ai_leasing_operating_context.sql`, branch
+> `claude/getting-up-to-speed-nyf4ww`). Slice 8 therefore took **122**.
+> Always `ls migrations/` before choosing a number — two `106` files once broke
+> every API deploy.

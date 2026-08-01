@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════════
---  MIGRATION 121 — GOVERNED ECONOMICS: REASON, LINEAGE, STACKING
+--  MIGRATION 122 — GOVERNED ECONOMICS: REASON, LINEAGE, STACKING
 --
 --  Slice 8, steps 2–3. Additive only. Nothing here changes an existing
 --  row's meaning, and nothing retroactively alters signed or executed

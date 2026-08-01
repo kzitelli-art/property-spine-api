@@ -2,7 +2,7 @@
    slice8_governed_economics_proof.js — Slice 8, steps 1–4.
 
    Proves the governed-economics socket against REAL Postgres, inside a
-   transaction that is rolled back. The point is not that migration 121 added
+   transaction that is rolled back. The point is not that migration 122 added
    columns — it is that:
 
      · a renewal with no published sheet says WHY, instead of a bare null;
@@ -159,7 +159,7 @@ const retireSheet = (c, verId) => c.query(
     ok("and names it: no_renewal_rent_in_governed_terms",
       row && row.economics_unavailable_reason === "no_renewal_rent_in_governed_terms");
 
-    section("F  migration 121 — lineage and stacking");
+    section("F  migration 122 — lineage and stacking");
     // Concession policies are frozen on a published version too, so author
     // them against a draft — the same way the product must.
     const draftId = (await c.query(
