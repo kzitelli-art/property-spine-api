@@ -51,6 +51,7 @@ module.exports = function operatorModule(deps) {
   const { buildReviewList, buildReviewDetail } = require("../applications/application_review"); // application review reads (slice 2)
   const { loadLeasingDesk } = require("../leasing/leasing_desk_loader"); // Leasing Desk composition (one repeatable-read snapshot)
   const { renewalsCohort, renewalsCohortEnriched } = require("../leasing/renewals_read"); // R1 cohort + Slice 6 operating rail
+  const { loadAiLeasingStrategyProjection } = require("../leasing/ai_leasing_strategy_projection"); // read-only strategy status + conversation attribution
   const { currentRentRoll } = require("../surfaces/rent_roll_canonical");   // canonical Current Rent Roll (migration route)
   const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts"); // factual Future Rent Roll (migration route)
   const { institutionalRentRoll, institutionalCsv } = require("../surfaces/rent_roll_institutional"); // formal as-of schedule + CSV
@@ -1266,9 +1267,28 @@ module.exports = function operatorModule(deps) {
       // no new loader resource and no session change.
       const today = await todayCounts(propertyId);
 
+      // AI LEASING STRATEGIES — one additive, read-only projection. The queue
+      // remains the operating surface; this supplies only governed identity,
+      // validation/deployment state, and exact opportunity assignment. No
+      // score, winner, recommendation, or traffic-changing control is exposed.
+      const aiLeasingStrategy = await loadAiLeasingStrategyProjection(pool, {
+        propertyId,
+        conversationIds: rows.map((row) => row.conversation_id),
+      });
+      for (const row of rows) {
+        row.ai_strategy = aiLeasingStrategy.conversation_assignments[String(row.conversation_id)] || null;
+      }
+
       return res.json({
         property_id: propertyId, as_of: asOf, projection_version: "conversation_board_v1",
-        scope, counts, sources, today, conversations: rows, next_cursor: nextCursor, limit,
+        scope, counts, sources, today,
+        ai_leasing_strategies: {
+          contract_version: aiLeasingStrategy.contract_version,
+          state: aiLeasingStrategy.state,
+          strategies: aiLeasingStrategy.strategies,
+          performance: aiLeasingStrategy.performance,
+        },
+        conversations: rows, next_cursor: nextCursor, limit,
       });
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message }); }
   });
@@ -1765,6 +1785,52 @@ module.exports = function operatorModule(deps) {
         user_id: req.operator.id,
         draft_version_id: b.draft_version_id || null,
         proposal: b.proposal || {}, decision: b.decision, note: b.note || null,
+      });
+      return res.json(out);
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null }); }
+  });
+
+  // ── SLICE 8 — GOVERNED CONCESSION READ ──────────────────────────────
+  //  Slice 7's audit recorded that concessions had governed tables but no
+  //  operator read. Read-only: authors nothing, approves nothing. Effective
+  //  state is server-authored so no surface has to decide for itself whether
+  //  a dated concession is live today.
+  router.get("/operator/pricing/concessions", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { governedConcessions } = require("../money/concessions_read");
+      return res.json(await governedConcessions(pool, {
+        property_id: req.operator.property_id,   // session only, never the query
+        as_of: req.query.as_of || null,
+      }));
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null }); }
+  });
+
+  // ── SLICE 8 — PUBLISH A GOVERNED PRICING VERSION ────────────────────
+  //  publishVersion() has existed and been complete since 062; it simply had
+  //  no route, which is why every property reads published_version: null and
+  //  the governed sheet has never been the thing anyone quotes from.
+  //
+  //  Authority is NOT this route's business: publishVersion calls
+  //  pricingAuthority and throws 403 without may_publish_pricing, refuses an
+  //  unapproved or mismatched review receipt (409), and refuses self-review by
+  //  a grant holder (403). The route adds session scope and nothing else.
+  //
+  //  dry_run defaults TRUE. A malformed or accidental POST rehearses against
+  //  real constraints and triggers, then rolls back. Publishing requires
+  //  saying dry_run:false out loud.
+  router.post("/operator/pricing/publish", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { publishVersion } = require("../money/pricing_lifecycle");
+      const b = req.body || {};
+      const out = await publishVersion(pool, {
+        property_id: req.operator.property_id,   // session only, never the body
+        user_id: req.operator.id,                // session only, never the body
+        draft_version_id: b.draft_version_id || null,
+        proposal: b.proposal || {},
+        review_receipt_id: b.review_receipt_id || null,
+        dry_run: b.dry_run !== false,
       });
       return res.json(out);
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null }); }
