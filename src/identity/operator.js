@@ -308,6 +308,10 @@ module.exports = function operatorModule(deps) {
     try {
       const out = await aiLeasingOperatingContext.listSettings(pool, {
         propertyId: req.operator.property_id,
+        // The SAME condition requireGovernanceAuthority enforces on the write
+        // routes, read from the same resolved session — so what the browser is
+        // offered and what the server will accept cannot drift apart.
+        mayManageGovernance: req.operator.can_manage_roles === true,
       });
       return res.json(out);
     } catch (e) {

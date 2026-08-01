@@ -194,31 +194,76 @@ function snapshotHash(rules) {
     .digest("hex");
 }
 
+// Plain comparison, deliberately. The candidate used crypto.timingSafeEqual
+// here; that is for comparing SECRETS, where per-byte timing could leak the
+// value an attacker is guessing. These are digests of governance rules the
+// same authenticated operator can read in full from the settings endpoint —
+// there is nothing to leak. Keeping it would have implied a threat model
+// that does not exist, and timingSafeEqual THROWS on length mismatch, so it
+// would have turned any future change of hash function into a crash rather
+// than a false. Neither property is wanted here.
 function snapshotsMatch(reviewedSnapshot, liveRules) {
   const reviewed = canonicalRuleSnapshot(Array.isArray(reviewedSnapshot) ? reviewedSnapshot : []);
   const live = canonicalRuleSnapshot(liveRules);
-  return crypto.timingSafeEqual(
-    Buffer.from(crypto.createHash("sha256").update(JSON.stringify(reviewed)).digest("hex")),
-    Buffer.from(crypto.createHash("sha256").update(JSON.stringify(live)).digest("hex")),
-  );
+  return snapshotHash(reviewed) === snapshotHash(live);
 }
 
+// ONE IMPLEMENTATION OF "IN FORCE RIGHT NOW".
+//
+// This function previously carried its own SQL date predicate
+// (confirmed_at <= now and (effective_until is null or effective_until > now))
+// while effectiveState() carried the same rule again in JS. Two
+// implementations of one meaning, in the two places that must never
+// disagree: what GENERATION includes, and what the SETTINGS SURFACE labels
+// active. If a later edit touched one and not the other, the operator would
+// read "active_now" for a rule the AI was not being given — or the reverse —
+// and nothing would fail loudly.
+//
+// This repo has already paid for that exact mistake once: work_order_service.js
+// documents two functions named deriveCategories that disagreed, so an
+// operator previewed "tenant billback", saved, and silently got an ordinary
+// resident repair. The rule there is the rule here — one implementation.
+//
+// So the SQL now selects only what is cheap and index-backed (the property's
+// non-retired rows, served by idx_ai_leasing_operating_rules_active) and
+// effectiveState() is the SOLE judge of whether each one is in force. The row
+// count is bounded by MAX_ACTIVE_RULES_PER_PROPERTY, so filtering in JS reads
+// at most a few dozen rows — there is no performance argument for keeping a
+// second copy of the rule.
 async function loadActiveRules(db, propertyId, at = new Date()) {
   if (!db || typeof db.query !== "function") throw new TypeError("loadActiveRules requires a queryable database object");
   if (!propertyId) throw new TypeError("loadActiveRules requires propertyId");
   const rows = (await db.query(
     `select id, property_id, rule_key, rule_kind, title, instruction_text,
             trigger_text, steps, escalation_text, source_type, source_note,
-            confirmed_at, effective_until, approved_by_user_id, created_at
+            confirmed_at, effective_until, status, approved_by_user_id, created_at
        from ai_leasing_operating_rules
       where property_id=$1 and status='active'
-        and confirmed_at <= $2::timestamptz
-        and (effective_until is null or effective_until > $2::timestamptz)
       order by case rule_kind when 'guardrail' then 1 when 'policy' then 2 else 3 end,
                rule_key asc, created_at asc`,
-    [propertyId, new Date(at).toISOString()],
+    [propertyId],
   )).rows;
-  return rows.map((row) => ({ ...row, steps: Array.isArray(row.steps) ? row.steps : [] }));
+  return rows
+    .map((row) => ({ ...row, steps: Array.isArray(row.steps) ? row.steps : [] }))
+    .filter((row) => effectiveState(row, at) === "active_now");
+}
+
+// The set that can EVER appear in a future prompt for this property:
+// what is in force now, plus what is scheduled to come into force. Expired
+// rules are excluded — they can never return. Used by the write-time budget
+// check below.
+async function loadBudgetRelevantRules(db, propertyId, at = new Date()) {
+  const rows = (await db.query(
+    `select id, property_id, rule_key, rule_kind, title, instruction_text,
+            trigger_text, steps, escalation_text, source_type, source_note,
+            confirmed_at, effective_until, status, approved_by_user_id, created_at
+       from ai_leasing_operating_rules
+      where property_id=$1 and status='active'`,
+    [propertyId],
+  )).rows;
+  return rows
+    .map((row) => ({ ...row, steps: Array.isArray(row.steps) ? row.steps : [] }))
+    .filter((row) => ["active_now", "scheduled"].includes(effectiveState(row, at)));
 }
 
 function buildOperatingContextDirective(rules) {
@@ -277,6 +322,45 @@ async function activeRuleCount(client, propertyId) {
   return r ? r.n : 0;
 }
 
+// WRITE-TIME CHARACTER BUDGET.
+//
+// The count ceiling above is not sufficient on its own. Thirty-five short
+// rules and thirty-five long ones both pass a count check, but only one of
+// them produces a prompt that fits. Without this, an operator could save a
+// long rule, see a healthy receipt, and never learn that from that moment on
+// every generation for the property silently degraded to the deterministic
+// fallback — a write that LOOKS successful while quietly disabling the thing
+// it was supposed to configure. That is the "confident wrong" §5 exists to
+// forbid, and the operator is the one person positioned to fix it, so the
+// refusal belongs here, at the moment of writing, in language they can act on.
+//
+// The generation-time throw inside buildOperatingContextDirective stays as
+// the structural backstop for rows that predate this check or arrive by some
+// other path; this makes reaching it an anomaly rather than the design.
+//
+// SCHEDULED RULES COUNT. The prospective set is what can ever be in force
+// together (active_now + scheduled), not merely what is in force this second.
+// Judging the budget on today's set alone would repeat, in a new place,
+// exactly the mistake correction #4 fixed — treating a scheduled rule as if
+// it were not real. This can refuse a write that would only have overflowed
+// later; that is deliberate. A refusal an operator can act on now beats a
+// silent degradation that begins at a date nobody is watching.
+async function assertDirectiveBudget(client, propertyId, prospectiveRule, { replacingRuleId = null } = {}) {
+  const existing = await loadBudgetRelevantRules(client, propertyId);
+  const kept = replacingRuleId
+    ? existing.filter((r) => String(r.id) !== String(replacingRuleId))
+    : existing;
+  try {
+    buildOperatingContextDirective(kept.concat([prospectiveRule]));
+  } catch (e) {
+    if (e && e.code === "OPERATING_CONTEXT_OVER_BUDGET") {
+      throw httpErr(409,
+        `This property's policies, SOPs, and guardrails would exceed the ${MAX_DIRECTIVE_CHARS}-character limit the leasing assistant can be given. Shorten this rule, or retire one that is no longer needed.`);
+    }
+    throw e;
+  }
+}
+
 async function createRule(client, { propertyId, actorUserId, input }) {
   const rule = normalizeRuleInput(input);
   const existing = (await client.query(
@@ -296,6 +380,7 @@ async function createRule(client, { propertyId, actorUserId, input }) {
     throw httpErr(409,
       `This property already has ${count} active operating rules, the maximum of ${MAX_ACTIVE_RULES_PER_PROPERTY}. Retire an existing policy, SOP, or guardrail before adding another.`);
   }
+  await assertDirectiveBudget(client, propertyId, rule);
 
   return (await client.query(
     `insert into ai_leasing_operating_rules
@@ -339,6 +424,9 @@ async function replaceRule(client, { ruleId, propertyId, actorUserId, retiredByU
   // retire does — replacing without recording who authorized the retirement
   // half of the operation would leave that half unaudited.
   if (!retiredByUserId) throw httpErr(400, "retiredByUserId is required to replace a rule.");
+  // Budget-check BEFORE retiring the prior version — a refused replace must
+  // leave the existing governed rule in force, not retire it and then fail.
+  await assertDirectiveBudget(client, propertyId, rule, { replacingRuleId: old.id });
   await client.query(
     `update ai_leasing_operating_rules
         set status='retired', retired_at=now(), retired_by_user_id=$2, retirement_reason=$3
@@ -381,7 +469,16 @@ async function retireRule(client, { ruleId, propertyId, retiredByUserId, retirem
   return { retired_rule_id: row.id };
 }
 
-async function listSettings(db, { propertyId }) {
+// mayManageGovernance is passed IN from the route, which read it from the
+// resolved staff session — this service never re-derives authority, and the
+// browser never asserts it. Without it the settings payload could not tell
+// the UI whether to offer the write controls at all, and the drawer would
+// render Create/Replace/Retire buttons that every click answers with a 403.
+// Showing an action that cannot succeed is the interface version of a
+// confident wrong (§5, §28: a button must describe what will actually
+// happen). Server enforcement is unchanged and remains the real boundary —
+// this only lets the browser stop lying about what is available.
+async function listSettings(db, { propertyId, mayManageGovernance = false }) {
   const strategyRows = (await db.query(
     `select p.id as strategy_profile_id, p.strategy_key, p.interface_name,
             p.interface_title, p.description, p.status as profile_status,
@@ -508,6 +605,16 @@ async function listSettings(db, { propertyId }) {
     },
     property_id: propertyId,
     shared_across_strategies: true,
+    // Server-decided, browser-rendered. Reads stay open to anyone with
+    // leasing-module access; only governance WRITES require the elevated
+    // capability, so an ordinary leasing user sees the full governed context
+    // and simply is not offered controls that would refuse them.
+    authority: {
+      may_manage_governance: !!mayManageGovernance,
+      read_only_reason: mayManageGovernance
+        ? null
+        : "Changing property policies, SOPs, and guardrails requires an account that can manage roles at this property.",
+    },
     strategies,
     knowledge: {
       items: knowledge,
@@ -554,9 +661,11 @@ module.exports = {
   snapshotHash,
   snapshotsMatch,
   loadActiveRules,
+  loadBudgetRelevantRules,
   buildOperatingContextDirective,
   appendOperatingContextDirective,
   activeRuleCount,
+  assertDirectiveBudget,
   createRule,
   replaceRule,
   retireRule,
