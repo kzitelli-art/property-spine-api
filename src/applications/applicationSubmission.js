@@ -894,14 +894,20 @@ module.exports = function applicationSubmissionModule(deps) {
       note: `Application ${reason}${note ? " — " + note : ""}`,
     });
 
-    const upd = (await client.query(
-      `update lease_applications
-          set status=$1, decision_reason=$2, decision_by_user_id=$3, decided_at=now(), updated_at=now()
-        where id=$4 returning *`,
-      [reason, note || reason, decided_by_user_id, app.id]
-    )).rows[0];
+    // PATH C — through the canonical authority. The raw write moved status and
+    // decided_at but authored no terminal_code / terminal_at pair, so a
+    // terminal application could not be placed in a reporting window or
+    // classified without re-deriving both from current status. It also had no
+    // guard against terminal-to-terminal rewriting: a declined application
+    // could be silently overwritten as withdrawn, erasing which decision was
+    // actually made. A terminal disposition is immutable here — a later
+    // pursuit is a NEW application, never a rewritten one.
+    const ended = await lifecycle.markTerminal(client, {
+      applicationId: app.id, terminalCode: reason,
+      decisionReason: note || reason, actorUserId: decided_by_user_id,
+    });
 
-    return { receipt: `Application ${reason}.`, application: upd };
+    return { receipt: `Application ${reason}.`, application: ended.application };
   }, res));
 
   // expose the service for in-process tests + the approve route to close the gate
