@@ -40,7 +40,12 @@ All final DB runs executed on the **isolated Neon branch**
 
 ## Four statements that must travel with this summary
 
-1. **The conversion rail is NOT yet fully proven.** It stands at 11/12.
+1. **The conversion rail was NOT fully proven at merge time.** It stood at
+   11/12. **Superseded 2026-08-01:** ITEM 1 was resolved on
+   `claude/slice-missed-timeliness` and the rail now runs **15/15** against the
+   isolated database at `3e44e8b`. That work is NOT part of this merge — this
+   statement described the state of `main` when the engine branch merged, and it
+   is left standing so the record of what was claimed then stays accurate.
 2. **Scenario 8 is blocked by ITEM 1** — `obligations.status='missed'` is
    unwritable against `ck_obl_status`. That is a pre-existing product-model
    defect on `main`, which this branch neither caused nor conceals. It is

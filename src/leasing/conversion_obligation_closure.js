@@ -40,6 +40,7 @@
 //  explicitly rejected as false confidence.
 // ════════════════════════════════════════════════════════════════════
 "use strict";
+const { recognizeObligationMissed } = require("../shared/obligation_missed.js");
 
 const staffIdentity = require("../identity/staff_identity_resolver.js");
 
@@ -103,10 +104,35 @@ function createConversionClosureAuthority() {
     // generic engine can never perform on linked rows.
     const ob = (await client.query(
       "select * from obligations where id=$1 for update", [link.obligation_id])).rows[0];
-    if (ob && ob.status !== "complete" && ob.status !== "missed") {
+    if (ob && ob.status !== "complete") {
       if (resolution === "missed") {
-        await client.query(
-          `update obligations set status='missed', updated_at=now() where id=$1`, [link.obligation_id]);
+        // ── THE WINDOW CLOSED. THE WORK DID NOT DISAPPEAR. ──────────────
+        //  This used to write `status='missed'`. That write NEVER SUCCEEDED —
+        //  ck_obl_status permits only open|in_progress|complete|escalated, so
+        //  every attempt threw and rolled back the whole transaction, taking the
+        //  link stamp and the 069 ledger append with it. A crossed window
+        //  recorded nothing at all. Zero missed rows exist in production.
+        //
+        //  Ruled 2026-08-01: missedness is ORTHOGONAL to lifecycle, not a fourth
+        //  value of it. The obligation KEEPS its status and stays visible,
+        //  because the work still has not happened. The rung's window is closed
+        //  as missed (the link stamp above); the obligation remains open and
+        //  actionable. Those are different truths, not a contradiction.
+        //
+        //  The old `ob.status !== "missed"` half of the guard above was dead
+        //  code — no row could ever hold that value — and is gone with it.
+        await recognizeObligationMissed(client, {
+          obligation_id: link.obligation_id,
+          expected_status: ob.status,
+          // the threshold is DERIVED inside the service from the obligation;
+          // this is stale-state protection only, never authority.
+          expected_threshold_at: ob.due_at,
+          system_actor: "conversion_rail_window",
+          reason: "conversion rung window closed as missed",
+          source: "conversion_rail.resolveRung",
+          // deterministic per rung: a retry recognises nothing new.
+          idempotency_key: `conv_rung_missed:${link.id}`,
+        });
       } else {
         await client.query(
           `update obligations set status='complete', completed_at=now(), updated_at=now() where id=$1`,
