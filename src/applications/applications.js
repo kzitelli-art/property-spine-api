@@ -24,6 +24,10 @@
 // =============================================================
 
 const express = require("express");
+// The canonical lifecycle authority — see applicationSubmission.js. This is
+// the second birth door; both hold the same contract until the decision to
+// retire one is made.
+const lifecycle = require("./application_lifecycle");
 
 module.exports = function applicationsModule(deps) {
   const { pool, spawnObligationFromEvent, satisfyObligation, completeObligation } = deps;
@@ -366,14 +370,15 @@ module.exports = function applicationsModule(deps) {
       const prop = (await client.query("select id from properties where id=$1", [req.params.propertyId])).rows[0];
       if (!prop) { await client.query("rollback"); return res.status(404).json({ receipt: "No property with that id." }); }
 
-      const ins = await client.query(
-        `insert into lease_applications
-           (property_id, unit_id, person_id, status, applicant_name, unit_label, rent, deposit, guarantor_name, captured)
-         values ($1,$2,$3,'submitted',$4,$5,$6,$7,$8,$9) returning *`,
-        [req.params.propertyId, unit_id, person_id, applicant_name, unit_label, rent, deposit, guarantor_name,
-         JSON.stringify(captured || {})]
-      );
-      const app = ins.rows[0];
+      // Through the canonical authority, same as the submission service. This
+      // route supplies no lead, source or conversion; those fields are simply
+      // omitted from the insert so their column defaults survive, rather than
+      // being overwritten with an explicit null.
+      const born = await lifecycle.createSubmittedApplication(client, {
+        property_id: req.params.propertyId, unit_id, person_id, applicant_name,
+        unit_label, rent, deposit, guarantor_name, captured: captured || {},
+      });
+      const app = born.application;
       await recordEvent(client, { property_id: app.property_id, person_id, unit_id, type: "application_submitted",
         note: `Application submitted — ${applicant_name}${unit_label ? " · " + unit_label : ""}` });
 
@@ -382,7 +387,14 @@ module.exports = function applicationsModule(deps) {
     } catch (e) {
       await client.query("rollback");
       console.error("application create:", e);
-      res.status(500).json({ receipt: "Could not create the application.", error: e.message });
+      // A lifecycle refusal is a stated contract violation carrying its own
+      // status and message. Reporting it as an anonymous 500 would tell the
+      // caller the server broke when in fact the server refused, and for a
+      // reason it can name. Body keys are unchanged.
+      res.status(e.httpStatus || 500).json({
+        receipt: e.publicMessage || "Could not create the application.",
+        error: e.message,
+      });
     } finally { client.release(); }
   });
 
