@@ -144,6 +144,15 @@ async function refusedCode(c, fn) {
       return id;
     };
 
+    // Deliberately NOT folded into mkExecuted. The application's pointer is a
+    // separate real fact: a record can exist without the application having
+    // moved onto it. Making the seed set it automatically would hide exactly
+    // the null-pointer case the authority must refuse.
+    const pointAt = async (appId, elrId) => {
+      await c.query("update lease_applications set executed_lease_record_id=$2 where id=$1",
+        [appId, elrId]);
+    };
+
     section("C  birth authors submitted_at in one statement");
     const born = await L.createSubmittedApplication(c, {
       property_id: prop, person_id: person, applicant_name: "Iso Proof",
@@ -200,6 +209,7 @@ async function refusedCode(c, fn) {
     const space0 = (await c.query("select id from spaces where unit_id=$1 limit 1", [unit.id])).rows[0];
     const elr = await mkExecuted(a5, space0.id, 'verified', 'h1');
     const to1 = await mkObl(a5, "term_required", "open");
+    await pointAt(a5, elr);
     const r5 = await L.markTermConfirmationRequiredFromExecutedLease(c, {
       applicationId: a5, executedLeaseRecordId: elr, termRequiredObligationId: to1 });
     ok("status is accepted_term_required", r5.application.status === "accepted_term_required");
@@ -219,9 +229,44 @@ async function refusedCode(c, fn) {
         { applicationId: a6, executedLeaseRecordId: voided, termRequiredObligationId: to2 }))) === "executed_lease_record_not_verified");
     const a6b = await mkApp("lease_ready", { submitted_at: stamp, approved_at: stamp });
     const elr6b = await mkExecuted(a6b, space0.id, 'verified', 'h3');
+    // Every OTHER fact must be valid, or this asserts the pointer check
+    // (which now runs first) rather than the missing obligation.
+    await pointAt(a6b, elr6b);
     ok("missing term obligation refused",
       (await refusedCode(c, () => L.markTermConfirmationRequiredFromExecutedLease(c,
         { applicationId: a6b, executedLeaseRecordId: elr6b }))) === "term_required_obligation_required");
+
+    // ── THE NULL-POINTER CONTROLS ───────────────────────────────────
+    //  An earlier guard read `if (pointer && pointer !== supplied) refuse`,
+    //  so a NULL pointer sailed through: every other fact about the record
+    //  could be perfect and the application had still never moved onto it.
+    //  These three are the discriminating set — without the third, requiring
+    //  non-null would also be satisfied by refusing everything.
+    const nullPtr = await mkApp("lease_ready", { submitted_at: stamp, approved_at: stamp });
+    const nullElr = await mkExecuted(nullPtr, space0.id, "verified", "h11");
+    const nullObl = await mkObl(nullPtr, "term_required", "open");
+    ok("lease_ready + verified record + NULL application pointer refused",
+      (await refusedCode(c, () => L.markTermConfirmationRequiredFromExecutedLease(c,
+        { applicationId: nullPtr, executedLeaseRecordId: nullElr,
+          termRequiredObligationId: nullObl }))) === "executed_lease_record_not_current");
+    ok("...and the application did not move", (await row(nullPtr)).status === "lease_ready");
+
+    const nullReplay = await mkApp("accepted_term_required", { submitted_at: stamp, approved_at: stamp });
+    const nullReplayElr = await mkExecuted(nullReplay, space0.id, "verified", "h12");
+    const nullReplayObl = await mkObl(nullReplay, "term_required", "open");
+    ok("accepted_term_required REPLAY + NULL application pointer refused",
+      (await refusedCode(c, () => L.markTermConfirmationRequiredFromExecutedLease(c,
+        { applicationId: nullReplay, executedLeaseRecordId: nullReplayElr,
+          termRequiredObligationId: nullReplayObl }))) === "executed_lease_record_not_current");
+
+    // The positive control: identical shape, pointer now set. If this refused
+    // too, the guard would be rejecting everything and the two refusals above
+    // would prove nothing about null specifically.
+    await pointAt(nullPtr, nullElr);
+    const ptrOk = await L.markTermConfirmationRequiredFromExecutedLease(c,
+      { applicationId: nullPtr, executedLeaseRecordId: nullElr, termRequiredObligationId: nullObl });
+    ok("the SAME shape with a matching non-null pointer is accepted",
+      ptrOk.transition_state === "applied" && ptrOk.application.status === "accepted_term_required");
 
     section("H  already_beyond_target is a distinct, zero-write outcome");
     const lease = uuid();
