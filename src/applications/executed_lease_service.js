@@ -24,9 +24,6 @@
 // ════════════════════════════════════════════════════════════════════
 
 const { normalizeAndHash } = require("./proposed_terms_service");
-// THE ONE canonical writer of lease_applications.status. This service records
-// executed-lease evidence; it never moves the application lifecycle itself.
-const lifecycle = require("./application_lifecycle");
 
 // The normalization contract this service is built against. 085's
 // normalizeAndHash is version 1. If that normalizer changes, this
@@ -348,28 +345,6 @@ async function computeAdmissionBlockers(client, { application_id }) {
     space_id: record.space_id,
   };
 
-  // ── 0. THE LIFECYCLE WALL — ASKED, NEVER ATTEMPTED ──────────────────
-  //  Admission moves the application to 'accepted_term_required', and that
-  //  transition belongs to the lifecycle authority. Not every row may make
-  //  it: a terminal application is immutable, and one that never reached
-  //  approval carries no approval instant across the boundary. This service
-  //  must not DISCOVER that by attempting the write — the refusal would roll
-  //  back the caller's single transaction and destroy the executed-lease
-  //  evidence Phase 1 already recorded. assessTransition answers the same
-  //  question with no write and no throw, so an inadmissible row becomes a
-  //  BLOCKER, the evidence still commits, and the 200-with-blocked contract
-  //  survives. Confirm-term recomputes through this same function, so it
-  //  refuses to build a tenancy on such a row for the same reason.
-  //  already_in_state is NOT a blocker: an application already at — or past —
-  //  term confirmation is admitted, and the authority issues no statement.
-  const transition = lifecycle.assessTransition(
-    app.status, lifecycle.STATUS.ACCEPTED_TERM_REQUIRED);
-  sources.application_status = app.status || null;
-  if (!transition.admissible && !transition.already_in_state) {
-    blockers.push({ code: transition.code, detail: transition.reason,
-      application_status: app.status || null });
-  }
-
   // ── 1. what the TENANT ACKNOWLEDGED — the primary baseline ──
   // Prefer the confirmation bound to the SUBMITTED packet (what they
   // actually saw) over the application's current pointer, which may
@@ -559,15 +534,10 @@ async function evaluateExecutedLeaseAdmission(client, {
   // Operator-facing meaning is "term confirmation required" — never
   // "accepted" or "countersigned", which imply a legal act after the
   // lease was already executed.
-  //  The transition itself is the lifecycle authority's, on THIS transaction's
-  //  client, in ONE statement. Two things that fixes at exactly this line:
-  //  countersigned_at is no longer rewritten with now() on every idempotent
-  //  re-verification (the authority coalesces it, and a replay from
-  //  'accepted_term_required' issues no statement at all), and the previously
-  //  unguarded update can no longer resurrect a terminal application.
-  //  Admissibility was settled as a blocker above, so this cannot refuse here;
-  //  if it ever did, that is a genuine invariant failure and it propagates.
-  await lifecycle.markAcceptedTermRequired(client, { applicationId: app.id });
+  await client.query(
+    `update lease_applications
+        set status='accepted_term_required', countersigned_at=now(), updated_at=now()
+      where id=$1`, [app.id]);
 
   const ev = (await client.query(
     `insert into events (property_id, person_id, unit_id, type, note)

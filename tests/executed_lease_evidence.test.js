@@ -21,20 +21,12 @@ const ACK = { id: "conf-1", rent: "1850.00", security_deposit: "1850.00",
 let LOCKED_OFFER_RENT = null;   // null = no locked offer
 let OVERLAPS = [];              // competing operative leases on the space
 
-// The application row the stub serves. status is part of it: the admission
-// evaluator now asks the lifecycle authority whether this row may reach
-// 'accepted_term_required' at all, and a row without a status is not a row.
-const appRow = (o, status) => ({
-  id: APP, property_id: PROP, unit_id: o.appUnit, person_id: "per-1",
-  applicant_name: "Marlow Reyes", status,
-});
-
 function stubClient(overrides = {}) {
   const o = { appUnit: UNIT, spaceUnit: UNIT, spaceProp: PROP, ...overrides };
   return { query: async (sql, params) => {
     const s = String(sql);
     if (/from lease_applications where id=\$1/.test(s))
-      return { rows: [appRow(o, store.appStatus)] };
+      return { rows: [{ id: APP, property_id: PROP, unit_id: o.appUnit, person_id: "per-1", applicant_name: "Marlow Reyes" }] };
     if (/from spaces s join units u/.test(s))
       return { rows: params[0] === SPACE ? [{ id: SPACE, unit_id: o.spaceUnit, property_id: o.spaceProp }] : [] };
     if (/from executed_lease_records[\s\S]*idempotency_key=\$2/.test(s))
@@ -63,12 +55,7 @@ function stubClient(overrides = {}) {
       if (r) { r.admission_status = params[0]; r.admission_blockers = params[1]; }
       return { rows: [] };
     }
-    // the lifecycle authority's single statement — the target status rides in
-    // $1, never in the SQL text, and the caller gets the updated row back
-    if (/update lease_applications set status=\$1/.test(s)) {
-      store.appStatus = params[0];
-      return { rows: [appRow(o, params[0])] };
-    }
+    if (/update lease_applications[\s\S]*accepted_term_required/.test(s)) { store.appStatus = "accepted_term_required"; return { rows: [] }; }
     if (/insert into executed_lease_admission_evaluations/.test(s)) {
       store.evaluations.push({ record_id: params[0], application_id: params[1], result: params[2],
         blockers: JSON.parse(params[3]), sources_compared: JSON.parse(params[4]),

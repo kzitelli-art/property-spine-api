@@ -92,9 +92,6 @@ function buildClient({ recordLeaseId = null, leases = [] } = {}) {
           property_id: "88888888-8888-4888-8888-888888888888",
           unit_id: UNIT_ID,
           proposed_terms_confirmation_id: CONF_ID,
-          // the evaluator asks the lifecycle authority whether this row may
-          // reach 'accepted_term_required'; a row without a status is not a row
-          status: "lease_ready",
         }] };
       }
       if (/from executed_lease_records[\s\S]*record_state = 'verified'/.test(text)) {
