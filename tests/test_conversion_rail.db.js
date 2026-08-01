@@ -10,6 +10,7 @@
 const receipt = require("./_run_receipt.js");
 const { Pool } = require("pg");
 const engine = require("./_engine.js");
+const missedSvc = require("../src/shared/obligation_missed.js");
 const buildModule = require("../src/leasing/leasingconversion.js");
 // THE CLOSURE AUTHORITY. leasingconversion.js fails CLOSED without it
 // (leasingconversion.js:35-37) — and this harness was not passing it, so it
@@ -137,7 +138,7 @@ async function seed() {
 }
 
 async function main() {
-  receipt.begin(__filename, { url: CONN, expected: 12 });
+  receipt.begin(__filename, { url: CONN, expected: 15 });
   console.log("\n══════════ CONVERSION RAIL — DB-BACKED PROOF (real Postgres) ══════════\n");
   await seed();
 
@@ -331,19 +332,125 @@ async function main() {
     secondObId = af.obligation_id;
   });
 
-  // ── 8. a crossed due window writes durable MISSED proof (no advance) ──
-  await T("8 · crossed window with no action → durable missed proof, no further advance", async () => {
-    // Resolve the applicant rung as missed (simulating a window sweep result).
+  // ══════════════════════════════════════════════════════════════════
+  //  8. A CROSSED WINDOW — the window closes, the work does not vanish.
+  //
+  //  This scenario used to assert `ob.status === "missed"` and that the
+  //  obligation "left the open queue". Both encoded the REJECTED model.
+  //  ck_obl_status never permitted 'missed', so that write threw and rolled the
+  //  whole transaction back — a crossed window recorded nothing at all, and zero
+  //  missed rows exist in production.
+  //
+  //  Ruled 2026-08-01: missedness is ORTHOGONAL to lifecycle. The obligation
+  //  KEEPS its status and stays visible, because the work still has not
+  //  happened. The rung's window closed; the obligation did not.
+  // ══════════════════════════════════════════════════════════════════
+  let statusBefore = null, dueBefore = null;
+
+  await T("8a · recognition BEFORE the threshold is refused — a miss cannot be asserted into existence", async () => {
+    // the applicant rung was spawned minutes ago; its window has not passed.
+    await expectThrow(() => tx(c => svc.resolveRung(c, { obligation_id: secondObId, result: "missed" })),
+      "has not passed");
+    // and the refusal wrote NOTHING — not the link stamp, not the columns.
+    const link = (await pool.query(
+      `select outcome, closed_at from leasing_conversion_obligations where obligation_id=$1`, [secondObId])).rows[0];
+    assert(link.outcome === null && link.closed_at === null, "the window closed despite the refusal");
+    const ob = (await pool.query(`select missed_at from obligations where id=$1`, [secondObId])).rows[0];
+    assert(ob.missed_at === null, "missed_at was stamped despite the refusal");
+  });
+
+  await T("8 · crossed window → durable recognition; lifecycle UNCHANGED, obligation still visible", async () => {
+    // Time passes. Backdating due_at is the fixture standing in for THE CLOCK —
+    // never for the recognition: the service still derives the threshold from
+    // the obligation itself and still checks the crossing against now().
+    await pool.query(`update obligations set due_at = now() - interval '2 hours' where id=$1`, [secondObId]);
+    const pre = (await pool.query(`select status, due_at from obligations where id=$1`, [secondObId])).rows[0];
+    statusBefore = pre.status; dueBefore = pre.due_at;
+
     const before = (await read(c => svc.readConversion(c, conv.id))).rungs.length;
     const out = await tx(c => svc.resolveRung(c, { obligation_id: secondObId, result: "missed" }));
     assert(out.outcome === "missed" && out.resolution === "missed", "not missed");
-    const link = (await pool.query(`select * from leasing_conversion_obligations where obligation_id=$1`, [secondObId])).rows[0];
-    assert(link.outcome === "missed" && link.closed_at != null, "missed not persisted");
+
+    // (1) the rail link records the missed outcome
+    const link = (await pool.query(
+      `select * from leasing_conversion_obligations where obligation_id=$1`, [secondObId])).rows[0];
+    assert(link.outcome === "missed" && link.closed_at != null, "missed not persisted on the link");
+
+    // (2) the 069 rail ledger records the missed resolution and its time
+    const led = (await pool.query(
+      `select * from leasing_conversion_obligation_events
+        where conversion_obligation_id=$1 and event_type='resolved'`, [link.id])).rows;
+    assert(led.length === 1 && led[0].resolution_code === "missed" && led[0].occurred_at != null,
+      "the rail ledger did not record the missed resolution");
+
+    // (3) LIFECYCLE UNCHANGED — the heart of the ruling
+    const ob = (await pool.query(`select * from obligations where id=$1`, [secondObId])).rows[0];
+    assert(ob.status === statusBefore, `lifecycle moved: ${statusBefore} -> ${ob.status}`);
+    assert(ob.status !== "complete", "a missed obligation must never read complete");
+
+    // (4) the durable facts
+    assert(ob.missed_at != null, "missed_at not stamped");
+    assert(ob.missed_threshold_at != null, "missed_threshold_at not stamped");
+
+    // (8) the threshold came from the OBLIGATION, not from the request
+    assert(new Date(ob.missed_threshold_at).getTime() === new Date(dueBefore).getTime(),
+      "missed_threshold_at is not the obligation's own due_at — a caller supplied the threshold");
+
+    // (5) exactly ONE immutable event, carrying threshold + recognition time
+    const ev = (await pool.query(
+      `select * from events where type='obligation_missed' and note like $1`, ["%" + secondObId + "%"])).rows;
+    assert(ev.length === 1, `expected exactly one obligation_missed event, got ${ev.length}`);
+    const payload = JSON.parse(ev[0].note);
+    assert(payload.threshold_at != null && payload.missed_at != null,
+      "the event omits the threshold or the recognition time");
+    assert(payload.lifecycle_status === statusBefore, "the event misreports the lifecycle it left alone");
+
+    // (6) still visible for recovery — it moved, it did not leave
+    assert(missedSvc.timelinessOf(ob) === "missed", "timeliness does not read missed");
+    const actionable = (await pool.query(
+      `select count(*)::int c from obligations where id=$1 and status <> 'complete'`, [secondObId])).rows[0].c;
+    assert(actionable === 1, "the obligation vanished from the actionable set");
+
+    // and a miss still does not advance the rail
     const after = (await read(c => svc.readConversion(c, conv.id))).rungs.length;
     assert(after === before, "missed must not spawn the next rung");
-    // obligation left the open queue
-    const ob = (await pool.query(`select status from obligations where id=$1`, [secondObId])).rows[0];
-    assert(ob.status === "missed", "obligation not marked missed");
+  });
+
+  await T("8b · repeated recognition is idempotent — no second event, no rewritten timestamp", async () => {
+    const before = (await pool.query(
+      `select missed_at, missed_threshold_at from obligations where id=$1`, [secondObId])).rows[0];
+    // a DIFFERENT idempotency key: the obligation can only be missed once at a
+    // threshold, so even an unrelated caller must replay rather than re-record.
+    const r = await tx(c => missedSvc.recognizeObligationMissed(c, {
+      obligation_id: secondObId, expected_status: statusBefore,
+      system_actor: "conversion_rail_window", reason: "repeat recognition",
+      source: "harness.8b", idempotency_key: "conv_rung_missed_repeat_8b",
+    }));
+    assert(r.replayed === true && r.recognized === false, "a repeat was treated as a new recognition");
+    const after = (await pool.query(
+      `select missed_at, missed_threshold_at from obligations where id=$1`, [secondObId])).rows[0];
+    assert(new Date(after.missed_at).getTime() === new Date(before.missed_at).getTime(),
+      "missed_at was rewritten — when the miss happened must be write-once");
+    const n = (await pool.query(
+      `select count(*)::int c from events where type='obligation_missed' and note like $1`,
+      ["%" + secondObId + "%"])).rows[0].c;
+    assert(n === 1, `a second obligation_missed event was written: ${n}`);
+  });
+
+  await T("8c · completion AFTER recognition preserves missed_at and the missed event", async () => {
+    // the work finally gets done. Raw update: this stands in for a later
+    // governed completion, which is not what this case is testing.
+    await pool.query(`update obligations set status='complete', completed_at=now() where id=$1`, [secondObId]);
+    const ob = (await pool.query(`select * from obligations where id=$1`, [secondObId])).rows[0];
+    assert(ob.status === "complete", "fixture: completion did not apply");
+    assert(ob.missed_at != null && ob.missed_threshold_at != null,
+      "completion erased the missed facts — both histories must remain");
+    const n = (await pool.query(
+      `select count(*)::int c from events where type='obligation_missed' and note like $1`,
+      ["%" + secondObId + "%"])).rows[0].c;
+    assert(n === 1, "completion disturbed the missed history");
+    assert(missedSvc.timelinessOf(ob) === "missed",
+      "an obligation completed AFTER being missed must still read missed");
   });
 
   // ── 10. a manager/PM gate can coexist with the tour host's conversation obligation ──
@@ -376,7 +483,7 @@ async function main() {
   // 204 commits and reported nothing at all. A run that executes fewer
   // scenarios than the rail defines is INVALID, not merely quiet.
   process.exitCode = receipt.complete({
-    harness: __filename, passed: pass, failed: fail, expectedAtLeast: 12,
+    harness: __filename, passed: pass, failed: fail, expectedAtLeast: 15,
   });
 }
 

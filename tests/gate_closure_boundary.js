@@ -29,7 +29,7 @@ for (const f of files) {
   lines.forEach((line, i) => {
     const at = `${f}:${i + 1}`;
     // 1. only server.js may import/create the authority factory
-    if (/require\(["'].\/conversion_obligation_closure(\.js)?["']\)/.test(line) && f !== "server.js") {
+    if (/require\(["'][^"']*conversion_obligation_closure(\.js)?["']\)/.test(line) && f !== "server.js") {
       offenses.push(`${at}  imports the closure authority factory (only server.js may): ${line.trim().slice(0, 90)}`);
     }
     if (/createConversionClosureAuthority\s*\(/.test(line) && f !== "server.js" && f !== "conversion_obligation_closure.js") {
@@ -52,8 +52,14 @@ for (const f of files) {
 }
 
 // self-test: the gate must be able to see (plant a violation in-memory and match it)
+//  THIS SELF-TEST EARNED ITS KEEP. The pattern required a SINGLE character
+//  before the slash ("./conversion_obligation_closure.js"), which stopped
+//  matching when the domain reorg moved everything under src/ — real imports
+//  now read "../src/leasing/...". The gate had been BLIND to violations at the
+//  live path ever since, and the self-test is the only reason that was visible
+//  instead of a permanent silent GATE PASS. Pattern widened to any path.
 const planted = 'const x = require("../src/leasing/conversion_obligation_closure.js");';
-if (!/require\(["'].\/conversion_obligation_closure(\.js)?["']\)/.test(planted)) {
+if (!/require\(["'][^"']*conversion_obligation_closure(\.js)?["']\)/.test(planted)) {
   console.log("GATE SELF-TEST FAILED — the import pattern no longer matches its own plant.");
   process.exit(1);
 }

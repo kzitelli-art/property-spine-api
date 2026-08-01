@@ -182,58 +182,126 @@ the honest answer is `overdue`.
 
 ---
 
-## Part 5 — The service contract
+## Part 5 — The service contract (rev 3 — APPROVED, three tightenings applied)
 
 ### `recognizeObligationMissed(client, spec)`
 
-**Required inputs** — the service refuses without them:
+#### T1 — the caller does NOT define the threshold
 
-| Input | Why |
+An arbitrary caller-supplied `threshold_at` would let anyone mark an obligation
+missed by passing an earlier timestamp. The service **derives** the canonical
+threshold from the obligation itself:
+
+```
+obligation_id
+  → service LOCKS and reads the obligation
+  → service DERIVES the canonical threshold (obligations.due_at)
+  → caller may pass expected_threshold_at ONLY as stale-state protection
+```
+
+`expected_threshold_at`, when supplied, must match the derived value **exactly**
+or the call is refused. `missed_threshold_at` stores the **canonical** value,
+never the request's.
+
+**The database clock decides**, both for the crossing check and for the
+recognition time. No caller-provided timestamp is trusted for either.
+
+#### T2 — idempotency and concurrency are DATABASE mechanisms
+
+Not an application-level lookup followed by an unguarded update. The write is a
+single conditional atomic update under a row lock:
+
+```sql
+update obligations
+   set missed_at = now(), missed_threshold_at = due_at,
+       missed_recognition_key = $2, updated_at = now()
+ where id = $1
+   and missed_at is null          -- write-once, and the concurrency gate
+   and due_at is not null
+   and due_at < now()             -- database clock
+returning *
+```
+
+- competing calls: exactly **one** transaction can satisfy `missed_at is null`,
+  so exactly one state transition and exactly one `obligation_missed` event;
+- a repeated request **returns the existing recognition** — it does not throw and
+  does not write;
+- the recognition key is stored durably on the obligation and carried in the
+  event payload, so a recognition is traceable to the request that caused it.
+
+`events` is deliberately **not** altered. A nullable dedupe column plus a partial
+unique index on the shared events table would be a wider change than this slice
+needs, and the conditional update already guarantees single-event semantics.
+
+#### T3 — only `open` or `in_progress` may be recognised
+
+```
+open | in_progress
+  → missed recognised durably
+  → lifecycle UNCHANGED
+  → obligation may later complete
+  → both the missed history and the completion history remain
+```
+
+Recognition of an already-`complete` obligation is **explicitly deferred**. It
+needs its own rule about late completion, evidence, and who may backdate an
+institutional recognition. A later slice decides it.
+
+#### Required inputs
+
+| Input | Rule |
 |---|---|
-| `obligation_id` | the subject |
-| `expected_status` | stale-state protection — a concurrent resolution loses rather than double-applies |
-| `threshold_at` | the deadline being recognised as crossed, stated by the caller |
-| `recognized_by_user_id` **or** `system_actor` | who recognised it; never anonymous |
-| `reason` / `source` | why, and by which path |
-| `idempotency_key` | a repeat recognises nothing new |
+| `obligation_id` | required |
+| `expected_status` | required — stale-state protection; must be `open` or `in_progress` |
+| `expected_threshold_at` | optional; if given must match the derived threshold exactly |
+| `recognized_by_user_id` **xor** `system_actor` | **exactly one**, never both, never neither; `system_actor` must be a controlled named value |
+| `reason` / `source` | required — why, and by which path |
+| `idempotency_key` | required |
 
-**Guarantees:**
+#### Guarantees
 
-1. **Atomic.** `missed_at`, `missed_threshold_at` and the immutable
-   `obligation_missed` event are written in ONE transaction, or none of them are.
-2. **Threshold actually crossed.** Refuses if the obligation has not in fact
-   passed `threshold_at`. A recognition cannot be asserted into existence.
-3. **Stale state fails closed.** If the obligation no longer matches
-   `expected_status`, refuse — same discipline as `transitionObligation`.
-4. **Write-once.** `missed_at` is stamped only when null. A later call cannot
+1. **Atomic** — columns and the immutable `obligation_missed` event in ONE
+   transaction, or neither.
+2. **Threshold actually crossed**, by the database clock. A recognition cannot be
+   asserted into existence.
+3. **Stale state fails closed** — status or threshold mismatch refuses.
+4. **Write-once** — `missed_at` is stamped only when null; a later call can never
    rewrite *when* the miss happened.
-5. **Idempotent.** A repeat with the same key writes nothing and creates no
-   second event.
-6. **Lifecycle untouched.** The service never writes `obligations.status`.
-7. **Never rewrites `due_at`**, and never erases later completion history. An
-   obligation completed *after* being missed keeps both facts.
+5. **Idempotent** — a repeat returns the existing recognition.
+6. **Lifecycle untouched** — the service never writes `obligations.status`.
+7. **Never rewrites `due_at`**, never erases later completion history.
 
-### Migration (not written)
+#### Wiring — the primitive must have a live caller
 
-Adds to `obligations`, nullable, write-once by service discipline:
+The existing human `result='missed'` paths call it. A durable primitive no
+runtime path invokes would be built-but-dormant, not proven. **The sweeper
+remains out of scope.**
 
-- `missed_at timestamptz` — when the miss was recognised;
-- `missed_threshold_at timestamptz` — the deadline that was crossed.
+Consequence, accepted: declaring a window missed **before** it has passed is now
+refused. That is the honest behaviour, and it changes the human path — a rung
+whose window has not yet crossed can no longer be marked missed.
+
+### Migration
+
+Adds to `obligations`, all nullable:
+
+- `missed_at timestamptz` — when the miss was recognised (database clock);
+- `missed_threshold_at timestamptz` — the canonical deadline that was crossed;
+- `missed_recognition_key text` — the idempotency key, durable.
 
 **No enum widened. No constraint touched.** `ck_obl_status` is left exactly as it
-is — that is the whole point of the ruling.
+is — the point of the ruling.
 
-**Migration number: query `schema_migrations` and cross-check unmerged
-branches.** The isolated branch measured ceiling **122**
-(`governed_economics_lineage`) on 2026-08-01, and a parallel thread holds
-unmerged numbers. Do not assume 123.
+**Number:** main holds `118,119,120,122`; the unmerged resident-SMS branch holds
+`121`; `123`/`124` are unmerged elsewhere and `125` is in flight in the parallel
+thread. **126** is the first safe number, and must be reconfirmed against the
+live `schema_migrations` before it is applied.
 
 ---
 
 ## Part 6 — Scenario 8, rewritten
 
-It must no longer expect `status='missed'`, and must no longer expect the
-obligation to leave the queue. It proves:
+Proves:
 
 1. the conversion link records `outcome='missed'`;
 2. the rail ledger (069) records the missed resolution and its time;
@@ -241,7 +309,10 @@ obligation to leave the queue. It proves:
 4. `missed_at` and `missed_threshold_at` are durable;
 5. exactly **one** immutable `obligation_missed` event exists;
 6. the obligation **remains visible** for recovery;
-7. repeating the recognition is **idempotent** — no second event.
+7. repeated recognition is **idempotent** — no second event;
+8. **the recorded threshold came from the obligation, not the request**;
+9. **recognition before the threshold is rejected**;
+10. **completion after recognition preserves `missed_at` and the missed event**.
 
 ---
 
@@ -249,11 +320,13 @@ obligation to leave the queue. It proves:
 
 - **The sweeper.** Automatic detection: cadence, ownership, retries, locking,
   recovery behaviour. Its own slice.
-- **Consolidating the eight clock-derived reads.** Audited and documented in §1.3,
-  deliberately not normalised here — normalising eight surfaces while introducing
-  the primitive would broaden the build. A follow-on projection slice can unify
-  `overdue`, `missed_window` and `missed_commitment` into one canonical timeliness
-  read **after** the durable primitive is proven.
+- **Consolidating the eight clock-derived reads** (§1.3). Audited and documented,
+  deliberately not normalised — normalising eight surfaces while introducing the
+  primitive would broaden the build. A follow-on projection slice can unify
+  `overdue`, `missed_window` and `missed_commitment` **after** the primitive is
+  proven. This slice exports the canonical timeliness function; it rewires
+  nothing.
+- **Retrospective recognition of a completed obligation** (T3).
 
 ---
 
