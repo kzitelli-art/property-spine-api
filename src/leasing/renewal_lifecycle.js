@@ -86,7 +86,11 @@ function deriveStage({ hasCase, caseStage, daysUntilExpiration }) {
 //  Slice 6 does NOT author a renewal price. It only reports whether GOVERNED
 //  economics exist for this renewal. proposed_rent stays null until Slice 8's
 //  governed economics produce one.
-function economicsView({ governedProposedRent, economicsSource, economicsAsOf, currentRent }) {
+//  SLICE 8: when there is no governed proposed rent, the reason is now
+//  authored rather than left as a bare null. A blank the operator cannot
+//  explain is the thing the Renewals rail exists to remove.
+function economicsView({ governedProposedRent, economicsSource, economicsAsOf, currentRent,
+                         economicsUnavailableReason = null }) {
   const has = governedProposedRent != null && economicsSource != null;
   const proposed = has ? Number(governedProposedRent) : null;
   let changeAmount = null, changePercent = null;
@@ -101,6 +105,9 @@ function economicsView({ governedProposedRent, economicsSource, economicsAsOf, c
     economics_as_of: has ? economicsAsOf : null,
     effective_change_amount: changeAmount,
     effective_change_percent: changePercent,
+    // null when economics ARE governed; otherwise a concrete code the surface
+    // can state in words. Never a silent blank.
+    economics_unavailable_reason: has ? null : (economicsUnavailableReason || null),
   };
 }
 
@@ -215,6 +222,7 @@ function renewalLifecycle(facts, asOfYmd) {
     governed_proposed_rent = null,
     economics_source = null,
     economics_as_of = null,
+    economics_unavailable_reason = null,
   } = facts || {};
 
   const hasCase = !!renewal_case;
@@ -234,6 +242,7 @@ function renewalLifecycle(facts, asOfYmd) {
     economicsSource: economics_source,
     economicsAsOf: economics_as_of,
     currentRent: current_rent,
+    economicsUnavailableReason: economics_unavailable_reason,
   });
 
   const op = deriveOperating({
