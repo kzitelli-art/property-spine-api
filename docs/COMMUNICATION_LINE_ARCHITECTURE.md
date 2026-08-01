@@ -188,3 +188,131 @@ Do not add code that treats an inbound number as self-evidently a property line.
 Any new inbound handling resolves the **line** first and derives context from it.
 When a slice needs the receiving number, it asks the boundary — it does not query
 `properties.sms_number`.
+
+---
+
+# Rulings (2026-08-01)
+
+The immediate defect is **not** the missing operations line — that absence was
+expected and fails safe. The immediate defect is that duplicate property numbers
+can bind a message to an arbitrary property. That is a truth and property-scope
+risk.
+
+## Ruling 1 — duplicate line ambiguity is a real safety defect
+
+`WHERE sms_number=$1 LIMIT 1` without a database uniqueness guarantee is not
+acceptable long term. Two configured properties could route a message into the
+wrong property ledger.
+
+**Do not fix it in the engine branch.** It gets its own narrow build — scope in
+§ *Communication Line Hardening* below.
+
+## Ruling 2 — `properties.sms_number` is a TEMPORARY ADAPTER (§18 class: temporary)
+
+Keep it for the current property-facing slice, explicitly classified:
+
+- **current role** — one property-facing line per property;
+- **limitation** — cannot represent an organization-owned operations line;
+- **replacement condition** — retired when a canonical communication-line model
+  resolves both inbound and outbound numbers.
+
+**Do not create a sentinel "operations property."**
+
+## Ruling 3 — protect the resolver seam now
+
+No new communications code reads or writes `properties.sms_number` directly
+outside the existing resolver / configuration boundary. Future callers ask:
+
+- resolve inbound line;
+- resolve outbound line for purpose;
+- determine line type and authority ceiling.
+
+That lets the storage model change later without rewriting every SMS caller.
+
+## Ruling 4 — the staff ceiling must become EXPLICIT before staff resolution exists
+
+Today staff texting a property line gain no authority only because there is no
+staff sender tier (FLAG 3). Safe, but accidental.
+
+**Before any staff identity lookup is added to this inbound boundary**, add the
+structural invariant:
+
+> A `property_facing` line can never invoke staff-authorized actions, regardless
+> of who the sender resolves to. Identity may lower behavior; it may never raise
+> the line's authority ceiling.
+
+## Ruling 5 — staff OTP over the property line is a TEMPORARY TRANSPORT ADAPTER
+
+It grants no inbound staff authority (FLAG 4), so it is **not** an emergency
+defect and **must not** be changed in the current resident or engine slice.
+
+- **replacement condition** — once an active operations line exists for the
+  management organization, staff OTP and internal operational messaging no longer
+  select a property line through assignment ordering
+  (`090_admin_users.sql:47-48`).
+
+---
+
+# Communication Line Hardening — proposed slice (NOT STARTED)
+
+Narrow. Makes today's property-line model safe. Does **not** introduce the
+operations line.
+
+1. A **read-only duplicate-number preflight** — measures the live database before
+   anything changes.
+2. A **database uniqueness guarantee** for active, non-null property-facing
+   numbers.
+3. An **inbound resolver that treats zero, one, and multiple matches explicitly**
+   — three named outcomes, not a `limit 1`.
+4. **Multiple matches fail closed with zero operating writes** — same discipline
+   as the existing unknown-line path.
+5. **Tests proving a message can never bind arbitrarily to one property.**
+
+### Migration number: QUERY THE LEDGER, DO NOT ASSUME
+
+`123` is not a safe assumption — branches in flight hold unmerged numbers, and
+the live ceiling has been below the repo's highest file before. Query first:
+
+```
+node -e 'const{Pool}=require("pg");const p=new Pool({connectionString:process.env.DATABASE_URL});p.query("select version, name from schema_migrations order by version desc limit 15").then(r=>{r.rows.forEach(x=>console.log(x.version+"  "+x.name));return p.end()}).catch(e=>{console.error("ERR "+e.message);process.exit(1)})'
+```
+
+Cross-check the result against unmerged branches before claiming a number.
+
+---
+
+# Future canonical line model (NOT STARTED)
+
+When the operations-line slice begins, the durable model represents:
+
+number · line type (`property_facing` | `operations`) · owning property or
+operating organization · inbound and outbound capabilities · permitted audience ·
+authority ceiling · active status · messaging-service / provider configuration.
+
+Runtime:
+
+```text
+To number
+→ communication-line record
+→ property or organization context
+→ line posture and authority ceiling
+→ sender identity
+→ permitted canonical action
+```
+
+Property-facing and operations lines still write to the **same** work orders,
+obligations, events, and history.
+
+---
+
+# Disciplined sequence
+
+```
+prove the shared engine
+  → close today's arbitrary-line risk
+  → introduce the operations line
+  → build the maintenance technician's text workflow on top of it
+```
+
+Do not start the full operations-line implementation before the step above it is
+closed.
