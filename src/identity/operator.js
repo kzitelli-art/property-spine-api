@@ -2363,7 +2363,7 @@ module.exports = function operatorModule(deps) {
   //  Resolved through the ONE shared resolver (property_timezone.js) — the SAME
   //  truth leasingleads.js uses for agent tour-offer local times. An
   //  UNCONFIGURED property gets an honest null (never an invented day).
-  const { resolvePropertyOperatingTimeZone } = require("../shared/property_timezone");
+  const { loadPropertyOperatingTimeZone } = require("../shared/property_timezone");
   // The board's DAY CONTRACT — offsets, clamping, and the SQL fragments that
   // enforce them. Shared with tours_conveyor.test.js so the harness exercises
   // the real predicate rather than a re-typed copy. (tour_window.js)
@@ -2387,7 +2387,7 @@ module.exports = function operatorModule(deps) {
     res.set("Cache-Control", "no-store");
     try {
       // "Today" is the PROPERTY'S OPERATIONAL DAY — resolved, never assumed.
-      const PROPERTY_TZ = resolvePropertyOperatingTimeZone(req.operator.property_id);
+      const PROPERTY_TZ = await loadPropertyOperatingTimeZone(pool, req.operator.property_id);
       // ── DAY WINDOW (the conveyor) ───────────────────────────────────
       // The board reads a RANGE of operating days, not just forward from
       // today. Offsets are relative to the property's today, resolved
