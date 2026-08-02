@@ -118,15 +118,50 @@ ledger carries a stale `121` row; the query above settles it.
 
 Never paste an operator key into a chat, a screenshot, or a shared channel.
 
-## Smoke — run in the Render Shell after the API is healthy
+## Smoke — Step 6. Execution path OWNER-VERIFIED in the Render Web Shell
+
+```text
+Service ............ property-spine-api
+Shell available .... Yes
+Running commit ..... f85f70bafea172c1cd3d7ca09179f25df4b58177
+DATABASE_URL ....... present        OPERATOR_KEY ....... present
+Secrets printed .... No
+```
+
+Run from the directory the shell opens in — currently `~/project/src`.
+**Do not `cd /app`.** That path tells us something useful: Render is running a
+**native Node environment, not the `Dockerfile`** (Docker would place the app at
+`/app`). Either way the checkout carries `tests/`, so the harness is present in
+the deployed artifact.
 
 ```bash
 node tests/smoke_release3.deployed.js
+echo $?
 ```
 
-It builds its own isolated `R3 SMOKE <ts>` QA property and its own staff
-session, then runs the obligation boundary rung inside the same run. **A
-missing session is a FAIL, not a skip.**
+No environment variable needs setting. The harness reads `DATABASE_URL` and
+`OPERATOR_KEY` from the service, and `API_BASE` defaults to the production URL —
+leave it unset so the run exercises real routing. Nothing is typed or echoed;
+secrets never leave Render.
+
+### ⚠ This run WRITES to production — authorize it deliberately
+
+It builds an isolated world and, per the append-only teardown doctrine,
+**permanently retains** a property named
+`R3 SMOKE <timestamp> — QA (not an operating property)` plus its people,
+conversion, tasks and event history. Only staff sessions and team-access rows
+are removed. That is the ledger doctrine working, stated in the run's own
+receipt — **but it is a permanent production write and needs Kameron's explicit
+authorization before Step 6, not after.**
+
+### Required evidence
+
+```text
+BOUNDARY: 10/10 behaviours executed + 1 execution-floor assertion
+B1 through B10 all printed
+0 failed
+exit code 0
+```
 
 Boundary rung — **10 named behaviours + 1 execution-floor assertion**:
 
