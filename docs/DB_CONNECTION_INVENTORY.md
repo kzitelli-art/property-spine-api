@@ -1677,3 +1677,267 @@ itself worth a ruling.
 **Proof level of Appendix E: Locally exercised.** Source inspection only. E1 and
 E2 are conclusive from source — the mint sites are enumerable and their arguments
 traceable. E3 is explicitly unclassified and must not be cited as a finding.
+
+---
+
+# Appendix F — S2 design ruling (2026-08-02)
+
+Ruling received in response to Appendix E. **Recorded as governing.** It settles
+the D5 question, corrects one thing E2 got wrong, and defines the acceptance
+surface. Nothing here is built; the hold stands.
+
+---
+
+## F1 — Correction to E2: the decision belongs AFTER S1, not at the origin write
+
+E2 concluded that *"the remediation surface is one write —
+`teamaccess.js:246`."* **That location is right and the timing is wrong, and
+the ruling explains why.**
+
+`teamaccess.js:246` sits inside `POST /auth/sms/start`, which runs **before the
+phone credential is verified**. Deciding the property there — even by asking the
+operator — would:
+
+1. **Disclose a staff member's property affiliations to anyone who knows their
+   phone number.** An unauthenticated caller could enumerate where a person
+   works by starting a login they cannot finish. This is an information-
+   disclosure defect, not a UX preference.
+2. **Keep S1 and S2 blended**, which is the coupling the fix exists to remove.
+
+**The ruling is explicit: do not put a pre-OTP property picker in front of the
+current delivery mechanism.** *"That would make the interim behavior easier to
+use while preserving the conceptual coupling you are trying to remove."*
+
+### The corrected flow
+
+```text
+enter phone number
+→ send property-neutral OTP through the operations line
+→ verify OTP: S1 complete
+→ resolve the user's current active property set
+→ make the S2 decision
+→ record the selected property on the durable login record
+→ mint the existing canonical property-scoped session
+```
+
+**Amended remediation surface:** the login invite must be minted
+**property-neutral** at `/auth/sms/start`, and the property attached at
+`/auth/sms/verify` after S1 completes. E2's "one write" framing understated the
+change — see F4, which establishes that the current schema cannot represent a
+property-neutral login invite at all.
+
+---
+
+## F2 — The S2 decision: three cases
+
+| Active set | Behavior |
+|---|---|
+| **Zero** | **No property-bearing invite and no session.** Show: *"Your account does not currently have access to a property. Contact your manager."* |
+| **Exactly one** | **Select automatically.** No judgment is being asked of the user, so a chooser would be friction for no benefit. |
+| **More than one** | **Require one explicit choice** — *"Where are you working?"* — listing only the server-returned active authorized properties. |
+
+On selection, the server: (1) re-resolves the active set, (2) confirms the chosen
+property is still in it, (3) writes that exact property to the login record,
+(4) hands the record to the existing issuer.
+
+**The browser expresses intent; it does not grant authority.** The server defines
+and validates the allowed set, preserving §21.
+
+### Explicitly disallowed as a default
+
+Named in the ruling, all as *"proxies for intent"*: most recently updated
+assignment · highest role · `can_manage_roles` · property phone configuration ·
+database row order · most recently created assignment · the property the browser
+already displays.
+
+**The first two are exactly the current sort keys** (`can_manage_roles desc,
+updated_at desc`), so this forecloses repairing the ordering rather than
+replacing it.
+
+### A remembered choice is a later, separate fact
+
+Spine may eventually remember a last explicitly-chosen property, but as its own
+durable fact, surfaced as *"Continue to Solo on Chestnut / Choose another
+property."* **A remembered choice must never silently become permanent authority
+or inferred current intent.** Not in scope for the first S2 completion.
+
+---
+
+## F3 — The controlling invariant
+
+E's laundering finding is accepted: once an arbitrary property reaches a durable
+invite, every later component sees a valid record. Therefore the invariant lives
+at the origin, not downstream:
+
+> **No phone re-login record may acquire a property unless the active assignment
+> set contains exactly one property, or the verified operator explicitly selected
+> one from that set.**
+
+*"The invite/session issuer should remain boring. Its job is to honor a correctly
+produced property-bound record. The decision point must prove how that property
+got there."*
+
+---
+
+## F4 — Provenance and the schema: source answer to the ruling's conditional
+
+The ruling asks for provenance values — `single_active_assignment`,
+`explicit_staff_selection`, `onboarding_invite`, `shell_issued_proof` — *"where
+the existing record supports a source or reason field,"* adding: *"I would not
+add a schema change solely for that unless current source lacks any suitable
+provenance field."*
+
+**Source answers this: there is no suitable field, and two independent schema
+constraints block the ruling's flow.**
+
+### Constraint 1 — `team_invites` has no provenance field, and never has
+
+Defined once at `migrations/035_phone_first_team.sql:89–114`. **There is no
+`alter table team_invites` anywhere in the 122 migrations** — the table has never
+been altered. Its columns are id, property_id, phone_number, invited_name,
+role_title, allowed_modules, scope_type, backup_user_id, escalates_to_user_id,
+can_manage_roles, invited_by_user_id, token, status, otp_hash, otp_expires_at,
+otp_sent_at, failed_attempts, superseded_by, expires_at, accepted_at,
+accepted_user_id, created_at. **No reason, source, purpose, or origin column.**
+
+The current re-login marker is *derived*, not recorded: `accepted_user_id` set at
+creation plus `allowed_modules = '{}'` (`teamaccess.js:186–192`). That
+distinguishes a re-login invite from an onboarding invite — but it **cannot
+express how the property was chosen**, which is the axis the ruling wants
+preserved.
+
+**There is an exact precedent to copy.** `operator_session_invites`
+(`070_operator_session_bootstrap.sql`) already carries
+`issuance_reason text not null default 'bootstrap_invite'` (`:48`) and
+`issuance_source text not null default 'cli'` (`:64`). The pattern the ruling
+describes is already modelled in this schema, one table over.
+
+### Constraint 2 — a property-neutral login invite cannot currently be represented
+
+`035:91` — `property_id uuid not null references properties(id) on delete
+cascade`. **NOT NULL.**
+
+The ruling's flow requires the OTP to be sent property-neutral and the property
+attached only after verification. **The current schema forbids that**: a login
+invite cannot exist without a property, which is precisely why the arbitrary pick
+happens at `/auth/sms/start` in the first place. The defect is partly structural,
+not only procedural.
+
+Two resolutions are visible from source — making `property_id` nullable for
+login-purpose rows, or holding login OTPs somewhere other than `team_invites`.
+**Choosing between them is design and is not authorized here.** What source
+establishes is that **the first S2 slice necessarily includes a migration on a
+table that has never been altered**, and that migration can carry the provenance
+columns at no extra cost, resolving both constraints together.
+
+---
+
+## F5 — Containment adapter (Class: temporary, §18)
+
+A defensible containment exists that **invents no temporary tiebreak**. At the
+current origin point:
+
+| Active set | Containment behavior |
+|---|---|
+| 0 | refuse |
+| 1 | continue with that property |
+| **2+** | **refuse phone re-login before writing an invite**; direct the user to the deterministic invite or shell-proof path |
+
+Message: *"This account has access to more than one property. Use your
+property-specific sign-in link while we complete property selection."*
+
+**Why it qualifies as a legitimate temporary adapter:** it fails closed; it
+removes wrong-context risk; it creates no second authority model; and it has an
+exact retirement condition.
+
+> **Removal condition (§18):** replace the multi-property refusal with explicit
+> post-OTP property selection.
+
+**Most of it survives the final build.** Authorized-set resolution and the
+zero/one/many branching are permanent; only the *many* branch changes from
+`refuse` to `selection_required`.
+
+---
+
+## F6 — Sequencing ruling
+
+- **If the operations-line split and full S2 are the next immediate release** —
+  build the complete flow once. **Do not ship a separate containment release.**
+- **If full S2 will wait beyond that release** — ship the multi-property refusal
+  first. *"The P1 path should not remain open merely to avoid one small temporary
+  branch."*
+- **Never** — a pre-OTP property picker in front of the current property-line
+  delivery (F1).
+
+---
+
+## F7 — Acceptance must target the decision point
+
+**Explicitly insufficient**, confirming E2: a green session-mint test, a green
+client-property-refusal test, and a green assignment-authority test. All three
+pass with 4B present.
+
+The decisive cases:
+
+| # | Case | Required outcome |
+|---|---|---|
+| 1 | **Zero assignments** | verified user → no active assignments → no property-bearing login record → no session |
+| 2 | **One assignment** | verified user → that exact property recorded → session carries it |
+| 3 | **Multiple, no selection** | **no arbitrary property is written** → result is `selection_required` → no session minted |
+| 4 | **Valid selection** | server returns set A+B → user selects B → server revalidates → record contains B → session contains B |
+| 5 | **Invalid selection** | user submits C, not in the current active set → refusal → no property-bearing record → no session |
+| 6 | **Revocation race** | B in the initial set → B revoked → user submits B → server re-resolves → refusal |
+| 7 | **Assignment-edit regression** | user has A+B → unrelated modules/role edit changes `B.updated_at` → **login still requires explicit selection; no property becomes preferred** |
+
+**Case 7 is the direct regression test for D3**, and case 3 is the one that
+would have caught 4B.
+
+**Proof ladder** — per §33 and `CLAUDE.md`, source assertions are not the
+stopping point:
+
+```text
+isolated Postgres
+→ real HTTP
+→ browser: verify OTP · see property chooser · choose B ·
+           shell shows B · scoped read uses B
+```
+
+---
+
+## F8 — The other property-ID routes: registered, out of this build
+
+E3's unclassified list is registered and **stays out of the S2 build.** After S2
+settles, classify each into:
+
+| Class | Rule |
+|---|---|
+| **Operator authority** | a client property must not determine scope |
+| **Portfolio filtering** | an already-authorized operator may select a property to view, with server validation |
+| **Public addressing** | a public request may legitimately identify the property being contacted |
+| **Owner / administrative control** | separate authority model, requiring its own validation |
+
+> *"Three patterns are not automatically a defect. Three unclassified patterns
+> are the concern."*
+
+---
+
+## F9 — Citation provenance
+
+The ruling cites **`Property Spine Master Document.docx`** three times. **It is
+not in this repository** — `find` over the working tree returns no match. As with
+`Operator App Audit.docx` (D6), its claims are recorded as **external and
+unverified from source.**
+
+The points that could be checked in-repo were, and hold: §21's server-derived
+authority (`PHILOSOPHY.md:632–658`) supports the browser-expresses-intent model
+in F2, and the proof ladder in F7 matches §33 and `CLAUDE.md`'s Definition of
+Done. **Two governing rulings now rest partly on documents absent from the
+repository**; if they are doctrine, they belong in `docs/`.
+
+---
+
+**Proof level of Appendix F: Reported** for the ruling itself (F1–F3, F5–F8);
+**Locally exercised** for F4, which is source-derived and conclusive — the
+`team_invites` definition, the absence of any `alter table team_invites`, the
+`NOT NULL` on `property_id`, and the `operator_session_invites` precedent are all
+read directly from the migrations.
