@@ -211,6 +211,24 @@ function marketingState(p, liveOk) {
 //  duration exists as a property fact. So a dated expectation is returned
 //  as 'incomplete' with the exact fact that is missing, rather than a
 //  confident date the building cannot stand behind.
+// ── ONE DATE NORMALIZER ──────────────────────────────────────────────
+//  Dates reach this file in TWO shapes and the difference is invisible until
+//  it corrupts a value. Lease dates arrive through json_agg in
+//  space_position, so they are already 'YYYY-MM-DD' STRINGS. notice_date is
+//  selected as a bare `date` column, so node-pg parses it into a JS DATE.
+//
+//  `String(d).slice(0, 10)` is correct for the first and silently wrong for
+//  the second: String(new Date(...)) is 'Sat Aug 22 2026 …', whose first ten
+//  characters are 'Sat Aug 22'. Every `upcoming` position was returning that
+//  as available_from, and `within_horizon` then compared it lexically against
+//  a real ISO date — so it was ALWAYS false and expected_within_horizon
+//  silently undercounted. Found by Slice 9's deterministic fixtures.
+function ymd(d) {
+  if (!d) return null;
+  if (d instanceof Date) return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  return String(d).slice(0, 10);
+}
+
 function availableFrom(p, state, asOf) {
   if (state === "marketable_now") {
     return { available_from: asOf, availability_confidence: "confirmed", blocking_fact: null };
@@ -220,7 +238,7 @@ function availableFrom(p, state, asOf) {
     // and marketable is the turn, and its duration is not governed.
     const d = p.available_from || (p.lease ? p.lease.end_date : null);
     return {
-      available_from: d ? String(d).slice(0, 10) : null,
+      available_from: ymd(d),
       availability_confidence: "incomplete",
       blocking_fact: "no_governed_turnover_duration",
     };
@@ -248,7 +266,7 @@ function availableFrom(p, state, asOf) {
     };
   }
   if (state === "occupied") {
-    const d = p.lease && p.lease.end_date ? String(p.lease.end_date).slice(0, 10) : null;
+    const d = p.lease ? ymd(p.lease.end_date) : null;
     return {
       available_from: null,   // an expiration is not an availability date
       availability_confidence: "incomplete",
