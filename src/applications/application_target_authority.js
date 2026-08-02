@@ -80,6 +80,10 @@ const REFUSAL = {
   MOVE_IN_REQUIRED:       "intended_move_in_required",
   DATE_NOT_GOVERNED:      "availability_date_not_governed",
   NOT_READY_BY_MOVE_IN:   "not_ready_by_intended_move_in",
+  // Submission-time only. Distinct from MULTI_SPACE: the unit CHANGED under an
+  // open invitation rather than having been an unsupported shape all along.
+  BECAME_AMBIGUOUS:       "application_target_became_ambiguous",
+  NO_LONGER_OFFERABLE:    "application_target_no_longer_offerable",
 };
 
 // Operator-facing sentences. No internal codes in operator copy; the code
@@ -92,6 +96,8 @@ const REFUSAL_TEXT = {
   [REFUSAL.MOVE_IN_REQUIRED]:     "This unit is not available today. Add an intended move-in date to offer it forward.",
   [REFUSAL.DATE_NOT_GOVERNED]:    "This unit has no governed availability date, so it cannot be offered for a future move-in.",
   [REFUSAL.NOT_READY_BY_MOVE_IN]: "This unit is not available by the intended move-in date.",
+  [REFUSAL.BECAME_AMBIGUOUS]:     "This unit was changed to hold more than one rentable space after the application link was sent, so the application can no longer be attributed to a single space.",
+  [REFUSAL.NO_LONGER_OFFERABLE]:  "This unit is no longer available, so this application link can no longer be used.",
 };
 
 function refuse(code, extra = {}) {
@@ -291,8 +297,71 @@ function evaluateOfferability(row, intended_move_in) {
   return { offerable: false, refusal_code: REFUSAL.NOT_READY_BY_MOVE_IN };
 }
 
+// ── SUBMISSION-TIME REVALIDATION ─────────────────────────────────────
+//  An invitation can sit open while inventory changes underneath it. Before a
+//  lease_application is born from a public token, the target it was prepared
+//  against must still hold.
+//
+//  THE SAME CLOSED ALLOWLIST, ONE TEST SHORT — and the difference is
+//  deliberate, not an oversight:
+//
+//    preparation   marketable_now | (upcoming | turnover_required WITH a
+//                  supplied intended_move_in on or after a governed
+//                  available_from)
+//    submission    marketable_now | upcoming | turnover_required
+//
+//  intended_move_in is NOT persisted on application_invitations, and this
+//  slice adds no migration. Re-running the date test at submission would
+//  therefore refuse every legitimate forward offer, because the date it needs
+//  was never stored. The forward offer was already governed at preparation;
+//  what submission must still catch is inventory that has since been
+//  COMMITTED TO SOMEONE ELSE or become un-attributable. So the same allowlist
+//  is applied without the test whose input does not exist.
+//
+//  This is one allowlist used twice, not a second ladder.
+//
+//  AMBIGUITY GETS ITS OWN CODE. A unit that has been split into two spaces
+//  since preparation is not "unsupported" the way a two-space unit is at
+//  preparation time — it CHANGED under an open invitation, and the operator
+//  needs to be told that rather than being told the shape was never allowed.
+async function resolveSubmissionTarget(q, { property_id, unit_id } = {}) {
+  const target = await resolveApplicationTarget(q, {
+    property_id, unit_id, require_offerable: false,
+  });
+
+  if (!target.ok) {
+    if (target.refusal_code === REFUSAL.MULTI_SPACE) {
+      return {
+        ...target,
+        refusal_code: REFUSAL.BECAME_AMBIGUOUS,
+        refusal_reason: REFUSAL_TEXT[REFUSAL.BECAME_AMBIGUOUS],
+        httpStatus: 409,
+      };
+    }
+    return target;
+  }
+
+  if (!target.targeted) return target;   // untargeted invitation: nothing to revalidate
+
+  const submittable = target.marketing_state === OFFERABLE_NOW
+    || OFFERABLE_FOR_FUTURE_MOVE_IN.has(target.marketing_state);
+
+  if (!submittable) {
+    return {
+      ...target,
+      ok: false,
+      offerable: false,
+      refusal_code: REFUSAL.NO_LONGER_OFFERABLE,
+      refusal_reason: REFUSAL_TEXT[REFUSAL.NO_LONGER_OFFERABLE],
+      httpStatus: 409,
+    };
+  }
+  return { ...target, ok: true };
+}
+
 module.exports = {
   resolveApplicationTarget,
+  resolveSubmissionTarget,
   evaluateOfferability,
   REFUSAL,
   REFUSAL_TEXT,

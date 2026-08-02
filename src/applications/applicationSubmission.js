@@ -866,6 +866,37 @@ module.exports = function applicationSubmissionModule(deps) {
     }
     if (!name) throw httpErr(400, "applicant_name is required (none on file for this link).");
 
+    // ── SUBMISSION-TIME TARGET REVALIDATION ───────────────────────────
+    //  An invitation stays open while inventory moves. Preparation-time truth
+    //  is not submission-time truth, and accepting against the stale one is
+    //  how an application is born for a unit somebody else already took.
+    //
+    //  PLACED HERE DELIBERATELY — after the idempotency return, before the
+    //  atomic consume. Two consequences, both intended:
+    //
+    //   · A previously completed submission has ALREADY returned above. Current
+    //     availability is never re-run against an application that is durably
+    //     born; revalidation applies before FIRST birth only.
+    //   · A refusal leaves the invitation UNCONSUMED. The token is not burned
+    //     by a condition the applicant did not cause and cannot fix — correct
+    //     the unit configuration and the same link still works.
+    //
+    //  On refusal nothing downstream happens: no lease_application, no
+    //  application_submitted event, no progression obligation closed, no
+    //  approval obligation spawned. All of those live below the consume.
+    //
+    //  The invitation is NOT converted to another unit and no new space is
+    //  selected. A target that no longer holds is refused, never re-aimed.
+    if (inv.unit_id) {
+      const still = await applicationTarget.resolveSubmissionTarget(client, {
+        property_id: inv.property_id, unit_id: inv.unit_id });
+      if (!still.ok) {
+        throw httpErr(still.httpStatus || 409,
+          still.refusal_reason || "This application link can no longer be used.",
+          still.refusal_code);
+      }
+    }
+
     // ATOMIC CONSUME: flip the invitation to 'consumed' FIRST, conditional on it
     // still being in a sent state. If a concurrent transaction already consumed
     // it, this UPDATE affects 0 rows and we abort — the token can be consumed

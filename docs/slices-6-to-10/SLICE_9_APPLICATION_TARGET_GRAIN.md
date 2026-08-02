@@ -164,9 +164,49 @@ application nobody can attribute to a space, and `lease_applications` has no
 *not* enforced on the internal staff door. Offerability for the public token
 door is enforced by its own submission-time revalidation (Commit C).
 
-### 3.10 · `POST /applications/submit-public`
+### 3.10 · `POST /applications/submit-public` — submission-time revalidation
 
-Commit C. Recorded there.
+| | |
+|---|---|
+| **Source identity** | bearer token → `application_invitations` row (`for update`) |
+| **unit_id source** | the invitation, never the request body |
+| **Durable object** | `lease_applications` @ `submitted` |
+| **Target validation** | `resolveSubmissionTarget` |
+| **Placement** | **after** the idempotency return, **before** the atomic consume |
+
+**Placement has two intended consequences:**
+
+- A previously completed submission has already returned above. Current
+  availability is **never** re-run against a durably born application —
+  revalidation applies before *first* birth only.
+- A refusal leaves the invitation **unconsumed**. The token is not burned by a
+  condition the applicant did not cause and cannot fix.
+
+On refusal nothing downstream happens: no `lease_application`, no
+`application_submitted` event, no progression obligation closed, no approval
+obligation spawned. All of those live below the consume. The invitation is not
+converted to another unit and no new space is selected.
+
+**The submission allowlist is the preparation allowlist minus one test:**
+
+```
+preparation   marketable_now | (upcoming | turnover_required
+                                WITH intended_move_in ≥ governed available_from)
+submission    marketable_now | upcoming | turnover_required
+```
+
+`intended_move_in` is **not persisted** on `application_invitations`, and this
+slice adds no migration. Re-running the date test at submission would refuse
+every legitimate forward offer, because the date it needs was never stored. The
+forward offer was already governed at preparation; what submission must still
+catch is inventory that has since been **committed to someone else** or become
+**un-attributable**. One allowlist used twice, not a second ladder.
+
+**Ambiguity gets its own code.** A unit split into two spaces after the link
+was sent returns `application_target_became_ambiguous`, not
+`space_grain_not_supported` — the unit *changed* under an open invitation
+rather than having been an unsupported shape all along, and the operator needs
+to be told which.
 
 ### 3.11 · `GET /operator/leasing/leaseable-units`
 
@@ -217,6 +257,7 @@ The future migration that bridges invitation → submission → birth is
 |---|---|
 | `slice9_application_target_authority_proof.js` | 70 passed, 0 failed |
 | `slice9_targeted_invitation_proof.js` | 26 passed, 0 failed |
+| `slice9_public_submission_revalidation_proof.js` | 25 passed, 0 failed |
 
 Both run against real Postgres in a rolled-back transaction over a seeded
 scratch property. Neither reads Demo Building.
