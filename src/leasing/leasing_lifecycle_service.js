@@ -1,8 +1,19 @@
 // leasing_lifecycle_service.js — the WRITE PATH for the leasing-lead lifecycle rail (054).
 //
-// AUTHORITY (locked): leasing_leads.status owns opportunity existence + exits; THESE
-// functions own the append-only history of explicit decisions; the queue projection
-// owns current position. Every write here:
+// AUTHORITY (CORRECTED, migration 128): THESE EVENTS own opportunity terminal
+// truth. leasing_leads.status and leasing_conversions.status are DISPLAY/COMPATIBILITY
+// fields — mutable, latest-wins, no reason code, no actor, no history — and are no
+// longer historical evidence of an exit. The prior header claimed "leasing_leads.status
+// owns opportunity existence + exits"; that was the mutable-label authority this
+// migration exists to replace. The queue projection still owns current position.
+//
+// GRAIN: every act that changes ONE opportunity's terminal state carries an exact
+// conversion_id and REFUSES without it. conversation_id remains relationship/channel
+// context but is not sufficient authority — `conversations` is unique per
+// (property_id, person_id), so one conversation spans every opportunity that person
+// ever has at that property.
+//
+// Every write here:
 //   • locks the canonical conversation row (SELECT ... FOR UPDATE) — the UNIVERSAL
 //     serialization point. agent_thread_state is NOT the lock (it is lazily created and
 //     not guaranteed per lead) and is NEVER created as a side effect of a lifecycle write.
@@ -48,15 +59,53 @@ module.exports = function leasingLifecycleService(deps) {
     return Number(r.n);
   }
 
+  // ── EXACT OPPORTUNITY IDENTITY, OR THE ACT IS REFUSED (migration 128) ────
+  //  The caller must ALREADY hold the opportunity UUID because its workflow is
+  //  opportunity-bound. This function does not find one. There is deliberately
+  //  no lookup by active conversion, latest conversion, event time, lead,
+  //  person+property or conversation — one conversation spans every opportunity
+  //  a person has at a property, so any of those would be a guess dressed as a
+  //  fact. Missing identity REFUSES before any event is written.
+  async function requireOpportunity(client, { conversionId, conv, propertyId }) {
+    if (!conversionId) {
+      throw httpErr(400,
+        "This act changes one opportunity's terminal state, so it requires an exact opportunity id. " +
+        "The conversation alone cannot identify it — one conversation covers every opportunity this person has at this property.");
+    }
+    const o = (await client.query(
+      `select id, property_id, person_id from leasing_conversions where id=$1`, [conversionId]
+    )).rows[0];
+    if (!o) throw httpErr(404, "That opportunity does not exist.");
+    if (String(o.property_id) !== String(conv.property_id)
+        || (propertyId && String(o.property_id) !== String(propertyId))) {
+      throw httpErr(403, "That opportunity belongs to another property.");
+    }
+    //  The opportunity must belong to the SAME person as the conversation.
+    //  This is a consistency CHECK on an id the caller supplied — never a way
+    //  to derive one.
+    if (String(o.person_id) !== String(conv.person_id)) {
+      throw httpErr(409, "That opportunity does not belong to this conversation's person.");
+    }
+    return o;
+  }
+
   // Compute the current lifecycle position from latest-RELEVANT events (a close with no
-  // later reopen = closed). Used to guard illegal transitions.
-  async function currentClosureState(client, conversationId) {
+  // later reopen = closed).
+  //
+  // SCOPED BY OPPORTUNITY when one is given. Closing one opportunity must not
+  // close another that happens to share the conversation, and reopening one must
+  // not reopen the other. The per-conversation event_sequence is KEPT as the
+  // durable chronology — it is not rewritten — and simply filtered by exact
+  // conversion_id.
+  async function currentClosureState(client, conversationId, conversionId = null) {
+    const scope = conversionId ? "and conversion_id = $2" : "";
+    const args = conversionId ? [conversationId, conversionId] : [conversationId];
     const r = (await client.query(
       `select
          max(event_sequence) filter (where event_type='closed_not_fit') as close_seq,
          max(event_sequence) filter (where event_type='reopened')       as reopen_seq
-       from leasing_lead_lifecycle_events where conversation_id=$1`,
-      [conversationId]
+       from leasing_lead_lifecycle_events where conversation_id=$1 ${scope}`,
+      args
     )).rows[0];
     const closed = r.close_seq !== null &&
       (r.reopen_seq === null || Number(r.reopen_seq) < Number(r.close_seq));
@@ -66,7 +115,7 @@ module.exports = function leasingLifecycleService(deps) {
   // Load a tour and assert it matches the conversation's property AND person.
   async function assertTourMatches(client, tourId, conv) {
     const t = (await client.query(
-      "select id, property_id, person_id, status from scheduled_tours where id=$1",
+      "select id, property_id, person_id, status, conversion_id from scheduled_tours where id=$1",
       [tourId]
     )).rows[0];
     if (!t) throw httpErr(404, "Tour not found.");
@@ -92,24 +141,26 @@ module.exports = function leasingLifecycleService(deps) {
   // ── CLOSE AS NOT-FIT ──────────────────────────────────────────────────────
   // Operator decision. Requires a reason_code ('other' ⇒ reason_note). Idempotent by
   // a caller-supplied key (default: one close per current-open span).
-  async function closeNotFit({ conversationId, propertyId, actorUserId, reasonCode, reasonNote, idempotencyKey }) {
+  async function closeNotFit({ conversationId, propertyId, conversionId, actorUserId, reasonCode, reasonNote, idempotencyKey }) {
     if (!VALID_CLOSE_REASONS.has(reasonCode)) throw httpErr(400, "Invalid or missing reason_code.");
     if (reasonCode === "other" && (!reasonNote || !reasonNote.trim()))
       throw httpErr(400, "reason_note is required when reason_code is 'other'.");
     return tx(async (client) => {
       const conv = await lockConversation(client, conversationId, propertyId);
-      const { closed } = await currentClosureState(client, conversationId);
-      if (closed) throw httpErr(409, "Conversation is already closed.");
+      //  REFUSES BEFORE ANY WRITE when identity is missing.
+      const opp = await requireOpportunity(client, { conversionId, conv, propertyId });
+      const { closed } = await currentClosureState(client, conversationId, opp.id);
+      if (closed) throw httpErr(409, "This opportunity is already closed.");
       const seq = await nextSequence(client, conversationId);
-      const idem = idempotencyKey || `close:${conversationId}:${seq}`;
+      const idem = idempotencyKey || `close:${conversationId}:${opp.id}:${seq}`;
       const row = (await client.query(
         `insert into leasing_lead_lifecycle_events
-           (conversation_id, property_id, event_sequence, event_type, actor_type,
+           (conversation_id, conversion_id, property_id, event_sequence, event_type, actor_type,
             actor_id, reason_code, reason_note, idempotency_key, occurred_at)
-         values ($1,$2,$3,'closed_not_fit','operator',$4,$5,$6,$7, now())
+         values ($1,$8,$2,$3,'closed_not_fit','operator',$4,$5,$6,$7, now())
          on conflict (conversation_id, idempotency_key) do nothing
          returning *`,
-        [conversationId, conv.property_id, seq, actorUserId || null, reasonCode, reasonNote || null, idem]
+        [conversationId, conv.property_id, seq, actorUserId || null, reasonCode, reasonNote || null, idem, opp.id]
       )).rows[0];
       if (!row) throw httpErr(409, "Duplicate close (idempotency key already used).");
       // FIX-FORWARD (BL-3): a plain-language receipt, matching the house pattern
@@ -123,22 +174,23 @@ module.exports = function leasingLifecycleService(deps) {
 
   // ── REOPEN ────────────────────────────────────────────────────────────────
   // From an operator action OR a genuine qualifying inbound (source_comm_event_id set).
-  async function reopen({ conversationId, propertyId, actorType = "operator", actorUserId, sourceCommEventId, idempotencyKey }) {
+  async function reopen({ conversationId, propertyId, conversionId, actorType = "operator", actorUserId, sourceCommEventId, idempotencyKey }) {
     if (!["operator","system","agent"].includes(actorType)) throw httpErr(400, "Invalid actor_type.");
     return tx(async (client) => {
       const conv = await lockConversation(client, conversationId, propertyId);
-      const { closed } = await currentClosureState(client, conversationId);
-      if (!closed) throw httpErr(409, "Conversation is not closed; nothing to reopen.");
+      const opp = await requireOpportunity(client, { conversionId, conv, propertyId });
+      const { closed } = await currentClosureState(client, conversationId, opp.id);
+      if (!closed) throw httpErr(409, "This opportunity is not closed; nothing to reopen.");
       const seq = await nextSequence(client, conversationId);
-      const idem = idempotencyKey || `reopen:${conversationId}:${seq}`;
+      const idem = idempotencyKey || `reopen:${conversationId}:${opp.id}:${seq}`;
       const row = (await client.query(
         `insert into leasing_lead_lifecycle_events
-           (conversation_id, property_id, event_sequence, event_type, actor_type,
+           (conversation_id, conversion_id, property_id, event_sequence, event_type, actor_type,
             actor_id, source_comm_event_id, idempotency_key, occurred_at)
-         values ($1,$2,$3,'reopened',$4,$5,$6,$7, now())
+         values ($1,$8,$2,$3,'reopened',$4,$5,$6,$7, now())
          on conflict (conversation_id, idempotency_key) do nothing
          returning *`,
-        [conversationId, conv.property_id, seq, actorType, actorUserId || null, sourceCommEventId || null, idem]
+        [conversationId, conv.property_id, seq, actorType, actorUserId || null, sourceCommEventId || null, idem, opp.id]
       )).rows[0];
       if (!row) throw httpErr(409, "Duplicate reopen (idempotency key already used).");
       return { ok: true, event: row };
@@ -153,7 +205,7 @@ module.exports = function leasingLifecycleService(deps) {
       throw httpErr(400, "Invalid relationship_type.");
     return tx(async (client) => {
       const conv = await lockConversation(client, conversationId, propertyId);
-      await assertTourMatches(client, tourId, conv);           // property + person
+      const linkTourRow = await assertTourMatches(client, tourId, conv);   // property + person
       const link = (await client.query(
         `insert into leasing_conversation_tour_links
            (conversation_id, tour_id, relationship_type, linked_by)
@@ -167,12 +219,13 @@ module.exports = function leasingLifecycleService(deps) {
       const idem = idempotencyKey || `tour_linked:${tourId}`;
       const evt = (await client.query(
         `insert into leasing_lead_lifecycle_events
-           (conversation_id, property_id, event_sequence, event_type, actor_type,
+           (conversation_id, conversion_id, property_id, event_sequence, event_type, actor_type,
             actor_id, tour_id, idempotency_key, occurred_at)
-         values ($1,$2,$3,'tour_linked','operator',$4,$5,$6, now())
+         values ($1,$7,$2,$3,'tour_linked','operator',$4,$5,$6, now())
          on conflict (conversation_id, idempotency_key) do nothing
          returning *`,
-        [conversationId, conv.property_id, seq, linkedByUserId || null, tourId, idem]
+        [conversationId, conv.property_id, seq, linkedByUserId || null, tourId, idem,
+         linkTourRow.conversion_id || null]
       )).rows[0];
       return { ok: true, link, event: evt };
     });
@@ -197,12 +250,13 @@ module.exports = function leasingLifecycleService(deps) {
       const idem = idempotencyKey || `tour_cancelled:${tourId}:${seq}`;
       const evt = (await client.query(
         `insert into leasing_lead_lifecycle_events
-           (conversation_id, property_id, event_sequence, event_type, actor_type,
+           (conversation_id, conversion_id, property_id, event_sequence, event_type, actor_type,
             actor_id, tour_id, idempotency_key, occurred_at)
-         values ($1,$2,$3,'tour_cancelled','operator',$4,$5,$6, now())
+         values ($1,$7,$2,$3,'tour_cancelled','operator',$4,$5,$6, now())
          on conflict (conversation_id, idempotency_key) do nothing
          returning *`,
-        [conversationId, conv.property_id, seq, actorUserId || null, tourId, idem]
+        [conversationId, conv.property_id, seq, actorUserId || null, tourId, idem,
+         tour.conversion_id || null]
       )).rows[0];
       return { ok: true, event: evt, tour_status: "cancelled", link_kept: true };
     });
@@ -215,6 +269,7 @@ module.exports = function leasingLifecycleService(deps) {
     if (!correctionReason || !correctionReason.trim()) throw httpErr(400, "correction_reason is required.");
     return tx(async (client) => {
       const conv = await lockConversation(client, conversationId, propertyId);
+      const correctTour = await assertTourMatches(client, tourId, conv);
       const link = (await client.query(
         "select id from leasing_conversation_tour_links where conversation_id=$1 and tour_id=$2 and unlinked_at is null",
         [conversationId, tourId]
@@ -228,12 +283,13 @@ module.exports = function leasingLifecycleService(deps) {
       const idem = idempotencyKey || `tour_link_corrected:${tourId}:${seq}`;
       const evt = (await client.query(
         `insert into leasing_lead_lifecycle_events
-           (conversation_id, property_id, event_sequence, event_type, actor_type,
+           (conversation_id, conversion_id, property_id, event_sequence, event_type, actor_type,
             actor_id, tour_id, correction_reason, idempotency_key, occurred_at)
-         values ($1,$2,$3,'tour_link_corrected','operator',$4,$5,$6,$7, now())
+         values ($1,$8,$2,$3,'tour_link_corrected','operator',$4,$5,$6,$7, now())
          on conflict (conversation_id, idempotency_key) do nothing
          returning *`,
-        [conversationId, conv.property_id, seq, actorUserId || null, tourId, correctionReason, idem]
+        [conversationId, conv.property_id, seq, actorUserId || null, tourId, correctionReason, idem,
+         correctTour.conversion_id || null]
       )).rows[0];
       return { ok: true, event: evt, link_corrected: true };
     });
@@ -256,14 +312,45 @@ module.exports = function leasingLifecycleService(deps) {
   //
   // Returns { reopened: boolean }. reopened=false when the thread wasn't closed (the
   // common case) OR when an earlier call in a race already reopened it.
-  async function maybeReopenOnQualifyingInbound(client, { conversationId, sourceCommEventId }) {
-    // lock the conversation row (the universal serialization point) — NOT agent_thread_state
+  //  ── CONTROLLED REFUSAL (migration 128) ────────────────────────────────
+  //  This path is the ONE caller that cannot supply exact opportunity identity.
+  //  An inbound text arrives on a CONVERSATION. It carries no opportunity, and
+  //  one conversation spans every opportunity the person has at the property.
+  //  Reopening "the active one" would be precisely the silent guess the rail is
+  //  being corrected to stop making.
+  //
+  //  So it now REFUSES instead of writing: no event, no mutation, and — this
+  //  matters — NO THROW. It runs inside the inbound-persistence transaction, so
+  //  throwing would roll back the prospect's message. The message is the real
+  //  fact and must survive; only the unattributable reopen is withheld.
+  //
+  //  BEHAVIOUR CHANGE, STATED PLAINLY: a closed opportunity no longer reopens
+  //  automatically when the prospect replies. The reply is still recorded and
+  //  still surfaces on the conversation; an operator reopens explicitly, naming
+  //  the opportunity. Restoring automatic reopen requires the inbound path to
+  //  carry an opportunity, which is a separate, governed piece of work.
+  async function maybeReopenOnQualifyingInbound(client, { conversationId, sourceCommEventId, conversionId = null }) {
     const c = (await client.query(
       "select id from conversations where id=$1 for update", [conversationId]
     )).rows[0];
-    if (!c) return { reopened: false }; // conversation vanished; nothing to do
-    const { closed } = await currentClosureState(client, conversationId);
-    if (!closed) return { reopened: false };
+    if (!c) return { reopened: false, refused: false };
+
+    if (!conversionId) {
+      //  Is there anything to reopen at all? Reported so the refusal is
+      //  visible as a real withheld act rather than a silent nothing.
+      const { closed } = await currentClosureState(client, conversationId);
+      return {
+        reopened: false,
+        refused: closed,
+        refusal_code: closed ? "opportunity_identity_required" : null,
+        refusal_reason: closed
+          ? "A closed opportunity exists on this conversation, but an inbound message does not identify WHICH opportunity. Reopening requires an explicit opportunity id; it is never chosen automatically."
+          : null,
+      };
+    }
+
+    const { closed } = await currentClosureState(client, conversationId, conversionId);
+    if (!closed) return { reopened: false, refused: false };
     const seq = await nextSequence(client, conversationId);
     // idempotency key ties the reopen to the specific inbound; if the same inbound is
     // somehow processed twice, the unique (conversation_id, idempotency_key) makes the
@@ -271,15 +358,15 @@ module.exports = function leasingLifecycleService(deps) {
     const idem = sourceCommEventId ? `reopen_inbound:${sourceCommEventId}` : `reopen_inbound:${conversationId}:${seq}`;
     const row = (await client.query(
       `insert into leasing_lead_lifecycle_events
-         (conversation_id, property_id, event_sequence, event_type, actor_type,
+         (conversation_id, conversion_id, property_id, event_sequence, event_type, actor_type,
           source_comm_event_id, idempotency_key, occurred_at)
-       select $1, c.property_id, $2, 'reopened', 'system', $3, $4, now()
+       select $1, $5, c.property_id, $2, 'reopened', 'system', $3, $4, now()
          from conversations c where c.id=$1
        on conflict (conversation_id, idempotency_key) do nothing
        returning id`,
-      [conversationId, seq, sourceCommEventId || null, idem]
+      [conversationId, seq, sourceCommEventId || null, idem, conversionId]
     )).rows[0];
-    return { reopened: !!row };
+    return { reopened: !!row, refused: false };
   }
 
   // ── TRANSITION GUARD (transaction-aware) ──

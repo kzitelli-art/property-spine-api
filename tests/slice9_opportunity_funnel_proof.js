@@ -317,15 +317,21 @@ const mkWindow = (property_id, start, end, asOf) => ({
     ok(a1.rows.every((r) => r.as_of_utc === W.as_of_utc), "every row carries the as_of it was read at");
 
     console.log("\n── ONE BOUNDED SNAPSHOT, NO N+1 ─────────────────────────");
-    //  8 total = 6 MATERIAL reads (conversions, tours, tour_events,
-    //  scheduled_tours, revisions, applications) + 2 snapshot-metadata probes
-    //  taken at the open and close to prove the snapshot never moved. A seventh
-    //  material read appears only when a reschedule parent lives at another
-    //  property — bounded, and still one query for all opportunities.
+    //  12 total = 10 MATERIAL reads + 2 snapshot-metadata probes taken at the
+    //  open and close to prove the snapshot never moved.
+    //    funnel    (6): conversions, tours, tour_events, scheduled_tours,
+    //                   scheduled_tour_revisions, lease_applications
+    //    lifecycle (4): conversions, lifecycle_events, obligations,
+    //                   lease_applications
+    //  The journey snapshot is SHARED, not taken twice — the lifecycle
+    //  authority is handed the funnel's own, so the two projections cannot
+    //  disagree about what was scheduled. An extra material read appears only
+    //  when a reschedule parent lives at another property — bounded, and still
+    //  one query for all opportunities.
     let queries = 0;
     const counting = { query: (...a) => { queries++; return c.query(...a); } };
     await opportunityFunnelRows(counting, W);
-    ok(queries === 8, `the whole property projects in ${queries} queries (6 material + 2 snapshot probes)`);
+    ok(queries === 12, `the whole property projects in ${queries} queries (10 material + 2 snapshot probes)`);
     const snap = await appointmentJourneySnapshot(c, { property_id: P });
     ok(snap.opportunity_count >= 4,
       `across ${snap.opportunity_count} opportunities — so the count is NOT per-opportunity`);
@@ -350,6 +356,25 @@ const mkWindow = (property_id, start, end, asOf) => ({
     const snap2 = await appointmentJourneySnapshot(c, { property_id: P });
     ok(snap2.opportunity_count === snap.opportunity_count + 4,
       "and the snapshot sees every one of them");
+
+    console.log("\n── FUNNEL 2 CONSUMES THE LIFECYCLE AUTHORITY ────────────");
+    ok(rows.every((r) => "lifecycle_state" in r && "pending_state" in r),
+      "every opportunity row carries terminal and pending truth");
+    ok(agg.lifecycle_split_reconciles === true,
+      "the no_appointment split reconciles exactly to its own bucket");
+    const splitSum = Object.values(agg.lifecycle_split).reduce((a, b) => a + b, 0);
+    ok(splitSum === agg.populations.no_appointment,
+      `recomputed independently: ${splitSum} === ${agg.populations.no_appointment}`);
+    ok("terminal_never_toured" in agg.lifecycle_split && "live_no_known_pending" in agg.lifecycle_split,
+      "'over, never toured' and 'live but nothing pending' are no longer the same number");
+    //  The funnel must NOT repair missing lifecycle evidence from mutable labels.
+    const fsrc = require("fs").readFileSync(
+      path.join(REPO, "src/evidence/opportunity_funnel.js"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "")
+      .replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/'(?:[^'\\]|\\.)*'/g, "''");
+    ok(!/leasing_leads/.test(fsrc), "the funnel never reads leasing_leads");
+    ok(!/opp\.status|conversion_status\s*===/.test(fsrc),
+      "and never falls back to the mutable conversion status to fill a gap");
 
     console.log("\n── THE SNAPSHOT CONTRACT ────────────────────────────────");
     const snapRun = await opportunityFunnelRows(c, W);
@@ -416,9 +441,17 @@ const mkWindow = (property_id, start, end, asOf) => ({
 
     console.log("\n── MISSING FACTS ARE EXPOSED, NOT WORKED AROUND ─────────");
     ok(MISSING_CANONICAL_FACTS.length >= 2, "the missing canonical facts are declared");
-    ok(MISSING_CANONICAL_FACTS.some((f) => /terminal/.test(f.fact)
-      && /lead_events/.test(f.assigned_to)),
-      "terminal truth is assigned to the lead_events phase, not solved here");
+    //  Terminal and pending truth are now RESOLVED (migration 128). What
+    //  remains open is declared with the reason it cannot be closed.
+    ok(MISSING_CANONICAL_FACTS.some((f) => /terminal opportunity truth/.test(f.fact)
+      && /RESOLVED/.test(f.status)),
+      "terminal truth is recorded as resolved by the lifecycle authority");
+    ok(MISSING_CANONICAL_FACTS.some((f) => /historical lifecycle events/.test(f.fact)
+      && /OPEN/.test(f.status) && /forbidden_workaround/.test(Object.keys(f).join(","))),
+      "and historical events stay open, with the forbidden workarounds named");
+    ok(MISSING_CANONICAL_FACTS.some((f) => /automatic reopen/.test(f.fact)
+      && /WITHDRAWN BY DESIGN/.test(f.status)),
+      "the withdrawn automatic reopen is declared as a behaviour change, not hidden");
     //  Strip comments AND string literals. The module NAMES the forbidden
     //  workarounds in MISSING_CANONICAL_FACTS so they stay visible; declaring a
     //  practice forbidden is not performing it, and a guard that cannot tell

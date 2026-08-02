@@ -36,12 +36,21 @@
 //
 //  ── NOT IN THIS FILE ─────────────────────────────────────────────────
 //  No scores, no rankings, no recommendations, no leaderboard, no calendar, no
-//  writes, no route, no renderer. Terminal opportunity truth is NOT solved here
-//  by reading current lead status — see §MISSING at the bottom.
+//  writes, no route, no renderer.
+//
+//  ── TERMINAL AND PENDING TRUTH ───────────────────────────────────────
+//  Consumed from opportunity_lifecycle_read.js, which derives them from ORDERED
+//  LIFECYCLE EVENTS attributed by exact conversion_id (migration 128). This file
+//  never reads leasing_leads.status or leasing_conversions.status, and never
+//  falls back to them when lifecycle evidence is missing — such a row is
+//  reported as lifecycle_unknown rather than repaired into a complete-looking
+//  number. See §MISSING at the bottom for what remains open and why.
 // ════════════════════════════════════════════════════════════════════
 "use strict";
 
 const { appointmentJourneySnapshot, OBSERVED } = require("../leasing/appointment_journey");
+const { opportunityLifecycleSnapshot, LIFECYCLE, PENDING } =
+  require("../leasing/opportunity_lifecycle_read");
 
 // ── THE EIGHT APPOINTMENT-EVIDENCE STATES, KEPT SEPARATE ─────────────
 //  These are distinct truths, not gradations of one scale. Collapsing any two
@@ -199,6 +208,15 @@ async function readOpportunityFunnel(q, window, _meta) {
 
   const snap = await appointmentJourneySnapshot(q, { property_id, as_of: asOfIso });
 
+  //  ── THE LIFECYCLE AUTHORITY (migration 128) ──────────────────────
+  //  Terminal and pending truth come from ordered lifecycle EVENTS, never from
+  //  leasing_leads.status or leasing_conversions.status. The journey snapshot is
+  //  handed over so both projections read the SAME appointment material under
+  //  this one coherent snapshot.
+  const life = await opportunityLifecycleSnapshot(q, {
+    property_id, as_of: asOfIso, journeys: snap });
+  const lifeByOpp = new Map(life.rows.map((r) => [String(r.opportunity_id), r]));
+
   // ── APPLICATIONS, EXACTLY LINKED ───────────────────────────────────
   //  One bounded query. conversion_id is the only link read for credit;
   //  leasing_lead_id is carried ONLY to detect ambiguity, never to assign.
@@ -252,9 +270,23 @@ async function readOpportunityFunnel(q, window, _meta) {
     const attributed = ev.occurrences.filter(
       (o) => o.attribution_basis === "explicit_link" || o.attribution_basis === "chain_inheritance").length;
 
+    const lf = lifeByOpp.get(oid) || null;
+
     rows.push({
       opportunity_id: oid,
       property_id,
+
+      //  TERMINAL / PENDING — from events only. When lifecycle evidence is
+      //  missing or unusable this stays unknown; it NEVER falls back to the
+      //  mutable status labels to look complete.
+      lifecycle_state: lf ? lf.lifecycle_state : "unknown",
+      terminal: lf ? lf.terminal : null,
+      terminal_code: lf ? lf.terminal_code : null,
+      terminal_event_id: lf ? lf.terminal_event_id : null,
+      reopened_after_terminal: lf ? lf.reopened_after_terminal : null,
+      pending_state: lf ? lf.pending_state : "pending_unknown",
+      pending_basis: lf ? lf.pending_basis : [],
+      lifecycle_coverage_state: lf ? lf.coverage_state : "unknown",
 
       // CONTEXT, NOT GRAIN. Present so a reader can navigate; never a key.
       context: { lead_id: opp.lead_id || null, person_id: opp.person_id || null },
@@ -349,6 +381,23 @@ function aggregateOpportunityFunnel(rows) {
   };
   for (const r of rows) bucket[MAP[r.appointment_evidence_state]] += 1;
 
+  //  ── THE no_appointment SPLIT, FROM LIFECYCLE EVENTS ────────────────
+  //  Previously `no_appointment` conflated "still live, nothing booked yet"
+  //  with "over, never toured" — the gap the lifecycle authority was built to
+  //  close. It is split here by ORDERED EVENTS only. When lifecycle evidence is
+  //  missing or unusable the row lands in `lifecycle_unknown`; it is NEVER
+  //  resolved by falling back to leasing_leads.status or
+  //  leasing_conversions.status to make the funnel look complete.
+  const noAppt = rows.filter((r) => r.appointment_evidence_state === EVIDENCE.NO_APPOINTMENT);
+  const lifecycle_split = {
+    terminal_never_toured: noAppt.filter((r) => r.terminal === true).length,
+    live_with_pending_act: noAppt.filter((r) => r.terminal === false && r.pending_state === "pending").length,
+    live_no_known_pending: noAppt.filter((r) => r.terminal === false
+      && r.pending_state === PENDING.NONE_KNOWN).length,
+    lifecycle_unknown: noAppt.filter((r) => r.terminal === null
+      || r.pending_state === PENDING.UNKNOWN).length,
+  };
+
   // ── THE COHORT ─────────────────────────────────────────────────────
   //  Origin cohort: opportunities whose FIRST observed visit falls in the
   //  window. An opportunity with no observed visit has no origin instant and
@@ -384,6 +433,10 @@ function aggregateOpportunityFunnel(rows) {
       eligible_population: rows.filter((r) => r.metric_eligible).length,
       ...bucket,
     },
+    lifecycle_split,
+    //  The split must itself reconcile to the bucket it partitions.
+    lifecycle_split_reconciles:
+      Object.values(lifecycle_split).reduce((a, b) => a + b, 0) === bucket.no_appointment,
     reconciles: Object.values(bucket).reduce((a, b) => a + b, 0) === rows.length,
     cohort_size: cohort.length,
     numerator,
@@ -407,21 +460,34 @@ function aggregateOpportunityFunnel(rows) {
 const MISSING_CANONICAL_FACTS = Object.freeze([
   {
     fact: "terminal opportunity truth",
-    why_needed: "An opportunity with no observed visit and no future appointment cannot be distinguished between 'still live, nothing booked yet' and 'over, it never toured'. Both currently land in no_appointment.",
-    forbidden_workaround: "reading leasing_leads.status or leasing_conversions.status as terminal truth",
-    assigned_to: "lead_events terminal/pending truth",
+    status: "RESOLVED — migration 128",
+    resolved_by: "leasing_lead_lifecycle_events.conversion_id, read as ordered events by opportunity_lifecycle_read.js",
+    note: "no_appointment now splits into terminal_never_toured, live_with_pending_act, live_no_known_pending and lifecycle_unknown.",
   },
   {
     fact: "pending opportunity truth",
-    why_needed: "Without it, a young opportunity and a dead one are the same row, so no_appointment cannot be split into pending and closed-without-tour.",
-    forbidden_workaround: "elapsed time since opened_at",
-    assigned_to: "lead_events terminal/pending truth",
+    status: "RESOLVED — no migration needed",
+    resolved_by: "appointments via conversion_id (127), leasing_conversion_obligations.conversion_id, lease_applications.conversion_id (051)",
+    note: "Pending names a real unresolved act. 'Not terminal with nothing pending' is its own honest answer and is never dressed up as active.",
   },
   {
-    fact: "application→opportunity link coverage",
-    why_needed: "lease_applications.conversion_id is nullable and historically sparse. Unlinked applications suppress the rate rather than being guessed onto an opportunity.",
-    forbidden_workaround: "falling back to leasing_lead_id, which double-credits a lead with two opportunities",
+    fact: "historical lifecycle events predating migration 128",
+    status: "OPEN — permanently, absent explicit correction",
+    why: "closed_not_fit and reopened carry no source object naming an opportunity, so no exact evidence exists for historical rows. They stay NULL and are reported as untrackable, never applied to an opportunity.",
+    forbidden_workaround: "whichever opportunity was active at the event time, the only one currently open, nearest conversion creation time, same lead, same person and property, current lead status, current conversion status",
     assigned_to: "not this cut — coverage is reported, never inferred",
+  },
+  {
+    fact: "automatic reopen on a qualifying prospect inbound",
+    status: "WITHDRAWN BY DESIGN — behaviour change",
+    why: "An inbound message identifies a conversation, not an opportunity. Reopening 'the active one' would be the silent guess this cut removes, so that path now refuses instead of writing.",
+    consequence: "A closed opportunity no longer reopens automatically when the prospect replies. The reply is still recorded; an operator reopens explicitly, naming the opportunity.",
+    assigned_to: "restoring it requires the inbound path to carry an opportunity — separate governed work",
+  },
+  {
+    fact: "application to opportunity link coverage",
+    status: "OPEN — reported, never inferred",
+    why: "lease_applications.conversion_id is nullable and historically sparse; unlinked applications suppress the rate rather than being guessed onto an opportunity.",
   },
 ]);
 

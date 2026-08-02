@@ -173,3 +173,140 @@ with **B** as its first deployable step if a migration is not wanted in this cut
 No implementation, no migration, no route, no mount, no renderer, no funnel
 aggregation change, no Slice 10 work. `server.js`, `src/agent/` and every Ask
 Spine file untouched. Migration 125 untouched; ceiling remains 127.
+
+---
+
+# PART 2 — IMPLEMENTED (Option A ruling)
+
+## 9 · MIGRATION AUTHORITY — ASSIGNED **128**
+
+| step | evidence |
+|---|---|
+| API `main` | **moved during this session**: `f85f70b` → `10c43b3` (security-obligations lane, PR #32) |
+| did that deploy add a ledger row? | **No** — `git diff f85f70b..main -- migrations/` is **empty**. No migration file changed, so the deploy could not have recorded one. |
+| Neon ledger | last supplied: max **126**, `121 = ai_leasing_operating_context`. Still current by the line above. |
+| all-branch, all-path scan | `125` staged only (`docs/slices-6-to-10/deployment_b/`), `126` on main, `127` mine (unmerged). **Nothing at 128+ anywhere.** |
+| Ask Spine | `ask-spine-slice-1` `17c5a68` — 7 ahead, **not landed**, tops out at 126. `ask-spine-source-audit` `d2f14c5` — landed. **Zero migration overlap.** |
+| Migration 125 | md5 `b4b817a5c3d65a01fef0783ccdc968b4`, still outside `migrations/`. **Untouched.** |
+
+**Stated limitation:** I could not re-query Neon directly (production credentials
+are out of scope). Currency is derived from main changing no migration file. The
+runner's own "number already spent" guard is the backstop if that inference is
+ever wrong. Independent corroboration: main's own commit `f6ab9f6` says
+*"migration 121 has no file"* — the same finding reached separately.
+
+## 10 · WRITER CENSUS AND CUTOVERS
+
+| caller | can it supply exact identity? | outcome |
+|---|---|---|
+| `POST /operator/…/close-not-fit` | **yes** — route now takes `conversion_id` | cut over; **refuses 400** without it |
+| `POST /operator/…/reopen` | **yes** | cut over; refuses 400 without it |
+| `demo_reset.js` | **yes** — now enumerates OPPORTUNITIES and derives each conversation | cut over |
+| `linkTour` / `cancelTour` / `correctTourLink` | **yes** — from the event's OWN named tour | carry `scheduled_tours.conversion_id` |
+| `maybeReopenOnQualifyingInbound` (agent.js, leasingleads.js) | **NO** | **CONTROLLED REFUSAL** |
+
+**Direction matters.** conversation → opportunity is one-to-many and forbidden.
+opportunity → conversation is many-to-one and unambiguous; `demo_reset` walks
+that direction, so each close is an explicit act against a named opportunity.
+
+**`src/agent/` and `server.js` were NOT modified.** The inbound signature
+defaults `conversionId` to `null`, so those callers refuse without being touched.
+
+## 11 · STOP CONDITION 1 — TRIGGERED, HANDLED PER THE RULING
+
+An inbound text identifies a **conversation**, not an opportunity. It cannot
+supply exact identity, and choosing "the active one" is the guess this cut
+removes. Per *"stop that path with a controlled refusal"*, it now writes no
+event and returns `refusal_code: "opportunity_identity_required"`.
+
+It does **not throw** — it runs inside the inbound-persistence transaction, so
+throwing would roll back the prospect's message. The message is the real fact and
+survives; only the unattributable reopen is withheld.
+
+**BEHAVIOUR CHANGE, STATED PLAINLY:** a closed opportunity no longer reopens
+automatically when a prospect replies. An operator reopens explicitly, naming the
+opportunity. Restoring automation requires the inbound path to carry an
+opportunity — separate governed work. **This is the one item that most deserves
+your review.**
+
+## 12 · HISTORICAL ATTRIBUTION COUNTS
+
+Permitted evidence is exactly one thing: an event's **own named tour**
+(`tour_id` → `scheduled_tours.conversion_id`, migration 127). Following a pointer
+the event already carries is lineage, not inference.
+
+| bucket | count (proof fixture) |
+|---|---|
+| exactly attributable | **0** |
+| already correct | 0 |
+| conflicting | 0 |
+| **untrackable from existing evidence** | **1** (all historical `closed_not_fit` / `reopened`) |
+| written | **0** |
+
+`closed_not_fit` and `reopened` carry **no** source object naming an opportunity,
+so no exact evidence exists for them — permanently, absent an explicit governed
+correction. Verified absent from the backfill: active-conversion lookup,
+person+property, lead, time-proximity.
+
+## 13 · CONTRACTS
+
+**Terminal** — `lifecycle_state` ∈ `no_terminal_event · terminal ·
+reopened_after_terminal · conflict · incomplete · untrackable`, plus
+`terminal_code`, `terminal_occurred_at`, `terminal_event_id`,
+`reopened_after_terminal`, `latest_reopen_event_id`, full `terminal_history`,
+`conflict_codes`, `coverage_state`, `source_event_ids`, `as_of_utc`.
+
+Ordering uses the rail's existing per-conversation `event_sequence`, filtered by
+exact `conversion_id`. **The rail was not rewritten.** `occurred_at` is used only
+for as-of windowing, never to order two events — clock skew is not chronology.
+
+**Pending** — `pending_basis` ∈ `future_appointment_scheduled ·
+observed_visit_awaiting_outcome · open_follow_up_obligation ·
+application_process_underway`; `pending_state` ∈ `pending · no_known_pending_act ·
+pending_unknown`. **"Not terminal with nothing pending" is its own answer and is
+never called "active".**
+
+## 14 · FUNNEL 2 INTEGRATION
+
+`no_appointment` — which conflated "still live, nothing booked" with "over, never
+toured" — now splits by **events only**:
+
+```
+terminal_never_toured · live_with_pending_act · live_no_known_pending · lifecycle_unknown
+```
+
+The split reconciles exactly to the bucket it partitions (asserted, and
+recomputed independently). A row with missing or unusable lifecycle evidence
+lands in `lifecycle_unknown`; it is **never** repaired from
+`leasing_leads.status` or `leasing_conversions.status`.
+
+Query count **12 = 10 material + 2 snapshot probes**, still constant — the
+journey snapshot is *shared* with the lifecycle authority, not taken twice, so
+the two projections cannot disagree about what was scheduled.
+
+## 15 · REMAINING MUTABLE-STATUS READS
+
+| read | classification | status |
+|---|---|---|
+| `leasing_leads.status` in the queue projection | queue position / display | **legitimate**, untouched |
+| `leasing_leads.status` in Funnel 1 `f1pending` | inferred pending | **still inferred** — Funnel 1 not rebuilt in this cut, per the ruling |
+| `leasing_conversions.status` in the funnel row | **compatibility only**, carried for comparison | never evidence; drives `label_disagrees_with_events` |
+| `lease_applications.status` in Funnels 3/4 | application lifecycle | correctly scoped, not opportunity terminal truth |
+| terminal reads in the new projection | **none** | 0 code-level `leasing_leads` references |
+
+## 16 · PROOF TOTALS
+
+**Full suite twice against a clean database: `843 / 0` and `843 / 0`.** Zero
+properties before and after. New: opportunity lifecycle **61/0**; funnel now
+**92/0**; evidence **60/0**.
+
+All seventeen required cases proven, including two opportunities sharing one
+conversation classified independently, close/reopen isolation, terminal → reopen
+→ terminal, stale-label-cannot-override, and stable as-of reads.
+
+## 17 · BOUNDARIES
+
+No renderer, no route, no mount, no generic lifecycle framework, no new CRM
+status, no deployment, no Slice 10. `server.js` and `src/agent/` untouched in
+this cut. Ask Spine untouched, re-verified at assignment time. Migration 125
+untouched.

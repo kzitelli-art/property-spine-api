@@ -3148,9 +3148,14 @@ module.exports = function operatorModule(deps) {
   router.post("/operator/leasing/conversations/:conversationId/close-not-fit", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
-      const { reason_code, reason_note, idempotency_key } = req.body || {};
+      //  conversion_id is REQUIRED (migration 128). The conversation cannot
+      //  identify the opportunity — it covers every opportunity this person has
+      //  at this property — so the service refuses without it rather than
+      //  closing whichever one happens to be active.
+      const { reason_code, reason_note, idempotency_key, conversion_id } = req.body || {};
       const out = await leasingLifecycle.closeNotFit({
         conversationId: req.params.conversationId, propertyId: req.operator.property_id,
+        conversionId: conversion_id,
         actorUserId: req.operator.id, reasonCode: reason_code, reasonNote: reason_note,
         idempotencyKey: idempotency_key,
       });
@@ -3164,9 +3169,12 @@ module.exports = function operatorModule(deps) {
   router.post("/operator/leasing/conversations/:conversationId/reopen", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
-      const { idempotency_key } = req.body || {};
+      //  conversion_id is REQUIRED (migration 128) — reopening one opportunity
+      //  must never reopen another that shares the conversation.
+      const { idempotency_key, conversion_id } = req.body || {};
       const out = await leasingLifecycle.reopen({
         conversationId: req.params.conversationId, propertyId: req.operator.property_id,
+        conversionId: conversion_id,
         actorType: "operator", actorUserId: req.operator.id, idempotencyKey: idempotency_key,
       });
       return res.json(out);

@@ -93,21 +93,33 @@ module.exports = function demoReset(deps) {
   // CTE AND its is_closed derivation: a conversation already closed (and not since
   // reopened) is NOT active, so it is not a reset candidate. Without this, health
   // over-counts and a re-run needlessly re-touches settled rows.
-  async function candidateConversationIds(propId, srcId) {
+  //  ── ENUMERATE OPPORTUNITIES, NOT CONVERSATIONS (migration 128) ────────
+  //  closeNotFit now requires an EXACT opportunity id. This walks the direction
+  //  that is unambiguous: each OPPORTUNITY carries its own id, and its
+  //  conversation is single-valued (conversations is unique per
+  //  property+person). The forbidden direction is the reverse — a conversation
+  //  covers every opportunity a person has at the property, so it can never say
+  //  which one a close belongs to.
+  //
+  //  Each row is therefore an explicit act against a named opportunity, not one
+  //  close guessed onto whichever opportunity looked active.
+  async function candidateTargets(propId, srcId) {
     if (!srcId) return [];
     return (await pool.query(
-      `select distinct c.id as conversation_id
-         from leasing_leads ll
+      `select lc.id as conversion_id, c.id as conversation_id
+         from leasing_conversions lc
+         join leasing_leads ll
+           on ll.id = lc.lead_id
          join conversations c
-           on c.property_id = ll.property_id and c.person_id = ll.person_id
+           on c.property_id = lc.property_id and c.person_id = lc.person_id
          left join (
-           select conversation_id,
+           select conversation_id, conversion_id,
                   max(event_sequence) filter (where event_type='closed_not_fit') as close_seq,
                   max(event_sequence) filter (where event_type='reopened')       as reopen_seq
              from leasing_lead_lifecycle_events
-            group by conversation_id
-         ) life on life.conversation_id = c.id
-        where ll.property_id = $1
+            group by conversation_id, conversion_id
+         ) life on life.conversation_id = c.id and life.conversion_id = lc.id
+        where lc.property_id = $1
           and ll.source_id   = $2
           and c.status = 'open'
           and ll.status not in ('applied','leased','lost')
@@ -115,7 +127,7 @@ module.exports = function demoReset(deps) {
           and (life.close_seq is null
                or (life.reopen_seq is not null and life.reopen_seq >= life.close_seq))`,
       [propId, srcId]
-    )).rows.map((r) => r.conversation_id);
+    )).rows;
   }
 
   // ── GET /demo/rehearsal-reset/health — how many rows a reset WOULD close,
@@ -130,7 +142,7 @@ module.exports = function demoReset(deps) {
       if (scope.missingProperty) {
         return res.status(409).json({ ok: false, receipt: "The demo property is not seeded yet — start the demo first." });
       }
-      const ids = await candidateConversationIds(scope.prop.id, scope.srcId);
+      const ids = await candidateTargets(scope.prop.id, scope.srcId);
       return res.json({
         ok: true,
         mode: "demo",
@@ -190,7 +202,7 @@ module.exports = function demoReset(deps) {
         });
       }
 
-      const ids = await candidateConversationIds(scope.prop.id, scope.srcId);
+      const ids = await candidateTargets(scope.prop.id, scope.srcId);
       if (ids.length === 0) {
         return res.json({
           ok: true, mode: "demo", property: scope.prop.name, source: DEMO_SOURCE,
@@ -200,15 +212,17 @@ module.exports = function demoReset(deps) {
       }
 
       let closed = 0, already = 0, errorCount = 0;
-      for (const conversationId of ids) {
+      for (const target of ids) {
+        const conversationId = target.conversation_id;
         try {
           await leasingLifecycle.closeNotFit({
             conversationId,
+            conversionId: target.conversion_id,  // EXACT — enumerated, never guessed
             propertyId: scope.prop.id,          // re-verified inside lockConversation (403 on mismatch)
             actorUserId: null,                  // system reset — no operator identity is faked
             reasonCode: "other",
             reasonNote: "boardroom rehearsal reset",
-            idempotencyKey: `rehearsal_reset:${conversationId}`,
+            idempotencyKey: `rehearsal_reset:${target.conversion_id}`,
           });
           closed++;
         } catch (e) {
