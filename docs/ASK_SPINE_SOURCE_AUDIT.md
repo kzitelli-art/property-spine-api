@@ -14,9 +14,9 @@ across both repositories.
 there — `PHILOSOPHY.md`, `THREAD_HANDOFF.md`, `COMMUNICATION_LINE_ARCHITECTURE.md`.
 The app repo has no `docs/`. Move it if that's wrong.)*
 
-**Completeness:** §1, §2 and §4 are complete and source-verified. §3 and §5 are
-**partial** — bounded explicitly in each section and summarised at the end. They
-are not padded to look finished.
+**Completeness: complete.** §1, §2 and §4 were source-verified in Phase 1.
+**Phase 2 (below) closes §3 and §5 and supersedes §1's mount recommendation** —
+read it before acting on §1 or §3, which are left intact to show what changed.
 
 ---
 
