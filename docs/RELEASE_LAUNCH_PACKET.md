@@ -62,7 +62,7 @@ Current deployed app SHA ................ ______   (Render Events, not __PS_BUIL
 App rollback availability ............... ______
 Recent API deploy duration X ............ ______
 /health/migrations result ............... ______
-Migration 121 disposition ............... ______
+Migration 121 disposition ............... CLEARED — see below
 API deploy warnings relevant to migrations ______
 Rollback decision clock time ............ ______   (derived from X)
 ```
@@ -178,7 +178,7 @@ operator should have to understand any of the machinery above.
 [ ] expected deployed SHAs recorded
 [ ] /health green
 [ ] deployed migration ledger read and compared
-[ ] migration 121 explicitly classified
+[x] migration 121 explicitly classified — CLEARED (below)
 [ ] rollback path verified — not assumed
 [ ] named operator present for every role
 [ ] smoke and browser tools staged
@@ -292,3 +292,55 @@ Smoke fails, health OK→ how do we tell an app defect from an API defect?
 
 **No "deployed but still checking."** Either it passes and closes, or it rolls
 back and returns with a specific named defect.
+
+
+---
+
+## MIGRATION 121 — CLEARED, LIVE SCHEMA DRIFT UNDERSTOOD
+
+**Production ledger:** `121 ai_leasing_operating_context` · `122 governed_economics_lineage`.
+
+The AI-leasing migration from commit `5d2b2ad` reached production while its file
+stayed parked on `claude/getting-up-to-speed-nyf4ww` and never entered `main`.
+**A branch was deployed to the production service and `prestart` migrated it.**
+`THREAD_HANDOFF.md:49–52` claims that file "has never been applied to a
+database" — **production disproves it**; line 95–96 was the accurate account.
+
+### Verified in production, read-only
+
+| Object | State |
+|---|---|
+| `ai_leasing_operating_rules` | exists · **0 rows** |
+| `trg_ai_leasing_operating_rule_history` / `_lineage` | present, `enabled=O` |
+| `agent_runs.ai_operating_context_snapshot_json` | `nullable=NO default='[]'::jsonb` |
+| `agent_runs.ai_operating_context_hash` | `nullable=YES default=NONE` |
+| `..._snapshot_array` / `..._hash_format` / `..._snapshot_json_not_null` | all `validated=true` |
+| indexes | `pkey`, `id_property_id_key`, `idx_…_active`, `uq_ai_leasing_operating_rule_active` |
+
+### Why this does not block the security release
+
+1. **Bounded to one file.** `121_ai_leasing_operating_context.sql` is the only
+   migration on that branch absent from `main`. Nothing else could have run.
+2. **Zero release-source references.** No `.js` or `.sql` on the candidate or on
+   `main` names any of these objects.
+3. **The triggers cannot fire.** Both sit on `ai_leasing_operating_rules`, which
+   no release code reads or writes.
+4. **The constraints are satisfied by their own defaults.** `agent_runs` is
+   written at `src/agent/agent.js:1036` and `:2272` with explicit column lists
+   naming neither drifted column, so the `'[]'::jsonb` default satisfies the
+   array check and a NULL hash satisfies the format check.
+5. **0 rows.** Nothing has ever written to the drifted table — the schema is
+   inert, not load-bearing. Had it been non-zero, AI-leasing *application* code
+   would also have been deployed, and this would still be STOP.
+6. **This lane adds no migration.** Nothing executes on deploy.
+
+### Classification
+
+```text
+SAFE-BUT-AHEAD-OF-SOURCE — inert structure, no runtime dependency
+Release impact: NONE. The obligation-security release may proceed.
+Reconciliation: required, but as its own lane. NOT here.
+```
+
+**Not done, deliberately:** no ledger edit, no dropped object, no replacement
+121, no AI-leasing merge to normalise the schema.
