@@ -29,6 +29,7 @@ source audit. **Appendix D carries the governing ruling; start there.**
 | **Appendix C** | Amendments — the defect split, S2 framing, activation gate, **escalation trigger answered (C4)**, conformance set, evidence set | Locally exercised |
 | **Appendix D** | **Revised consultant ruling. 4A/4B canonical labels, P1 reclassification, sequencing, S2 acceptance conditions.** Governing. | Reported |
 | **Appendix E** | S2 surface audit — is 4B the only gap? (No pattern; one write.) | Locally exercised |
+| **Appendix G** | **Build authorization.** Schema resolution (dedicated login-challenge record), provenance fields, backlog priority ruling A–F, merge authorization, the eight-step build order. **G6 corrects false-green row 4.** | Reported (G6: Locally exercised) |
 | **Appendix F** | **S2 design ruling.** The decision belongs after S1, not at the origin write; three-case decision; controlling invariant; containment adapter; seven acceptance cases. **F4 reports two schema constraints that put a migration in the first S2 slice.** | Reported (F4: Locally exercised) |
 
 **Terminology:** A090-4 was split by the ruling into **4A** (credential-delivery
@@ -278,7 +279,7 @@ Catalogued, not fixed.
 | 1 | **root `migrate.js`** | `MIGRATIONS_DIR = __dirname` (`:32`) is the repo root, which holds no `NNN_*.sql`. `readdirSync` filtered by `/^\d{3}_.*\.sql$/` (`:62–65`) matches nothing — `schema.sql` fails the pattern — so it prints `"No migration files found. Nothing to do."` (`:68`) and returns normally. **Exit 0, zero migrations applied.** | **Yes.** `package.json:7` correctly calls `migrations/migrate.js`, so boot is safe; the trap is anyone running `node migrate.js` from the repo root, which is the natural guess. |
 | 2 | **`tests/test_adapter_seam.db.js`** | `ReferenceError` at load; zero assertions. Exits non-zero, so `$?` catches it — invisible only under piped/eyeballed output. | **Yes.** See FINDING 1. |
 | 3 | **No assertion floor on 104 of 107 files** | Only `test_conversion_rail`, `test_identity_bridge` and `test_release3` pass `expectedAtLeast` to `receipt.complete()`, which fails a run that executed fewer assertions than expected (`_run_receipt.js:128–133`). Everywhere else the pattern is `process.exit(fail ? 1 : 0)` — correct for failures, but **exit 0 when zero assertions ran**. Any harness whose assertions sit inside a loop over query results reports success on an empty result set. | **Yes.** This is the conversion-rail defect generalised; the floor was built but applied to three files. |
-| 4 | **`psql` pipes in shell setup scripts** | `setup_clean_qa_record.sh:31,45,51,56,61` and `setup_fresh_record_and_prove.sh:18,50` pipe `curl` into `head`/`grep`, so `$?` reports the **last** command in the pipeline, not `curl`. `setup_fresh_record_and_prove.sh` sets `set -e`; **`setup_clean_qa_record.sh` does not**, so a failed step there continues silently with an empty variable. | **Yes.** |
+| 4 | **`psql` pipes in shell setup scripts** | `setup_clean_qa_record.sh:31,45,51,56,61` and `setup_fresh_record_and_prove.sh:18,50` pipe `curl` into `head`/`grep`, so `$?` reports the **last** command in the pipeline, not `curl`. **Both scripts set `-e`** (`:14` and `:5`) but **neither sets `pipefail`**, so `set -e` never fires on those pipelines — the guard is present but ineffective exactly where the row applies. | **Yes.** *(Corrected — an earlier version of this row wrongly stated `setup_clean_qa_record.sh` lacks `set -e`. See Appendix G6.)* |
 
 **Row 5 is recorded in the appendix**, not inline: `migrations/090_admin_users.sql`
 suppresses an enum alter with `exception when others then null`, and the ledger
@@ -1942,3 +1943,182 @@ repository**; if they are doctrine, they belong in `docs/`.
 `team_invites` definition, the absence of any `alter table team_invites`, the
 `NOT NULL` on `property_id`, and the `operator_session_invites` precedent are all
 read directly from the migrations.
+
+---
+
+# Appendix G — Build authorization and backlog ruling (2026-08-02)
+
+Ruling received in response to Appendix F. **This is the first appendix that
+authorizes work.** It settles the schema resolution, orders the backlog, clears
+the documentation merge, and fixes the build sequence. Recorded as governing.
+
+---
+
+## G1 — Schema resolution: option (b), a dedicated staff-login challenge record
+
+**Ruled: do not make `team_invites.property_id` nullable.**
+
+> *"Making `property_id` nullable on the invite table would weaken a valid
+> invariant in order to accommodate a second lifecycle. It would also preserve
+> the original conceptual mistake: treating authentication and property selection
+> as one object."*
+
+The two records represent different facts:
+
+| Record | Fact asserted |
+|---|---|
+| **Property invite** | this person is invited to **this known property** |
+| **Staff login challenge** | this person is proving identity — **property scope has not been decided yet** |
+
+### Lifecycle of the new record
+
+```text
+challenge issued
+→ OTP verified
+→ authorized-property set resolved
+→ S2 scope decided
+→ selected property attached
+→ existing canonical session issuer called
+→ challenge consumed
+```
+
+**This is not a parallel session architecture.** Both paths still converge on the
+one existing issuer (E1). The new record only preserves the S1/S2 distinction
+until the decision has actually occurred. The existing property invite stays
+property-bound and deterministic.
+
+### Minimum invariants
+
+1. An unverified challenge has **no selected property**.
+2. A verified **multi-property** challenge **cannot be consumed without an
+   explicit selection**.
+3. A **single-property** user may be resolved automatically.
+4. Before consumption, the server **revalidates** that the selected property
+   remains in the active assignment set.
+5. **No session may be minted** from a challenge without a selected, currently
+   authorized property.
+6. The existing session issuer and **per-request assignment revalidation remain
+   unchanged**.
+
+---
+
+## G2 — Provenance ships now, in the same migration and slice
+
+> *"If it is deferred, it is likely never added."*
+
+Minimum fields on the new object:
+
+| Field | Purpose |
+|---|---|
+| `issuance_source` | copied from the `operator_session_invites` precedent (`070:64`) |
+| `issuance_reason` | copied from the same precedent (`070:48`) |
+| **`scope_resolution`** | **the new and important one** |
+
+`scope_resolution` must distinguish at least `single_active_assignment` from
+`explicit_staff_selection`.
+
+**Why it is the load-bearing field:** without it, the resulting property id again
+looks identical regardless of how it was chosen — which is precisely the
+laundering defect from E2 returning in a new table. This field is what makes
+deliberate selection and automatic resolution distinguishable in a later audit.
+
+**Copy the operator-invite precedent where its meaning fits. Do not invent a
+broad new vocabulary for completeness.**
+
+---
+
+## G3 — Backlog priority ruling
+
+**Explicitly not batched** — different risk classes, different prerequisites.
+
+| | Item | Priority | Ruling |
+|---|---|---|---|
+| **A** | Two shell scripts bypassing the guard | **P1 containment — first repo change** | *"A standalone script capable of connecting to Postgres must not have an unguarded path to production."* Resolve **before** the S2 database work. **Do not rely on documentation saying not to run them.** |
+| **B** | Dead harness + missing assertion floors | **P1 proof integrity — one problem** | The two-line fix **must not ship alone**; fixing one harness while 104 others can pass with zero assertions preserves the defect. Required shape: *test completes → assertion count must exceed an explicit floor → otherwise fail.* Need not block the first line of S2 coding, **but must be resolved before any S2 result is called Proven.** **Do not hand-add floors to 104 files** before identifying the common runner or enforcement boundary. |
+| **C** | Migration staged outside `migrations/` | **Release blocker for the next migration-bearing deployment** | *"A migration that must be manually moved into place is not governed migration infrastructure. A README reminder is not an execution boundary."* **Do not move or renumber it yet** — the live ledger ceiling is unverified. After the read-only pass it must either enter the runner as a reviewed migration with correct version and postconditions, **or be formally withdrawn.** *"'No one forgets to move the file' is not an acceptable deployment plan."* |
+| **D** | Migration 090 blanket portfolio grants | **P2 governance — inventory first** | **Do not clean up inside the S2 slice.** The read-only pass must first establish which rows exist, which properties they cover, whether the founders are *intended* to retain portfolio authority, whether role-management rights are intentional, and whether a canonical org-level or assignment-based replacement already exists. Then: define intended authority → establish canonical grants → compare effective permissions → deactivate obsolete rows → **preserve audit history.** **Solo's presence is not automatically wrong** if the founders are intentionally authorized there — *"the defect is that authority was created by a point-in-time blanket migration rather than a deliberate ongoing policy."* |
+| **E** | Unused `admin` enum value | **P3 schema hygiene** | **Do not** update users into the role merely because a comment promised it. **Do not** attempt removal now — Postgres enum removal is invasive and source shows no consumer. Record as unused and misleading; resolve when `users.role`, `users.platform_role`, property assignments and module entitlements are formally consolidated. |
+| **F** | Fixture number classified differently by two documents | **Depends on reachability — classify now** | Outside `555-01XX` **and** reachable through an active outbound path → **P1 containment.** Inside the reserved block, or unreachable → documentation inconsistency only. Normalize the number, apply the exchange-plus-line rule, record **one** classification. *"Do not bury a real dialable, outbound-reachable number in a later documentation batch."* |
+
+---
+
+## G4 — Documentation merge authorized
+
+**Merge before implementation.** *"Open findings are a reason to merge the
+record, not a reason to leave it on an unread branch."*
+
+**Merge the documentation file only. No code rides with it.**
+
+The document must clearly state: source-only · no live database queried ·
+findings not yet live-proven · open remediation status · the six rulings · the
+two retirement conditions for Finding 4 · the S2 acceptance conditions · the
+containment adapter's replacement condition · which decisions remain dependent on
+the read-only pass. *(All present as of this appendix; the document map and D1
+carry the labels, F5 the replacement condition, F7 the acceptance conditions.)*
+
+---
+
+## G5 — Authorized build order
+
+**The design is settled, but the S2 migration must not be written yet.** The
+live-source rule applies: query the Neon ledger → confirm actual live schema →
+establish the real migration ceiling → *then* write the migration.
+
+```text
+1. Merge the audit-documentation PR
+2. Close the two unguarded shell-script paths
+3. Run the single read-only Neon pass and commit its output
+4. Confirm the migration ceiling and actual login-invite schema
+5. Build the staff-login challenge record, provenance, S2 decision and route
+   behavior as ONE vertical slice
+6. Establish assertion-floor enforcement before accepting the S2 proof results
+7. Prove through isolated Postgres → real HTTP → browser
+8. Address migration 090 grants after the live authority inventory exists
+```
+
+**Steps 1 and 2 are unblocked now.** Steps 3–4 are blocked on a connection
+string. Step 5 is blocked on step 4.
+
+**Keep the S2 build narrow.** Do not pull the 090 grants, the enum cleanup, the
+phone-fixture dispute, or the staged unrelated migration into it.
+
+---
+
+## G6 — Correction to the false-green inventory (row 4)
+
+**An error in this report, found while scoping G3-A. Row 4 of the Section A
+false-green inventory is wrong in one respect.**
+
+It states: *"`setup_fresh_record_and_prove.sh` sets `set -e`; **`setup_clean_qa_record.sh`
+does not**, so a failed step there continues silently with an empty variable."*
+
+**Both scripts set `-e`** — `setup_clean_qa_record.sh:14` and
+`setup_fresh_record_and_prove.sh:5`, both top-level and unconditional. The claim
+that one lacks it is false, and the "continues silently with an empty variable"
+consequence does not follow.
+
+**The pipe finding stands, and is sharper than originally stated.** Neither
+script sets `pipefail`. Without it a pipeline's exit status is that of the *last*
+command, so `curl … | head` reports `head`'s success and `set -e` never fires —
+`set -e` is present but **ineffective across exactly the pipes the row is about**.
+That is a more dangerous shape than a missing `set -e`, because the script
+appears defended.
+
+Corrected row 4 should read: *both scripts set `-e`; neither sets `pipefail`;
+therefore `curl`-into-`head`/`grep` pipes mask failures despite the apparent
+guard.* This matters for G3-A, which is now the first repo change.
+
+---
+
+## G7 — Citation provenance
+
+`Property Spine Master Document.docx` is cited three further times in this
+ruling. **Still not in the repository** (F9, D6). Its claims remain **external
+and unverified from source.** The in-repo checks continue to hold: the build
+protocol requirement in G5 matches §30 and §33 and `CLAUDE.md`'s Definition of
+Done.
+
+---
+
+**Proof level of Appendix G: Reported** for the ruling (G1–G5, G7);
+**Locally exercised** for G6, which is read directly from the two scripts.
