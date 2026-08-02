@@ -43,7 +43,7 @@
 // ════════════════════════════════════════════════════════════════════
 "use strict";
 
-const { buildMetric } = require("./metric_contract");
+const { buildMetric, FUNNEL_CONTRACTS } = require("./metric_contract");
 const { resolveChains, journeyFinalStatus } = require("./tour_demand");
 const {
   opportunityFunnelRows, aggregateOpportunityFunnel, MISSING_CANONICAL_FACTS,
@@ -304,6 +304,9 @@ async function conversionFunnels(pool, window) {
 
   return {
     state: "ok",
+    //  THE FROZEN CONTRACTS ride the response by reference — the browser and
+    //  every other reader consume the meaning, never re-derive it.
+    contracts: FUNNEL_CONTRACTS,
     //  The opportunity rows the Funnel 2 aggregate is computed from. Published
     //  so the aggregate can be RECONCILED against its own inputs rather than
     //  trusted — every population count above is derivable from these rows.

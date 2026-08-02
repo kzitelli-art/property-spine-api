@@ -317,8 +317,8 @@ const mkWindow = (property_id, start, end, asOf) => ({
     ok(a1.rows.every((r) => r.as_of_utc === W.as_of_utc), "every row carries the as_of it was read at");
 
     console.log("\n── ONE BOUNDED SNAPSHOT, NO N+1 ─────────────────────────");
-    //  12 total = 10 MATERIAL reads + 2 snapshot-metadata probes taken at the
-    //  open and close to prove the snapshot never moved.
+    //  PRODUCTION PATH: 10 material reads, NO probes — the two snapshot probes
+    //  are proof instrumentation and are gated out of the response path.
     //    funnel    (6): conversions, tours, tour_events, scheduled_tours,
     //                   scheduled_tour_revisions, lease_applications
     //    lifecycle (4): conversions, lifecycle_events, obligations,
@@ -331,7 +331,7 @@ const mkWindow = (property_id, start, end, asOf) => ({
     let queries = 0;
     const counting = { query: (...a) => { queries++; return c.query(...a); } };
     await opportunityFunnelRows(counting, W);
-    ok(queries === 12, `the whole property projects in ${queries} queries (10 material + 2 snapshot probes)`);
+    ok(queries === 10, `the PRODUCTION path projects in ${queries} material queries — probes are proof-only`);
     const snap = await appointmentJourneySnapshot(c, { property_id: P });
     ok(snap.opportunity_count >= 4,
       `across ${snap.opportunity_count} opportunities — so the count is NOT per-opportunity`);
@@ -377,7 +377,7 @@ const mkWindow = (property_id, start, end, asOf) => ({
       "and never falls back to the mutable conversion status to fill a gap");
 
     console.log("\n── THE SNAPSHOT CONTRACT ────────────────────────────────");
-    const snapRun = await opportunityFunnelRows(c, W);
+    const snapRun = await opportunityFunnelRows(c, W, { prove_snapshot: true });
     ok(snapRun.snapshot.stable_across_all_reads === true,
       "the LAST material read saw the same database snapshot as the FIRST");
     ok(snapRun.snapshot.transaction_owner === "caller",
@@ -410,7 +410,7 @@ const mkWindow = (property_id, start, end, asOf) => ({
 
     const W2 = mkWindow(propId, "2000-01-01T00:00:00Z", "2100-01-01T00:00:00Z",
                         new Date().toISOString());
-    const poolRun = await opportunityFunnelRows(pool, W2);
+    const poolRun = await opportunityFunnelRows(pool, W2, { prove_snapshot: true });
     ok(poolRun.snapshot.isolation_level === "repeatable read",
       `a pool-backed read runs at REPEATABLE READ, not read committed (${poolRun.snapshot.isolation_level})`);
     ok(poolRun.snapshot.read_only === true,

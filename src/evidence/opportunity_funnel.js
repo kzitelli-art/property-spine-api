@@ -147,7 +147,12 @@ async function snapshotMeta(client) {
            backend_pid: r.backend_pid };
 }
 
-async function withCoherentSnapshot(q, fn) {
+//  `probe` gates the two snapshot-metadata reads (pg_current_snapshot at open
+//  and close). They are PROOF INSTRUMENTATION — the isolation level itself is
+//  set by the BEGIN and needs no query to be true — so the production response
+//  path skips them rather than paying two diagnostic round-trips to preserve
+//  an assertion count.
+async function withCoherentSnapshot(q, fn, { probe = false } = {}) {
   //  Discriminate a POOL from a CLIENT. Both expose connect(), so that alone
   //  is not the test — a pg Client throws "cannot reuse a client" on a second
   //  connect(). Pool-specific counters are the reliable marker.
@@ -156,20 +161,22 @@ async function withCoherentSnapshot(q, fn) {
     const client = await q.connect();
     try {
       await client.query("begin transaction isolation level repeatable read read only");
-      const opened = await snapshotMeta(client);
+      const opened = probe ? await snapshotMeta(client)
+        : { isolation: "repeatable read", snapshot_marker: null, backend_pid: null };
       const out = await fn(client, { ...opened, owner: "opportunity_funnel" });
-      const closed = await snapshotMeta(client);
+      const closed = probe ? await snapshotMeta(client) : opened;
       await client.query("commit");
-      return { out, opened, closed, owner: "opportunity_funnel" };
+      return { out, opened, closed, probed: probe, owner: "opportunity_funnel" };
     } catch (e) {
       await client.query("rollback").catch(() => {});
       throw e;
     } finally { client.release(); }
   }
-  const opened = await snapshotMeta(q);
+  const opened = probe ? await snapshotMeta(q)
+    : { isolation: null, snapshot_marker: null, backend_pid: null };
   const out = await fn(q, { ...opened, owner: "caller" });
-  const closed = await snapshotMeta(q);
-  return { out, opened, closed, owner: "caller" };
+  const closed = probe ? await snapshotMeta(q) : opened;
+  return { out, opened, closed, probed: probe, owner: "caller" };
 }
 
 /**
@@ -179,17 +186,20 @@ async function withCoherentSnapshot(q, fn) {
  * `window` is a resolveOperatingWindow() result; property_id and as_of are
  * taken from it, never from a caller-supplied value.
  */
-async function opportunityFunnelRows(pq, window) {
+async function opportunityFunnelRows(pq, window, { prove_snapshot = false } = {}) {
   const result = await withCoherentSnapshot(pq, (q, meta) =>
-    readOpportunityFunnel(q, window, meta));
+    readOpportunityFunnel(q, window, meta), { probe: prove_snapshot });
   return {
     ...result.out,
     snapshot: {
       isolation_level: result.opened.isolation,
       backend_pid: result.opened.backend_pid,
       snapshot_marker: result.opened.snapshot_marker,
-      //  Proof that the LAST read saw the same snapshot as the FIRST.
-      stable_across_all_reads: result.opened.snapshot_marker === result.closed.snapshot_marker,
+      //  Proof that the LAST read saw the same snapshot as the FIRST. Only
+      //  meaningful when probed; null otherwise, never claimed.
+      stable_across_all_reads: result.probed
+        ? result.opened.snapshot_marker === result.closed.snapshot_marker : null,
+      probed: result.probed,
       transaction_owner: result.owner,
       read_only: result.owner === "opportunity_funnel",
     },

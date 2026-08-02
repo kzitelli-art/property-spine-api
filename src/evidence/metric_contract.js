@@ -31,12 +31,19 @@
 
 const { TZ_UNAVAILABLE } = require("../shared/property_timezone");
 
-//  'partial' is a fourth honest state, distinct from the other three: the
-//  cohort was measured and its COUNTS are exact, but unresolved evidence can
-//  still move the numerator or the denominator, so no rate is published. It is
-//  not an error and not an absence — publishing a complete-looking percentage
-//  over only the resolved subset would be the lie it exists to prevent.
-const METRIC_STATES = Object.freeze(["ok", "partial", "unavailable", "unsupported"]);
+//  ── THE SHARED STATE VOCABULARY — one meaning across all four funnels ──
+//    ok           complete evidence, a real rate
+//    partial      counts exact, but unresolved/conflicting/untrackable or
+//                 inherited-attribution evidence could move the numerator or
+//                 denominator, so the rate is withheld
+//    empty        a real measurement of NOTHING: denominator zero. Not 0% —
+//                 "nothing converted" and "nothing was measured" are different
+//                 facts an operator acts on differently
+//    unavailable  the measurement could not be taken (no operating timezone)
+//    error        the read itself failed (authored by the section wrapper)
+//    unsupported  registered but structurally uncomputable, with the reason
+//  No funnel may invent its own interpretation of incomplete coverage.
+const METRIC_STATES = Object.freeze(["ok", "partial", "empty", "unavailable", "error", "unsupported"]);
 
 const ATTRIBUTION_MODELS = Object.freeze([
   "deduplicated_opportunity",   // one row per opportunity; partitions the population
@@ -222,9 +229,15 @@ function buildMetric({
   const isPartial = !!(partial && partial.is_partial);
   if (isPartial) rate = null;
 
+  //  THE EMPTY RULE. Denominator zero with nothing unresolved is a complete,
+  //  honest measurement of an empty cohort — state `empty`, rate null. If
+  //  unresolved evidence could still ADD rows, partial wins: the cohort is not
+  //  known to be empty, only currently empty.
+  const isEmpty = !isPartial && den === 0;
+
   return {
     ...base,
-    state: isPartial ? "partial" : "ok",
+    state: isPartial ? "partial" : (isEmpty ? "empty" : "ok"),
     ...(isPartial ? { reason: partial.reason || "unresolved evidence can change this metric", partial } : {}),
     numerator: num,
     denominator: den,
@@ -262,7 +275,109 @@ function unsupportedMetric(metric_code, reason, window = null) {
   };
 }
 
+// ════════════════════════════════════════════════════════════════════
+//  THE FOUR FROZEN FUNNEL CONTRACTS.
+//
+//  Contract and proof, not product design — the meanings below were each
+//  established and accepted in their own cut; this freezes them in ONE place
+//  so no funnel can drift back to a convenient private interpretation of
+//  source, window, conversion, pending, terminal or missing evidence.
+//  Changing ANY field here requires a new contract_version AND a new
+//  metric_code version, because the old number and the new one would not be
+//  comparable.
+// ════════════════════════════════════════════════════════════════════
+
+const SHARED_CONTRACT = Object.freeze({
+  property_scope: "server-derived from the resolved staff session / operating window; a client-supplied property id is never authority",
+  date_window: "property-local operating window, half-open [start, end), resolved through resolveOperatingWindow; no UTC fallback",
+  as_of: "one server-authored as_of_utc governs every row and every aggregate; outcomes are observed through it",
+  rate_suppression_rule: "rate = null whenever conflicting, untrackable, unresolved or inherited-attribution evidence could change the numerator or the denominator; known counts stay visible; a percentage over only the trackable subset is never presented as the whole cohort",
+  zero_denominator_rule: "denominator 0 with nothing unresolved => state 'empty', rate null — never 0%",
+  response_states: ["ok", "partial", "empty", "unavailable", "error"],
+  snapshot: "all four funnels read one coherent property-scoped snapshot (REPEATABLE READ, READ ONLY on the pool path); aggregates reconcile to their own rows",
+});
+
+const SOURCE_ATTRIBUTION_BASIS = Object.freeze({
+  basis: "originating_lead_source",
+  grain: "lead",
+  counted_unit: "opportunity",
+  independently_recorded_per_opportunity: false,
+  meaning: "lead_source_touches records a LEAD's arrival from a source. Later opportunities on the same lead INHERIT it. It is inherited context, not exact opportunity acquisition attribution; segmented rates go partial when inheritance could change them.",
+});
+
+const FUNNEL_CONTRACTS = Object.freeze({
+  f1: Object.freeze({
+    metric_code: "s9.conversion.all_opportunity_to_completed_tour.v1",
+    contract_version: "c1",
+    counted_entity: "durable leasing opportunity (leasing_conversions.id)",
+    cohort_entry_fact: "the opportunity was opened",
+    cohort_entry_timestamp: "leasing_conversions.opened_at",
+    numerator_fact: "at least one OBSERVED visit — recorded attendance from the canonical appointment-journey projection; never a tour status, never elapsed time",
+    numerator_timestamp: "the occurrence's own observed_at",
+    deduplication_key: "leasing_conversions.id",
+    source_attribution_basis: SOURCE_ATTRIBUTION_BASIS,
+    pending_definition: "a real unresolved act from the lifecycle authority (future appointment, visit awaiting outcome, open obligation, application underway) — never 'not terminal', never a live-looking tour status",
+    terminal_definition: "ordered lifecycle events with exact conversion_id (migration 128); mutable status labels are never evidence",
+    conflict_conditions: "competing or contradictory appointment attribution; duplicate terminal events at one sequence",
+    untrackable_conditions: "reschedule cycles; parents outside the opportunity; historical events without exact attribution",
+    coverage_rules: "conflict and untrackable rows are counted in their own populations, never discarded",
+    ...SHARED_CONTRACT,
+  }),
+  f2: Object.freeze({
+    metric_code: "s9.conversion.opportunity_observed_visit_to_submitted_application.v1",
+    contract_version: "c1",
+    counted_entity: "durable leasing opportunity (leasing_conversions.id)",
+    cohort_entry_fact: "FIRST observed visit",
+    cohort_entry_timestamp: "earliest attended occurrence's observed_at inside the window",
+    numerator_fact: "a submitted application EXACTLY linked by lease_applications.conversion_id; leasing_lead_id never awards credit, only flags ambiguity",
+    numerator_timestamp: "lease_applications.submitted_at (durable milestone, migration 124)",
+    deduplication_key: "leasing_conversions.id",
+    source_attribution_basis: SOURCE_ATTRIBUTION_BASIS,
+    pending_definition: "same lifecycle-authority definition as f1",
+    terminal_definition: "same event authority as f1",
+    conflict_conditions: "same as f1, plus a chain whose members carry different opportunities",
+    untrackable_conditions: "same as f1; unlinked applications that MAY belong make the row ambiguous and the cohort partial",
+    coverage_rules: "the eight appointment-evidence populations sum exactly to the row count; no_appointment splits by lifecycle events into terminal/live/unknown",
+    ...SHARED_CONTRACT,
+  }),
+  f3: Object.freeze({
+    metric_code: "s9.conversion.submitted_application_to_approved.v1",
+    contract_version: "c1",
+    counted_entity: "lease application (lease_applications.id)",
+    cohort_entry_fact: "the submission milestone was durably reached",
+    cohort_entry_timestamp: "lease_applications.submitted_at — never created_at",
+    numerator_fact: "the approval milestone was durably reached; a later withdrawal does not erase it; a DENIAL never counts",
+    numerator_timestamp: "lease_applications.approved_at",
+    deduplication_key: "lease_applications.id",
+    source_attribution_basis: SOURCE_ATTRIBUTION_BASIS,
+    pending_definition: "submitted, not yet approved, not terminal",
+    terminal_definition: "the canonical application ladder's TERMINAL set, by reference from the one writer module",
+    conflict_conditions: "none defined at this grain",
+    untrackable_conditions: "reached submission with no submitted_at (pre-milestone history) — undateable, never assumed into a window",
+    coverage_rules: "undateable milestones are counted untrackable and make the metric partial",
+    ...SHARED_CONTRACT,
+  }),
+  f4: Object.freeze({
+    metric_code: "s9.conversion.approved_application_to_executed_lease.v1",
+    contract_version: "c1",
+    counted_entity: "lease application (lease_applications.id)",
+    cohort_entry_fact: "the approval milestone was durably reached",
+    cohort_entry_timestamp: "lease_applications.approved_at — never decided_at, which a denial also sets",
+    numerator_fact: "an admitted, non-void executed_lease_record correlated by application_id",
+    numerator_timestamp: "executed_lease_records.executed_at",
+    deduplication_key: "lease_applications.id",
+    source_attribution_basis: SOURCE_ATTRIBUTION_BASIS,
+    pending_definition: "approved, not executed, not terminal",
+    terminal_definition: "same ladder authority as f3",
+    conflict_conditions: "none defined at this grain",
+    untrackable_conditions: "reached approval with no approved_at; executed leases with no application_id stay visible as uncorrelated",
+    coverage_rules: "same as f3",
+    ...SHARED_CONTRACT,
+  }),
+});
+
 module.exports = {
   METRIC_STATES, ATTRIBUTION_MODELS, METRIC_DEFINITIONS,
+  FUNNEL_CONTRACTS, SOURCE_ATTRIBUTION_BASIS,
   buildMetric, unsupportedMetric, definitionFor, versionOf,
 };
