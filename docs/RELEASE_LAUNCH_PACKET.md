@@ -389,3 +389,88 @@ Reconciliation: required, but as its own lane. NOT here.
 
 **Not done, deliberately:** no ledger edit, no dropped object, no replacement
 121, no AI-leasing merge to normalise the schema.
+
+---
+
+# WINDOW 1 — ABORTED AT THE FIRST GATE. What happened and what changed.
+
+**2026-08-02, 2:00–3:00 PM ET. Operator: Kameron Zitelli.**
+
+```text
+T0 (app PR #26 merged) ......... 2:01:43 PM ET   app 9e25382 Deploy live 2:01 PM
+Mismatch honesty check ......... FAILED ~2:06 PM
+App rolled back ................ 30e550b live 2:05 PM
+API PR #32 ..................... NEVER MERGED. Production stayed f85f70b, green.
+Deployed smoke ................. NEVER RAN.
+Production QA records .......... NONE created.
+Repo state corrected ........... PR #27 merged → app main f662550,
+                                 tree byte-identical to 30e550b
+```
+
+**Total exposure: four minutes, one surface, no writes.** The app-first ordering
+did exactly the job it was chosen for — it put the defect in front of a human
+before the API moved, when rollback was one button and cost nothing.
+
+## What the gate caught
+
+The check asks one question: does the new app tell the truth while the old API
+lacks the route? The screen showed an honest `HTTP 404` banner **and**
+"Nothing needs you right now." at the same time.
+
+The loader migration was correct — `loadObligations` throws. **Two callers
+caught the throw and substituted `[]`**, so the valid-empty branch rendered on a
+*failed* read. The swallow moved from the loader into its consumers.
+
+## The eight-consumer audit — one trust failure, three shapes
+
+| Shape | Sites | Behaviour on a failed read |
+|---|---|---|
+| Fabricated empty | `renderMyWork`, `pvRenderMyWork` | `catch → obs=[]` → "Nothing needs you right now." |
+| Silent no-op | `openManagementDoor` | `.then()` with no `.catch` → unhandled rejection, prior content left standing |
+| Stale content | 5 desk renderers | threw to a toast; the toast fades, the half-rendered desk does not |
+
+All eight now route through one treatment. `loadObligations` still **throws** —
+the honesty stays in the loader. Legitimate empty (a successful zero-row read)
+is untouched and has its own assertion.
+
+## Two pre-existing defects found — neither introduced by this lane
+
+1. **The false empty is older than the migration.** Both `catch(e){ obs=[] }`
+   blocks are on `main` today. They were only ever harmless because the old
+   `tryJSON(path, [], …)` never threw — it already returned `[]`. **Production
+   has always rendered "Nothing needs you right now." on a failed obligations
+   read.** The migration made the loader honest; the callers re-created the
+   swallow one layer up.
+2. **`renderMyWork` could never render a row.** It called `items.map(row)` while
+   its row-builder is named `obRow`, so the moment My Work had anything to show
+   it threw `ReferenceError: row is not defined` — swallowed by
+   `try{ renderMyWork(); }catch(e){}`. On `main` today at `:10705`. The main My
+   Work surface has only ever been able to show the empty line or nothing.
+   Fixed: one word, one site. `pvRenderMyWork` defines `row` locally and was
+   always fine.
+
+## Proof after the repair
+
+| Harness | Result |
+|---|---|
+| `obligations_failure_state_proof.browser.js` | **61 passed · 0 failed** — 8/8 surfaces + execution floor |
+| `obligations_security_browser_proof.browser.js` | **25 passed · 0 failed** — floor 22 |
+| App suite | **749 passed · 0 failed** — 17 harnesses, 0 red |
+
+Every case: render real obligation content → force the read to fail → prove the
+prior content is gone → prove a visible unavailable state → prove no
+confident-empty wording. **The seeding step is the proof** — a clean page would
+not show whether stale data survives.
+
+## Candidates for window 2
+
+```text
+App PR #28  head 07b4880   base main f662550   (replaces #26)
+API PR #32  head f6ab9f6   UNCHANGED
+Proposed:   today 4:00–5:00 PM ET, app first, API immediately after
+Escalation: actual T0 + 10 min      Rollback decision: actual T0 + 15 min
+```
+
+**X remains an owner-approved conservative 5 minutes.** Window 1 produced no
+measurement — the API never deployed. The first real API deploy duration gets
+recorded in window 2 and replaces the estimate.
