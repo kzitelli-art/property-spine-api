@@ -31,6 +31,12 @@
 // Deps: { pool }. No obligation engine needed for the rail itself (obligations are a
 // later slice); kept dependency-free so it is trivially testable.
 
+//  Required directly rather than injected: the inbound path receives this
+//  service from server.js, which this cut may not modify. A module-level
+//  require adds the capability without touching that wiring.
+const { openInboundOpportunityDecision, DECISION_DETAIL } =
+  require("./inbound_opportunity_decision");
+
 module.exports = function leasingLifecycleService(deps) {
   const { pool } = deps;
   if (!pool) throw new Error("leasing_lifecycle_service requires { pool }");
@@ -174,9 +180,13 @@ module.exports = function leasingLifecycleService(deps) {
 
   // ── REOPEN ────────────────────────────────────────────────────────────────
   // From an operator action OR a genuine qualifying inbound (source_comm_event_id set).
-  async function reopen({ conversationId, propertyId, conversionId, actorType = "operator", actorUserId, sourceCommEventId, idempotencyKey }) {
+  //  ONE reopen implementation, usable inside a caller's transaction. The
+  //  public reopen() is this function wrapped in tx(), so an operator reopen and
+  //  a decision-resolution reopen cannot diverge.
+  async function reopenInTransaction(client, { conversationId, propertyId, conversionId,
+      actorType = "operator", actorUserId, sourceCommEventId, idempotencyKey }) {
     if (!["operator","system","agent"].includes(actorType)) throw httpErr(400, "Invalid actor_type.");
-    return tx(async (client) => {
+    {
       const conv = await lockConversation(client, conversationId, propertyId);
       const opp = await requireOpportunity(client, { conversionId, conv, propertyId });
       const { closed } = await currentClosureState(client, conversationId, opp.id);
@@ -194,7 +204,11 @@ module.exports = function leasingLifecycleService(deps) {
       )).rows[0];
       if (!row) throw httpErr(409, "Duplicate reopen (idempotency key already used).");
       return { ok: true, event: row };
-    });
+    }
+  }
+
+  async function reopen(args) {
+    return tx(async (client) => reopenInTransaction(client, args));
   }
 
   // ── LINK TOUR ─────────────────────────────────────────────────────────────
@@ -339,13 +353,41 @@ module.exports = function leasingLifecycleService(deps) {
       //  Is there anything to reopen at all? Reported so the refusal is
       //  visible as a real withheld act rather than a silent nothing.
       const { closed } = await currentClosureState(client, conversationId);
+      if (!closed) return { reopened: false, refused: false };
+
+      //  ── THE OPERATING SEAM ──────────────────────────────────────────
+      //  Refusing is not enough. Without this, the reply is durable and
+      //  INVISIBLE: the queue classifies the conversation closed_not_fit with
+      //  waiting_on='none', so nobody owns the next action. Open an explicit,
+      //  owned decision IN THIS SAME TRANSACTION, so the message and the
+      //  decision commit together or not at all.
+      //  SAVEPOINT: the prospect's message must survive regardless. Without
+      //  one, a failed decision insert aborts the WHOLE inbound transaction in
+      //  Postgres, so catching the error in JavaScript would not be enough —
+      //  every later statement would fail too.
+      let decision = null;
+      await client.query("savepoint s9_inbound_decision");
+      try {
+        const conv = (await client.query(
+          `select id, property_id, person_id from conversations where id=$1`, [conversationId])).rows[0];
+        decision = await openInboundOpportunityDecision(client, {
+          property_id: conv.property_id, person_id: conv.person_id,
+          conversation_id: conversationId, source_comm_event_id: sourceCommEventId,
+        });
+        await client.query("release savepoint s9_inbound_decision");
+      } catch (e) {
+        await client.query("rollback to savepoint s9_inbound_decision");
+        decision = { ok: false, error: e.message };
+      }
+
       return {
         reopened: false,
-        refused: closed,
-        refusal_code: closed ? "opportunity_identity_required" : null,
-        refusal_reason: closed
-          ? "A closed opportunity exists on this conversation, but an inbound message does not identify WHICH opportunity. Reopening requires an explicit opportunity id; it is never chosen automatically."
-          : null,
+        refused: true,
+        refusal_code: "opportunity_identity_required",
+        refusal_reason: "A closed opportunity exists on this conversation, but an inbound message does not identify WHICH opportunity. Reopening requires an explicit opportunity id; it is never chosen automatically.",
+        decision_opened: !!(decision && decision.ok),
+        decision_obligation_id: decision && decision.obligation_id ? decision.obligation_id : null,
+        operator_prompt: DECISION_DETAIL,
       };
     }
 
@@ -385,7 +427,7 @@ module.exports = function leasingLifecycleService(deps) {
     return { ok: true };
   }
 
-  return { closeNotFit, reopen, linkTour, cancelTour, correctTourLink,
+  return { closeNotFit, reopen, reopenInTransaction, linkTour, cancelTour, correctTourLink,
            maybeReopenOnQualifyingInbound, assertNotSoftClosedForTour,
            // exported for testing / reuse
            _internals: { lockConversation, nextSequence, currentClosureState, assertTourMatches } };
