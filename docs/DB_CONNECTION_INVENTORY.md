@@ -2122,3 +2122,83 @@ Done.
 
 **Proof level of Appendix G: Reported** for the ruling (G1–G5, G7);
 **Locally exercised** for G6, which is read directly from the two scripts.
+
+---
+
+# Appendix H — Migration chain cannot rebuild from an empty database
+
+**Reproduced against a real empty Postgres 16.13** while building an unrelated
+proof. Filed here because this is the baseline/clean-database lane, and because
+it is the concrete counterpart to A090-2's thesis: there, a ledger entry did not
+prove applied schema; here, **the migrations themselves do not reconstruct.**
+
+**Not fixed. Do not patch `012` on a feature branch.** The canonical remedy —
+repair in place, or a sanitized baseline — is the baseline owner's call.
+
+## The failure
+
+| | |
+|---|---|
+| **Failing migration** | `migrations/012_bank_intake.sql` |
+| **Exact error** | `ERROR: column "yardi_code" does not exist` (at `012_bank_intake.sql:42`) |
+| **Reproducible from empty?** | **Yes** — `initdb` → `create database` → `node migrations/migrate.js` |
+
+## Mechanism
+
+```text
+001_baseline.sql:238   create table if not exists vendors (…)   ← no yardi_code
+012_bank_intake.sql:33 create table if not exists vendors (…)   ← WITH yardi_code
+                       the table already exists, so the whole
+                       declaration is SILENTLY SKIPPED
+012_bank_intake.sql:43 create unique index … on vendors (yardi_code)
+                       → the column was never added → ERROR
+```
+
+`create table if not exists` is being used as though it were additive. It is
+not: when the table exists, **every column in the new declaration is discarded
+without warning.** The failure only surfaces at the first statement that depends
+on one.
+
+Observed `vendors` columns on the fresh database after `001`:
+`id, preferred, created_at, phone, email, note, insurance_status, name, trade` —
+no `yardi_code`.
+
+## Applied and skipped
+
+**109 of 122 applied; 15 skipped.** Applying files individually (rather than
+through the runner, which halts on first failure) separates the causes:
+
+| Class | Files | Cause |
+|---|---|---|
+| **Genuine defect** | `012` | the mechanism above |
+| **Cascade from 012** | `017`, `021`, `022`, `023`, `031`, `037` | need `bank_transactions` / `bank_accounts`, which `012` never created |
+| **Artifact of per-file application** | `053`, `054`, `087` | ledger-head preflight (`expected head NNN`) — these assert the recorded head before running, and per-file application records versions afterwards. **Through the real runner they pass.** |
+| **Cascade from those artifacts** | `077`, `106`, `110`, `120` | need objects `053`/`054` create |
+
+**So the honest count is 1 genuine defect, 6 real cascade, 8 method artifacts —
+not 15 broken migrations.**
+
+## What this implies about production
+
+Production's `vendors` **does** carry `yardi_code`, or the banking features
+would not work. Since no migration in this repository can have added it on a
+chain that halts at `012`, **it arrived by a path not represented in
+`migrations/`** — a hand-run statement, a console edit, or an since-edited file.
+That is the same class of gap A090-2 anticipated, now observed rather than
+inferred.
+
+## Intersection with other lanes
+
+**None with Ask Spine.** Its table closure — `obligations`, `properties`,
+`users`, `property_team_assignments`, `staff_sessions`, `persons` — was checked
+mechanically against every skipped file for `create table` / `alter table`
+matches. **No match.** The Ask Spine proof therefore stands on a complete
+schema for the tables it uses.
+
+## Suggested checks for whoever owns the remedy
+
+1. Audit every `create table if not exists` in `migrations/` for the same
+   shape — a re-declaration that assumes it is additive.
+2. Decide: repair `012` in place, or cut a sanitized baseline and re-anchor.
+3. Whatever is chosen, add a **rebuild-from-empty** check so this cannot regress
+   silently. That check is the one thing that would have caught it years ago.
