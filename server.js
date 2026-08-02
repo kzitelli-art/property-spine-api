@@ -745,49 +745,20 @@ app.get("/events", async (req, res) => {
 //  a real workflow needs it.
 
 // ── read one obligation (with the event that caused it — proves causality) ──
-// ── CLAIM an obligation ──
-// The simplified claim mechanic: claiming IS just the first update to the
-// already-existing obligation. Stamps assigned_user_id and flips open →
-// in_progress. An agent claims it for themselves; a manager can claim it
-// for someone by passing a different user_id. Default behavior is "claim".
+// ── RETIRED: PATCH /obligations/:id/{claim,satisfy,complete} ────────
+//  All three sat behind the portfolio-wide shared OPERATOR_KEY with no
+//  property, module or actor authority, acting on an obligation by ID alone.
+//  claim additionally took the assignee from the REQUEST BODY, so a key
+//  holder could claim any work, on any property, as any user.
 //
-// Body: { user_id }   — the user taking ownership (required)
-// Guards: the obligation must exist, the user must exist, and it must not
-// already be claimed by someone else (re-claiming the same person is a no-op;
-// a manager reassigning is a separate explicit action, kept simple for now).
-app.patch("/obligations/:id/claim", async (req, res) => {
-  const { user_id } = req.body || {};
-  if (!user_id) return res.status(400).json({ error: "user_id is required (who is claiming it)" });
-  try {
-    const o = await pool.query("select * from obligations where id=$1", [req.params.id]);
-    if (o.rows.length === 0) return res.status(404).json({ error: "obligation not found" });
-    const obligation = o.rows[0];
-
-    const u = await pool.query("select id, name from users where id=$1", [user_id]);
-    if (u.rows.length === 0) return res.status(404).json({ error: "user not found" });
-
-    // Already claimed by someone else → conflict (don't silently steal it).
-    if (obligation.assigned_user_id && obligation.assigned_user_id !== user_id) {
-      return res.status(409).json({
-        error: "already claimed by another user",
-        assigned_user_id: obligation.assigned_user_id,
-      });
-    }
-
-    const r = await pool.query(
-      `update obligations
-         set assigned_user_id = $1,
-             status = case when status = 'open' then 'in_progress' else status end,
-             updated_at = now()
-       where id = $2
-       returning *`,
-      [user_id, req.params.id]
-    );
-    res.json(r.rows[0]);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+//  claim is replaced by PATCH /operator/obligations/:id/claim (self-claim,
+//  session-derived actor), registered with the other operator doors.
+//
+//  satisfy and complete are NOT replaced — neither had a product caller. The
+//  canonical services satisfyObligation and completeObligation are UNCHANGED
+//  and still enforce required inputs and the conversion rail; they are proven
+//  directly rather than through an exposed door kept alive for a test to call.
+//  See docs/SECURITY_OBLIGATIONS_ROUTE.md.
 
 // ════════════════════════════════════════════════════════════════════
 //  USERS (minimal) — needed so obligations can belong to real people.
@@ -847,61 +818,11 @@ app.get("/users", async (_req, res) => {
 //   proof — the actual proof (string or object). Stored on a durable event.
 // Delegates to the shared satisfyObligation helper — the one place this logic
 // lives. The input must currently be in the obligation's required_inputs.
-app.patch("/obligations/:id/satisfy", async (req, res) => {
-  const { input, proof } = req.body || {};
-  if (!input) return res.status(400).json({ error: "input is required (which required input this satisfies)" });
-
-  const client = await pool.connect();
-  try {
-    await client.query("begin");
-    const out = await satisfyObligation(client, { obligation_id: req.params.id, input, proof });
-    await client.query("commit");
-    res.json({
-      ...out.obligation,
-      satisfied_input: out.satisfied_input,
-      can_complete: out.remaining.length === 0,   // hint for the UI
-    });
-  } catch (e) {
-    await client.query("rollback");
-    if (e.code === "NOT_FOUND") return res.status(404).json({ error: e.message });
-    if (e.code === "NOT_OUTSTANDING") return res.status(409).json({ error: e.message, required_inputs: e.required_inputs });
-    if (e.code === "BAD_INPUT") return res.status(400).json({ error: e.message });
-    res.status(500).json({ error: e.message });
-  } finally {
-    client.release();
-  }
-});
-
 // ── COMPLETE an obligation (the proof gate) ──
 // Body: { completed_by? }
 // Refuses with 409 if any required_inputs remain — naming what's still owed.
 // On success: status='complete', completed_at=now(). The Completed Record.
-app.patch("/obligations/:id/complete", async (req, res) => {
-  const { completed_by } = req.body || {};
-  const client = await pool.connect();
-  try {
-    await client.query("begin");
-    const completed = await completeObligation(client, { obligation_id: req.params.id, completed_by });
-    await client.query("commit");
-    res.json(completed);
-  } catch (e) {
-    await client.query("rollback");
-    if (e.code === "NOT_FOUND") return res.status(404).json({ error: e.message });
-    if (e.code === "ALREADY_COMPLETE") return res.status(409).json({ error: e.message });
-    // CLOSURE BOUNDARY (R2): a conversion-linked obligation refused by the engine
-    // is a WRONG-DOOR condition, not a server fault. Surface the honest 409 the
-    // error already carries (err.httpStatus) rather than a misleading 500.
-    if (e.code === "CONVERSION_RAIL_REQUIRED") return res.status(e.httpStatus || 409).json({ error: e.publicMessage || e.message });
-    if (e.code === "INPUTS_OUTSTANDING") return res.status(409).json({
-      error: e.message,
-      outstanding_inputs: e.outstanding_inputs,
-      hint: "satisfy each required input first (PATCH /obligations/:id/satisfy)",
-    });
-    res.status(500).json({ error: e.message });
-  } finally {
-    client.release();
-  }
-});// ════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════
 //  REVENUE SIDE — all four blocks, paste-once.
 //  Order: leases+schedule -> payments+delinquency -> PM approval -> tenant linkage.
 //  Paste this ENTIRE file into server.js on the blank line ABOVE the
@@ -3116,6 +3037,7 @@ app.use("/", require("./src/agent/staff_agent")({ pool, staffAgentService }));
 // ── OBLIGATIONS (authenticated) — replaces the shared-key GET /obligations ──
 //  Property, modules and actor all come from the resolved staff session.
 app.use("/", require("./src/obligations/operator_obligations")({ pool }));
+app.use("/", require("./src/obligations/operator_obligation_actions")({ pool }));
 
 // ── THE ONE UNIT TURN PAGE (BUILD 6A) ────────────────────────────────────
 //  READ-ONLY consolidation of the Build 1-5 canonical reads. Creates no state
