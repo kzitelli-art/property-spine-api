@@ -1564,7 +1564,10 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // Slice 9 ruling 1A: the name says ASYNC. A sync-looking name returning a
   // Promise already cost one regression in a proof fixture; the next caller
   // does not get to make that mistake.
-  function loadPropertyOperatingTimezone(propertyId) {
+  // DECLARED async, not merely Promise-returning. A sync function that hands
+  // back a Promise reads as sync to every shape check and to every human
+  // skimming it — the exact trap ruling 1A was written to close.
+  async function loadPropertyOperatingTimezone(propertyId) {
     return loadPropertyOperatingTimeZone(pool, propertyId); // null = unconfigured
   }
 
