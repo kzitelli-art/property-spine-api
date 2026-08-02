@@ -213,3 +213,186 @@ Per the ruling, **no security code is written until this inventory is reviewed.*
 The proof requirements (eight cases, real Postgres, authenticated HTTP, explicit
 assertion floor, no global test-infrastructure expansion) are recorded above and
 unchanged.
+
+---
+
+# CORRECTION — the threat model was wrong (2026-08-02)
+
+**My earlier framing called this an "unauthenticated public endpoint." That is
+incorrect and is withdrawn.** I asserted it without checking for global
+middleware. The evidence and severity now follow.
+
+## The route is behind a fail-closed shared-key gate
+
+`server.js:147–162` applies a global operator gate to everything not explicitly
+allowlisted. `/obligations` is **not** allowlisted, so it is gated:
+
+```text
+OPERATOR_KEY unset in the environment
+→ 503  "Operator routes are locked…"      (fail closed, never silently open)
+
+missing or wrong x-operator-key
+→ 401  "Missing or wrong x-operator-key."
+
+valid shared OPERATOR_KEY
+→ route runs, and accepts a CLIENT-SUPPLIED property_id
+→ property_id may be changed, or omitted entirely
+→ omitting it removes the property predicate → cross-property read
+```
+
+`/operator/*` skips this gate deliberately (`isOperatorPath`), because those
+routes enforce staff sessions internally. Matching is exact-boundary, so
+`/operatorial` does not bypass it.
+
+## Corrected defect statement
+
+> **A shared-operator-key-protected route that trusts client-supplied property
+> scope, permitting cross-property reads to any holder of the portfolio-wide
+> key.**
+
+Not anonymous. Still a material isolation defect, because the key is
+**portfolio-wide** while the data is **property-scoped**.
+
+## Credential path — the browser does hold the shared key
+
+Established without printing or exposing any value:
+
+```text
+index.html:9787   $('opKey').value = localStorage.getItem('ps_operator_key')
+index.html:6339   const key = () => $('opKey').value.trim()
+index.html:6341   const headers = (extra={}) =>
+                    Object.assign(key() ? {'x-operator-key': key()} : {}, extra)
+index.html:9791   the value is persisted back to localStorage on change
+index.html:9966   removed on sign-out
+```
+
+So `loadObligations()` sends the **portfolio-wide shared key from browser
+localStorage**.
+
+**This contradicts the server's own stated policy.** `server.js:144` says *"we
+never put the raw OPERATOR_KEY in a browser."* That holds for `/operator/*`,
+which is exactly why those routes skip the key gate — but the legacy
+non-`/operator/` surface still requires the key, and the app supplies it from
+localStorage to satisfy that requirement.
+
+**Practical severity:** the key is portfolio-wide, persisted in browser
+localStorage, and unlocks a route that accepts client-supplied property scope.
+Anyone who obtains it — a departing employee, a shared workstation, an XSS on
+the page — can read obligations across **every** property.
+
+---
+
+# Sibling-route authority check — NEW FINDING, requires a ruling
+
+**The obligation security boundary is wider than the collection read, and it
+includes mutation.** Classified from current source:
+
+| Route | Credential | Derives property? | Derives module? | Cross-property act by ID? | Callers |
+|---|---|---|---|---|---|
+| `GET /obligations` `:733` | shared key | **no** — from `req.query` | **no** | **yes, by omitting `property_id`** | `loadObligations()` |
+| `GET /obligations/:id` `:761` | shared key | **NO** — `select * from obligations where id=$1` | **no** | **YES — any obligation, any property, by ID** | none found in-repo |
+| `PATCH /obligations/:id/claim` `:792` | shared key | **NO** — same shape | **no** | **YES — MUTATION** | app `index.html:14028` `claimObligation()` |
+| `PATCH /obligations/:id/satisfy` `:884` | shared key | **NO** | **no** | **YES — MUTATION** | none found in-repo |
+| `PATCH /obligations/:id/complete` `:913` | shared key | **NO** | **no** | **YES — MUTATION** | `smoke_release2/3.deployed.js` |
+
+**None of the four siblings calls `resolveStaffSession`. None filters by
+property. All act on an obligation by ID alone.**
+
+## Why this is escalated rather than absorbed
+
+The collection route is a **cross-property read**. The three `PATCH` routes are
+**cross-property writes** — a holder of the shared key who knows or guesses an
+obligation ID can claim, satisfy or complete work belonging to a property they
+have no authority over. That is a strictly more severe class than the finding
+this lane was opened for.
+
+**PR #32 therefore cannot claim the obligation boundary is closed by fixing the
+collection route alone.** Recorded here as required, and flagged for a ruling:
+
+> **Ruling requested.** The bounded check has revealed a shared authority defect
+> beyond the approved scope — cross-property **mutation** on three routes. Per
+> the standing instruction, that is a reason to pause rather than proceed. The
+> collection fix may still proceed independently; the question is whether the
+> three `PATCH` routes and `GET /:id` join this lane, become their own lane, or
+> are deferred with an explicit accepted-risk note.
+
+**No route has been changed. No security code has been written.**
+
+---
+
+# Offline and demo interceptors — must be preserved deliberately
+
+Migrating `loadObligations()` to `/operator/obligations` will stop both
+client-side interceptors from matching, because both match on the literal
+`/obligations` path:
+
+| Site | Kind | Match | Returns |
+|---|---|---|---|
+| `index.html:5820` | offline / persona-preview | `clean==='/obligations'` or `/^\/obligations(\?\|$)/` | live local store via `obligationsForProperty(pid)` — explicitly *"Never DEMO_DB"* |
+| `index.html:10177` | demo | `clean==='/obligations'` or `/\/obligations(\?\|$)/` | `DEMO_DB.obligations` |
+
+**Neither reaches the network today.** If their matching is not updated, preview
+and demo would fall through to a live authenticated call — which is precisely
+the live-first violation §19–20 forbids in the opposite direction.
+
+Required regression proof:
+
+```text
+live signed-in path   → uses authenticated /operator/obligations
+preview path          → stays local and deterministic
+demo path             → stays local and deterministic
+no live session       → NO live obligations request is issued at all
+```
+
+---
+
+# Approved architecture — unchanged, recorded for implementation
+
+`GET /operator/obligations`, with:
+
+canonical staff-session authentication · property derived **only** from the
+resolved session · module entitlement derived **only** from the resolved
+session · **no authoritative `property_id` request parameter** · client property
+or module parameters rejected or ignored, never trusted · zero entitlement
+performs **no unrestricted query** · **explicit field projection — no
+`select *`** · honest unavailable in the app · the old collection route removed
+after the consumer migrates.
+
+**Only the filters `loadObligations()` actually needs.** It sends
+`property_id` (which becomes server-derived) and `status=open`. Legacy filters
+`assigned_role`, `assigned_user_id`, `unclaimed` have **no in-repo caller** and
+will not be carried forward.
+
+## Structure
+
+```text
+src/obligations/operator_obligations.js          route: session, validation, HTTP mapping
+src/obligations/operator_obligations_service.js  service: scoped query, filters, projection, ordering
+```
+
+Neither duplicates Ask Spine's service, and neither endpoint depends on the
+other. The canonical session resolver is reused; only the thin mounting pattern
+is copied.
+
+## Response envelope
+
+```json
+{ "items": [], "total": 0,
+  "scope": { "property_id": "server-derived", "modules": ["session-derived"] } }
+```
+
+Unavailable stays distinct from a valid empty array. The browser adapts `items`
+for its existing call sites.
+
+## Proof requirements (real Postgres, explicit floor, no global test changes)
+
+1. no credential → denied by the correct perimeter
+2. wrong shared key on the retired route → denied while it still exists
+3. valid staff session for Property A → only Property A rows
+4. Property B request parameter → cannot widen
+5. unauthorized module rows excluded
+6. zero entitlement → no database query
+7. preview and demo remain local
+8. live failure does not become empty
+9. old `GET /obligations` no longer exists after migration
+10. explicit projection prevents unrelated columns leaking
