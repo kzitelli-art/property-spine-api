@@ -23,7 +23,7 @@ That is the whole reason for the order.
 | App PR | **#26** — `https://github.com/kzitelli-art/property-spine-app/pull/26` |
 | App SHA | **`b35ed66`** |
 | API PR | **#32** — `https://github.com/kzitelli-art/property-spine-api/pull/32` |
-| API SHA | **`3024478`** |
+| API SHA | **`26a14c0`** |
 | Merge order | **app #26 → then API #32, immediately** |
 | Full record | `docs/SECURITY_OBLIGATIONS_ROUTE.md` (API repo) |
 
@@ -41,16 +41,30 @@ Records the final receipt ......................... ____________________
 FINAL GO/NO-GO CALL ............................... ____________________
 ```
 
-## Dashboard fields to verify before anything moves
+## Production facts — CONFIRMED by the owner 2026-08-02, do not re-ask
 
 ```text
-API service name ......... ______   App service name ......... ______
-API configured branch .... ______   App configured branch .... ______
-API auto-deploy .......... ______   App auto-deploy .......... ______
-API deployed SHA ......... ______   App deployed SHA ......... ______
-API last deploy duration . ___ min  App rollback available ... ______
-API rollback available ... ______   App deploy in progress ... ______
-API deploy in progress ... ______
+API service ............. property-spine-api      App service ..... property-spine-app
+API type ................ Web Service             App type ........ Static Site
+API configured branch ... main                    App branch ...... main
+API auto-deploy ......... On Commit               App auto-deploy . On Commit
+API deployed SHA ........ f85f70b
+API status .............. Deployed
+API deploy running ...... No
+API rollback ............ visible and available
+API /health ............. 200 {"ok":true,"db_time":"2026-08-02T15:01:32.006Z"}
+```
+
+## Still open — seven facts, nothing else
+
+```text
+Current deployed app SHA ................ ______   (Render Events, not __PS_BUILD)
+App rollback availability ............... ______
+Recent API deploy duration X ............ ______
+/health/migrations result ............... ______
+Migration 121 disposition ............... ______
+API deploy warnings relevant to migrations ______
+Rollback decision clock time ............ ______   (derived from X)
 ```
 
 Two traps: the app's `__PS_BUILD.code_sha` is **one commit behind by
@@ -76,22 +90,37 @@ It builds its own isolated `R3 SMOKE <ts>` QA property and its own staff
 session, then runs the obligation boundary rung inside the same run. **A
 missing session is a FAIL, not a skip.**
 
-Boundary rung, nine checks:
+Boundary rung — **10 named behaviours + 1 execution-floor assertion**:
 
 ```text
-GET   /obligations                     → 404
-GET   /obligations/:id                 → 404
-PATCH /obligations/:id/claim           → 404
-PATCH /obligations/:id/satisfy         → 404
-PATCH /obligations/:id/complete        → 404
-GET   /operator/obligations   (session)      → 200, server-derived scope echoed
-GET   /operator/obligations?property_id=…    → 403  (client scope refused)
-POST  /operator/obligations/<other>/claim    → 404  (concealed, not 403)
-GET   /operator/obligations   (shared key only) → 401
+B1   GET   /obligations                          → 404
+B2   GET   /obligations/:id                      → 404
+B3   PATCH /obligations/:id/claim                → 404
+B4   PATCH /obligations/:id/satisfy              → 404
+B5   PATCH /obligations/:id/complete             → 404
+B6   GET   /operator/obligations   (session)     → 200 with items[]
+B7   …the response echoes SERVER-DERIVED scope
+B8   GET   /operator/obligations?property_id=…   → 403  (client scope refused)
+B9   POST  /operator/obligations/<other>/claim   → 404  (concealed, not 403)
+B10  GET   /operator/obligations   (key only)    → 401
+FLOOR  all 10 executed — evaluated in `finally`, so it fires even if the
+       rung was never reached
 ```
 
-**Exit code 0 with a non-zero `failed` count is impossible** — the harness exits
-1 on any failure. Read the `RESULT:` line, not the absence of red text.
+**Read the BOUNDARY line, not the aggregate.** The run prints:
+
+```text
+═══ BOUNDARY: 10/10 behaviours executed + 1 execution-floor assertion ═══
+═══ RESULT: N passed · 0 failed ═══
+```
+
+**`BOUNDARY: 10/10` is the evidence.** A green aggregate alone is not — this
+rung already produced one false green by being defined, exported and never
+invoked, and a pass count cannot detect an absent check. Four fail-closed
+properties are proven, not assumed: deleting the invocation → `0/10` and exit 1;
+a missing staff session → B6–B9 FAIL, never skip; a wrong `OPERATOR_KEY` → B1
+FAILs and says why; the rung runs in `finally`, so an unrelated crash upstream
+cannot suppress it.
 
 ## Browser acceptance — the product, not just status codes
 
@@ -152,7 +181,9 @@ App-first means obligations read **unavailable** until the API is healthy. That
 is honest, but it is not open-ended.
 
 ```text
-Recent API deploy duration ...... X = ______ min   (from the deploys list)
+Recent API deploy duration ...... X = ______ min   (NOT YET ESTABLISHED —
+                                  Render's event list shows minute precision
+                                  only; "same minute" is not a measurement)
 Escalation threshold ............ X + 5 min        — start diagnosing
 ROLLBACK DECISION POINT ......... 2X + 5 min       — fixed clock time: ______
 ```
