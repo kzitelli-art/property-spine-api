@@ -42,9 +42,12 @@ const GUARDED = [
 // bare public GET /availability route it mounted had zero repository callers.
 // A file that no longer exists cannot be guarded; its removal is asserted by
 // slice9_route_retirement_proof.js instead.
-// Files Pass 2 has NOT yet reached. turn_priority.js left this list in Commit G;
-// leasepackets.js leaves it in Commit H.
-const PASS_2 = ["src/applications/leasepackets.js"];
+// Pass 2 is COMPLETE. turn_priority.js was corrected in Commit G and
+// leasepackets.js in Commit H, so no file remains in the "known-defective,
+// owned by a later pass" set. The list stays as an empty declaration rather
+// than being deleted: it is the record that the set is now empty by
+// correction, not by never having existed.
+const PASS_2 = [];
 
 const read = (f) => fs.readFileSync(path.join(REPO, f), "utf8");
 // Strip comments so documentation naming a defect is not mistaken for the defect.
@@ -133,9 +136,14 @@ ok("turn_priority.js NO LONGER carries an application status list (Commit G)",
     .test(read("src/maintenance/turn_priority.js")));
 ok("and never queries lease_applications at all",
   !/lease_applications/.test(code("src/maintenance/turn_priority.js")));
-ok("leasepackets.js still carries its own list (Pass 2 owns it)",
-  /\["lease_ready", "tenant_signed", "approved"\]/
-    .test(read("src/applications/leasepackets.js")));
+// CORRECTED by Commit H. The private list existed TWICE in this file -- the
+// generate path and the issue path -- and both now use the one derived set.
+ok("leasepackets.js NO LONGER carries a private status list (Commit H)",
+  !/\["lease_ready", "tenant_signed", "approved"\]/
+    .test(code("src/applications/leasepackets.js")));
+ok("and asks the named eligibility predicate instead",
+  /assessLeasePacketEligibility/.test(code("src/applications/leasepackets.js")));
+ok("no file remains in the Pass 2 known-defective set", PASS_2.length === 0);
 for (const f of PASS_2) {
   ok(`${f} does NOT yet consume the read authority`,
     !/application_lifecycle_read/.test(read(f)));
