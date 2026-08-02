@@ -76,7 +76,9 @@ const mask = (p) => (p ? String(p).replace(/^(\+?\d{0,3})(\d+)(\d{4})$/, (_, a, 
     console.log(`\nHELD: ${held.length}`);
     console.table(held);
 
-    const w = commsBoundary.withinSendWindow(PROPERTY, "followup", new Date());
+    // AWAITED as of Slice 9 — withinSendWindow reads the governed property
+    // timezone, so it is async. Un-awaited it printed "CLOSED (undefined)".
+    const w = await commsBoundary.withinSendWindow(PROPERTY, "followup", new Date());
     console.log(`\nSend window right now: ${w.allowed ? "OPEN" : "CLOSED"} (${w.reason})`);
     console.log("NOTHING WAS SENT. This script has no send path.\n");
   } catch (e) {
