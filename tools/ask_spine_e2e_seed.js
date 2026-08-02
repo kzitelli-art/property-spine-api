@@ -12,7 +12,10 @@ const hrs = n => new Date(Date.now() + n*3600e3).toISOString();
     A = (await c.query(`insert into properties (name) values ($1) returning id`, ['E2E Property'])).rows[0].id;
     const B = (await c.query(`insert into properties (name) values ($1) returning id`, ['E2E Other'])).rows[0].id;
     u = (await c.query(`insert into users (name,email,phone,role,is_active,status)
-      values ('E2E Operator',$1,'+17245559911','property_manager',true,'active') returning id`, [TAG+'@e2e.test'])).rows[0].id;
+      values ('E2E Operator',$1,$2,'property_manager',true,'active') returning id`,
+      //  phone must be unique per run: uq_users_phone_normalized collides on a
+      //  second seed, which blocked rerunning the ladder after a rebase.
+      [TAG+'@e2e.test', '+1724' + String(Date.now()).slice(-7)])).rows[0].id;
     await c.query(`insert into property_team_assignments
       (property_id,user_id,role_title,scope_type,allowed_modules,primary_for_modules,can_manage_roles,active)
       values ($1,$2,'Operator','property',$3,$3,false,true)`, [A, u, ['leasing','maintenance']]);
