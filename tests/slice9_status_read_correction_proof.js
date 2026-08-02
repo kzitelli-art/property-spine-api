@@ -127,6 +127,108 @@ const substatusFor = async (client, conversionId) => (await client.query(
     ok("reports the explicit 'unknown', not 'submitted' and not null",
       sh === "unknown", String(sh));
 
+    // ── PHASE 0 CORRECTION: malformed terminal truth ──────────────────
+    //  The SQL fragment previously accepted "terminal_code is not null OR
+    //  status is terminal" and answered coalesce(terminal_code, status), so a
+    //  declined row with no terminal_at was reported as a clean 'declined'.
+    //  classifyApplicationHistory already called that unknown. These cases are
+    //  the ones the earlier proof did not contain, which is why the divergence
+    //  survived.
+    //
+    //  The compatibility trigger authors terminal metadata on the crossing, so
+    //  every malformed shape below is produced by clearing/perturbing AFTER the
+    //  insert — the same technique the pre-124 case needed.
+    section("Fx  malformed terminal shapes are UNKNOWN, never a clean label");
+
+    const malformed = async (label, seed, mutate, expected) => {
+      const conv = await mk(seed);
+      await c.query(`update lease_applications set ${mutate} where conversion_id=$1`, [conv]);
+      const got = await substatusFor(c, conv);
+      ok(`${label} → '${expected}'`, got === expected, `got '${got}'`);
+      return conv;
+    };
+
+    // Which malformed shapes are even REACHABLE is itself a finding. Migration
+    // 124's ck_la_terminal_pair enforces "both terminal columns or neither", so
+    // a code with no instant — one of the shapes the classifier guards against
+    // — cannot exist in a 124 database at all. Proving the database REFUSES it
+    // is a stronger result than proving the read reports it as unknown, so both
+    // are asserted, each where it applies.
+    const refusedByDb = async (label, seed, mutate) => {
+      const conv = await mk(seed);
+      let refused = false, code = null;
+      try {
+        await c.query("savepoint mal");
+        await c.query(`update lease_applications set ${mutate} where conversion_id=$1`, [conv]);
+      } catch (e) { refused = true; code = e.constraint || e.code; }
+      await c.query(refused ? "rollback to savepoint mal" : "release savepoint mal");
+      ok(`${label} → REFUSED by the database (${code})`, refused, "the shape was accepted");
+    };
+
+    // REACHABLE under 124 — the pair constraint is satisfied, the truth is not.
+    await malformed("terminal status with NO terminal metadata at all",
+      { status: "declined", submitted_at: T },
+      "terminal_code=null, terminal_at=null", "unknown");
+    await malformed("withdrawn status but terminal_code='declined' (contradiction)",
+      { status: "withdrawn", submitted_at: T }, "terminal_code='declined'", "unknown");
+    await malformed("SUBMITTED row carrying a full terminal pair",
+      { status: "submitted", submitted_at: T },
+      `terminal_code='declined', terminal_at='${T}'`, "unknown");
+
+    // UNREACHABLE under 124 — ck_la_terminal_pair refuses the half-pair.
+    await refusedByDb("declined status + code, NO terminal_at",
+      { status: "declined", submitted_at: T }, "terminal_at=null");
+    await refusedByDb("SUBMITTED row carrying only a terminal_at",
+      { status: "submitted", submitted_at: T }, `terminal_at='${T}'`);
+
+    // The negative control: malformed must not be reachable merely by BEING
+    // terminal. A valid pair still answers cleanly.
+    const cvw = await mk({ status: "withdrawn", submitted_at: T,
+      terminal_at: T, terminal_code: "withdrawn" });
+    ok("a VALID withdrawn pair still answers 'withdrawn'",
+      (await substatusFor(c, cvw)) === "withdrawn");
+
+    // approved_at outranks a later VALID disposition...
+    const cav = await mk({ status: "withdrawn", submitted_at: T, approved_at: T,
+      terminal_at: T, terminal_code: "withdrawn" });
+    ok("approved_at + valid withdrawal → 'approved' (approval is proven history)",
+      (await substatusFor(c, cav)) === "approved");
+
+    // ...and also outranks a MALFORMED one, because the approval milestone is
+    // still a proven fact. But the malformed condition must stay visible in the
+    // canonical classification rather than being laundered into a clean answer.
+    const cam = await mk({ status: "withdrawn", submitted_at: T, approved_at: T });
+    await c.query(
+      "update lease_applications set terminal_at=null, terminal_code=null where conversion_id=$1", [cam]);
+    ok("approved_at + malformed terminal → still 'approved' (approval is proven)",
+      (await substatusFor(c, cam)) === "approved");
+    const camRow = (await c.query(
+      "select * from lease_applications where conversion_id=$1", [cam])).rows[0];
+    const camH = R.classifyApplicationHistory(camRow);
+    ok("...but the classifier still reports terminal_state UNKNOWN",
+      camH.terminal_state === null);
+    ok("...and names the malformed condition",
+      camH.reason_codes.includes("terminal_code_missing_or_invalid"));
+    ok("...while approval_reached stays TRUE", camH.approval_reached === true);
+
+    section("Fy  SQL and the row classifier now agree on malformed shapes");
+    for (const [label, seed, mutate] of [
+      ["terminal with no metadata", { status: "declined", submitted_at: T }, "terminal_code=null, terminal_at=null"],
+      ["code contradicts status", { status: "withdrawn", submitted_at: T }, "terminal_code='declined'"],
+      ["nonterminal carrying a pair", { status: "submitted", submitted_at: T },
+        `terminal_code='declined', terminal_at='${T}'`],
+    ]) {
+      const conv = await mk(seed);
+      await c.query(`update lease_applications set ${mutate} where conversion_id=$1`, [conv]);
+      const row = (await c.query(
+        "select * from lease_applications where conversion_id=$1", [conv])).rows[0];
+      const h = R.classifyApplicationHistory(row);
+      const sql = await substatusFor(c, conv);
+      ok(`${label}: classifier UNKNOWN and SQL 'unknown'`,
+        h.terminal_state === null && sql === "unknown",
+        `terminal_state=${h.terminal_state} sql='${sql}'`);
+    }
+
     section("G  accepted_term_required is visible, not skipped");
     const ca = await mk({ status: "accepted_term_required", submitted_at: T, approved_at: T });
     ok("reports 'approved' (it has reached approval)",

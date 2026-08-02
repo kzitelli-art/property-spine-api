@@ -209,8 +209,18 @@ const STATUS_GROUP_PARAMS = Object.freeze({
 //       later withdrawal or expiry. The old ladder tested terminal statuses
 //       before approval, which is why approved-then-withdrawn reported
 //       'declined' and the approval vanished.
-//    2. terminal            → the actual terminal_code, so withdrawn and
-//       expired stop being flattened into 'declined'.
+//    2. a CLEAN terminal pair → the actual terminal_code, so withdrawn and
+//       expired stop being flattened into 'declined'. Clean means all three:
+//       the status is a canonical terminal status, terminal_code EQUALS it,
+//       and terminal_at exists.
+//    2b. a MALFORMED terminal shape → 'unknown'. An earlier revision accepted
+//       "terminal_code is not null OR status is terminal" and answered with
+//       coalesce(terminal_code, status), which blessed malformed lifecycle
+//       data as a clean disposition — a code with no instant cannot be placed
+//       in a reporting window, and a code contradicting status means one of
+//       the two is wrong and we cannot tell which. The row classifier already
+//       called those unknown; the SQL now matches it rather than the other way
+//       round. It must NOT fall through to 'submitted' or to the raw label.
 //    3. submitted_at is not null → 'submitted' (milestone, not label).
 //    4. progressed with NO milestones → 'unknown'. A pre-124 historical row.
 //       Explicitly unknown rather than coerced into submitted or no-application.
@@ -234,11 +244,23 @@ const SQL_APPLICANT_SUBSTATUS = `
           then 'approved'
         when exists (select 1 from lease_applications la
                       where la.conversion_id = lco.conversion_id
-                        and (la.terminal_code is not null or la.status in (${TERMINAL_SQL_LITERALS})))
-          then (select coalesce(la.terminal_code, la.status) from lease_applications la
+                        and la.status in (${TERMINAL_SQL_LITERALS})
+                        and la.terminal_code = la.status
+                        and la.terminal_at is not null)
+          then (select la.terminal_code from lease_applications la
                  where la.conversion_id = lco.conversion_id
-                   and (la.terminal_code is not null or la.status in (${TERMINAL_SQL_LITERALS}))
-                 order by la.terminal_at desc nulls last, la.created_at desc nulls last limit 1)
+                   and la.status in (${TERMINAL_SQL_LITERALS})
+                   and la.terminal_code = la.status
+                   and la.terminal_at is not null
+                 order by la.terminal_at desc, la.created_at desc nulls last limit 1)
+        when exists (select 1 from lease_applications la
+                      where la.conversion_id = lco.conversion_id
+                        and ((la.status in (${TERMINAL_SQL_LITERALS})
+                              and (la.terminal_code is distinct from la.status
+                                   or la.terminal_at is null))
+                          or (la.status not in (${TERMINAL_SQL_LITERALS})
+                              and (la.terminal_code is not null or la.terminal_at is not null))))
+          then 'unknown'
         when exists (select 1 from lease_applications la
                       where la.conversion_id = lco.conversion_id
                         and la.submitted_at is not null)
