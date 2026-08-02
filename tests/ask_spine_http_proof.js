@@ -24,7 +24,7 @@ const http = require("http");
 const path = require("path");
 const receipt = require("./_run_receipt.js");
 
-const EXPECTED_ASSERTIONS = 18;
+const EXPECTED_ASSERTIONS = 26;
 
 let pass = 0, fail = 0;
 function T(name, fn) {
@@ -37,6 +37,7 @@ function ok(v, m) { if (!v) throw new Error(m || "expected truthy"); }
 const PROP  = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
 const OTHER = "9e2bb96e-08e2-41db-81c2-91055ceb50a3";
 const TOKEN = "valid-session-token";
+let SESSION_MODULES = ["leasing", "maintenance"];
 
 //  ── Stub the session resolver BEFORE the router requires it. The router
 //     is otherwise the real module, unmodified.
@@ -47,7 +48,7 @@ require.cache[resolverPath] = {
       if (token !== TOKEN) return null;
       return {
         id: "user-1", name: "QA Operator", property_id: PROP,
-        allowed_modules: ["leasing", "maintenance"],
+        allowed_modules: SESSION_MODULES,
       };
     },
   },
@@ -56,9 +57,10 @@ require.cache[resolverPath] = {
 //  ── A stub pool whose behaviour each test controls.
 let dbMode = "rows";
 let lastParams = null;
+let queryCount = 0;
 const pool = {
   async query(_sql, params) {
-    lastParams = params;
+    queryCount++; lastParams = params;
     if (dbMode === "error") throw new Error("connection reset");
     if (dbMode === "empty") return { rows: [] };
     return { rows: [{
@@ -170,6 +172,53 @@ let PORT = 0, server = null;
       ok(/Could not read the work queue/.test(r2.json.error));
     });
     dbMode = "rows";
+  }
+
+  // ── MODULE ENTITLEMENT — not merely property scope ─────────────────
+  //  A leasing-only operator must not receive management, financial or
+  //  maintenance work merely because it shares the property.
+  {
+    SESSION_MODULES = ["leasing"];
+    dbMode = "rows"; queryCount = 0;
+    const r = await request("GET", URL, { "x-staff-session": TOKEN });
+    T("M1  leasing-only session → the query is bound to leasing ONLY", () => {
+      eq(r.status, 200);
+      eq(JSON.stringify(lastParams[1]), JSON.stringify(["leasing"]));
+    });
+    T("M2  no other module reaches the query", () => {
+      const flat = JSON.stringify(lastParams[1]);
+      ok(!/management|maintenance|accounting|controls/.test(flat), "an unentitled module leaked: " + flat);
+    });
+
+    SESSION_MODULES = ["leasing", "maintenance", "management"];
+    await request("GET", URL, { "x-staff-session": TOKEN });
+    T("M3  broader entitlement widens the query to exactly those modules", () => {
+      eq(JSON.stringify(lastParams[1]), JSON.stringify(["leasing", "maintenance", "management"]));
+    });
+
+    //  The client attempting to widen its own entitlement.
+    SESSION_MODULES = ["leasing"];
+    const r2 = await request("GET", `${URL}?module=management&modules=management,accounting&allowed_modules=management`,
+      { "x-staff-session": TOKEN });
+    T("M4  a client-supplied module is IGNORED — entitlement stays the session's", () => {
+      eq(r2.status, 200);
+      eq(JSON.stringify(lastParams[1]), JSON.stringify(["leasing"]));
+    });
+    T("M5  the client could not add management to its own entitlement", () => {
+      ok(!JSON.stringify(lastParams[1]).includes("management"));
+    });
+
+    //  Zero entitlement must be an honest empty — and must not even query.
+    SESSION_MODULES = [];
+    queryCount = 0;
+    const r3 = await request("GET", URL, { "x-staff-session": TOKEN });
+    T("M6  zero entitlement → 200 honest empty, not an error and not everything", () => {
+      eq(r3.status, 200); eq(r3.json.items.length, 0); eq(r3.json.total_open, 0);
+    });
+    T("M7  zero entitlement issues NO database query at all", () => eq(queryCount, 0));
+    T("M8  zero entitlement says why, via scope_note", () => eq(r3.json.scope_note, "no_module_entitlement"));
+
+    SESSION_MODULES = ["leasing", "maintenance"];
   }
 
   // ── read-only surface ──────────────────────────────────────────────

@@ -17,8 +17,8 @@ Base SHAs the branches were cut from:
 | Evidence | Label | Not claimed |
 |---|---|---|
 | Service contract, stubbed db (31 assertions, floor 24) | **Locally exercised** | — |
-| Express + real router + real socket, stubbed pool (19, floor 18) | **Real HTTP transport exercised** | *not* authenticated live HTTP |
-| Chromium + real shipped loader + intercepted network (16) | **Browser UI path exercised** | *not* end-to-end browser verified |
+| Express + real router + real socket, stubbed pool (27, floor 26) | **Real HTTP transport exercised** | *not* authenticated live HTTP |
+| Chromium + real shipped loader + intercepted network (27, both viewports) | **Browser UI path exercised** | *not* end-to-end browser verified |
 | Real Postgres, real session resolution, real SQL rows | **Not yet exercised** | — |
 
 **The slice is NOT Proven.** Per §33 that requires real Postgres, real HTTP and
@@ -99,14 +99,37 @@ then     due_at ASC NULLS LAST
 then     id ASC
 ```
 
-**The final `id ASC` is deliberate.** Without it, rows tied on tier and `due_at`
-would come back in whatever order the planner produced — the exact defect
-recorded as 4B in `DB_CONNECTION_INVENTORY.md`, where two tied sort keys and no
-third made a selection arbitrary. Every ordering here terminates in a unique
-column.
+**`id ASC` is a deterministic stability tiebreak, applied only after every
+meaningful priority fact has tied. It is not business priority and carries no
+product meaning** — a lower id does not mean more important. Its sole purpose is
+to prevent planner-order randomness: without it, rows tied on tier and `due_at`
+would return in whatever order the planner produced, which is the defect
+recorded as 4B in `DB_CONNECTION_INVENTORY.md`. Every ordering here terminates
+in a unique column.
 
 **No score exists.** Each `reason` names the recorded fact that placed the item,
 so an operator can be told *why* it ranked without a number that means nothing.
+
+### Module entitlement — proven, not merely asserted
+
+Property scope alone is not sufficient. A leasing-only operator must not receive
+management, financial, resident-sensitive or maintenance work merely because it
+belongs to the same property.
+
+The filter exists in the query (`module = ANY($2::text[])`) and `$2` is
+`req.operator.allowed_modules` — never a request value. **Proven over real HTTP**
+(`tests/ask_spine_http_proof.js`, assertions M1–M8):
+
+| Scenario | Proven behaviour |
+|---|---|
+| Session property A + **leasing** entitlement | query bound to `["leasing"]` only; no `management`, `maintenance`, `accounting` or `controls` reaches it |
+| Session property A + **broader** entitlement | query widens to exactly the session's modules |
+| Client sends `?module=` / `?modules=` / `?allowed_modules=` | **ignored** — entitlement stays the session's; the client cannot add `management` to itself |
+| **Zero** entitlement | 200 honest empty, `scope_note: "no_module_entitlement"`, and **no database query is issued at all** |
+
+Row-level filtering against real rows still needs the Postgres rung; what is
+proven here is that the correct, session-derived module list reaches the query
+and that no client input can alter it.
 
 ### Cap
 
@@ -163,7 +186,8 @@ node tests/ask_spine_http_proof.js
 # 3. Browser UI path — 16 assertions
 mkdir -p /tmp/pw && cd /tmp/pw && npm install playwright
 cd /path/to/property-spine-app
-SP=/tmp/pw node ask_spine_browser_proof.browser.js
+SP=/tmp/pw node ask_spine_browser_proof.browser.js            # desktop
+SP=/tmp/pw VP=phone node ask_spine_browser_proof.browser.js  # phone
 
 # 4. Existing app suite — must stay green (17 harnesses, 749 passed)
 cd /path/to/property-spine-app
