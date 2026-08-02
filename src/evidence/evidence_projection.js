@@ -58,8 +58,46 @@ async function marketEvidenceProjection(pool, { property_id, start_local = null,
     settleSection("conversion", () => conversionFunnels(pool, window)),
   ]);
 
+  // ── THE FROZEN TOP-LEVEL STATE — one deterministic derivation ──────
+  //  The browser must never decide whether coverage is partial; this is where
+  //  that decision is authored, once, from the funnel metrics themselves.
+  //    unavailable  the window could not be resolved (no operating timezone)
+  //    error        the conversion section itself failed to read
+  //    partial      any funnel's evidence is unresolved
+  //    empty        every funnel measured an empty cohort
+  //    ok           complete evidence everywhere
+  const funnelStates = (conv && conv.metrics)
+    ? ["f1all", "f2", "f3", "f4"].map((k) => (conv.metrics[k] || {}).state).filter(Boolean)
+    : [];
+  let state;
+  if (window.state !== "ok") state = "unavailable";
+  else if (!conv || conv.state === "error") state = "error";
+  else if (funnelStates.includes("partial")) state = "partial";
+  else if (funnelStates.length && funnelStates.every((s) => s === "empty")) state = "empty";
+  else state = "ok";
+
+  const coverage = (conv && conv.metrics) ? {
+    funnels: Object.fromEntries(["f1all", "f2", "f3", "f4"].map((k) => {
+      const m = conv.metrics[k] || {};
+      return [k, {
+        state: m.state || null,
+        pending_count: m.pending_count ?? null,
+        unknown_count: m.unknown_count ?? null,
+        untrackable_count: m.untrackable_count ?? null,
+        suppression_reason: (m.partial && m.partial.reason) || null,
+      }];
+    })),
+    source_attribution: conv.source_attribution || null,
+  } : null;
+
   return {
-    contract_version: "market_evidence_v1",
+    contract: {
+      version: "market_evidence_v2",
+      response_states: ["ok", "partial", "empty", "unavailable", "error"],
+      //  The four frozen funnel contracts also ride sections.conversion.contracts.
+      note: "Stages, rates, coverage, terminal state, attendance and source attribution are all server-authored. The browser renders; it never derives.",
+    },
+    contract_version: "market_evidence_v2",
     property_id,
     operating_timezone: window.operating_timezone,
     window: {
@@ -71,6 +109,9 @@ async function marketEvidenceProjection(pool, { property_id, start_local = null,
       end_utc: window.window_end_utc,
     },
     as_of_utc: window.as_of_utc,
+    generated_at: new Date().toISOString(),
+    state,
+    coverage,
     sections: {
       lead_demand: lead,
       tour_demand: tour,
