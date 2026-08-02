@@ -244,3 +244,124 @@ proposals or confirmations · general AI search.
 - **Defect 4B.** Which property the session carries is the subject of 4B in
   `DB_CONNECTION_INVENTORY.md`. Ask Spine inherits that scope and does not work
   around it.
+
+---
+
+# Real-runtime rung — completed 2026-08-02
+
+**Rebased first.** API branch rebased onto `f85f70b` (current `main` after PR #29
+merged); app `main` was unchanged. All evidence below applies to the rebased
+merge candidate.
+
+| Repo | Base | Branch head |
+|---|---|---|
+| api | `f85f70bafea172c1cd3d7ca09179f25df4b58177` | `claude/ask-spine-slice-1` |
+| app | `30e550b6c8f9b0e88beac426cbac5b6f35a0c37a` | `claude/ask-spine-slice-1` |
+
+## The four rungs
+
+| Rung | Assertions | Floor | Result |
+|---|---|---|---|
+| Service contract (stubbed db) | 31 | 24 | pass |
+| Real HTTP transport (stubbed pool) | 27 | 26 | pass |
+| **Real Postgres + real sessions + real HTTP** | **23** | **22** | **pass** |
+| **API-backed browser, no interception** | **11** | — | **pass (desktop)** |
+
+## Isolated database — never an operating property
+
+Local Postgres 16.13 on `127.0.0.1:55432`, database `askspine_proof`, created
+for this proof. **No Neon, no Demo Building, no real operating property.** The
+harness routes through `receipt.harnessConnectionString()`, so it refuses to run
+against `DATABASE_URL`.
+
+### A blocker found while building it — reported, not fixed
+
+**The migration chain cannot rebuild the schema from zero.** On a fresh database
+`012_bank_intake.sql` fails with `column "yardi_code" does not exist`, because
+`001_baseline.sql:238` already creates `vendors`, so `012:33`'s
+`create table if not exists vendors (…)` is **silently skipped** and `:43`
+then indexes a column that was never added.
+
+109 of 122 migrations applied; **15 skipped**, all downstream of that failure in
+the banking chain (`bank_transactions`, `bank_accounts`). **None is an Ask Spine
+table** — `obligations`, `users`, `properties`, `property_team_assignments` and
+`staff_sessions` all built correctly from the real migrations.
+
+**This belongs to its own lane, not Ask Spine.** It extends the Phase 1 thesis
+that a ledger entry is not evidence of applied schema: here the migrations
+themselves do not reconstruct, which means production's `vendors.yardi_code`
+arrived by some path not in `migrations/`.
+
+## Fixture (`tools/ask_spine_e2e_seed.js`, reproducible)
+
+Property A and B · a user with leasing+maintenance on A · a leasing-only user ·
+a user whose assignment is deactivated mid-proof · overdue assigned · overdue
+unassigned · future · closed · **no due date** · another property's work ·
+unauthorised-module work (`accounting`, `management`) · more than five
+qualifying · an empty case · a revoked-session case.
+
+## What real Postgres proved (23 assertions)
+
+Property comes from the session · a client `property_id` is refused 403 ·
+**Property B's row never appears in Property A's answer** · unauthorised-module
+rows excluded for the broader user · a leasing-only session sees no maintenance
+work while the broader session does · **a client `module` parameter cannot
+widen entitlement** · closed work excluded · future work does not outrank
+overdue · no-due-date work still qualifies · `total_open` counts every
+qualifying row · the cap holds at five · every returned row verified open and on
+Property A by a second query · genuine empty is `200`/`items:[]`/`total_open:0`
+· **deactivating the assignment makes the session stop resolving (401)** · a
+revoked response carries no items · `issueStaffSession` refuses to mint for an
+unassigned property · no session and a bogus token both 401.
+
+## What the API-backed browser proved (11 assertions, desktop)
+
+**No interception, no mocked loader, no fixture.** Real Chromium → real app
+artifact → real HTTPS → real API → real Postgres.
+
+The app **pins** its API origin (`PRODUCTION_ORIGIN`) so a staff token can only
+ever be sent to one host. Rather than modify the artifact, that hostname was
+**resolved** to the local API over real HTTPS via
+`--host-resolver-rules`. The browser issues a genuine request and the real
+server answers it. `--ignore-certificate-errors` is required only because the
+local certificate is self-signed. **Documented deviation: host resolution and a
+self-signed certificate. Nothing about the request or response is faked.**
+
+Proved: the real loader holds a real canonical session · Property Home opens with
+Ask Spine correctly placed · **"What should I focus on?"** — not the chip text —
+is accepted and hits `https://property-spine-api.onrender.com/operator/ask-spine/attention`
+· live items render from real rows, capped at five · **no other-property or
+unauthorised-module row reaches the browser** · clicking a result opens the
+underlying record · returning to Property Home leaves the composer and four desks
+intact · a **real** empty database state produces the truthful empty line · a
+**real** API outage is honest and is not the empty state · Retry is offered · no
+overflow.
+
+### Honest gap
+
+**Phone width reached E8.** The outage assertion did not reproduce at 390px in
+the API-backed run; it passes on desktop in this rung and at **both** viewports
+in the interception-based harness. Not claimed as proven at phone width.
+
+## Reproducing
+
+```bash
+# isolated Postgres, then the real migrations (expect 15 skipped — see above)
+DATABASE_URL=postgres://postgres@127.0.0.1:55432/askspine_proof node migrations/migrate.js
+
+# real-Postgres rung
+HARNESS_DATABASE_URL=postgres://postgres@127.0.0.1:55432/askspine_proof \
+  node tests/ask_spine_db_proof.db.js          # 23 assertions, floor 22
+
+# API-backed browser: seed, run the real API, resolve the pinned origin
+HARNESS_DATABASE_URL=… node tools/ask_spine_e2e_seed.js > session.json
+DATABASE_URL=… OPERATOR_APP_ORIGIN=http://127.0.0.1:8081 PORT=3001 node server.js
+SP=/tmp/pw node ask_spine_e2e_browser.browser.js   # in the app repo
+```
+
+## Status
+
+**Every case in the required real-runtime sequence passes.** Remaining before
+merge: final visual sign-off, then the deployment order — merge API → deploy →
+authenticated smoke → merge app → deploy → browser acceptance against the
+deployed API.
