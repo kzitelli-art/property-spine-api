@@ -1,5 +1,8 @@
 "use strict";
 
+// Slice 9: canonical application read authority — TERMINAL vocabulary only.
+const lifecycleRead = require("../applications/application_lifecycle_read");
+
 // PROPERTY SPINE — canonical Leasing Desk composition.
 //
 // This module is deliberately pure. It does not query, write, authorize, or infer
@@ -489,8 +492,16 @@ function normalizeStageApplicationRow(row) {
 function stageForFollowup(row) {
   if (!row) return null;
   const substatus = valueOrNull(row.applicant_substatus);
-  if (substatus === "declined") return null;
-  if (substatus === "application_sent" || substatus === "submitted" || substatus === "approved") {
+  // Slice 9: the canonical fragment now emits the ACTUAL terminal code, so
+  // withdrawn and expired stop being flattened into 'declined'. Testing only
+  // for 'declined' here would silently send a withdrawn application back to
+  // post_tour — a closed deal reappearing as live follow-up work.
+  if (substatus && lifecycleRead.TERMINAL.includes(substatus)) return null;
+  // 'unknown' is a pre-124 historical row: progressed, with no milestone to
+  // prove when. It IS an application, so it belongs in the application stage;
+  // it is not evidence of anything earlier.
+  if (substatus === "application_sent" || substatus === "submitted"
+      || substatus === "approved" || substatus === "unknown") {
     return "application";
   }
   // createConversionFromTour is called only when tour_given !== false.

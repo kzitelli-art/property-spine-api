@@ -56,11 +56,18 @@ active, declined, withdrawn, expired, accepted_term_required
 | **A** | Current state — a status read may be correct | 6 |
 | **B** | Historical milestone — must use `*_at` columns | 2 |
 | **C** | Terminal outcome — must use `terminal_code` / `terminal_at` | 0 (folded into B) |
-| **D** | Progression / ordering — must consume a canonical group | 8 |
+| **D** | Progression / ordering — must consume a canonical group | 9 |
 | **E** | Display / compatibility only | 3 |
 | **F** | Test / fixture / documentation — not production | not counted |
 
-**Production occurrences: 19.** Remediation required on **10** (categories B and D).
+**Production occurrences: 20.** Remediation required on **11** (categories B and D).
+
+> **Count correction (2026-08-02):** an earlier revision of this table said D=8 /
+> total 19 / remediation 10 while the D table below listed D1–D9. The table was
+> right and the totals were wrong. `leasepackets.js:405` (D9) is a genuine
+> production read of `lease_applications.status` — a JS comparison against
+> `app.status` gating packet creation — so it counts. D=9, total=20,
+> remediation=11.
 
 ---
 

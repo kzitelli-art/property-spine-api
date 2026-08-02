@@ -43,6 +43,8 @@ const crypto = require("crypto");
 // together in one insert — migration 125 refuses a row that reaches submission
 // without submitted_at, so insert-then-update is rejected by the database.
 const lifecycle = require("./application_lifecycle");
+// Slice 9: canonical application READ authority (TERMINAL group, status vocabulary).
+const lifecycleRead = require("./application_lifecycle_read");
 
 // Non-recoverable digest of a bearer token. We store ONLY this; the raw token
 // lives solely in the issued URL. SHA-256 is sufficient for a high-entropy
@@ -1999,9 +2001,21 @@ module.exports = function applicationSubmissionModule(deps) {
     });
     if (!basis.allowed) throw httpErr(403, "You are not the owner of this commitment and hold no covering role for it.");
 
+    // CURRENT TERMINAL STATE — "does a live application already exist on this
+    // conversation right now?" Present tense, so a status read is correct; what
+    // was wrong is the list. It omitted 'expired', so an expired application
+    // read as LIVE and permanently blocked a new one, and it filtered 'denied',
+    // which the CHECK constraint does not permit and no row can hold.
+    // The canonical TERMINAL group is bound as a parameter — no literal ladder.
     const nonterminal = (await client.query(
-      `select 1 from lease_applications where conversion_id=$1
-        and status not in ('denied','declined','withdrawn') limit 1`, [conversion_id])).rows[0];
+      `select status from lease_applications where conversion_id=$1
+        and status <> all($2::text[]) limit 1`,
+      [conversion_id, lifecycleRead.STATUS_GROUP_PARAMS.terminal])).rows[0];
+    // An unrecognized status is not silently "live": it is surfaced as its own
+    // refusal, because we cannot say what it means.
+    if (nonterminal && !lifecycleRead.isKnownStatus(nonterminal.status)) {
+      throw httpErr(409, `This conversation has an application in an unrecognized state ('${nonterminal.status}'). Resolve it before continuing.`);
+    }
     if (nonterminal) throw httpErr(409, "A live application already exists on this conversation.");
 
     // unit revalidation AT preparation (eligibility check, not a hold)

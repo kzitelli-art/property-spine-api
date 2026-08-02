@@ -35,6 +35,9 @@ const crypto = require("crypto");
 const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 const proposedTerms = require("../applications/proposed_terms_service"); // Part 3: governed proposed-terms confirmation (Part 2 service)
+// Slice 9: the canonical application READ authority. One definition of
+// "did this ever reach approval", shared with the leasing desk.
+const lifecycleRead = require("../applications/application_lifecycle_read");
 const applicationSendCommand = require("../applications/application_send_command"); // composite Send-application command (intent→prepare→dispatch)
 
 module.exports = function operatorModule(deps) {
@@ -2915,21 +2918,11 @@ module.exports = function operatorModule(deps) {
              left join units un on un.id = tu.unit_id
              -- APPLICANT SUB-STATUS (Slice 2): event-backed only, minimal set.
              -- Application truth wins over invitation truth; honest null else.
-             left join lateral (
-               select case
-                 when exists (select 1 from lease_applications la where la.conversion_id = lco.conversion_id
-                              and la.status in ('approved','lease_ready','tenant_signed','countersigned','active'))
-                   then 'approved'
-                 when exists (select 1 from lease_applications la where la.conversion_id = lco.conversion_id
-                              and la.status in ('denied','declined','withdrawn'))
-                   then 'declined'
-                 when exists (select 1 from lease_applications la where la.conversion_id = lco.conversion_id
-                              and la.status = 'submitted')
-                   then 'submitted'
-                 when exists (select 1 from application_invitations ai where ai.conversion_id = lco.conversion_id
-                              and ai.status in ('manually_sent','provider_dispatched'))
-                   then 'application_sent'
-                 else null end as applicant_substatus
+             -- CANONICAL (Slice 9 read authority). This CASE ladder previously
+             -- lived here AND byte-identically in leasing_desk_loader.js, and
+             -- both answered a HISTORY question from a current status label:
+             -- an application approved and later withdrawn reported 'declined'.
+             left join lateral (${lifecycleRead.SQL_APPLICANT_SUBSTATUS}
              ) subst on true
             where c.property_id = $1 and lco.outcome is null
          )
