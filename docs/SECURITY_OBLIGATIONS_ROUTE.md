@@ -623,3 +623,165 @@ Spine.
 **has not been executed against a deployed API** — there is no deployment to
 run it against from here. It is *Built*, not *Proven*, and must be run as part
 of the deploy step.
+
+---
+
+# Browser rung — focused real-browser acceptance (2026-08-02)
+
+Real Chromium, real authenticated API, real Postgres. **25 assertions, floor
+22, 0 red.** Harness: app repo `obligations_security_browser_proof.browser.js`.
+Screenshots and the header capture: app repo `docs/obligation-security/`.
+
+| Proved in the browser | Result |
+|---|---|
+| Live collection renders from `GET /operator/obligations` | pass |
+| Every obligation request carries `x-staff-session` and **no** `x-operator-key` | pass — `network-evidence.json` |
+| Self-claim succeeds through the named write action, empty body | pass |
+| Another property's work is not reachable from the UI | pass |
+| Unauthorised module never appears | pass |
+| No session → **zero requests issued**, honest unavailable state | pass — `03-unavailable.png` |
+| API failure renders unavailable, **not** an empty queue | pass |
+| Preview and demo still resolve locally (both interceptors) | pass |
+
+## Three defects the browser rung found — all real, all fixed
+
+1. **`writeAction` requires a declared key.** The claim action was registered
+   without one, so the write seam rejected it before any request left the page.
+   Fixed by declaring `key: 'obligationId'`. *Source review had not caught this;
+   only driving the real seam did.*
+2. **The app read `d.receipt` off the envelope.** `writeAction` returns
+   `{data, meta}`; the receipt lives at `out.data.receipt`. The success path
+   was reading `undefined`. Fixed.
+3. **Two of my own assertions were wrong.** I had asserted a claimed item
+   leaves the open queue. It does not — claiming advances `open →
+   in_progress`, and the queue is filtered by `status=open`, so it leaves for
+   that reason and not the one I asserted. **The assertions were corrected to
+   the actual behaviour rather than the behaviour reworded to match them.**
+
+---
+
+# Deployment topology and rollout (2026-08-02)
+
+Everything below is **established from repository source and committed
+documentation only**. This environment holds **no** Render credentials
+(`RENDER_API_KEY` absent, `RENDER_SERVICE_ID` absent, `.env` absent) and no
+production database credential (`DATABASE_URL` absent). Rows that a dashboard
+would answer but source cannot are marked **not source-establishable** rather
+than guessed.
+
+| | **API — `property-spine-api`** | **App — `property-spine-app`** |
+|---|---|---|
+| **Hosting service** | Render **Web Service** (`docs/deployment.md:7`) | Render **Static Site** (`preview_build.js:3`, which documents the sibling preview static site and its publish dir) |
+| **Repo / deployed branch** | `main` (`docs/deployment.md:7`). The branch is a Render **Settings → Branch** field and **has been repointed before** to run a harness off an unmerged branch (`docs/THREAD_HANDOFF.md:123–125`) — so `main` is a *setting*, not a guarantee | `main`. Established, not assumed: the stamped `code_sha` in `build-info.js` (`9422d45`) **is an ancestor of `origin/main`**, and its stamp child `0438574` sits on `main` |
+| **Build step** | Docker — `node:22-alpine`, `CMD ["npm","start"]`; `prestart` runs `migrations/migrate.js` | **None.** "served as committed static files with no build step" (`build-info.js:3`). The *preview* site alone has a build command (`node preview_build.js`, publish `dist`) |
+| **Auto-deploys on push** | **Yes**, on push to `main` (`docs/deployment.md:7`) | **Yes** by strong implication — the whole stamp-child convention and post-deploy probe in `build-info.js` presuppose deploy-on-commit. Not stated in words anywhere in the repo. **Treat as yes; confirm in the dashboard before the window opens.** |
+| **Can auto-deploy be disabled?** | **Not source-establishable.** Render exposes it as a service setting; no repo evidence and no credentials here | **Not source-establishable** (same) |
+| **Manual deploy of a chosen commit** | **Partially.** `deploy.sh` POSTs `/v1/services/{id}/deploys` with `{"clearCache":"do_not_clear"}` and **no commit reference** — it redeploys the *tip of the configured branch*. Deploying a specific commit means repointing Settings → Branch first (`THREAD_HANDOFF.md:123–125`) | **No mechanism in the repo.** Dashboard only |
+| **Build / deploy duration** | **Not source-establishable.** Docker image build + `npm ci` + migration pass — minutes, magnitude unknown | **Near-instant** — no build step; the published artifact *is* the committed file |
+| **Health / identity endpoint** | `GET /health` → `{ok, db_time}` (`server.js:246`); `GET /health/migrations` behind the operator key (`docs/deployment.md:137–142`) | **None.** Identity probe is `window.__PS_BUILD.code_sha`, which is **one commit behind by construction** (`build-info.js:3–8`) |
+| **Rollback mechanism** | **No source-established mechanism.** The only rollback this repo can perform is `git revert` + push, which triggers a *new forward deploy* and **re-runs `prestart` migrations**. Render's dashboard rollback exists as a product feature but is unverified here — and it rolls back **code only, never schema** | `git revert` + push. With no build step this is a true artifact rollback |
+| **Previous deployment retained** | **Not source-establishable** | **Not source-establishable** |
+
+## The API deploy is never code-only by default
+
+`prestart` runs `migrate.js` against **the service's own `DATABASE_URL`**
+(`THREAD_HANDOFF.md:91–98`: *"deploying a branch and applying that branch's
+migrations to production are THE SAME OPERATION"*). **This lane adds no
+migration**, so this deploy *should* be code-only — but `main` carries a known
+ledger/repo divergence (the documented GAP at 121, and the `012` rebuild defect
+filed in PR #33). **Mandatory pre-deploy check:** read
+`GET /health/migrations` immediately before the window and confirm no
+unapplied migration would ride along as a side effect of shipping this lane.
+
+## The bridge is NOT permitted — the deciding evidence
+
+The preferred three-stage bridge was conditional: *"if the currently deployed
+app does not send a staff session to its legacy calls, this bridge is not
+permitted."*
+
+Checked against `origin/main` of the app — the currently deployed version:
+
+```js
+// origin/main index.html:6312
+const headers = (extra={}) => Object.assign(key()?{'x-operator-key':key()}:{}, extra);
+
+// origin/main index.html:10896
+await tryJSON(`/obligations?property_id=${encodeURIComponent(prop())}&status=open`,
+              [], {headers:headers()});
+```
+
+`x-staff-session` on obligation-request lines in `origin/main`: **0 matches.**
+
+**The deployed app's legacy obligation calls carry `x-operator-key` and NOT
+`x-staff-session`.** A bridge could therefore only work by keeping the legacy
+routes alive **still accepting the portfolio-wide shared key** — i.e. retaining
+the exact defect this lane exists to remove, purely for rollout convenience.
+That is forbidden by standing instruction. **The bridge is ruled out on
+evidence, not preference.**
+
+## Selected rollout — coordinated maintenance deployment, app first
+
+There is no ordering without a disagreement window. The order is chosen by
+which failure mode the window produces.
+
+| Order | What the window looks like |
+|---|---|
+| **API first** | The deployed old app calls `GET /obligations` → **404** → `tryJSON(path, [], …)` swallows it → **obligation queues render EMPTY with no error**. A confident wrong. Direct §5 violation |
+| **App first** | The new app calls `GET /operator/obligations` on the old API → 404 → the loader is `liveRequired` with **no fixture fallback** → **honest "unavailable"**. Claim fails visibly |
+
+**App first.** The window is one API build long instead of seconds, and that is
+the correct trade: the extra minutes carry no *new* exposure — the legacy
+routes have been reachable for their whole life — while API-first would put a
+fabricated "nothing to do" in front of an operator. A non-negotiable
+(§5) outranks a shorter window.
+
+```text
+1.  Read GET /health/migrations. Confirm nothing unapplied would ride along.
+2.  Merge the APP PR to main. No build step → live in seconds.
+3.  Verify the app is serving the new file (window.__PS_BUILD / the
+    obligations call now targeting /operator/obligations).
+    ── window opens: obligations read UNAVAILABLE, honestly ──
+4.  Merge the API PR to main. Render builds and deploys.
+5.  Watch GET /health until the new build answers.
+    ── window closes ──
+6.  Run the deployed boundary smoke — the last unproven rung.
+7.  Confirm in a real browser: collection loads, self-claim works,
+    and the legacy paths return 404.
+```
+
+**Rollback of the window, both directions:** revert the app commit (instant,
+restores the old file, which the old API still serves) or revert the API commit
+(a forward deploy; safe here **only because this lane adds no migration**).
+
+**Not done in this rollout, deliberately:** no compatibility alias, no
+test-only endpoint, no secret URL, no shared-key window kept open "just for the
+cutover."
+
+## Exact commit boundaries
+
+**No bridge commits exist, because there is no bridge.**
+
+| Repo | Branch | Commits | State |
+|---|---|---|---|
+| API | `claude/security-obligations-route` | 9 | complete through `4a81c77` |
+| App | `claude/security-obligations-route` | 3 | complete through `b35ed66` |
+
+**One final commit, API only:** this section — deployment topology, the bridge
+ruling, the browser rung. Documentation only; **no code, no test, no route
+changes.** The app branch needs no further commit: its browser evidence
+(`docs/obligation-security/`) is already committed.
+
+## Incidental finding, filed not fixed
+
+`docs/deployment.md:76` instructs future authors to write
+`DO $$ BEGIN … EXCEPTION WHEN others THEN null; END $$;` and cites
+`migrations/090_admin_users.sql` as **the pattern to follow**. That is the
+exact construct recorded as false-green defect **A090-2** in
+`docs/DB_CONNECTION_INVENTORY.md`. **The deployment guide is actively
+recommending the anti-pattern the audit programme exists to remove.** Out of
+scope for this lane; recorded here so it is not rediscovered a third time.
+
+## Standing at the gate
+
+**Nothing has been merged and nothing has been deployed.** Both PRs remain
+open. Ask Spine remains frozen; Slice 9 remains untouched.
