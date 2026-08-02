@@ -1,6 +1,6 @@
 # SLICES 6–10 — STATUS
 
-**Last updated:** 2026-08-01
+**Last updated:** 2026-08-02
 
 > **NEXT FOCUS AFTER 8–10 WRAP: BY-BED PRICING.**
 > Owner ruling, 2026-08-01. Governed pricing resolves per `unit_type_id`; no
@@ -24,13 +24,39 @@ history.
 | 6 | Renewals Operating Rail | **CLOSED** — live-proven, browser verified |
 | 7 | Market & Pricing Workspace | **CLOSED** — live-proven, browser verified |
 | 8 | Governed Rents and Concessions | **STEPS 1–4 BUILT & PROVEN** — step 5 held |
-| 9 | Market Evidence | Not started |
+| 9 | Market Evidence | **IN PROGRESS** — lifecycle authority + Paths A–E built and locally proven; status-read audit complete; see below |
 | 10 | Economic Closure and Orchestration | Not started |
 | — | **By-bed pricing** | **NEXT FOCUS after 8–10** (ruled 2026-08-01) |
 
 Slices 1–5 are closed. Slice 8 steps 1–4 are on branch
 `claude/new-session-via3v4` (API), pushed, **not merged, no PR**. Slices 9 and
 10 have no branch, no commit, and no closure doc in either repository.
+
+## Slice 9 — exact bounded state (2026-08-02)
+
+Branch `claude/slice-9-demand-evidence`, rebased onto `origin/main` `4a04855`.
+**Slice 9 is NOT complete.** What is true right now, and nothing more:
+
+| Item | State |
+|---|---|
+| Lifecycle authority (5 writers) | built, locally proven |
+| Paths A–E writer cutover | built; A/B/C proven through real HTTP; **D and E caller-side only** |
+| `lease_applications.status` writers | authority is the ONLY one, codebase-wide walk confirms |
+| Migrations 123 / 124 | **unmerged**; proven to apply cleanly onto a DB already at 126 |
+| Migration 125 (enforcement) | **staged outside `migrations/`**, deliberately not runnable |
+| Async timezone contract | audited, zero defective call sites |
+| Status-read audit | **complete** — `SLICE_9_APPLICATION_STATUS_READ_AUDIT.md`, 10 sites need correction |
+| Read-side refactor | **not started** |
+| Canonical journey builder / Funnel 2 re-grain | not started |
+| Evidence contract freeze | not done |
+| Renderer | not built |
+| Production acceptance | not started |
+| Browser verification | not done |
+
+Known open defects, from the read audit: `expired` missing from three
+"still open" exclusions; a unit held by an approved application can read as
+available; two duplicated copies of a historical inference that loses an
+approval when an application is later withdrawn.
 
 ## Closed slice identity
 
