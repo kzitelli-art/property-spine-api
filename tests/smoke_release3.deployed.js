@@ -221,15 +221,23 @@ const call = (method, path, { token, key, body } = {}) =>
        values ($1, 'resolved', 'vanished')`, [S.link]).catch((e) => { vocab2 = e.message; });
     ok(vocab2 && /check constraint/i.test(vocab2), "C2 resolution_code vocabulary is DB-closed", (vocab2 || "").slice(0, 80));
 
-    // ── obligation authority boundary — the deployed rung, ACTUALLY RUN ──
-    //  Uses this run's own real staff session on its own isolated QA
-    //  property. It is invoked here, inside the run, because a proof that
-    //  is defined but never called reports green without executing.
-    await obligationBoundarySmoke({ call, j, ok, OPKEY, STAFF: S.mgrTok });
-
   } catch (e) {
     fail++; console.log("  SMOKE CRASHED:", e.message);
   } finally {
+    // ── OBLIGATION AUTHORITY BOUNDARY — invoked HERE, in `finally`, on purpose.
+    //  Placed in the main body it sat downstream of the unrelated leasing
+    //  checks, so any earlier crash skipped the entire rung — proven by a
+    //  local run where an unrelated failure left 0/10 executed. The release's
+    //  final security gate must not be suppressible by an unrelated defect.
+    //  It runs before teardown, because teardown deletes the staff session it
+    //  needs. Its own try/catch keeps a boundary error from masking teardown.
+    try {
+      await obligationBoundarySmoke({
+        call, j, ok, OPKEY: process.env.OPERATOR_KEY, STAFF: S.mgrTok });
+    } catch (e) {
+      ok(false, "BOUNDARY rung crashed before completing", e.message);
+    }
+
     // ── teardown: sessions + team access only. The property, people,
     //    conversion, tasks, and their EVENT HISTORY are RETAINED — the
     //    append-only doctrine has no teardown escape hatch, by design.
@@ -243,7 +251,15 @@ const call = (method, path, { token, key, body } = {}) =>
       console.log("  property picker, and no operating workflow references it. It must never be");
       console.log("  treated as an operating property.");
     } catch (e2) { console.log("  TEARDOWN NOTE:", e2.message); }
+    //  EXECUTION FLOOR — always evaluated, even if the boundary rung was
+    //  never reached. This is the assertion that catches a deleted call.
+    const missingBoundary = boundaryFloorMissing();
+    ok(missingBoundary.length === 0,
+      `FLOOR  all ${BOUNDARY_REQUIRED.length} obligation-boundary behaviours executed`,
+      missingBoundary.length ? `NOT EXECUTED (${missingBoundary.length}): ` + missingBoundary.join(" | ") : "");
+
     c.release(); await pool.end();
+    console.log(`═══ BOUNDARY: ${BOUNDARY_SEEN.size}/${BOUNDARY_REQUIRED.length} behaviours executed + 1 execution-floor assertion ═══`);
     console.log(`═══ RESULT: ${pass} passed · ${fail} failed ═══`);
     process.exit(fail ? 1 : 0);
   }
@@ -264,49 +280,89 @@ const call = (method, path, { token, key, body } = {}) =>
 //  Usage (same as the rest of this suite):
 //    BASE=https://…  OPERATOR_KEY=…  STAFF_SESSION=…  node tests/smoke_release3.deployed.js
 // ════════════════════════════════════════════════════════════════════
+//  EXECUTION FLOOR. This rung already produced one false green: it was
+//  defined, exported, and never invoked, so the suite reported green while
+//  proving nothing. A pass count cannot detect that — an absent check adds
+//  zero to both `pass` and `fail`. So the rung declares its behaviours by
+//  NAME, records each one as it actually executes, and the main run asserts
+//  in its `finally` block that every declared name was observed. Delete the
+//  invocation, delete a check, or short-circuit past one, and the floor
+//  fails and the process exits non-zero.
+const BOUNDARY_REQUIRED = [
+  "B1  legacy door gone: GET /obligations",
+  "B2  legacy door gone: GET /obligations/:id",
+  "B3  legacy door gone: PATCH /obligations/:id/claim",
+  "B4  legacy door gone: PATCH /obligations/:id/satisfy",
+  "B5  legacy door gone: PATCH /obligations/:id/complete",
+  "B6  authenticated GET /operator/obligations is reachable",
+  "B7  the response carries SERVER-DERIVED scope",
+  "B8  a client property_id is REFUSED (403)",
+  "B9  an out-of-scope claim is CONCEALED (404, not 403)",
+  "B10 the shared operator key ALONE cannot read obligations (401)",
+];
+const BOUNDARY_SEEN = new Set();
+
 async function obligationBoundarySmoke({ call, j, ok, OPKEY, STAFF }) {
+  //  Every boundary assertion goes through bok, which records the label. A
+  //  check that does not run leaves its name missing from BOUNDARY_SEEN.
+  const bok = (label, cond, extra) => { BOUNDARY_SEEN.add(label); ok(cond, label, extra); };
+
   //  1. all five legacy doors must be UNROUTED — not merely unused.
+  //  The shared key is REQUIRED here: without it the global gate answers 401
+  //  before routing, so an unkeyed run cannot observe the 404 at all.
+  const NIL = "00000000-0000-0000-0000-000000000000";
   const legacy = [
-    ["GET",   "/obligations"],
-    ["GET",   "/obligations/00000000-0000-0000-0000-000000000000"],
-    ["PATCH", "/obligations/00000000-0000-0000-0000-000000000000/claim"],
-    ["PATCH", "/obligations/00000000-0000-0000-0000-000000000000/satisfy"],
-    ["PATCH", "/obligations/00000000-0000-0000-0000-000000000000/complete"],
+    ["B1  legacy door gone: GET /obligations",                    "GET",   "/obligations"],
+    ["B2  legacy door gone: GET /obligations/:id",                "GET",   `/obligations/${NIL}`],
+    ["B3  legacy door gone: PATCH /obligations/:id/claim",        "PATCH", `/obligations/${NIL}/claim`],
+    ["B4  legacy door gone: PATCH /obligations/:id/satisfy",      "PATCH", `/obligations/${NIL}/satisfy`],
+    ["B5  legacy door gone: PATCH /obligations/:id/complete",     "PATCH", `/obligations/${NIL}/complete`],
   ];
-  for (const [m, p] of legacy) {
-    const r = await call(m, p, { key: OPKEY, body: {} });
-    ok(r.status === 404, `legacy door gone: ${m} ${p}`, "status " + r.status);
+  for (const [label, m, p] of legacy) {
+    //  no body on GET — fetch throws "Request with GET/HEAD method cannot
+    //  have body", which would abort the rung on its very first check.
+    const r = await call(m, p, m === "GET" ? { key: OPKEY } : { key: OPKEY, body: {} });
+    bok(label, r.status === 404,
+      `status ${r.status}` + (r.status === 401 ? " — OPERATOR_KEY missing or wrong; the gate answered before routing" : ""));
   }
 
-  //  2. the authenticated collection read is reachable and scoped.
-  //  A MISSING SESSION IS A FAILURE, NOT A SKIP. Conditionally skipping the
-  //  authenticated half would let this rung report green while proving only
-  //  that five routes are absent — the false-green shape this programme exists
-  //  to remove, in the release's own final gate.
+  //  2. the authenticated half. A MISSING SESSION IS A FAILURE, NOT A SKIP.
+  //  Skipping here would leave the rung proving only that five routes are
+  //  absent, which is exactly half of the boundary and the weaker half.
   if (!STAFF) {
-    ok(false, "a real staff session is REQUIRED for the boundary rung",
-      "no session available — the authenticated half did not run");
+    for (const label of ["B6  authenticated GET /operator/obligations is reachable",
+                         "B7  the response carries SERVER-DERIVED scope",
+                         "B8  a client property_id is REFUSED (403)",
+                         "B9  an out-of-scope claim is CONCEALED (404, not 403)"]) {
+      bok(label, false, "NO STAFF SESSION — the authenticated half could not run");
+    }
   } else {
     const r = await call("GET", "/operator/obligations", { token: STAFF });
     const b = await j(r);
-    ok(r.status === 200 && Array.isArray(b.items),
-      "authenticated /operator/obligations is reachable", r.status);
-    ok(b.scope && b.scope.property_id,
-      "the response carries SERVER-DERIVED scope", JSON.stringify(b.scope || {}));
+    bok("B6  authenticated GET /operator/obligations is reachable",
+      r.status === 200 && Array.isArray(b.items), r.status);
+    bok("B7  the response carries SERVER-DERIVED scope",
+      !!(b.scope && b.scope.property_id), JSON.stringify(b.scope || {}));
 
-    //  3. a client property_id cannot widen — refused, not silently ignored.
-    const r2 = await call("GET",
-      "/operator/obligations?property_id=00000000-0000-0000-0000-000000000000", { token: STAFF });
-    ok(r2.status === 403, "a client property_id is refused on the deployed route", r2.status);
+    //  a client property_id cannot widen — refused, not silently ignored.
+    const r2 = await call("GET", `/operator/obligations?property_id=${NIL}`, { token: STAFF });
+    bok("B8  a client property_id is REFUSED (403)", r2.status === 403, r2.status);
 
-    //  4. cross-property self-claim is concealed, not disclosed.
-    const r3 = await call("POST",
-      "/operator/obligations/00000000-0000-0000-0000-000000000000/claim", { token: STAFF, body: {} });
-    ok(r3.status === 404, "an out-of-scope claim is CONCEALED (404, not 403)", r3.status);
+    //  cross-property self-claim is concealed, not disclosed.
+    const r3 = await call("POST", `/operator/obligations/${NIL}/claim`, { token: STAFF, body: {} });
+    bok("B9  an out-of-scope claim is CONCEALED (404, not 403)", r3.status === 404, r3.status);
   }
 
-  //  5. the read must refuse an unauthenticated caller even WITH the shared key.
+  //  3. the replacement read must refuse the shared key on its own.
   const r4 = await call("GET", "/operator/obligations", { key: OPKEY });
-  ok(r4.status === 401, "the shared operator key alone cannot read obligations", r4.status);
+  bok("B10 the shared operator key ALONE cannot read obligations (401)", r4.status === 401, r4.status);
 }
-module.exports = Object.assign(module.exports || {}, { obligationBoundarySmoke });
+
+//  Asserted by the main run in `finally`, so it fires even if the rung was
+//  never reached. Returns the missing labels.
+function boundaryFloorMissing() {
+  return BOUNDARY_REQUIRED.filter((l) => !BOUNDARY_SEEN.has(l));
+}
+
+module.exports = Object.assign(module.exports || {},
+  { obligationBoundarySmoke, boundaryFloorMissing, BOUNDARY_REQUIRED });
