@@ -245,3 +245,71 @@ Ask Spine re-fetched at write time: `ask-spine-slice-1` @ `17c5a68` still 7 ahea
 and **not landed**; `ask-spine-source-audit` @ `d2f14c5` landed. Zero named-file
 overlap, zero migration overlap. Migration 125 untouched; migration ceiling
 remains 127.
+
+---
+
+## 10 · CLOSEOUT — PROOF SELF-CONTAINMENT AND THE SNAPSHOT CONTRACT
+
+### 10.1 · The evidence proof no longer depends on ambient data
+
+`slice9_evidence_proof.js` did `select id from properties limit 1`. It therefore
+passed or crashed depending on what the database happened to hold, and when it
+did find a row it **overwrote that real property's operating timezone**. The
+earlier `57/57` was locally exercised but not independently reproducible.
+
+Corrected in the harness only — no production source touched:
+
+- it creates its own `'S9 evidence proof — scratch'` property inside the
+  transaction, with the timezone set at creation instead of overwritten;
+- it asserts the property exists before any behavioural assertion;
+- section J's leftover check is scoped to that property instead of counting
+  `leasing_tours where status='rescheduled'` globally — a second ambient
+  dependency that would pass or fail on unrelated rows;
+- everything rolls back with the transaction.
+
+**Two clean runs against a database holding ZERO properties: `60/0` and `60/0`.**
+(60, not 57: three new assertions cover the property's own creation and the
+scoped teardown.)
+
+### 10.2 · The snapshot contract — a real defect, corrected
+
+The constant query count was true, but the reads were **not one snapshot**.
+`marketEvidenceProjection` passes the raw **pool**, so the six Funnel 2 reads
+could land on six different connections at READ COMMITTED. A tour completed
+midway through would appear in one read and not another, and the aggregate would
+reconcile to a set of rows that never existed together.
+
+Only the read boundary was changed. Every material read now runs inside one
+`BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`. Read-only is
+deliberate: the path is structurally incapable of writing. When the caller
+already owns a transaction — every proof does — that transaction *is* the
+snapshot and is used as-is; no nested transaction, no second connection.
+
+A `snapshot` block now rides the response:
+
+| field | proven |
+|---|---|
+| `isolation_level` | `repeatable read` on the pool-backed path |
+| `read_only` | `true`; a write in that mode is refused by Postgres itself |
+| `backend_pid` | all reads pinned to ONE backend |
+| `snapshot_marker` | `pg_current_snapshot()` at open |
+| `stable_across_all_reads` | the marker is identical at the last read |
+| `transaction_owner` | `opportunity_funnel` (pool) or `caller` (proof) |
+
+**Query count: 8 = 6 material reads + 2 snapshot probes** (open and close). A
+seventh material read appears only when a reschedule parent lives at another
+property — bounded, one query for all opportunities.
+
+**No N+1, proven by construction rather than inspection:** adding four more
+opportunities leaves the count at exactly 8 while the row count grows to 10.
+
+One server-authored `as_of` and one property scope govern every row; rows,
+coverage and the aggregate all derive from that single read.
+
+A discriminator bug was found and fixed while proving this: a pg `Client` also
+exposes `connect()`, so the pool/client test now keys on Pool-specific counters.
+
+### 10.3 · Totals
+
+**Full suite, twice, against a clean database: `774 / 0` and `774 / 0`.**
+Zero properties in the database before and after both runs.

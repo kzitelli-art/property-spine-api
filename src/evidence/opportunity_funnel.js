@@ -115,13 +115,79 @@ function classifyEvidence(j) {
   return { state, flags, occurrences: occ };
 }
 
+// ── ONE COHERENT SNAPSHOT FOR EVERY FUNNEL 2 FACT ───────────────────
+//  Funnel 2 reads opportunities, tours, tour events, external tours, revisions
+//  and applications. Issued against a POOL, those land on any free connection
+//  at READ COMMITTED — six independent snapshots. A tour completed midway
+//  through would then appear in one read and not another, and the aggregate
+//  would reconcile to rows that never existed together.
+//
+//  So every material read is taken inside ONE REPEATABLE READ, READ ONLY
+//  transaction. Read-only is deliberate: this path must be structurally
+//  incapable of writing.
+//
+//  When the caller already owns a transaction (every proof does), that
+//  transaction IS the snapshot and is used as-is — opening a nested one is not
+//  possible and starting a second connection would defeat the point.
+async function snapshotMeta(client) {
+  const r = (await client.query(
+    `select current_setting('transaction_isolation') as isolation,
+            pg_current_snapshot()::text            as snapshot_marker,
+            pg_backend_pid()                       as backend_pid`)).rows[0];
+  return { isolation: r.isolation, snapshot_marker: r.snapshot_marker,
+           backend_pid: r.backend_pid };
+}
+
+async function withCoherentSnapshot(q, fn) {
+  //  Discriminate a POOL from a CLIENT. Both expose connect(), so that alone
+  //  is not the test — a pg Client throws "cannot reuse a client" on a second
+  //  connect(). Pool-specific counters are the reliable marker.
+  const isPool = typeof q.connect === "function" && typeof q.totalCount === "number";
+  if (isPool) {
+    const client = await q.connect();
+    try {
+      await client.query("begin transaction isolation level repeatable read read only");
+      const opened = await snapshotMeta(client);
+      const out = await fn(client, { ...opened, owner: "opportunity_funnel" });
+      const closed = await snapshotMeta(client);
+      await client.query("commit");
+      return { out, opened, closed, owner: "opportunity_funnel" };
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      throw e;
+    } finally { client.release(); }
+  }
+  const opened = await snapshotMeta(q);
+  const out = await fn(q, { ...opened, owner: "caller" });
+  const closed = await snapshotMeta(q);
+  return { out, opened, closed, owner: "caller" };
+}
+
 /**
- * opportunityFunnelRows — one row per opportunity, property-scoped, bounded.
+ * opportunityFunnelRows — one row per opportunity, property-scoped, bounded,
+ * read under ONE coherent snapshot.
  *
- * `window` is a resolveOperatingWindow() result; property_id is taken from it,
- * never from a caller-supplied value.
+ * `window` is a resolveOperatingWindow() result; property_id and as_of are
+ * taken from it, never from a caller-supplied value.
  */
-async function opportunityFunnelRows(q, window) {
+async function opportunityFunnelRows(pq, window) {
+  const result = await withCoherentSnapshot(pq, (q, meta) =>
+    readOpportunityFunnel(q, window, meta));
+  return {
+    ...result.out,
+    snapshot: {
+      isolation_level: result.opened.isolation,
+      backend_pid: result.opened.backend_pid,
+      snapshot_marker: result.opened.snapshot_marker,
+      //  Proof that the LAST read saw the same snapshot as the FIRST.
+      stable_across_all_reads: result.opened.snapshot_marker === result.closed.snapshot_marker,
+      transaction_owner: result.owner,
+      read_only: result.owner === "opportunity_funnel",
+    },
+  };
+}
+
+async function readOpportunityFunnel(q, window, _meta) {
   const property_id = window.property_id;
   const asOfIso = window.as_of_utc;
   const inWindow = (d) => {

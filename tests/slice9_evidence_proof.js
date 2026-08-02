@@ -89,8 +89,23 @@ const asPool = (c) => ({ query: (...a) => c.query(...a) });
   try {
     await c.query("begin");
     const P = asPool(c);
-    const prop = (await c.query("select id from properties limit 1")).rows[0].id;
-    await c.query("update properties set operating_timezone='America/New_York' where id=$1", [prop]);
+
+    // ── THE HARNESS CREATES ITS OWN PROPERTY ──────────────────────────
+    //  This proof used to do `select id from properties limit 1`, which meant
+    //  it passed or crashed depending on whatever the database happened to
+    //  contain — and silently reused a REAL property's timezone by overwriting
+    //  it. On a clean database it crashed outright. A proof that carries the
+    //  accepted Funnel 2 contract has to be reproducible from empty, so it now
+    //  creates a dedicated scratch property inside the transaction and rolls it
+    //  back with everything else.
+    const prop = (await c.query(
+      `insert into properties (name, operating_timezone)
+       values ('S9 evidence proof — scratch', 'America/New_York') returning id`)).rows[0].id;
+    const seeded = (await c.query(
+      `select id, operating_timezone from properties where id = $1`, [prop])).rows[0];
+    ok("the harness created its OWN property — no ambient row is relied on", !!seeded);
+    ok("with the operating timezone it needs, set at creation rather than overwritten",
+      seeded.operating_timezone === "America/New_York");
 
     const win = await resolveOperatingWindow(P, {
       property_id: prop, start_local: "2026-08-01", end_local: "2026-08-31",
@@ -239,9 +254,17 @@ const asPool = (c) => ({ query: (...a) => c.query(...a) });
   } finally { c.release(); }
 
   section("J  nothing survived the rollback");
-  const left = (await pool.query(
-    "select count(*)::int n from leasing_tours where status='rescheduled'")).rows[0].n;
-  ok("seeded tours did not persist", left === 0);
+  //  Scoped to THIS harness's own property, not a global count — a global
+  //  assertion would be a second ambient dependency, passing or failing on
+  //  unrelated rows.
+  const leftProp = (await pool.query(
+    "select count(*)::int n from properties where name = 'S9 evidence proof — scratch'")).rows[0].n;
+  ok("the scratch property did not persist", leftProp === 0);
+  const leftTours = (await pool.query(
+    `select count(*)::int n from leasing_tours t
+      join properties p on p.id = t.property_id
+     where p.name = 'S9 evidence proof — scratch'`)).rows[0].n;
+  ok("and neither did anything seeded against it", leftTours === 0);
 
   await pool.end();
   console.log(`\n════ ${pass} passed, ${fail} failed ════\n`);
