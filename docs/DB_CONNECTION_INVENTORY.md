@@ -2202,3 +2202,70 @@ schema for the tables it uses.
 2. Decide: repair `012` in place, or cut a sanitized baseline and re-anchor.
 3. Whatever is chosen, add a **rebuild-from-empty** check so this cannot regress
    silently. That check is the one thing that would have caught it years ago.
+
+---
+
+# Appendix I — The deployment guide teaches the false-green pattern
+
+**Registered here, deliberately not fixed in the security release.** Recorded
+2026-08-02 while establishing the deployment topology for the obligation
+security lane. This belongs to the baseline / migration-hardening lane, and it
+is now owned rather than merely observed.
+
+## The finding
+
+`docs/deployment.md:76`, under **"Adding a migration"**, instructs every future
+author:
+
+> **Special case — `ALTER TYPE … ADD VALUE`:** Postgres does not allow using a
+> newly added enum value in the same transaction as an `INSERT` referencing it.
+> Use a `DO $$ BEGIN … EXCEPTION WHEN others THEN null; END $$;` block, then a
+> separate `UPDATE` in the next statement. **See `migrations/090_admin_users.sql`
+> for the pattern.**
+
+That is **defect A090-2** — recorded in this document's false-green inventory —
+being recommended as the house style, and the exact file carrying the defect
+cited as the model to copy.
+
+## Why this outranks a single bad migration
+
+`090` is one file. **A090-2 is one instance of a pattern the documentation
+propagates.** Every migration written to this guidance inherits it. The
+programme can repair `090` and still receive `091`, `092`, `093` with the same
+construct, written correctly according to the docs.
+
+`EXCEPTION WHEN others THEN null` catches **everything** — a syntax error, a
+missing table, a permission failure, a typo in a column name — and reports
+success. The migration runner records the file as applied. `/health/migrations`
+reports green. **The ledger and the schema diverge silently**, which is exactly
+the divergence Appendix H observed at `012` and could not explain from
+`migrations/` alone.
+
+## What the corrected guidance must say
+
+The real constraint is narrow and worth stating precisely, because the current
+text is a legitimate problem with an illegitimate remedy:
+
+- The genuine limitation is that a newly added enum value **cannot be used in
+  the same transaction** in which it was added. That is real.
+- The remedy is **not** to swallow all errors. It is to catch the **specific**
+  condition (`duplicate_object` for a re-added value) — or to split the
+  statements across migrations so no exception handler is needed at all.
+
+The corrected documentation must **explicitly reject**:
+
+```sql
+EXCEPTION WHEN others THEN null
+```
+
+as a general migration pattern, and say why: it converts every failure mode into
+a recorded success.
+
+## Ownership
+
+| | |
+|---|---|
+| **Lane** | baseline / migration hardening — this lane |
+| **Not** | the obligation security release. It ships no migration and must not carry a documentation change to `deployment.md` |
+| **Blocks the security release?** | **No.** It affects migrations written in future, not this deploy |
+| **Removal condition** | `docs/deployment.md:76` no longer recommends a blanket handler, **and** a rebuild-from-empty check exists (Appendix H, item 3) so a silently-skipped migration cannot pass again |
