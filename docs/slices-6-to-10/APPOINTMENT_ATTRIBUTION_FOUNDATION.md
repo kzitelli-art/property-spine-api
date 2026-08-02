@@ -262,3 +262,80 @@ Remaining: 4 (migration 127, **blocked**) · 5 (writer cutover — note the
 
 No migration written. No writer cut over. No backfill. No projection. No route.
 `server.js` and `src/agent/` untouched.
+
+---
+
+## UNBLOCKED — LEDGER SUPPLIED 2026-08-02
+
+The precondition above was satisfied by live Neon output:
+
+```
+126 obligation_missed_recognition     122 governed_economics_lineage
+121 ai_leasing_operating_context      120 ai_leasing_strategy_foundation
+119 renewal_operating_rail            118 work_proof_attachments
+117 staff_agent_capture               116 readiness_certification
+```
+
+**Applied ceiling: 126, with no gap above it.** Combined with a fresh all-branch,
+all-path scan (below), **127 was free** and is now
+`migrations/127_appointment_attribution_bridge.sql`.
+
+The prior "127" in this document was an *assumption*. It is now an *assignment
+from combined live evidence*. That the two agree is a coincidence worth stating
+plainly rather than treating as confirmation of the guess.
+
+| number | where it lives | applied in production? |
+|---|---|---|
+| 121 `ai_leasing_operating_context` | **only** `claude/getting-up-to-speed-nyf4ww` | **yes** |
+| 123, 124 | Slice 9 branch only | no |
+| 125 `application_lifecycle_enforcement` | staged in `docs/slices-6-to-10/deployment_b/`, **not** in `migrations/` | no — untouched by this cut |
+| 126 | `main` | yes |
+| **127** | **this branch** | not yet |
+
+### The 121 provenance question, now answered
+
+Production records `121 = ai_leasing_operating_context` while **no release
+branch's source contains a 121 file**. It exists on exactly one branch, which
+was deployed to the production Render service, where `prestart` ran its
+migration. Production therefore carries schema — `ai_leasing_operating_rules`,
+two triggers and `agent_runs` constraints — that no release branch can rebuild.
+
+This does not endanger 127: the runner's own "number already spent" guard keys
+on the ledger, 127 is unspent, and the bridge touches none of those objects. It
+does mean **a rebuild from source alone would not reproduce production**, which
+is a real finding, owned by whoever holds that branch, and not Slice 9's to fix.
+
+### Ask Spine isolation, re-verified at assignment time
+
+`claude/ask-spine-slice-1` (7 commits ahead) and `claude/ask-spine-source-audit`
+(0 ahead) both top out at migration 126 — **zero migration overlap**. Their
+non-doc source is confined to `server.js`, `src/agent/ask_spine*.js`, Ask Spine
+tests and seeds. This cut touches none of those. Re-check again before any PR.
+
+### Proof replayed from the real migration
+
+Scratch DDL was **deleted**, the proof database **dropped and rebuilt from
+empty**, and the whole chain re-run so the bridge came from 127 itself:
+
+| proof | result |
+|---|---|
+| attribution writers | **29 / 0** |
+| appointment journey | **52 / 0** |
+| exact-links-only backfill | **23 / 0** |
+| Slice 9 A–I regression (10 suites) | **526 / 0** |
+
+Migration 127 re-applied directly a second time: idempotent, no duplicate index.
+Structure verified against the contract — both columns `uuid` and **nullable**,
+both FKs `ON DELETE SET NULL`, both indexes partial on `conversion_id is not
+null`, and **zero `conversion_id` values written by the migration**.
+
+Backfill measured: **2 exact links written, 16 left NULL by design**, zero
+inferred. A second run writes zero rows; a row already carrying a different
+opportunity is reported for a human, never rewritten.
+
+**Standing evidence limitation, unchanged:** the local chain still cannot build
+from empty without four documented pre-existing patches (012 `vendors` shape,
+083/084 self-recording, 087 production-keyed data correction, 110's production
+backfill). Those are recorded on `claude/baseline-migration-evidence`, are not
+Slice 9's to repair, and every one is echoed by the bootstrap rather than
+silently absorbed. Migration 125 was not moved, renumbered or modified.

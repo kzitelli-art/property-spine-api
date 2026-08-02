@@ -1,15 +1,23 @@
-# APPOINTMENT ATTRIBUTION — MIGRATION CONTRACT (UNNUMBERED)
+# APPOINTMENT ATTRIBUTION — MIGRATION CONTRACT → **ASSIGNED 127**
 
-**This is a migration CONTRACT, not migration authority.**
+**This was a migration CONTRACT, not migration authority. It has since been
+satisfied.**
 
-It is deliberately **not** named with a number. The Neon ledger is deployment
+It was deliberately **not** named with a number. The Neon ledger is deployment
 authority, and the unresolved `121` history — two different migrations numbered
 `121` on 2026-08-01, one renumbered to `122` sixteen minutes later, and a
-production ledger row whose identity cannot be resolved from the repository —
-proves the all-branch reservation scan is not sufficient to claim a number.
+production ledger row whose identity could not be resolved from the repository —
+proved the all-branch reservation scan is not sufficient to claim a number.
 
-**Nothing in this file may be placed in `migrations/` until the Neon ledger is
-supplied and a number is assigned from it.**
+**RESOLVED 2026-08-02.** The live ledger was supplied: applied ceiling **126**,
+no gap above it, `121 = ai_leasing_operating_context`. A fresh all-branch,
+all-path scan confirmed nothing reserves 127 or higher. The DDL in §1 now lives
+at `migrations/127_appointment_attribution_bridge.sql`, **byte-identical** in its
+executable statements (verified by diff). Migration 125 remains staged in
+`docs/slices-6-to-10/deployment_b/` and was not moved, renumbered or modified.
+
+Full assignment evidence, the 121 provenance answer and the replayed proof
+totals are in `APPOINTMENT_ATTRIBUTION_FOUNDATION.md`.
 
 ---
 
@@ -152,10 +160,18 @@ cutover are one deployable unit.
 
 ---
 
-## 6 · LEDGER-DEPENDENT ACTIONS STILL BLOCKED
+## 6 · LEDGER-DEPENDENT ACTIONS — NOW CLEARED
 
-- assigning the number
-- creating the file under `migrations/` or the staged deployment directory
-- pushing any branch state whose production source references `conversion_id`
+| was blocked on the ledger | status |
+|---|---|
+| assigning the number | **done** — 127, from combined live evidence |
+| creating the file under `migrations/` | **done** — `127_appointment_attribution_bridge.sql` |
+| pushing source that references `conversion_id` | **cleared** — the branch now carries the authoritative migration that creates it |
+
+Enforcement sequence (§5) reached step **4**: migration applied · writers cut
+over · analyzer re-run · exact-links-only backfill implemented and proven
+(`tools/appointment_attribution_backfill.js`, 23/0). Step 5 (projector reads
+`conversion_id` as primary basis) is already true. Step 6 stands permanently:
+**no NOT NULL is ever added.**
 
 Migration 125 is not amended or moved by any of this.
