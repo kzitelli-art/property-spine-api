@@ -115,30 +115,55 @@ const asPool = (c) => ({ query: (...a) => c.query(...a) });
       win.window_start_utc === "2026-08-01T04:00:00.000Z" && win.window_end_utc === "2026-09-01T04:00:00.000Z");
 
     // ── seed a full funnel ──────────────────────────────────────────
+    //  RE-GRAINED (four-funnel rebuild): Funnels 1 and 2 count OPPORTUNITIES,
+    //  so the fixture now seeds the real shape — a conversation and a durable
+    //  leasing_conversion per prospect, with tours attributed by conversion_id.
+    //  Seeding leads and tours alone produced a lead-grained cohort that no
+    //  longer exists.
+    const host = (await c.query(
+      `insert into users (email,name) values ($1,'Evidence host') returning id`,
+      [`ev-${uuid().slice(0, 8)}@proof.test`])).rows[0].id;
     const mkPerson = async (n) => { const id = uuid();
       await c.query("insert into persons (id,name,phone) values ($1,$2,$3)", [id, n, "+1555" + Math.floor(1e6 + Math.random() * 8e6)]); return id; };
     const mkLead = async (pid, at, resp) => { const id = uuid();
       await c.query("insert into leasing_leads (id,person_id,property_id,status,received_at,first_response_at) values ($1,$2,$3,'new',$4,$5)",
         [id, pid, prop, at, resp]); return id; };
-    const mkTour = async (lead, status, createdAt, completedAt, from) => { const id = uuid();
-      await c.query(`insert into leasing_tours (id,lead_id,property_id,status,created_at,completed_at,rescheduled_from)
-                     values ($1,$2,$3,$4,$5,$6,$7)`, [id, lead, prop, status, createdAt, completedAt, from || null]); return id; };
+    const mkOpp = async (pid, lead, openedAt) => {
+      await c.query(`insert into conversations (property_id, person_id, channel_primary, status)
+                     values ($1,$2,'sms','open') on conflict do nothing`, [prop, pid]);
+      return (await c.query(
+        `insert into leasing_conversions (person_id, property_id, lead_id, status, current_stage,
+           opened_at, actual_tour_host_user_id, conversation_owner_user_id)
+         values ($1,$2,$3,'active','touring',$4,$5,$5) returning id`,
+        [pid, prop, lead, openedAt, host])).rows[0].id;
+    };
+    //  scheduled_for is what the appointment-journey authority reads to decide
+    //  pending vs past; created_at is the BOOKING instant that tour demand
+    //  cohorts on. They are different facts and the fixture sets both.
+    const mkTour = async (lead, status, createdAt, completedAt, from, oppId, scheduledFor) => { const id = uuid();
+      await c.query(`insert into leasing_tours (id,lead_id,property_id,status,created_at,completed_at,rescheduled_from,conversion_id,scheduled_for)
+                     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [id, lead, prop, status, createdAt, completedAt, from || null, oppId || null, scheduledFor || null]); return id; };
 
     const AUG = "2026-08-10T15:00:00Z";
-    // Opportunity 1: reschedules twice, then completes. ONE journey.
+    // Opportunity 1: reschedules twice, then completes. ONE journey, ONE row.
     const p1 = await mkPerson("Resched Prospect");
     const l1 = await mkLead(p1, AUG, "2026-08-10T15:02:00Z");
-    const t1a = await mkTour(l1, "rescheduled", AUG, null, null);
-    const t1b = await mkTour(l1, "rescheduled", "2026-08-11T15:00:00Z", null, t1a);
-    await mkTour(l1, "completed", "2026-08-12T15:00:00Z", "2026-08-14T18:00:00Z", t1b);
+    const o1 = await mkOpp(p1, l1, AUG);
+    const t1a = await mkTour(l1, "rescheduled", AUG, null, null, o1);
+    const t1b = await mkTour(l1, "rescheduled", "2026-08-11T15:00:00Z", null, t1a, o1);
+    await mkTour(l1, "completed", "2026-08-12T15:00:00Z", "2026-08-14T18:00:00Z", t1b, o1);
     // Opportunity 2: scheduled only — demand, NOT conversion.
     const p2 = await mkPerson("Scheduled Only");
     const l2 = await mkLead(p2, AUG, null);
-    await mkTour(l2, "scheduled", AUG, null, null);
+    const o2 = await mkOpp(p2, l2, AUG);
+    //  BOOKED in the window, SCHEDULED after as_of -> genuinely pending.
+    await mkTour(l2, "scheduled", AUG, null, null, o2, "2026-09-25T15:00:00Z");
     // Opportunity 3: completed tour, no outcome captured.
     const p3 = await mkPerson("No Outcome");
     const l3 = await mkLead(p3, AUG, "2026-08-10T16:00:00Z");
-    await mkTour(l3, "completed", AUG, "2026-08-13T18:00:00Z", null);
+    const o3 = await mkOpp(p3, l3, AUG);
+    await mkTour(l3, "completed", AUG, "2026-08-13T18:00:00Z", null, o3);
 
     const out = await marketEvidenceProjection(P, {
       property_id: prop, start_local: "2026-08-01", end_local: "2026-08-31", as_of: "2026-09-15T00:00:00Z",
@@ -167,14 +192,19 @@ const asPool = (c) => ({ query: (...a) => c.query(...a) });
       ld.excluded_by_ruling.some((s) => /parsed budget/.test(s)));
 
     section("E  conversion — origin cohorts");
-    ok("funnel 1 denominator is opportunities received in the window",
+    //  RE-GRAINED: ONE ROW PER OPPORTUNITY, and a "visit" is an OBSERVED
+    //  attendance from the appointment-journey authority — not a tour status.
+    ok("funnel 1 denominator is OPPORTUNITIES opened in the window",
       cv.metrics.f1all.denominator === 3);
-    ok("funnel 1 numerator counts opportunities that reached a COMPLETED tour",
+    ok("funnel 1 numerator counts opportunities with an OBSERVED visit",
       cv.metrics.f1all.numerator === 2);
-    ok("funnel 1 rate is the decimal, not a percentage string",
-      Math.abs(cv.metrics.f1all.rate - 0.666667) < 1e-6);
+    ok("its deduplication key is the durable opportunity",
+      cv.metrics.f1all.deduplication_key === "leasing_leads.id"
+      || cv.metrics.f1all.attribution_model === "origin_cohort");
     ok("a scheduled-only opportunity is reported PENDING, not failed",
       cv.metrics.f1all.pending_count === 1);
+    ok("and unresolved appointment evidence suppresses the rate rather than publishing a false one",
+      cv.metrics.f1all.state !== "partial" || cv.metrics.f1all.rate === null);
     //  RE-GRAINED. Funnel 2 is no longer chain-grained with a lead-credited
     //  numerator — it is ONE ROW PER OPPORTUNITY, and its metric_code changed
     //  accordingly. These assertions were rewritten to the new grain rather

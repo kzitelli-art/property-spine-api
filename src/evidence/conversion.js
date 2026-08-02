@@ -37,19 +37,28 @@ const { buildMetric } = require("./metric_contract");
 const { resolveChains, journeyFinalStatus } = require("./tour_demand");
 const {
   opportunityFunnelRows, aggregateOpportunityFunnel, MISSING_CANONICAL_FACTS,
+  RESOLVED: RESOLVED_APPT,
 } = require("./opportunity_funnel");
 
-// Canonical lifecycle vocabulary from migration 033. Milestone achievement is
-// "reached at least this far", never current-status equality: an application
-// that advanced to countersigned still reached approved.
-const LIFECYCLE_ORDER = ["draft", "submitted", "approved", "lease_ready", "tenant_signed", "countersigned", "active"];
-const TERMINATED = new Set(["declined", "withdrawn"]);
+// ── NO SECOND COPY OF THE LADDER ────────────────────────────────────
+//  This file used to carry its own LIFECYCLE_ORDER / TERMINATED / reached().
+//  application_lifecycle_read.js exists precisely to stop that: "A second copy
+//  is how the nine private ladders this module replaces came to exist." The
+//  vocabulary and the milestone predicates now come from the one writer module,
+//  BY REFERENCE. `reached` is kept as a thin adapter because the evidence proof
+//  imports it, but it no longer defines anything.
+const {
+  LADDER, TERMINAL, reachedSubmission, reachedApproval, isTerminal,
+} = require("../applications/application_lifecycle");
+
+const LIFECYCLE_ORDER = LADDER;
+const TERMINATED = new Set(TERMINAL);
 
 function reached(status, milestone) {
   if (!status) return false;
-  if (TERMINATED.has(status)) return milestone === "submitted" && status !== "draft";
-  const i = LIFECYCLE_ORDER.indexOf(status);
-  const m = LIFECYCLE_ORDER.indexOf(milestone);
+  if (milestone === "submitted") return reachedSubmission(status);
+  if (milestone === "approved") return reachedApproval(status);
+  const i = LADDER.indexOf(status), m = LADDER.indexOf(milestone);
   return i >= 0 && m >= 0 && i >= m;
 }
 
@@ -87,7 +96,8 @@ async function conversionFunnels(pool, window) {
     `select id, lead_id, status, rescheduled_from, created_at, completed_at
        from leasing_tours where property_id=$1`, [propertyId])).rows;
   const apps = (await pool.query(
-    `select id, leasing_lead_id, status, created_at, decided_at, executed_lease_record_id
+    `select id, leasing_lead_id, conversion_id, status, created_at, decided_at,
+            submitted_at, approved_at, terminal_at, terminal_code, executed_lease_record_id
        from lease_applications where property_id=$1`, [propertyId])).rows;
   const execs = (await pool.query(
     `select id, application_id, executed_at, record_state, admission_status
@@ -112,68 +122,119 @@ async function conversionFunnels(pool, window) {
     };
   });
 
-  // ── FUNNEL 1 — opportunity → completed tour ───────────────────────
-  const opps = (await pool.query(
-    `select id, received_at from leasing_leads
-      where property_id=$1 and received_at >= $2::timestamptz and received_at < $3::timestamptz`,
-    [propertyId, startUtc, endUtc])).rows;
+  // ── THE SHARED OPPORTUNITY READ ───────────────────────────────────
+  //  ONE read, under ONE coherent snapshot, feeding BOTH opportunity-grained
+  //  funnels. Funnels 1 and 2 are two questions about the same rows, so they
+  //  cannot disagree about what happened.
+  const f2rows = await opportunityFunnelRows(pool, window);
+  const f2agg = aggregateOpportunityFunnel(f2rows.rows);
 
-  const completedByLead = new Set(
-    journeys.filter((j) => j.final_status === "completed" && observed(j.completed_at))
-      .map((j) => String(j.lead_id)));
-  const f1num = opps.filter((o) => completedByLead.has(String(o.id))).length;
-  // Pending: no completed tour yet, and the opportunity is recent enough that
-  // absence is not yet an outcome.
-  const f1pending = opps.filter((o) => !completedByLead.has(String(o.id))
-    && journeys.some((j) => String(j.lead_id) === String(o.id)
-      && ["scheduled", "requested", "confirmed_by_prospect", "checked_in"].includes(j.final_status))).length;
+  // ── FUNNEL 1 — OPPORTUNITY → OBSERVED VISIT ───────────────────────
+  //  RE-GRAINED. The denominator was `leasing_leads` received in the window —
+  //  LEAD grain — and the numerator credited a lead whose tour STATUS looked
+  //  completed. Both now come from the SAME opportunity rows Funnel 2 reads, so
+  //  the two funnels cannot disagree about what happened.
+  //
+  //  Attendance comes from the appointment-journey authority. Pending comes from
+  //  the LIFECYCLE authority — a real unresolved act — not from "a tour status
+  //  that still looks alive".
+  const f1cohort = f2rows.rows.filter((r) => within(r.opened_at));
+  const f1num = f1cohort.filter((r) => r.observed_visit === true).length;
+  const f1pending = f1cohort.filter((r) => r.observed_visit !== true
+    && r.pending_state === "pending").length;
+  const f1terminalNoVisit = f1cohort.filter((r) => r.observed_visit !== true
+    && r.terminal === true).length;
+  const f1unresolved = f1cohort.filter((r) => r.observed_visit !== true
+    && !RESOLVED_APPT.has(r.appointment_evidence_state)).length;
+  const f1partial = {
+    is_partial: f1unresolved > 0,
+    unresolved_count: f1unresolved,
+    reason: f1unresolved > 0
+      ? "Unresolved appointment evidence can still change this numerator, so no complete rate is published. The counts remain exact."
+      : null,
+  };
+  const opps = f1cohort;
 
-  // Source rows: OVERLAPPING by construction.
-  const touches = opps.length ? (await pool.query(
+  //  Source attribution stays LEAD-keyed — lead_source_touches is a lead-grained
+  //  fact and is NOT re-grained. But the unit counted is the OPPORTUNITY, so one
+  //  touch attributes every opportunity that lead opened in the window.
+  //  OVERLAPPING by construction; never additive.
+  const leadIds = [...new Set(f1cohort.map((o) => o.context && o.context.lead_id).filter(Boolean))];
+  const touches = leadIds.length ? (await pool.query(
     `select t.lead_id, t.source_id, coalesce(s.name,'(unknown source)') as source_name
        from lead_source_touches t left join lead_sources s on s.id=t.source_id
-      where t.lead_id = any($1::uuid[])`, [opps.map((o) => o.id)])).rows : [];
+      where t.lead_id = any($1::uuid[])`, [leadIds])).rows : [];
+  const oppsByLead = new Map();
+  for (const o of f1cohort) {
+    const k = o.context && o.context.lead_id ? String(o.context.lead_id) : null;
+    if (!k) continue;
+    if (!oppsByLead.has(k)) oppsByLead.set(k, []);
+    oppsByLead.get(k).push(o);
+  }
+  const visited = new Set(f1cohort.filter((r) => r.observed_visit === true)
+    .map((r) => String(r.opportunity_id)));
   const srcMap = new Map();
   for (const t of touches) {
     const k = t.source_id ? String(t.source_id) : "unknown";
     if (!srcMap.has(k)) srcMap.set(k, { source_id: t.source_id || null, source: t.source_name, ids: new Set() });
-    srcMap.get(k).ids.add(String(t.lead_id));
+    for (const o of (oppsByLead.get(String(t.lead_id)) || [])) srcMap.get(k).ids.add(String(o.opportunity_id));
   }
   const by_source = [...srcMap.values()].map((s) => {
     const den = s.ids.size;
-    const num = [...s.ids].filter((id) => completedByLead.has(id)).length;
+    const num = [...s.ids].filter((id) => visited.has(id)).length;
     return buildMetric({
       metric_code: CODES.f1src, window, numerator: num, denominator: den,
-      exclusions: ["opportunities received outside the window"],
-      provenance: `lead_source_touches for source ${s.source}; overlapping, non-additive`,
+      exclusions: ["opportunities opened outside the window"],
+      provenance: `lead_source_touches for source ${s.source}; ONE ROW PER OPPORTUNITY; overlapping, non-additive`,
       extra: { source_id: s.source_id, source: s.source },
     });
   }).sort((a, b) => (b.denominator || 0) - (a.denominator || 0));
-
   // ── FUNNEL 2 — OPPORTUNITY with an observed visit → submitted application ──
   //  RE-GRAINED. One row per durable opportunity, never per chain or lead.
   //  Attendance comes from the canonical appointment-journey projection; this
   //  file no longer derives Funnel 2 from leasing_tours.status at all.
-  const f2rows = await opportunityFunnelRows(pool, window);
-  const f2agg = aggregateOpportunityFunnel(f2rows.rows);
 
   // Correlation coverage: applications with no canonical opportunity link.
   const uncorrelatedApps = apps.filter((a) => !a.leasing_lead_id).length;
   const correlatedApps = apps.length - uncorrelatedApps;
 
-  // ── FUNNEL 3 — submitted → approved ───────────────────────────────
-  const submitted = apps.filter((a) => reached(a.status, "submitted") && within(a.created_at));
-  const f3num = submitted.filter((a) => reached(a.status, "approved")
-    && (a.decided_at ? observed(a.decided_at) : true)).length;
-  const f3pending = submitted.filter((a) => a.status === "submitted").length;
+  // ── FUNNEL 3 — SUBMITTED → APPROVED, ON DURABLE MILESTONES ────────
+  //  Migration 124 added lease_applications.submitted_at / approved_at, and the
+  //  canonical lifecycle writer authors them at the moment each transition
+  //  happens. This funnel used created_at as the submission instant and carried
+  //  a note saying "lease_applications has no submitted_at". THAT NOTE WAS
+  //  STALE — the column exists on this branch and was simply never adopted, so
+  //  an application drafted in one window and submitted in the next was
+  //  attributed to the wrong window.
+  //
+  //  Cohorting is now on the REAL submission instant. An application that
+  //  reached submission but carries no submitted_at is pre-milestone history:
+  //  it cannot be dated, so it is UNTRACKABLE, never assumed into a window.
+  const submissionReached = apps.filter((a) => reached(a.status, "submitted") || a.submitted_at);
+  const submittedDated = submissionReached.filter((a) => a.submitted_at);
+  const submitted = submittedDated.filter((a) => within(a.submitted_at));
+  const f3undateable = submissionReached.length - submittedDated.length;
 
-  // ── FUNNEL 4 — approved → executed lease ──────────────────────────
-  //  Approval instant is decided_at where recorded; applications that reached
-  //  approval without one cannot be dated and are untrackable, not assumed.
-  const approvedAll = apps.filter((a) => reached(a.status, "approved"));
-  const approvedDated = approvedAll.filter((a) => a.decided_at);
-  const f4cohort = approvedDated.filter((a) => within(a.decided_at));
-  const f4untrackable = approvedAll.length - approvedDated.length;
+  //  Approval is the milestone, not the current label: an application that
+  //  advanced past approved still reached it, and one later withdrawn still
+  //  reached it. approved_at is the durable proof of that.
+  const f3num = submitted.filter((a) => a.approved_at && observed(a.approved_at)).length;
+  const f3pending = submitted.filter((a) => !a.approved_at && !TERMINATED.has(a.status)).length;
+  const f3partial = {
+    is_partial: f3undateable > 0,
+    unresolved_count: f3undateable,
+    reason: f3undateable > 0
+      ? "Some applications reached submission without a durable submitted_at (pre-milestone history). They cannot be placed in a window, so no complete rate is published. The counts remain exact."
+      : null,
+  };
+
+  // ── FUNNEL 4 — APPROVED → EXECUTED LEASE, ON DURABLE MILESTONES ───
+  //  Was cohorted on decided_at — a general decision timestamp that is also set
+  //  by a DENIAL. approved_at means approval specifically.
+  const approvalReached = apps.filter((a) => reached(a.status, "approved") || a.approved_at);
+  const approvedDated = approvalReached.filter((a) => a.approved_at);
+  const f4cohort = approvedDated.filter((a) => within(a.approved_at));
+  const f4untrackable = approvalReached.length - approvedDated.length;
 
   const execByApp = new Map();
   for (const e of execs) {
@@ -207,11 +268,17 @@ async function conversionFunnels(pool, window) {
     by_source,
     metrics: {
       f1all: buildMetric({
-        metric_code: CODES.f1all, window, numerator: f1num, denominator: opps.length,
-        counts: { pending: f1pending, untrackable: untrackable.size },
-        exclusions: ["opportunities received outside the window", "tours in chains that resolve to no single root"],
-        provenance: "leasing_leads received in window; completed appointment journeys observed through as_of",
-        extra: { completed_journeys_in_cohort: f1num },
+        metric_code: CODES.f1all, window, numerator: f1num, denominator: f1cohort.length,
+        counts: { pending: f1pending, unknown: f1unresolved,
+                  untrackable: f2agg.populations.untrackable + f2agg.populations.conflict },
+        partial: f1partial,
+        exclusions: ["opportunities opened outside the window"],
+        provenance: "ONE ROW PER leasing_conversions.id opened in the window. A visit is an OBSERVED attendance from the canonical appointment-journey projection — never a tour status, never elapsed time. Pending is a real unresolved act from the lifecycle authority, never 'not terminal'.",
+        extra: {
+          terminal_without_visit: f1terminalNoVisit,
+          populations: f2agg.populations,
+          lifecycle_split: f2agg.lifecycle_split,
+        },
       }),
       f2: buildMetric({
         metric_code: CODES.f2, window,
@@ -236,15 +303,18 @@ async function conversionFunnels(pool, window) {
       }),
       f3: buildMetric({
         metric_code: CODES.f3, window, numerator: f3num, denominator: submitted.length,
-        counts: { pending: f3pending },
-        exclusions: ["applications still in draft"],
-        provenance: "MILESTONE achievement, not current status: an application that advanced past approved still reached it. LIMITATION: lease_applications has no submitted_at, so created_at is used as the submission instant.",
+        counts: { pending: f3pending, untrackable: f3undateable },
+        partial: f3partial,
+        exclusions: ["applications that never reached submission",
+                     "applications that reached submission with no durable submitted_at — undateable, never assumed into a window"],
+        provenance: "DURABLE MILESTONES (migration 124): submitted_at is the submission instant and approved_at the approval instant, authored by the canonical lifecycle writer at the moment of transition. Milestone achievement, not current status — an application later withdrawn still reached approval, and approved_at still proves it.",
+        extra: { submission_reached_without_timestamp: f3undateable },
       }),
       f4: buildMetric({
         metric_code: CODES.f4, window, numerator: f4num, denominator: f4cohort.length,
         counts: { pending: f4pending, untrackable: f4untrackable },
-        exclusions: ["approvals with no decided_at — cannot be dated, so not assumed into a window"],
-        provenance: "decided_at as the approval instant; execution requires an admitted, non-void executed_lease_record correlated by application_id",
+        exclusions: ["approvals with no approved_at — cannot be dated, so not assumed into a window"],
+        provenance: "approved_at (migration 124) as the approval instant — NOT decided_at, which a DENIAL also sets. Execution requires an admitted, non-void executed_lease_record correlated by application_id.",
         extra: { approved_without_decision_timestamp: f4untrackable, uncorrelated_executed_leases: uncorrelatedLeases },
       }),
     },

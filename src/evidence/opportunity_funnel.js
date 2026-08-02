@@ -275,6 +275,7 @@ async function readOpportunityFunnel(q, window, _meta) {
     rows.push({
       opportunity_id: oid,
       property_id,
+      opened_at: opp.opened_at || null,
 
       //  TERMINAL / PENDING — from events only. When lifecycle evidence is
       //  missing or unusable this stays unknown; it NEVER falls back to the
