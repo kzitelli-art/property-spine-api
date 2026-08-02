@@ -3,6 +3,14 @@
 # proof, all through the real gated routes with a real staff session.
 # Run in Render Shell. Requires: STAFF_SESSION (token from establisher), $OPERATOR_KEY.
 set -e
+
+# Production-write guard. This script inserts a person, classifies it and
+# mutates lease_applications through psql "$DATABASE_URL" — production in the
+# Render Shell — and never cleans up. The guard also sets pipefail, so the
+# curl pipelines below can no longer report success on a failed request.
+. "$(dirname "$0")/_db_target_guard.sh"
+pspine_require_db_target "a QA person, an internal_qa classification and lease_application mutations"
+
 API="http://localhost:$PORT"
 DEMO="a50fbdd0-3642-431e-b532-0dcd6ab8a4fe"
 KEY="$OPERATOR_KEY"
@@ -14,8 +22,12 @@ UNIT=$(psql "$DATABASE_URL" -tAc "select id from units where property_id='$DEMO'
 echo "unit=$UNIT  name=$NAME"
 
 # 1) application (creates the record; person_id may be null → we fix next)
-APP=$(curl -s -X POST "$API/properties/$DEMO/applications" -H "Content-Type: application/json" -H "x-operator-key: $KEY" \
-  -d "{\"applicant_name\":\"$NAME\",\"unit_id\":\"$UNIT\",\"rent\":2900,\"deposit\":2900}" | grep -o '"id":"[0-9a-f-]\{36\}"' | head -1 | grep -o '[0-9a-f-]\{36\}')
+APP_RESP=$(curl -s -X POST "$API/properties/$DEMO/applications" -H "Content-Type: application/json" -H "x-operator-key: $KEY" \
+  -d "{\"applicant_name\":\"$NAME\",\"unit_id\":\"$UNIT\",\"rent\":2900,\"deposit\":2900}")
+# grep -m1 rather than `| head -1`: head exits early and SIGPIPEs the producer,
+# which under pipefail would fail the pipeline. A missing id now fails loudly
+# here instead of leaving APP empty and corrupting every later step.
+APP=$(printf '%s' "$APP_RESP" | grep -o -m1 '"id":"[0-9a-f-]\{36\}"' | grep -o '[0-9a-f-]\{36\}')
 echo "application=$APP"
 
 # 2) ensure the application has a person, and classify that person internal_qa
@@ -45,9 +57,10 @@ curl -s -X POST "$API/applications/$APP/sign" -H "Content-Type: application/json
 # 5) COUNTERSIGN — now through the PERIMETER (operator-key + staff-session both).
 #    This is a real gated-route call: proves the perimeter admits the authorized session.
 echo "── countersign (perimeter-gated) ──"
-curl -s -X POST "$API/applications/$APP/countersign" -H "Content-Type: application/json" \
+COUNTER_RESP=$(curl -s -X POST "$API/applications/$APP/countersign" -H "Content-Type: application/json" \
   -H "x-operator-key: $KEY" -H "x-staff-session: $SESS" \
-  -d "{\"countersigned_by\":\"QA Live\"}" | head -c 300; echo
+  -d "{\"countersigned_by\":\"QA Live\"}")
+printf '%s\n' "${COUNTER_RESP:0:300}"
 
 # final state should be accepted_term_required
 echo "── state ──"
