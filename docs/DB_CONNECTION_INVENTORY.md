@@ -2269,3 +2269,67 @@ a recorded success.
 | **Not** | the obligation security release. It ships no migration and must not carry a documentation change to `deployment.md` |
 | **Blocks the security release?** | **No.** It affects migrations written in future, not this deploy |
 | **Removal condition** | `docs/deployment.md:76` no longer recommends a blanket handler, **and** a rebuild-from-empty check exists (Appendix H, item 3) so a silently-skipped migration cannot pass again |
+
+---
+
+# Appendix J — Duplicate migration 121, and a branch-only migration in production
+
+**Registered here, deliberately not repaired.** Established 2026-08-02 during
+the obligation-security preflight. Reconciliation belongs to this lane; it was
+kept out of the security release entirely.
+
+## Two migrations were numbered 121, eight minutes apart
+
+| | Slice 8 | AI-leasing |
+|---|---|---|
+| Commit | `844bd0f` — 2026-08-01 **11:27:37Z** | `5d2b2ad` — 2026-08-01 **11:35:32Z** |
+| File | `121_governed_economics_lineage.sql` | `121_ai_leasing_operating_context.sql` |
+| Now | renumbered → `122_…` by `10e13a7` (11:43:22Z) | still 121, parked on `claude/getting-up-to-speed-nyf4ww` |
+| On `main`? | yes, as 122 | **no** |
+
+The renumber changed **one comment line** (`-- MIGRATION 121` → `-- MIGRATION
+122`); the 95 lines of SQL are otherwise byte-identical and unchanged since.
+
+## Production ran the branch-only one
+
+```text
+schema_migrations:  121 ai_leasing_operating_context
+                    122 governed_economics_lineage
+```
+
+`prestart` runs `migrate.js` against the service's own `DATABASE_URL`, so
+**deploying that branch to the production service and migrating production were
+the same operation** — the trap already recorded in `THREAD_HANDOFF.md:91–98`.
+
+## A governing document is wrong and must be corrected
+
+`docs/THREAD_HANDOFF.md:49–52` states that
+`121_ai_leasing_operating_context.sql` *"has never been applied to a database or
+exercised over HTTP."* **Production contradicts it.** Line 95–96 of the same
+document is the accurate account. A handoff document is read as current truth;
+this line will mislead the next person who trusts it.
+
+## Live drift, verified read-only
+
+`ai_leasing_operating_rules` exists with **0 rows**, both history/lineage
+triggers enabled, four indexes, and three validated constraints plus two
+columns on `agent_runs`. **No source file in `main` describes any of it.**
+
+It is inert — no release code references it, the triggers sit on a table nothing
+writes, and the `agent_runs` constraints are satisfied by their own defaults —
+so it did not block the security release. **Inert is not reconciled.**
+
+## What this lane owns
+
+1. Correct `THREAD_HANDOFF.md:49–52`.
+2. Decide the 121 endgame: land the parked file so source matches production
+   (it will apply *after* 122 — harmless, they touch unrelated tables), or
+   retire it and record what production keeps. **Do not edit the ledger row to
+   make the sequence look tidy.**
+3. Add the duplicate-number check to whatever gate exists: a number must be
+   unique across **every branch**, not merely absent from `ls migrations/`.
+4. Add a rebuild-from-empty check (Appendix H) — it would also have caught this.
+
+**Removal condition:** source and production agree on 121, the handoff line is
+corrected, and a duplicate-number check exists that fails on a second file
+claiming a taken number.
