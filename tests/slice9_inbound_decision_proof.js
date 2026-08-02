@@ -233,6 +233,64 @@ const ssl = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || "")
     const stillOpen = await one(`select status from obligations where id=$1`, [rA.decision_obligation_id]);
     ok(stillOpen.status === "open", `and is not silently marked handled (${stillOpen.status})`);
 
+    console.log("\n── 15 · VISIBILITY IN THE CANONICAL OBLIGATION READ ─────");
+    //  The canonical scoped read is main's operator_obligations_service.list.
+    //  Its projection is reproduced here EXACTLY (from origin/main
+    //  src/obligations/operator_obligations_service.js) so this proof measures
+    //  the real contract rather than a convenient one. Its two mandatory
+    //  predicates are property_id and module.
+    const FIELDS = ["id","property_id","module","type","label","status","due_at",
+      "assigned_user_id","assigned_role","person_id","unit_id","related_type",
+      "related_id","created_at","updated_at"];
+    const listed = (await c.query(
+      `select ${FIELDS.map((f) => "o." + f).join(", ")},
+              (o.due_at is not null and o.due_at < now()) as is_overdue
+         from obligations o
+        where o.property_id = $1 and o.module = any($2::text[])
+        order by o.due_at asc nulls last, o.created_at desc, o.id asc`,
+      [P, ["leasing"]])).rows;
+    const mine = listed.find((r) => String(r.id) === String(rA.decision_obligation_id));
+    ok(!!mine, "the decision APPEARS in the canonical property+module scoped read");
+    ok(mine.module === "leasing", `under the leasing module an operator holds (${mine.module})`);
+    ok(mine.status === "open", "as open work");
+    ok(/Choose which opportunity this reply belongs to/.test(mine.label),
+      `with a plain-language label ("${mine.label}")`);
+    ok(!/conversion|conversation|lifecycle|grain/i.test(mine.label),
+      "exposing no conversion id, conversation grain or lifecycle terminology");
+    ok(String(mine.related_id) === String(A.conv) && mine.related_type === "conversation",
+      "carrying its conversation context");
+    ok(String(mine.person_id) === String(A.person), "and its person context");
+
+    console.log("\n── 16 · SCOPE AND UNASSIGNED COVERAGE ───────────────────");
+    const otherScope = (await c.query(
+      `select id from obligations where property_id=$1 and module = any($2::text[])`,
+      [other, ["leasing"]])).rows;
+    ok(!otherScope.some((r) => String(r.id) === String(rA.decision_obligation_id)),
+      "it never appears under another property's scope");
+    const noModule = (await c.query(
+      `select id from obligations where property_id=$1 and module = any($2::text[])`,
+      [P, ["maintenance"]])).rows;
+    ok(!noModule.some((r) => String(r.id) === String(rA.decision_obligation_id)),
+      "nor to an operator without the leasing module");
+    //  UNASSIGNED coverage read.
+    const unassigned = (await c.query(
+      `select id, owner_eligibility_state from obligations
+        where property_id=$1 and status <> 'complete' and assigned_user_id is null`, [P])).rows;
+    const un = unassigned.find((r) => String(r.id) === String(rA.decision_obligation_id));
+    ok(!!un, "an unassigned decision appears in the unassigned/coverage read");
+    ok(un.owner_eligibility_state === "unassigned",
+      `with ownership stated EXPLICITLY, not merely absent (${un.owner_eligibility_state})`);
+
+    console.log("\n── 17 · THE QUEUE DOES NOT MARK IT HANDLED ──────────────");
+    const openNow = await one(`select status from obligations where id=$1`, [rA.decision_obligation_id]);
+    ok(openNow.status === "open",
+      "while the decision is unresolved it stays open — never silently handled");
+    ok((await one(`select body from comm_events where id=$1`, [A.inbound])).body.length > 0,
+      "and the underlying reply remains readable");
+    const bDone = await one(`select status from obligations where id=$1`, [bDecision]);
+    ok(bDone.status === "complete",
+      "a resolved decision leaves the queue (complete), so it cannot linger");
+
     console.log("\n── 14 · NO INFERRED OPPORTUNITY ID IS EVER WRITTEN ──────");
     const guessed = (await one(
       `select count(*)::int n from obligations where type=$1 and related_type <> 'conversation'`,

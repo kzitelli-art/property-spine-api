@@ -222,6 +222,55 @@ const asPool = (c) => ({ query: (...a) => c.query(...a) });
     ok("every conversion metric carries a definition version",
       Object.values(cv.metrics).every((m) => /^v\d+$/.test(m.definition_version)));
 
+    section("E2  source attribution states its ACTUAL grain");
+    ok("the basis is originating LEAD source, not opportunity acquisition source",
+      cv.source_attribution.basis === "originating_lead_source");
+    ok("its grain is stated as lead while the counted unit is the opportunity",
+      cv.source_attribution.grain === "lead" && cv.source_attribution.counted_unit === "opportunity");
+    ok("and it states plainly that it was NOT recorded per opportunity",
+      cv.source_attribution.independently_recorded_per_opportunity === false);
+    ok("the disclosure rides every source-segmented metric",
+      cv.by_source.every((m) => m.detail && m.detail.source_attribution
+        && m.detail.source_attribution.basis === "originating_lead_source"));
+    ok("no source metric claims to be an opportunity acquisition source",
+      cv.by_source.every((m) => !/opportunity acquisition source/i.test(m.provenance || "")));
+
+    section("E3  two opportunities on ONE lead — inherited source");
+    //  A second opportunity on l1. leasing_conversions_one_active permits one
+    //  ACTIVE per person+property, so this one is released — it is still a
+    //  distinct opportunity and still inherits l1's source touch.
+    await c.query(
+      `insert into leasing_conversions (person_id, property_id, lead_id, status, current_stage,
+         opened_at, actual_tour_host_user_id, conversation_owner_user_id)
+       values ($1,$2,$3,'released','tour_followup',$4,$5,$5)`,
+      [p1, prop, l1, "2026-08-20T15:00:00Z", host]);
+    const src = (await c.query(`insert into lead_sources (name, source_type) values ($1,'ils') returning id`,
+      [`Zillow ${uuid().slice(0, 6)}`])).rows[0].id;
+    await c.query(`insert into lead_source_touches (lead_id, person_id, source_id, arrived_at)
+                   values ($1,$2,$3,$4)`, [l1, p1, src, AUG]);
+    const outSrc = await marketEvidenceProjection(P, {
+      property_id: prop, start_local: "2026-08-01", end_local: "2026-08-31", as_of: "2026-09-15T00:00:00Z" });
+    const cvS = outSrc.sections.conversion;
+    ok("the lead now carries TWO opportunities in the cohort",
+      cvS.source_attribution.leads_with_multiple_opportunities >= 1);
+    ok("and the later one is counted as INHERITED, not independently observed",
+      cvS.source_attribution.inherited_opportunity_count >= 1);
+    const seg = cvS.by_source.find((m) => m.detail && m.detail.source_id === src);
+    //  NOTE: this harness's helper is ok(message, condition) — the REVERSE of
+    //  the other Slice 9 proofs. Passing (condition, message) makes every
+    //  assertion pass on a truthy string, which is exactly how a proof lies.
+    ok("a source-segmented metric exists for that source", !!seg);
+    ok(`both opportunities appear under it as context (${seg && seg.denominator})`,
+      seg.denominator >= 2);
+    ok(`the segmented metric declares itself PARTIAL (${seg && seg.state})`,
+      seg.state === "partial");
+    ok("and publishes NO rate, because a per-opportunity source could change it",
+      seg.rate === null);
+    ok(`while the counts stay exact (${seg.numerator}/${seg.denominator})`,
+      seg.numerator !== null && seg.denominator !== null);
+    ok("with the inheritance named as the reason",
+      /inherited/i.test((seg.partial && seg.partial.reason) || ""));
+
     section("F  correlation is canonical or untrackable");
     const appUn = uuid();
     await c.query(`insert into lease_applications (id,property_id,person_id,status,created_at)

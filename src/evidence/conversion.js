@@ -1,10 +1,13 @@
 // ════════════════════════════════════════════════════════════════════
 //  conversion.js — Slice 9, step 5. The four funnels.
 //
-//      1. opportunity            → completed tour
-//      2. completed tour         → submitted application
+//      1. OPPORTUNITY           → observed visit
+//      2. OPPORTUNITY w/ visit   → submitted application
 //      3. submitted application  → approved application
 //      4. approved application   → executed lease
+//
+//  Funnels 1 and 2 are two questions about ONE shared opportunity read, taken
+//  under ONE coherent snapshot, so they cannot disagree about what happened.
 //
 //  ── EVERY FUNNEL IS AN ORIGIN COHORT ─────────────────────────────────
 //  The denominator is entities whose ORIGIN event fell inside the
@@ -18,18 +21,25 @@
 //
 //  ── CORRELATION IS CANONICAL OR IT IS UNTRACKABLE ────────────────────
 //  Ruling 8. No matching on name, phone, email, unit similarity or time
-//  proximity. Tour→application rides leasing_leads.id
-//  (leasing_tours.lead_id ↔ lease_applications.leasing_lead_id);
+//  proximity. Opportunity→application rides lease_applications.conversion_id;
 //  application→lease rides executed_lease_records.application_id. Anything
 //  without that link is counted as uncorrelated and stays visible.
 //
-//  ── A KNOWN LIMITATION, STATED RATHER THAN SMOOTHED ──────────────────
-//  lease_applications has no submitted_at. Funnel 3's origin instant
-//  therefore uses created_at for applications that have REACHED the submitted
-//  milestone. An application drafted in one window and submitted in the next
-//  is attributed to the window it was created in. This is disclosed in the
-//  metric's provenance and exclusions rather than quietly assumed, and it is
-//  raised in the handback as a question canonical truth does not answer.
+//  ── THE FORMER "NO submitted_at" LIMITATION IS GONE ──────────────────
+//  This header used to say lease_applications had no submitted_at, so Funnel 3
+//  cohorted on created_at. Migration 124 added submitted_at, approved_at,
+//  terminal_at and terminal_code, and the canonical lifecycle writer authors
+//  them at the moment of transition. The note was stale and the columns were
+//  simply never adopted. Funnels 3 and 4 now cohort on those DURABLE
+//  MILESTONES; Funnel 4 uses approved_at rather than decided_at, which a
+//  DENIAL also sets. A milestone reached with no timestamp (pre-migration
+//  history) is UNTRACKABLE and makes the metric partial — never assumed into a
+//  window.
+//
+//  ── SOURCE ATTRIBUTION STATES ITS ACTUAL GRAIN ───────────────────────
+//  lead_source_touches is ORIGINATING LEAD SOURCE, lead-grained, inherited by
+//  later opportunities on the same lead. It is NOT opportunity acquisition
+//  source and is never labelled as one.
 // ════════════════════════════════════════════════════════════════════
 "use strict";
 
@@ -179,16 +189,58 @@ async function conversionFunnels(pool, window) {
     if (!srcMap.has(k)) srcMap.set(k, { source_id: t.source_id || null, source: t.source_name, ids: new Set() });
     for (const o of (oppsByLead.get(String(t.lead_id)) || [])) srcMap.get(k).ids.add(String(o.opportunity_id));
   }
+  //  ── SOURCE-ATTRIBUTION BASIS, FROZEN ─────────────────────────────
+  //  lead_source_touches records the ARRIVAL OF A LEAD FROM A SOURCE
+  //  (migration 038: lead_id, source_id, arrived_at, source_listing_id). It is
+  //  lead-grained, permits several touches per lead, and is NEVER recorded per
+  //  opportunity.
+  //
+  //  A lead can carry SEVERAL opportunities. For the first, the touch is a fair
+  //  acquisition record. For any later one, the source was NOT independently
+  //  recorded — it is INHERITED. So this is:
+  //
+  //      ORIGINATING LEAD SOURCE, inherited by later opportunities on the same
+  //      lead, with INCOMPLETE opportunity attribution.
+  //
+  //  It is NOT "opportunity acquisition source", and is never labelled as one.
+  //  No product contract says every opportunity for a lead shares an
+  //  acquisition source, so claiming it would be a confident wrong.
+  //
+  //  CONSEQUENCE: when any lead in the cohort carries MORE THAN ONE
+  //  opportunity, a source-segmented rate could change under a correct
+  //  per-opportunity source. That makes the segmented metric PARTIAL — the
+  //  counts stay exact and the rate is withheld.
+  const multiOppLeads = [...oppsByLead.entries()].filter(([, v]) => v.length > 1);
+  const inheritedOpportunities = multiOppLeads.reduce((n, [, v]) => n + (v.length - 1), 0);
+  const sourceBasis = {
+    basis: "originating_lead_source",
+    grain: "lead",
+    counted_unit: "opportunity",
+    independently_recorded_per_opportunity: false,
+    inherited_opportunity_count: inheritedOpportunities,
+    leads_with_multiple_opportunities: multiOppLeads.length,
+    disclosure: "lead_source_touches records a lead's ARRIVAL from a source. It is lead-grained and was not recorded per opportunity. Where one lead carries several opportunities, the later ones INHERIT this source rather than having had it observed. This is originating lead source as context — not opportunity acquisition source.",
+  };
+  const sourcePartial = {
+    is_partial: inheritedOpportunities > 0,
+    unresolved_count: inheritedOpportunities,
+    reason: inheritedOpportunities > 0
+      ? "One or more leads in this cohort carry several opportunities, so the source shown for the later ones is inherited, not observed. A correct per-opportunity source could change these rates, so none is published. The counts remain exact."
+      : null,
+  };
+
   const by_source = [...srcMap.values()].map((s) => {
     const den = s.ids.size;
     const num = [...s.ids].filter((id) => visited.has(id)).length;
     return buildMetric({
       metric_code: CODES.f1src, window, numerator: num, denominator: den,
+      partial: sourcePartial,
       exclusions: ["opportunities opened outside the window"],
-      provenance: `lead_source_touches for source ${s.source}; ONE ROW PER OPPORTUNITY; overlapping, non-additive`,
-      extra: { source_id: s.source_id, source: s.source },
+      provenance: `lead_source_touches for source ${s.source}. ORIGINATING LEAD SOURCE, lead-grained, inherited by later opportunities on the same lead — NOT an opportunity acquisition source. Overlapping, non-additive.`,
+      extra: { source_id: s.source_id, source: s.source, source_attribution: sourceBasis },
     });
   }).sort((a, b) => (b.denominator || 0) - (a.denominator || 0));
+
   // ── FUNNEL 2 — OPPORTUNITY with an observed visit → submitted application ──
   //  RE-GRAINED. One row per durable opportunity, never per chain or lead.
   //  Attendance comes from the canonical appointment-journey projection; this
@@ -266,6 +318,7 @@ async function conversionFunnels(pool, window) {
       note: "Correlation is canonical only — leasing_leads.id for tour→application and executed_lease_records.application_id for application→lease. Uncorrelated records stay visible and are never assigned to a funnel by inference.",
     },
     by_source,
+    source_attribution: sourceBasis,
     metrics: {
       f1all: buildMetric({
         metric_code: CODES.f1all, window, numerator: f1num, denominator: f1cohort.length,
