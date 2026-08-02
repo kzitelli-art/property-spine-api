@@ -846,3 +846,254 @@ source across four files. No login was exercised, no database contacted.
 analysis only. No claim in this appendix is Proven. In particular, nothing here
 establishes the live enum contents, the live `role` values of the two admin
 rows, which properties received grants, or any property's current `sms_number`.
+
+---
+
+# Appendix B — Post-ruling read-only additions (2026-08-02)
+
+Consultant ruling received and ordering accepted: **A090-4 P1**, **A090-2
+high-severity integrity**, **A090-3 governance, inventory first**, **A090-1
+low**. The hold stands — no connection string, no Phase 2, no fixes. The four
+additions below are source-only and change no behavior.
+
+---
+
+## B1 — Blanket exception-handler scan across all 122 migrations
+
+090 was not treated as isolated. Every file in `migrations/` was scanned for
+handlers that suppress rather than catch a named condition.
+
+**Result: nine handlers in total across 122 files. Eight name a specific
+condition. `090_admin_users.sql:31` is the only `when others` in the
+repository.**
+
+| File:line | Guarded statement | Catches | Shape | Would still record as applied on failure? |
+|---|---|---|---|---|
+| `001_baseline.sql:43` | `create type prov as enum (…)` | `duplicate_object` | **Acceptable — the reference shape.** The named condition is exactly what a repeat `CREATE TYPE` raises. | Yes, and correctly — the only suppressed case is the benign re-run. |
+| `001_baseline.sql:52` | `create type role_name as enum (…)` | `duplicate_object` | **Acceptable.** Same shape. | Yes, correctly. |
+| `093_organizations.sql:39` | `alter table users add column platform_role …` | `duplicate_column` | **Acceptable.** Condition matches the statement exactly. (`add column if not exists` would be cleaner but is equivalent.) | Yes, correctly. |
+| `093_organizations.sql:44` | `alter table properties add column organization_id …` | `duplicate_column` | **Acceptable.** | Yes, correctly. |
+| `093_organizations.sql:50` | `alter table users add column organization_id …` | `duplicate_column` | **Acceptable.** | Yes, correctly. |
+| `095_staff_roles.sql:85` | `alter table property_team_assignments add column role_key …` | `duplicate_column` | **Acceptable.** | Yes, correctly. |
+| `095_staff_roles.sql:18` | `alter table users drop constraint if exists users_platform_role_check` | `undefined_object` | **Redundant but bounded.** `drop constraint if exists` already handles absence, so the handler catches nothing reachable. Narrow condition, so no blast radius — but it is the same "handler adds nothing" reasoning that made 090 dangerous, applied to a safe condition. | Yes; nothing suppressible occurs. |
+| `077_agent_auto_dispatch.sql:29` | `alter table agent_drafts alter column dispatched_by_user_id drop not null` | `undefined_column` | **Named, but suppresses a structural absence — worth a second look.** `DROP NOT NULL` on an existing column is already idempotent, so the only case this catches is *the column not existing at all*. That is not a benign re-run; it means the schema is not what the migration assumes. No postcondition is asserted afterward. | **Yes — and this one is not obviously correct.** If `dispatched_by_user_id` is absent, 077 records as applied having silently skipped its own change. |
+| `090_admin_users.sql:31` | `alter type role_name add value if not exists 'admin'` | **`others`** | **The defect.** `IF NOT EXISTS` already supplies idempotency, so the handler adds only suppression — of permissions failures, lock timeouts, and the in-transaction restriction the file's own header discusses at `:7–15`. | **Yes, and incorrectly.** See A090-2. |
+
+### The acceptable shape, stated
+
+`001_baseline.sql:52` is the reference: **a handler is acceptable when the named
+condition is the exact error the guarded statement raises on a benign re-run, and
+nothing else.** Under that rule, seven of the nine pass cleanly, `095:18` passes
+as redundant, and two do not sit comfortably — `090:31` (unbounded) and `077:29`
+(named, but the named condition indicates schema drift rather than a re-run).
+
+### The opposite discipline already exists in this repository
+
+Seven migrations abort loudly rather than suppress, using `raise exception` in a
+preflight block: `053:31,34`, `054:52,55`, `070:192`, `080:50`, `081:68`,
+`084:132`, `087:38`. Several assert ledger head position before proceeding
+(`053`, `054`), one blocks on duplicate active assignment pairs (`070:192`), one
+aborts on conflicting active invitations (`084:132`). **The house style for
+"this must be true before I run" is therefore already established and is
+correct.** 090 is a departure from it, not an absence of it.
+
+---
+
+## B2 — Does the replacement flow inherit the defect?
+
+**Read: `docs/COMMUNICATION_LINE_ARCHITECTURE.md` (318 lines). It is the only
+document in `docs/` that mentions the operations line** — no other related design
+doc exists.
+
+### What the spec does address
+
+It addresses A090-4 explicitly, and by file and line:
+
+- **FLAG 4** (`:157–169`) names the exact behavior: *"`teamaccess.js:273-282`
+  sends staff login OTPs out over the property's `sms_number` … 
+  `090_admin_users.sql:47-48` deliberately orders assignment inserts so an
+  SMS-capable property 'wins the login OTP routing.'"* It concludes: *"When the
+  operations line exists, staff OTP is the first traffic that should move to it —
+  and `090`'s ordering hack becomes unnecessary rather than load-bearing."*
+- **Ruling 5** (`:244–254`) classifies staff OTP over the property line a
+  **temporary transport adapter** with a stated replacement condition: *"once an
+  active operations line exists for the management organization, staff OTP and
+  internal operational messaging no longer select a property line through
+  assignment ordering (`090_admin_users.sql:47-48`)."*
+
+So the **delivery** half of A090-4 is squarely covered and scheduled.
+
+### What the spec does not address
+
+**The spec is silent on active-property selection.** Searching the full document
+for `session`, `scope`, `active property`, `property_team_assignments` and
+`which property` returns two hits, neither on this subject: `:198` uses
+"property-scope" about *inbound message binding*, and `:207` uses "scope" to mean
+the scope of a build slice.
+
+The "Future canonical line model" runtime chain (`:284–307`) is an **inbound**
+resolution path — `To number → communication-line record → property or
+organization context → line posture and authority ceiling → sender identity →
+permitted canonical action`. It describes how an arriving message finds its
+context. It says nothing about how a staff **session** acquires a property scope
+at login.
+
+### Consequence — A090-4 splits, and only one half retires
+
+| Half | Mechanism | Retired by the split? |
+|---|---|---|
+| **Delivery** — an unlined property wins the pick, the gate refuses `no_property_line`, the endpoint returns 200 and no code arrives | OTP routed over `properties.sms_number` | **Yes.** Ruling 5's replacement condition removes property-line selection from staff OTP entirely. |
+| **Session scoping** — an arbitrary property becomes the session's operating context | `teamaccess.js:207–211` `ORDER BY can_manage_roles DESC, updated_at DESC LIMIT 1`, whose result becomes the invite's `property_id` and hence the session scope | **No. Untouched.** Nothing in the spec replaces or removes this query, and a session still needs a property scope after OTP delivery moves off the property line. |
+
+**Stated plainly: the number split retires the lockout symptom, not the
+wrong-context risk.** The spec has no successor mechanism for deciding which
+property scopes a staff session, and does not acknowledge that the question
+exists. That gap should be closed in the operations-line slice's design, or
+A090-4's second half will survive the change that was expected to retire it.
+
+---
+
+## B3 — Alternate login path, independent of SMS OTP
+
+**Confirmed from source.** `tools/issue_operator_invite.js` mints a single-use
+login proof redeemable at the login screen without any SMS involvement.
+
+- **What it writes:** one row in `operator_session_invites` (`:84–89`) —
+  `crypto.randomBytes(32)` base64url token (`:81`), of which **only the
+  sha256 digest is stored** (`:82`), plus `issuance_reason='bootstrap_invite'`
+  and `issuance_source='cli'`.
+- **How it is redeemed:** the recipient submits the token at the Invite Access
+  screen, `POST /operator/session` (`:100–101`), implemented at
+  `src/identity/operator_session_bootstrap.js:81`, which exchanges the proof for
+  a canonical staff session and retires the invite (`:141`). **This path never
+  touches `team_invites`, `sms_number`, or the outbound gate.**
+
+**What it requires:**
+
+| Requirement | Source |
+|---|---|
+| `DATABASE_URL` in the environment | `:40` — dies without it |
+| `--user <uuid>` and `--property <uuid>`, both mandatory | `:41` |
+| Shell access to run the CLI | `#!/usr/bin/env node`, `:22–23` |
+| **An interactive TTY** — refuses non-interactive stdout so the token cannot be captured by logs or pipelines; override only via `PSPINE_ALLOW_NON_TTY=1` | `:45–50` |
+| The target user already `is_active` **and** `status='active'` | `:63–67` |
+| An **already-active assignment** for that exact property — *"This tool never creates authority."* | `:69–74` |
+| TTL: `--minutes`, **default 60, hard-capped at 24h** (`Math.min(…, 24*60)`) | `:35` |
+
+**Bearing on A090-4 severity.** This materially lowers the lockout ceiling: an
+admin who cannot receive an OTP is recoverable without a database edit, provided
+someone has shell access and an interactive terminal. Two qualifications worth
+carrying into the ruling:
+
+1. **It requires `--property` explicitly**, so it bypasses the arbitrary
+   selection entirely and lands the session on a chosen property. It is therefore
+   a workaround for *both* halves of A090-4, not just the lockout.
+2. **It is a bootstrap tool, not a user-facing fallback.** It needs a second
+   person with shell access, an interactive terminal, and out-of-band delivery
+   (`:92–93`). It does not help a locked-out admin acting alone, and it is not
+   reachable from the login screen without someone running it first.
+
+---
+
+## B4 — Candidate-set composition, as far as source allows
+
+The arbitrary pick spans every active assignment row regardless of `sms_number`
+(A090-4). How often that lands on an unlined property depends on how many
+properties carry a line.
+
+**Source cannot establish either count, and the reason is specific:**
+
+- `migrations/030_sms_transport.sql:34` adds `sms_number` as a plain nullable
+  `text` column — **no default, no backfill, no `not null`.**
+- **No migration ever writes it.** Grepping all 122 files for `sms_number`
+  alongside `set|insert|update|values|default` returns exactly one hit, and it is
+  the comment at `090_admin_users.sql:48`. 090 *reads* the column to partition on
+  (`:65`, `:91`); it never assigns it.
+- The only durable runtime writer is the operator config route
+  `src/comms/tenantlink.js:394` (`update properties set sms_number = $1 where id = $2`).
+  **Values set through that route leave no trace in source at all.**
+- The remaining writers create synthetic rows, not real ones:
+  `src/shared/no076_failclosed_check.js:40` (`'__CB_NO076__P'`, `+15550076001`)
+  and the harness-created properties already catalogued in Section C.3.
+
+So: **zero properties are known from source to carry an `sms_number`**, and that
+number is an artifact of where the value is written, not evidence that none do.
+Section C names four real property rows (Solo, UNO, The Felix, Demo Building);
+the true denominator is also unestablished.
+
+**Two source signals point in opposite directions and neither settles it.**
+`migrations/094_property_channel_capabilities.sql:36–39` states Demo Building is
+*"currently sending successfully (167 accepted comm_events)"*, so **at least one**
+property has a working line. Meanwhile `COMMUNICATION_LINE_ARCHITECTURE.md`
+Ruling 1 (`:201`) treats **duplicate** property numbers as a live safety defect,
+which implies more than one — but a stated concern is not a count.
+
+### The implication, stated explicitly
+
+**If few properties carry a line, an arbitrary pick lands on a no-line property
+most of the time.** That would make A090-4's delivery half **an already-live
+intermittent login failure**, not a latent risk — the two admins would be failing
+to receive codes at roughly the rate of unlined properties in the candidate set,
+with the failure presenting as a silent HTTP 200.
+
+Conversely, if nearly all properties carry a line, the delivery half is latent
+and the wrong-context half (B2) is the whole of the finding.
+
+**This is the single highest-value thing for the first live query to settle.**
+It is the difference between a scheduled cleanup and an active incident, and it
+is one count:
+
+```sql
+select count(*) as total,
+       count(sms_number) as with_line,
+       count(*) - count(sms_number) as without_line
+  from properties;
+```
+
+Paired with the candidate set actually in play:
+
+```sql
+select p.id, p.name, (p.sms_number is not null) as has_line,
+       a.can_manage_roles, a.updated_at
+  from property_team_assignments a
+  join properties p on p.id = a.property_id
+  join users u on u.id = a.user_id
+ where u.email in ('tmysl@me.com', 'kz8434@gmail.com')
+   and a.active = true
+ order by p.name;
+```
+
+---
+
+## B5 — Recorded for when a connection string arrives (destination only)
+
+**`db_preflight.js` must establish ledger-to-schema correspondence, not the
+ledger maximum.** A090-2 shows the maximum can be recorded without the
+corresponding work having occurred; `COMMUNICATION_LINE_ARCHITECTURE.md:271–281`
+independently warns against assuming a migration number rather than querying it.
+A ceiling number is trustworthy only when each entry is checked against an
+observed schema object.
+
+**Minimum postconditions to check for 090:**
+
+1. **Does the `admin` enum member exist?** Query `pg_enum` joined to `pg_type`
+   for `role_name`. Presence of ledger row 090 is not evidence of it (A090-2).
+2. **What roles do the two users actually hold?** Read `role` for
+   `tmysl@me.com` and `kz8434@gmail.com`. Source predicts `property_manager`
+   (A090-1); confirm rather than assume, since a manual correction would not
+   appear in this repository.
+3. **Which assignment rows exist, and in what state?** For those two users, the
+   set of `property_team_assignments` rows with `scope_type`, `allowed_modules`,
+   `primary_for_modules`, `can_manage_roles`, `active` — and whether Real Solo
+   `9e2bb96e-…` is among them (A090-3). This doubles as the B4 candidate-set
+   count.
+
+**Not now — destination only, do not build in this phase:** per-migration
+postconditions, a verified ledger state, and migration file checksums. Recorded
+here so the shape is not re-derived later; none of it is authorized work today.
+
+---
+
+**Proof level of Appendix B: Locally exercised.** Source and documentation
+inspection only. No database was contacted, no tool run, no login exercised. B4
+in particular establishes what source *cannot* determine; it is not a count.
