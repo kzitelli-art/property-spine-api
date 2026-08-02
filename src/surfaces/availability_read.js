@@ -83,8 +83,27 @@ function marketingState(p, liveOk) {
     return { state: "successor_pending", reason: "successor_awaiting_execution_and_funding" };
 
   // Committed to a future resident even though nothing spans today.
-  if (p.availability_state === "committed_future")
-    return { state: "successor_locked", reason: "committed_to_a_future_start_date" };
+  //
+  // This branch previously returned successor_locked UNCONDITIONALLY. The
+  // `successor` tests above only fire when a governing lease exists, so a
+  // STANDALONE future lease on a vacant position never reached them and every
+  // such position — funded or not — was reported locked. Suppression was
+  // right; the label was stronger than the proof.
+  //
+  // The canonical future_commitment now answers it, using the same governed
+  // locked rule (executed AND funded). No availability state may claim more
+  // proof than the lease carries.
+  if (p.availability_state === "committed_future") {
+    const fc = p.future_commitment;
+    if (fc && fc.state === "locked")
+      return { state: "successor_locked", reason: "committed_to_a_future_start_date" };
+    if (fc && fc.state === "pending")
+      return { state: "successor_pending", reason: "future_commitment_awaiting_execution_and_funding" };
+    // committed_future with no carried commitment object means the projection
+    // did not supply one. Marketing stays suppressed — the position IS
+    // committed — but it is never upgraded to locked on missing evidence.
+    return { state: "successor_pending", reason: "future_commitment_proof_unavailable" };
+  }
 
   if (p.lease) {
     return p.notice_state === "on_notice"
@@ -407,6 +426,22 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
       notice_state: p.notice_state,
       successor_state: p.successor.state,
       successor_lease_id: p.successor.lease_id,
+
+      // THE CANONICAL COMMITMENT, carried explicitly rather than implied by
+      // the marketing state. commitment_proof_basis is the field that stops a
+      // confirmed opening import from being read as native execution-and-
+      // funding proof: such a lease may legitimately suppress marketing as
+      // governed opening truth, but it did not pass proof steps it never
+      // passed, and the response must not claim it did.
+      commitment_state: p.future_commitment ? p.future_commitment.state
+        : (p.successor ? p.successor.state : "none"),
+      commitment_lease_id: p.future_commitment && p.future_commitment.lease_id
+        ? p.future_commitment.lease_id
+        : (p.successor ? p.successor.lease_id : null),
+      commitment_start_date: p.future_commitment ? p.future_commitment.start_date : null,
+      commitment_proof_basis: p.future_commitment && p.future_commitment.proof_basis
+        ? p.future_commitment.proof_basis
+        : (p.successor ? p.successor.proof_basis : null),
       conflict_state: p.conflict_state,
       evidence_state: p.evidence_state,
       tenancy_state: p.tenancy_state,

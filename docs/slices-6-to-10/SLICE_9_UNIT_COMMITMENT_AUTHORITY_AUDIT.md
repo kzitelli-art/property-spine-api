@@ -221,6 +221,52 @@ vocabulary already covers the required contract.
 
 ---
 
+## 7a. CORRECTION (2026-08-02, Pass 2A) — the projection defect this audit missed
+
+The conclusion in §7 that all five distinctions "already hold in the canonical
+path" was **correct about the durable model and wrong about the canonical
+availability projection.** Recorded here rather than silently rewritten.
+
+`position_classifier` populates `successor` only when a **governing** lease
+exists (`:163` — `if (governing && governing.end_date)`). A **standalone**
+future lease on an otherwise vacant position therefore produced
+`successor.state === "none"`, so `availability_read`'s two proof-respecting
+branches never fired and execution fell through to:
+
+```js
+if (p.availability_state === "committed_future")
+  return { state: "successor_locked", ... };   // unconditional
+```
+
+`dated_positions` also did not carry `future_lease_position` forward, so
+availability had no proof to consult even if it had wanted to.
+
+**Consequence:** an unfunded, unexecuted future lease on a vacant position was
+suppressed from marketing **correctly** and then reported **LOCKED** — an
+availability state stronger than the proof the lease carried. Over-blocking was
+never the risk here; mislabelling was.
+
+| | Verdict |
+|---|---|
+| pending ≠ locked in the **durable model** | **preserved** — neither is a stored field; both derive live |
+| pending ≠ locked in the **canonical availability projection** | **DEFECTIVE (now corrected)** |
+
+**Corrected in Pass 2A** by one shared `classifyFutureCommitment` helper used by
+both the successor and standalone paths, carried through `dated_positions` as
+`future_commitment`, and consumed by `availability_read`. The governed locked
+rule (executed AND funded, absence of a required charge set is NOT funded) is
+unchanged and now written exactly once as `isNativelyProven`.
+
+**Confirmed opening import contract:** a future lease with
+`source_type = historical_snapshot` and `confidence = confirmed` suppresses
+marketing as governed opening truth but is **`pending`, never `locked`**, and
+carries `proof_basis = confirmed_opening_import`. The response exposes
+`commitment_state`, `commitment_proof_basis`, `commitment_lease_id` and
+`commitment_start_date` so no consumer can imply native execution-and-funding
+proof from suppression alone.
+
+---
+
 ## 8. Stop conditions
 
 | # | Condition | Triggered | Evidence |

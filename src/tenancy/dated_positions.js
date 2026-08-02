@@ -205,6 +205,13 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
       proof_basis: lease ? lease.proof_basis : null,
       notice_state: p.notice_state,
       successor: p.successor,
+      // THE STANDALONE FUTURE COMMITMENT, carried forward. Without it
+      // availability_read had no proof for a future lease on a vacant position
+      // — `successor` is only populated when a governing lease exists — so it
+      // mapped committed_future straight to locked. Carrying the canonical
+      // object here is what lets availability answer pending vs locked without
+      // re-querying leases or growing a second commitment ladder.
+      future_commitment: p.future_commitment,
       conflict_state: p.conflict_state,
       conflicting_lease_ids: p.conflicting_lease_ids,
 
