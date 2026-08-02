@@ -149,6 +149,78 @@ for (const f of PASS_2) {
     !/application_lifecycle_read/.test(read(f)));
 }
 
+section("H  Slice 9 corrections cannot be reintroduced");
+// ══════════════════════════════════════════════════════════════════════
+//  SCOPED TO THE SURFACES SLICE 9 CORRECTED. This is deliberately NOT a
+//  generic repository-wide lint framework: it names specific files and the
+//  specific defect each one had, so a failure points at a known regression
+//  rather than at a style opinion. Comments are stripped everywhere below —
+//  prose describing a removed defect is not the defect.
+// ══════════════════════════════════════════════════════════════════════
+
+// 1 · dead 'denied' vocabulary (already covered per-file in section A; this is
+//     the cross-cutting restatement for the surfaces Slice 9 touched)
+for (const f of ["src/maintenance/turn_priority.js", "src/applications/leasepackets.js",
+                 "src/applications/lease_packet_eligibility.js",
+                 "src/applications/application_target_authority.js"]) {
+  ok(`${f} carries no 'denied' status literal`, !/'denied'|"denied"/.test(code(f)));
+}
+
+// 2 · private terminal arrays — the canonical TERMINAL group or nothing
+for (const f of ["src/applications/lease_packet_eligibility.js",
+                 "src/applications/application_target_authority.js",
+                 "src/maintenance/turn_priority.js"]) {
+  ok(`${f} builds no literal terminal exclusion`,
+    !/\[\s*["']declined["']\s*,\s*["']withdrawn["']/.test(code(f)));
+}
+
+// 3 · application status as AVAILABILITY authority
+for (const f of ["src/surfaces/availability_read.js", "src/tenancy/position_classifier.js",
+                 "src/tenancy/dated_positions.js", "src/tenancy/space_position.js"]) {
+  ok(`${f} never reads lease_applications`, !/lease_applications/.test(code(f)));
+}
+ok("the application-target authority reads availability, never application status",
+  !/lease_applications/.test(code("src/applications/application_target_authority.js")));
+
+// 4 · application status as TURN-PRIORITY authority
+ok("turn_priority never reads lease_applications",
+  !/lease_applications/.test(code("src/maintenance/turn_priority.js")));
+ok("and carries no applicant_demand tier",
+  !/applicant_demand/.test(code("src/maintenance/turn_priority.js")));
+
+// 5 · approval HISTORY as packet eligibility
+ok("packet eligibility never reads approved_at",
+  !/approved_at/.test(code("src/applications/lease_packet_eligibility.js")));
+ok("and does not use APPROVAL_REACHED wholesale",
+  /EXCLUDED_FROM_PACKET/.test(code("src/applications/lease_packet_eligibility.js")));
+
+// 6 · FIRST-SPACE SELECTION — the shortcut the grain boundary forbids
+const ata = code("src/applications/application_target_authority.js");
+ok("the target authority selects no space by ordering",
+  !/order by[\s\S]{0,80}limit 1/i.test(ata) && !/spaces\[0\]|\.rows\[0\]\.space_id/.test(ata));
+ok("it resolves a space ONLY when the unit has exactly one",
+  /space_count > 1/.test(ata) && /space_count === 0/.test(ata));
+
+// 7 · MULTI-SPACE APPLICATION ACCEPTANCE
+ok("the multi-space refusal code exists and is 409",
+  /space_grain_not_supported/.test(ata));
+const sub = code("src/applications/applicationSubmission.js");
+ok("invitation birth resolves a target before inserting",
+  /resolveApplicationTarget/.test(sub));
+ok("public submission revalidates before the atomic consume",
+  sub.indexOf("resolveSubmissionTarget") > 0 &&
+  sub.indexOf("resolveSubmissionTarget") < sub.indexOf("status='consumed'"));
+ok("no application table gained a space_id",
+  !/application_invitations[\s\S]{0,200}space_id/.test(sub));
+
+// 8 · the bare GET /availability mount
+ok("server.js does not mount the legacy availability module",
+  !/tenancy\/availability/.test(code("server.js")));
+ok("and src/tenancy/availability.js stays deleted",
+  !fs.existsSync(path.join(REPO, "src/tenancy/availability.js")));
+ok("no file redefines the bare route",
+  !/router\.(get|use)\(\s*["\'`]\/availability["\'`]/.test(code("server.js")));
+
 section("G  the read authority never re-declares the vocabulary");
 const readSrc = code("src/applications/application_lifecycle_read.js");
 ok("no local SUBMISSION_REACHED array literal",

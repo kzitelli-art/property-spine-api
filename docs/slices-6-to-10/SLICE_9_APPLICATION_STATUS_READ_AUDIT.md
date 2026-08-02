@@ -246,3 +246,84 @@ Migration `121_ai_leasing_operating_context.sql` is still unmerged on
 6. Re-run: leasing desk, availability, conversion, turn priority, and the Slice 9 lifecycle suites.
 
 Do **not** begin the read-side refactor in this audit commit.
+
+---
+---
+
+# CLOSURE — FINAL DISPOSITION OF ALL 20 PRODUCTION STATUS READS
+
+**Recorded at Slice 9 Commit I.** Every disposition below was verified against
+**current source**, not against the claim of the pass that made it.
+
+## Totals
+
+| Disposition | Count |
+|---|---|
+| **Corrected** — through the canonical lifecycle read authority | 8 |
+| **Replaced** — by a different authority that owns the question | 2 |
+| **Removed** — with the legacy availability module | 1 |
+| **Intentionally retained** — the read is correct as written | 9 |
+| **Deferred with owner ruling** | **0** |
+| **Unclassified** | **0** |
+| **TOTAL** | **20** |
+
+## The table
+
+| # | Location | Disposition | Where |
+|---|---|---|---|
+| B1 | `operator.js:2919–2929` | corrected through lifecycle read authority | Pass 1 |
+| B2 | `leasing_desk_loader.js:219–229` | corrected through lifecycle read authority | Pass 1 |
+| D1 | `leasingconversion.js:479` | corrected — canonical group, `accepted_term_required` no longer missing | Pass 1 |
+| D2 | `leasingconversion.js:486` | corrected — canonical group | Pass 1 |
+| D3 | `leasingconversion.js:818` | corrected — canonical group | Pass 1 |
+| D4 | `leasingconversion.js:890` | corrected — `expired` is terminal; dead `denied` removed | Pass 1 |
+| D5 | `leasingconversion.js:1069` | corrected — `expired` is terminal; dead `denied` removed | Pass 1 |
+| D6 | `applicationSubmission.js:2004` | corrected — canonical TERMINAL group bound as a parameter | Pass 1 |
+| D7 | `availability.js:176` | **removed with legacy availability** — file deleted | **Commit E** |
+| D8 | `turn_priority.js:57` | **replaced by commitment authority** — an application holds no space | **Commit G** |
+| D9 | `leasepackets.js:405` | **replaced by packet-eligibility authority** | **Commit H** |
+| A1 | `applicationSubmission.js:855` | retained current-state read — "may I deny from here?" | — |
+| A2 | `tenancy_anchor_service.js:190` | retained current-state read | — |
+| A3 | `tenancy_anchor_service.js:114` | retained current-state read | — |
+| A4 | `activation_perimeter.js:221` | retained current-state read | — |
+| A5 | `proof_next_action_resolver.js:41–44` | retained current-state read — "what is the next action *now*?" | — |
+| A6 | `applications.js:428` | retained current-state read — the authority re-checks | — |
+| E1 | `operator.js:2223–2224` | retained display compatibility (`statusMap` + `raw_status`) | — |
+| E2 | `tenancy_anchor_service.js:130` | retained display compatibility | — |
+| E3 | `demo.js:111` | retained display compatibility | — |
+
+**Retained annotated domain-specific rule:** one case, already recorded in Pass
+1 and re-affirmed here — the `tenant_signed / countersigned / active` set where
+the question is *whether signature activity occurred*. Replacing it with
+`APPROVAL_REACHED` would falsely treat a merely-approved application as signed.
+It is a correct domain rule, not a private ladder.
+
+## What each replacement actually decided
+
+- **D7 removed, not corrected.** The legacy projection's ladder was a symptom;
+  the module was the defect. Its two internal decision consumers moved to
+  canonical availability first (Commits B and D), then the module and its bare
+  public route were deleted. No adapter was built.
+
+- **D8 replaced.** Turn priority ranked a turn higher because an open
+  application referenced the unit. An application holds **no** inventory —
+  `position_classifier` never reads `lease_applications`, and approval,
+  `lease_ready` and `accepted_term_required` create no space reservation. The
+  tier is gone; priority now reads canonical space-linked commitment.
+
+- **D9 replaced.** Packet eligibility is a present-tense workflow question, so
+  it keeps a status read — but through a named predicate deriving from
+  canonical `APPROVAL_REACHED`, never `approved_at`, and never the group
+  wholesale.
+
+## Verification
+
+| Claim | Verified against current source |
+|---|---|
+| D1–D6 corrected | `leasingconversion.js` and `applicationSubmission.js` bind canonical groups; `'denied'` survives only in comments explaining its removal |
+| D7 removed | `src/tenancy/availability.js` does not exist |
+| D8 replaced | `lease_applications` appears in `turn_priority.js` **only in comments**; absent from code with comments stripped |
+| D9 replaced | the private list `["lease_ready","tenant_signed","approved"]` appears **zero** times in `leasepackets.js` |
+
+**Zero unclassified production status reads remain. No remediation item is
+unnamed, and nothing is deferred.**
