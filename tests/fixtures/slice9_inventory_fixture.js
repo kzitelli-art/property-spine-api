@@ -287,6 +287,16 @@ async function seedInventory(c, { as_of = null } = {}) {
   // ── 19. TWO-SPACE UNIT — the grain refusal ──────────────────────────
   await unit("S-two-space", { spaces: 2 });
 
+  // ── 20. RENEWAL-OPEN — expiring soon, NO successor, NO notice ────────
+  //  The renewals cohort's core case, and it was missing. Every other
+  //  soon-expiring fixture here carries a successor, so it lands in the
+  //  successor_pending or conflicted cohort instead of the OPEN one — leaving
+  //  "a position Renewals calls open is not locked after its lease ends" with
+  //  nothing to range over. The invariant is real; it simply had no subject.
+  const ro = await unit("T-renewal-open", { occupancy: "occupied" });
+  ids.renewal_open_lease = await lease(ro.space_id, {
+    status: "active", start: past, end: soon });
+
   return { property_id, asOf, units, ids, user_id: user.id, person_id: person.id };
 }
 

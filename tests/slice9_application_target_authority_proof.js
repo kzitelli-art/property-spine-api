@@ -45,8 +45,8 @@ const ssl = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || "")
     const popn = (await c.query(
       `select count(distinct u.id)::int units, count(s.id)::int spaces
          from units u left join spaces s on s.unit_id=u.id where u.property_id=$1`, [P])).rows[0];
-    ok(popn.units === 19, `19 fixture units exist (got ${popn.units})`);
-    ok(popn.spaces === 19, `19 spaces exist — 17 sole + 2 on the two-space unit, 0 on the zero-space unit (got ${popn.spaces})`);
+    ok(popn.units === 20, `20 fixture units exist (got ${popn.units})`);
+    ok(popn.spaces === 20, `20 spaces exist — 18 sole + 2 on the two-space unit, 0 on the zero-space unit (got ${popn.spaces})`);
     ok(!!U["A-marketable"] && !!U["S-two-space"] && !!U["R-zero-space"], "every named fixture this proof needs exists");
 
     console.log("\n── SOLE-SPACE RESOLUTION ────────────────────────────────");

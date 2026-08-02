@@ -15,27 +15,53 @@
 const path = require("path");
 const { Pool } = require("pg");
 const REPO = path.resolve(__dirname, "..");
-const DEMO = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
+const { seedInventory } = require("./fixtures/slice9_inventory_fixture");
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { fail++; console.log("   FAIL  " + m); } };
 
+// Local Postgres speaks no SSL; Neon requires it. Deciding from the URL keeps
+// one harness runnable in both places.
+const ssl = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || "")
+  ? false : { rejectUnauthorized: false };
+
 (async () => {
   const url = process.env.DATABASE_URL;
   if (!url) { console.log("FATAL: DATABASE_URL required"); process.exit(1); }
-  const pool = new Pool({ connectionString: url, ssl: { rejectUnauthorized: false } });
+  const pool = new Pool({ connectionString: url, ssl });
+  const pg = await pool.connect();
+  await pg.query("begin");
+  const seeded = await seedInventory(pg);
+  const DEMO = seeded.property_id;   // the SCRATCH property, seeded by this proof
   const { availabilityRead, marketingState } = require(path.join(REPO, "src/surfaces/availability_read"));
   const { datedPropertyPositions } = require(path.join(REPO, "src/tenancy/dated_positions"));
   const { currentRentRoll } = require(path.join(REPO, "src/surfaces/rent_roll_canonical"));
   const { renewalsCohort } = require(path.join(REPO, "src/leasing/renewals_read"));
   const { futureRentRollFacts } = require(path.join(REPO, "src/surfaces/future_rent_roll_facts"));
 
-  const av = await availabilityRead(pool, { property_id: DEMO });
-  const dp = await datedPropertyPositions(pool, { property_id: DEMO });
-  const rr = await currentRentRoll(pool, { property_id: DEMO });
-  const rn = await renewalsCohort(pool, { property_id: DEMO });
-  const fr = await futureRentRollFacts(pool, { property_id: DEMO });
+  const av = await availabilityRead(pg, { property_id: DEMO });
+  const dp = await datedPropertyPositions(pg, { property_id: DEMO });
+  const rr = await currentRentRoll(pg, { property_id: DEMO });
+  const rn = await renewalsCohort(pg, { property_id: DEMO });
+  const fr = await futureRentRollFacts(pg, { property_id: DEMO });
   const byId = new Map(dp.positions.map(p => [p.space_id, p]));
+
+  // ══════════════════════════════════════════════════════════════
+  //  POPULATION FIRST — assert the fixtures EXIST before asserting how they
+  //  behave. This proof previously hardcoded Demo Building and seeded nothing,
+  //  so on a database where that property has no spaces it failed 4 assertions
+  //  that were really reading an empty set. An empty-population failure and a
+  //  real defect are indistinguishable in that shape, and the mirror image is
+  //  worse: the same proof passes VACUOUSLY when every filtered list is empty.
+  // ══════════════════════════════════════════════════════════════
+  console.log("\n== FIXTURE POPULATION ==");
+  ok(!!DEMO, "a scratch property was created by this proof");
+  const popn = (await pg.query(
+    `select (select count(*) from units where property_id=$1)::int u,
+            (select count(*) from spaces s join units n on n.id=s.unit_id
+              where n.property_id=$1)::int s`, [DEMO])).rows[0];
+  ok(popn.u === 20, `20 units seeded (${popn.u})`);
+  ok(popn.s === 20, `20 spaces seeded — 18 sole + 2 on the two-space unit, 0 on the zero-space unit (${popn.s})`);
 
   console.log("\n== ONE POSITION, ONE STATE ==");
   ok(av.count === dp.positions.length, `one row per canonical position (${av.count})`);
@@ -45,6 +71,17 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
   ok(av.rows.every(r => r.marketing_state === "marketable_now" ? !r.blocking_reason : !!r.blocking_reason),
     "every non-marketable position states exactly one blocking reason");
   ok(av.rows.every(r => r.blocking_label), "every state has operator-readable language");
+
+  // Every state this proof goes on to assert about must actually be present.
+  // Without this, "a contested position is never marketable" passes when there
+  // is no contested position at all.
+  console.log("\n== EXPECTED STATE POPULATIONS ARE NONZERO ==");
+  for (const st of ["marketable_now", "upcoming", "occupied", "turnover_required",
+                    "successor_locked", "successor_pending", "activation_pending",
+                    "contested", "evidence_disagrees", "down", "not_marketable_use",
+                    "readiness_unknown"]) {
+    ok(av.states[st] > 0, `${st} is populated (${av.states[st]})`);
+  }
 
   console.log("\n== vacant != ready != marketable ==");
   const marketable = av.rows.filter(r => r.marketing_state === "marketable_now");
@@ -144,9 +181,16 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
     "operating_use is loaded per space FROM its unit - an explicit propagation, not an assumption");
 
   console.log("\n== HTTP ==");
-  const base = process.env.API_BASE, token = process.env.STAFF_SESSION;
-  if (!base || !token) { console.log("   SKIP  no API_BASE / STAFF_SESSION"); }
-  else {
+  //  The fixtures live in an UNCOMMITTED transaction, so a separate HTTP
+  //  connection cannot see them. The HTTP contract is exercised against a
+  //  deployed property when one is supplied; it is honestly skipped otherwise,
+  //  and skipping is never counted as a pass.
+  const base = process.env.API_BASE, token = process.env.STAFF_SESSION,
+        httpProperty = process.env.HTTP_PROPERTY_ID;
+  if (!base || !token || !httpProperty) {
+    console.log("   SKIP  no API_BASE / STAFF_SESSION / HTTP_PROPERTY_ID — the seeded fixture is transaction-scoped and unreachable over HTTP");
+  } else {
+    const DEMO = httpProperty;
     const anon = await fetch(`${base}/operator/leasing/availability-canonical`);
     ok(anon.status === 401, "no session -> 401");
     const r = await fetch(`${base}/operator/leasing/availability-canonical`, { headers: { "x-staff-session": token } });
@@ -158,7 +202,9 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
     ok((await spoof.json()).property_id === DEMO, "a client-supplied property_id is ignored");
   }
 
+  await pg.query("rollback");   // the scratch property never persists
+  pg.release();
   await pool.end();
   console.log(`\n==== ${pass} passed, ${fail} failed ====\n`);
   process.exit(fail === 0 ? 0 : 1);
-})().catch(e => { console.log("FATAL:", e.message); process.exit(1); });
+})().catch(e => { console.log("FATAL:", e.message, "\n", e.stack); process.exit(1); });
