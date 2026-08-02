@@ -365,3 +365,99 @@ SP=/tmp/pw node ask_spine_e2e_browser.browser.js   # in the app repo
 merge: final visual sign-off, then the deployment order — merge API → deploy →
 authenticated smoke → merge app → deploy → browser acceptance against the
 deployed API.
+
+---
+
+# Evidence boundary — what the database rung does and does not cover
+
+## Correct label
+
+> **Runtime-proven on an isolated Ask-Spine-complete schema**, pending visual
+> sign-off and deployed acceptance.
+
+**It is not a claim that the repository can rebuild its entire schema.** It is
+also not a dismissal of the rung: real tables, real SQL, real canonical
+sessions, the real router, real HTTP and a real browser path were all exercised.
+
+## The precise qualification
+
+> The isolated database was produced from the repository migration chain until
+> an unrelated banking migration defect blocked continuation. **All migrations
+> creating or modifying the tables and columns used by Ask Spine and canonical
+> staff-session resolution were confirmed applied before the proof ran.**
+
+## Tables the proof depends on
+
+| Table | Used for |
+|---|---|
+| `obligations` | the read itself — property, module, status, `due_at`, `assigned_user_id`, `person_id`, `unit_id`, `related_type`, `related_id`, `label`, `type` |
+| `properties` | property identity |
+| `users` | the operator |
+| `property_team_assignments` | **authority** — the resolver's active-assignment join, and `allowed_modules` |
+| `staff_sessions` | canonical session issuance and resolution |
+| `persons` | `person_id` navigation target |
+
+All six were confirmed present with the required columns before the proof ran.
+
+## Skipped migrations — none intersects that closure
+
+**Verified mechanically:** each skipped file was scanned for
+`create table` / `alter table` against all six tables. **No match.**
+
+Of the 15 skipped, only **one is a genuine defect**:
+
+| Class | Files | Cause |
+|---|---|---|
+| **Genuine defect** | `012_bank_intake.sql` | `vendors.yardi_code` — see the baseline lane |
+| **Cascade from 012** | `017`, `021`, `022`, `023`, `031`, `037` | depend on `bank_transactions` / `bank_accounts`, which 012 never created |
+| **Harness artifact — NOT a defect** | `053`, `054`, `087` | ledger-head preflight assertions (`expected head NNN`). They failed because this proof applied files **individually** and recorded versions afterwards, so the head did not match at check time. Through the real runner they would pass. |
+| **Cascade from the artifacts** | `077`, `106`, `110`, `120` | depend on objects from `053`/`054` |
+
+**Stated plainly: 15 files were skipped, but that is 1 defect + 6 cascade + 8
+artifacts of the application method — not 15 broken migrations.**
+
+---
+
+# Mobile real-outage proof — the last runtime gap, now closed
+
+Narrow, failure-only, at **390 × 844**. Real app, real API, real Postgres, real
+HTTPS to the pinned origin. **No interception.** Shutdown is deterministic: the
+TLS front is killed by **recorded PID**, and the harness then polls the port
+until it genuinely refuses before asserting anything.
+
+| # | Assertion |
+|---|---|
+| M1 | a successful Ask Spine response renders first (5 items) — so staleness is provable |
+| M2 | the API is deterministically down (PID kill; port confirmed refusing) |
+| M3 | the submitted request **genuinely failed at the network** (`requestfailed` observed) |
+| M4 | **stale items are removed** |
+| M5 | the unavailable message appears |
+| M6 | **Retry** appears |
+| M7 | **no empty-success claim appears** — asserted against both the empty line and any "nothing needs/requires" phrasing |
+| M8 | **no horizontal overflow at 390px** |
+
+**8 passed, 0 failed.** Harness: `ask_spine_mobile_outage.browser.js` (app repo).
+**No product code was changed to make it pass.**
+
+---
+
+# Post-Slice-9 compatibility check — recorded, to run after Slice 9 lands
+
+Slice 9 has **no code collision** with Ask Spine (verified: zero shared files),
+but it changes **which obligations are created and completed**. That is a
+downstream contract interaction, not a merge dependency. **Ask Spine does not
+wait for Slice 9, and the branches are not combined.**
+
+To run once Slice 9 is on `main`:
+
+```text
+Slice 9 creates a qualifying obligation
+→ Ask Spine displays it under the correct property and module
+
+Slice 9 completes or closes it
+→ Ask Spine no longer presents it as open work
+```
+
+Both are already expressible against the existing fixture harness — the
+qualification predicate (`status='open'`, property, module) is the contract
+under test.
