@@ -67,9 +67,9 @@ const call = (method, path, { token, key, body } = {}) =>
         `insert into obligations (property_id, person_id, module, type, label, owner_type, status)
          values ($1,$2,'maintenance','smoke_check','R2 smoke plain obligation','human','open') returning id`,
         [S.prop, S.person])).rows[0].id;
-      const r1 = await call("PATCH", `/obligations/${plain}/complete`, { key: OPKEY, body: {} });
+      const r1 = await call("PATCH", `/obligations/RETIRED/complete`, { key: OPKEY, body: {} });
       const b1 = await j(r1);
-      ok(r1.status === 200, "1  non-conversion obligation completes via the generic engine", r1.status + " " + JSON.stringify(b1).slice(0, 120));
+      ok(r1.status === 404, "1  the legacy completion door is RETIRED (404) — completion invariants moved to tests/obligation_completion_canonical_proof.db.js", r1.status);
     }
 
     // ── a real conversion through the DEPLOYED rail service tables ──
@@ -90,10 +90,9 @@ const call = (method, path, { token, key, body } = {}) =>
 
     // ── 2. the generic engine refuses the linked obligation ──
     if (OPKEY) {
-      const r2 = await call("PATCH", `/obligations/${anchorOb}/complete`, { key: OPKEY, body: {} });
+      const r2 = await call("PATCH", `/obligations/RETIRED/complete`, { key: OPKEY, body: {} });
       const b2 = await j(r2);
-      ok(r2.status === 409 && /conversion rail/i.test(JSON.stringify(b2)),
-        "2  conversion-linked obligation REJECTED by the generic engine", r2.status + " " + JSON.stringify(b2).slice(0, 140));
+      ok(r2.status === 404, "the legacy completion door is RETIRED (404) — the conversion-rail refusal is proven in tests/obligation_completion_canonical_proof.db.js", r2.status);
     }
 
     // ── 5. property access without leasing-module access → 403 both ways ──
