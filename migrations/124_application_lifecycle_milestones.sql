@@ -22,8 +22,12 @@
 --      Deployment A : 124 expansion + canonical lifecycle writer + cutover
 --      Deployment B : 125 enforcement, once every instance runs A
 --
---  No trigger in this file invents a timestamp for compatibility. Absence
---  stays absent.
+--  This file DOES install a temporary compatibility-authoring trigger
+--  (ps_app_compat_author_milestones, below). It is not historical inference
+--  and it invents nothing: PostgreSQL is witnessing the real transition at
+--  the moment it occurs, so transaction_timestamp() IS the milestone, and it
+--  writes only where the milestone is null. Staged migration 125 drops it.
+--  Absence that predates this migration stays absent.
 --
 --  ── TERMINAL VOCABULARY (ruling A, 2026-08-01) ───────────────────────
 --      declined | withdrawn | expired
