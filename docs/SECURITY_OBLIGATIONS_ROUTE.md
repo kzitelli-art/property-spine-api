@@ -630,7 +630,7 @@ than guessed.
 | **Can auto-deploy be disabled?** | **Not source-establishable.** Render exposes it as a service setting; no repo evidence and no credentials here | **Not source-establishable** (same) |
 | **Manual deploy of a chosen commit** | **Partially.** `deploy.sh` POSTs `/v1/services/{id}/deploys` with `{"clearCache":"do_not_clear"}` and **no commit reference** — it redeploys the *tip of the configured branch*. Deploying a specific commit means repointing Settings → Branch first (`THREAD_HANDOFF.md:123–125`) | **No mechanism in the repo.** Dashboard only |
 | **Build / deploy duration** | **Not source-establishable.** Docker image build + `npm ci` + migration pass — minutes, magnitude unknown | **Near-instant** — no build step; the published artifact *is* the committed file |
-| **Health / identity endpoint** | `GET /health` → `{ok, db_time}` (`server.js:246`); `GET /health/migrations` behind the operator key (`docs/deployment.md:137–142`) | **None.** Identity probe is `window.__PS_BUILD.code_sha`, which is **one commit behind by construction** (`build-info.js:3–8`) |
+| **Health / identity endpoint** | `GET /health` → `{ok, db_time}` (`server.js:246`). **`GET /health/migrations` DOES NOT EXIST** — see the correction below | **None.** Identity probe is `window.__PS_BUILD.code_sha`, which is **one commit behind by construction** (`build-info.js:3–8`) |
 | **Rollback mechanism** | **No source-established mechanism.** The only rollback this repo can perform is `git revert` + push, which triggers a *new forward deploy* and **re-runs `prestart` migrations**. Render's dashboard rollback exists as a product feature but is unverified here — and it rolls back **code only, never schema** | `git revert` + push. With no build step this is a true artifact rollback |
 | **Previous deployment retained** | **Not source-establishable** | **Not source-establishable** |
 
@@ -688,7 +688,8 @@ fabricated "nothing to do" in front of an operator. A non-negotiable
 (§5) outranks a shorter window.
 
 ```text
-1.  Read GET /health/migrations. Confirm nothing unapplied would ride along.
+1.  Establish the deployed migration ledger (see MIGRATION PREFLIGHT —
+    NOT via /health/migrations, which does not exist).
 2.  Merge the APP PR to main. No build step → live in seconds.
 3.  Verify the app is serving the new file (window.__PS_BUILD / the
     obligations call now targeting /operator/obligations).
@@ -769,7 +770,7 @@ Any deploy in progress now:     yes / no
 
 ── Health ───────────────────────────────────────────────────
 GET /health:                    ____________________
-GET /health/migrations:         ____________________
+Deployed migration ledger:      ____________________  (Neon SQL editor)
 
 ── Execution ────────────────────────────────────────────────
 Operator executing the window:  ____________________
@@ -799,7 +800,7 @@ silently with a security release.**
 | 1 | Record the deployed API SHA | ______ |
 | 2 | `git diff --name-only <deployed-sha>..<merge-candidate> -- migrations/` | ______ |
 | 3 | `GET /health` | ______ |
-| 4 | `GET /health/migrations` (needs the operator key; do not print it) | ______ |
+| 4 | Read the deployed ledger — **Neon SQL editor**, read-only `select` (below) | ______ |
 | 5 | Confirm this lane adds no migration | **established from source: it adds none** — see below |
 | 6 | Identify any unrelated unapplied migration that would run during `prestart` | ______ |
 
@@ -808,6 +809,55 @@ touches `server.js`, three new files under `src/obligations/`, two new
 harnesses, two smoke files, and documentation. `git diff --name-only
 origin/main...claude/security-obligations-route -- migrations/` returns
 **nothing**. This deploy is code-only *from this lane's side*.
+
+## CORRECTION — `/health/migrations` does not exist
+
+**Established from source, 2026-08-02.** `docs/deployment.md:137–142` documents:
+
+```bash
+curl -H "x-operator-key: $OPERATOR_KEY" \
+  https://property-spine-api.onrender.com/health/migrations
+```
+
+**There is no such route.** `server.js` defines exactly one health endpoint,
+`GET /health` at `:246`. A repository-wide search finds `/health/migrations`
+only in documentation — never in a router, never in `src/`. An earlier revision
+of this file repeated the documented command as if it were a topology fact; it
+cited the doc instead of the source. **Withdrawn.**
+
+Consequence for the window: **migration state cannot be read over HTTP.** Use a
+**read-only query in the Neon SQL editor** — no credential leaves the browser,
+no environment variable changes, no deploy, no new endpoint:
+
+```sql
+select version from schema_migrations order by version;
+```
+
+Compare against the candidate's own files:
+
+```bash
+ls migrations/*.sql | sed -E 's#.*/([0-9]+).*#\1#' | sort
+```
+
+Anything present in the repository and absent from the deployed ledger **will
+run during `prestart` on the next deploy.** That list — not a green health
+check — is the preflight answer.
+
+## Migration 121 — the file does not exist
+
+**Established from source.** There is **no `121_*.sql`** in `migrations/`, on
+this candidate or on `origin/main`. The sequence goes `120_ai_leasing_strategy_
+foundation.sql` → `122_governed_economics_lineage.sql`.
+
+`migrate.js` iterates the files present in `migrations/`. **With no 121 file,
+nothing named 121 can execute during `prestart`** — this deploy cannot apply it,
+re-apply it, or roll it forward. That is established without any dashboard.
+
+What remains open is a **ledger question, not a deploy risk**: whether
+production's `schema_migrations` carries a `121` row for a file that reached it
+by a branch deploy and never reached `main`. The read-only Neon query above
+answers it. The disposition rule is unchanged — but note that the deploy-risk
+half is already closed by source.
 
 ## The migration-121 divergence must be closed as a deployment fact
 
@@ -826,8 +876,8 @@ pending and understood         — an unapplied migration exists, it is named,
                                  → PROCEED ONLY WITH THAT NAMED ACCEPTANCE
 
 stop deployment                — an unapplied migration exists that is not
-                                 understood, or `/health/migrations` disagrees
-                                 with the repository ledger.  → DO NOT MERGE
+                                 understood, or the deployed ledger disagrees
+                                 with the repository.  → DO NOT MERGE
 ```
 
 **"Probably fine" is not one of the three outcomes.**
@@ -903,7 +953,7 @@ Watch the Render build from start through healthy deploy. Verify:
 
 - `prestart` migration pass completes;
 - `GET /health` healthy;
-- `GET /health/migrations` returns the expected state from the preflight;
+- the deployed ledger still matches the preflight reading;
 - the deployed API SHA **matches the merged security commit**.
 
 ### Step D — deployed boundary smoke
