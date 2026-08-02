@@ -503,3 +503,123 @@ acting user; `completeObligation` takes only an optional `completed_by` from the
 body. Recording the server-derived actor therefore requires either a service
 signature change or a route-level audit write. **That choice will be made and
 stated when Phase B is built — it must not silently keep the spoofable field.**
+
+---
+
+# Final receipt — the obligation authority boundary
+
+## The permanent boundary, stated plainly
+
+### Supported HTTP surface
+- **`GET /operator/obligations`** — authenticated, property- and module-scoped collection read
+- **`POST /operator/obligations/:id/claim`** — authenticated **self-claim**
+
+### Deliberately service-only
+- **`satisfyObligation`** — canonical service, no HTTP door
+- **`completeObligation`** — canonical service, no HTTP door
+
+Both remain fully enforced (required inputs, conversion rail) and are now
+proven **directly** rather than through an exposed route kept alive for a test
+to call.
+
+### Removed
+- **All five shared-key legacy obligation routes** — `GET /obligations`,
+  `GET /obligations/:id`, `PATCH /obligations/:id/{claim,satisfy,complete}`
+- **Browser-selected claimant identity** — `localStorage.ps_user_id` is off the
+  authority path
+- **Client-selected property scope** — refused, not ignored
+
+### Deferred by design — not forgotten
+- **Manager assignment / delegation** — no server-side work-assignment
+  capability exists today (`can_manage_roles` is role administration;
+  `reassignObligation` reassigns by *role*, internally). Rebuilding "send any
+  user id" behind a new URL would recreate the defect with better manners.
+- **Authenticated satisfy workflow** — no product caller exists.
+- **Authenticated completion workflow** — no product caller exists. When one
+  does, it must pass the actor into the canonical service **in the same
+  transaction**, not via a side audit write.
+
+---
+
+## Exact changes
+
+### Routes removed (API)
+
+| Route | Replacement |
+|---|---|
+| `GET /obligations` | `GET /operator/obligations` |
+| `GET /obligations/:id` | **none** — no caller existed |
+| `PATCH /obligations/:id/claim` | `POST /operator/obligations/:id/claim` (self-claim) |
+| `PATCH /obligations/:id/satisfy` | **none** — service-only |
+| `PATCH /obligations/:id/complete` | **none** — service-only |
+
+### Files
+
+| File | Change |
+|---|---|
+| `src/obligations/operator_obligations_service.js` | **new** — scoped query, explicit projection, whitelisted status, deterministic ordering |
+| `src/obligations/operator_obligations.js` | **new** — thin route: session, authority refusal, HTTP mapping |
+| `src/obligations/operator_obligation_actions.js` | **new** — self-claim |
+| `server.js` | register two routers; **retire all five legacy routes** |
+| `tests/operator_obligations_security_proof.db.js` | **new** — 21 assertions, floor 20 |
+| `tests/obligation_completion_canonical_proof.db.js` | **new** — 12 assertions, floor 12 |
+| `tests/smoke_release2.deployed.js`, `smoke_release3.deployed.js` | legacy calls retargeted; boundary smoke added |
+| app `index.html` | `loadObligations()` migrated; `claimObligation()` migrated; **both interceptors extended**; one appended manifest entry; one named write action |
+
+### Consumers migrated
+
+| Consumer | From | To |
+|---|---|---|
+| `loadObligations()` (8 call sites, one function body) | `tryJSON('/obligations?property_id=…', [])` | `loadResource('operatorObligations')` |
+| `claimObligation()` | `PATCH /obligations/:id/claim` with `{user_id}` | named write action, **empty body** |
+| deployed smoke completion cases | `PATCH /obligations/:id/complete` | canonical-service proof + boundary smoke |
+
+### Preview and demo preserved
+
+Both client-side interceptors now match `/operator/obligations` as well as the
+legacy path, so preview keeps resolving from its local store and demo keeps
+returning `DEMO_DB`. **Without that they would have stopped matching and fallen
+through to a live authenticated call** — the live-first violation in the
+opposite direction. `loadObligations()` also issues **no request at all**
+without a live session.
+
+### Typed response contract
+
+```json
+{ "items": [], "total": 0,
+  "scope": { "property_id": "server-derived", "modules": ["session-derived"] } }
+```
+
+Adapted in the **one central loader**, so the eight call sites never see two
+response shapes. Unavailable stays distinct from a valid empty array.
+
+---
+
+## Proof counts
+
+| Harness | Assertions | Floor | Nature |
+|---|---|---|---|
+| `operator_obligations_security_proof.db.js` | **21** | 20 | real Postgres · real sessions · authenticated HTTP |
+| `obligation_completion_canonical_proof.db.js` | **12** | 12 | real Postgres · canonical services |
+| app suite (`run_harnesses.sh`) | 749 | — | 17 harnesses, 0 red |
+
+**Legacy doors proven unrouted (404) — not merely unused.**
+
+## Collision status
+
+| Lane | Status |
+|---|---|
+| **Ask Spine** | **No shared files.** Ask Spine keeps its own purpose-built endpoint and does not depend on these routes; the authority seam is copied, not imported. `server.js` registrations sit in the same block, adjacent lines — trivially mergeable. |
+| **Slice 9** | **Zero overlap.** Touches neither `server.js` nor any `obligation*` file. |
+
+## Release blockers
+
+**None inside this lane.** Remaining sequence: merge and deploy this security
+lane → prove the legacy browser key can no longer reach obligation routes on
+the deployed API → rebase Ask Spine → rerun its ladder → merge and deploy Ask
+Spine.
+
+**One honest caveat:** the deployed boundary smoke is written and parses, but
+**has not been executed against a deployed API** — there is no deployment to
+run it against from here. It is *Built*, not *Proven*, and must be run as part
+of the deploy step.
