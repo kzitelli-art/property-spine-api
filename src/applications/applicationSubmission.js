@@ -45,6 +45,12 @@ const crypto = require("crypto");
 const lifecycle = require("./application_lifecycle");
 // Slice 9: canonical application READ authority (TERMINAL group, status vocabulary).
 const lifecycleRead = require("./application_lifecycle_read");
+// Slice 9 Commit A/B: the ONE application-target authority. Required directly
+// rather than injected — an injected `unitOfferable` that defaulted to null
+// meant any caller which simply did not pass it created an invitation with NO
+// target validation at all. Possessing a unit_id is not permission to skip
+// resolution.
+const applicationTarget = require("./application_target_authority");
 
 // Non-recoverable digest of a bearer token. We store ONLY this; the raw token
 // lives solely in the issued URL. SHA-256 is sufficient for a high-entropy
@@ -84,7 +90,13 @@ module.exports = function applicationSubmissionModule(deps) {
       client.release();
     }
   }
-  function httpErr(status, msg) { const e = new Error(msg); e.httpStatus = status; e.publicMessage = msg; return e; }
+  function httpErr(status, msg, code = null) {
+    const e = new Error(msg); e.httpStatus = status; e.publicMessage = msg;
+    // Stable refusal identity travels beside the sentence so a client can
+    // branch on the reason without parsing operator copy.
+    if (code) e.code = code;
+    return e;
+  }
 
   // Evidence lineage is opportunity-scoped. Resolve the one canonical open
   // leasing opportunity for this Person × Property pair. Absence remains null:
@@ -204,6 +216,29 @@ module.exports = function applicationSubmissionModule(deps) {
 
     const prop = (await client.query("select id from properties where id=$1", [property_id])).rows[0];
     if (!prop) throw httpErr(404, "No property with that id.");
+
+    // ── GRAIN FLOOR FOR EVERY APPLICATION BIRTH ───────────────────────
+    //  This is the ONE service that creates an application record, so it is
+    //  where the grain boundary is enforced for every door that reaches it —
+    //  public token submission, internal staff entry and import alike.
+    //
+    //  require_offerable is FALSE by design. An application record is not an
+    //  offer: the internal path exists partly to record applications that
+    //  ALREADY happened (source 'import'), and refusing those because the unit
+    //  is no longer marketable would make historical truth unrecordable.
+    //  What is NOT negotiable is the grain — a multi-space unit produces an
+    //  application nobody can attribute to a space, and lease_applications has
+    //  no space_id to attribute it with. Offerability for the public token
+    //  door is enforced by its own submission-time revalidation.
+    if (unit_id) {
+      const target = await applicationTarget.resolveApplicationTarget(client, {
+        property_id, unit_id, require_offerable: false });
+      if (!target.ok) {
+        throw httpErr(target.httpStatus || 409,
+          target.refusal_reason || "That unit cannot carry an application.",
+          target.refusal_code);
+      }
+    }
 
     let resolvedLeasingLeadId = leasing_lead_id || await resolveOpenLeasingLeadId(client, { property_id, person_id });
     if (resolvedLeasingLeadId) {
@@ -331,16 +366,30 @@ module.exports = function applicationSubmissionModule(deps) {
   // staff-session operator route call this ONE service — no duplicated logic.
   async function createPreparedInvitation(client, {
     conversion_id = null, person_id = null, property_id, unit_id = null,
-    expires_at = null, created_by_user_id = null,
+    expires_at = null, created_by_user_id = null, intended_move_in = null,
   }) {
     if (!property_id) throw httpErr(400, "property_id is required.");
     const prop = (await client.query("select id from properties where id=$1", [property_id])).rows[0];
     if (!prop) throw httpErr(404, "No property with that id.");
-    // PROPERTY WALL: a supplied unit must belong to THIS property.
+
+    // ── THE ONE CHOKE POINT FOR INVITATION BIRTH ──────────────────────
+    //  Every prepared invitation is created here, so the target is resolved
+    //  here. The old check was a property wall only: it proved the unit was at
+    //  this property and nothing else, so an invitation could be prepared for
+    //  a unit that was occupied, down, committed to another resident, or
+    //  carried two spaces with no way to say which one the application meant.
+    //
+    //  REFUSAL HAPPENS BEFORE THE INSERT. No invitation row, no token, no
+    //  comm_event follows a refused target.
+    let target = null;
     if (unit_id) {
-      const u = (await client.query("select property_id from units where id=$1", [unit_id])).rows[0];
-      if (!u) throw httpErr(404, "No unit with that id.");
-      if (u.property_id !== property_id) throw httpErr(403, "That unit belongs to a different property.");
+      target = await applicationTarget.resolveApplicationTarget(client, {
+        property_id, unit_id, intended_move_in, require_offerable: true,
+      });
+      if (!target.ok) {
+        throw httpErr(target.httpStatus || 409, target.refusal_reason || "That unit cannot be used for an application.",
+          target.refusal_code);
+      }
     }
     const rawToken = crypto.randomBytes(24).toString("base64url");
     const tokenDigest = digestToken(rawToken);
@@ -355,6 +404,11 @@ module.exports = function applicationSubmissionModule(deps) {
       invitation_id: inv.id,
       token: rawToken,          // RAW token returned ONCE — digest-only at rest.
       status: inv.status,
+      // VALIDATION RECEIPT, NOT LINEAGE. Proves which space availability was
+      // evaluated against. Deliberately NOT written to application_invitations
+      // — the invitation is unit-grained and stays that way.
+      resolved_space_id: target ? target.resolved_space_id : null,
+      resolution_basis: target ? target.resolution_basis : null,
     };
   }
 
@@ -380,7 +434,7 @@ module.exports = function applicationSubmissionModule(deps) {
   async function createAndDispatchApplicationInvitation({
     property_id, person_id, unit_id = null, conversion_id = null,
     expires_at = null, created_by_user_id = null, message_prefix = null,
-    resume_invitation_id = null,
+    resume_invitation_id = null, intended_move_in = null,
   }) {
     if (!commBoundary) return { dispatched: false, reason: "boundary_not_wired" };
 
@@ -405,6 +459,27 @@ module.exports = function applicationSubmissionModule(deps) {
       const evt = (await pool.query(`select id, body from comm_events where id=$1`, [inv.dispatch_comm_event_id])).rows[0];
       const per = (await pool.query(`select phone from persons where id=$1`, [inv.person_id])).rows[0] || {};
       if (!per.phone) return { dispatched: false, reason: "no_phone_on_person", invitation_id: inv.id, status: inv.status };
+
+      // ── RESUME REVALIDATES THE GRAIN, NOT THE MARKET ────────────────
+      //  An invitation can sit prepared while inventory changes underneath it.
+      //  Before re-attempting the wire, the ORIGINAL target must still be
+      //  resolvable: same property, still exactly one space. A unit that has
+      //  since been split into two spaces is ambiguous, and a link that would
+      //  produce an application nobody can attribute to a space must not go
+      //  out.
+      //
+      //  require_offerable is FALSE deliberately. This is crash recovery, not
+      //  a new offer — the unit may well have become unmarketable BECAUSE of
+      //  this very applicant, and demanding marketability would make a
+      //  legitimate resume impossible. Only structural grain failures refuse.
+      if (inv.unit_id) {
+        const still = await applicationTarget.resolveApplicationTarget(pool, {
+          property_id: inv.property_id, unit_id: inv.unit_id, require_offerable: false });
+        if (!still.ok) {
+          return { dispatched: false, reason: still.refusal_code, invitation_id: inv.id,
+                   status: inv.status, receipt: still.refusal_reason };
+        }
+      }
       const wire = await commBoundary.sendPropertySms({
         property_id: inv.property_id, recipient: per.phone, body: evt.body,
         purpose: "application_link", person_id: inv.person_id, eventId: evt.id,
@@ -445,10 +520,19 @@ module.exports = function applicationSubmissionModule(deps) {
       if (!prop) throw httpErr(404, "No property with that id.");
       const per = (await client.query("select id, phone from persons where id=$1", [person_id])).rows[0];
       if (!per) throw httpErr(404, "No person with that id.");
+      // ── TARGET RESOLUTION BEFORE ANY SIDE EFFECT ────────────────────
+      //  Provider dispatch must not bypass resolution just because it holds a
+      //  unit_id. The refusal lands BEFORE the invitation insert, before the
+      //  comm_event insert, and therefore before any wire attempt. The prior
+      //  check was a property wall only.
       if (unit_id) {
-        const u = (await client.query("select property_id from units where id=$1", [unit_id])).rows[0];
-        if (!u) throw httpErr(404, "No unit with that id.");
-        if (u.property_id !== property_id) throw httpErr(403, "That unit belongs to a different property.");
+        const target = await applicationTarget.resolveApplicationTarget(client, {
+          property_id, unit_id, intended_move_in, require_offerable: true });
+        if (!target.ok) {
+          throw httpErr(target.httpStatus || 409,
+            target.refusal_reason || "That unit cannot be used for an application.",
+            target.refusal_code);
+        }
       }
       const rawToken = crypto.randomBytes(24).toString("base64url");
       const inv = (await client.query(
@@ -1900,8 +1984,11 @@ module.exports = function applicationSubmissionModule(deps) {
     // 2) DISPATCH — the proven primitive (validates person+unit belong to the
     //    property, creates the prepared invitation, sends via the ONE comms
     //    gate, records the SID on acceptance; on refusal, revokes honestly).
+    //  intended_move_in was accepted by this function and then silently
+    //  dropped, so a forward offer was validated against "available today".
+    //  It is now carried into the one resolution.
     const out = await createAndDispatchApplicationInvitation({
-      property_id, person_id, unit_id, conversion_id, created_by_user_id });
+      property_id, person_id, unit_id, conversion_id, created_by_user_id, intended_move_in });
     if (!out || !out.dispatched) return out;   // honest failure passes straight through — NO advance
     // 3) ADVANCE — only on provider acceptance. One shared transition helper,
     //    its own txn. The SMS is already out; an advance hiccup is a follow-up
@@ -2018,11 +2105,22 @@ module.exports = function applicationSubmissionModule(deps) {
     }
     if (nonterminal) throw httpErr(409, "A live application already exists on this conversation.");
 
-    // unit revalidation AT preparation (eligibility check, not a hold)
-    if (unit_id && unitOfferable) {
-      const ok = await unitOfferable(client, { property_id: conv.property_id, unit_id });
-      if (!ok || ok.offerable === false) {
-        throw httpErr(409, `That unit is no longer offerable${ok && ok.reason ? ` (${ok.reason})` : ""}. Choose a current unit.`);
+    // ── UNIT REVALIDATION AT PREPARATION (eligibility, never a hold) ──
+    //  The injected `unitOfferable` seam is kept ONLY as a caller-supplied
+    //  override; when absent this now falls back to the canonical authority
+    //  rather than skipping validation entirely. Preparation cannot proceed
+    //  on an unresolved target.
+    if (unit_id) {
+      const verdict = unitOfferable
+        ? await unitOfferable(client, { property_id: conv.property_id, unit_id })
+        : await applicationTarget.resolveApplicationTarget(client, {
+            property_id: conv.property_id, unit_id, require_offerable: true });
+      if (!verdict || verdict.offerable === false || verdict.ok === false) {
+        const why = verdict && (verdict.refusal_reason || verdict.reason);
+        throw httpErr(
+          (verdict && verdict.httpStatus) || 409,
+          why || "That unit is no longer offerable. Choose a current unit.",
+          verdict && verdict.refusal_code);
       }
     }
 

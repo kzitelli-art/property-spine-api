@@ -39,6 +39,7 @@ const proposedTerms = require("../applications/proposed_terms_service"); // Part
 // "did this ever reach approval", shared with the leasing desk.
 const lifecycleRead = require("../applications/application_lifecycle_read");
 const applicationSendCommand = require("../applications/application_send_command"); // composite Send-application command (intent→prepare→dispatch)
+const applicationTargetAuthority = require("../applications/application_target_authority"); // Slice 9 Commit A: the ONE application-target resolver
 
 module.exports = function operatorModule(deps) {
   const {
@@ -3186,39 +3187,30 @@ module.exports = function operatorModule(deps) {
   //   POST /operator/leasing/application-invitations/:id/sent
   //        → attest a manual send → 'manually_sent'. Only this moves the status.
   // ══════════════════════════════════════════════════════════════════
-  // LEASEABLE ALLOWLIST — explicit, from availability semantics. NOT "!= unavailable".
-  //   ready_now      : vacant, ready to lease now.
-  //   vacant_turning : vacant, turn in progress → leaseable-forward.
-  //   on_notice      : occupied but resident vacating → leaseable-forward (not tourable).
-  // EXCLUDED: committed_future (ALREADY leased to someone else — not open supply),
-  //           unavailable (down/model/occupied-no-notice).
-  const LEASEABLE_STATES = ["ready_now", "vacant_turning", "on_notice"];
-
-  // is a specific unit currently offerable at this property? Reads the SAME
-  // availability projection (no second system). Used for the selector AND for
-  // send-time revalidation of a unit attached to a conversation. Optionally
-  // checks the unit can be ready for an intended move-in date.
-  async function unitOfferableState(property_id, unit_id, intended_move_in) {
-    const availability = require("../tenancy/availability")({ pool });
-    const proj = await availability._service.readAvailability(property_id);
-    const space = (proj.spaces || []).find((s) => String(s.unit_id) === String(unit_id));
-    if (!space) return { offerable: false, reason: "not_at_property", state: null };
-    if (!LEASEABLE_STATES.includes(space.availability_state)) {
-      return { offerable: false, reason: "not_leaseable", state: space.availability_state, space };
-    }
-    // future/turning units: if an intended move-in is known and the unit has a
-    // projected ready date, the ready date must not be AFTER the move-in.
-    if (intended_move_in && space.projected_ready_date) {
-      try {
-        const ready = new Date(space.projected_ready_date);
-        const want = new Date(intended_move_in);
-        if (isFinite(ready) && isFinite(want) && ready > want) {
-          return { offerable: false, reason: "not_ready_by_move_in", state: space.availability_state,
-                   projected_ready_date: space.projected_ready_date, space };
-        }
-      } catch (_) { /* if either date won't parse, don't block on it */ }
-    }
-    return { offerable: true, state: space.availability_state, space };
+  // ── APPLICATION TARGET — ONE AUTHORITY, NOT A SECOND OPINION ────────
+  //  This was a bespoke allowlist (ready_now | vacant_turning | on_notice)
+  //  over the LEGACY availability projection, with its own date rule. It is
+  //  now a thin adapter over the canonical application-target authority, so
+  //  the selector, the prepare doors and the composite send command all ask
+  //  ONE question and get ONE answer.
+  //
+  //  What the cutover changes, deliberately:
+  //   · committed_future was already excluded, but the legacy module labelled
+  //     EVERY standalone future lease 'locked' regardless of proof. The
+  //     canonical read distinguishes pending from locked, and both refuse.
+  //   · the old date rule compared a projected_ready_date derived from a
+  //     five-day placeholder turn window. The authority requires a GOVERNED
+  //     available_from and refuses when there is none, rather than offering
+  //     against an assumed date.
+  //   · multi-space units now refuse explicitly instead of being silently
+  //     offered against whichever space the legacy projection listed first.
+  //
+  //  The return shape keeps `offerable` so existing call sites are untouched;
+  //  callers that want to explain the refusal read refusal_code/refusal_reason.
+  async function unitOfferableState(property_id, unit_id, intended_move_in, q = pool) {
+    return applicationTargetAuthority.resolveApplicationTarget(q, {
+      property_id, unit_id, intended_move_in, require_offerable: true,
+    });
   }
 
     // ══════════════════════════════════════════════════════════════════
@@ -3336,8 +3328,8 @@ module.exports = function operatorModule(deps) {
       const out = await applicationInvitations.prepareApplicationLinkForObligation(client, {
         prepare_obligation_id, unit_id, expires_at,
         actor_user_id: req.operator.id,
-        unitOfferable: async (_c, { property_id, unit_id }) =>
-          unitOfferableState(property_id, unit_id, intended_move_in),
+        unitOfferable: async (c, { property_id, unit_id }) =>
+          unitOfferableState(property_id, unit_id, intended_move_in, c),
       });
       await client.query("commit");
       out.link = `${APPLICANT_ORIGIN}/t/application/${out.token}`;
@@ -3371,8 +3363,8 @@ module.exports = function operatorModule(deps) {
       prepared = await applicationInvitations.prepareApplicationLinkForObligation(client, {
         prepare_obligation_id, unit_id, expires_at,
         actor_user_id: req.operator.id,
-        unitOfferable: async (_c, { property_id, unit_id }) =>
-          unitOfferableState(property_id, unit_id, intended_move_in),
+        unitOfferable: async (c, { property_id, unit_id }) =>
+          unitOfferableState(property_id, unit_id, intended_move_in, c),
       });
       await client.query("commit");
     } catch (e) {
@@ -3486,8 +3478,8 @@ module.exports = function operatorModule(deps) {
             unitId: unit_id,
             idempotencyKey: idempotency_key,
             expiresAt: expires_at,
-            unitOfferable: async (_client, { property_id, unit_id: candidateUnitId }) =>
-              unitOfferableState(property_id, candidateUnitId, intended_move_in),
+            unitOfferable: async (c, { property_id, unit_id: candidateUnitId }) =>
+              unitOfferableState(property_id, candidateUnitId, intended_move_in, c),
           }
         );
 
@@ -3668,6 +3660,12 @@ module.exports = function operatorModule(deps) {
   // over the EXISTING availability projection (availability.js readAvailability)
   // — no second availability system. Returns only spaces that can be offered
   // (availability_state !== 'unavailable'); property is the session's scope.
+  // CLASS 2 — TEMPORARY. The last reader of the legacy availability allowlist.
+  // REMOVAL CONDITION: Commit D rewrites this route over the canonical
+  // application-target authority; this constant and the legacy read below go
+  // with it, which is what unblocks Commit E's module deletion.
+  const LEASEABLE_STATES = ["ready_now", "vacant_turning", "on_notice"];
+
   router.get("/operator/leasing/leaseable-units", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
