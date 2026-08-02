@@ -21,9 +21,9 @@ That is the whole reason for the order.
 | | |
 |---|---|
 | App PR | **#26** — `https://github.com/kzitelli-art/property-spine-app/pull/26` |
-| App SHA | **`b35ed66`** |
+| App SHA | **`b35ed66`** (PR base `30e550b` = deployed) |
 | API PR | **#32** — `https://github.com/kzitelli-art/property-spine-api/pull/32` |
-| API SHA | **`f6ab9f6`** |
+| API SHA | **`f6ab9f6`** (PR base `f85f70b` = deployed) |
 | Merge order | **app #26 → then API #32, immediately** |
 | Full record | `docs/SECURITY_OBLIGATIONS_ROUTE.md` (API repo) |
 
@@ -41,31 +41,44 @@ Records the final receipt ......................... Kameron Zitelli
 FINAL GO/NO-GO CALL ............................... Kameron Zitelli
 ```
 
-## Production facts — CONFIRMED by the owner 2026-08-02, do not re-ask
+## Production facts — OWNER-VERIFIED 2026-08-02. Do not re-ask for any of these.
 
 ```text
-API service ............. property-spine-api      App service ..... property-spine-app
-API type ................ Web Service             App type ........ Static Site
-API configured branch ... main                    App branch ...... main
-API auto-deploy ......... On Commit               App auto-deploy . On Commit
-API deployed SHA ........ f85f70b
-API status .............. Deployed
-API deploy running ...... No
-API rollback ............ visible and available
-API /health ............. 200 {"ok":true,"db_time":"2026-08-02T15:01:32.006Z"}
+Operator, and final GO/NO-GO ...... Kameron Zitelli
+
+API                                        APP
+service ...... property-spine-api          service ...... property-spine-app
+type ......... Web Service                 type ......... Static Site
+branch ....... main                        branch ....... main
+auto-deploy .. On Commit                   auto-deploy .. On Commit
+deployed SHA . f85f70b                     deployed SHA . 30e550b
+deploy running No                          deploy running No
+rollback ..... Available                   rollback ..... Available
+/health ...... Green                       health ....... n/a (static site)
+database ..... Responding
 ```
 
-## Still open — seven facts, nothing else
+`/health` at 15:01:32Z returned `{"ok":true,"db_time":"2026-08-02T15:01:32.006Z"}`.
+
+**Production is running exactly `main` on both services** — `f85f70b` is the API
+PR's base, `30e550b` is the app PR's base. There is no gap between what is
+deployed and what these PRs merge into. That is the cleanest possible
+precondition, and it is verified, not assumed.
+
+## Timing — X is an OWNER-APPROVED CONSERVATIVE VALUE, not a measurement
+
+Render displayed the last API deploy starting and going live within the same
+minute. Seconds were not available, so **X was not measured**. Kameron approved
+a conservative operating value:
 
 ```text
-Current deployed app SHA ................ ______   (Render Events, not __PS_BUILD)
-App rollback availability ............... ______
-Recent API deploy duration X ............ ______
-/health/migrations result ............... ______
-Migration 121 disposition ............... CLEARED — see below
-API deploy warnings relevant to migrations ______
-Rollback decision clock time ............ ______   (derived from X)
+X ............................ 5 minutes   ← owner-approved conservative
+Escalation point ............. app-merge + 10 min   → start diagnosing
+ROLLBACK DECISION POINT ...... app-merge + 15 min   → roll the app back
 ```
+
+**Write the two absolute clock times down before merging the app.** "Still
+building" is not permission to pass the decision point.
 
 Two traps: the app's `__PS_BUILD.code_sha` is **one commit behind by
 construction** — the deployed head is its *stamp child*. And the Render Shell
@@ -206,19 +219,16 @@ App-first means obligations read **unavailable** until the API is healthy. That
 is honest, but it is not open-ended.
 
 ```text
-Recent API deploy duration ...... X = ______ min   (NOT YET ESTABLISHED —
-                                  Render's event list shows minute precision
-                                  only; "same minute" is not a measurement)
-Escalation threshold ............ X + 5 min        — start diagnosing
-ROLLBACK DECISION POINT ......... 2X + 5 min       — fixed clock time: ______
+X = 5 min  (owner-approved conservative — Render showed minute precision only)
+Escalation point ......... app-merge + 10 min
+ROLLBACK DECISION POINT .. app-merge + 15 min   fixed clock time: __________
 ```
 
 Write the clock time down **before** merging the app. If the API is not healthy
 at that time, **roll back the app** and restore the prior stable state. "Still
 progressing" is not a reason to wait past it.
 
-**If X is unknown, the window does not open.** An unbounded ceiling is a STOP
-condition, not a detail.
+**X is approved, not measured.** Label it that way wherever it is repeated.
 
 ## Rollback
 
