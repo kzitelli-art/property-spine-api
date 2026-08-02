@@ -15,6 +15,27 @@ proof run that motivated it).
 
 ---
 
+## Document map
+
+Sections A–C are the original Phase 1 mandate. Appendices A090/B–E were added
+later and are separated deliberately so this report does not become a general
+source audit. **Appendix D carries the governing ruling; start there.**
+
+| Section | Contents | Proof level |
+|---|---|---|
+| **Headline, FINDING 1, A–C** | Phase 1 guard coverage audit, fixture/phone inventory, property classification | Locally exercised |
+| **Appendix (A090-1…4)** | Source findings from tracing migration 090 — missing role transition, false-green enum handler, blanket portfolio grants, non-deterministic property selection | Locally exercised |
+| **Appendix B** | Post-ruling additions — repo-wide exception-handler scan, whether the number split retires the defect, alternate login path, candidate-set limits | Locally exercised |
+| **Appendix C** | Amendments — the defect split, S2 framing, activation gate, **escalation trigger answered (C4)**, conformance set, evidence set | Locally exercised |
+| **Appendix D** | **Revised consultant ruling. 4A/4B canonical labels, P1 reclassification, sequencing, S2 acceptance conditions.** Governing. | Reported |
+| **Appendix E** | S2 surface audit — is 4B the only gap? (No pattern; one write.) | Locally exercised |
+
+**Terminology:** A090-4 was split by the ruling into **4A** (credential-delivery
+routing, retires with the operations-line split) and **4B** (staff-session scope,
+P1, not retired by it). Appendices before D use the older label; D1 maps them.
+
+---
+
 ## Headline
 
 The guard shipped and works as designed. **It covers 6 of 107 database-capable
@@ -413,7 +434,7 @@ compliant. The two documents disagree; this one applies the stated rule.
 
 | Number | Location | Class | Exposure |
 |---|---|---|---|
-| `+17243098434` | `migrations/090_admin_users.sql:25,39`; `src/identity/phone_identity.js:8`; `src/comms/communications_boundary.js:688`; `src/leasing/leasingleads.js:201`; `tests/qa_lifecycle_arc.js:35`; `tests/night_harness.js:224`; `tests/demo_authority_ruling_proof.js:64` | R, S | **The expected occurrence — Kameron's real cell, intentionally present.** Its exposure is not the identity but the *placement*: `090_admin_users.sql:39` inserts it as a real `users` row — `role='property_manager'`, `auth_method='phone_otp'`, `is_active=true`, `status='active'`. That is a migration, so it was written through the authorized path. **Correction (see Appendix — A090-3):** it does *not* run on every production boot — `migrate.js:178–181` skips applied versions, so 090 executes **once per database** and the row is durable thereafter. This is a live operator account with a live phone, not a fixture. Whether that is intended is an owner question; it is reported here because a migration-created account is durable, reachable by any outbound path that selects active property managers, and cannot be removed by fixture cleanup. |
+| `+17243098434` | `migrations/090_admin_users.sql:25,39`; `src/identity/phone_identity.js:8`; `src/comms/communications_boundary.js:688`; `src/leasing/leasingleads.js:201`; `tests/qa_lifecycle_arc.js:35`; `tests/night_harness.js:224`; `tests/demo_authority_ruling_proof.js:64` | R, S | **The expected occurrence — Kameron's real cell, intentionally present.** Its exposure is not the identity but the *placement*: `090_admin_users.sql:39` inserts it as a real `users` row — `role='property_manager'`, `auth_provider='phone_otp'`, `is_active=true`, `status='active'`. That is a migration, so it was written through the authorized path. **Correction (see Appendix — A090-3):** it does *not* run on every production boot — `migrate.js:178–181` skips applied versions, so 090 executes **once per database** and the row is durable thereafter. This is a live operator account with a live phone, not a fixture. Whether that is intended is an owner question; it is reported here because a migration-created account is durable, reachable by any outbound path that selects active property managers, and cannot be removed by fixture cleanup. |
 | `+18626683053` | `migrations/090_admin_users.sql:24,38` | R | Second real number in the same migration, same row shape, `tmysl@me.com` (Tom). Identical exposure. **This one is not covered by the contract's expected-occurrence note.** |
 | `+12153591082` | `tools/seed_solo_facts.js:132` | S | Written into `agent_facts` as an office contact — *"(215) 359-1082. Office hours are Monday–Friday, 9:00 AM–4:30 PM ET."* Agent facts are **AI-quotable**, so this number can be spoken to a real prospect. A real-looking Philadelphia number in a prospect-facing fact is materially different from one in a fixture. |
 | `+12154452021` | `tests/demo_book_route_proof.js:47`; `tests/prove_escalate_move.js:100`; `tests/prove_one_in_one_out.js:99`; `tests/prove_persona_v6.js:75`; `tests/tour_booking_proof.js:193`; `tests/http_negative_smoke.js:67`; +1 more | S | Inserted as `properties.sms_number` for `'Property Spine Demo Building'` across seven harnesses. Real-looking 215 number. If this is the live Demo Building line, these harnesses are writing a **production inbound-routing value** — and `properties.sms_number` has no unique index (ITEM 4), so a duplicate is not refused. |
@@ -1512,3 +1533,147 @@ governs remains *Locally exercised*. Nothing here was verified against a
 database, and the ruling's population estimate for 4B is bounded by C4's limit —
 source establishes that the capability is universal, not how many users currently
 exercise it.
+
+---
+
+# Appendix E — S2 surface audit: is 4B the only gap?
+
+**Question.** D5 leaves the S2 design decision open. Before that decision can be
+scoped, one thing is source-answerable now: **is 4B the only place a staff
+operating property is inferred rather than server-authorized, or is it one
+instance of a pattern?** This bounds the S2 build.
+
+**Answer: 4B is a single defective write, not a pattern. The surrounding
+architecture is sound, and that is what makes 4B hard to detect.**
+
+---
+
+## E1 — What is already correct
+
+### One mint path, one resolve path
+
+`src/identity/staff_session_service.js` is the sole issuer and sole authority
+read — `issueStaffSession(client, { userId, propertyId, purpose })` (`:59`) and
+`resolveStaffSession(db, token)` (`:169`), described in-file as *"the ONE mint
+path"* (`:55`) and *"the ONE live authority read"* (`:130`). It rejects a mint
+missing either id (`:62`).
+
+### Every mint site supplies an explicit property from a durable record
+
+All four call sites, and the provenance of `propertyId` at each:
+
+| Call site | `propertyId` source | Deterministic? |
+|---|---|---|
+| `operator_session_bootstrap.js:125` | the operator invite row (`--property`, C4/B3) | **Yes** — explicitly chosen by the issuing human |
+| `teamaccess.js:439` | `inv.property_id`, the accepted onboarding invite | **Yes** — the invite was minted for one property |
+| `operator.js:205` | `prop.id`, the demo path's resolved property | **Yes** |
+| `teamaccess.js:370` | `inv.property_id`, the **login** invite | **No — see E2** |
+
+**No mint site accepts a client-supplied property id.** §21's *"a client-provided
+property ID is never authority"* holds at the issuer.
+
+### The resolver enforces S2 live, not just at login
+
+`RESOLVER_SQL` (`:153–167`) joins
+`property_team_assignments a on a.user_id = u.id and a.property_id = s.property_id
+and a.active = true`. **A session whose assignment is revoked stops resolving
+mid-life** — authority is re-derived on every request, not trusted from the token.
+The returned `property_id` is annotated *"the SESSION's property — scope truth"*
+(`:193`).
+
+### The client half of §21 is defended explicitly
+
+`refuseClientProperty` appears in six modules — `agent/staff_agent.js:43`,
+`maintenance/work_acceptance.js:71`, `maintenance/unit_turn_scope.js`,
+`maintenance/maintenance.js`, `maintenance/unit_triage.js`,
+`maintenance/readiness.js` — each refusing with *"property authority is
+server-derived; a client-supplied property_id cannot select a different
+property."* `src/identity/actor_context.js:202` lists `request_body_property_id`
+under `never_uses`, and `src/leasing/leasingleads.js:124–134` treats a body
+`property_id` as *"a REQUEST"* subject to entitlement rather than as authority.
+
+**This is a deliberate, repeated, correctly-reasoned defense.** It is not the
+problem.
+
+---
+
+## E2 — The gap: one write, laundered into legitimacy
+
+The arbitrary pick does not reach the issuer directly. It is **written into a
+durable record first**, and read back as if chosen:
+
+```text
+teamaccess.js:207–211   arbitrary ORDER BY … LIMIT 1  →  a.property_id
+teamaccess.js:240–246   INSERT INTO team_invites (property_id, …) VALUES (a.property_id, …)
+teamaccess.js:371       issueStaffSession({ propertyId: inv.property_id })
+```
+
+By the time the value reaches the canonical issuer it is `inv.property_id` — a
+column on a durable invite row, structurally identical to the onboarding-invite
+path at `:439` that is genuinely deterministic. **The mint cannot tell them
+apart, and neither can anything downstream.**
+
+### Why this matters for the S2 acceptance tests (D4)
+
+Three defenses that look like they would catch 4B do not:
+
+1. **A test at the mint site** would see an explicit `propertyId` drawn from a
+   durable record and pass.
+2. **`refuseClientProperty`** compares the claimed value against
+   `req.operator.property_id` — *the session's own scope*. It guarantees the
+   client cannot **change** the property; it cannot detect that the property was
+   **never chosen**. Every one of the six guards measures consistency with a
+   value 4B may have set arbitrarily.
+3. **The resolver's assignment join** confirms the operator *is authorized* for
+   the session's property. 4B always picks an authorized property — that is the
+   whole point. The join passes.
+
+This is the same shape as D3's observation about §21's forbidden state: **every
+consistency check passes, because the system is consistently pointed at the
+wrong property.** An S2 acceptance suite written against the mint, the guards, or
+the resolver would go green with 4B fully present.
+
+### The remediation surface is one line
+
+The only place the defect can be corrected is where the value originates —
+**`/auth/sms/start`, the single write at `teamaccess.js:246`** that puts
+`a.property_id` into the login invite. That is the entire blast radius of 4B's
+scope half.
+
+**This is good news for the S2 build.** D4's condition 3 (*"with multiple
+authorized properties, the system makes an explicit scope decision"*) has exactly
+one insertion point, not a diffuse refactor: the decision must happen before the
+login invite is written, and everything downstream already honors whatever it
+records.
+
+---
+
+## E3 — Not classified: client-scoped reads outside the guarded modules
+
+Recorded as a lead, **not as a finding.** Several routes take `property_id` from
+`req.query`, `req.body` or `req.params` without passing through
+`refuseClientProperty`:
+
+`src/money/commitmentledger.js:1430,1436` · `src/tenancy/availability.js:202` ·
+`src/tenancy/movein.js:517,550` · `src/leasing/leasingscheduling.js:348` ·
+`src/leasing/leasinginteractions.js:260` · `src/leasing/decisions.js:347,349` ·
+`src/surfaces/roomowners.js:156,180` · `src/shared/snapshot_loader.js:1082–1083`
+
+**These are not asserted to be defects.** Some are owner or public surfaces where
+a different authority model legitimately applies; some may be filters within an
+already-scoped session rather than scope selection. **Each needs its own
+classification against §21, and that was not performed here** — it is a separate
+audit with a different question, and doing it badly would produce exactly the
+confident-wrong output this report exists to avoid.
+
+It is recorded because the asymmetry is real: six modules defend this explicitly
+and roughly ten touch client property ids without that guard. Three distinct
+handling patterns are visible in source (`refuseClientProperty` refusal,
+`leasingleads.js:124` entitlement-check-as-request, and unguarded read), which is
+itself worth a ruling.
+
+---
+
+**Proof level of Appendix E: Locally exercised.** Source inspection only. E1 and
+E2 are conclusive from source — the mint sites are enumerable and their arguments
+traceable. E3 is explicitly unclassified and must not be cited as a finding.
