@@ -221,6 +221,12 @@ const call = (method, path, { token, key, body } = {}) =>
        values ($1, 'resolved', 'vanished')`, [S.link]).catch((e) => { vocab2 = e.message; });
     ok(vocab2 && /check constraint/i.test(vocab2), "C2 resolution_code vocabulary is DB-closed", (vocab2 || "").slice(0, 80));
 
+    // ── obligation authority boundary — the deployed rung, ACTUALLY RUN ──
+    //  Uses this run's own real staff session on its own isolated QA
+    //  property. It is invoked here, inside the run, because a proof that
+    //  is defined but never called reports green without executing.
+    await obligationBoundarySmoke({ call, j, ok, OPKEY, STAFF: S.mgrTok });
+
   } catch (e) {
     fail++; console.log("  SMOKE CRASHED:", e.message);
   } finally {
@@ -273,7 +279,14 @@ async function obligationBoundarySmoke({ call, j, ok, OPKEY, STAFF }) {
   }
 
   //  2. the authenticated collection read is reachable and scoped.
-  if (STAFF) {
+  //  A MISSING SESSION IS A FAILURE, NOT A SKIP. Conditionally skipping the
+  //  authenticated half would let this rung report green while proving only
+  //  that five routes are absent — the false-green shape this programme exists
+  //  to remove, in the release's own final gate.
+  if (!STAFF) {
+    ok(false, "a real staff session is REQUIRED for the boundary rung",
+      "no session available — the authenticated half did not run");
+  } else {
     const r = await call("GET", "/operator/obligations", { token: STAFF });
     const b = await j(r);
     ok(r.status === 200 && Array.isArray(b.items),
