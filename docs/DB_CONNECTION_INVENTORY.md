@@ -1097,3 +1097,210 @@ here so the shape is not re-derived later; none of it is authorized work today.
 **Proof level of Appendix B: Locally exercised.** Source and documentation
 inspection only. No database was contacted, no tool run, no login exercised. B4
 in particular establishes what source *cannot* determine; it is not a count.
+
+---
+
+# Appendix C — Post-ruling amendments (2026-08-02)
+
+Consultant ruling accepted. Amendments below are report-only; nothing is built,
+no connection string was supplied or requested.
+
+---
+
+## C1 — A090-4 is two defects sharing one arbitrary query
+
+**The line split can no longer be credited as resolving A090-4.** Per B2 the
+finding separates, and the halves have different retirement conditions, different
+severities, and different owners.
+
+| | **Delivery defect** | **Session-scoping defect** |
+|---|---|---|
+| **What goes wrong** | An unlined property wins the pick; the gate refuses `no_property_line`; the endpoint returns HTTP 200 and no code arrives | An arbitrary property becomes the session's operating context |
+| **Mechanism** | OTP routed over `properties.sms_number` for the picked property | `teamaccess.js:207–211` result becomes the invite's `property_id`, and hence the session scope |
+| **Retirement condition** | **Retired by the number split.** `COMMUNICATION_LINE_ARCHITECTURE.md` Ruling 5 — once an active operations line exists, staff OTP no longer selects a property line through assignment ordering | **Not retired by anything currently scheduled.** Requires a server-authoritative property scope at login (C2). No successor mechanism exists in any spec |
+| **Failure mode** | **Stops the user.** Loud to the person affected, silent to the system | **Lets the user proceed.** They confidently do the wrong work and discover it later |
+| **Priority** | Follows the line split | **P1 independently** |
+
+**The asymmetry drives the sequencing.** A lockout halts work and is
+self-announcing to the operator. Wrong context does not halt anything — it
+permits confident work against the wrong property, discovered downstream if at
+all. Under §5 (*honest blank beats confident wrong*) the second is the worse
+failure, and it is the one no scheduled remedy addresses.
+
+---
+
+## C2 — The successor is S2, and this is not new architecture
+
+`PHILOSOPHY.md:598–620` defines the four live-first seams and states the order is
+mandatory:
+
+```text
+S1 — identity                     Who is the operator?
+S2 — authoritative property scope What property may they operate?
+```
+
+**The session-scoping defect is a missing S2 on the login path.** The successor
+therefore has a home in existing doctrine rather than needing invention — this is
+building a seam the architecture already names, not designing a new mechanism.
+
+**It also explains how it slipped.** The login path shipped S1 — identity is
+established properly, by phone, by OTP, against a real user row. S2 was assumed
+to follow from it, and instead an ordering heuristic was substituted for an
+authority decision. The seam was in the doctrine and was skipped when the invite
+path shipped.
+
+One corroborating detail: `src/identity/staff_identity_resolver.js:290–291`
+already aggregates a user's full active property set
+(`array_agg(distinct t.property_id) … as team_properties_035`) rather than
+choosing one. **The set-shaped read S2 would need already exists.** What is
+missing is the authority decision over that set, not the data to make it.
+
+---
+
+## C3 — Activation gate, registered as a gate
+
+Recorded as a constraint on activation, not as a style note:
+
+> **Broader real operator use is not authorized while session scope remains
+> planner-selected.**
+
+This bears directly on Solo activation and on any expansion of real operator
+accounts beyond the current two. It is not a code comment and should not be
+carried as one.
+
+---
+
+## C4 — Escalation trigger answered: the ambiguous path is shared by all staff
+
+The ruling names *"ordinary users beyond the two founders can enter through the
+same ambiguous path"* as the escalation trigger. **Source answers it now, and the
+answer is yes.**
+
+### Which code path resolves active property at login
+
+`src/identity/teamaccess.js:207–211`, inside the `else` branch of
+`POST /auth/sms/start` — the no-token re-login branch.
+
+### Is it shared, or admin-specific? — Shared
+
+The query filters on `user_id=$1 and active=true` and nothing else. **There is no
+admin check, no email filter, no role or scope predicate.** It is the re-login
+path for every staff member who signs in by phone without an invite token.
+**This is a login-path defect, not a two-person defect.**
+
+It is also the *only* such site. Across `src/`, it is the sole read that selects a
+property from assignments with an ordering and `limit 1` and no `property_id`
+predicate. Every other assignment read either supplies the property explicitly —
+`src/leasing/leasingconversion.js:1012–1016` and
+`src/identity/staff_identity_resolver.js:201–202` are membership checks — or
+returns the whole set without choosing (`staff_identity_resolver.js:290–291`).
+
+The deterministic login paths, for contrast: **invite-accept** scopes from
+`inv.property_id`, and **`POST /operator/session`** (`operator_session_bootstrap.js:81`)
+scopes from the invite row's explicit property. Only the phone re-login path
+picks.
+
+### Who can hold multiple active assignments
+
+**Multi-property assignment is designed, not accidental.** The uniqueness
+guarantee is `uq_pta_one_active on property_team_assignments (property_id, user_id)
+where active = true` (`migrations/070_operator_session_bootstrap.sql:194`) — one
+active row per user **per property**, which explicitly permits many properties per
+user.
+
+Reachable through three production writers, none admin-only:
+
+| Writer | How multiplicity arises |
+|---|---|
+| `teamaccess.js:419` | Invite-accept provisioning, one assignment per accepted invite. A staff member who accepts invites for two properties holds two active assignments. |
+| `super_admin.js:347` | Direct upsert, `scope_type='property'`. |
+| `org_admin.js:192` | Direct upsert, `scope_type='property'`. |
+
+`090_admin_users.sql` is the only **migration** that inserts assignments, and it
+grants both admins on every property (A090-3).
+
+**How many users actually hold two or more: source cannot say.** Runtime-created
+assignments leave no trace in the repository — the same limitation as `sms_number`
+in B4. What source establishes is that the capability is universal, designed, and
+reachable by ordinary staff through the normal invite flow.
+
+### Does a deterministic key exist for them? — No
+
+- **For the two admins**, both sort keys tie exactly and no third key exists
+  (A090-4). The result is arbitrary.
+- **For ordinary staff the keys usually do not tie.** `can_manage_roles` may
+  differ, and `updated_at` on runtime-created rows is genuine per-statement
+  wall-clock across separate transactions. A row usually wins outright.
+
+**But winning outright is not the same as being chosen.** The effective rule is
+*"prefer a property where you can manage roles; otherwise the most recently
+updated assignment wins."* Neither clause expresses which property the person
+should be operating. It is incidental, not deliberate — the same defect as the
+admins' case, merely less visible because it is stable between edits rather than
+arbitrary within a query.
+
+**And it is mutable by unrelated administration.** `teamaccess.js:614` sets
+`updated_at = now()` on every assignment PATCH. So a manager editing someone's
+modules or role title **on a different property** silently changes which property
+that person lands on at their next login. The landing context is a side effect of
+the most recent edit to their access, which no one performing that edit would
+expect.
+
+**Conclusion for the escalation trigger: met.** The ambiguous path is the shared
+staff login path; ordinary multi-property staff are subject to it; and no
+deterministic key governs their outcome either.
+
+---
+
+## C5 — `077_agent_auto_dispatch.sql` joins the conformance-audit set
+
+Added alongside `090` per the ruling. Same trust defect, second file:
+`077:29` catches `undefined_column` around a `DROP NOT NULL` that is already
+idempotent on an existing column, so the only reachable case is the column being
+absent — and nothing asserts a postcondition afterward. **If that handler ever
+fired, the ledger recorded 077 as applied while its change did not happen.**
+
+The conformance set is therefore **two migrations, not one**:
+
+| Migration | Postcondition that must hold if the ledger says applied |
+|---|---|
+| `090` | `admin` present in `role_name` (`pg_enum`); the two users' actual `role`; the assignment rows, with scope, modules, `can_manage_roles`, `active` |
+| `077` | `agent_drafts.dispatched_by_user_id` exists **and** is nullable |
+
+---
+
+## C6 — First read-only evidence set (scoped, NOT authorized)
+
+Recorded so the shape is settled before a connection exists. **No part of this is
+authorized work today.**
+
+| | Evidence | Settles |
+|---|---|---|
+| **A** | Actual candidate assignment rows per admin — property, `scope_type`, `can_manage_roles`, `updated_at`, `active`, and whether the property carries an SMS line | Whether the sort keys tie in production; the real candidate set for A090-4 |
+| **B** | Property and line inventory across the three property classes (real operating / Demo Building / harness-created) | B4's count — delivery half already-live vs latent |
+| **C** | Manual proof issuance and redemption history — `operator_session_invites`, filterable by `issuance_reason='bootstrap_invite'` and `issuance_source='cli'` (`tools/issue_operator_invite.js:84–89`) | Whether reliance on the shell bootstrap is itself the behavioral symptom of the delivery half |
+| **D** | SMS request / refusal / dispatch records and sessions minted with their property scopes | Whether `no_property_line` refusals correlate with staff OTP attempts; which property scopes real sessions received |
+
+**When a connection string arrives, this evidence set and the `db_preflight.js`
+ledger-to-schema conformance pass (B5, C5) are ONE read-only pass with committed
+output — not two sessions.** The evidence and the conformance checks read the
+same database at the same moment; splitting them would produce two snapshots that
+cannot be reconciled, and would spend two authorizations where one is needed.
+
+---
+
+## C7 — Recorded as agreed, not built
+
+- **CI ban on `EXCEPTION WHEN OTHERS` in migrations.** Agreed and scoped; **not
+  built in this phase.** B1 establishes the norm already exists — eight of nine
+  handlers name a condition, and seven migrations abort loudly via `raise
+  exception` — so this is enforcement of an existing convention, not
+  establishment of a new one.
+- **Per-migration postconditions, verified ledger state, migration file
+  checksums** (B5). Destination only.
+
+---
+
+**Proof level of Appendix C: Locally exercised.** Source and doctrine inspection
+only. C4 answers the escalation trigger from source; it does not establish how
+many users actually hold multiple assignments, which requires evidence set A/B.
