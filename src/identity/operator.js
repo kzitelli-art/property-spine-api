@@ -3207,9 +3207,9 @@ module.exports = function operatorModule(deps) {
   //
   //  The return shape keeps `offerable` so existing call sites are untouched;
   //  callers that want to explain the refusal read refusal_code/refusal_reason.
-  async function unitOfferableState(property_id, unit_id, intended_move_in, q = pool) {
+  async function unitOfferableState(property_id, unit_id, q = pool) {
     return applicationTargetAuthority.resolveApplicationTarget(q, {
-      property_id, unit_id, intended_move_in, require_offerable: true,
+      property_id, unit_id, require_offerable: true,
     });
   }
 
@@ -3311,7 +3311,7 @@ module.exports = function operatorModule(deps) {
       return res.status(503).json({ error: "applicant_link_origin_not_configured",
         receipt: "APP_BASE_URL is not set. Refusing to create an invitation whose applicant link cannot be built." });
     }
-    const { prepare_obligation_id, unit_id, expires_at = null, intended_move_in = null } = req.body || {};
+    const { prepare_obligation_id, unit_id, expires_at = null } = req.body || {};
     if (!prepare_obligation_id) return res.status(400).json({ error: "prepare_obligation_id is required — prepare acts on the exact open commitment." });
     if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
     const client = await pool.connect();
@@ -3329,7 +3329,7 @@ module.exports = function operatorModule(deps) {
         prepare_obligation_id, unit_id, expires_at,
         actor_user_id: req.operator.id,
         unitOfferable: async (c, { property_id, unit_id }) =>
-          unitOfferableState(property_id, unit_id, intended_move_in, c),
+          unitOfferableState(property_id, unit_id, c),
       });
       await client.query("commit");
       out.link = `${APPLICANT_ORIGIN}/t/application/${out.token}`;
@@ -3345,7 +3345,7 @@ module.exports = function operatorModule(deps) {
   router.post("/operator/leasing/application-invitations/send", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     if (!svcGuard(res, "dispatchPreparedLinkProvider")) return;
-    const { prepare_obligation_id, unit_id, expires_at = null, intended_move_in = null, message_prefix = "" } = req.body || {};
+    const { prepare_obligation_id, unit_id, expires_at = null, message_prefix = "" } = req.body || {};
     if (!prepare_obligation_id) return res.status(400).json({ error: "prepare_obligation_id is required." });
     if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
     const client = await pool.connect();
@@ -3364,7 +3364,7 @@ module.exports = function operatorModule(deps) {
         prepare_obligation_id, unit_id, expires_at,
         actor_user_id: req.operator.id,
         unitOfferable: async (c, { property_id, unit_id }) =>
-          unitOfferableState(property_id, unit_id, intended_move_in, c),
+          unitOfferableState(property_id, unit_id, c),
       });
       await client.query("commit");
     } catch (e) {
@@ -3419,7 +3419,6 @@ module.exports = function operatorModule(deps) {
         unit_id,
         idempotency_key,
         expires_at = null,
-        intended_move_in = null,
         message_prefix = "",
       } = req.body || {};
 
@@ -3479,7 +3478,7 @@ module.exports = function operatorModule(deps) {
             idempotencyKey: idempotency_key,
             expiresAt: expires_at,
             unitOfferable: async (c, { property_id, unit_id: candidateUnitId }) =>
-              unitOfferableState(property_id, candidateUnitId, intended_move_in, c),
+              unitOfferableState(property_id, candidateUnitId, c),
           }
         );
 
@@ -3681,7 +3680,6 @@ module.exports = function operatorModule(deps) {
     res.set("Cache-Control", "no-store");
     try {
       const property_id = req.operator.property_id;         // SERVER-DERIVED, never the query string
-      const intended_move_in = req.query.intended_move_in || null;
 
       // Space grain per unit, including units with none. LEFT JOIN so a
       // zero-space unit is a row rather than an absence.
@@ -3720,7 +3718,7 @@ module.exports = function operatorModule(deps) {
 
         const row = byUnit.get(String(u.unit_id));
         if (!row) continue;                  // classified by nobody: not evidence of availability
-        const verdict = applicationTargetAuthority.evaluateOfferability(row, intended_move_in);
+        const verdict = applicationTargetAuthority.evaluateOfferability(row);
         if (!verdict.offerable) continue;    // ordinary not-offerable, not a grain refusal
 
         eligible_units.push({

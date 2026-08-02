@@ -3,7 +3,8 @@
 **What this document is:** the complete inventory of every path that can aim an
 application at a unit, what each one validates, and where space lineage begins.
 
-**Status:** Commits A–D landed (API + app).
+**Status:** Commits A–I landed (API + app), plus the acceptance correction
+narrowing targeting to `marketable_now`.
 
 ---
 
@@ -25,9 +26,10 @@ closed allowlist refuses the entire birth with `birth_payload_unknown_field`.
 
 Therefore:
 
-| Unit shape | Behaviour |
+| Unit shape / state | Behaviour |
 |---|---|
-| exactly one space | supported — space derived **server-side** |
+| exactly one space **and `marketable_now`** | supported — space derived **server-side** |
+| `upcoming` / `turnover_required` | refused · `future_application_target_not_supported` · 409 |
 | more than one space | controlled refusal · `space_grain_not_supported` · **409** |
 | zero spaces | refused · `application_target_unconfigured` · 409 |
 | not at this property | refused · `not_at_property` · 404 |
@@ -186,20 +188,34 @@ On refusal nothing downstream happens: no `lease_application`, no
 obligation spawned. All of those live below the consume. The invitation is not
 converted to another unit and no new space is selected.
 
-**The submission allowlist is the preparation allowlist minus one test:**
+**Preparation and submission apply ONE identical rule** (owner ruling, after the
+acceptance addendum found them diverging):
 
 ```
-preparation   marketable_now | (upcoming | turnover_required
-                                WITH intended_move_in ≥ governed available_from)
-submission    marketable_now | upcoming | turnover_required
+preparation   marketable_now
+submission    marketable_now
 ```
 
-`intended_move_in` is **not persisted** on `application_invitations`, and this
-slice adds no migration. Re-running the date test at submission would refuse
-every legitimate forward offer, because the date it needs was never stored. The
-forward offer was already governed at preparation; what submission must still
-catch is inventory that has since been **committed to someone else** or become
-**un-attributable**. One allowlist used twice, not a second ladder.
+The earlier form admitted `upcoming` and `turnover_required` at preparation when
+a supplied `intended_move_in` fell on or after a governed `available_from`. That
+date is a **request parameter** and reaches no durable row, so submission could
+not reproduce the verdict and applied a **strictly weaker** standard in three of
+six cases. `turnover_required` was unreachable at preparation yet permitted at
+submission.
+
+> A target may not be offered unless **both boundaries can independently reach
+> the same verdict from durable facts alone.**
+
+`intended_move_in` is now threaded **nowhere**: it is absent from the authority,
+from `createPreparedInvitation`, from `createAndDispatchApplicationInvitation`,
+from `sendApplication` and from the route bodies. It is not persisted in
+captured JSON, notes, labels, events, obligation metadata or communication
+records. Proven by assertion, not by intent.
+
+**`upcoming` and `turnover_required` remain truthful canonical availability
+states.** They are not removed, not flattened into `unavailable`, and
+`availability_read.js` is untouched by this correction. They are simply not
+valid application targets under the present durable application contract.
 
 **Ambiguity gets its own code.** A unit split into two spaces after the link
 was sent returns `application_target_became_ambiguous`, not

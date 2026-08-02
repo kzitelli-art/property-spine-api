@@ -33,7 +33,7 @@ const ssl = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || "")
 // The route body, evaluated directly against the seeded transaction. The HTTP
 // wrapper adds session auth, which the operator HTTP proof covers; this proves
 // the READ.
-async function leaseableUnits(q, property_id, intended_move_in = null) {
+async function leaseableUnits(q, property_id) {
   const shapes = (await q.query(
     `select u.id as unit_id, u.unit_number, count(s.id)::int as space_count
        from units u left join spaces s on s.unit_id = u.id
@@ -55,7 +55,7 @@ async function leaseableUnits(q, property_id, intended_move_in = null) {
     if (u.space_count === 0) continue;
     const row = byUnit.get(String(u.unit_id));
     if (!row) continue;
-    const v = authority.evaluateOfferability(row, intended_move_in);
+    const v = authority.evaluateOfferability(row);
     if (!v.offerable) continue;
     eligible_units.push({
       unit_id: row.unit_id, unit_number: row.unit_number,
@@ -135,14 +135,32 @@ async function leaseableUnits(q, property_id, intended_move_in = null) {
     ok(notEligible("R-zero-space") && notUnsupported("R-zero-space"),
       "a zero-space unit is not offered and is not a grain refusal either");
 
-    console.log("\n── FORWARD OFFERS APPEAR ONLY WITH AN INTENDED MOVE-IN ──");
-    ok(notEligible("B-upcoming"), "an on-notice unit is absent with no intended move-in");
+    console.log("\n── FUTURE-DATED UNITS ARE NEVER SELECTABLE (owner ruling) ─");
+    //  The selector previously surfaced upcoming and turnover_required units
+    //  once an intended_move_in was supplied. That promise is withdrawn: the
+    //  date reached no durable row, so submission could not reproduce it.
+    ok(notEligible("B-upcoming"), "an on-notice unit is not selectable");
+    ok(notEligible("C-turnover"), "a unit in turnover is not selectable");
+    ok(notUnsupported("B-upcoming") && notUnsupported("C-turnover"),
+      "and neither is mislabelled as a GRAIN refusal — the limitation is capability, not shape");
+
     const farOut = new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10);
-    const fwd = await leaseableUnits(c, P, farOut);
-    ok(fwd.eligible_units.some((u) => String(u.unit_id) === String(U["B-upcoming"].unit_id)),
-      "and becomes eligible once an intended move-in makes it a forward offer");
-    ok(fwd.unsupported_count === out.unsupported_count,
-      "the grain refusal is unaffected by the date — it is structural");
+    const fwd = await leaseableUnits(c, P);
+    ok(!fwd.eligible_units.some((u) => String(u.unit_id) === String(U["B-upcoming"].unit_id)),
+      "supplying a far-future intended move-in does NOT make it selectable");
+    ok(fwd.eligible_count === out.eligible_count && fwd.unsupported_count === out.unsupported_count,
+      "the selector returns an identical answer regardless of any date the caller had in mind");
+    const routeSrc = require("fs").readFileSync(path.join(REPO, "src/identity/operator.js"), "utf8")
+      .split('router.get("/operator/leasing/leaseable-units"')[1].slice(0, 4000)
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    ok(!/intended_move_in/.test(routeSrc),
+      "and the route reads no intended_move_in at all — no vestigial query parameter");
+
+    console.log("\n── EVERY ELIGIBLE ROW IS marketable_now ─────────────────");
+    ok(out.eligible_units.every((u) => u.marketing_state === "marketable_now"),
+      `every selectable unit is marketable_now (${[...new Set(out.eligible_units.map(u => u.marketing_state))].join(", ") || "none"})`);
+    ok(out.eligible_units.every((u) => u.availability_confidence === "confirmed"),
+      "and each carries confirmed availability confidence, never incomplete");
 
     console.log("\n── NO LEGACY AVAILABILITY IN THE ROUTE ──────────────────");
     const opsrc = require("fs").readFileSync(path.join(REPO, "src/identity/operator.js"), "utf8");

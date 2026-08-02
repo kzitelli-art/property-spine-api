@@ -95,7 +95,13 @@ which this cut forbids.
 > The forward-offer path can call the resolver at preparation but cannot
 > reproduce its governed decision at submission without a new schema field.
 
-### Rulings available — none taken
+### RULING TAKEN — option 1, narrowing (owner, after this addendum)
+
+Targeted application invitations are supported **only** when the canonical
+marketing state is `marketable_now`. Implemented in the corrective commit; the
+truth table below is superseded by §2A.
+
+### Rulings that were available
 
 Reported for your decision, not improvised:
 
@@ -110,7 +116,42 @@ Reported for your decision, not improvised:
 3. **Accept the asymmetry explicitly**, with the weaker submission standard
    documented as governed product behaviour rather than an oversight.
 
-Until a ruling, the implemented behaviour is exactly the table above.
+---
+
+## 2A · POST-RULING BEHAVIOUR — ONE RULE, BOTH BOUNDARIES
+
+| Case | Preparation | Submission |
+|---|---|---|
+| `marketable_now` | **PERMITTED** | **PERMITTED** |
+| `marketable_now`, still valid at first submission | — | **PERMITTED** |
+| `upcoming`, **no** date | REFUSED `future_application_target_not_supported` | REFUSED `future_application_target_not_supported` |
+| `upcoming`, **any** date | REFUSED `future_application_target_not_supported` | REFUSED `future_application_target_not_supported` |
+| `turnover_required`, **any** date | REFUSED `future_application_target_not_supported` | REFUSED `future_application_target_not_supported` |
+| ceased to be `marketable_now` before first birth | — | REFUSED `application_target_no_longer_offerable` |
+| became multi-space before first birth | — | REFUSED `application_target_became_ambiguous` |
+| multi-space / zero-space | unchanged | unchanged |
+| previously completed birth | — | **idempotent, not re-evaluated** |
+| untargeted | unchanged | unchanged |
+
+**Two codes, deliberately distinct.** A future-dated state was never
+supportable, so reporting it as *no longer* offerable would falsely imply the
+target changed. A unit that was `marketable_now` and has since been taken
+genuinely did change, and says so.
+
+**The refusal describes the lineage limitation, never the position:**
+*"Application links for a future availability date are not supported yet. This
+unit is not available today, and an application record cannot yet carry a
+future-dated target through to the lease."* The position may be genuinely coming
+available on a governed date; claiming it is unavailable would be a
+confident-wrong statement about supply.
+
+**Submission may be stricter, never weaker** — asserted exhaustively over every
+seeded position, not by inspection: no unit is refused at preparation and
+permitted at submission.
+
+`intended_move_in` is threaded nowhere and persisted nowhere. `upcoming` and
+`turnover_required` remain canonical availability states;
+`availability_read.js` is untouched by the correction.
 
 ---
 

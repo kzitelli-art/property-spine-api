@@ -56,19 +56,43 @@
 
 const { availabilityRead } = require("../surfaces/availability_read");
 
-// ── THE OFFERABILITY POLICY — A CLOSED ALLOWLIST ─────────────────────
-//  Only these marketing states can ever produce an offerable target.
-//  Everything else — successor_pending, successor_locked, activation_pending,
-//  occupied, contested, evidence_disagrees, down, not_marketable_use,
-//  use_not_configured, not_ready, not_ready_confirmed, readiness_unknown,
-//  unavailable, and any state this file has never heard of — refuses.
+// ── THE OFFERABILITY POLICY — ONE STATE, BOTH BOUNDARIES ─────────────
+//  A targeted application invitation is supported ONLY when the canonical
+//  marketing state is marketable_now.
+//
+//  ── WHY FORWARD TARGETING WAS WITHDRAWN (owner ruling) ──────────────
+//  Preparation previously admitted `upcoming` and `turnover_required` when a
+//  supplied intended_move_in fell on or after a governed available_from.
+//  That date is a REQUEST PARAMETER and reaches no durable row —
+//  application_invitations has no column for it — so submission could not
+//  reproduce the decision preparation had made. Submission therefore applied a
+//  WEAKER standard than preparation in three of six cases, and
+//  turnover_required was unreachable at preparation yet permitted at
+//  submission.
+//
+//  Two boundaries applying different standards is the defect, whatever the
+//  shared code path. Closing it truthfully needs the governed date to survive
+//  on the invitation — new durable lineage, therefore a migration, which this
+//  cut forbids. So the promise is withdrawn rather than half-kept:
+//
+//      A target may not be offered unless BOTH boundaries can independently
+//      reach the same verdict from durable facts alone.
+//
+//  `upcoming` and `turnover_required` REMAIN truthful canonical availability
+//  states. They are not flattened into `unavailable` and nothing about the
+//  availability read changes. They are simply not valid APPLICATION targets
+//  under the present durable application contract — a lineage limitation, not
+//  a statement about the position.
 //
 //  An allowlist rather than a denylist BY CONSTRUCTION: a marketing state
-//  added to availability_read later must be deliberately admitted here. The
-//  denylist version of this rule would silently offer it. Unknown is not
-//  offerable.
+//  added to availability_read later must be deliberately admitted here.
+//  Unknown is not offerable.
 const OFFERABLE_NOW = "marketable_now";
-const OFFERABLE_FOR_FUTURE_MOVE_IN = new Set(["upcoming", "turnover_required"]);
+
+// Truthful availability states that cannot carry an application target today.
+// Named so the refusal can explain itself instead of falling into the generic
+// not_offerable bucket, which would misdescribe why.
+const FUTURE_DATED_STATES = new Set(["upcoming", "turnover_required"]);
 
 // Refusal codes. Stable identifiers — the app renders from these, never from
 // prose, and never re-derives the decision.
@@ -77,9 +101,10 @@ const REFUSAL = {
   UNCONFIGURED:           "application_target_unconfigured",
   MULTI_SPACE:            "space_grain_not_supported",
   NOT_OFFERABLE:          "not_offerable",
-  MOVE_IN_REQUIRED:       "intended_move_in_required",
-  DATE_NOT_GOVERNED:      "availability_date_not_governed",
-  NOT_READY_BY_MOVE_IN:   "not_ready_by_intended_move_in",
+  // CAPABILITY refusal, not an availability statement. The position may be
+  // perfectly real and coming available on a governed date; what is missing is
+  // durable application lineage able to carry a future-dated target.
+  FUTURE_NOT_SUPPORTED:   "future_application_target_not_supported",
   // Submission-time only. Distinct from MULTI_SPACE: the unit CHANGED under an
   // open invitation rather than having been an unsupported shape all along.
   BECAME_AMBIGUOUS:       "application_target_became_ambiguous",
@@ -93,9 +118,13 @@ const REFUSAL_TEXT = {
   [REFUSAL.UNCONFIGURED]:         "This unit has no rentable space configured, so an application cannot be aimed at it yet.",
   [REFUSAL.MULTI_SPACE]:          "Individual-space application links are not supported for this unit yet.",
   [REFUSAL.NOT_OFFERABLE]:        "This unit cannot be offered right now.",
-  [REFUSAL.MOVE_IN_REQUIRED]:     "This unit is not available today. Add an intended move-in date to offer it forward.",
-  [REFUSAL.DATE_NOT_GOVERNED]:    "This unit has no governed availability date, so it cannot be offered for a future move-in.",
-  [REFUSAL.NOT_READY_BY_MOVE_IN]: "This unit is not available by the intended move-in date.",
+  // Describes the LINEAGE limitation. It must not say the position is
+  // unavailable — it may be genuinely coming available on a governed date, and
+  // saying otherwise would be a confident-wrong statement about inventory.
+  [REFUSAL.FUTURE_NOT_SUPPORTED]:
+    "Application links for a future availability date are not supported yet. "
+    + "This unit is not available today, and an application record cannot yet "
+    + "carry a future-dated target through to the lease.",
   [REFUSAL.BECAME_AMBIGUOUS]:     "This unit was changed to hold more than one rentable space after the application link was sent, so the application can no longer be attributed to a single space.",
   [REFUSAL.NO_LONGER_OFFERABLE]:  "This unit is no longer available, so this application link can no longer be used.",
 };
@@ -113,10 +142,8 @@ function refuse(code, extra = {}) {
   };
 }
 
-// Dates arrive as ISO strings from canonical availability, but an
-// intended_move_in supplied by a caller may be a Date. Normalize both — a
-// Date stringified and sliced yields 'Sat Aug 22', which compares wrong
-// against a real ISO date rather than failing loudly.
+// available_from is still CARRIED on the result — it is truthful context an
+// operator surface may render. It no longer GOVERNS anything.
 const ymd = (d) => {
   if (!d) return null;
   if (d instanceof Date) return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
@@ -132,7 +159,6 @@ const ymd = (d) => {
  *                     snapshot as the write it is about to make.
  * @param property_id  SERVER-DERIVED property scope. Never a browser value.
  * @param unit_id      null ⇒ untargeted (see below).
- * @param intended_move_in  optional YYYY-MM-DD; enables forward offers.
  * @param require_offerable when false, resolve the space and REPORT
  *                     offerability without refusing on it. Grain refusals
  *                     (multi-space, unconfigured, not-at-property) still
@@ -141,7 +167,6 @@ const ymd = (d) => {
 async function resolveApplicationTarget(q, {
   property_id,
   unit_id = null,
-  intended_move_in = null,
   require_offerable = true,
 } = {}) {
   if (!property_id) throw new Error("resolveApplicationTarget requires a server-derived property_id");
@@ -238,7 +263,7 @@ async function resolveApplicationTarget(q, {
     availability_confidence: row.availability_confidence,
   };
 
-  const verdict = evaluateOfferability(row, intended_move_in);
+  const verdict = evaluateOfferability(row);
 
   if (!verdict.offerable && require_offerable) {
     return {
@@ -272,58 +297,34 @@ async function resolveApplicationTarget(q, {
 //                      turnover completion date ever lands, this branch starts
 //                      working without a policy rewrite.
 //  everything else     refused, including states this file does not know.
-function evaluateOfferability(row, intended_move_in) {
+function evaluateOfferability(row) {
   const state = row.marketing_state;
 
   if (state === OFFERABLE_NOW) return { offerable: true, refusal_code: null };
 
-  if (!OFFERABLE_FOR_FUTURE_MOVE_IN.has(state)) {
-    return { offerable: false, refusal_code: REFUSAL.NOT_OFFERABLE };
+  // A truthful future-dated availability state. The refusal is about what the
+  // application record can carry, NOT about the position.
+  if (FUTURE_DATED_STATES.has(state)) {
+    return { offerable: false, refusal_code: REFUSAL.FUTURE_NOT_SUPPORTED };
   }
 
-  if (!intended_move_in) {
-    return { offerable: false, refusal_code: REFUSAL.MOVE_IN_REQUIRED };
-  }
-
-  const from = ymd(row.available_from);
-  if (!from) {
-    return { offerable: false, refusal_code: REFUSAL.DATE_NOT_GOVERNED };
-  }
-
-  // String compare is correct and timezone-free for YYYY-MM-DD.
-  if (from <= ymd(intended_move_in)) {
-    return { offerable: true, refusal_code: null };
-  }
-  return { offerable: false, refusal_code: REFUSAL.NOT_READY_BY_MOVE_IN };
+  return { offerable: false, refusal_code: REFUSAL.NOT_OFFERABLE };
 }
 
 // ── SUBMISSION-TIME REVALIDATION ─────────────────────────────────────
-//  An invitation can sit open while inventory changes underneath it. Before a
-//  lease_application is born from a public token, the target it was prepared
-//  against must still hold.
+//  THE SAME AUTHORITY, THE SAME RULE. Preparation and first submission now
+//  reach an identical verdict from durable facts alone, with no request-time
+//  context either boundary could lose.
 //
-//  THE SAME CLOSED ALLOWLIST, ONE TEST SHORT — and the difference is
-//  deliberate, not an oversight:
+//  Submission may be STRICTER than preparation, because the target can change
+//  after preparation — a unit that was marketable_now may since have been
+//  taken, split into two spaces, or had its space removed. It can never be
+//  WEAKER, which is exactly the defect this replaces.
 //
-//    preparation   marketable_now | (upcoming | turnover_required WITH a
-//                  supplied intended_move_in on or after a governed
-//                  available_from)
-//    submission    marketable_now | upcoming | turnover_required
-//
-//  intended_move_in is NOT persisted on application_invitations, and this
-//  slice adds no migration. Re-running the date test at submission would
-//  therefore refuse every legitimate forward offer, because the date it needs
-//  was never stored. The forward offer was already governed at preparation;
-//  what submission must still catch is inventory that has since been
-//  COMMITTED TO SOMEONE ELSE or become un-attributable. So the same allowlist
-//  is applied without the test whose input does not exist.
-//
-//  This is one allowlist used twice, not a second ladder.
-//
-//  AMBIGUITY GETS ITS OWN CODE. A unit that has been split into two spaces
-//  since preparation is not "unsupported" the way a two-space unit is at
-//  preparation time — it CHANGED under an open invitation, and the operator
-//  needs to be told that rather than being told the shape was never allowed.
+//  AMBIGUITY KEEPS ITS OWN CODE. A unit split into two spaces since
+//  preparation is not "unsupported" the way a two-space unit is at preparation
+//  time — it CHANGED under an open invitation, and the operator needs to be
+//  told that rather than that the shape was never allowed.
 async function resolveSubmissionTarget(q, { property_id, unit_id } = {}) {
   const target = await resolveApplicationTarget(q, {
     property_id, unit_id, require_offerable: false,
@@ -343,16 +344,26 @@ async function resolveSubmissionTarget(q, { property_id, unit_id } = {}) {
 
   if (!target.targeted) return target;   // untargeted invitation: nothing to revalidate
 
-  const submittable = target.marketing_state === OFFERABLE_NOW
-    || OFFERABLE_FOR_FUTURE_MOVE_IN.has(target.marketing_state);
-
-  if (!submittable) {
+  if (target.marketing_state !== OFFERABLE_NOW) {
+    // TWO DIFFERENT FACTS, TWO DIFFERENT CODES.
+    //
+    //  A future-dated state was never a supportable target, so saying it is
+    //  "no longer offerable" would falsely imply it CHANGED. It reports the
+    //  same capability refusal preparation gives — which is also what makes
+    //  the two boundaries verifiably identical.
+    //
+    //  Every other non-marketable state DID change under an open invitation:
+    //  the unit was taken, went down, became contested. That is a genuine
+    //  no-longer-offerable.
+    const code = FUTURE_DATED_STATES.has(target.marketing_state)
+      ? REFUSAL.FUTURE_NOT_SUPPORTED
+      : REFUSAL.NO_LONGER_OFFERABLE;
     return {
       ...target,
       ok: false,
       offerable: false,
-      refusal_code: REFUSAL.NO_LONGER_OFFERABLE,
-      refusal_reason: REFUSAL_TEXT[REFUSAL.NO_LONGER_OFFERABLE],
+      refusal_code: code,
+      refusal_reason: REFUSAL_TEXT[code],
       httpStatus: 409,
     };
   }
@@ -366,5 +377,5 @@ module.exports = {
   REFUSAL,
   REFUSAL_TEXT,
   OFFERABLE_NOW,
-  OFFERABLE_FOR_FUTURE_MOVE_IN,
+  FUTURE_DATED_STATES,
 };

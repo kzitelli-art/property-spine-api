@@ -40,7 +40,7 @@ const digest = (raw) => crypto.createHash("sha256").update(String(raw)).digest("
     await c.query("begin");
     const s = await seedInventory(c);
     const P = s.property_id, U = s.units;
-    const { resolveSubmissionTarget, REFUSAL } =
+    const { resolveSubmissionTarget, resolveApplicationTarget, REFUSAL } =
       require(path.join(REPO, "src/applications/application_target_authority"));
 
     const person = (await c.query(
@@ -120,17 +120,58 @@ const digest = (raw) => crypto.createHash("sha256").update(String(raw)).digest("
     const cont = await resolveSubmissionTarget(c, { property_id: P, unit_id: U["O-conflict"].unit_id });
     ok(cont.ok === false, "a contested position refuses submission");
 
-    console.log("\n── FORWARD OFFERS SURVIVE SUBMISSION ────────────────────");
-    //  THE POINT: intended_move_in is not persisted on the invitation and this
-    //  slice adds no migration, so re-running the date test at submission would
-    //  refuse every legitimate forward offer. The same allowlist is applied
-    //  WITHOUT the test whose input was never stored.
-    const upc = await resolveSubmissionTarget(c, { property_id: P, unit_id: U["B-upcoming"].unit_id });
-    ok(upc.ok === true,
-      "an on-notice unit prepared as a forward offer still submits");
-    ok(upc.marketing_state === "upcoming", "and is still honestly reported as upcoming");
-    const turn = await resolveSubmissionTarget(c, { property_id: P, unit_id: U["C-turnover"].unit_id });
-    ok(turn.ok === true, "a unit in turnover prepared as a forward offer still submits");
+    console.log("\n── SUBMISSION AND PREPARATION NOW AGREE EXACTLY ─────────");
+    //  THE CORRECTION. Submission previously permitted upcoming and
+    //  turnover_required unconditionally while preparation refused them —
+    //  a strictly WEAKER standard, because the governed intended_move_in
+    //  reached no durable row and submission could not reproduce the verdict.
+    //  Both boundaries now read ONE present-tense fact: marketable_now.
+    for (const [name, state] of [["B-upcoming", "upcoming"], ["C-turnover", "turnover_required"]]) {
+      const prep = await resolveApplicationTarget(c, { property_id: P, unit_id: U[name].unit_id });
+      const subm = await resolveSubmissionTarget(c, { property_id: P, unit_id: U[name].unit_id });
+      ok(prep.ok === false && subm.ok === false,
+        `${name} (${state}) is refused at BOTH boundaries`);
+      ok(prep.refusal_code === subm.refusal_code,
+        `${name} refuses with the SAME code at both (${prep.refusal_code} / ${subm.refusal_code})`);
+      ok(subm.refusal_code === "future_application_target_not_supported",
+        `${name} submission code is the capability refusal (${subm.refusal_code})`);
+    }
+
+    console.log("\n── SUBMISSION MAY BE STRICTER, NEVER WEAKER ─────────────");
+    //  Exhaustive over every seeded position: no unit may be refused at
+    //  preparation and permitted at submission. That direction is the defect.
+    const allUnits = (await c.query(
+      `select id from units where property_id=$1`, [P])).rows.map((r) => r.id);
+    const weaker = [];
+    for (const uid of allUnits) {
+      const p1 = await resolveApplicationTarget(c, { property_id: P, unit_id: uid });
+      const s1 = await resolveSubmissionTarget(c, { property_id: P, unit_id: uid });
+      if (!p1.ok && s1.ok) weaker.push(uid);
+    }
+    ok(weaker.length === 0,
+      `NO position is refused at preparation and permitted at submission (${allUnits.length} positions checked)`,
+      weaker.length ? "weaker at: " + weaker.join(", ") : "");
+
+    console.log("\n── A SUBMISSION REFUSAL BIRTHS NOTHING ──────────────────");
+    const beforeSub = (await c.query(
+      `select
+         (select count(*) from lease_applications where property_id=$1)::int apps,
+         (select count(*) from events where property_id=$1 and type='application_submitted')::int evts,
+         (select count(*) from obligations where property_id=$1 and type='application_approval')::int obs`,
+      [P])).rows[0];
+    const refusedSub = await resolveSubmissionTarget(c, { property_id: P, unit_id: U["B-upcoming"].unit_id });
+    ok(refusedSub.ok === false, "the future-dated target is refused at submission");
+    const afterSub = (await c.query(
+      `select
+         (select count(*) from lease_applications where property_id=$1)::int apps,
+         (select count(*) from events where property_id=$1 and type='application_submitted')::int evts,
+         (select count(*) from obligations where property_id=$1 and type='application_approval')::int obs`,
+      [P])).rows[0];
+    ok(afterSub.apps === beforeSub.apps, "NO lease application was born");
+    ok(afterSub.evts === beforeSub.evts, "NO application_submitted event was recorded");
+    ok(afterSub.obs === beforeSub.obs, "NO approval obligation was spawned");
+    ok(refusedSub.resolved_space_id === null || refusedSub.ok === false,
+      "and no resolved space is presented as lineage");
 
     console.log("\n── ZERO-SPACE AND PROPERTY LINEAGE ──────────────────────");
     const zero = await resolveSubmissionTarget(c, { property_id: P, unit_id: U["R-zero-space"].unit_id });

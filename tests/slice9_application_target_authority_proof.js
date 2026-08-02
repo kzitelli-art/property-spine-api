@@ -124,31 +124,53 @@ const ssl = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || "")
       `a cancelled future lease leaves the position marketable (got ${canc.marketing_state})`);
     ok(canc.ok === true, "and offerable — terminal leases hold no inventory");
 
-    console.log("\n── FORWARD OFFERS: THE GOVERNED-DATE RULE ───────────────");
-    const upNoDate = await resolveApplicationTarget(c, { property_id: P, unit_id: U["B-upcoming"].unit_id });
-    ok(upNoDate.marketing_state === "upcoming", `on-notice unit is upcoming (got ${upNoDate.marketing_state})`);
-    ok(upNoDate.ok === false && upNoDate.refusal_code === REFUSAL.MOVE_IN_REQUIRED,
-      "upcoming refuses with no intended move-in — it is not available today");
-
+    console.log("\n── FUTURE-DATED TARGETS ARE NOT SUPPORTED (owner ruling) ─");
+    //  upcoming and turnover_required remain TRUTHFUL availability states. They
+    //  are simply not valid application targets, because the durable
+    //  application record cannot carry a future-dated target and submission
+    //  could not reproduce preparation's verdict.
     const farOut = new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10);
-    const upFar = await resolveApplicationTarget(c, {
-      property_id: P, unit_id: U["B-upcoming"].unit_id, intended_move_in: farOut });
-    ok(upFar.ok === true && upFar.offerable === true,
-      "upcoming IS offerable for a move-in after its governed available_from");
-    ok(upFar.availability_confidence === "incomplete",
-      "and the incomplete confidence is carried, never upgraded to confirmed");
-
     const tooSoon = new Date(Date.now() + 1 * 86400000).toISOString().slice(0, 10);
-    const upSoon = await resolveApplicationTarget(c, {
-      property_id: P, unit_id: U["B-upcoming"].unit_id, intended_move_in: tooSoon });
-    ok(upSoon.ok === false && upSoon.refusal_code === REFUSAL.NOT_READY_BY_MOVE_IN,
-      "and refused for a move-in BEFORE the governed date");
 
-    const turn = await resolveApplicationTarget(c, {
-      property_id: P, unit_id: U["C-turnover"].unit_id, intended_move_in: farOut });
-    ok(turn.marketing_state === "turnover_required", `turn in progress classifies as turnover_required (got ${turn.marketing_state})`);
-    ok(turn.ok === false && turn.refusal_code === REFUSAL.DATE_NOT_GOVERNED,
-      "a turn record alone does NOT create an availability date — refused even with a far move-in");
+    for (const [name, state] of [["B-upcoming", "upcoming"], ["C-turnover", "turnover_required"]]) {
+      const r = await resolveApplicationTarget(c, { property_id: P, unit_id: U[name].unit_id });
+      ok(r.marketing_state === state, `${name} still classifies as ${state} (${r.marketing_state})`);
+      ok(r.ok === false && r.refusal_code === REFUSAL.FUTURE_NOT_SUPPORTED,
+        `${name} refuses with future_application_target_not_supported (${r.refusal_code})`);
+      ok(r.httpStatus === 409, `${name} carries 409`);
+      //  THE COPY MUST NOT LIE ABOUT INVENTORY. The position may be genuinely
+      //  coming available on a governed date; saying it is unavailable would be
+      //  a confident-wrong statement about supply.
+      ok(/not supported yet/i.test(r.refusal_reason || ""),
+        `${name} states a capability limit`);
+      ok(/application record cannot yet carry/i.test(r.refusal_reason || ""),
+        `${name} names the APPLICATION-LINEAGE limitation, not the position`);
+      ok(!/future_application_target/.test(r.refusal_reason || ""),
+        `${name} leaks no internal code into operator copy`);
+      ok(r.available_from !== undefined,
+        `${name} still CARRIES available_from as truthful context`);
+    }
+
+    console.log("\n── NO DATE PARAMETER CAN REOPEN THE DOOR ────────────────");
+    //  The old rule turned on a request-time intended_move_in. Passing one now
+    //  must change nothing — otherwise a preparation-only promise survives that
+    //  submission cannot reproduce.
+    for (const d of [farOut, tooSoon, null]) {
+      const r = await resolveApplicationTarget(c, {
+        property_id: P, unit_id: U["B-upcoming"].unit_id, intended_move_in: d });
+      ok(r.ok === false && r.refusal_code === REFUSAL.FUTURE_NOT_SUPPORTED,
+        `upcoming refuses identically with intended_move_in=${d || "null"}`);
+    }
+    const authSrc = require("fs").readFileSync(
+      path.join(REPO, "src/applications/application_target_authority.js"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    ok(!/intended_move_in/.test(authSrc),
+      "the authority does not reference intended_move_in in code at all");
+
+    console.log("\n── AND marketable_now STILL WORKS ───────────────────────");
+    const still = await resolveApplicationTarget(c, { property_id: P, unit_id: U["A-marketable"].unit_id });
+    ok(still.ok === true && still.marketing_state === "marketable_now",
+      "a marketable_now unit is still permitted");
 
     console.log("\n── require_offerable=false REPORTS WITHOUT REFUSING ─────");
     const soft = await resolveApplicationTarget(c, {

@@ -366,7 +366,7 @@ module.exports = function applicationSubmissionModule(deps) {
   // staff-session operator route call this ONE service — no duplicated logic.
   async function createPreparedInvitation(client, {
     conversion_id = null, person_id = null, property_id, unit_id = null,
-    expires_at = null, created_by_user_id = null, intended_move_in = null,
+    expires_at = null, created_by_user_id = null,
   }) {
     if (!property_id) throw httpErr(400, "property_id is required.");
     const prop = (await client.query("select id from properties where id=$1", [property_id])).rows[0];
@@ -384,7 +384,7 @@ module.exports = function applicationSubmissionModule(deps) {
     let target = null;
     if (unit_id) {
       target = await applicationTarget.resolveApplicationTarget(client, {
-        property_id, unit_id, intended_move_in, require_offerable: true,
+        property_id, unit_id, require_offerable: true,
       });
       if (!target.ok) {
         throw httpErr(target.httpStatus || 409, target.refusal_reason || "That unit cannot be used for an application.",
@@ -434,7 +434,7 @@ module.exports = function applicationSubmissionModule(deps) {
   async function createAndDispatchApplicationInvitation({
     property_id, person_id, unit_id = null, conversion_id = null,
     expires_at = null, created_by_user_id = null, message_prefix = null,
-    resume_invitation_id = null, intended_move_in = null,
+    resume_invitation_id = null,
   }) {
     if (!commBoundary) return { dispatched: false, reason: "boundary_not_wired" };
 
@@ -527,7 +527,7 @@ module.exports = function applicationSubmissionModule(deps) {
       //  check was a property wall only.
       if (unit_id) {
         const target = await applicationTarget.resolveApplicationTarget(client, {
-          property_id, unit_id, intended_move_in, require_offerable: true });
+          property_id, unit_id, require_offerable: true });
         if (!target.ok) {
           throw httpErr(target.httpStatus || 409,
             target.refusal_reason || "That unit cannot be used for an application.",
@@ -1982,7 +1982,7 @@ module.exports = function applicationSubmissionModule(deps) {
   //  provider_dispatched) and is still live (not consumed/revoked/expired), a
   //  second tap does NOT create a second invitation or a second text — it
   //  returns that existing send idempotently. They're already in Applicants.
-  async function sendApplication({ property_id, person_id, unit_id, conversion_id = null, created_by_user_id = null, intended_move_in = null }) {
+  async function sendApplication({ property_id, person_id, unit_id, conversion_id = null, created_by_user_id = null }) {
     // 1) DOUBLE-TAP GUARD — an already-sent, still-live invitation on this
     //    conversion means the application is already out; we do NOT send a second
     //    text. BUT "already sent" is not the same as "already in Applicants":
@@ -2015,11 +2015,12 @@ module.exports = function applicationSubmissionModule(deps) {
     // 2) DISPATCH — the proven primitive (validates person+unit belong to the
     //    property, creates the prepared invitation, sends via the ONE comms
     //    gate, records the SID on acceptance; on refusal, revokes honestly).
-    //  intended_move_in was accepted by this function and then silently
-    //  dropped, so a forward offer was validated against "available today".
-    //  It is now carried into the one resolution.
+    //  No intended_move_in is threaded anywhere. A targeted invitation requires
+    //  marketable_now — a present-tense fact BOTH boundaries read from durable
+    //  state — so there is no request-time context for either to lose, and no
+    //  shadow field in which to hide one.
     const out = await createAndDispatchApplicationInvitation({
-      property_id, person_id, unit_id, conversion_id, created_by_user_id, intended_move_in });
+      property_id, person_id, unit_id, conversion_id, created_by_user_id });
     if (!out || !out.dispatched) return out;   // honest failure passes straight through — NO advance
     // 3) ADVANCE — only on provider acceptance. One shared transition helper,
     //    its own txn. The SMS is already out; an advance hiccup is a follow-up

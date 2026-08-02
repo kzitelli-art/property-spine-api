@@ -216,16 +216,30 @@ const ssl = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || "")
     console.log("\n── SPOT ASSERTIONS PER SCENARIO ─────────────────────────");
     ok(M[1].application_target === "eligible" && M[1].marketing_state === "marketable_now",
       "1 marketable: application-eligible");
-    ok(M[2].application_target === "intended_move_in_required" && M[2].submission === "permitted",
-      "2 upcoming: refused a same-day offer, still submittable as a forward offer");
-    ok(M[3].application_target === "intended_move_in_required" && M[3].future_commitment === "none",
-      "3 turnover: no commitment, no invented date");
+    ok(M[2].application_target === "future_application_target_not_supported"
+       && M[2].submission === "future_application_target_not_supported",
+      "2 upcoming: refused IDENTICALLY at both boundaries");
+    ok(M[3].application_target === "future_application_target_not_supported"
+       && M[3].submission === "future_application_target_not_supported",
+      "3 turnover: refused IDENTICALLY at both boundaries");
     ok(M[4].application_target === "space_grain_not_supported" && M[4].invitation_creation === "refused",
       "4 multi-space: UNSUPPORTED is the honest answer");
     ok(M[5].application_target === "application_target_unconfigured",
       "5 zero-space: unconfigured, distinct from not-found");
     ok(M[6].packet === "no_open_terms_or_activation_gate",
       `6 approved application: NOT packet-eligible on approval alone (${M[6].packet})`);
+
+    // ── THE SIX MISMATCH ROWS MUST NOW BE ZERO ─────────────────────
+    //  Before the narrowing ruling, six of twenty rows read `refused` at
+    //  preparation and `permitted` at submission — submission applying a
+    //  weaker standard because the governed intended_move_in reached no
+    //  durable row. This asserts the whole class is closed, not six rows
+    //  individually.
+    const mismatched = rows.filter((r) =>
+      r.invitation_creation === "refused" && r.submission === "permitted");
+    ok(mismatched.length === 0,
+      `ZERO scenarios are refused at preparation and permitted at submission (was 6)`,
+      mismatched.length ? mismatched.map((r) => r.scenario).join(" · ") : "");
     ok(M[6].future_commitment === "none" && M[6].turn_priority === "raw_vacancy",
       `6 and it creates NO commitment and NO turn deadline (commit=${M[6].future_commitment}, turn=${M[6].turn_priority})`);
     ok(M[7].packet === "no_open_terms_or_activation_gate" && M[7].future_commitment === "none",
@@ -235,6 +249,8 @@ const ssl = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || "")
       `9 historical approval on a withdrawn application is NOT packet-eligible (${M[9].packet})`);
     ok(M[10].future_commitment === "pending" && M[10].turn_priority === "pending_commitment",
       "10 pending future lease: pending everywhere, never locked");
+    ok(M[10].application_target === M[10].submission,
+      `10 and its two application boundaries agree (${M[10].application_target})`);
     ok(M[11].future_commitment === "locked" && M[11].turn_priority === "committed_start",
       `11 locked future lease: committed in BOTH domains (commit=${M[11].future_commitment}, turn=${M[11].turn_priority})`);
     ok(M[12].marketing_state === "activation_pending" && M[12].economic_tenancy === "none",
