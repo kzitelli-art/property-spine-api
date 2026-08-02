@@ -15,15 +15,20 @@ set -e
 
 # Production-write guard. These steps write persons, classifications and
 # lease_applications through psql "$DATABASE_URL" — production in the Render
-# Shell — and never clean up. The guard also sets pipefail, so the curl
+# Shell — and never clean up. Sourcing also sets pipefail, so the curl
 # pipelines below can no longer report success on a failed request.
 . "$(dirname "$0")/_db_target_guard.sh"
-pspine_require_db_target "a QA person, an internal_qa classification and a lease application"
 
 API="${API:-http://localhost:$PORT}"
 [ -z "$PORT" ] && API="${API:-https://property-spine-api.onrender.com}"
 KEY="$OPERATOR_KEY"
 DEMO="a50fbdd0-3642-431e-b532-0dcd6ab8a4fe"
+
+# Refuses unless the database target parses, the property is the pinned Demo
+# Building, and a per-run acknowledgement names both. The guard checks $DEMO
+# against its own pin — editing the line above does not widen this.
+pspine_require_db_target PSPINE_WRITE_ACK_CLEAN_QA "$DEMO" \
+  "a QA person, an internal_qa classification and a lease application"
 PHONE="+17245550${RANDOM:0:3}"   # fresh throwaway phone → fresh person
 NAME="QA Anchor $(date +%H%M%S)"
 

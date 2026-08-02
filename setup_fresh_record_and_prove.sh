@@ -6,16 +6,21 @@ set -e
 
 # Production-write guard. This script inserts a person, classifies it and
 # mutates lease_applications through psql "$DATABASE_URL" — production in the
-# Render Shell — and never cleans up. The guard also sets pipefail, so the
+# Render Shell — and never cleans up. Sourcing also sets pipefail, so the
 # curl pipelines below can no longer report success on a failed request.
 . "$(dirname "$0")/_db_target_guard.sh"
-pspine_require_db_target "a QA person, an internal_qa classification and lease_application mutations"
 
 API="http://localhost:$PORT"
 DEMO="a50fbdd0-3642-431e-b532-0dcd6ab8a4fe"
 KEY="$OPERATOR_KEY"
 SESS="$STAFF_SESSION"
 [ -z "$SESS" ] && { echo "Set STAFF_SESSION to the token from establish_qa_staff_session.js"; exit 1; }
+
+# Refuses unless the database target parses, the property is the pinned Demo
+# Building, and a per-run acknowledgement names both. The guard checks $DEMO
+# against its own pin — editing the line above does not widen this.
+pspine_require_db_target PSPINE_WRITE_ACK_FRESH_PROVE "$DEMO" \
+  "a QA person, an internal_qa classification and lease_application mutations"
 
 NAME="QA Anchor Live $(date +%H%M%S)"
 UNIT=$(psql "$DATABASE_URL" -tAc "select id from units where property_id='$DEMO' order by created_at limit 1")

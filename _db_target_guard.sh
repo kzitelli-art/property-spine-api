@@ -10,83 +10,137 @@
 #  production. The JS harnesses are guarded by
 #  tests/_run_receipt.js → harnessConnectionString(); these scripts never
 #  enter a Node process, so that guard could not reach them. Per the
-#  Phase 1 audit (docs/DB_CONNECTION_INVENTORY.md, Section A and
-#  Appendix G3-A) they were the largest remaining coverage gap:
-#  standalone, production-capable, unguardable by construction.
+#  Phase 1 audit (docs/DB_CONNECTION_INVENTORY.md, Appendix G3-A) they
+#  were the largest remaining coverage gap: standalone,
+#  production-capable, unguardable by construction.
 #
-#  WHAT THIS DOES — AND DELIBERATELY DOES NOT DO
-#  It does NOT forbid production. These scripts are MEANT to run in the
-#  Render Shell against Demo Building; refusing the production target
-#  would remove their purpose, not their risk. What it forbids is
-#  reaching production WITHOUT SAYING SO. The operator must name the
-#  target by acknowledging it, and the resolved target is echoed first so
-#  the acknowledgement is informed rather than reflexive.
+#  THE BOUNDARY THIS ENFORCES
+#  Production access is permitted only as an explicit, informed, narrowly
+#  scoped operational act. A blanket "never touch production" rule would
+#  be the wrong control — these scripts are MEANT to run in the Render
+#  Shell against Demo Building, which the architecture recognises as a
+#  legitimate isolated demo context. The requirement is that they remain
+#  constrained demo infrastructure, not an unrestricted production
+#  writer.
 #
-#  This is the shell counterpart of harnessConnectionString()'s refusal,
-#  adapted to a script whose correct target IS the live database. It
-#  follows the PSPINE_ALLOW_NON_TTY precedent in
-#  tools/issue_operator_invite.js: an explicit, named, dangerous-by-
-#  default opt-in rather than a comment asking people to be careful.
+#      recognised production database
+#      + exact Demo Building property
+#      + explicit per-run acknowledgement
+#      → proceed
+#
+#      unknown/unparseable database
+#      or non-Demo property
+#      or missing/stale acknowledgement
+#      → refuse before operating
+#
+#  The property is PINNED HERE, not in the calling script, and the
+#  caller's property is checked against this pin. Editing `DEMO=` in a
+#  script to point at Solo does not get past this file. The property is
+#  never taken from an environment variable or a command-line argument.
+#
+#  The acknowledgement is per-SCRIPT (not one universal
+#  ALLOW_PRODUCTION) and per-RUN: it must carry today's UTC date, so a
+#  value exported into a shell profile or Render's permanent environment
+#  stops working within a day rather than silently persisting.
 #
 #  CLASS 2 (permanent). No removal condition — the gap it closes is
 #  structural, not transitional.
 # ════════════════════════════════════════════════════════════════════
 
-# Fail on error, on unset-variable misuse in the guard, and — the point of
-# row 4 in the false-green inventory — on ANY failing stage of a pipeline.
-# Without pipefail a `curl … | head` reports head's success and the
-# calling script's `set -e` never fires. Callers must not pipe a producer
-# into an early-exiting consumer; capture and slice instead (see the
-# callers for the pattern).
+# Fail on error and — the point of row 4 in the false-green inventory — on
+# ANY failing stage of a pipeline. Without pipefail a `curl … | head`
+# reports head's success and the calling script's `set -e` never fires.
+# Callers must not pipe a producer into an early-exiting consumer;
+# capture and slice instead (see the callers for the pattern).
 set -o pipefail
 
-# Render host:port/database from a connection string WITHOUT the password.
-# Strips scheme, then credentials, then any query string.
+# The ONE property these scripts may operate on. Pinned here deliberately:
+# a caller cannot widen it, and no environment variable can reach it.
+_PSPINE_DEMO_BUILDING="a50fbdd0-3642-431e-b532-0dcd6ab8a4fe"
+
+_pspine_refuse() {
+  { echo; echo "  ════════════════════════════════════════════════════════"
+    echo "  REFUSED — $1"
+    echo "  ════════════════════════════════════════════════════════"; echo
+    shift
+    for line in "$@"; do echo "  $line"; done
+    echo
+    echo "  See docs/DB_CONNECTION_INVENTORY.md (Appendix G3-A)."
+    echo
+  } >&2
+  exit 1
+}
+
+# Render host[:port]/database from a connection string WITHOUT the
+# password: strip scheme, then credentials, then any query string.
 _pspine_db_identity() {
   printf '%s' "${1:-}" | sed -E 's#^[a-zA-Z+]+://##; s#^[^@/]*@##; s#\?.*$##'
 }
 
-# pspine_require_db_target <human-readable description of what will be written>
+# pspine_require_db_target <ack-var-name> <property-id> <what-gets-written>
+#
+# Refuses unless ALL of: a parseable database target, the pinned Demo
+# Building property, and a current per-run acknowledgement naming both.
 pspine_require_db_target() {
-  local what="${1:-QA fixture rows}"
+  local ack_var="$1" property="$2" what="$3"
 
+  # ── 1. a target must exist ──────────────────────────────────────────
   if [ -z "${DATABASE_URL:-}" ]; then
-    {
-      echo
-      echo "  REFUSED: DATABASE_URL is not set."
-      echo
-      echo "  This script writes ${what} directly through psql."
-      echo "  It has no target and will not guess one."
-      echo
-    } >&2
-    exit 1
+    _pspine_refuse "DATABASE_URL is not set." \
+      "This script writes ${what} directly through psql." \
+      "It has no target and will not guess one."
   fi
 
-  local target
+  # ── 2. it must parse completely — fail closed, never assume ─────────
+  local target host db
   target="$(_pspine_db_identity "$DATABASE_URL")"
-
-  if [ "${PSPINE_QA_WRITES_OK:-}" != "1" ]; then
-    {
-      echo
-      echo "  ════════════════════════════════════════════════════════"
-      echo "  REFUSED: this script writes to a live database."
-      echo "  ════════════════════════════════════════════════════════"
-      echo
-      echo "  target:  ${target}"
-      echo "  writes:  ${what}"
-      echo
-      echo "  In the Render Shell this target is PRODUCTION. These rows"
-      echo "  are business-shaped and are NOT cleaned up afterwards."
-      echo
-      echo "  If that is what you intend, say so explicitly:"
-      echo
-      echo "      PSPINE_QA_WRITES_OK=1 bash $0"
-      echo
-      echo "  See docs/DB_CONNECTION_INVENTORY.md (Appendix G3-A)."
-      echo
-    } >&2
-    exit 1
+  host="${target%%/*}"
+  db="${target#*/}"
+  if [ -z "$target" ] || [ "$host" = "$target" ] || [ -z "$host" ] || [ -z "$db" ]; then
+    _pspine_refuse "the connection target could not be parsed." \
+      "parsed: '${target}'" \
+      "A target that cannot be identified cannot be acknowledged, so this" \
+      "refuses rather than proceeding against an unknown database."
   fi
 
-  echo "  db target: ${target}  · acknowledged via PSPINE_QA_WRITES_OK=1"
+  # ── 3. the property is pinned — checked BEFORE the acknowledgement, ──
+  #       so no acknowledgement can widen it.
+  if [ "$property" != "$_PSPINE_DEMO_BUILDING" ]; then
+    _pspine_refuse "this script may only operate on Demo Building." \
+      "requested: ${property}" \
+      "permitted: ${_PSPINE_DEMO_BUILDING}  (Demo Building)" \
+      "" \
+      "These scripts write business-shaped rows and do not clean up. They" \
+      "are demo infrastructure and are not a general production writer." \
+      "No acknowledgement overrides this — change the pin in" \
+      "_db_target_guard.sh only through review."
+  fi
+
+  # ── 4. explicit, per-script, per-run acknowledgement ────────────────
+  local today expected actual
+  today="$(date -u +%Y-%m-%d)"
+  expected="${property}:${today}"
+  actual="$(eval "printf '%s' \"\${${ack_var}:-}\"")"
+
+  if [ "$actual" != "$expected" ]; then
+    _pspine_refuse "this script writes to a live database." \
+      "target:  ${host}/${db}" \
+      "property: ${property}  (Demo Building)" \
+      "writes:  ${what}" \
+      "" \
+      "In the Render Shell this target is PRODUCTION. These rows are" \
+      "business-shaped and are NOT cleaned up afterwards." \
+      "" \
+      "If that is what you intend, acknowledge it for THIS run:" \
+      "" \
+      "    ${ack_var}=\"${expected}\" bash $0" \
+      "" \
+      "The acknowledgement names the property and carries today's UTC" \
+      "date on purpose: it is per-run, and a value exported into a shell" \
+      "profile or Render's environment stops working tomorrow."
+  fi
+
+  echo "  db target: ${host}/${db}"
+  echo "  property:  ${property}  (Demo Building, pinned)"
+  echo "  ack:       ${ack_var} accepted for ${today}"
 }
