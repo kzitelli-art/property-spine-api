@@ -1,85 +1,119 @@
-# Security lane — unauthenticated cross-property `GET /obligations`
+# Security lane — the obligation authority boundary
 
 **Release gate. This must close before Ask Spine is deployed to production.**
 
 **Scope discipline:** this lane is the fix. It is **not** to be folded into Ask
-Spine, and Ask Spine neither depends on this route nor remediates it. Ask Spine
-built a new gated route precisely so the two stay separate.
+Spine, and Ask Spine neither depends on these routes nor remediates them. Ask
+Spine built a new gated route precisely so the two stay separate.
+
+> **Document status.** This file states the finding **once, in its corrected
+> form**. Superseded framings from earlier in the investigation were **removed,
+> not annotated**: Git history is the right place for how an investigation
+> evolved, and a governing document must never carry a superseded account
+> beside the true one.
 
 ---
 
-## The defect
+## The defect, stated once and correctly
 
-`server.js:733` — `app.get("/obligations", …)`
+> **Five obligation routes were protected by a portfolio-wide shared operator
+> key, held in browser `localStorage`, but had no server-derived property,
+> module, or actor authority.**
 
-```js
-app.get("/obligations", async (req, res) => {
-  const { assigned_role, status, assigned_user_id, property_id, unclaimed } = req.query;
-  …
-  if (property_id) { vals.push(property_id); where.push(`property_id = $${vals.length}`); }
-  …
-  const sql = "select * from obligations" + (where.length ? " where " + where.join(" and ") : "") + …
-```
+Every element of that sentence is load-bearing:
 
-Two independent failures:
+- **Protected, not open.** A global gate (`server.js:147–162`) applies to
+  everything not explicitly allowlisted. `/obligations` was not allowlisted, so
+  it was gated, and gated **fail-closed**:
 
-1. **No authentication.** A bare `app.get` with **no operator gate, no session
-   check, no perimeter**. Every comparable operator route in this codebase
-   passes through `resolveStaffSession`; this one does not.
-2. **Client-supplied scope.** `property_id` comes from `req.query` and is used
-   directly. **Omit it and `where` is empty — the route returns `select * from
-   obligations` across every property in the database.**
+  ```text
+  OPERATOR_KEY unset in the environment  → 503  (locked, never silently open)
+  missing or wrong x-operator-key        → 401
+  valid shared OPERATOR_KEY              → the route runs
+  ```
 
-`select *` also returns every column, including any future sensitive field, with
-no projection.
+  `/operator/*` skips this gate deliberately (`isOperatorPath`) because those
+  routes enforce staff sessions internally. Matching is exact-boundary, so
+  `/operatorial` does not bypass it.
 
-**Severity: material isolation defect.** Unauthenticated cross-property read of
-operational work records.
+- **Portfolio-wide.** One key, the whole estate. The data behind it is
+  **property-scoped**. That mismatch is the defect: authentication existed;
+  **authority did not**.
 
-## Known consumer
+- **Held in the browser.** Established without printing or exposing any value:
 
-`property-spine-app` `index.html` (`loadObligations`) calls
-`/obligations?property_id=…&status=open`, wrapped in `tryJSON(path, [], …)`.
-Two consequences worth carrying into the fix:
+  ```text
+  index.html:9787   $('opKey').value = localStorage.getItem('ps_operator_key')
+  index.html:6339   const key = () => $('opKey').value.trim()
+  index.html:6341   const headers = (extra={}) =>
+                      Object.assign(key() ? {'x-operator-key': key()} : {}, extra)
+  index.html:9791   persisted back to localStorage on change
+  index.html:9966   removed on sign-out
+  ```
 
-- the caller supplies the property, so it will need the authorized shape;
-- `tryJSON`'s `[]` fallback means a failure renders as "nothing to do" — an
-  **honest-blank violation** in its own right, and a second reason this consumer
-  needs revisiting rather than merely re-pointing.
+  **This contradicts the server's own stated policy.** `server.js:144` says
+  *"we never put the raw OPERATOR_KEY in a browser."* That holds for
+  `/operator/*` — which is exactly why those routes skip the key gate — but the
+  legacy non-`/operator/` surface still required the key, and the app supplied
+  it from `localStorage` to satisfy that requirement.
 
-## Decision required
+- **No server-derived property.** `property_id` came from `req.query` and was
+  used directly. **Omit it and the `where` clause is empty** — `select * from
+  obligations` across every property. The four sibling routes act on an
+  obligation **by ID alone**, with no property predicate at all.
 
-1. **Remove** the route, or
-2. **Gate it** behind operator authentication with server-derived property
-   scope (and module entitlement, per §21), or
-3. **Migrate** the remaining legitimate consumers to an authorized route, then
-   disable it.
+- **No module entitlement.** Nothing consulted the caller's allowed modules.
 
-Option 3 is the likely path given the live app consumer. Ask Spine's
-`src/agent/ask_spine.js` is a working reference for the gate shape:
-`resolveStaffSession` → `req.operator.property_id` → refuse a mismatched client
-`property_id` with 403.
+- **No server-derived actor.** `PATCH /obligations/:id/claim` took the claiming
+  `user_id` **from the request body**, sourced from a browser text field
+  persisted in `localStorage.ps_user_id`.
+
+- **No projection.** `select *` returned every column, including any future
+  sensitive field.
+
+**Severity: material isolation defect.** Anyone who obtained the key — a
+departing employee, a shared workstation, an XSS on the page — could read
+obligations across **every** property, and could claim, satisfy or complete work
+on a property they had no authority over, **as any user**.
+
+## Five routes, one defect — not one route
+
+| Route | Credential | Property derived? | Module derived? | Cross-property act by ID? | Callers found |
+|---|---|---|---|---|---|
+| `GET /obligations` (`server.js:733`) | shared key | **no** — `req.query` | **no** | **yes** — by omitting `property_id` | `loadObligations()` |
+| `GET /obligations/:id` (`:761`) | shared key | **no** — `where id=$1` | **no** | **yes** | none |
+| `PATCH /obligations/:id/claim` (`:792`) | shared key | **no** | **no** | **yes — MUTATION** | `claimObligation()` |
+| `PATCH /obligations/:id/satisfy` (`:884`) | shared key | **no** | **no** | **yes — MUTATION** | none |
+| `PATCH /obligations/:id/complete` (`:913`) | shared key | **no** | **no** | **yes — MUTATION** | deployed smoke only |
+
+**None of the five called `resolveStaffSession`. None filtered by property.**
+The three `PATCH` routes are cross-property **writes** — a strictly more severe
+class than the read this lane was opened for. That escalation was found by the
+Phase 0 sibling check below, was ruled on, and **all five routes are in scope
+and all five are retired** by this lane.
+
+## The consumer defect that travels with it
+
+`loadObligations()` wrapped its call in `tryJSON(path, [], …)`, so a denial or
+failure rendered as **"nothing to do."** Locking the routes without fixing that
+caller would turn a 401 into a silent empty — the exact honest-blank violation
+§5 forbids. **The caller had to be migrated, not merely re-pointed.**
 
 ## Required proof
 
 ```text
-unauthenticated request
-→ denied
-
-authenticated Property A session
-→ only Property A rows
-
-client-supplied Property B id
-→ cannot widen access
-
-zero permitted scope
-→ no data
+no staff session                    → denied
+authenticated Property A session    → only Property A rows
+client-supplied Property B id       → cannot widen access
+unauthorised module                 → excluded
+zero permitted scope                → no data, and no unrestricted query
+client-supplied user_id             → refused, not ignored
+all five legacy routes              → unrouted, not merely unused
 ```
 
-Each must be exercised against **real Postgres with rows on at least two
-properties** — the same standard Ask Spine was held to. A source assertion that
-the gate exists is not sufficient; the cross-property case must be proven by
-absence in a real response.
+Each against **real Postgres with rows on at least two properties**. A source
+assertion that the gate exists is not sufficient; the cross-property case must
+be proven by **absence in a real response**.
 
 ## Sequencing
 
@@ -91,36 +125,21 @@ land this fix
 ```
 
 **Ask Spine must not ship beside a known cross-property exposure**, even though
-it does not use the route.
+it does not use these routes.
 
 ## Provenance
 
-Found during the Ask Spine source audit
-(`docs/ASK_SPINE_SOURCE_AUDIT.md`, Phase 2 Read 2) while establishing why Ask
-Spine could not reuse the existing obligations read. Registered as a standalone
-finding at that time and deliberately left unremediated in that lane.
+Found during the Ask Spine source audit (`docs/ASK_SPINE_SOURCE_AUDIT.md`,
+Phase 2 Read 2) while establishing why Ask Spine could not reuse the existing
+obligations read. Registered as a standalone finding at that time and
+deliberately left unremediated in that lane.
 
 ---
 
 # Consumer inventory — complete (2026-08-02)
 
-**Bounded current-source audit across both repositories.** No route change has
-been made. This inventory is the input to the architecture choice.
-
-## Scope note — one route, not a family
-
-`/obligations` names **five** routes. Only the **collection read** is in scope:
-
-| Route | In scope? |
-|---|---|
-| **`GET /obligations`** (`server.js:733`) | **YES — the defect** |
-| `GET /obligations/:id` (`:761`) | no — single row by id; still worth its own review |
-| `PATCH /obligations/:id/claim` (`:792`) | no |
-| `PATCH /obligations/:id/satisfy` (`:884`) | no |
-| `PATCH /obligations/:id/complete` (`:913`) | no |
-
-Conflating them would overstate the blast radius. The `PATCH` routes are what
-the deployed smoke tests exercise, not the collection read.
+**Bounded current-source audit across both repositories**, taken before any
+route change. This inventory was the input to the architecture choice.
 
 ## Consumers of `GET /obligations`
 
@@ -160,7 +179,7 @@ forbids. **The caller must be migrated, not merely re-pointed.**
 
 # Recommended architecture
 
-## Preferred option is available: retire the public route
+## Preferred option is available: retire the shared-key route
 
 The inventory shows **no non-operator consumer exists**. The acceptable-fallback
 case — a genuine machine consumer needing its own authority boundary — **does
@@ -207,85 +226,22 @@ resolves one line.
 
 ---
 
-# Awaiting approval before any code
+# Approval gate — satisfied
 
-Per the ruling, **no security code is written until this inventory is reviewed.**
-The proof requirements (eight cases, real Postgres, authenticated HTTP, explicit
-assertion floor, no global test-infrastructure expansion) are recorded above and
-unchanged.
-
----
-
-# CORRECTION — the threat model was wrong (2026-08-02)
-
-**My earlier framing called this an "unauthenticated public endpoint." That is
-incorrect and is withdrawn.** I asserted it without checking for global
-middleware. The evidence and severity now follow.
-
-## The route is behind a fail-closed shared-key gate
-
-`server.js:147–162` applies a global operator gate to everything not explicitly
-allowlisted. `/obligations` is **not** allowlisted, so it is gated:
-
-```text
-OPERATOR_KEY unset in the environment
-→ 503  "Operator routes are locked…"      (fail closed, never silently open)
-
-missing or wrong x-operator-key
-→ 401  "Missing or wrong x-operator-key."
-
-valid shared OPERATOR_KEY
-→ route runs, and accepts a CLIENT-SUPPLIED property_id
-→ property_id may be changed, or omitted entirely
-→ omitting it removes the property predicate → cross-property read
-```
-
-`/operator/*` skips this gate deliberately (`isOperatorPath`), because those
-routes enforce staff sessions internally. Matching is exact-boundary, so
-`/operatorial` does not bypass it.
-
-## Corrected defect statement
-
-> **A shared-operator-key-protected route that trusts client-supplied property
-> scope, permitting cross-property reads to any holder of the portfolio-wide
-> key.**
-
-Not anonymous. Still a material isolation defect, because the key is
-**portfolio-wide** while the data is **property-scoped**.
-
-## Credential path — the browser does hold the shared key
-
-Established without printing or exposing any value:
-
-```text
-index.html:9787   $('opKey').value = localStorage.getItem('ps_operator_key')
-index.html:6339   const key = () => $('opKey').value.trim()
-index.html:6341   const headers = (extra={}) =>
-                    Object.assign(key() ? {'x-operator-key': key()} : {}, extra)
-index.html:9791   the value is persisted back to localStorage on change
-index.html:9966   removed on sign-out
-```
-
-So `loadObligations()` sends the **portfolio-wide shared key from browser
-localStorage**.
-
-**This contradicts the server's own stated policy.** `server.js:144` says *"we
-never put the raw OPERATOR_KEY in a browser."* That holds for `/operator/*`,
-which is exactly why those routes skip the key gate — but the legacy
-non-`/operator/` surface still requires the key, and the app supplies it from
-localStorage to satisfy that requirement.
-
-**Practical severity:** the key is portfolio-wide, persisted in browser
-localStorage, and unlocks a route that accepts client-supplied property scope.
-Anyone who obtains it — a departing employee, a shared workstation, an XSS on
-the page — can read obligations across **every** property.
+This inventory was reviewed and the architecture approved before any security
+code was written. The proof requirements (real Postgres, authenticated HTTP,
+explicit assertion floor, no global test-infrastructure expansion) were recorded
+above and were met — see **Proof counts** in the final receipt.
 
 ---
 
-# Sibling-route authority check — NEW FINDING, requires a ruling
+# Sibling-route authority check — escalated, ruled, and resolved
 
-**The obligation security boundary is wider than the collection read, and it
-includes mutation.** Classified from current source:
+**Recorded as found.** The bounded sibling check showed the obligation boundary
+was wider than the collection read and **included mutation**. That exceeded the
+scope this lane was opened for, so implementation paused and a ruling was
+requested. **The ruling brought all five routes into this lane, and all five are
+retired.** Classified from the source as it then stood:
 
 | Route | Credential | Derives property? | Derives module? | Cross-property act by ID? | Callers |
 |---|---|---|---|---|---|
@@ -306,17 +262,13 @@ obligation ID can claim, satisfy or complete work belonging to a property they
 have no authority over. That is a strictly more severe class than the finding
 this lane was opened for.
 
-**PR #32 therefore cannot claim the obligation boundary is closed by fixing the
-collection route alone.** Recorded here as required, and flagged for a ruling:
+**This lane therefore could not claim the obligation boundary was closed by
+fixing the collection route alone**, which is why implementation stopped here
+and asked.
 
-> **Ruling requested.** The bounded check has revealed a shared authority defect
-> beyond the approved scope — cross-property **mutation** on three routes. Per
-> the standing instruction, that is a reason to pause rather than proceed. The
-> collection fix may still proceed independently; the question is whether the
-> three `PATCH` routes and `GET /:id` join this lane, become their own lane, or
-> are deferred with an explicit accepted-risk note.
-
-**No route has been changed. No security code has been written.**
+> **Ruling given.** All five routes belong to one program and are remediated
+> together — Phase A the reads, Phase B the actions. No route is deferred with
+> an accepted-risk note, and no shared-key route survives the lane.
 
 ---
 
@@ -386,16 +338,16 @@ for its existing call sites.
 
 ## Proof requirements (real Postgres, explicit floor, no global test changes)
 
-1. no credential → denied by the correct perimeter
-2. wrong shared key on the retired route → denied while it still exists
-3. valid staff session for Property A → only Property A rows
-4. Property B request parameter → cannot widen
-5. unauthorized module rows excluded
-6. zero entitlement → no database query
-7. preview and demo remain local
-8. live failure does not become empty
-9. old `GET /obligations` no longer exists after migration
-10. explicit projection prevents unrelated columns leaking
+1. no staff session → denied by the replacement perimeter
+2. valid staff session for Property A → only Property A rows
+3. Property B request parameter → cannot widen
+4. unauthorized module rows excluded
+5. zero entitlement → no database query
+6. preview and demo remain local
+7. live failure does not become empty
+8. all five legacy routes no longer exist after migration
+9. explicit projection prevents unrelated columns leaking
+10. a client-supplied `user_id` is refused, not ignored
 
 ---
 
@@ -781,7 +733,256 @@ exact construct recorded as false-green defect **A090-2** in
 recommending the anti-pattern the audit programme exists to remove.** Out of
 scope for this lane; recorded here so it is not rediscovered a third time.
 
-## Standing at the gate
 
-**Nothing has been merged and nothing has been deployed.** Both PRs remain
-open. Ask Spine remains frozen; Slice 9 remains untouched.
+---
+
+# OPERATOR DEPLOYMENT CARD — must be completed before merge
+
+**These fields cannot be established from source.** They are dashboard and
+runtime facts. **Do not guess any of them.** A blank field is a blocker, not a
+formality: these determine what actually happens when the merge buttons are
+pressed.
+
+Whoever holds Render access fills this in and returns it. Record SHAs only —
+**never a key, token, or connection string.**
+
+```text
+── API service ──────────────────────────────────────────────
+Render service name:            ____________________
+Configured branch:              ____________________   (expected: main)
+Auto-deploy:                    on / off / ____________________
+                                if off, exact trigger: ____________________
+Currently deployed SHA:         ____________________   (Render Shell: echo $RENDER_GIT_COMMIT)
+Last deploy duration:           _______ min           (from the deploys list)
+Rollback available:             yes / no / ____________________
+Any deploy in progress now:     yes / no
+
+── App service ──────────────────────────────────────────────
+Render service name:            ____________________
+Configured branch:              ____________________   (expected: main)
+Auto-deploy:                    on / off / ____________________
+                                if off, exact trigger: ____________________
+Currently deployed SHA:         ____________________   (or window.__PS_BUILD.code_sha
+                                                        + 1 stamp commit — see below)
+Rollback available:             yes / no / ____________________
+Any deploy in progress now:     yes / no
+
+── Health ───────────────────────────────────────────────────
+GET /health:                    ____________________
+GET /health/migrations:         ____________________
+
+── Execution ────────────────────────────────────────────────
+Operator executing the window:  ____________________
+Window start (local + UTC):     ____________________
+```
+
+**Two traps when filling this in.**
+
+1. **The app's `__PS_BUILD.code_sha` is one commit behind by construction**
+   (`build-info.js:3–8`). It names the *code* commit; the deployed head is that
+   commit's **stamp child**. Do not report `code_sha` as the deployed SHA
+   without saying which you mean.
+2. **The Render Shell has no `.git`** (`THREAD_HANDOFF.md:120–125`).
+   `git rev-parse HEAD` fails there. Use `echo $RENDER_GIT_COMMIT`.
+
+---
+
+# MIGRATION PREFLIGHT — run immediately before the window
+
+**Every API deploy runs `migrate.js` against the service's own `DATABASE_URL`
+via `prestart`.** Deploying code and migrating production are the same
+operation (`THREAD_HANDOFF.md:91–98`). **No unrelated migration may ride
+silently with a security release.**
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Record the deployed API SHA | ______ |
+| 2 | `git diff --name-only <deployed-sha>..<merge-candidate> -- migrations/` | ______ |
+| 3 | `GET /health` | ______ |
+| 4 | `GET /health/migrations` (needs the operator key; do not print it) | ______ |
+| 5 | Confirm this lane adds no migration | **established from source: it adds none** — see below |
+| 6 | Identify any unrelated unapplied migration that would run during `prestart` | ______ |
+
+**Step 5 is already answered and does not need a dashboard.** The security lane
+touches `server.js`, three new files under `src/obligations/`, two new
+harnesses, two smoke files, and documentation. `git diff --name-only
+origin/main...claude/security-obligations-route -- migrations/` returns
+**nothing**. This deploy is code-only *from this lane's side*.
+
+## The migration-121 divergence must be closed as a deployment fact
+
+`THREAD_HANDOFF.md` records a GAP at 121 — a migration that reached production
+by a branch deploy while `main` lacked the file. Before the window, that
+divergence resolves to **exactly one** of:
+
+```text
+already recorded and healthy   — 121 is in schema_migrations on the target
+                                 database, and no file in the merge candidate
+                                 is unapplied.  → PROCEED
+
+pending and understood         — an unapplied migration exists, it is named,
+                                 its content is read, its effect is understood,
+                                 and it is accepted deliberately.
+                                 → PROCEED ONLY WITH THAT NAMED ACCEPTANCE
+
+stop deployment                — an unapplied migration exists that is not
+                                 understood, or `/health/migrations` disagrees
+                                 with the repository ledger.  → DO NOT MERGE
+```
+
+**"Probably fine" is not one of the three outcomes.**
+
+Related, and separately filed: `docs/DB_CONNECTION_INVENTORY.md` records that
+the migration chain **cannot rebuild from an empty database** (`012` re-declares
+`vendors` under `create table if not exists`, so the declaration is silently
+skipped and the following index fails). That is evidence-only in PR #33 and is
+**not** a blocker for this release — it affects a rebuild, not a forward
+migration of an existing database — but the operator should know it exists
+before reading any migration output.
+
+---
+
+# FINAL SOURCE FRESHNESS CHECK — immediately before deployment
+
+```bash
+git fetch origin main                       # both repositories
+git log --oneline <recorded-main>..origin/main
+git diff --stat origin/main...HEAD          # confirm no new overlapping change
+```
+
+If `main` has moved in either repository: **rebase that security branch, then
+rerun the focused proofs.** A rebase invalidates every proof taken before it.
+
+Required focused results, unchanged, after any rebase:
+
+```text
+API security         21/21   (floor 20)
+canonical completion 12/12   (floor 12)
+browser security     25/25   (floor 22)
+app suite           749/0/0
+```
+
+Record and carry into the window:
+
+```text
+Final API head SHA:   ____________________
+Final app head SHA:   ____________________
+API PR #32 mergeable: ____________________
+App PR #26 mergeable: ____________________
+```
+
+---
+
+# COORDINATED MAINTENANCE RUNBOOK
+
+Both PRs open, reviewed and ready **before** step A. Do not start the window
+otherwise.
+
+### Step A — announce the window
+
+> Obligation work views and the claim action may be briefly unavailable. This is
+> intentional. An honest "unavailable" is preferable to a false empty queue.
+
+### Step B — merge app PR #26 (first)
+
+Wait until the static site serves **the exact merged app SHA**. Then verify:
+
+- the new artifact is live;
+- obligation reads call `/operator/obligations`;
+- requests carry `x-staff-session`;
+- requests **do not** carry `x-operator-key`;
+- against the still-old API, the surface shows an **honest unavailable** state;
+- it does **not** show a valid-empty state;
+- no preview or demo request escapes to the API.
+
+**Do not linger here.** This is the open window.
+
+### Step C — merge API PR #32 (immediately after)
+
+Watch the Render build from start through healthy deploy. Verify:
+
+- `prestart` migration pass completes;
+- `GET /health` healthy;
+- `GET /health/migrations` returns the expected state from the preflight;
+- the deployed API SHA **matches the merged security commit**.
+
+### Step D — deployed boundary smoke
+
+```text
+GET   /obligations
+GET   /obligations/:id
+PATCH /obligations/:id/claim
+PATCH /obligations/:id/satisfy
+PATCH /obligations/:id/complete
+→ all 404
+```
+
+then, on the replacement surface:
+
+```text
+authenticated GET /operator/obligations   → correct property and modules only
+authenticated POST …/:id/claim            → the SESSION user becomes assignee
+client-supplied property_id               → refused
+client-supplied user_id                   → refused
+cross-property known ID                   → 404 (not 403 — no existence probe)
+revoked session                           → denied
+```
+
+**This is the last unproven rung.** Until it runs, the boundary is *Proven*
+locally and *Built* in deployment — not deployed-proven.
+
+### Step E — deployed browser acceptance
+
+In the **real deployed app**:
+
+- collection renders;
+- self-claim succeeds;
+- the claimed item leaves the open queue (because `open → in_progress`, and the
+  queue filters `status=open` — assert the reason, not just the disappearance);
+- the unfiltered state shows the **session user** as owner;
+- unavailable remains distinct from empty;
+- preview and demo remain local;
+- **no obligation request sends the shared operator key.**
+
+Record screenshots and network evidence into `docs/obligation-security/`.
+Headers recorded **present/absent only** — never a value.
+
+---
+
+# ROLLBACK RULES
+
+### App merged, API deploy not started
+Revert the app PR. The old API is untouched and still serves the old surface.
+Clean exit.
+
+### API build fails before becoming healthy
+1. revert or roll back the API;
+2. verify the **old** API is healthy;
+3. revert the app so it targets the old surface again;
+4. **do not leave the new app sitting in a permanent unavailable state.**
+
+### API healthy but deployed acceptance fails
+Identify which artifact is defective first.
+
+- **App defect** — revert the app; then judge whether the secured API can safely
+  remain (it can, if nothing else calls the retired routes).
+- **API defect** — roll back the API, then revert the app.
+
+**Never restore an unsecured compatibility route as an emergency patch.** That
+reintroduces the defect this lane exists to remove, at the moment attention is
+lowest.
+
+**Every API deploy runs migrations.** Confirm schema compatibility before any
+dashboard rollback or Git revert — a code rollback does **not** un-apply
+schema. This lane adds no migration, so a rollback within this window is
+schema-neutral; that guarantee does not extend to any other change riding along.
+
+---
+
+# Standing at the gate
+
+**Nothing has been merged and nothing has been deployed.** Both PRs remain open
+and draft. Ask Spine remains frozen; Slice 9 remains untouched.
+
+**Merge is blocked on the operator deployment card above being completed with
+real dashboard values.**
