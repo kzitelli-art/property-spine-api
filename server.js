@@ -730,55 +730,21 @@ app.get("/events", async (req, res) => {
 // ?assigned_user_id=<uuid>      → "my obligations"
 // ?unclaimed=true               → open AND nobody assigned yet (the claim pool)
 // ?property_id=<uuid>
-app.get("/obligations", async (req, res) => {
-  const { assigned_role, status, assigned_user_id, property_id, unclaimed } = req.query;
-  try {
-    const where = [];
-    const vals = [];
-    if (assigned_role)    { vals.push(assigned_role);    where.push(`assigned_role = $${vals.length}`); }
-    if (status)           { vals.push(status);           where.push(`status = $${vals.length}`); }
-    if (assigned_user_id) { vals.push(assigned_user_id); where.push(`assigned_user_id = $${vals.length}`); }
-    if (property_id)      { vals.push(property_id);      where.push(`property_id = $${vals.length}`); }
-    if (unclaimed === "true") { where.push(`assigned_user_id is null and status = 'open'`); }
-    const sql = "select * from obligations" +
-      (where.length ? " where " + where.join(" and ") : "") +
-      " order by due_at asc nulls last, created_at desc";
-    const r = await pool.query(sql, vals);
-
-    // Add a read-time `is_overdue` flag — the clock is read-time logic, no jobs.
-    const now = Date.now();
-    const rows = r.rows.map(o => ({
-      ...o,
-      is_overdue: o.due_at ? (new Date(o.due_at).getTime() < now) : false,
-    }));
-    res.json(rows);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
+// ── RETIRED: GET /obligations and GET /obligations/:id ──────────────
+//  Both were protected only by the portfolio-wide shared OPERATOR_KEY while
+//  taking property scope from the request (the collection) or ignoring it
+//  entirely (the detail read). Any key holder could read across every
+//  property. See docs/SECURITY_OBLIGATIONS_ROUTE.md.
+//
+//  The collection read is replaced by the session-scoped
+//  GET /operator/obligations, registered below with the other operator doors.
+//
+//  The detail read is NOT replaced. The audit found it had no caller in
+//  either repository, so rebuilding it behind a new URL would preserve
+//  attack surface for a workflow that does not exist. Add it back only when
+//  a real workflow needs it.
 
 // ── read one obligation (with the event that caused it — proves causality) ──
-app.get("/obligations/:id", async (req, res) => {
-  try {
-    const o = await pool.query("select * from obligations where id=$1", [req.params.id]);
-    if (o.rows.length === 0) return res.status(404).json({ error: "not found" });
-    const obligation = o.rows[0];
-    let source_event = null;
-    if (obligation.source_event_id) {
-      const e = await pool.query("select * from events where id=$1", [obligation.source_event_id]);
-      source_event = e.rows[0] ?? null;
-    }
-    const now = Date.now();
-    res.json({
-      ...obligation,
-      is_overdue: obligation.due_at ? (new Date(obligation.due_at).getTime() < now) : false,
-      source_event,   // the "this is why this obligation exists" link
-    });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
 // ── CLAIM an obligation ──
 // The simplified claim mechanic: claiming IS just the first update to the
 // already-existing obligation. Stamps assigned_user_id and flips open →
@@ -3146,6 +3112,10 @@ app.use("/", require("./src/maintenance/readiness")({ pool, readinessService }))
 const staffAgentService = require("./src/agent/staff_agent_service")
   .makeStaffAgentService({ unitTriageService, unitTurnScopeService, workAcceptanceService, readinessService });
 app.use("/", require("./src/agent/staff_agent")({ pool, staffAgentService }));
+
+// ── OBLIGATIONS (authenticated) — replaces the shared-key GET /obligations ──
+//  Property, modules and actor all come from the resolved staff session.
+app.use("/", require("./src/obligations/operator_obligations")({ pool }));
 
 // ── THE ONE UNIT TURN PAGE (BUILD 6A) ────────────────────────────────────
 //  READ-ONLY consolidation of the Build 1-5 canonical reads. Creates no state
