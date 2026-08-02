@@ -396,3 +396,110 @@ for its existing call sites.
 8. live failure does not become empty
 9. old `GET /obligations` no longer exists after migration
 10. explicit projection prevents unrelated columns leaking
+
+---
+
+# Phase 0 — sibling consumer and semantics inventory (complete)
+
+**One defect, five routes:** a browser-held portfolio-wide key can read or mutate
+obligations without server-derived property, module, or actor authority.
+
+## Route-by-route
+
+### `GET /obligations/:id` — `server.js:761`
+
+| | |
+|---|---|
+| **Callers** | **NONE.** No browser, proof, smoke, shell or internal caller in either repository. |
+| Request / response | no body; returns the **entire row** (`select *`) plus `is_overdue` and the joined `source_event` |
+| Canonical service? | **No — inline SQL** |
+| Property authority | **none** — `where id=$1` |
+| Actor recorded | none |
+| Migration files | route only; **no consumer to migrate** |
+
+**Retirable with zero consumer migration.** The `source_event` join is the only
+behaviour worth carrying forward.
+
+### `PATCH /obligations/:id/claim` — `server.js:792`
+
+| | |
+|---|---|
+| **Callers** | **ONE:** app `index.html:14028` `claimObligation(id)`, from the obligation drawer (`:14026`) |
+| Request | `{ user_id }` — **from `userId()` = `$('userId').value`, a browser-entered field persisted in `localStorage.ps_user_id`** |
+| Response | the updated obligation row |
+| Canonical service? | **No — inline SQL `update obligations set assigned_user_id …`** |
+| Property authority | **none** |
+| Actor recorded | `assigned_user_id` — **taken verbatim from the request body** |
+| Existing guards | obligation must exist · user must exist · 409 if already claimed by someone else |
+| Migration files | `server.js`, app `index.html` (`claimObligation` + its drawer button) |
+
+**This is the sharpest actor defect.** The acting identity is a browser-entered
+UUID. A key holder can claim work **as any user**, on **any property**.
+
+### `PATCH /obligations/:id/satisfy` — `server.js:884`
+
+| | |
+|---|---|
+| **Callers** | **NONE** in either repository |
+| Request | `{ input, proof }` |
+| Canonical service? | **Yes — `satisfyObligation`** (`server.js:188`, the shared core service) |
+| Property authority | **none** at the route |
+| Actor recorded | **none** — the service is not told who acted |
+| Domain errors preserved | `NOT_FOUND` 404 · `NOT_OUTSTANDING` 409 · `BAD_INPUT` 400 |
+
+### `PATCH /obligations/:id/complete` — `server.js:913`
+
+| | |
+|---|---|
+| **Callers** | `tests/smoke_release2.deployed.js:70,93` · `tests/smoke_release3.deployed.js:89,109` — **deployed smoke tests**, calling with the shared key and `body: {}` |
+| Request | `{ completed_by? }` — **spoofable actor** |
+| Canonical service? | **Yes — `completeObligation`** |
+| Property authority | **none** at the route |
+| Domain errors preserved | `NOT_FOUND` · `ALREADY_COMPLETE` · **`CONVERSION_RAIL_REQUIRED`** (honest 409, wrong-door) · **`INPUTS_OUTSTANDING`** (409 naming what is owed) |
+
+**These domain errors are business invariants and must survive hardening
+untouched.**
+
+## Interceptor trace — all affected routes
+
+| Site | Matches | Covers the siblings? |
+|---|---|---|
+| `index.html:5820` | `clean==='/obligations'` or `/^\/obligations(\?\|$)/` | **No** — anchored, so `/obligations/<id>/claim` does **not** match |
+| `index.html:10177` | `clean==='/obligations'` or `/\/obligations(\?\|$)/` | **No** — same |
+
+**Neither interceptor covers the sibling routes.** So `claimObligation` in
+preview/demo already reaches the network today — or fails. Only the **collection
+read** is intercepted, and only that one needs its matcher updated when the
+caller moves. The sibling migration does not risk breaking preview/demo, because
+preview/demo never intercepted them.
+
+## The two pause-conditions — both checked, neither triggered
+
+| Condition | Result |
+|---|---|
+| **Would a canonical workflow break?** | **No.** Only one live browser workflow exists (claim). `satisfy` and `GET /:id` have no callers at all; `complete` has only deployed smoke tests, which authenticate with the shared key server-to-server and are unaffected by browser-side changes. |
+| **Does Slice 9 edit the same business service?** | **No.** `git diff origin/main...origin/claude/slice-9-demand-evidence` touches neither `server.js` nor any `obligation*` file. Zero overlap. |
+
+**Proceeding to implementation without a further approval pause, as directed.**
+
+## Migration surface, exact
+
+| File | Phase |
+|---|---|
+| `src/obligations/operator_obligations.js` | **new** — A |
+| `src/obligations/operator_obligations_service.js` | **new** — A |
+| `src/obligations/operator_obligation_actions.js` | **new** — B |
+| `server.js` | registration; retire `:733`, `:761` (A) and `:792`, `:884`, `:913` (B) |
+| app `index.html` — `loadObligations()` + interceptor matcher | A |
+| app `index.html` — `claimObligation()` + drawer button | B |
+| `tests/*.db.js` | read proof (A), mutation proof (B) |
+
+**Ask Spine files: none.** Slice 9 files: none. Migrations: none.
+
+## Actor-identity note for Phase B
+
+Neither `satisfyObligation` nor `completeObligation` currently receives an
+acting user; `completeObligation` takes only an optional `completed_by` from the
+body. Recording the server-derived actor therefore requires either a service
+signature change or a route-level audit write. **That choice will be made and
+stated when Phase B is built — it must not silently keep the spoofable field.**
