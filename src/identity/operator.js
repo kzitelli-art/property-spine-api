@@ -3660,24 +3660,93 @@ module.exports = function operatorModule(deps) {
   // over the EXISTING availability projection (availability.js readAvailability)
   // — no second availability system. Returns only spaces that can be offered
   // (availability_state !== 'unavailable'); property is the session's scope.
-  // CLASS 2 — TEMPORARY. The last reader of the legacy availability allowlist.
-  // REMOVAL CONDITION: Commit D rewrites this route over the canonical
-  // application-target authority; this constant and the legacy read below go
-  // with it, which is what unblocks Commit E's module deletion.
-  const LEASEABLE_STATES = ["ready_now", "vacant_turning", "on_notice"];
-
+  // ══════════════════════════════════════════════════════════════════
+  //  LEASEABLE UNITS — the send-application selector.
+  //
+  //  Session-gated, read-only, over CANONICAL availability and the ONE
+  //  application-target authority. The legacy availability projection is gone
+  //  from this route, which is what makes the module deletable.
+  //
+  //  TWO LISTS, NOT ONE FILTERED LIST. A multi-space unit is not absent
+  //  because it failed a marketing test — it is present and unselectable
+  //  because the durable chain cannot carry a space choice. Dropping those
+  //  rows silently would leave an operator hunting for a unit they can see in
+  //  every other surface, with no statement of why it is missing here.
+  //
+  //  ONE ROW PER UNIT, NEVER ONE PER SPACE. The application segment is
+  //  unit-grained; returning a selectable row per space would offer a choice
+  //  the invitation cannot preserve.
+  //
+  //  resolved_space_id on an eligible row is a SERVER-AUTHORED VALIDATION
+  //  RECEIPT — the space availability was evaluated against. It is not a
+  //  "selected space" and the browser must not send it back.
+  // ══════════════════════════════════════════════════════════════════
   router.get("/operator/leasing/leaseable-units", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
-      const availability = require("../tenancy/availability")({ pool });
-      const proj = await availability._service.readAvailability(req.operator.property_id);
-      const spaces = (proj.spaces || []).filter((s) => LEASEABLE_STATES.includes(s.availability_state));
-      const units = spaces.map((s) => ({
-        unit_id: s.unit_id, unit_number: s.unit_number,
-        availability_state: s.availability_state,
-        projected_ready_date: s.projected_ready_date || null,
-      }));
-      return res.json({ property_id: req.operator.property_id, count: units.length, units });
+      const property_id = req.operator.property_id;         // SERVER-DERIVED, never the query string
+      const intended_move_in = req.query.intended_move_in || null;
+
+      // Space grain per unit, including units with none. LEFT JOIN so a
+      // zero-space unit is a row rather than an absence.
+      const shapes = (await pool.query(
+        `select u.id as unit_id, u.unit_number, count(s.id)::int as space_count
+           from units u
+           left join spaces s on s.unit_id = u.id
+          where u.property_id = $1
+          group by u.id, u.unit_number
+          order by u.unit_number asc`,
+        [property_id]
+      )).rows;
+
+      // ONE canonical availability read for the whole property. The authority's
+      // OWN policy function is then applied per row — resolveApplicationTarget
+      // per unit would re-read availability for the entire property once per
+      // unit, which is quadratic. Same rule, evaluated once per position.
+      const avail = await availabilityRead(pool, { property_id });
+      const byUnit = new Map(avail.rows.map((r) => [String(r.unit_id), r]));
+
+      const eligible_units = [];
+      const unsupported_multi_space_units = [];
+
+      for (const u of shapes) {
+        if (u.space_count > 1) {
+          unsupported_multi_space_units.push({
+            unit_id: u.unit_id,
+            unit_number: u.unit_number,
+            rentable_space_count: u.space_count,
+            reason_code: applicationTargetAuthority.REFUSAL.MULTI_SPACE,
+            reason: applicationTargetAuthority.REFUSAL_TEXT[applicationTargetAuthority.REFUSAL.MULTI_SPACE],
+          });
+          continue;
+        }
+        if (u.space_count === 0) continue;   // unconfigured: not eligible, not a grain refusal
+
+        const row = byUnit.get(String(u.unit_id));
+        if (!row) continue;                  // classified by nobody: not evidence of availability
+        const verdict = applicationTargetAuthority.evaluateOfferability(row, intended_move_in);
+        if (!verdict.offerable) continue;    // ordinary not-offerable, not a grain refusal
+
+        eligible_units.push({
+          unit_id: row.unit_id,
+          unit_number: row.unit_number,
+          resolved_space_id: row.space_id,   // validation receipt, NOT a selection
+          position_kind: row.position_kind,
+          space_label: row.space_label,
+          marketing_state: row.marketing_state,
+          available_from: row.available_from,
+          availability_confidence: row.availability_confidence,
+          resolution_basis: "sole_space_unit",
+        });
+      }
+
+      return res.json({
+        property_id,
+        eligible_count: eligible_units.length,
+        unsupported_count: unsupported_multi_space_units.length,
+        eligible_units,
+        unsupported_multi_space_units,
+      });
     } catch (e) {
       return res.status(e.httpStatus || 500).json({ error: e.message || "leaseable-units read failed" });
     }

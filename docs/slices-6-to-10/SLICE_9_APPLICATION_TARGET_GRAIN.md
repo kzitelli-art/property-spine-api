@@ -3,8 +3,7 @@
 **What this document is:** the complete inventory of every path that can aim an
 application at a unit, what each one validates, and where space lineage begins.
 
-**Status:** Commits A–B landed. Commit C (submission-time revalidation) and
-Commit D (leaseable-units + app) are recorded here as they land.
+**Status:** Commits A–D landed (API + app).
 
 ---
 
@@ -208,11 +207,53 @@ was sent returns `application_target_became_ambiguous`, not
 rather than having been an unsupported shape all along, and the operator needs
 to be told which.
 
-### 3.11 · `GET /operator/leasing/leaseable-units`
+### 3.11 · `GET /operator/leasing/leaseable-units` — the selector
 
-Commit D. Still on the legacy allowlist at the time of Commit B, marked
-**Class 2** in source with its removal condition. It is one of the two internal
-consumers Commit E must retire before deleting the legacy module.
+| | |
+|---|---|
+| **Source identity** | staff session; `property_id` is **server-derived**, never the query string |
+| **Returns** | `eligible_units` + `unsupported_multi_space_units` |
+| **Target validation** | one canonical `availabilityRead`, then the authority's own `evaluateOfferability` per row |
+
+**Two lists, not one filtered list.** A multi-space unit is not absent because
+it failed a marketing test — it is present and unselectable, carrying the
+server's reason. Dropping those rows silently would leave an operator hunting
+for a unit visible in every other surface with no statement of why it is
+missing here.
+
+**One row per unit, never one per space.** Returning a selectable row per space
+would offer a choice the invitation cannot preserve.
+
+`resolveApplicationTarget` is deliberately **not** called per unit — it re-reads
+availability for the whole property each time, which is quadratic. The
+authority's exported policy function is applied to one canonical read instead.
+Same rule, evaluated once per position.
+
+**This discharges the Class 2 removal condition.** `LEASEABLE_STATES` and the
+legacy import are gone from `operator.js` entirely, leaving **zero** legacy
+availability consumers there — which is what unblocks Commit E.
+
+### 3.11b · The app half
+
+The app stays unit-grained. It sends `person_id` and `unit_id` only, never
+`space_id`, and never reads `resolved_space_id` at all.
+
+Multi-space units render as present-but-unavailable rows with no `data-uid`,
+no button element, and no click action — unselectable structurally, not by
+styling. The copy is *"Individual-space application links are not supported for
+this unit yet"*, never *"select a space"*: selecting one cannot solve the
+durable-lineage limitation, so wording that implies a forgotten step would be
+false.
+
+A `409` grain refusal on the `cc.unit_id` shortcut opens the selector with the
+controlled reason and does **not** re-prepare the same unit, and never shows
+prepared or sent.
+
+**Space-grained rendering elsewhere in the app is correct and was left alone.**
+The executed-lease surface names *"the exact space the lease names"* because
+`executed_lease_records` and `leases` carry `space_id` — that is precisely
+where space lineage is supposed to begin. The app proof scopes its assertions
+to the application selector for this reason.
 
 ### 3.12 · `POST /operator/leasing/application-intent`
 
