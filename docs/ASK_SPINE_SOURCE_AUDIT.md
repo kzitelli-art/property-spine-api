@@ -664,3 +664,201 @@ belongs to a §21 pass**) · anything touching `renderMyWork`.
 
 **Proof level: Locally exercised.** Source inspection of both repositories at the
 recorded SHAs. Nothing executed, no database contacted, no browser opened.
+
+---
+
+# Phase 3 — Branch-collision check (read-only)
+
+**No merge, rebase, cherry-pick, or edit of any other branch.** Refs were
+fetched and diffed; nothing was checked out or modified.
+
+Compared against `origin/main` in each repo at the time of the check —
+api `4a04855`, app `30e550b`.
+
+---
+
+## Headline
+
+**Slice 9 exists in the API repository only. There is no Slice 9 branch in the
+app repository at all.**
+
+| Branch | Repo | Contents |
+|---|---|---|
+| `claude/slice-9-demand-evidence` (`11ab91d`, 2026-08-02) | **api** | 40 files, +6083/−103 |
+| `claude/slice-9-evidence-audit` (`fc9f0e6`) | api | **docs only**, 1 file |
+| `archive/slice-9-pre-main-sync-fc23869` | api | archive |
+
+So the `index.html` collision question is **not a Slice 9 question**. It is a
+question about three other app branches, answered below.
+
+---
+
+## 1. Slice 9 files overlapping the proposed Ask Spine files
+
+**Zero overlap.** Checked directly:
+
+| Proposed Ask Spine location | Files Slice 9 touches there |
+|---|---|
+| `server.js` | **0 — untouched by Slice 9** |
+| `src/agent/` (proposed service location) | **0 — untouched by Slice 9** |
+| `src/identity/staff_session_service.js` (the auth gate to copy) | **0 — untouched** |
+
+Slice 9's actual footprint: `migrations/123`, `124` (plus `125` staged under
+`docs/slices-6-to-10/deployment_b/`), a new `src/evidence/` directory,
+`src/applications/*`, `src/shared/{operating_window,property_timezone,timezone_command}.js`,
+`src/identity/{operator,super_admin}.js`, `src/leasing/*`,
+`src/tenancy/tenancy_anchor_service.js`, `src/comms/communications_boundary.js`,
+nine `tests/slice9_*` proofs, and three `tools/`.
+
+**None of those is an Ask Spine file.**
+
+---
+
+## 2. `index.html` — which regions do active branches touch?
+
+Slice 9: **not applicable** (no app branch). Three app branches are ahead of
+`main` and touch `index.html`:
+
+| Branch | Ahead | Behind | Last commit |
+|---|---|---|---|
+| `claude/getting-up-to-speed-nyf4ww` | 1 | **3** | 2026-08-01 |
+| `claude/operator-ui-system-alignment` | 20 | **33** | 2026-07-29 |
+| `claude/maintenance-home-alignment` | 14 | **33** | 2026-07-29 |
+
+Checked **by content**, not by line number — the two older branches are 33
+commits behind, so hunk line numbers do not map onto current `main`'s anchors
+and a positional check would be unreliable. Reporting the content result:
+
+| Anchor | `getting-up-to-speed` | `operator-ui-system-alignment` | `maintenance-home-alignment` |
+|---|---|---|---|
+| Property Home markup region | untouched | untouched | untouched |
+| `.home-hero` | untouched | untouched | untouched |
+| `renderMyWork` / `#myWorkMount` | **untouched** | **untouched** | **untouched** |
+| `renderFrontDashboard` / `#frontDashboard` | **untouched** | **untouched** | **untouched** |
+| `openDesk` / desk rendering | untouched | **2 `desk-card` lines** | untouched |
+| **Shared fetch helper** (`createLiveLoader` / `loadResource` / `LIVE_RESOURCES`) | **1 line** | **13 lines** | **13 lines** |
+
+### The one real contention surface
+
+**All three branches modify `loadResource` / `createLiveLoader`.** For
+`getting-up-to-speed-nyf4ww` the hunks sit at `index.html:6696`, `7223`, `7316`
+— inside `createLiveLoader`, in and around the `LIVE_RESOURCES` manifest.
+
+**That is exactly where Ask Spine adds its manifest entry.**
+
+---
+
+## 3. API — does Slice 9 touch the Ask Spine surfaces?
+
+| Surface | Slice 9 | Other branches |
+|---|---|---|
+| `server.js` | **No** | **One:** `claude/getting-up-to-speed-nyf4ww`, +12/−7 |
+| Obligations **query** logic (`GET /obligations`, `server.js:733`) | **No** | No |
+| Operator auth middleware / `staff_session_service.js` | **No** | No |
+| Proposed service location `src/agent/ask_spine*.js` | **No** | No |
+
+**On the one `server.js` contender:** `getting-up-to-speed-nyf4ww` changes
+`server.js` at `:255` (replacing a local `obligationError` with an import from
+`src/shared/obligation_transitions.js`), `:399`, and `:3247` (widening
+`makeWorkOrderService` deps). **All obligation-*service wiring*, none of it route
+registration**, and none of it the `GET /obligations` handler.
+
+**Slice 9 and obligations:** Slice 9 mentions obligations only in
+application-lifecycle files (`application_lifecycle.js`, `applications.js`,
+`executed_lease_service.js`, `tenancy_anchor_service.js`) — it **spawns and
+completes** obligations. It does not change how they are read.
+
+> **Worth naming, because it is not a code conflict and could be missed:** Slice 9
+> changes *which obligations exist* for applications. Ask Spine reads obligations.
+> The two do not conflict in source, but Ask Spine's results will reflect Slice 9's
+> data once merged. That is correct behavior, not a collision — recorded so it is
+> not mistaken for one later.
+
+---
+
+## 4. Collision classification
+
+| Surface | Class | Detail |
+|---|---|---|
+| `server.js` — Ask Spine route registration vs `getting-up-to-speed` service wiring | **Same file, different anchored region** | Different functions, hundreds of lines apart. Git merges this cleanly. |
+| `index.html` — `LIVE_RESOURCES` manifest | **Same function / registration block** | Three branches edit `createLiveLoader`. Adding a manifest entry lands in the same block. Textual conflict is likely if any merges after Ask Spine branches. |
+| `index.html` — Property Home markup, hero, `#myWorkMount`, `#frontDashboard`, `openDesk` | **No overlap** | Content-checked across all three branches. |
+| Slice 9 ↔ Ask Spine, anywhere | **No overlap of any class** | Zero shared files. |
+| Slice 9 obligation data ↔ Ask Spine reads | **Not a conflict** | Data-level interaction; correct behavior. |
+| `desk-card` (2 lines, `operator-ui-system-alignment`) | **Same file, different region** | Ask Spine does not modify desk cards. Branch is 33 behind and 4 days stale. |
+
+**No genuine semantic conflict was found anywhere.**
+
+---
+
+## Collision ruling applied
+
+The governing instruction: *if Slice 9 touches the same Property Home anchors,
+hold the UI patch; if there is no anchor-level overlap, proceed on a fresh branch
+from current main.*
+
+**There is no anchor-level overlap — and Slice 9 does not touch the app at all.**
+So: **proceed on a fresh Ask Spine implementation branch from current `main`,
+UI included.**
+
+Two qualifications the check surfaced, neither a blocker:
+
+1. **The `LIVE_RESOURCES` manifest is contended by three app branches.** Keep the
+   Ask Spine manifest addition to **one entry, appended**, so a later merge
+   conflict is a one-line resolution rather than a restructure. Do not reformat
+   or reorder the manifest.
+2. **`operator-ui-system-alignment` and `maintenance-home-alignment` are 33
+   commits behind and four days stale.** They may be abandoned. **Whether they
+   are still live is not something source can tell me** — if either is revived it
+   should rebase onto main before Ask Spine's UI lands, not after.
+
+---
+
+## Final exact file list
+
+**API — new files (no contention):**
+
+| File | Purpose |
+|---|---|
+| `src/agent/ask_spine_service.js` | ranked obligations query; property from the caller, never the request |
+| `src/agent/ask_spine.js` | one gated `GET /operator/ask-spine/attention` |
+
+**API — modified (smallest possible patch):**
+
+| File | Change |
+|---|---|
+| `server.js` | **route-registration only** — mount the router. One block, deliberately minimal to stay clear of `getting-up-to-speed`. |
+
+**App — modified:**
+
+| File | Change | Contention |
+|---|---|---|
+| `index.html` | one `<section id="askSpineMount">` after `.home-hero` | none |
+| `index.html` | one appended `LIVE_RESOURCES` entry | **contended — keep to one appended line** |
+| `index.html` | one `renderAskSpine()` + composer markup/styles | none |
+
+**Not in the file list, deliberately:** `GET /obligations` (see below),
+`renderMyWork`, `renderFrontDashboard`, the four desk cards, the Monthly Report
+bar, any `tryJSON` caller, any Slice 9 file, any migration.
+
+---
+
+## Registered separately — not absorbed into Ask Spine
+
+**`GET /obligations` is unauthenticated and cross-property** (`server.js:733`):
+a bare `app.get` with no operator gate, taking `property_id` from the query
+string, returning **every property's obligations** when it is omitted.
+
+**Recorded here as a standalone security finding needing its own owner and its
+own lane.** Ask Spine does not remediate it, does not depend on it, and must not
+quietly become the branch that fixes it. Ask Spine's route is new and gated; the
+existing route is left exactly as found.
+
+Likewise, **`tryJSON(..., [])` is not refactored anywhere.** Ask Spine simply
+does not adopt that failure behavior — it uses `loadResource`, which throws.
+
+---
+
+**Proof level: Locally exercised.** Branch refs fetched and diffed read-only.
+Nothing merged, rebased, cherry-picked, checked out, or edited. No feature code
+written.
