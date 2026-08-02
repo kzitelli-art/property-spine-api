@@ -29,6 +29,7 @@ source audit. **Appendix D carries the governing ruling; start there.**
 | **Appendix C** | Amendments — the defect split, S2 framing, activation gate, **escalation trigger answered (C4)**, conformance set, evidence set | Locally exercised |
 | **Appendix D** | **Revised consultant ruling. 4A/4B canonical labels, P1 reclassification, sequencing, S2 acceptance conditions.** Governing. | Reported |
 | **Appendix E** | S2 surface audit — is 4B the only gap? (No pattern; one write.) | Locally exercised |
+| **Appendix F** | **S2 design ruling.** The decision belongs after S1, not at the origin write; three-case decision; controlling invariant; containment adapter; seven acceptance cases. **F4 reports two schema constraints that put a migration in the first S2 slice.** | Reported (F4: Locally exercised) |
 
 **Terminology:** A090-4 was split by the ruling into **4A** (credential-delivery
 routing, retires with the operations-line split) and **4B** (staff-session scope,
