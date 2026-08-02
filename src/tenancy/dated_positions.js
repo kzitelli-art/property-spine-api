@@ -212,6 +212,11 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
       // object here is what lets availability answer pending vs locked without
       // re-querying leases or growing a second commitment ladder.
       future_commitment: p.future_commitment,
+      // Activation-pending PROVENANCE. The projection already reported the
+      // state; without the source lease a consumer could not say WHICH lease
+      // commenced or how it is proven, and availability would have had to
+      // re-query leases to find out. shapeLease already carries proof_basis.
+      activation_pending_lease_position: p.activation_pending_lease_position,
       conflict_state: p.conflict_state,
       conflicting_lease_ids: p.conflicting_lease_ids,
 

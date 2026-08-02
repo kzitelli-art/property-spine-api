@@ -66,10 +66,35 @@ ok("runtime: only a locked commitment yields successor_locked",
   marketingState({ ...base, future_commitment: { state: "locked", locked: true,
     lease_id: "X", start_date: null, proof_basis: "native_verified" } }, true).state === "successor_locked");
 
-// Proof basis must survive to the response.
-ok("availability_read exposes commitment_proof_basis",
-  /commitment_proof_basis:/.test(av));
-ok("...and commitment_state", /commitment_state:/.test(av));
+// The FROZEN canonical contract: three independent objects, not one flattened
+// state. The earlier commitment_* fields implied "all commitment on this
+// position" while only ever describing the future one, and carried a fallback
+// that could never fire.
+ok("availability_read exposes a future_commitment OBJECT",
+  /future_commitment: p\.future_commitment \|\| \{/.test(av));
+ok("...an activation_pending object with its source lease",
+  /activation_pending: p\.activation_pending_lease_position \?/.test(av));
+ok("...and a current_lease object", /current_lease: p\.lease \?/.test(av));
+ok("the flattened commitment_state field is GONE", !/^\s*commitment_state:/m.test(av));
+ok("the flattened commitment_proof_basis field is GONE",
+  !/^\s*commitment_proof_basis:/m.test(av));
+ok("no dead future_commitment ternary fallback to successor remains",
+  !/p\.future_commitment \?[\s\S]{0,120}: \(p\.successor/.test(av));
+
+// Proof-aware language: a confirmed opening import must never be described as
+// awaiting native execution or funding.
+ok("a proof-aware pendingReason helper exists", /function pendingReason\(/.test(av));
+ok("confirmed_opening_import has its own reason",
+  /confirmed_opening_import.*future_commitment_confirmed_opening_truth/s.test(av));
+ok("both the successor and standalone paths use it",
+  (av.match(/pendingReason\(/g) || []).length >= 3);
+ok("no hardcoded awaiting-execution-and-funding string survives",
+  !/awaiting_execution_and_funding/.test(av));
+
+// activation-pending provenance must be carried, not re-queried.
+ok("dated_positions carries activation_pending_lease_position",
+  /activation_pending_lease_position: p\.activation_pending_lease_position/.test(
+    code("src/tenancy/dated_positions.js")));
 
 console.log(`\n════ ${pass} passed, ${fail} failed ════\n`);
 process.exit(fail === 0 ? 0 : 1);

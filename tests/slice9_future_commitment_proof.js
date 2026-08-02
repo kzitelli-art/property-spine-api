@@ -158,8 +158,9 @@ const mPending = marketingState(pos({
     proof_basis: "unproven", locked: false } }), true);
 ok("committed_future + PENDING commitment → successor_pending, NOT locked",
   mPending.state === "successor_pending", mPending.state);
-ok("...and the reason names execution and funding",
-  /execution_and_funding/.test(mPending.reason), mPending.reason);
+ok("...and the reason names the incomplete native proof/funding",
+  mPending.reason === "future_commitment_native_proof_or_funding_incomplete",
+  mPending.reason);
 
 const mLocked = marketingState(pos({
   future_commitment: { state: "locked", lease_id: "L2", start_date: "2026-10-01",
@@ -186,6 +187,53 @@ ok("NO committed_future input can produce successor_locked without locked proof"
         proof_basis: "unproven", locked: false } : null }), true);
     return r.state !== "successor_locked";
   }));
+
+section("J  proof-aware pending language");
+// "awaiting execution and funding" is TRUE of an unproven native lease and
+// FALSE of a confirmed opening import, which never took the native path. A
+// single reason string for both told operators a governed opening lease was
+// waiting for steps it will never take.
+const rPending = marketingState(pos({
+  future_commitment: { state: "pending", lease_id: "L1", start_date: "2026-10-01",
+    proof_basis: "unproven", locked: false } }), true);
+ok("unproven native → native_proof_or_funding_incomplete",
+  rPending.reason === "future_commitment_native_proof_or_funding_incomplete", rPending.reason);
+
+const rOpen = marketingState(pos({
+  future_commitment: { state: "pending", lease_id: "L2", start_date: "2026-10-01",
+    proof_basis: "confirmed_opening_import", locked: false } }), true);
+ok("confirmed opening → confirmed_opening_truth",
+  rOpen.reason === "future_commitment_confirmed_opening_truth", rOpen.reason);
+ok("...and NEVER claims it awaits execution or funding",
+  !/execution|funding|incomplete/.test(rOpen.reason), rOpen.reason);
+
+const rNo = marketingState(pos({ future_commitment: null }), true);
+ok("absent commitment → proof_unavailable",
+  rNo.reason === "future_commitment_proof_unavailable", rNo.reason);
+
+// The SUCCESSOR path must use the same language.
+const rSuccOpen = marketingState({
+  availability_state: "unavailable", lease: null, notice_state: "none", conflict_state: "clear",
+  successor: { state: "pending", lease_id: "S1", proof_basis: "confirmed_opening_import" },
+  future_commitment: { state: "none", lease_id: null, start_date: null, proof_basis: null },
+}, true);
+ok("a confirmed-opening SUCCESSOR gets the same honest reason",
+  rSuccOpen.reason === "future_commitment_confirmed_opening_truth", rSuccOpen.reason);
+
+section("K  no dead fallback based on object truthiness");
+// classifyFutureCommitment(null) returns a TRUTHY {state:'none'} object, so any
+// `future_commitment ? A : B` fallback can never reach B. Asserted directly so
+// the shape of that bug cannot be reintroduced silently.
+const nullResult = PC.classifyFutureCommitment(null);
+ok("classifyFutureCommitment(null) is truthy — the reason the fallback was dead",
+  !!nullResult === true);
+ok("...and reports state 'none' rather than being absent", nullResult.state === "none");
+const availSrc = require("fs").readFileSync(
+  path.join(__dirname, "..", "src/surfaces/availability_read.js"), "utf8");
+ok("availability_read no longer carries a future_commitment ternary fallback",
+  !/p\.future_commitment \?[\s\S]{0,120}: \(p\.successor/.test(availSrc));
+ok("and the flattened commitment_state field is gone",
+  !/^\s*commitment_state:/m.test(availSrc));
 
 console.log(`\n════ ${pass} passed, ${fail} failed ════\n`);
 process.exit(fail === 0 ? 0 : 1);
