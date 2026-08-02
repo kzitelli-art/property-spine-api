@@ -59,6 +59,95 @@ Both are asserted at the source rung (2b, 2c) and over real HTTP (G3–G6, H2, H
 
 ---
 
+## Qualification and ranking contract
+
+The exact behaviour of `GET /operator/ask-spine/attention`. This is the contract
+the UI's scope disclosure refers to.
+
+### Qualification — a row is eligible if and only if ALL hold
+
+| Predicate | Source |
+|---|---|
+| `property_id = <session property>` | `req.operator.property_id`. Never from the request. |
+| `status = 'open'` | closed / resolved obligations never appear |
+| `module = ANY(<session allowed_modules>)` | module entitlement is server-derived authority (§21) |
+
+**A missing due date does not disqualify.** An obligation with `due_at IS NULL`
+is still eligible and lands in tier 4.
+
+**Zero entitled modules yields an honest empty**, not an error and not
+everything: `items: []`, `total_open: 0`, `scope_note: "no_module_entitlement"`.
+
+### Two derived facts, computed read-time
+
+```text
+is_overdue     due_at IS NOT NULL AND due_at < now()
+is_unassigned  assigned_user_id IS NULL
+```
+
+Both are read-time. There is no job, no stored flag, and no clock to drift.
+
+### Ranking — four tiers, then a deterministic tiebreak
+
+```text
+tier 1   is_overdue AND is_unassigned      reason: overdue_unassigned
+tier 2   is_overdue                        reason: overdue
+tier 3   is_unassigned                     reason: unassigned
+tier 4   everything else                   reason: due_soonest
+
+then     due_at ASC NULLS LAST
+then     id ASC
+```
+
+**The final `id ASC` is deliberate.** Without it, rows tied on tier and `due_at`
+would come back in whatever order the planner produced — the exact defect
+recorded as 4B in `DB_CONNECTION_INVENTORY.md`, where two tied sort keys and no
+third made a selection arbitrary. Every ordering here terminates in a unique
+column.
+
+**No score exists.** Each `reason` names the recorded fact that placed the item,
+so an operator can be told *why* it ranked without a number that means nothing.
+
+### Cap
+
+Five, enforced **twice** — `LIMIT 5` in SQL and a `slice(0, MAX_ITEMS)` in the
+service. The cap is a contract of the function, so it does not depend on the
+query staying correct.
+
+`total_open` counts **the qualification predicate**, not the capped page, so
+"3 of 23" is truthful.
+
+### Navigation metadata
+
+First match wins; anything else returns `null`:
+
+| Order | Condition | Emitted |
+|---|---|---|
+| 1 | `person_id` present | `{kind:"person", id:person_id}` |
+| 2 | `related_type = 'application'` and `related_id` present | `{kind:"application", id:related_id}` |
+| 3 | `module` maps exactly to a desk — `leasing`, `maintenance`, `management` | `{kind:"desk", id:<desk>}` |
+| — | anything else, including `accounting` and `controls` | `null` |
+
+**`unit_id` is returned as context and is never navigation.** No unit opener
+exists in the app, and a link that goes nowhere is worse than no link.
+
+### Deliberately not part of the contract
+
+Money impact · missing proof · operational blockage · "someone waiting" · any
+inferred urgency. No recorded fact supports them today, so asserting them would
+be confident-wrong (§5). They are absent from the query, the response and the UI.
+
+### What a valid empty result means
+
+**"No open obligation currently qualifies as needing attention."**
+
+That is a statement about *this dataset under this contract* — nothing matched
+the predicates above. **It is not a statement that the property is healthy**, and
+the UI is asserted not to imply one. Work that is not recorded as an open
+obligation in an entitled module is outside what Ask Spine can see.
+
+---
+
 ## Commands
 
 Each runs independently and exits non-zero on failure.
