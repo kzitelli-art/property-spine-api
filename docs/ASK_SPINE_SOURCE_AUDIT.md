@@ -317,3 +317,350 @@ perhaps an hour of reading.
 
 **Proof level: Locally exercised** — source inspection of both repositories at
 the SHAs above. Nothing was executed, no database contacted, no browser opened.
+
+---
+
+# Phase 2 — the four reads, and the completed §3 and §5
+
+Read at the same SHAs. **This section supersedes §1's mount recommendation and
+completes §3 and §5.** Still report-only; nothing implemented.
+
+---
+
+## Read 1 — Staff agent: can it answer read questions today?
+
+### Can it answer grounded read questions? **No.**
+
+`src/agent/staff_agent.js` exposes four routes:
+
+| Route | Method | Purpose |
+|---|---|---|
+| `/operator/staff-agent/thread` | GET | read the message thread |
+| `/operator/staff-agent/message` | POST | capture a message — **proposes only** |
+| `/operator/staff-agent/proposals/:id/confirm` | POST | the **only** path reaching a canonical service |
+| `/operator/staff-agent/proposals/:id/cancel` | POST | cancel |
+
+**The intent vocabulary is entirely write-shaped.** `staff_agent_intent.js:48`
+defines `INTENT`, of which `CONFIRMABLE_INTENTS` are exactly
+`initial_triage`, `turn_scope`, `work_completion` — all write proposals mapped to
+services (`INTENT_SERVICE:59–64`). The only two non-write intents are:
+
+- **`redirect`** — *"none — this is a redirect to a structured action, not a
+  proposal"*
+- **`unclear`** — *"none — no service may be called"*
+
+**There is no query, lookup, or read intent.** A question like "what needs
+attention?" would classify as `unclear`, and the operator would get *"Spine needs
+one more detail."*
+
+### Response types it already returns
+
+From `staff_agent.js:86–133`, `POST /message` returns one of two shapes:
+
+```text
+proposal shape   { message, proposal, unit, unit_basis, agent_reply,
+                   would_call, nothing_recorded, needs_clarification,
+                   clarification_label }
+redirect shape   { message, proposal: null, redirect, unit, unit_basis,
+                   agent_reply, would_call, nothing_recorded,
+                   needs_clarification: false }   ← HTTP 201
+```
+
+`agent_reply` is composed **server-side** in plain operating language —
+*"the operator never sees a raw intent name"* (`:123–125`).
+
+### Does it return navigation targets? **Partially, and not record links.**
+
+`redirect` carries a `to` field, with exactly four values in source
+(`staff_agent_intent.js:279, 297, 319, 423`):
+
+```text
+final_readiness · work_item · recorded_item
+```
+
+**These name structured actions, not records.** There is no `person_id`,
+`unit_id`, `obligation_id` or route in the redirect contract, and no approved way
+to return a list of record links. `unit` / `unit_basis` are returned alongside,
+but as the message's resolved subject — not as a navigation payload.
+
+### Would Ask Spine reads extend it cleanly? **No — it would overload it.**
+
+Three structural reasons, all from source:
+
+1. **Method mismatch.** Every answer path is `POST` and returns `201 Created`,
+   because every message is *recorded*. An Ask Spine read is a `GET` that records
+   nothing. Routing a read through `POST /message` would write a message row per
+   question.
+2. **Intent mismatch.** Adding a read intent means adding to a frozen vocabulary
+   whose entire structure is intent → confirmable → service. A read intent is
+   never confirmable and calls no service — it would be the first member that
+   breaks the type's invariant.
+3. **Contract mismatch.** The reply is a single `agent_reply` string plus at most
+   one proposal or redirect. Ask Spine returns *a ranked list of records with
+   links*. That is a different response type, not a variant of this one.
+
+**Recommendation: read-only sibling.** See §3 below.
+
+---
+
+## Read 2 — The attention read
+
+### The route exists, and Ask Spine must not use it
+
+**`GET /obligations` — `server.js:733–757`.** It is called by the app today
+(`index.html:10896`).
+
+What it already does right:
+
+- computes **`is_overdue` at read time** — *"the clock is read-time logic, no
+  jobs"* (`:748–752`), a real recorded fact, not a score;
+- orders **`due_at asc nulls last, created_at desc`**;
+- supports `unclaimed=true` → `assigned_user_id is null and status = 'open'`;
+- filters on `status`, `assigned_role`, `assigned_user_id`, `property_id`.
+
+**Why it is disqualified as Ask Spine's source — two defects, both §21:**
+
+1. **It is unauthenticated.** `app.get("/obligations", …)` is a bare route with
+   **no `requireOperator`, no session gate, no perimeter**. Every other operator
+   route in this audit passes through a gate; this one does not.
+2. **Scope is client-supplied.** `property_id` is taken from `req.query` and
+   used directly. **Omit it and the route returns obligations across every
+   property in the database.**
+
+The app's own call is `/obligations?property_id=${prop()}&status=open`, where
+`prop()` is `$('propPick').value` (`index.html:6308`) — **a DOM read**. The
+AUTHORITY LOCK (`loadProperties`) does pin that select to
+`_egAuthScope.property_id` under a live session and strips other options, so in
+practice the value is server-derived. **But the server does not know that** — it
+trusts whatever arrives.
+
+### And the app's caller silently fabricates empty
+
+`loadObligations` uses `tryJSON(path, [], …)`, and `tryJSON` is:
+
+```js
+async function tryJSON(path, fallback, opts={}, report){
+  try{ ... }catch(e){ if(report) report(e); return fallback }
+}
+```
+
+**A failed obligations call returns `[]` and renders as "nothing to do."** That
+is not an honest blank — it is a confident wrong, and it is exactly the failure
+mode §5 forbids. Ask Spine must use `loadResource` (`liveRequired`, throws, no
+fallback), never `tryJSON`.
+
+### Facts confirmed reliable now
+
+| Fact | Reliable? | Source |
+|---|---|---|
+| **overdue** | **Yes** | `is_overdue` computed read-time from `due_at` |
+| **unassigned** | **Yes** | `assigned_user_id is null`; `unclaimed=true` already implements it |
+| **due date** | **Yes** | `due_at`, indexed, already the sort key |
+| **status** | **Yes** | `status`, indexed |
+| **person** | **Yes, as an id** | `person_id` — resolving to a name is a further read |
+| **unit** | **Yes, as an id** | `unit_id` — same caveat |
+
+### Honest-empty and unavailable
+
+- **Server:** no distinction today — an error returns `500 {error}`, and an empty
+  result and a filtered-to-nothing result are both `[]`.
+- **Client:** `tryJSON` collapses failure into empty (above). `loadResource`
+  does not, and `applyUnavailable()` in `authoritative-property-context.js` is the
+  existing unavailable path for scope.
+
+**A new endpoint must distinguish "ran and found nothing" from "could not
+run."**
+
+### Verdict: **a new endpoint is required.**
+
+Not because the data is missing — it is all there — but because the existing
+route is unauthenticated and client-scoped. Ask Spine can **reuse the query
+logic** (the `is_overdue` computation, the `unclaimed` predicate, the ordering)
+behind an operator-gated, server-scoped route. It cannot reuse the route.
+
+---
+
+## Read 3 — Open-record behavior
+
+**The app already has a canonical contract for persons. Do not invent one.**
+
+| Target | Function | Signature | Identifier |
+|---|---|---|---|
+| **Person** | `openPersonCard(opts)` (`index.html:16532`) | `opts` object **or** a bare string, normalised to `{person_id, context:'lead', source:'tour'}` | `person_id` |
+| **Desk** | `openDesk(name)` (`:10766`) | `async`, hides `#home`, shows `#workspace`, `renderDesk(name,true)`, `syncCrumbLabels()` | `'management' \| 'leasing' \| 'maintenance' \| 'capital' \| 'reporting'` |
+| **Obligation → application** | `openApprovalDecision(related_id, label)` | used from the work queue | `related_id` where `related_type==='application'` |
+| **Obligation → lease** | `openCountersign(related_id)` | same | `related_id` |
+| **Turnover** | `openTurnoverDetail(turnId)` (`:11840`) | | `turnId` |
+
+**`openPersonCard` is the model to follow.** It gates on session and routes live
+traffic to one renderer:
+
+```js
+if(window.__psLive && window.__psLive.hasSession && window.__psLive.hasSession()){
+  return pcOpenLiveRail(opts);
+}
+// PREVIEW ONLY: … not reachable from the authenticated product path.
+```
+
+**Not found:** a general "open unit" entry point. Unit navigation appears to go
+through door-specific pages (`unit-turn-page.js`, `turn-scope-door.js`,
+`unit-triage-door.js`) rather than one `openUnit(unitId)`. **Recorded as a real
+gap** — a first slice should not promise unit navigation it cannot deliver.
+
+**Conclusion: obligations are opened by `related_type` → a specific handler,
+keyed on `related_id`.** There is no generic `openRecord(type, id)`, and this
+audit does not propose one.
+
+---
+
+## Read 4 — Property Home mounts: **both are occupied**
+
+**This corrects §1.**
+
+| Mount | Renderer | What it holds |
+|---|---|---|
+| `#myWorkMount` | `renderMyWork()` (`:10666`) | **A persona-preview work queue.** Gated on `previewEmployee()`; when there is no persona it sets `mount.innerHTML=''`, which is why it looks empty in markup. Uses `previewAssignmentsHere()`, `policyFor()`, `previewCanAccess()`. |
+| `#frontDashboard` | `renderFrontDashboard(home)` (`:9605`) | **Occupied.** Sets `#frontTitle`/`#frontSub`, renders setup blockers, assigned-role count, and accountability counts. |
+
+**Neither is free.** `#myWorkMount` in particular is not an empty slot — it is
+the persona-preview queue, and it already renders overdue/blocked partitioning
+and tap-to-open rows. Mounting Ask Spine there would collide with it.
+
+Worth flagging beyond this lane: `renderMyWork` is **persona/preview-driven**
+(`previewEmployee`, `previewCanAccess`) yet sits on the signed-in Property Home,
+and it reads obligations through the `tryJSON` path above. Whether that
+constitutes a §19–20 live-first concern is **not this lane's call** and is
+recorded, not asserted.
+
+### The mount Ask Spine should use
+
+**A new sibling section inserted between `.home-hero` and `#myWorkMount`**, with
+its own id, populated by its own render function.
+
+- It does not touch the four desk cards or `#deskGrid`.
+- It does not touch `#reportingOutputBar` or its doubled `!important` styling
+  (`:685–686`, `:2165–2166`).
+- It sits above the persona queue and below the hero — the correct reading order
+  for an entry point, and the position §1 wanted before establishing the mounts
+  were taken.
+- It is one `<section>` in markup plus one render call, matching the established
+  pattern.
+
+**Confirmed: the first rendering can be inserted without disrupting the four
+desks or the Monthly Report.**
+
+---
+
+## §3 completed — firm recommendation
+
+### **Build a read-only sibling. Do not extend the staff agent.**
+
+Grounds, all from source (Read 1):
+
+1. Every staff-agent answer path is `POST`/`201` because it **records a message**;
+   Ask Spine is a `GET` that records nothing.
+2. `CONFIRMABLE_INTENTS` and `INTENT_SERVICE` make the type
+   intent → confirmable → canonical service. A read intent is never confirmable
+   and calls no service — it breaks the invariant rather than extending it.
+3. The response contract is one `agent_reply` plus at most one proposal or
+   redirect. Ask Spine returns a **ranked list of records with open targets** — a
+   different type.
+
+**What to copy from it rather than share:** the authority seam. `staff_agent.js`
+derives `property_id` from `req.operator` and *"never accept[s] it from a message
+body."* The new route must do exactly that. Copy the gate; do not copy the door.
+
+---
+
+## §5 completed — the smallest browser slice
+
+**Confirmed from source, with one deliberate reduction.**
+
+> From Property Home, ask "What needs attention?" → receive **up to five** live,
+> property-scoped obligation items → **open the underlying record where an
+> existing opener exists.**
+
+The reduction: Read 3 found **no general unit opener**. Promising "open any
+underlying record" would over-claim. The slice opens what the app can already
+open — person, and the two obligation handlers keyed by `related_type` — and
+shows the rest as text without a dead link.
+
+### Exact files
+
+| Repo | File | Change |
+|---|---|---|
+| api | `server.js` **or** a new `src/agent/ask_spine.js` | register one gated GET route |
+| api | new `src/agent/ask_spine_service.js` | the ranked query |
+| app | `index.html` | one `<section id="askSpineMount">` after `.home-hero`; one `LIVE_RESOURCES` entry; one `renderAskSpine()`; composer markup + styles |
+
+### Request / response
+
+```text
+GET /operator/ask-spine/attention          (x-staff-session; NO property in the request)
+
+200 {
+  property_id,                    ← echoed from the session, server-derived
+  asked_at,
+  items: [ {                      ← max 5
+    obligation_id, label, module,
+    due_at, is_overdue,
+    assigned_user_id,             ← null means unassigned
+    reason: "overdue_unassigned" | "overdue" | "unassigned" | "due_soonest",
+    person_id, unit_id,
+    related_type, related_id,
+    open: { kind: "person"|"application"|"lease"|"none", id } | null
+  } ],
+  total_open                      ← so "5 of 23" is truthful
+}
+```
+
+**Ranking** — the four tiers from §4, each a recorded fact, no score.
+
+### Existing services reused
+
+- **`GET /obligations`'s query logic** — the read-time `is_overdue`, the
+  `unclaimed` predicate, the `due_at asc nulls last` ordering. **The logic, not
+  the route.**
+- **`staff_agent.js`'s authority gate** — `req.operator.property_id`, never from
+  the request.
+- **App: `loadResource`** — `liveRequired`, no fixture fallback, request id,
+  typed errors. **Not `tryJSON`.**
+- **App: `openPersonCard(opts)`**, `openApprovalDecision`, `openCountersign`,
+  `openDesk(name)`.
+
+### Honest-empty and failure
+
+| Condition | Behavior |
+|---|---|
+| Query ran, zero open obligations | *"Nothing is overdue or unassigned right now."* — **only** after a successful read |
+| Read failed | *"Could not read the work queue."* + the typed code. **Never rendered as empty.** |
+| No live session | existing gate; no Ask Spine call attempted |
+| Property scope unavailable | existing `applyUnavailable()` |
+| Item has no opener | render the row, no link. **No dead affordance.** |
+
+### Acceptance steps (browser)
+
+1. Sign in; Property Home renders with four desks and the Monthly Report bar
+   **unchanged**.
+2. Composer appears above the persona queue, below the hero.
+3. Ask "What needs attention?" → up to five items, each stating **why** it
+   ranked.
+4. Every item's property matches the session's property.
+5. Click a person-backed item → the canonical Person Card opens via
+   `openPersonCard`.
+6. Force a failure (offline) → failure message, **not** "nothing needs
+   attention."
+7. On a property with no open obligations → the honest-empty line.
+
+### Deliberately deferred
+
+Writes of any kind · general free-text AI search (this answers **one** fixed
+question) · money prioritisation (§4 — no monetary column traced) · occupancy
+blockage, missing proof, waiting-on-team (§4) · unit navigation (Read 3 — no
+opener exists) · fixing `GET /obligations`'s missing gate (**real, out of lane —
+belongs to a §21 pass**) · anything touching `renderMyWork`.
+
+---
+
+**Proof level: Locally exercised.** Source inspection of both repositories at the
+recorded SHAs. Nothing executed, no database contacted, no browser opened.
