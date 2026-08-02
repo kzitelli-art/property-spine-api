@@ -160,10 +160,20 @@ const asPool = (c) => ({ query: (...a) => c.query(...a) });
       Math.abs(cv.metrics.f1all.rate - 0.666667) < 1e-6);
     ok("a scheduled-only opportunity is reported PENDING, not failed",
       cv.metrics.f1all.pending_count === 1);
-    ok("funnel 2 denominator is journeys completed IN the window",
-      cv.metrics.f2.denominator === 2);
-    ok("no application yet ⇒ funnel 2 numerator zero with a real denominator",
-      cv.metrics.f2.numerator === 0 && cv.metrics.f2.rate === 0);
+    //  RE-GRAINED. Funnel 2 is no longer chain-grained with a lead-credited
+    //  numerator — it is ONE ROW PER OPPORTUNITY, and its metric_code changed
+    //  accordingly. These assertions were rewritten to the new grain rather
+    //  than deleted; the retired v1 behaviour must not be asserted anywhere.
+    ok("funnel 2 is published under the OPPORTUNITY-grained code",
+      cv.metrics.f2.metric_code === "s9.conversion.opportunity_observed_visit_to_submitted_application.v1");
+    ok("its deduplication key is the durable opportunity",
+      cv.metrics.f2.deduplication_key === "leasing_conversions.id");
+    ok("the aggregate reconciles to its own opportunity rows",
+      cv.metrics.f2.detail.reconciles === true);
+    ok("no application yet ⇒ funnel 2 numerator is zero",
+      cv.metrics.f2.numerator === 0);
+    ok("and unresolved appointment evidence suppresses the rate rather than publishing 0%",
+      cv.metrics.f2.state !== "partial" || cv.metrics.f2.rate === null);
     ok("every conversion metric carries a definition version",
       Object.values(cv.metrics).every((m) => /^v\d+$/.test(m.definition_version)));
 
@@ -179,6 +189,9 @@ const asPool = (c) => ({ query: (...a) => c.query(...a) });
       out2.sections.conversion.correlation.applications_total >= 1);
     ok("it is NOT counted into funnel 2's numerator by inference",
       out2.sections.conversion.metrics.f2.numerator === 0);
+    ok("an application with no conversion_id is never assigned to an opportunity",
+      out2.sections.conversion.opportunity_rows.every(
+        (r) => r.application_link !== "exact_conversion_id" || r.submitted_application_ids.length > 0));
 
     section("G  milestone achievement beats current status");
     const appOk = uuid();
@@ -191,8 +204,14 @@ const asPool = (c) => ({ query: (...a) => c.query(...a) });
       out3.sections.conversion.metrics.f3.denominator === 2);
     ok("and still counts as having REACHED approved",
       out3.sections.conversion.metrics.f3.numerator === 1);
-    ok("a correlated application now converts its completed journey",
-      out3.sections.conversion.metrics.f2.numerator === 1);
+    //  RE-GRAINED: credit now rides lease_applications.conversion_id, so an
+    //  application carrying only leasing_lead_id no longer converts anything.
+    //  That is the DEFECT BEING REMOVED, not a regression: crediting by lead
+    //  gave one application to every chain the lead ever had.
+    ok("an application linked only by lead does NOT convert an opportunity",
+      out3.sections.conversion.metrics.f2.numerator === 0);
+    ok("and it is reported as unlinked coverage rather than silently dropped",
+      out3.sections.conversion.metrics.f2.detail.coverage.unlinked_with_lead >= 1);
     ok("funnel 4 cohort is approvals dated inside the window",
       out3.sections.conversion.metrics.f4.denominator === 1);
     ok("no executed lease yet ⇒ funnel 4 numerator zero, pending reported",

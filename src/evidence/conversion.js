@@ -35,6 +35,9 @@
 
 const { buildMetric } = require("./metric_contract");
 const { resolveChains, journeyFinalStatus } = require("./tour_demand");
+const {
+  opportunityFunnelRows, aggregateOpportunityFunnel, MISSING_CANONICAL_FACTS,
+} = require("./opportunity_funnel");
 
 // Canonical lifecycle vocabulary from migration 033. Milestone achievement is
 // "reached at least this far", never current-status equality: an application
@@ -55,7 +58,7 @@ async function conversionFunnels(pool, window) {
   const CODES = {
     f1all: "s9.conversion.all_opportunity_to_completed_tour.v1",
     f1src: "s9.conversion.attributed_opportunity_to_completed_tour.v1",
-    f2: "s9.conversion.completed_tour_to_submitted_application.v1",
+    f2: "s9.conversion.opportunity_observed_visit_to_submitted_application.v1",
     f3: "s9.conversion.submitted_application_to_approved.v1",
     f4: "s9.conversion.approved_application_to_executed_lease.v1",
   };
@@ -147,21 +150,13 @@ async function conversionFunnels(pool, window) {
     });
   }).sort((a, b) => (b.denominator || 0) - (a.denominator || 0));
 
-  // ── FUNNEL 2 — completed tour → submitted application ─────────────
-  const f2cohort = journeys.filter((j) => j.final_status === "completed" && within(j.completed_at));
-  const appsByLead = new Map();
-  for (const a of apps) {
-    if (!a.leasing_lead_id) continue;
-    const k = String(a.leasing_lead_id);
-    if (!appsByLead.has(k)) appsByLead.set(k, []);
-    appsByLead.get(k).push(a);
-  }
-  let f2num = 0, f2rawApps = 0;
-  for (const j of f2cohort) {
-    const linked = (appsByLead.get(String(j.lead_id)) || [])
-      .filter((a) => reached(a.status, "submitted") && observed(a.created_at));
-    if (linked.length) { f2num += 1; f2rawApps += linked.length; }
-  }
+  // ── FUNNEL 2 — OPPORTUNITY with an observed visit → submitted application ──
+  //  RE-GRAINED. One row per durable opportunity, never per chain or lead.
+  //  Attendance comes from the canonical appointment-journey projection; this
+  //  file no longer derives Funnel 2 from leasing_tours.status at all.
+  const f2rows = await opportunityFunnelRows(pool, window);
+  const f2agg = aggregateOpportunityFunnel(f2rows.rows);
+
   // Correlation coverage: applications with no canonical opportunity link.
   const uncorrelatedApps = apps.filter((a) => !a.leasing_lead_id).length;
   const correlatedApps = apps.length - uncorrelatedApps;
@@ -196,6 +191,11 @@ async function conversionFunnels(pool, window) {
 
   return {
     state: "ok",
+    //  The opportunity rows the Funnel 2 aggregate is computed from. Published
+    //  so the aggregate can be RECONCILED against its own inputs rather than
+    //  trusted — every population count above is derivable from these rows.
+    //  The internal cohort-membership marker is stripped; it is not contract.
+    opportunity_rows: f2rows.rows.map(({ _first_visit_in_window, ...r }) => r),
     correlation: {
       applications_total: apps.length,
       correlated_count: correlatedApps,
@@ -214,11 +214,25 @@ async function conversionFunnels(pool, window) {
         extra: { completed_journeys_in_cohort: f1num },
       }),
       f2: buildMetric({
-        metric_code: CODES.f2, window, numerator: f2num, denominator: f2cohort.length,
-        counts: { untrackable: uncorrelatedApps },
-        exclusions: ["journeys completed outside the window", "applications with no canonical opportunity link"],
-        provenance: "leasing_tours.lead_id ↔ lease_applications.leasing_lead_id; multiple applications from one journey count once",
-        extra: { raw_submitted_applications: f2rawApps, uncorrelated_applications: uncorrelatedApps },
+        metric_code: CODES.f2, window,
+        numerator: f2agg.numerator, denominator: f2agg.cohort_size,
+        counts: {
+          pending: f2agg.populations.pending_future_appointment,
+          unknown: f2agg.populations.unresolved_past_appointment,
+          untrackable: f2agg.populations.untrackable + f2agg.populations.conflict,
+        },
+        partial: f2agg.partial,
+        exclusions: [
+          "opportunities whose first observed visit falls outside the window",
+          "opportunities with no observed visit — reported in their own populations, never dropped",
+        ],
+        provenance: "ONE ROW PER leasing_conversions.id. Attendance from the canonical appointment-journey projection (never elapsed time, lead status or flattened conversion fields). Credit rides lease_applications.conversion_id ONLY — leasing_lead_id is never used to award a conversion.",
+        extra: {
+          populations: f2agg.populations,
+          reconciles: f2agg.reconciles,
+          coverage: f2rows.coverage,
+          missing_canonical_facts: MISSING_CANONICAL_FACTS,
+        },
       }),
       f3: buildMetric({
         metric_code: CODES.f3, window, numerator: f3num, denominator: submitted.length,

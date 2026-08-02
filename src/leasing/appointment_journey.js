@@ -60,70 +60,42 @@ const OBSERVED = Object.freeze({
 
 const iso = (d) => (d ? new Date(d).toISOString() : null);
 
-async function appointmentJourney(q, { property_id, opportunity_id, as_of = null } = {}) {
-  if (!property_id) throw new Error("appointmentJourney requires a server-derived property_id");
-  if (!opportunity_id) throw new Error("appointmentJourney requires an exact opportunity_id");
-  const asOf = as_of ? new Date(as_of) : new Date();
+// ════════════════════════════════════════════════════════════════════
+//  MATERIAL LOADING IS SEPARATE FROM CLASSIFICATION.
+//
+//  There is exactly ONE implementation of "what happened at this appointment"
+//  — projectOpportunity() below — and two ways to feed it:
+//
+//    appointmentJourney()          scoped loader, one opportunity
+//    appointmentJourneySnapshot()  bounded loader, every opportunity at a
+//                                  property in a CONSTANT number of queries
+//
+//  Funnel 2 needs the second: calling the first in a loop would be an N+1, and
+//  re-deriving attendance inside the funnel would put a second copy of this
+//  vocabulary in the codebase — precisely the drift this module exists to stop.
+//
+//  The single-opportunity path keeps its exact prior contract, so its proof is
+//  what demonstrates the split changed no meaning.
+// ════════════════════════════════════════════════════════════════════
 
-  // ── THE OPPORTUNITY, PROPERTY-WALLED ───────────────────────────────
-  const opp = (await q.query(
-    `select id, property_id, person_id, lead_id, status, current_stage,
-            opened_at, closed_at, origin_tour_id, scheduled_tour_id,
-            actual_tour_host_user_id, tour_outcome
-       from leasing_conversions where id = $1`, [opportunity_id])).rows[0];
-
-  if (!opp) {
-    return { ok: false, refusal_code: "opportunity_not_found", opportunity_id, chains: [] };
-  }
-  if (String(opp.property_id) !== String(property_id)) {
-    // Cross-property refusal. Not a journey question at all.
-    return { ok: false, refusal_code: "opportunity_not_at_property",
-             opportunity_id, chains: [] };
-  }
-
-  // ── NATIVE OCCURRENCES ─────────────────────────────────────────────
-  //  Every tour explicitly attributed to this opportunity, PLUS every tour any
-  //  exact legacy pointer claims. Nothing is gathered by lead, person or time.
-  const native = (await q.query(
-    `select t.*, (t.conversion_id is not null) as has_explicit
-       from leasing_tours t
-      where t.property_id = $1
-        and ( t.conversion_id = $2
-              or t.id = $3
-              or t.rescheduled_from in (
-                   select id from leasing_tours
-                    where property_id = $1 and (conversion_id = $2 or id = $3)) )
-      order by t.scheduled_for asc nulls last`,
-    [property_id, opportunity_id, opp.origin_tour_id])).rows;
-
-  const events = native.length ? (await q.query(
-    `select tour_id, event_type, event_at, actor_id, metadata
-       from tour_events where tour_id = any($1::uuid[])
-      order by event_at asc`, [native.map((t) => t.id)])).rows : [];
-
-  const eventsByTour = new Map();
-  for (const e of events) {
-    const k = String(e.tour_id);
-    if (!eventsByTour.has(k)) eventsByTour.set(k, []);
-    eventsByTour.get(k).push(e);
-  }
+/**
+ * projectOpportunity — PURE. No queries. Classification lives here and nowhere
+ * else.
+ *
+ *   opp              the leasing_conversions row
+ *   native           leasing_tours rows belonging to this opportunity
+ *   eventsByTour     Map tour_id -> tour_events[], ascending
+ *   outsideParents   Map tour_id -> {id, conversion_id, property_id} for
+ *                    reschedule parents NOT in `native`
+ *   external         [{ row, revisions[] }]
+ */
+function projectOpportunity({
+  opp, native, eventsByTour, outsideParents, external, property_id, asOf,
+}) {
+  const opportunity_id = String(opp.id);
 
   // ── CHAIN RESOLUTION — iterative, cycle-safe ───────────────────────
   const byId = new Map(native.map((t) => [String(t.id), t]));
-
-  //  A parent that is NOT in this opportunity's loaded set is not automatically
-  //  a dead end. If it exists and carries a DIFFERENT opportunity, the chain
-  //  spans two opportunities — a COMPETING LINK, which the ruling requires be
-  //  surfaced as conflict rather than quietly dropped as untrackable.
-  const outsideParents = new Map();
-  const orphanParentIds = [...new Set(native
-    .map((t) => t.rescheduled_from).filter(Boolean).map(String)
-    .filter((id) => !byId.has(id)))];
-  if (orphanParentIds.length) {
-    for (const r of (await q.query(
-      `select id, conversion_id, property_id from leasing_tours where id = any($1::uuid[])`,
-      [orphanParentIds])).rows) outsideParents.set(String(r.id), r);
-  }
 
   function rootOf(t) {
     const seen = new Set();
@@ -256,18 +228,7 @@ async function appointmentJourney(q, { property_id, opportunity_id, as_of = null
   // ── EXTERNAL OCCURRENCES — reconstructed from the REVISION LOG ─────
   //  The scheduled_tours row holds only the last move. Every prior occurrence
   //  lives in scheduled_tour_revisions, so the row alone is not the history.
-  const external = (await q.query(
-    `select s.* from scheduled_tours s
-      where s.property_id = $1 and (s.conversion_id = $2 or s.id = $3)`,
-    [property_id, opportunity_id, opp.scheduled_tour_id])).rows;
-
-  for (const s of external) {
-    const revs = (await q.query(
-      `select change_type, prev_scheduled_start, prev_status,
-              new_scheduled_start, new_status, created_at
-         from scheduled_tour_revisions
-        where scheduled_tour_id = $1 order by created_at asc`, [s.id])).rows;
-
+  for (const { row: s, revisions: revs } of external) {
     // One occurrence per recorded scheduled time, in order. External rows carry
     // NO attendance vocabulary at all, so observed state is `unknown` unless
     // the row itself says cancelled. It is never `attended` and never `no_show`.
@@ -356,4 +317,190 @@ async function appointmentJourney(q, { property_id, opportunity_id, as_of = null
   };
 }
 
-module.exports = { appointmentJourney, BASIS, OBSERVED };
+// ── LOADER 1 · ONE OPPORTUNITY, SCOPED ───────────────────────────────
+//  Unchanged contract. Queries only what this opportunity can reach.
+async function appointmentJourney(q, { property_id, opportunity_id, as_of = null } = {}) {
+  if (!property_id) throw new Error("appointmentJourney requires a server-derived property_id");
+  if (!opportunity_id) throw new Error("appointmentJourney requires an exact opportunity_id");
+  const asOf = as_of ? new Date(as_of) : new Date();
+
+  // ── THE OPPORTUNITY, PROPERTY-WALLED ───────────────────────────────
+  const opp = (await q.query(
+    `select id, property_id, person_id, lead_id, status, current_stage,
+            opened_at, closed_at, origin_tour_id, scheduled_tour_id,
+            actual_tour_host_user_id, tour_outcome
+       from leasing_conversions where id = $1`, [opportunity_id])).rows[0];
+
+  if (!opp) {
+    return { ok: false, refusal_code: "opportunity_not_found", opportunity_id, chains: [] };
+  }
+  if (String(opp.property_id) !== String(property_id)) {
+    // Cross-property refusal. Not a journey question at all.
+    return { ok: false, refusal_code: "opportunity_not_at_property",
+             opportunity_id, chains: [] };
+  }
+
+  //  Every tour explicitly attributed to this opportunity, PLUS every tour any
+  //  exact legacy pointer claims. Nothing is gathered by lead, person or time.
+  const native = (await q.query(
+    `select t.*, (t.conversion_id is not null) as has_explicit
+       from leasing_tours t
+      where t.property_id = $1
+        and ( t.conversion_id = $2
+              or t.id = $3
+              or t.rescheduled_from in (
+                   select id from leasing_tours
+                    where property_id = $1 and (conversion_id = $2 or id = $3)) )
+      order by t.scheduled_for asc nulls last`,
+    [property_id, opportunity_id, opp.origin_tour_id])).rows;
+
+  const events = native.length ? (await q.query(
+    `select tour_id, event_type, event_at, actor_id, metadata
+       from tour_events where tour_id = any($1::uuid[])
+      order by event_at asc`, [native.map((t) => t.id)])).rows : [];
+  const eventsByTour = new Map();
+  for (const e of events) {
+    const k = String(e.tour_id);
+    if (!eventsByTour.has(k)) eventsByTour.set(k, []);
+    eventsByTour.get(k).push(e);
+  }
+
+  //  A parent NOT in this opportunity's set is not automatically a dead end. If
+  //  it carries a DIFFERENT opportunity the chain spans two, which the ruling
+  //  requires be surfaced as conflict rather than dropped as untrackable.
+  const byId = new Map(native.map((t) => [String(t.id), t]));
+  const outsideParents = new Map();
+  const orphanParentIds = [...new Set(native
+    .map((t) => t.rescheduled_from).filter(Boolean).map(String)
+    .filter((id) => !byId.has(id)))];
+  if (orphanParentIds.length) {
+    for (const r of (await q.query(
+      `select id, conversion_id, property_id from leasing_tours where id = any($1::uuid[])`,
+      [orphanParentIds])).rows) outsideParents.set(String(r.id), r);
+  }
+
+  const extRows = (await q.query(
+    `select s.* from scheduled_tours s
+      where s.property_id = $1 and (s.conversion_id = $2 or s.id = $3)`,
+    [property_id, opportunity_id, opp.scheduled_tour_id])).rows;
+  const external = [];
+  for (const s of extRows) {
+    external.push({ row: s, revisions: (await q.query(
+      `select change_type, prev_scheduled_start, prev_status,
+              new_scheduled_start, new_status, created_at
+         from scheduled_tour_revisions
+        where scheduled_tour_id = $1 order by created_at asc`, [s.id])).rows });
+  }
+
+  return projectOpportunity({ opp, native, eventsByTour, outsideParents,
+                              external, property_id, asOf });
+}
+
+// ── LOADER 2 · EVERY OPPORTUNITY AT ONE PROPERTY, BOUNDED ────────────
+//  Query count is CONSTANT in the number of opportunities: six, regardless of
+//  whether the property has one opportunity or ten thousand. This is what
+//  Funnel 2 reads. It also batches the per-row revisions lookup that the scoped
+//  loader still performs one row at a time.
+async function appointmentJourneySnapshot(q, { property_id, as_of = null } = {}) {
+  if (!property_id) throw new Error("appointmentJourneySnapshot requires a server-derived property_id");
+  const asOf = as_of ? new Date(as_of) : new Date();
+
+  const opps = (await q.query(
+    `select id, property_id, person_id, lead_id, status, current_stage,
+            opened_at, closed_at, origin_tour_id, scheduled_tour_id,
+            actual_tour_host_user_id, tour_outcome
+       from leasing_conversions where property_id = $1`, [property_id])).rows;
+
+  const tours = (await q.query(
+    `select t.*, (t.conversion_id is not null) as has_explicit
+       from leasing_tours t where t.property_id = $1
+      order by t.scheduled_for asc nulls last`, [property_id])).rows;
+
+  const events = tours.length ? (await q.query(
+    `select tour_id, event_type, event_at, actor_id, metadata
+       from tour_events where tour_id = any($1::uuid[])
+      order by event_at asc`, [tours.map((t) => t.id)])).rows : [];
+  const eventsByTour = new Map();
+  for (const e of events) {
+    const k = String(e.tour_id);
+    if (!eventsByTour.has(k)) eventsByTour.set(k, []);
+    eventsByTour.get(k).push(e);
+  }
+
+  const extRows = (await q.query(
+    `select s.* from scheduled_tours s where s.property_id = $1`, [property_id])).rows;
+  const revs = extRows.length ? (await q.query(
+    `select scheduled_tour_id, change_type, prev_scheduled_start, prev_status,
+            new_scheduled_start, new_status, created_at
+       from scheduled_tour_revisions where scheduled_tour_id = any($1::uuid[])
+      order by created_at asc`, [extRows.map((s) => s.id)])).rows : [];
+  const revsByTour = new Map();
+  for (const r of revs) {
+    const k = String(r.scheduled_tour_id);
+    if (!revsByTour.has(k)) revsByTour.set(k, []);
+    revsByTour.get(k).push(r);
+  }
+
+  const tourById = new Map(tours.map((t) => [String(t.id), t]));
+
+  //  Reschedule parents that live at ANOTHER property are not in `tours`. One
+  //  bounded lookup covers every opportunity at once.
+  const knownIds = new Set(tourById.keys());
+  const foreignParentIds = [...new Set(tours
+    .map((t) => t.rescheduled_from).filter(Boolean).map(String)
+    .filter((id) => !knownIds.has(id)))];
+  const foreignParents = new Map();
+  if (foreignParentIds.length) {
+    for (const r of (await q.query(
+      `select id, conversion_id, property_id from leasing_tours where id = any($1::uuid[])`,
+      [foreignParentIds])).rows) foreignParents.set(String(r.id), r);
+  }
+
+  const journeys = new Map();
+  for (const opp of opps) {
+    const oid = String(opp.id);
+
+    //  EXACTLY the scoped loader's membership rule, in memory: explicitly
+    //  attributed, or claimed by the exact legacy pointer, or a direct
+    //  reschedule child of one of those.
+    const directIds = new Set(tours
+      .filter((t) => (t.conversion_id && String(t.conversion_id) === oid)
+                  || (opp.origin_tour_id && String(t.id) === String(opp.origin_tour_id)))
+      .map((t) => String(t.id)));
+    const native = tours.filter((t) => directIds.has(String(t.id))
+      || (t.rescheduled_from && directIds.has(String(t.rescheduled_from))));
+
+    const inSet = new Set(native.map((t) => String(t.id)));
+    const outsideParents = new Map();
+    for (const t of native) {
+      const pid = t.rescheduled_from && String(t.rescheduled_from);
+      if (!pid || inSet.has(pid)) continue;
+      const parent = tourById.get(pid) || foreignParents.get(pid);
+      if (parent) outsideParents.set(pid, parent);
+    }
+
+    const external = extRows
+      .filter((s) => (s.conversion_id && String(s.conversion_id) === oid)
+                  || (opp.scheduled_tour_id && String(s.id) === String(opp.scheduled_tour_id)))
+      .map((s) => ({ row: s, revisions: revsByTour.get(String(s.id)) || [] }));
+
+    journeys.set(oid, projectOpportunity({
+      opp, native, eventsByTour, outsideParents, external,
+      property_id, asOf,
+    }));
+  }
+
+  return {
+    property_id,
+    as_of_utc: asOf.toISOString(),
+    opportunity_count: opps.length,
+    opportunities: opps,
+    journeys,                       // Map opportunity_id -> journey projection
+    query_count: 6,                 // CONSTANT in the number of opportunities
+  };
+}
+
+module.exports = {
+  appointmentJourney, appointmentJourneySnapshot, projectOpportunity,
+  BASIS, OBSERVED,
+};

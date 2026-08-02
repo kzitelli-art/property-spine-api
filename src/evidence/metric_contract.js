@@ -31,7 +31,12 @@
 
 const { TZ_UNAVAILABLE } = require("../shared/property_timezone");
 
-const METRIC_STATES = Object.freeze(["ok", "unavailable", "unsupported"]);
+//  'partial' is a fourth honest state, distinct from the other three: the
+//  cohort was measured and its COUNTS are exact, but unresolved evidence can
+//  still move the numerator or the denominator, so no rate is published. It is
+//  not an error and not an absence — publishing a complete-looking percentage
+//  over only the resolved subset would be the lie it exists to prevent.
+const METRIC_STATES = Object.freeze(["ok", "partial", "unavailable", "unsupported"]);
 
 const ATTRIBUTION_MODELS = Object.freeze([
   "deduplicated_opportunity",   // one row per opportunity; partitions the population
@@ -85,12 +90,34 @@ const METRIC_DEFINITIONS = Object.freeze({
     attribution_model: "multi_touch_non_additive",
     source_tables: ["leasing_leads", "lead_source_touches", "leasing_tours"],
   },
+  //  RETIRED, deliberately kept registered. The chain-grained v1 is no longer
+  //  published: its denominator counted appointment chains while its numerator
+  //  was credited from the LEAD, so one application could convert two chains.
+  //  It is superseded by the opportunity-grained code below. The definition
+  //  stays here so a stored historical number can still be explained, and so
+  //  the code can never be quietly reused for a different population.
   "s9.conversion.completed_tour_to_submitted_application.v1": {
-    label: "Completed tour → submitted application",
+    label: "Completed tour → submitted application (RETIRED — chain grain)",
     cohort_basis: "appointment journeys whose completed event falls inside the window",
     deduplication_key: "root leasing_tours.id of the reschedule chain",
     attribution_model: "origin_cohort",
     source_tables: ["leasing_tours", "lease_applications"],
+    retired: true,
+    superseded_by: "s9.conversion.opportunity_observed_visit_to_submitted_application.v1",
+    retirement_reason: "denominator was appointment-chain grained while the numerator was credited from the lead; two chains on one lead double-counted a single application",
+  },
+
+  //  A NEW CODE, not a bumped version: the denominator, the stage definition,
+  //  the attribution model and the deduplication key ALL changed. The old
+  //  number and the new one measure different populations and are not
+  //  comparable, so they must not share a code.
+  "s9.conversion.opportunity_observed_visit_to_submitted_application.v1": {
+    label: "Opportunity with an observed visit → submitted application",
+    cohort_basis: "durable leasing opportunities whose FIRST OBSERVED VISIT falls inside the property-local window; attendance comes from the canonical appointment-journey projection, never from elapsed time, lead status or flattened conversion fields",
+    deduplication_key: "leasing_conversions.id",
+    attribution_model: "deduplicated_opportunity",
+    source_tables: ["leasing_conversions", "leasing_tours", "scheduled_tours",
+                    "scheduled_tour_revisions", "tour_events", "lease_applications"],
   },
   "s9.conversion.submitted_application_to_approved.v1": {
     label: "Submitted application → approved",
@@ -143,7 +170,7 @@ function versionOf(metric_code) {
  */
 function buildMetric({
   metric_code, window, numerator = null, denominator = null,
-  counts = {}, exclusions = [], provenance = null, extra = null,
+  counts = {}, exclusions = [], provenance = null, extra = null, partial = null,
 } = {}) {
   const def = definitionFor(metric_code);
   const definition_version = versionOf(metric_code);
@@ -187,9 +214,18 @@ function buildMetric({
     rate = Number((num / den).toFixed(6));
   }
 
+  // THE PARTIAL RULE. If unresolved evidence can still move the numerator or
+  // the denominator, no rate is published — publishing one computed over only
+  // the trackable subset, while presenting it as the whole cohort, is exactly
+  // the flattering lie this contract exists to prevent. THE COUNTS SURVIVE:
+  // suppressing a rate must never also hide the numbers that explain it.
+  const isPartial = !!(partial && partial.is_partial);
+  if (isPartial) rate = null;
+
   return {
     ...base,
-    state: "ok",
+    state: isPartial ? "partial" : "ok",
+    ...(isPartial ? { reason: partial.reason || "unresolved evidence can change this metric", partial } : {}),
     numerator: num,
     denominator: den,
     rate,
