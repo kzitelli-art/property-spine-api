@@ -73,7 +73,7 @@ FK and delete the writer-side check.
 - **No inference-based backfill.** The migration writes no `conversion_id`
   values at all. Backfill is a separate, exact-links-only act (phase 6),
   measured first by the analyzer.
-- **No NOT NULL.** Null is permanently valid — see §4.
+- **No NOT NULL.** Null is indefinitely valid — see §4.
 - **No status change, no new vocabulary, no new table, no trigger.**
 - **No touching of `leasing_conversions`**, including the four flattened fields.
 
@@ -98,9 +98,9 @@ representing a continuing attempt.
 
 ---
 
-## 4 · WHEN NULL REMAINS VALID — PERMANENTLY
+## 4 · WHEN NULL REMAINS VALID — INDEFINITELY
 
-`conversion_id IS NULL` is a truthful, permanent state for:
+`conversion_id IS NULL` is a truthful state, valid indefinitely, for:
 
 1. every historical appointment with no exact link (the analyzer's honest
    opening population);
@@ -108,11 +108,18 @@ representing a continuing attempt.
    no conversation, external calendar rows imported before any opportunity
    existed;
 3. appointments whose only possible association is lead / person / property /
-   time inference. **These stay NULL forever.** A later pass may not "improve"
-   them, because the inference that would fill them is forbidden.
+   time inference. **No automated pass may ever "improve" these**, because the
+   inference that would fill them is forbidden.
 
-Null therefore means **"not exactly attributable"**, never "not yet processed".
-The projector reports it as `unattributed`, never as missing data awaiting a fix.
+Null therefore means **"not attributable from the evidence available"**, never
+"not yet processed". The projector reports it as `unattributed`, never as
+missing data awaiting a batch fix.
+
+**It does not mean the appointment can never be attributed.** A later
+*explicit* correction — one that carries its own proof and names its
+attribution — may resolve any of these. `conversion_id IS NULL` may remain valid
+indefinitely without that being a permanent verdict on the appointment. What is
+forbidden is closing the gap automatically.
 
 ---
 

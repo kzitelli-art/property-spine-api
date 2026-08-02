@@ -172,7 +172,7 @@ const ssl = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || "")
     const exact = R.exact_native_pointer.length + R.exact_external_pointer.length + R.chain_inheritance.length;
     ok(exact === 2, `exactly 2 appointments are backfillable by exact link (${exact})`);
     ok(R.inference_only.length > 0,
-      `and ${R.inference_only.length} remain inference-only, therefore permanently untrackable`);
+      `and ${R.inference_only.length} are inference-only, therefore untrackable from existing evidence`);
 
   } catch (e) {
     fail++; console.log("   FAIL  harness threw: " + e.message + "\n" + e.stack);

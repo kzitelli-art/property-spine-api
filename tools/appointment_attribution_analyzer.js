@@ -22,8 +22,14 @@
 //  unit preference · browser state.
 //
 //  Appointments whose ONLY possible association is one of those are reported
-//  as `inference_only` and remain UNTRACKABLE. They are counted so the size of
-//  the honest gap is visible — never so it can be closed by guessing.
+//  as `inference_only` and are UNTRACKABLE FROM EXISTING EVIDENCE. They are
+//  counted so the size of the honest gap is visible — never so it can be closed
+//  by guessing.
+//
+//  That classification is about the EVIDENCE AVAILABLE TODAY, not about the
+//  appointment forever. A later explicit correction, carrying its own proof and
+//  attribution, may resolve one of these. What is forbidden is filling the gap
+//  automatically from lead, person, property or time.
 //
 //  Run: DATABASE_URL=... node tools/appointment_attribution_analyzer.js [property_id]
 // ════════════════════════════════════════════════════════════════════
@@ -180,8 +186,9 @@ function report(R) {
   const exact = n(R.exact_native_pointer) + n(R.exact_external_pointer) + n(R.chain_inheritance);
   const total = R.native_total + R.external_total;
   console.log(`\n  BACKFILLABLE BY EXACT LINK ONLY: ${exact} of ${total}`);
-  console.log(`  PERMANENTLY UNTRACKABLE:         ${total - exact} of ${total}`);
-  console.log("  (the second number is not a defect to close — it is the honest gap)\n");
+  console.log(`  UNTRACKABLE FROM EXISTING EVIDENCE: ${total - exact} of ${total}`);
+  console.log("  (not a defect to close by inference — but an explicit, proven,");
+  console.log("   attributed correction may resolve any of these later)\n");
 }
 
 module.exports = { analyze, report };

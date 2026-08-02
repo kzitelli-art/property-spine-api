@@ -20,8 +20,11 @@
 //  An appointment is attributed ONLY from an opportunity UUID the caller
 //  already holds because the workflow is opportunity-bound. There is no
 //  lookup, no search, no nearest match. If the workflow does not carry one,
-//  the appointment stays NULL — explicitly unattributed, permanently, because
-//  the inference that would fill it later is forbidden.
+//  the appointment stays NULL — explicitly unattributed. It is not filled in
+//  later by inference, because inference from lead, person, property or time is
+//  forbidden. It MAY be resolved later by an explicit, proven, attributed
+//  correction. NULL means "not attributable from the evidence available", not
+//  "unattributable forever".
 //
 //  ── WHAT IT VALIDATES ────────────────────────────────────────────────
 //  · the opportunity exists
