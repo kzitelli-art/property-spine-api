@@ -177,11 +177,48 @@ Smallest direct durable bridge: a **nullable `conversion_id`** on
 `leasing_tours` and `scheduled_tours`, FK to `leasing_conversions`, indexed.
 No polymorphic journey table — direct references have not been shown incapable.
 
-**Deliberately not frozen yet**, per the ruling: every appointment writer and
-reschedule writer is inventoried in §2 but the *reschedule* writers
-(`recordTourEvent` rescheduled branch, `rescheduled_from` chain creation,
-`scheduled_tour_revisions`) need line-level inspection before the column shape
-is fixed. That is phase 3's remaining work.
+### 5.8 · RESCHEDULE WRITERS INSPECTED — the two shapes are opposites
+
+| | native `leasing_tours` | external `scheduled_tours` |
+|---|---|---|
+| Reschedule act | **inserts a NEW ROW** carrying `rescheduled_from = old` (`leasingleads.js:2476`) | **mutates the SAME ROW** (`leasingscheduling.js:239`) |
+| Old occurrence | preserved as its own row, status `rescheduled` | **overwritten** — only `previous_start`/`previous_end` survive, so a 3rd reschedule destroys the 2nd's values |
+| Occurrence history | `tour_events`, per-tour | `scheduled_tour_revisions`, one row per change |
+| Chain identity | root = row with `rescheduled_from IS NULL` | **the row IS the chain**; `reschedule_count` counts moves |
+
+Source states the native intent explicitly at `leasingleads.js:2447`: *"Two
+tours, two clean histories — exactly why `tour_events` is per-tour, not
+per-opportunity."*
+
+> ### STOP CONDITION 5 — CHECKED AND **NOT TRIGGERED**
+> Distinct occurrences and chain membership are preservable in both models, but
+> by **different mechanisms**: native from the row set itself, external from
+> `scheduled_tour_revisions`. The projection must read the revision log for
+> external occurrences — reading only the `scheduled_tours` row would silently
+> lose every reschedule before the last.
+
+### 5.9 · BRIDGE SHAPE — NOW FROZEN, justified by §5.8
+
+A **nullable `conversion_id uuid references leasing_conversions(id)`** on
+**both** `leasing_tours` and `scheduled_tours`, each with a partial index.
+
+The reschedule inspection is what makes this safe, and it lands differently on
+each side:
+
+- **`scheduled_tours`** — the row persists across reschedules, so the link is
+  written once and survives every subsequent move with no further work.
+- **`leasing_tours`** — a reschedule creates a NEW ROW, so the successor insert
+  at `leasingleads.js:2476` **must copy `conversion_id` forward**. Missing that
+  is precisely how a chain would lose its opportunity halfway through. This is
+  the single highest-risk line in the phase-5 cutover.
+
+Chain-level rule: carry one opportunity only when **every attributed member
+agrees**. Members disagreeing → `conflict`. Members unattributed → the chain
+inherits from the root only via `chain_inheritance`, never by majority or by
+first row.
+
+No polymorphic journey table: direct references represent both sources, so the
+"proven incapable" bar is not met.
 
 ---
 
@@ -193,7 +230,7 @@ is fixed. That is phase 3's remaining work.
 | 2 | host/outcome need a replacement completion service | **NOT TRIGGERED** — already appointment-specific; reused |
 | 3 | migration number conflicts with another lane | **not triggered** — 127 free, Ask Spine has zero migrations |
 | 4 | backfill requires lead/person/time inference | **open** — measured in phase 6; partial backfill accepted |
-| 5 | reschedule cannot preserve occurrences + chain | **open** — pending reschedule-writer inspection |
+| 5 | reschedule cannot preserve occurrences + chain | **NOT TRIGGERED** — preservable in both, by different mechanisms (§5.8) |
 | 6 | design turning into generalized scheduling/CRM | not triggered |
 | 7 | Funnel 2 change needed first | not triggered |
 | 8 | Ask Spine substantive overlap | **not triggered** — `server.js` junction only, zero migrations |
@@ -202,12 +239,26 @@ is fixed. That is phase 3's remaining work.
 
 ## 7 · PHASE STATE
 
-Complete: 1 (identities/migration evidence) · 2 (writer matrix) · 3 (contract,
-except the bridge column shape).
+Complete: 1 (identities/migration evidence) · 2 (writer matrix) · **3 (contract
+fully frozen, including the bridge shape)**.
 
-Remaining: 3-finish (reschedule-writer inspection) · 4 (migration 127) ·
-5 (writer cutover) · 6 (exact-link backfill only) · 7 (pure projection) ·
-8 (untrackable/unknown/conflict returns).
+**HALTED BEFORE PHASE 4 — a stated precondition is unmet.**
+
+The ruling permits the migration *"only after querying the current Neon
+migration ledger."* **That query cannot be run here** — the standing constraint
+forbids production credentials. Reservations, the Ask Spine check, the runner
+ceiling and staged files are all recorded (§1); the Neon ledger is the one
+precondition I cannot satisfy.
+
+This is not pedantry. The 121 provenance investigation run alongside this phase
+found **two different migrations numbered 121** on 2026-08-01, one renumbered to
+122 sixteen minutes later, and a production ledger row whose identity cannot be
+determined from the repository. Choosing 127 while the ledger above 122 is
+unverified would repeat exactly that failure.
+
+Remaining: 4 (migration 127, **blocked**) · 5 (writer cutover — note the
+`leasing_tours` successor-insert risk in §5.9) · 6 (exact-link backfill only) ·
+7 (pure projection) · 8 (untrackable/unknown/conflict returns).
 
 No migration written. No writer cut over. No backfill. No projection. No route.
 `server.js` and `src/agent/` untouched.
