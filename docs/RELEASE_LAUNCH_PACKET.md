@@ -474,3 +474,104 @@ Escalation: actual T0 + 10 min      Rollback decision: actual T0 + 15 min
 **X remains an owner-approved conservative 5 minutes.** Window 1 produced no
 measurement — the API never deployed. The first real API deploy duration gets
 recorded in window 2 and replaces the estimate.
+
+---
+
+# WINDOW 2 — DEPLOYED. Obligation security gate CLOSED.
+
+**2026-08-02, 3:30 PM ET. Operator: Kameron Zitelli.**
+
+```text
+T0 (app PR #28 merged) ......... 3:30:49 PM ET
+App deployed ................... 89a968c  Deploy live 3:31 PM
+Mismatch honesty check ......... PASSED — "Work items are unavailable. HTTP 404
+                                 This is not an empty queue — the work could not be read."
+                                 "Nothing needs you right now." ABSENT.
+API PR #32 merged .............. 3:33 PM
+API deployed ................... 10c43b3  Deploy live 3:33 PM — SHA matches the merge commit
+Mismatch window ................ ~2 minutes   (escalation 3:40 and rollback 3:45 never approached)
+MEASURED API deploy duration ... <= 1 minute  (started 3:33, live 3:33; minute precision only)
+                                 — replaces the owner-approved conservative X = 5 min
+/health ........................ {"ok":true,"db_time":"2026-08-02T19:34:21.005Z"}
+prestart migrations ............ none applied — this lane ships none
+```
+
+## Deployed boundary smoke — the rung that mattered
+
+```text
+PASS  B1-B5   all five legacy shared-key doors GONE (404)
+PASS  B6      authenticated GET /operator/obligations reachable
+PASS  B7      response carries SERVER-DERIVED scope
+PASS  B8      client property_id REFUSED (403)
+PASS  B9      out-of-scope claim CONCEALED (404, not 403)
+PASS  B10     shared operator key ALONE cannot read obligations (401)
+PASS  FLOOR   all 10 obligation-boundary behaviours executed
+BOUNDARY: 10/10 behaviours executed + 1 execution-floor assertion
+```
+
+Authorized production QA record created and retained:
+`R3 SMOKE 1785699397666 — QA (not an operating property)`.
+
+**Aggregate smoke: RED — 30 passed / 1 failed / SMOKE_EXIT=1.** Not green. See
+the open defect below.
+
+## Deployed browser acceptance
+
+| Check | Result | Evidence |
+|---|---|---|
+| Authorized obligations render | PASS | 23 rows, real, property-scoped |
+| Request path carries no property_id | PASS | `:path /operator/obligations?status=open` |
+| `x-staff-session` present | PASS | request headers |
+| `x-operator-key` absent | PASS | request headers |
+| Self-claim succeeds | PASS | 3 real claims, `receipt: "Claimed."` |
+| Session user becomes owner | PASS | `assignee` === `claimed_by` === session user |
+| Claimed item leaves the open queue | PASS | `still_in_open_queue: false`, count 23 → 22 |
+| …for the right REASON | PASS | `status: "in_progress"`; queue filters `status=open` |
+| Claim body carries no `user_id` | PASS | DevTools Payload: `{}` — *No properties* |
+| Unavailable distinct from empty | PASS | 404 → unavailable banner; 200 + 0 qualifying rows → quiet line |
+| Preview/demo remain local | **Not re-verified on production** | proven in the browser harness (25/0) against this exact artifact; both interceptors are client-side path matching with no origin dependence |
+
+**One assertion I withdrew mid-acceptance.** A `window.fetch` interceptor
+returned `wire: null` — `__psLive` is frozen and holds its own fetch reference,
+so it never fired, and `body_has_user_id: false` was **vacuous**. It was
+discarded, not counted. The DevTools Payload capture replaced it.
+
+## Open defects — neither introduced by this release
+
+### 5b — leasing-task reassignment
+
+```text
+POST /operator/leasing/tasks/:id/reassign
+Expected: eligible task reassignment succeeds without moving conversation ownership
+Actual:   HTTP 400, convOwner=true
+Production reproduction: yes
+Local reproduction:      yes
+First production execution of this smoke: 2026-08-02
+Relationship to this release: no changed reassignment code in the merged diff
+                              (f85f70b..10c43b3 touches server.js, three new
+                              src/obligations files, two harnesses, two smoke
+                              files, one doc — nothing on that path)
+Pre-existing status: strongly indicated, NOT conclusively proven — this smoke
+                     had never been run against production before today
+Rollback: DECLINED. It would restore the known cross-property shared-key
+          exposure and is unlikely to repair 5b.
+Owner: separate lane. Not diagnosed or repaired during the window.
+```
+
+### Cosmetic — the Claim button still gates on the retired User ID field
+
+`obligationActions` uses `canClaim = !o.assigned_user_id && userId()`. The
+browser-entered user id has **no authority** — the server derives the actor and
+refuses a client `user_id` with 403 — but it still controls whether the button
+renders. **Logged, not fixed during acceptance.**
+
+## Closing statement
+
+```text
+OBLIGATION SECURITY GATE CLOSED — DEPLOYED AND PROVEN
+
+Boundary proof:            10/10 + execution floor
+Browser acceptance:        passed
+Aggregate release smoke:   30/31
+Open unrelated defect:     leasing reassignment assertion 5b
+```
