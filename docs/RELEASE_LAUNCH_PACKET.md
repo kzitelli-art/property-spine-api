@@ -23,22 +23,22 @@ That is the whole reason for the order.
 | App PR | **#26** — `https://github.com/kzitelli-art/property-spine-app/pull/26` |
 | App SHA | **`b35ed66`** |
 | API PR | **#32** — `https://github.com/kzitelli-art/property-spine-api/pull/32` |
-| API SHA | **`26a14c0`** |
+| API SHA | **`f6ab9f6`** |
 | Merge order | **app #26 → then API #32, immediately** |
 | Full record | `docs/SECURITY_OBLIGATIONS_ROUTE.md` (API repo) |
 
 ## Roles — every role needs a name; one person may hold several
 
 ```text
-Presses merge on app PR #26 ....................... ____________________
-Confirms the new app SHA is live .................. ____________________
-Presses merge on API PR #32 ....................... ____________________
-Watches the Render API build ...................... ____________________
-Runs the deployed smoke ........................... ____________________
-Runs the browser acceptance ....................... ____________________
-Authority to call rollback ........................ ____________________
-Records the final receipt ......................... ____________________
-FINAL GO/NO-GO CALL ............................... ____________________
+Presses merge on app PR #26 ....................... Kameron Zitelli
+Confirms the new app SHA is live .................. Kameron Zitelli
+Presses merge on API PR #32 ....................... Kameron Zitelli
+Watches the Render API build ...................... Kameron Zitelli
+Runs the deployed smoke ........................... Kameron Zitelli
+Runs the browser acceptance ....................... Kameron Zitelli
+Authority to call rollback ........................ Kameron Zitelli
+Records the final receipt ......................... Kameron Zitelli
+FINAL GO/NO-GO CALL ............................... Kameron Zitelli
 ```
 
 ## Production facts — CONFIRMED by the owner 2026-08-02, do not re-ask
@@ -74,11 +74,36 @@ has **no `.git`**; use `echo $RENDER_GIT_COMMIT`, not `git rev-parse`.
 ## Health
 
 ```text
-GET https://property-spine-api.onrender.com/health              → { ok, db_time }
-GET https://property-spine-api.onrender.com/health/migrations   → needs x-operator-key
+GET https://property-spine-api.onrender.com/health   → { ok, db_time }
 ```
 
-Never paste the key into a shared channel or a screenshot.
+**`/health/migrations` DOES NOT EXIST.** `docs/deployment.md:137–142` documents
+it, but `server.js` defines only `GET /health` at `:246`; a repo-wide search
+finds the path in documentation and nowhere else. Do not send anyone to curl it.
+
+Read migration state instead in the **Neon SQL editor** — read-only, no
+credential leaves the browser, nothing deployed, no environment change:
+
+```sql
+select version from schema_migrations order by version;
+```
+
+Compare with the candidate's own files:
+
+```bash
+ls migrations/*.sql | sed -E 's#.*/([0-9]+).*#\1#' | sort
+```
+
+Anything in the repository and absent from that list **runs during `prestart`
+on the next deploy**. That comparison is the preflight answer.
+
+**Migration 121 is already half-resolved from source:** there is no
+`121_*.sql` in `migrations/`, on this candidate or on `main` — the sequence
+runs 120 → 122. `migrate.js` iterates files that exist, so **nothing named 121
+can execute during this deploy.** What remains is only whether production's
+ledger carries a stale `121` row; the query above settles it.
+
+Never paste an operator key into a chat, a screenshot, or a shared channel.
 
 ## Smoke — run in the Render Shell after the API is healthy
 
@@ -152,7 +177,7 @@ operator should have to understand any of the machinery above.
 [ ] no deploy already running on either service
 [ ] expected deployed SHAs recorded
 [ ] /health green
-[ ] /health/migrations green
+[ ] deployed migration ledger read and compared
 [ ] migration 121 explicitly classified
 [ ] rollback path verified — not assumed
 [ ] named operator present for every role
