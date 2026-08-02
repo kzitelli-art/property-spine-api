@@ -3656,10 +3656,6 @@ module.exports = function operatorModule(deps) {
   });
 
 
-  // LEASEABLE UNITS for the send-application selector. Session-gated, read-only,
-  // over the EXISTING availability projection (availability.js readAvailability)
-  // — no second availability system. Returns only spaces that can be offered
-  // (availability_state !== 'unavailable'); property is the session's scope.
   // ══════════════════════════════════════════════════════════════════
   //  LEASEABLE UNITS — the send-application selector.
   //

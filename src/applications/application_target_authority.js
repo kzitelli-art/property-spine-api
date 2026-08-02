@@ -44,10 +44,10 @@
 //
 //  ── CANONICAL AVAILABILITY, NEVER THE LEGACY MODULE ──────────────────
 //  Offerability is read from availabilityRead (surfaces/availability_read),
-//  the same truth the operator availability surface renders. This file does
-//  NOT import src/tenancy/availability.js — that legacy projection carries a
-//  weaker commitment model (it labelled every standalone future lease
-//  'locked') and is being retired.
+//  the same truth the operator availability surface renders. The legacy
+//  src/tenancy/availability.js projection this replaced carried a weaker
+//  commitment model — it labelled every standalone future lease 'locked'
+//  regardless of proof — and was DELETED in Commit E.
 //
 //  WRITES NOTHING.
 // ════════════════════════════════════════════════════════════════════

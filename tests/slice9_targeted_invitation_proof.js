@@ -168,8 +168,11 @@ async function refusal(fn) {
     ok(/applicationTargetAuthority\.resolveApplicationTarget/.test(opsrc),
       "unitOfferableState is now an adapter over the authority");
     const legacyRefs = (opsrc.match(/require\(["']\.\.\/tenancy\/availability["']\)/g) || []).length;
-    ok(legacyRefs === 1,
-      `only ONE legacy availability reference remains in operator.js — leaseable-units, which Commit D cuts (found ${legacyRefs})`);
+    // Was 1 at Commit B (leaseable-units still on the legacy read). Commit D cut
+    // it over and Commit E deleted the module, so the honest expectation is now
+    // ZERO. Tightened, not relaxed.
+    ok(legacyRefs === 0,
+      `ZERO legacy availability references remain in operator.js (found ${legacyRefs})`);
 
     console.log("\n── PROVIDER DISPATCH CANNOT BYPASS RESOLUTION ───────────");
     //  commBoundary is unwired, so a bypassed refusal would surface as

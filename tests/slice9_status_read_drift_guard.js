@@ -37,7 +37,12 @@ const GUARDED = [
   "src/applications/applicationSubmission.js",
 ];
 // Explicitly NOT guarded — Pass 2 owns these.
-const PASS_2 = ["src/tenancy/availability.js", "src/maintenance/turn_priority.js",
+// src/tenancy/availability.js was listed here and is now DELETED (Commit E):
+// its two internal decision consumers moved to canonical availability, and the
+// bare public GET /availability route it mounted had zero repository callers.
+// A file that no longer exists cannot be guarded; its removal is asserted by
+// slice9_route_retirement_proof.js instead.
+const PASS_2 = ["src/maintenance/turn_priority.js",
   "src/applications/leasepackets.js"];
 
 const read = (f) => fs.readFileSync(path.join(REPO, f), "utf8");
@@ -112,12 +117,18 @@ ok("and it carries no bind placeholder that could renumber a caller's params",
 section("F  Pass 2 files are UNTOUCHED by this pass");
 // Asserting their known-defective lists are still present is the honest way to
 // prove this pass did not quietly widen inventory authority.
-ok("availability.js still carries its own list (Pass 2 owns it)",
-  /status in \('submitted','tenant_signed','lease_ready'\)/.test(read(PASS_2[0])));
+// Files are named EXPLICITLY, not indexed. These were PASS_2[0..2] positional
+// lookups, so deleting availability.js in Commit E shifted every assertion onto
+// the wrong file and ran the third off the end of the array. A list whose
+// meaning depends on its order is a trap the next edit springs.
+ok("availability.js is DELETED — Commit E retired it, list and all",
+  !fs.existsSync(path.join(REPO, "src/tenancy/availability.js")));
 ok("turn_priority.js still carries its own list (Pass 2 owns it)",
-  /status in \('submitted','tenant_signed','lease_ready','accepted_term_required'\)/.test(read(PASS_2[1])));
+  /status in \('submitted','tenant_signed','lease_ready','accepted_term_required'\)/
+    .test(read("src/maintenance/turn_priority.js")));
 ok("leasepackets.js still carries its own list (Pass 2 owns it)",
-  /\["lease_ready", "tenant_signed", "approved"\]/.test(read(PASS_2[2])));
+  /\["lease_ready", "tenant_signed", "approved"\]/
+    .test(read("src/applications/leasepackets.js")));
 for (const f of PASS_2) {
   ok(`${f} does NOT yet consume the read authority`,
     !/application_lifecycle_read/.test(read(f)));
