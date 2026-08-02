@@ -12,10 +12,23 @@
 # Prints the application id at the end — use it as APP_ID for the proof.
 # ════════════════════════════════════════════════════════════════════
 set -e
+
+# Production-write guard. These steps write persons, classifications and
+# lease_applications through psql "$DATABASE_URL" — production in the Render
+# Shell — and never clean up. Sourcing also sets pipefail, so the curl
+# pipelines below can no longer report success on a failed request.
+. "$(dirname "$0")/_db_target_guard.sh"
+
 API="${API:-http://localhost:$PORT}"
 [ -z "$PORT" ] && API="${API:-https://property-spine-api.onrender.com}"
 KEY="$OPERATOR_KEY"
 DEMO="a50fbdd0-3642-431e-b532-0dcd6ab8a4fe"
+
+# Refuses unless the database target parses, the property is the pinned Demo
+# Building, and a per-run acknowledgement names both. The guard checks $DEMO
+# against its own pin — editing the line above does not widen this.
+pspine_require_db_target PSPINE_WRITE_ACK_CLEAN_QA "$DEMO" \
+  "a QA person, an internal_qa classification and a lease application"
 PHONE="+17245550${RANDOM:0:3}"   # fresh throwaway phone → fresh person
 NAME="QA Anchor $(date +%H%M%S)"
 
@@ -27,8 +40,9 @@ echo "unit=$UNIT"
 
 # 1) INTAKE — canonical lead creation (person born here)
 echo; echo "── 1. intake ──"
-curl -s -X POST "$API/leasing/intake" -H "Content-Type: application/json" \
-  -d "{\"property_id\":\"$DEMO\",\"name\":\"$NAME\",\"phone\":\"$PHONE\",\"source\":\"qa_anchor_proof\"}" | head -c 300; echo
+INTAKE_RESP=$(curl -s -X POST "$API/leasing/intake" -H "Content-Type: application/json" \
+  -d "{\"property_id\":\"$DEMO\",\"name\":\"$NAME\",\"phone\":\"$PHONE\",\"source\":\"qa_anchor_proof\"}")
+printf '%s\n' "${INTAKE_RESP:0:300}"
 
 # get the person_id we just created
 PERSON=$(psql "$DATABASE_URL" -tAc "select id from persons where primary_phone_e164='$PHONE' order by created_at desc limit 1")
@@ -41,24 +55,31 @@ psql "$DATABASE_URL" -c "insert into person_property_classifications (person_id,
 
 # 3) APPLICATION — canonical create
 echo; echo "── 3. application ──"
-APP=$(curl -s -X POST "$API/properties/$DEMO/applications" -H "Content-Type: application/json" -H "x-operator-key: $KEY" \
-  -d "{\"applicant_name\":\"$NAME\",\"unit_id\":\"$UNIT\",\"rent\":2900,\"deposit\":2900}" | grep -o '"id":"[0-9a-f-]\{36\}"' | head -1 | grep -o '[0-9a-f-]\{36\}')
+APP_RESP=$(curl -s -X POST "$API/properties/$DEMO/applications" -H "Content-Type: application/json" -H "x-operator-key: $KEY" \
+  -d "{\"applicant_name\":\"$NAME\",\"unit_id\":\"$UNIT\",\"rent\":2900,\"deposit\":2900}")
+# grep -m1 rather than `| head -1`: head exits early and SIGPIPEs the producer,
+# which under pipefail would fail the pipeline. A missing id now fails loudly
+# here instead of leaving APP empty and corrupting every later step.
+APP=$(printf '%s' "$APP_RESP" | grep -o -m1 '"id":"[0-9a-f-]\{36\}"' | grep -o '[0-9a-f-]\{36\}')
 echo "application=$APP"
 
 # 4) APPROVE — spawns activation obligation, status → lease_ready
 echo; echo "── 4. approve ──"
-curl -s -X POST "$API/applications/$APP/approve" -H "Content-Type: application/json" -H "x-operator-key: $KEY" \
-  -d "{\"approved_by\":\"QA Anchor Proof\"}" | head -c 200; echo
+APPROVE_RESP=$(curl -s -X POST "$API/applications/$APP/approve" -H "Content-Type: application/json" -H "x-operator-key: $KEY" \
+  -d "{\"approved_by\":\"QA Anchor Proof\"}")
+printf '%s\n' "${APPROVE_RESP:0:200}"
 
 # 5) SIGN (applicant) — satisfies tenant side, status → tenant_signed
 echo; echo "── 5. sign (applicant) ──"
-curl -s -X POST "$API/applications/$APP/sign" -H "Content-Type: application/json" -H "x-operator-key: $KEY" \
-  -d "{\"party\":\"applicant\",\"signature\":\"QA\",\"signed_by\":\"$NAME\"}" | head -c 200; echo
+SIGN_RESP=$(curl -s -X POST "$API/applications/$APP/sign" -H "Content-Type: application/json" -H "x-operator-key: $KEY" \
+  -d "{\"party\":\"applicant\",\"signature\":\"QA\",\"signed_by\":\"$NAME\"}")
+printf '%s\n' "${SIGN_RESP:0:200}"
 
 # 6) COUNTERSIGN — Phase 1 acceptance, status → accepted_term_required
 echo; echo "── 6. countersign (Phase 1) ──"
-curl -s -X POST "$API/applications/$APP/countersign" -H "Content-Type: application/json" -H "x-operator-key: $KEY" \
-  -d "{\"countersigned_by\":\"QA Anchor Proof\"}" | head -c 300; echo
+COUNTER_RESP=$(curl -s -X POST "$API/applications/$APP/countersign" -H "Content-Type: application/json" -H "x-operator-key: $KEY" \
+  -d "{\"countersigned_by\":\"QA Anchor Proof\"}")
+printf '%s\n' "${COUNTER_RESP:0:300}"
 
 # confirm final state
 echo; echo "── final state ──"
