@@ -134,17 +134,28 @@ const ssl = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || "")
       const pk = application
         ? packet.assessLeasePacketEligibility(application, { expectedPropertyId: P })
         : null;
+      // ── EVERY N/A CARRIES ITS JUSTIFICATION ────────────────────────
+      //  A blank cell would be indistinguishable from an untested one. These
+      //  say WHY the question does not apply to this scenario.
+      const NA_NO_UNIT = "n/a — scenario is about an application, not a position";
+      const NA_NO_APP  = "n/a — no application under test";
+      const NA_NO_POS  = "n/a — no classified position at this property";
+      const positioned = !!av;
       const r = {
         scenario: label,
-        application_target: a ? (a.ok ? "eligible" : a.refusal_code) : "n/a",
-        invitation_creation: a ? (a.ok ? "permitted" : "refused") : "n/a",
-        submission: sub ? (sub.ok ? "permitted" : sub.refusal_code) : "n/a",
-        packet: pk ? (pk.eligible ? "eligible" : pk.reason_code) : "n/a",
-        future_commitment: av ? av.future_commitment.state : "n/a",
-        marketing_state: av ? av.marketing_state : "n/a",
+        application_target: a ? (a.ok ? "eligible" : a.refusal_code) : NA_NO_UNIT,
+        invitation_creation: a ? (a.ok ? "permitted" : "refused") : NA_NO_UNIT,
+        submission: sub ? (sub.ok ? "permitted" : sub.refusal_code) : NA_NO_UNIT,
+        packet: pk ? (pk.eligible ? "eligible" : pk.reason_code) : NA_NO_APP,
+        future_commitment: positioned ? av.future_commitment.state
+          : (unit_id ? NA_NO_POS : NA_NO_UNIT),
+        marketing_state: positioned ? av.marketing_state
+          : (unit_id ? NA_NO_POS : NA_NO_UNIT),
         turn_priority: tp ? tp.demand_tier_key : "no_turn_in_progress",
-        economic_tenancy: av ? (av.current_lease ? "active" : "none") : "n/a",
-        refusal_reason: a && !a.ok ? a.refusal_code : (sub && !sub.ok ? sub.refusal_code : null),
+        economic_tenancy: positioned ? (av.current_lease ? "active" : "none")
+          : (unit_id ? NA_NO_POS : NA_NO_UNIT),
+        refusal_reason: a && !a.ok ? a.refusal_code
+          : (sub && !sub.ok ? sub.refusal_code : "none — not refused"),
       };
       rows.push(r);
       return r;
@@ -187,13 +198,13 @@ const ssl = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || "")
       "every scenario answers all eight domains — no cell left undefined");
 
     console.log("\n── THE ANSWERS ARE NOT ONE COMPRESSED STATE ─────────────");
-    const distinct = (f) => new Set(rows.map((r) => r[f])).size;
+    const distinct = (f) => new Set(rows.map((r) => String(r[f]).startsWith("n/a") ? "n/a" : r[f])).size;
     for (const f of FIELDS) ok(distinct(f) > 1, `${f} varies across scenarios (${distinct(f)} distinct)`);
     //  The load-bearing one: two scenarios that agree on marketing state must
     //  still be free to disagree elsewhere.
     const byMarketing = new Map();
     for (const r of rows) {
-      if (r.marketing_state === "n/a") continue;
+      if (String(r.marketing_state).startsWith("n/a")) continue;
       if (!byMarketing.has(r.marketing_state)) byMarketing.set(r.marketing_state, new Set());
       byMarketing.get(r.marketing_state).add(r.turn_priority);
     }
@@ -269,11 +280,23 @@ const ssl = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || "")
     ok(conflicts >= 1, `CONFLICT appears as a real outcome (${conflicts} scenarios)`);
     ok(refusals >= 10, `refusal is the majority outcome, not an edge case (${refusals} of 20)`);
 
-    console.log("\n── THE MATRIX ───────────────────────────────────────────");
+    console.log("\n── THE MATRIX · 20 SCENARIOS × 9 DOMAINS ────────────────");
+    const COLS = [
+      ["application_target",  "APPLICATION TARGET"],
+      ["invitation_creation", "INVITATION"],
+      ["submission",          "SUBMISSION"],
+      ["packet",              "PACKET"],
+      ["future_commitment",   "FUTURE COMMITMENT"],
+      ["marketing_state",     "MARKETING"],
+      ["turn_priority",       "TURN PRIORITY"],
+      ["economic_tenancy",    "ECONOMIC TENANCY"],
+      ["refusal_reason",      "REFUSAL REASON"],
+    ];
     for (const r of rows) {
-      console.log(`   ${r.scenario.padEnd(48)} target=${String(r.application_target).padEnd(32)} `
-        + `commit=${String(r.future_commitment).padEnd(8)} turn=${String(r.turn_priority).padEnd(22)} `
-        + `packet=${r.packet}`);
+      console.log(`\n  ${r.scenario}`);
+      for (const [k, label] of COLS) {
+        console.log(`      ${label.padEnd(20)} ${r[k]}`);
+      }
     }
 
   } catch (e) {
