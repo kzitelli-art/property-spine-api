@@ -276,3 +276,21 @@ then be corrected. Recorded here so that intent is not lost to a future tidy-up.
 
 **Proof level: Locally exercised.** Source inspection plus directly executed Node
 exit-semantics checks. No harness was run, no database contacted.
+
+---
+
+## Ruling on this report (2026-08-02)
+
+Recorded as governing. **This lane is closed; no enforcement work follows from
+it in this branch.**
+
+| Decision | Status |
+|---|---|
+| **Do not build a test runner** | Ruled. Option 2 above is rejected. |
+| **`_run_receipt.js` defaulting `expectedAtLeast` to 1** | **Registered as a proof-integrity gap.** Not fixed here. A harness that runs one setup assertion and skips every semantic case satisfies the default and reports green. |
+| **The dead harness stays broken** | `tests/test_adapter_seam.db.js:13` remains the real negative control for the load-time-error case. **It must not be tidied up.** Correct it only after a boundary demonstrably rejects it. |
+| **Node-version exposure** (no `engines`; 3 harnesses on default rejection semantics) | **Parked.** Recorded, not actioned. |
+| **Per-harness semantic / dataset floors** | **Parked.** Recorded, not actioned. |
+| **Unmeasured: how many harnesses are data-driven** | Remains open and deliberately uncounted (see *What this report does not establish*). |
+
+**Do not expand this branch into test-infrastructure implementation.**
