@@ -198,6 +198,7 @@ async function resolveInboundOpportunityDecision(client, {
   //  original terminal event is never mutated or deleted — the reopen is a NEW
   //  append-only event.
   let reopened;
+  let opportunity_already_open = false;
   try {
     reopened = await lifecycleService.reopenInTransaction(client, {
       conversationId: conversation_id, propertyId: property_id,
@@ -208,15 +209,28 @@ async function resolveInboundOpportunityDecision(client, {
         : undefined,
     });
   } catch (e) {
-    //  FAILURE BEHAVIOUR: the decision stays open, owned and visible, with the
-    //  exact blocked reason. Nothing is marked handled.
-    return {
-      ok: false, decision_remains_open: true,
-      refusal_code: e.code || "reopen_failed",
-      httpStatus: e.httpStatus || 500,
-      refusal_reason: e.publicMessage || e.message,
-      obligation_id,
-    };
+    //  ── THE ALREADY-OPEN CASE, EXPLICIT ─────────────────────────────
+    //  Another actor already resolved the underlying state (an operator
+    //  reopened it directly, or it was never closed at this grain). The
+    //  obligation's meaning is "identify the opportunity, then reopen IF
+    //  APPROPRIATE" — identification is still a complete, provable answer, and
+    //  writing a DUPLICATE reopen event merely to close the obligation would
+    //  fabricate history. So: no reopen event, the selection is recorded as
+    //  proof with the already-open fact stated, and the result says so.
+    if (e.httpStatus === 409 && /not closed/i.test(e.publicMessage || e.message || "")) {
+      reopened = { ok: true, event: null };
+      opportunity_already_open = true;
+    } else {
+      //  FAILURE BEHAVIOUR: the decision stays open, owned and visible, with
+      //  the exact blocked reason. Nothing is marked handled.
+      return {
+        ok: false, decision_remains_open: true,
+        refusal_code: e.code || "reopen_failed",
+        httpStatus: e.httpStatus || 500,
+        refusal_reason: e.publicMessage || e.message,
+        obligation_id,
+      };
+    }
   }
 
   //  3 · CLOSE THE DECISION WITH PROOF — the attributed decision and actor.
@@ -228,7 +242,9 @@ async function resolveInboundOpportunityDecision(client, {
         selected_by_user_id: String(actor_user_id),
         reopen_event_id: reopened.event ? String(reopened.event.id) : null,
         source_comm_event_id: source_comm_event_id ? String(source_comm_event_id) : null,
-        basis: "explicit_human_selection",
+        opportunity_already_open,
+        basis: opportunity_already_open
+          ? "explicit_human_selection_already_open" : "explicit_human_selection",
       },
     });
     await completeObligation(client, { obligation_id, completed_by: actor_user_id });
@@ -239,8 +255,11 @@ async function resolveInboundOpportunityDecision(client, {
     obligation_id,
     opportunity_id: String(conversion_id),
     reopen_event_id: reopened.event ? reopened.event.id : null,
+    opportunity_already_open,
     selected_by_user_id: actor_user_id,
-    receipt: "Reply attributed and the opportunity reopened.",
+    receipt: opportunity_already_open
+      ? "Reply attributed. The opportunity was already open, so no new reopen was recorded."
+      : "Reply attributed and the opportunity reopened.",
   };
 }
 
