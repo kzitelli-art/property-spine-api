@@ -1304,3 +1304,211 @@ cannot be reconciled, and would spend two authorizations where one is needed.
 **Proof level of Appendix C: Locally exercised.** Source and doctrine inspection
 only. C4 answers the escalation trigger from source; it does not establish how
 many users actually hold multiple assignments, which requires evidence set A/B.
+
+---
+
+# Appendix D — Revised consultant ruling (2026-08-02)
+
+Ruling received after C4 answered the escalation trigger. **Finding 4 is
+reclassified from a founder-specific defect to a systemic S2 defect on the normal
+staff login path.** Recorded as governing, not advisory. Hold stands.
+
+---
+
+## D1 — Canonical renaming: A090-4 becomes 4A and 4B
+
+The consultant's labels are adopted as canonical. Earlier appendices are not
+rewritten; the mapping is:
+
+| Consultant label | This report | Status |
+|---|---|---|
+| **4A — credential-delivery routing defect** | A090-4 delivery half (C1 left column) | Retires with the operations-line split and corrected delivery truth |
+| **4B — staff-session scope defect** | A090-4 session-scoping half (C1 right column) | **Not retired by the split.** Must be resolved as S2 before broader real-operator activation |
+
+**4A** — assignment ordering chooses the outbound property line; can silently
+refuse SMS while returning HTTP 200.
+
+**4B** — the normal phone re-login path infers active property from assignment
+ordering; affects **every multi-property staff member** using that path; can
+change after unrelated assignment administration (D3).
+
+---
+
+## D2 — Revised classification and sequencing
+
+> **P1 — systemic operator-context integrity defect and activation blocker.**
+
+**Affected population**, as established by C4: every current or future
+multi-property staff member who uses phone re-login without a property-bound
+invite proof. Not an edge case — the authority model deliberately permits one
+user to hold active assignments at multiple properties
+(`uq_pta_one_active`, `070:194`), so the login path contains a general defect
+**in a supported operating state**.
+
+### 4B precedes all of the following
+
+- Broader activation of the real operating property.
+- Routine phone re-login for multi-property staff.
+- Expanding property access for existing staff.
+- Any workflow where the active property is not unmistakably visible before a
+  consequential write.
+
+### P0 reserved, and for what
+
+**P0 remains reserved for evidence of actual wrong-property writes,
+communications, money actions, or other irreversible consequences.** 4B is not
+P0 today. It is also no longer something that can wait behind the operations-line
+work.
+
+Evidence set D (C6) is what would move this to P0 — sessions minted with their
+property scopes, checked against what those sessions then wrote. Recorded so the
+promotion condition is explicit rather than a judgment call later.
+
+### The sequencing ruling
+
+```text
+S1 phone identity may remain
+→ S2 must be completed
+→ then phone re-login can be considered safe for multi-property staff
+```
+
+**Until S2 is complete, the deterministic invite and shell-proof routes are not
+conveniences — they are the only described login paths that bind identity proof
+to an intentional authorized property.** That reframes B3: the shell bootstrap
+tool is currently load-bearing for correctness, not just for recovery.
+
+---
+
+## D3 — The assignment-edit side effect is accepted, and it worsens the defect
+
+C4's finding (`teamaccess.js:614` stamps `updated_at = now()` on every assignment
+PATCH) is accepted as changing the character of the defect, not merely its
+detail:
+
+| Without this fact | With this fact |
+|---|---|
+| *The login path chooses the wrong concept for deciding the property.* | ***Unrelated access administration can silently change a user's future operating context.*** |
+
+The hidden coupling:
+
+```text
+manager edits modules or role on Property B
+→ assignment.updated_at changes
+→ Property B becomes the preferred login row
+→ staff member's next session lands on Property B
+```
+
+The administrator making the edit is not choosing a landing property. The staff
+member logging in is not choosing one either. **The operating context changes
+anyway.** Three derived risks, recorded as ruled:
+
+1. **Context drift.** The result is not fixed at account creation. It can change
+   throughout the user's employment, whenever assignments are maintained.
+2. **Poor auditability.** A later investigation sees a valid assignment edit and a
+   valid session, with no event stating *"active operating property changed from
+   A to B."* The causal link exists only because two unrelated features share
+   `updated_at`.
+3. **False stability.** Ordinary users may receive the same property repeatedly,
+   making the behavior look deliberate — until an unrelated access edit changes
+   it. **A stable wrong rule is harder to detect than a visibly random one.**
+
+**Effect on severity:** no new label. It makes containment more urgent and
+**rules out treating the current behavior as a tolerable temporary default.**
+
+### One precision worth carrying into the S2 build
+
+§21 (`PHILOSOPHY.md:649–658`) names the forbidden state as:
+
+```text
+Solo chrome
+→ another property's data
+```
+
+**4B does not produce that state, and that is what makes it harder to catch.**
+The shell, the property name, the modules and the reads all agree — they simply
+agree on a property the operator did not choose. It is coherent and wrong rather
+than visibly inconsistent, which is the same shape as risk 3 above and the reason
+detection cannot rely on a chrome/data mismatch.
+
+---
+
+## D4 — S2 acceptance conditions (recorded as the ruling's, not proposed)
+
+The fix **must not repair the ordering.** *"A third tiebreak would only make the
+wrong decision rule deterministic."*
+
+The correct starting primitive is the set-shaped read that already exists
+(`staff_identity_resolver.js:290–291`, C2):
+
+```text
+verified staff user
+→ full active authorized-property set
+→ explicit scope decision
+→ server validates the chosen scope
+→ property-scoped canonical session
+```
+
+**Acceptance conditions:**
+
+1. With **zero** authorized properties, **no operating session is minted.**
+2. With **one** authorized property, the server may establish that scope directly.
+3. With **multiple** authorized properties, the system makes an **explicit scope
+   decision** rather than inferring one from role-management authority,
+   assignment recency, row order, or phone configuration.
+4. The selected property is **validated against the user's active assignment
+   set.**
+5. The resulting session **carries the active server-authorized property.**
+6. The shell **clearly reflects that same property.**
+7. All subsequent reads and writes **use that same scope.**
+8. Changing modules, role labels, or unrelated assignment metadata **must not
+   silently change the user's next operating property** (D3).
+
+Condition 3 is the one that distinguishes this from the current behavior:
+`can_manage_roles desc, updated_at desc` is precisely an inference from
+role-management authority and assignment recency, and is named as disallowed.
+
+**In-repo doctrine support** — §21 (`PHILOSOPHY.md:632–650`) requires the server
+to derive and validate *authenticated actor, role, authorized property,
+property-team membership, module entitlement, task eligibility, session
+validity*, and states *"A client-provided property ID is never authority"* and
+*"The app shell, property name, modules, reads, and writes must all agree with
+the same server-authoritative context."* Conditions 4–7 are that paragraph
+applied to login.
+
+---
+
+## D5 — The next decision, restated
+
+The hold remains correct. **The open question is not "which tiebreak should
+win?"** It is:
+
+> **What explicit S2 scope decision completes phone re-login using the
+> authorized-property set that already exists?**
+
+That is a design decision requiring a ruling, not a code change, and it is not
+authorized in this phase.
+
+---
+
+## D6 — Citation provenance
+
+The ruling cites **`Operator App Audit.docx`** twice. **That document is not in
+this repository** — `find` over the working tree returns no match, and
+`docs/specs/` contains `DOCTRINE.md`, `HOOK_COMPARISON_SPEC.md`,
+`MONEY_INBOX_SPEND_CONTROL_SPEC.md`, `NEXT_RUNG_REVIEW_UX_SPEC.md`,
+`PROPERTY_SPINE_SPEC.md` and `WORK_ORDER_PERSON_HANDOFF.md`, none of which is it.
+
+Its claims are therefore recorded as **external and unverified from source.**
+Where the ruling's architectural points could be checked in-repo, they were, and
+they hold: the mandatory `S1 → S2` order at `PHILOSOPHY.md:598–620` (C2) and the
+server-derived authority requirements at `PHILOSOPHY.md:632–658` (D4). No claim
+in this appendix rests on the external document alone.
+
+---
+
+**Proof level of Appendix D: Reported** — this appendix records a ruling and its
+reasoning. It is the only section of this report at that level; every finding it
+governs remains *Locally exercised*. Nothing here was verified against a
+database, and the ruling's population estimate for 4B is bounded by C4's limit —
+source establishes that the capability is universal, not how many users currently
+exercise it.
