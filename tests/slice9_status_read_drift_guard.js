@@ -42,8 +42,9 @@ const GUARDED = [
 // bare public GET /availability route it mounted had zero repository callers.
 // A file that no longer exists cannot be guarded; its removal is asserted by
 // slice9_route_retirement_proof.js instead.
-const PASS_2 = ["src/maintenance/turn_priority.js",
-  "src/applications/leasepackets.js"];
+// Files Pass 2 has NOT yet reached. turn_priority.js left this list in Commit G;
+// leasepackets.js leaves it in Commit H.
+const PASS_2 = ["src/applications/leasepackets.js"];
 
 const read = (f) => fs.readFileSync(path.join(REPO, f), "utf8");
 // Strip comments so documentation naming a defect is not mistaken for the defect.
@@ -123,9 +124,15 @@ section("F  Pass 2 files are UNTOUCHED by this pass");
 // meaning depends on its order is a trap the next edit springs.
 ok("availability.js is DELETED — Commit E retired it, list and all",
   !fs.existsSync(path.join(REPO, "src/tenancy/availability.js")));
-ok("turn_priority.js still carries its own list (Pass 2 owns it)",
-  /status in \('submitted','tenant_signed','lease_ready','accepted_term_required'\)/
+// CORRECTED by Commit G. turn_priority.js no longer reads application status at
+// all: an application holds no space, so it cannot create an incoming-resident
+// deadline. The assertion flips from "still defective" to "now corrected" —
+// the guard's job is to state what is true, not to preserve a defect.
+ok("turn_priority.js NO LONGER carries an application status list (Commit G)",
+  !/status in \('submitted','tenant_signed','lease_ready','accepted_term_required'\)/
     .test(read("src/maintenance/turn_priority.js")));
+ok("and never queries lease_applications at all",
+  !/lease_applications/.test(code("src/maintenance/turn_priority.js")));
 ok("leasepackets.js still carries its own list (Pass 2 owns it)",
   /\["lease_ready", "tenant_signed", "approved"\]/
     .test(read("src/applications/leasepackets.js")));
