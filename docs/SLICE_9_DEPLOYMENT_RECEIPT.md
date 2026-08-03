@@ -1,101 +1,70 @@
 # Slice 9 — Production Acceptance Receipt
 
-**Classification: BLOCKED — the live Neon ledger cannot be queried from the build
-environment, and the production origin is denied by the environment's network
-policy, so no production proof can be run and no merge may proceed.**
+**Classification: DEPLOYMENT ACCEPTED — with one named evidence gap: the
+production decision-door happy path is unproven because no inbound decision
+currently exists.**
 
-Date: 2026-08-03. This receipt records Big Build 1 up to the point where it
-stopped, and exactly why it stopped.
+Date: 2026-08-03. This receipt supersedes the BLOCKED classification this file
+carried before the live ledger could be read; that history is preserved in §1.
 
 ---
 
 ## 1. Migration authority
 
-The gate is a direct query against the live ledger:
+The gate was a direct query against the live Neon ledger:
 
 ```sql
 select version, name from schema_migrations order by version desc limit 15;
 ```
 
-**It was not run.** Two independent reasons, both verified rather than assumed:
+**It could not be run from the build environment.** No Neon credential exists
+there (no `DATABASE_URL`, no `.env`, no deploy config — only `.env.example` with
+a placeholder), and the network policy denies `property-spine-api.onrender.com`,
+`*.neon.tech` and `dashboard.render.com`; the proxy answers `403` to `CONNECT`.
+The build therefore stopped at Step 1 and classified itself BLOCKED rather than
+merge on inference. **The owner ran the query and supplied the result**, which is
+what unblocked the deploy.
 
-1. **No credential exists in this environment.** There is no `DATABASE_URL` in the
-   process environment, no `.env` in either repository (only `.env.example`, which
-   carries the placeholder `postgresql://...`), and no deploy configuration
-   containing a connection string. Render's dashboard, where the value lives, is
-   not reachable either.
-2. **The network policy denies the hosts.** `property-spine-api.onrender.com`,
-   `console.neon.tech`, a representative `*.neon.tech` compute endpoint, and
-   `dashboard.render.com` all fail. The agent proxy answers `403` to `CONNECT` and
-   logs `connect_rejected — gateway answered 403 to CONNECT (policy denial or
-   upstream failure)`. A direct TCP attempt to port 5432 has no route.
+A finding the branch rescan surfaced, worth keeping: the build was authorised on
+the understanding that 127 and 128 were the two unspent numbers. In fact the
+branch introduced **four** migration files absent from `main` — 123, 124, 127 and
+128 — with 123 and 124 sitting *below* the 126 ceiling already applied in
+production. Had either been spent under a different name, `migrate.js` would have
+hard-stopped the deploy and applied nothing, 127 and 128 included.
 
-Everything that does not require the ledger was completed:
+**Pre-merge ledger:** ceiling 126, jumping 126 → 122. All of 123, 124, 125, 127
+and 128 absent. Nothing above 126. No number spent under another name.
 
-**Branch rescan — every remote branch, migrations 123–128.** Results:
+**Post-deploy ledger:**
 
-| version | where it exists |
-|---|---|
-| 123 `property_operating_timezone` | this branch, `claude/slice-9-demand-evidence` , `scratch/slice-9-appointment-foundation-ledger-blocked`, `archive/slice-9-pre-main-sync-fc23869`. **Not on `main`.** |
-| 124 `application_lifecycle_milestones` | same four branches. **Not on `main`.** |
-| 125 `application_lifecycle_enforcement` | staged only, `docs/slices-6-to-10/deployment_b/`, outside the runner |
-| 126 `obligation_missed_recognition` | `main` and fifteen branches — the shared, already-applied one |
-| 127 `appointment_attribution_bridge` | **this branch only** |
-| 128 `lifecycle_event_opportunity_attribution` | **this branch only** |
-
-No other branch claims 127 or 128. No unexpected migration exists above the
-ceiling — 128 is the highest number anywhere in the repository.
-
-**Migration 125 is unchanged and outside the runner.** md5
-`b4b817a5c3d65a01fef0783ccdc968b4`, in `docs/slices-6-to-10/deployment_b/`. The
-runner globs `migrations/` for `NNN_*.sql`; a file in `docs/` cannot be picked up.
-
-**A finding that changes the shape of the gate.** The build was authorised on the
-understanding that 127 and 128 were the two unspent numbers. The rescan shows this
-branch introduces **four** migration files absent from `main`: 123, 124, 127 and
-128. 123 and 124 sit *below* the highest number known applied in production (126).
-
-That is not necessarily a conflict. `migrations/migrate.js` applies any unapplied
-version regardless of numeric order, so 123 and 124 running after 126 is expected
-and safe *if the ledger does not already hold those numbers under other names*. If
-it does, the runner's "MIGRATION NUMBER ALREADY SPENT" guard hard-stops the deploy
-and applies **nothing** — including 127 and 128. Which of those two worlds we are
-in is unknowable without the ledger. It is directly plausible that 123 and 124 are
-already applied from the earlier Slice 9 lane, because production is already known
-to carry `121 = ai_leasing_operating_context`, a migration whose file exists only
-on branches. The gate must therefore cover four numbers, not two:
-
-| version | ledger name that is safe |
-|---|---|
-| 123 | absent, or `property_operating_timezone` |
-| 124 | absent, or `application_lifecycle_milestones` |
-| 127 | absent, or `appointment_attribution_bridge` |
-| 128 | absent, or `lifecycle_event_opportunity_attribution` |
-
-Any of those numbers present under a different name means renumbering — and the
-renumbering must be derived from the ledger, never from assumption.
-
-## 2. Freshness and integration
-
-Both `main` branches had moved to pick up the Ask Spine Slice 1 lane.
-
-| | API | app |
+| version | name | verdict |
 |---|---|---|
-| `main` before | `10c43b3` | `89a968c` |
-| `main` after | `efb8c71` (PR #31) | `5cbe948` (PR #25) |
-| branch before | `2c38ca3` | `3181049` |
-| branch after | `c3bc0ba` | `ab29637` |
-| behind `main` | 0 | 0 |
-| ahead | 60 | 9 |
-| working tree | clean | clean |
-| overlapping file | `server.js` | `index.html` |
+| 123 | `property_operating_timezone` | applied exactly once |
+| 124 | `application_lifecycle_milestones` | applied exactly once |
+| 126 | `obligation_missed_recognition` | pre-existing, untouched |
+| 127 | `appointment_attribution_bridge` | applied exactly once |
+| 128 | `lifecycle_event_opportunity_attribution` | applied exactly once |
 
-Integrated by **merge**, not rebase. No pushed history was rewritten. Both
-overlapping files auto-merged with both lanes intact: Ask Spine's mount survives at
-`server.js:3047`, and the app's Ask Spine composer coexists with
-`openInboundDecision` and `psMkEvidence`.
+Migration **125 is absent**, still staged at `docs/slices-6-to-10/deployment_b/`
+(md5 `b4b817a5c3d65a01fef0783ccdc968b4`), outside the runner. The duplicate-version
+query returned zero rows. No renumbering was required.
 
-## 3. Proof on the merged tree
+## 2. Deploy
+
+| | |
+|---|---|
+| **T0** | 2026-08-03T10:57:42Z — API PR #34 merged |
+| API source SHA | `00c7891` → merge commit `d3698d3` |
+| API deployed SHA | `d3698d3`, Render auto-deploy, live |
+| **T1** | 2026-08-03T11:06:08Z — app PR #29 merged |
+| App deployed SHA | `5b3be36`, **manually deployed** |
+| **T2** | app PR #30 (acceptance fix) merged → `3be1399`, **manually deployed**, verified live |
+
+The app is a Render **static site and does not auto-deploy**. Both app releases
+required Manual Deploy from the dashboard. Merging is not deploying for that
+service — a distinction worth carrying into future slices.
+
+## 3. Source proof
 
 | lane | suites | assertions |
 |---|---|---|
@@ -104,60 +73,90 @@ overlapping files auto-merged with both lanes intact: Ask Spine's mount survives
 | Harness suites — scale, evidence HTTP, inbound-decision HTTP | 3 | 91 passed, 0 failed |
 | Ask Spine — contract, HTTP, DB | 3 | 81 passed, 0 failed |
 | App harness suite | 18 | 779 passed, 0 failed |
-| Browser — inbound decision, market evidence, Ask Spine e2e | 3 | 71 passed, 0 failed |
-| **Total** | **55** | **2335 passed, 0 failed** |
+| Browser — inbound decision, market evidence, Ask Spine e2e | 3 | 75 passed, 0 failed |
+| **Total** | **55** | **2339 passed, 0 failed** |
 
-`server.js` boots on the merged tree; `/health` answers `{"ok":true}`.
+Market evidence browser rose from 32 to 36 assertions with the acceptance fix in §5.
 
-Two honest notes about how that number was reached. The scale proof and four
+Two honest notes on how that total was reached. The scale proof and four
 ambient-fixture suites failed on first run against reused databases — a duplicate
-`users_email_key` left by an earlier seeding run, and suites reading
-`select id from properties limit 1` against a regression database deliberately kept
-empty. Both are green on fresh databases and neither involves product code.
+`users_email_key` from an earlier seeding run, and suites reading
+`select id from properties limit 1` against a regression database deliberately
+kept empty. Both are green on fresh databases; neither involved product code.
 
-One real defect was found and fixed. The market-evidence browser proof asserts
-(M22) that a signed-in operator entitled to maintenance only gets the forbidden
-state; the committed seeder never created that operator, so the assertion had only
-ever passed against a session file seeded by hand. It could not reproduce from
-committed artifacts. `ab29637` repairs the seeder. Proof-harness only.
+One defect was found in the proof harness itself: the market-evidence proof
+asserts that a maintenance-only operator gets the forbidden state, but the
+committed seeder never created that operator, so the assertion had only ever
+passed against a session file seeded by hand. It could not reproduce from
+committed artifacts. Repaired before merge.
 
-## 4. Pull requests
+## 4. Production verification
 
-- API: https://github.com/kzitelli-art/property-spine-api/pull/34 — open, non-draft, `mergeable_state: clean`, 0 behind
-- App: https://github.com/kzitelli-art/property-spine-app/pull/29 — open, non-draft, `mergeable_state: clean`, 0 behind
+Every check below was run against the deployed product. The build environment
+cannot reach the production origin, so these were executed by the repository
+owner against a supplied read-only checklist and are recorded as **owner-supplied
+evidence**, not machine-observed.
 
-Both bodies lead with the merge gate. **Neither was merged.**
+**API** — health answers ok · Ask Spine unregressed · `market_evidence_v2` served
+· bounded page (12 of 12, default capped at 100, `limit=9999` clamped to max 250)
+· cursor honest · withheld count server-authored · a client-supplied
+`property_id` is ignored in favour of server-derived scope · obligation queue
+single-property · a non-decision obligation returns 404, not 403.
 
-## 5. What was NOT done, and why
+Deliberately excluded: the decision **resolution** action. It writes real leasing
+history, and a smoke test is not a reason to reopen someone's opportunity.
 
-Steps 4, 5 and 6 of Big Build 1 — deploy the API, deploy the app, verify in
-production — were not attempted. Merging is what runs migrations against
-production, and the gate that authorises it could not be closed. Beyond that,
-every production verification the build requires (deployed SHA, health, ledger
-shows 127/128 applied exactly once, Ask Spine answers, obligation queue secure,
-decision detail and resolution, bounded evidence route, honest empty and partial
-states, desktop and 390px screenshots *from the deployed product*) requires
-reaching `property-spine-api.onrender.com`, which this environment cannot do.
+**App** — PARTIAL state with the withheld sentence above every number · the
+generic wording correctly selected because `unresolved_opportunity_count` is 0 ·
+four funnels in sequence, `PERCENTAGE UNAVAILABLE`, no 0% anywhere · honest
+source disclosure ("recorded for the lead and inherited as context … not
+independently recorded for each opportunity") · server-filtered, paged rows ·
+"What changes the answer" below the funnels on desktop and **above** them at
+phone width · no horizontal overflow · no UUID rendered anywhere.
 
-Merging without that would produce a deployment that could not be verified and
-could not be rolled back on evidence — and the build's own instruction is explicit
-that merge and health alone do not constitute acceptance.
+## 5. Acceptance defect found in production, and closed
 
-## 6. What unblocks this
+On a property whose current window held no newly opened opportunities, the page
+rendered `0 of 0 leasing opportunities` directly above `12 matching · showing 12`.
+Both numbers were correct — the funnel cohort is window-scoped, the supporting
+rows are the property's population observed through `as_of` — but nothing said
+they counted different things, so the pairing invited one reading and it was the
+wrong one. That is an acceptance defect, not a documentation gap.
 
-Either one is sufficient to resume:
+It never appeared locally because every fixture put opportunities inside the
+window. Real data with an empty current month exposed it.
 
-1. The Neon connection string, or the output of
-   `select version, name from schema_migrations order by version desc limit 15;`
-   run against production — **and** network access to
-   `property-spine-api.onrender.com` for the production proofs; or
-2. Running Steps 4–6 from an environment that already has both.
+Fixed with labels only: the funnel states `… in this window`; the supporting
+count states `12 property opportunities`, or `2 of 12 property opportunities`
+when filtered. Both totals remain the server's. No calculation, filtering, API
+contract or hierarchy changed. Proven by M12b/M12c (the labels) and M17b/M17c,
+which reproduce the production condition directly rather than asserting around
+it. Verified live at `3be1399` on desktop and at phone width.
 
-If the ledger comes back with 123, 124, 127 and 128 all absent or all matching the
-names above, the merge is safe and the sequence resumes at Step 4 unchanged.
+## 6. The named evidence gap
+
+**The inbound decision door's happy path is unproven in production.** No
+`resolve_inbound_opportunity` obligation exists on any live property, so only the
+refusal posture could be verified: an out-of-scope obligation returns 404, and
+another property's operator cannot read a decision.
+
+The full path — a qualifying inbound reply opening a decision, candidates offered
+unranked, an operator selecting one, exactly one opportunity reopening while its
+siblings stay terminal, a duplicate confirm proving idempotent — is proven at
+**28/0 in a real browser** against a real API branch and real Postgres. It becomes
+production-proven the first time a genuine inbound reply lands on a closed
+opportunity. It is not claimed as production-proven before then.
+
+## 7. Rollback position
+
+127 and 128 are additive, write no values, and each carries its rollback DDL in
+its file header. 123 and 124 likewise added columns and a validation trigger
+rather than rewriting data. The migrations and their writers are one deployable
+unit: rolling back the code without the columns is safe; rolling back the columns
+without the code is not.
 
 ---
 
-**Classification: BLOCKED — live production ledger unreadable and production origin
-unreachable from the build environment; no migration may be spent and no
-production proof may be claimed.**
+**Classification: DEPLOYMENT ACCEPTED — with one named evidence gap: the
+production decision-door happy path is unproven because no inbound decision
+currently exists.**

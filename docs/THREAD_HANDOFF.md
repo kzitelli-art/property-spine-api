@@ -1,14 +1,144 @@
 # Property Spine — Thread Handoff
 
-**Current as of `main` @ `8290adf` · 2026-08-01.**
-Rewritten from the repository and from executed runs, not from the prior
-handoff — which had gone 33 commits stale and was being read by every new
-session as current truth.
+**Current as of `main` @ `4983e5d` · 2026-08-03 (late).**
+Read the top section first — it wins over everything below it. Each dated
+section supersedes the ones under it; nothing is deleted, because the reasoning
+in the older sections is still the clearest account of how each trap was found.
+
+This file went 33 commits stale once and was read by every new session as
+current truth. Re-date it whenever `main` moves materially.
 
 ---
 
 ## ══════════════════════════════════════════════════════════════════
-##  HANDOFF — 2026-08-03. Read this whole section before touching anything.
+##  STATE — 2026-08-03 (late). THIS SECTION WINS over everything below.
+## ══════════════════════════════════════════════════════════════════
+
+### ⚠ `main` CANNOT BOOT RIGHT NOW. That is deliberate.
+
+Migration **129 is in the build and in no ledger**, so the verify gate refuses
+to start and Render keeps serving the previous build. **Production looks healthy
+while running older code.** This is expected, not a regression — the fix is to
+release 129, not to revert.
+
+```text
+source  main        4983e5d      repository migration ceiling 130 (on the Slice A branch)
+production          d3698d3      APPLIED ledger ceiling 128
+divergence          deliberate, pending the 129 activation receipt
+```
+
+Merging anything to `main` does not make this worse; the red is caused solely by
+129 already being there.
+
+### The migration state, exactly
+
+```text
+applied:                       120, 121, 122, 123, 124, 126, 127, 128
+unused historical gap:         125   (never applied anywhere; staged outside the runner)
+claimed, unreleased:           129 (property-line uniqueness, on main)
+                               130 (communication lines, on the Slice A branch only)
+next free number:              131 — RE-READ THE LEDGER AND SCAN ALL BRANCHES FIRST
+```
+
+**Do not reuse 125.** Authoring a new one behind live 126–128 backfills the
+sequence and creates a second misleading migration story.
+
+### There is now a required validation path — USE IT
+
+```bash
+npm run verify        # source-governance gates; DB-free; no credentials needed
+```
+
+Before this existed, the repository had **three gates and nothing invoked any of
+them** — no CI, no `npm test`. `gate_closure_boundary.js` was blind since a
+directory move and nothing noticed, because nothing ran it. `deploy.sh` now
+invokes `verify` before triggering a deploy, under `set -e`.
+
+### ⚠ THE HARNESS-ISOLATION FINDING — measured, contained, NOT repaired
+
+An audit **by connection rather than by filename** found:
+
+```text
+87  scripts across tests/ and tools/ build a connection from DATABASE_URL
+    with no guard  —  67 of them WRITE-CAPABLE
+ 5  more require HARNESS_DATABASE_URL but never perform its same-target refusal
+ 8  covered by the historical *.db.js convention
+17  genuinely guarded harnesses
+```
+
+**On Render, `DATABASE_URL` is production.** These are unsafe **capabilities** —
+not evidence any has run against production. `tools/` is the dangerous half: it
+holds `retire_hollow_leases`, `repair_invalid_task_owners`,
+`remove_duplicate_walkins`, `seed_*`.
+
+`tests/gate_harness_isolation.js` freezes the inventory as a **debt register**
+(path · measured write-class · provisional use · reason · removal condition) and
+**fails on growth**. It does NOT make the existing inventory safe.
+
+**Operational rule, effective now:** do not run any test, proof, seed or repair
+script directly from a production Render shell unless it is explicitly
+classified as structurally read-only. **`.db.js`, `_proof.js`, `smoke` and
+`test` are names, not evidence of safety.**
+
+Remediation is its own governed slice **after** Slice A. Do not mass-replace
+`DATABASE_URL` across 87 files — that would create 87 unexecuted safety claims.
+
+### Slice A — built and proven, NOT merged
+
+The canonical communication-line model (migration 130) lives on
+`claude/sms-work-order-handoff-qo3s8i`, proven **61/61** against isolated real
+PostgreSQL 16.13 and real HTTP at SHA `95f13c7`.
+
+**It is not on `main` and not in production.** Merge is blocked on: the 129
+activation receipt; re-reconciliation with current `main`; repair of two unsafe
+harnesses in its own proof set (`work_order_authority_proof.js`,
+`work_order_canonical_path_proof.js`); and the five full-schema harnesses running
+at the merge-candidate SHA. Full sequence: `docs/SLICE_A_MERGE_CHECKLIST.md`.
+
+> **"Previously green before the resolver changed" is not evidence for the
+> changed resolver.** Slice A changed `resolveInboundSmsContext`, which is the
+> exact function `resident_sms_route_proof.js` exercises.
+
+### Read these before building anything new
+
+| Document | Why |
+|---|---|
+| `docs/PHILOSOPHY.md` | the specification, not preamble |
+| `docs/MONEY_THESIS.md` | operations-first, accounting-derived; **cash vs accrual is an OUTPUT choice** — never force a basis at capture |
+| `docs/AGENT_CAPABILITY_SEAMS.md` | the SMS path is the agent's first bounded capability; three of six seams are transport-co-located, with an exact extraction trigger |
+| `docs/COMMUNICATION_LINE_MODEL_DESIGN.md` | approved design; org context is NOT property context |
+| `docs/DB_HARNESS_ISOLATION.md` | the finding above, in full |
+
+### The order
+
+```text
+129 activation receipt
+→ reconcile Slice A with current main
+→ repair and prove its two unsafe harnesses
+→ full proof set at the merge-candidate SHA
+→ merge and activate Slice A
+→ Slice B: retire properties.sms_number
+→ repository-wide harness-isolation remediation
+→ operations-number activation and technician loop
+```
+
+### Open cleanup, oldest first
+
+- **Production synthetic rows** — inventoried in `DB_HARNESS_ISOLATION.md`,
+  **never deleted**. Under derived reporting these are not stray rows; they are
+  fabricated operating events that become numbers. Needs an ID-based,
+  dependency-ordered dry run and owner approval.
+- **ITEM 2** — `conversation_owner_user_id` conflates attribution with
+  ownership. Now in the money path: attribution is what makes a derived number
+  auditable.
+- **Migration 125** — staged outside the runner, never applied, unresolved.
+- **`src/shared/no076_failclosed_check.js`** — dead, classified, not removed.
+- **Stale paths from the reorg** — three found, "assume more". Nobody has swept.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  HANDOFF — 2026-08-03 (earlier). Superseded in part by the section above.
 ## ══════════════════════════════════════════════════════════════════
 
 Where this conflicts with anything further down this file, **this section wins.**
