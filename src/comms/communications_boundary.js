@@ -653,13 +653,20 @@ module.exports = function communicationsBoundary({ pool, sms }) {
   //  normalize with the same function, not a second reading of it.
   const { resolvePropertyByLine } = require("./property_line");
 
+  //  THE CANONICAL LINE RESOLVER (migration 130). The receiving line is the
+  //  wall, and after 130 it is a durable record with a structural authority
+  //  ceiling rather than a column on properties. resolvePropertyByLine above
+  //  is retained only for the 129-era property-line proofs; the live inbound
+  //  path resolves through here.
+  const lines = require("./communication_lines");
+
   async function resolveInboundSmsContext({ To, From, MessageSid, body = null }, clientArg = null) {
     const q = clientArg || pool;
 
     if (!MessageSid || !From || !To) {
       // Malformed at the domain layer (route should have rejected).
       // Write nothing.
-      return { property: null, person: null, ambiguous: false, unknownLine: false, ambiguousLine: false, comm_event: null, idempotentReplay: false, malformed: true };
+      return { property: null, person: null, ambiguous: false, unknownLine: false, ambiguousLine: false, inactiveLine: false, operationsLine: false, comm_event: null, idempotentReplay: false, malformed: true };
     }
 
     // Idempotency FIRST — a Twilio retry must never create a second event.
@@ -671,7 +678,7 @@ module.exports = function communicationsBoundary({ pool, sms }) {
       return {
         property: dup.property_id ? { id: dup.property_id } : null,
         person: dup.person_id ? { id: dup.person_id } : null,
-        ambiguous: false, unknownLine: false, ambiguousLine: false,
+        ambiguous: false, unknownLine: false, ambiguousLine: false, inactiveLine: false, operationsLine: false,
         comm_event: dup, idempotentReplay: true,
       };
     }
@@ -680,45 +687,96 @@ module.exports = function communicationsBoundary({ pool, sms }) {
     // before touching the sender. Zero, one and many are each answered
     // explicitly — see src/comms/property_line.js. This used to be
     // `limit 1` with no `order by`, which answered "many" by picking.
-    const lineResolution = await resolvePropertyByLine(q, To);
+    const lineResolution = await lines.resolveInboundLine(q, To);
 
     if (lineResolution.outcome === "none" || lineResolution.outcome === "unresolvable") {
-      // No property owns this line → no property ledger exists. Write
-      // NOTHING to operating history (T2). Loud server log; Twilio's own
-      // logs retain the raw message.
+      // No line is configured for this number → no ledger exists. Write
+      // NOTHING to operating history (T2). Loud server log; the provider's
+      // own logs retain the raw message.
       console.error(`communications_boundary: UNKNOWN LINE ${To} — message ${MessageSid} from ${From} NOT attached; zero rows written.`);
-      return { property: null, person: null, ambiguous: false, unknownLine: true, ambiguousLine: false, comm_event: null, idempotentReplay: false };
+      return { property: null, person: null, ambiguous: false, unknownLine: true, ambiguousLine: false, inactiveLine: false, operationsLine: false, comm_event: null, idempotentReplay: false };
+    }
+
+    if (lineResolution.outcome === "inactive") {
+      //  A line EXISTS for this number and is suspended or retired. That is
+      //  a different fact from "unknown", and reporting it as unknown would
+      //  hide a real operator action or a number reassignment. It fails
+      //  closed identically — a retired line never resolves inbound traffic.
+      console.error(`communications_boundary: INACTIVE LINE ${To} — message ${MessageSid} from ${From} NOT attached; ` +
+        `${lineResolution.candidates.length} non-active line record(s) exist for this number. Zero rows written.`);
+      return { property: null, person: null, ambiguous: false, unknownLine: false, ambiguousLine: false, inactiveLine: true, operationsLine: false, comm_event: null, idempotentReplay: false };
     }
 
     if (lineResolution.outcome === "many") {
       //  AMBIGUOUS RECEIVING LINE. Deliberately NOT the sender-ambiguity
-      //  path, and the difference is the whole point:
-      //
-      //    ambiguous SENDER → the property is still known, so the claim is
-      //      preserved on that property's ledger, person-less and flagged
-      //      needs_human. A human can pick up a real message.
-      //
-      //    ambiguous LINE   → the property WALL itself is unknown. There is
-      //      no ledger this message can honestly belong to, so nothing is
-      //      attached to any property: no comm_event, no work order, no
-      //      obligation, no outbound. Writing it to one of the candidates
-      //      would be the arbitrary bind this slice exists to remove, just
-      //      performed one layer later.
-      //
-      //  The message is not lost — Twilio retains it, and this log names
-      //  every candidate property so an operator can resolve the collision.
-      //  Migration 129 makes this state unreachable through the database;
-      //  this branch is what happens if it is ever reached anyway, and it
-      //  must never become a silent pick again.
+      //  path: an ambiguous SENDER still has a known property, so the claim
+      //  is preserved there for a human. An ambiguous LINE means the property
+      //  wall itself is unknown, so nothing is attached to any ledger.
+      //  Migration 130's unique index makes this unreachable through the
+      //  database; this branch is what happens if it is ever reached anyway.
       console.error(
         `communications_boundary: AMBIGUOUS LINE ${To} — message ${MessageSid} from ${From} NOT attached; ` +
-        `${lineResolution.candidates.length} properties hold this line: ` +
+        `${lineResolution.candidates.length} active lines hold this number: ` +
         `${lineResolution.candidates.map((c) => c.id).join(", ")}. Zero rows written.`
       );
-      return { property: null, person: null, ambiguous: false, unknownLine: false, ambiguousLine: true, comm_event: null, idempotentReplay: false, lineCandidates: lineResolution.candidates.map((c) => c.id) };
+      return { property: null, person: null, ambiguous: false, unknownLine: false, ambiguousLine: true, inactiveLine: false, operationsLine: false, comm_event: null, idempotentReplay: false, lineCandidates: lineResolution.candidates.map((c) => c.id) };
     }
 
-    const prop = lineResolution.property;
+    const line = lineResolution.line;
+    const authority = lines.lineAuthority(line);
+
+    // ══ OPERATIONS LINE ═════════════════════════════════════════════
+    //  An organization-owned line establishes ORGANIZATION context and an
+    //  authority ceiling. IT DOES NOT ESTABLISH PROPERTY CONTEXT.
+    //
+    //  Slice A is inbound-only and performs NO operational action, so this
+    //  path resolves who and where-if-known and writes nothing at all. It
+    //  exists now so that the ceiling and the property-context boundary are
+    //  live and proven before any action is ever attached to them.
+    if (line.line_type === "operations") {
+      const staff = await lines.resolveStaffSenderForOrganization(q, {
+        organizationId: line.organization_id, fromNumber: From,
+      });
+
+      if (staff.outcome !== "one") {
+        //  Not staff of this organization — a resident, a prospect, or
+        //  someone else's staff. An operations line grants them nothing.
+        //  Zero rows written: there is no property ledger in scope, and an
+        //  organization is not a ledger.
+        console.error(`communications_boundary: OPERATIONS LINE ${To} — sender ${From} is not resolvable staff of organization ${line.organization_id} (${staff.outcome}); zero rows written.`);
+        return { property: null, person: null, ambiguous: false, unknownLine: false, ambiguousLine: false, inactiveLine: false,
+                 operationsLine: true, organizationId: line.organization_id, authority,
+                 staffOutcome: staff.outcome, propertyContext: null, clarification: null,
+                 comm_event: null, idempotentReplay: false };
+      }
+
+      //  Staff resolved. Property scope must come from an explicit work
+      //  reference or the SENDER'S OWN active assignments — never from the
+      //  organization's property list. See communication_lines.js.
+      const context = await lines.resolvePropertyContextForStaff(q, {
+        organizationId: line.organization_id, userId: staff.user.id,
+      });
+
+      return { property: null, person: null, ambiguous: false, unknownLine: false, ambiguousLine: false, inactiveLine: false,
+               operationsLine: true, organizationId: line.organization_id, authority,
+               staffOutcome: "one", staffUserId: staff.user.id,
+               propertyContext: context, clarification: lines.clarificationFor(context),
+               comm_event: null, idempotentReplay: false };
+    }
+
+    // ══ PROPERTY-FACING LINE ════════════════════════════════════════
+    const prop = (await q.query(
+      `select id, name, address, sms_number from properties where id = $1`,
+      [line.property_id]
+    )).rows[0];
+
+    if (!prop) {
+      //  A line record pointing at a property that no longer exists. The FK
+      //  is ON DELETE RESTRICT so this should be impossible; if it happens,
+      //  it fails closed rather than proceeding with a null property.
+      console.error(`communications_boundary: LINE ${line.id} references missing property ${line.property_id}; zero rows written.`);
+      return { property: null, person: null, ambiguous: false, unknownLine: true, ambiguousLine: false, inactiveLine: false, operationsLine: false, comm_event: null, idempotentReplay: false };
+    }
 
     // SENDER resolution inside this property. Phone is RELATIONSHIP EVIDENCE,
     // not identity — we resolve only when there is exactly ONE eligible durable
@@ -818,7 +876,7 @@ module.exports = function communicationsBoundary({ pool, sms }) {
       console.error(`communications_boundary: ${why} sender ${From} at ${prop.name || prop.address} — saved ${saved.id}, needs_human, zero outbound.`);
       return {
         property: { id: prop.id, name: prop.name, sms_number: prop.sms_number },
-        person: null, ambiguous: true, unknownLine: false, ambiguousLine: false,
+        person: null, ambiguous: true, unknownLine: false, ambiguousLine: false, inactiveLine: false, operationsLine: false,
         comm_event: saved, idempotentReplay: false,
       };
     }
@@ -843,7 +901,7 @@ module.exports = function communicationsBoundary({ pool, sms }) {
       console.error(`communications_boundary: CONSENT SIGNAL ${consentSignal} from ${person.id} at ${prop.name || prop.address} — canonical consent updated, event ${saved.id}, zero outbound.`);
       return {
         property: { id: prop.id, name: prop.name, sms_number: prop.sms_number },
-        person, ambiguous: false, unknownLine: false, ambiguousLine: false, ambiguousLine: false,
+        person, ambiguous: false, unknownLine: false, ambiguousLine: false, inactiveLine: false, operationsLine: false, inactiveLine: false, operationsLine: false, ambiguousLine: false,
         comm_event: saved, idempotentReplay: false,
         consentSignal, relationship,
       };

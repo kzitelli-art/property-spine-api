@@ -387,8 +387,16 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
         return res.status(400).json({ receipt: "That doesn't look like a valid US phone number. Use 10 digits or +1 format." });
       }
       if (number) {
+        //  Checked against the CANONICAL model, not the projection. The
+        //  database enforces this too (uq_communication_lines_active_e164);
+        //  this exists to answer with a sentence instead of a constraint
+        //  violation.
         const clash = await pool.query(
-          `select id, name, address from properties where sms_number = $1 and id <> $2`,
+          `select p.id, p.name, p.address
+             from communication_lines cl
+             join properties p on p.id = cl.property_id
+            where cl.e164 = $1 and cl.status = 'active'
+              and cl.line_type = 'property_facing' and cl.property_id <> $2`,
           [number, propertyId]);
         if (clash.rows.length) {
           return res.status(409).json({
@@ -396,9 +404,40 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
           });
         }
       }
+      //  CANONICAL CONFIGURATION WRITE (migration 130). communication_lines
+      //  is the only writable source of line configuration;
+      //  properties.sms_number is a read-only projection maintained by a
+      //  trigger, and a direct write to it is refused by the database.
+      //
+      //  Supersession, not mutation: the previous line is RETIRED rather
+      //  than overwritten, so a number moving between properties stays
+      //  auditable (§6 — corrections do not erase history).
+      await pool.query("begin");
+      try {
+        await pool.query(
+          `update communication_lines
+              set status = 'retired', superseded_at = now(), updated_at = now()
+            where property_id = $1 and line_type = 'property_facing' and status = 'active'`,
+          [propertyId]);
+
+        if (number) {
+          await pool.query(
+            `insert into communication_lines
+               (e164, line_type, property_id, authority_ceiling, permitted_audience,
+                inbound_enabled, outbound_enabled, status, notes)
+             values ($1, 'property_facing', $2, 'external', 'residents_and_prospects',
+                true, false, 'active', 'configured via operator property-line route')`,
+            [number, propertyId]);
+        }
+        await pool.query("commit");
+      } catch (e) {
+        await pool.query("rollback");
+        throw e;
+      }
+
       const r = await pool.query(
-        `update properties set sms_number = $1 where id = $2 returning id, name, address, sms_number`,
-        [number, propertyId]);
+        `select id, name, address, sms_number from properties where id = $1`,
+        [propertyId]);
       if (!r.rows.length) return res.status(404).json({ receipt: "No property with that id." });
       const p = r.rows[0];
       res.json({
@@ -1203,6 +1242,24 @@ Rules: classification "emergency" only for active danger or major damage in prog
         // candidates would reintroduce the arbitrary bind — the boundary
         // already logged every candidate id for an operator to resolve.
         if (ctx.ambiguousLine) return emptyTwiml(res);
+
+        // A configured line that is suspended or retired. Fails closed
+        // exactly like unknown; named separately so a real operator action
+        // (or a reassigned number) is not reported as "we've never heard of
+        // this number".
+        if (ctx.inactiveLine) return emptyTwiml(res);
+
+        // OPERATIONS LINE. Slice A is inbound-only and performs no
+        // operational action: the boundary resolved organization context,
+        // the authority ceiling, the staff sender and — separately — whether
+        // a property can be named at all. Nothing is written to any property
+        // ledger, and no outbound is sent.
+        //
+        // An organization number never chooses a building. When property
+        // context is absent or ambiguous the boundary produced the smallest
+        // useful clarification; DELIVERING it is the technician loop's job,
+        // not this slice's.
+        if (ctx.operationsLine) return emptyTwiml(res);
 
         // Unknown or ambiguous sender → the boundary saved the message on
         // the PROPERTY (person-less, needs_human). Phase A dispatches ZERO
