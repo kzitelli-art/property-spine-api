@@ -7,6 +7,53 @@ session as current truth.
 
 ---
 
+## READ THIS FIRST — state as of 2026-08-03
+
+Three things changed today that invalidate parts of the text below. Where they
+conflict, THIS section wins.
+
+**1. A DEPLOY NO LONGER MIGRATES PRODUCTION.** `prestart` now runs
+`migrations/migrate.js` in VERIFY mode: every migration file must already be in
+the ledger, or the service REFUSES TO START and names the pending file. It does
+not skip and boot — that would run new code against an older schema.
+
+Applying is a separate, deliberate act:
+
+```
+MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=<what you just read in the ledger> \
+  EXPECTED_SHA=<deployed sha> node migrations/migrate.js --apply
+```
+
+`EXPECTED_LEDGER_CEILING` exists so a release cannot be run by someone who has
+not read the ledger. Proven on real Postgres (`SCHEMA VERIFIED`, exit 0) plus
+`tests/migration_release_gate.test.js` 11/11. See `BLOCKING_DESIGN_ITEMS.md`
+ITEM 5.
+
+**2. THE 121 GAP IS CLOSED.** `migrations/121_ai_leasing_operating_context.sql`
+is on `main`. The ledger name matched, so nothing was renumbered and no history
+was rewritten. **`main` now holds 120 through 128 unbroken.** The section below
+titled "MIGRATION LEDGER — there is a GAP at 121" is HISTORY, not current state.
+
+**3. RESIDENT SMS → WORK ORDER IS MERGED AND PROVEN.** A resident texts the
+property line in their own words; Spine records the claim once as a canonical
+work order. `resident_sms_work_order_proof.js` 78/0 and
+`resident_sms_route_proof.js` 31/0 on real Postgres and real HTTP against an
+isolated database — all 22 contract cases between them.
+
+**Harnesses may never target production.** Every `.db.js` harness requires
+`HARNESS_DATABASE_URL` with no fallback, and refuses when it resolves to the
+same host/port/database as `DATABASE_URL`. The one exception is
+`tests/prod_smoke_missed_readonly.js`, which is structurally read-only. See
+`DB_HARNESS_ISOLATION.md` — production still contains synthetic rows from
+earlier runs, inventoried but NOT yet cleaned.
+
+**Next in the mission:** duplicate property-line hardening → canonical
+communication-line model → operations number → technician SMS loop. Roughly 60%
+of the resident-to-maintenance mission is done; the resident-facing intake is
+built, the staff execution loop is not.
+
+---
+
 ## What is LIVE on `main`
 
 | Slice | Landed | Proof level |
@@ -40,7 +87,7 @@ session as current truth.
 
 ---
 
-## MIGRATION LEDGER — there is a GAP at 121
+## MIGRATION LEDGER — the GAP at 121 (CLOSED 2026-08-03; kept for history)
 
 ```text
 repo on main:  … 118, 119, 120, [121 MISSING], 122
