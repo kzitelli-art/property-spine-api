@@ -215,6 +215,13 @@ const TARGET = "2026-09-01";
   ok("unknown denominator does NOT erase the proven occupancy fact",
     row(F.unclass).governing_lease_id !== null && row(F.unclass).coverage.occupancy === "complete");
 
+  //  REGRESSION. position_state was null on every non-conflicted row because
+  //  dated_positions does not carry future_state; 89 assertions missed it
+  //  because only the conflict case was ever checked. This is the direct guard.
+  ok("A0  a clean non-conflicted row NEVER returns position_state: null",
+    out.rows.filter((r) => r.conflict_state !== "conflicted")
+      .every((r) => typeof r.position_state === "string" && r.position_state.length > 0));
+
   section("B  conflict integrity — no first-match may win");
   const two = row(F.two), three = row(F.three);
   ok("two-way overlap is a conflict", two.position_state === "conflict" && two.conflict_state === "conflicted");

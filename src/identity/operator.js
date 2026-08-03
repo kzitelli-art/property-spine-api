@@ -2001,6 +2001,16 @@ const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts"); /
         contested: out.rows.filter((r) => r.conflict_state === "conflicted").length,
         locked_with_known_economics: out.rows.filter((r) => r.evidence_state === "contractually_supported").length,
         locked_economics_unavailable: out.rows.filter((r) => r.evidence_state === "incomplete").length,
+        //  The renderer reads these four as well (index.html:20316-20345).
+        //  Omitting them would have rendered "undefined" rather than breaking
+        //  loudly — the quiet failure this compatibility block exists to stop.
+        covered_unproven: out.rows.filter((r) => r.position_state === "covered_unproven").length,
+        successor_pending_not_locked: out.rows.filter((r) => r.position_state === "successor_pending_not_locked").length,
+        open_or_uncovered: out.rows.filter((r) => r.position_state === "open" || r.position_state === "open_or_uncovered").length,
+        locked_proof_split: {
+          native_verified: out.rows.filter((r) => r.position_state === "contractually_locked" && r.proof_basis === "native_verified").length,
+          confirmed_opening_import: out.rows.filter((r) => r.position_state === "contractually_locked" && r.proof_basis === "confirmed_opening_import").length,
+        },
         monthly_contractual_rent_known: Math.round(out.rows.reduce(
           (sum, r) => sum + (r.evidence_state === "contractually_supported" && r.contractual_rent != null
             ? Number(r.contractual_rent) : 0), 0) * 100) / 100,
