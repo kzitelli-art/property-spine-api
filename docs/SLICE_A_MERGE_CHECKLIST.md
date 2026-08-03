@@ -120,6 +120,7 @@ node tests/obligation_engine_one_implementation.test.js   # 14/0
 node tests/obligation_engine_import_smoke.test.js
 node tests/gate_closure_boundary.js               # PASS
 node tests/gate_no_raw_bridge_joins.js            # PASS
+node tests/gate_harness_isolation.js              # 4/4 — no new DATABASE_URL consumer
 ```
 
 ### ⚠ Requires a provisioned full-schema database — ONE governed command
@@ -160,10 +161,11 @@ no run receipt — and **both COMMIT fixtures**. `DB_HARNESS_ISOLATION.md` cover
 `*.db.js`; these are `*_proof.js`, so the convention missed them. **On Render,
 `DATABASE_URL` is production.**
 
-**These two are not the whole problem.** Measured 2026-08-03: **69 harnesses**
-connect via `DATABASE_URL` with no guard, **55 of them write-capable**, against
-**8** covered `*.db.js` files. That needs its own governed slice — see
-`DB_HARNESS_ISOLATION.md`. Only these two are a Slice A merge requirement,
+**These two are not the whole problem.** Measured 2026-08-03 across `tests/`
+**and** `tools/`: **87 scripts** connect via `DATABASE_URL` with no guard, **67
+write-capable**, against **8** covered `*.db.js` files. Enforcement against
+further growth is `tests/gate_harness_isolation.js`; remediation is its own
+governed slice **after** Slice A. Only these two are a Slice A merge requirement,
 because only these two are in its required proof set.
 
 `slice_a_full_schema_suite.js` contains this at the orchestration layer — it
