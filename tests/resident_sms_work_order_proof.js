@@ -5,9 +5,9 @@
 //  Part A — PURE. The obligation state machine and the closed vocabularies.
 //           Runs anywhere, no database.
 //  Part B — DURABLE. The 20 contract cases against REAL Postgres, in a
-//           transaction that is ALWAYS rolled back. Requires DATABASE_URL.
+//           transaction that is ALWAYS rolled back. Requires HARNESS_DATABASE_URL (never production).
 //
-//  Without DATABASE_URL this harness reports Part A only and exits NONZERO,
+//  Without HARNESS_DATABASE_URL this harness reports Part A only and exits NONZERO,
 //  so a missing database can never be mistaken for a passing suite. That is
 //  the same discipline renewals_slice6_proof.js uses and the same failure
 //  mode run_harnesses.sh exists to prevent.
@@ -163,24 +163,24 @@ function section(t) { console.log(`\n── ${t} ${"─".repeat(Math.max(0, 62 -
 //  PART B — DURABLE (real Postgres, always rolled back)
 // ────────────────────────────────────────────────────────────────────
 async function partB() {
-  if (!process.env.DATABASE_URL) {
+  if (!process.env.HARNESS_DATABASE_URL) {
     console.error(`
 ════════════════════════════════════════════════════════════════════
-  PART B NOT RUN — DATABASE_URL is not set.
+  PART B NOT RUN — HARNESS_DATABASE_URL is not set.
 
   The 20 contract cases assert against EXECUTED behaviour, not source.
   This harness refuses to report green without them: a suite that
   passes because it skipped its own subject is the exact failure mode
   run_harnesses.sh exists to prevent.
 
-  Set DATABASE_URL (Render env) and re-run.
+  Set HARNESS_DATABASE_URL to an ISOLATED database and re-run.
 ════════════════════════════════════════════════════════════════════`);
     process.exit(1);
   }
 
   const { Pool } = require("pg");
   const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString: require("./_run_receipt.js").harnessConnectionString(),
     ssl: { rejectUnauthorized: false },
   });
   const c = await pool.connect();
