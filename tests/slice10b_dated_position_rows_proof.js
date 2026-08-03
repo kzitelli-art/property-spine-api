@@ -388,6 +388,88 @@ const TARGET = "2026-09-01";
   ok("a property with no operating timezone refuses rather than borrowing UTC",
     noTz.state === "unavailable" && noTz.reason === "property_operating_timezone_not_configured" && noTz.rows.length === 0);
 
+  section("G2 CONSTANT QUERY COUNT — row growth isolated from shape growth");
+  //  The earlier "5 for 1, 9 for 23" figures did not isolate row count from
+  //  fixture shape: the bigger fixture also switched on economics, provenance
+  //  and obligations. This builds a LARGE property whose repeated mix is the
+  //  SAME shape as the small one, so only the row count differs.
+  const big = await (async () => {
+    const cc = await pool.connect();
+    const o = async (q, a = []) => (await cc.query(q, a)).rows[0];
+    try {
+      await cc.query("begin");
+      const P = (await o(`insert into properties (name, operating_timezone) values ('10B Scale','America/Los_Angeles') returning id`)).id;
+      const per = (await o(`insert into persons (name, lifecycle_status) values ('10B Scale Tenant','tenant') returning id`)).id;
+      const usr = (await o(`insert into users (name,email,phone,role,is_active,status)
+        values ('10B Scale User',$1,$2,'property_manager',true,'active') returning id`,
+        [`sc-${Date.now()}@rows.test`, "+1725" + String(Date.now()).slice(-7)])).id;
+      const off = (await o(`insert into lease_offers (property_id, person_id, status, source, scope,
+          offered_terms_snapshot, authority_basis_snapshot, granted_by_person_id)
+        values ($1,$2,'draft','discretionary','property','{}'::jsonb,'{}'::jsonb,$3) returning id`, [P, per, per])).id;
+      //  Ten repetitions of the same nine-shape mix = 90 positions.
+      const SHAPES = ["dated", "legacy_in", "legacy_out", "econ_conflict", "missing",
+                      "obligation", "unassigned", "two_obligations", "unclassified"];
+      for (let i = 0; i < 10; i++) {
+        for (const shape of SHAPES) {
+          const unit = (await o(`insert into units (property_id, unit_number) values ($1,$2) returning id`, [P, `S-${i}-${shape}`])).id;
+          const sp = (await cc.query(`select id from spaces where unit_id=$1`, [unit])).rows[0].id;
+          if (shape !== "unclassified") {
+            await cc.query(`update spaces set use_type='residential', classified_by_user_id=$2,
+                            classified_at=now(), classification_source='proof' where id=$1`, [sp, usr]);
+          }
+          const start = shape === "legacy_in" ? "2026-09-01" : "2026-01-01";
+          await cc.query(`insert into leases (property_id, space_id, tenant_ids, rent, start_date, end_date, lease_status)
+            values ($1,$2,$3,$4,$5,'2027-08-31','active')`, [P, sp, [per], shape === "missing" ? null : 1500, start]);
+          const lease = (await o(`select id from leases where space_id=$1 limit 1`, [sp])).id;
+          if (shape === "dated" || shape === "econ_conflict") {
+            const a = (await o(`insert into lease_applications (property_id, person_id, status)
+              values ($1,$2,'approved') returning id`, [P, per])).id;
+            const sc = (await o(`insert into lease_economic_schedules (property_id, application_id, space_id, status,
+                source_offer_id, locked_by_person_id) values ($1,$2,$3,'locked',$4,$5) returning id`, [P, a, sp, off, per])).id;
+            await cc.query(`insert into lease_economic_lines (schedule_id, effective_month, line_type, amount)
+              values ($1,'2026-09-01',$2,$3)`, [sc, "base_rent", 2000]);
+            if (shape === "econ_conflict") {
+              await cc.query(`insert into lease_economic_lines (schedule_id, effective_month, line_type, amount)
+                values ($1,'2026-09-01','base_rent',2600)`, [sc]);
+            }
+          }
+          const obl = (t2, st, own) => cc.query(
+            `insert into obligations (property_id, module, type, status, related_id, related_type, due_at, assigned_user_id, label)
+             values ($1,'leasing',$2,$3,$4,'lease','2099-01-01',$5,'Proof')`, [P, t2, st, lease, own]);
+          if (shape === "obligation") await obl("resolve_inbound_opportunity", "open", usr);
+          if (shape === "unassigned") await obl("resolve_inbound_opportunity", "open", null);
+          if (shape === "two_obligations") { await obl("resolve_inbound_opportunity", "open", usr);
+                                             await obl("resolve_inbound_opportunity", "in_progress", usr); }
+        }
+      }
+      await cc.query("commit");
+      return P;
+    } catch (e) { await cc.query("rollback"); throw e; } finally { cc.release(); }
+  })();
+
+  let nSmall = 0, nLarge = 0;
+  const cnt = (ref) => ({ query: (...a) => { ref.n++; return pool.query(...a); },
+                          connect: (...a) => pool.connect(...a), totalCount: pool.totalCount });
+  const rs = { n: 0 }; const smallOut = await datedPositionRows(cnt(rs), { property_id: F.A, as_of: TARGET }); nSmall = rs.n;
+  const rl = { n: 0 }; const largeOut = await datedPositionRows(cnt(rl), { property_id: big, as_of: TARGET }); nLarge = rl.n;
+  console.log(`   OBSERVED  small ${smallOut.rows.length} rows -> ${nSmall} queries; large ${largeOut.rows.length} rows -> ${nLarge} queries`);
+  ok(`row count grows (${smallOut.rows.length} -> ${largeOut.rows.length})`, largeOut.rows.length > smallOut.rows.length * 3);
+  ok(`query count does NOT grow (${nSmall} === ${nLarge}) — no N+1`, nSmall === nLarge);
+  ok("large result stays unique by spaces.id",
+    largeOut.rows.length === new Set(largeOut.rows.map((r) => String(r.space_id))).size);
+  const l1 = largeOut.rows.map((r) => String(r.space_id));
+  const l2 = (await datedPositionRows(pool, { property_id: big, as_of: TARGET })).rows.map((r) => String(r.space_id));
+  ok("large ordering stays deterministic", JSON.stringify(l1) === JSON.stringify(l2));
+  ok("the repeated mix really did activate every rail",
+    largeOut.rows.some((r) => r.rent_authority === "dated_economic_line")
+    && largeOut.rows.some((r) => r.rent_authority === "legacy_lease_rent")
+    && largeOut.rows.some((r) => r.rent_authority === "conflict")
+    && largeOut.rows.some((r) => r.rent_authority === "missing")
+    && largeOut.rows.some((r) => r.resolution_state === "existing_action")
+    && largeOut.rows.some((r) => r.existing_action && r.existing_action.owner === "UNASSIGNED")
+    && largeOut.rows.some((r) => r.resolution_state === "conflict")
+    && largeOut.rows.some((r) => r.denominator_class === "unknown"));
+
   section("H  writes");
   const before = await pool.query("select (select count(*) from leases) l, (select count(*) from events) e");
   await datedPositionRows(pool, { property_id: F.A, as_of: "2026-10-01" });

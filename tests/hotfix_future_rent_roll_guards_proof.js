@@ -178,6 +178,21 @@ const get = async (p, token) => {
       good.body.rows.every((r, i) => good.body.positions[i].conflict_state !== "conflicted"
         || (r.lease_id === null && r.contractual_rent === null && r.successor_lease_id === null)));
 
+    section("E1 ADDITIVE compatibility — existing consumers still served");
+    //  Proven against the REAL consumers found by inventory, not against a
+    //  guess: cross_surface_invariants.js reads body.property_id on this route,
+    //  and the app's psFrr renderer throws when totals is absent.
+    ok("deprecated top-level property_id is retained", good.body.property_id === F.A);
+    ok("deprecated top-level as_of is retained", typeof good.body.as_of === "string");
+    ok("deprecated totals is retained (the app renderer throws without it)",
+      good.body.totals && typeof good.body.totals.positions === "number");
+    ok("totals is marked deprecated in the payload itself", /Superseded by/.test(good.body.totals.deprecated));
+    ok("a forged property_id still cannot change the deprecated alias",
+      forged.body.property_id === F.A);
+    ok("the structured contract is present ALONGSIDE, not instead of",
+      good.body.property.property_id === good.body.property_id
+      && good.body.window.as_of === good.body.as_of);
+
     section("E  the CURRENT response contract, recorded verbatim");
     const top = Object.keys(good.body || {}).sort();
     const rowKeys = Object.keys((good.body.positions || [])[0] || {}).sort();

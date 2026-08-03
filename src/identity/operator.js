@@ -1965,7 +1965,7 @@ const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts"); /
         as_of: rawAsOf || null,
       });
       if (out.state !== "ok") {
-        return res.json({ contract: "forward_rent_roll_rows_v1", ...out });
+        return res.json({ contract: "forward_rent_roll_rows_v1", property_id: out.property_id, ...out });
       }
       const cov = out.rows.reduce((a, r) => {
         a.total_positions++;
@@ -1984,8 +1984,34 @@ const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts"); /
            economics_incomplete: 0, economics_conflict: 0,
            existing_action: 0, no_canonical_action: 0, action_conflict: 0 });
 
+      //  DEPRECATED COMPATIBILITY BLOCK. Three fields are retained because
+      //  consumers read them TODAY, and the additive rule says a truthful
+      //  field is not removed until every consumer is migrated or proven
+      //  absent:
+      //    · property_id / as_of — tests/cross_surface_invariants.js asserts
+      //      body.property_id on this exact route;
+      //    · totals — the app's psFrr renderer THROWS
+      //      ("Unexpected future rent roll response") when totals is missing,
+      //      and the app is suspended, not deleted.
+      //  Computed from the same typed rows, so there is no second read and no
+      //  second interpretation. A conflicted position contributes no rent.
+      const legacyTotals = {
+        positions: out.rows.length,
+        contractually_locked: out.rows.filter((r) => r.position_state === "contractually_locked").length,
+        contested: out.rows.filter((r) => r.conflict_state === "conflicted").length,
+        locked_with_known_economics: out.rows.filter((r) => r.evidence_state === "contractually_supported").length,
+        locked_economics_unavailable: out.rows.filter((r) => r.evidence_state === "incomplete").length,
+        monthly_contractual_rent_known: Math.round(out.rows.reduce(
+          (sum, r) => sum + (r.evidence_state === "contractually_supported" && r.contractual_rent != null
+            ? Number(r.contractual_rent) : 0), 0) * 100) / 100,
+        deprecated: "Superseded by summary/coverage under forward_rent_roll_rows_v1.",
+      };
+
       return res.json({
         contract: "forward_rent_roll_rows_v1",
+        property_id: out.property_id,
+        as_of: out.as_of,
+        totals: legacyTotals,
         property: { property_id: out.property_id, operating_timezone: out.operating_timezone },
         window: { as_of: out.as_of, as_of_basis: out.as_of_basis },
         state: out.state,
