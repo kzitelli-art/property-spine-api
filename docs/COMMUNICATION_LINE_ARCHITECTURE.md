@@ -180,6 +180,19 @@ through a line resolver rather than reading `properties` directly.
 **Small enough to change without rewriting anything — provided nothing new starts
 reading `properties.sms_number` directly.** That is the seam to protect.
 
+> **CORRECTION 2026-08-03 — this counts the ASSUMPTION, not the COLUMN.**
+> The two functions above are where the 1:1 *resolution* assumption lives, and
+> that count is right. It is **not** the cost of retiring
+> `properties.sms_number`, and it must not be carried forward as though it were.
+>
+> Measured on `590f2c9`: **24 call sites across 7 files** — 2 resolution, ~5
+> configuration write, ~16 display/read-only across `super_admin.js`,
+> `org_admin.js`, `teamaccess.js`, `demo_preflight.js` and `tenantlink.js`, and
+> 1 dead. Switching resolution is small; dropping the column is not.
+>
+> See `COMMUNICATION_LINE_MODEL_DESIGN.md` §1 and §6, which split those into
+> Slice A and Slice B for exactly this reason.
+
 ---
 
 ## The rule going forward
@@ -253,7 +266,15 @@ defect and **must not** be changed in the current resident or engine slice.
 
 ---
 
-# Communication Line Hardening — proposed slice (NOT STARTED)
+# Communication Line Hardening — BUILT AND MERGED (`a08c1da`, migration 129)
+
+**Status: all five points below are implemented and proven against isolated real
+PostgreSQL and real HTTP — `tests/property_line_hardening.db.js` 41/41, exit 0.**
+**NOT yet production-active:** migration 129 is merged and unreleased. See
+`docs/PROPERTY_LINE_HARDENING.md` for the slice and
+`docs/PROPERTY_LINE_ACTIVATION.md` for the release runbook.
+
+FLAG 2 is therefore closed in source, and ITEM 4 with it, pending release.
 
 Narrow. Makes today's property-line model safe. Does **not** introduce the
 operations line.
@@ -281,7 +302,12 @@ Cross-check the result against unmerged branches before claiming a number.
 
 ---
 
-# Future canonical line model (NOT STARTED)
+# Future canonical line model (DESIGNED, NOT BUILT)
+
+**A full design now exists: `docs/COMMUNICATION_LINE_MODEL_DESIGN.md`.** It
+carries the durable model, the resolver API, the structural authority ceiling,
+a two-slice retirement path for `properties.sms_number`, and five open owner
+rulings. It claims no migration number. The sketch below is what it expands.
 
 When the operations-line slice begins, the durable model represents:
 

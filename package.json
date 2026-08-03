@@ -6,7 +6,10 @@
   "scripts": {
     "prestart": "node migrations/migrate.js",
     "start": "node server.js",
-    "release:migrate": "node migrations/migrate.js --apply"
+    "release:migrate": "node migrations/migrate.js --apply",
+    "verify": "node tests/verify_source_governance.js",
+    "pretest": "node tests/verify_source_governance.js",
+    "test": "echo \"source-governance gates passed; database proofs run separately \u2014 see docs/DB_HARNESS_ISOLATION.md\" && exit 0"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

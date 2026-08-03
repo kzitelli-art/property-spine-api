@@ -188,3 +188,112 @@ preserve the proven engine work
   → finish the proof
   → clean production deliberately
 ```
+
+---
+
+# ⚠ THE CONVENTION HAS A HOLE — measured 2026-08-03
+
+**The guard keys on a NAMING convention. Most database-touching scripts are
+named outside it.**
+
+## The measurement, and the two corrections it took
+
+| | Count |
+|---|---|
+| `*.db.js` harnesses the guard covers | **8** |
+| Guarded harnesses (use `harnessConnectionString()`) | 17 |
+| Approved production-facing tools (allowlisted, each with a reason) | 5 |
+| **Connect via `DATABASE_URL` with no guard** | **87** |
+| — of those, **write-capable** | **67** |
+| — of those, read-only | 20 |
+
+The number moved twice before it settled, both times because the search was
+**scoped rather than exhaustive**:
+
+```text
+ 8  — "are the .db.js harnesses guarded?"        true, and incomplete
+69  — "which tests/ scripts read DATABASE_URL?"  tools/ was never scanned
+87  — walk BOTH roots, classify by behaviour
+```
+
+`tools/` is where the **repair and seed** scripts live — `retire_hollow_leases`,
+`repair_invalid_task_owners`, `remove_duplicate_walkins`, `seed_*`. Missing that
+directory understated exactly the most dangerous set.
+
+> **A measurement you scoped by assumption is a measurement of your assumption.**
+
+## What the finding is — and is not
+
+**87 repository scripts are CAPABLE of writing to whichever database
+`DATABASE_URL` names when run directly.** In a production Render shell that may
+be the production database.
+
+That is evidence of an unsafe **capability**. It is **not** evidence that every
+script has executed against production, nor that every one has caused pollution.
+Do not overstate it in either direction.
+
+## Enforcement — `tests/gate_harness_isolation.js`
+
+A receipt-bearing gate classifies every script under `tests/` and `tools/` **by
+behaviour, never by filename**:
+
+```text
+guarded harness · approved production tool · unguarded write-capable
+unguarded read-only · dead or obsolete · no direct connection
+```
+
+It **fails** when:
+
+1. a **new** unapproved direct `DATABASE_URL` consumer appears, or
+2. a **frozen entry has been repaired** but not removed from the inventory.
+
+Both failure modes were executed and confirmed to fire before this was committed;
+the gate also passes at baseline (4/4). It does **not** claim the frozen
+inventory is safe — it prevents growth and keeps the debt measurable.
+
+`PRODUCTION_APPROVED` is a small explicit allowlist and **every entry states why**
+that script may see production. New entries are an owner decision, not a
+convenience.
+
+## The rule this changes
+
+> A script needs the guard because it **touches a database**, not because of what
+> it is **called**. Audit by connection, across every root. `.db.js`, `_proof.js`,
+> `smoke` and `test` are names, not evidence of safety.
+
+## Operational containment, effective now
+
+**Do not run any test, proof, seed or repair script directly from a production
+Render shell** unless it is explicitly classified and approved as structurally
+read-only.
+
+- The structurally read-only production smoke remains the approved exception.
+- Migration release remains governed separately (`MIGRATION_RELEASE` + ceiling).
+- `slice_a_full_schema_suite.js` is **containment for the two scripts it runs**,
+  not repair, and covers nothing else.
+
+## Remediation — its own governed slice, AFTER Slice A
+
+Sequencing ruling 2026-08-03: the full remediation does **not** jump ahead of
+Slice A. Two exceptions are Slice A merge blockers because they sit in its
+required proof set: `work_order_authority_proof.js` and
+`work_order_canonical_path_proof.js`.
+
+The remediation slice:
+
+1. freeze the measured inventory at an exact SHA;
+2. separate write-capable from read-only;
+3. identify active / duplicated / obsolete / dead;
+4. **delete dead proof infrastructure rather than modernising it**;
+5. convert active scripts in bounded batches;
+6. execute every converted script against an isolated database;
+7. preserve direct-execution *and* orchestration receipts;
+8. re-run this gate until no unapproved write-capable script reads `DATABASE_URL`.
+
+**Do not mechanically replace `DATABASE_URL` with `HARNESS_DATABASE_URL` across
+87 files.** Each has different schema assumptions, cleanup behaviour, transports
+and fixture risk. A mass textual change would create 87 unexecuted safety claims —
+which is the failure this repository has already recorded three times.
+
+**Removal condition for this section:** closed when the gate reports zero
+unguarded write-capable scripts.
