@@ -93,6 +93,41 @@ const RENT_AUTHORITY = Object.freeze({
 
 const monthOf = (isoDay) => String(isoDay).slice(0, 7);
 
+// ── EVIDENCE STATE, one named vocabulary ────────────────────────────
+//  What supports this row's contractual conclusion. Deliberately NOT a
+//  confidence score: a score invites a consumer to threshold it, and a
+//  threshold is an opinion about someone's lease. These are source facts.
+const EVIDENCE_STATE = Object.freeze({
+  SUPPORTED: "contractually_supported",   // a governed dated schedule
+  QUALIFIED_LEGACY: "qualified_legacy",   // the lease's own amount, inside the month it can prove
+  INCOMPLETE: "incomplete",               // nothing governed reaches this date
+  CONFLICTING: "conflicting",             // competing governed facts, no winner selectable
+  UNTRACKABLE: "untrackable",             // lineage cannot resolve to one position
+  UNAVAILABLE: "unavailable",             // the source could not be read at all
+});
+
+// ── RESULT STATE, at the response level ─────────────────────────────
+//  These must never collapse into a generic empty answer. "No positions on
+//  this property" and "this property has no operating day" are different
+//  facts, and a consumer that cannot tell them apart will say the wrong thing.
+const RESULT_STATE = Object.freeze({
+  QUALIFYING: "qualifying_result_exists",
+  NONE: "no_qualifying_result",
+  UNAVAILABLE: "unavailable",
+  AUTHORITY_MISSING: "authority_missing",
+});
+
+function evidenceStateFor(conflicted, rentAuthority, legacyQualification) {
+  if (conflicted) return EVIDENCE_STATE.CONFLICTING;
+  if (rentAuthority === RENT_AUTHORITY.CONFLICT) return EVIDENCE_STATE.CONFLICTING;
+  if (rentAuthority === RENT_AUTHORITY.DATED) return EVIDENCE_STATE.SUPPORTED;
+  if (rentAuthority === RENT_AUTHORITY.LEGACY) {
+    return legacyQualification === "within_initial_month"
+      ? EVIDENCE_STATE.QUALIFIED_LEGACY : EVIDENCE_STATE.INCOMPLETE;
+  }
+  return EVIDENCE_STATE.INCOMPLETE;
+}
+
 //  CLASSIFICATION PROVENANCE. dated_positions carries use_type but not who
 //  classified it or when, and provenance is half the point of a governed
 //  classification — a class with no author is an assertion. Loaded here in one
@@ -199,7 +234,8 @@ async function datedPositionRows(pool, { property_id, as_of = null } = {}) {
   if (!zone) {
     return {
       property_id, as_of: null, contract_version: "dated_position_rows_v1",
-      state: TZ_UNAVAILABLE.state, reason: TZ_UNAVAILABLE.reason,
+      state: TZ_UNAVAILABLE.state, result_state: RESULT_STATE.AUTHORITY_MISSING,
+      reason: TZ_UNAVAILABLE.reason,
       detail: "This property has no configured operating timezone, so it has no operating day and no dated position can be stated.",
       rows: [], withheld: null,
     };
@@ -270,6 +306,7 @@ async function datedPositionRows(pool, { property_id, as_of = null } = {}) {
       rent_note: ec.rent_note,
       rent_lineage: ec.rent_lineage || [],
 
+      evidence_state: evidenceStateFor(conflicted, ec.rent_authority, ec.legacy_qualification),
       coverage,
       //  TYPED, machine-readable. A consumer must not have to parse prose to
       //  learn why an answer is absent.
@@ -290,6 +327,7 @@ async function datedPositionRows(pool, { property_id, as_of = null } = {}) {
     as_of_basis: as_of ? "explicit_property_local_date" : "property_local_today",
     contract_version: "dated_position_rows_v1",
     state: "ok",
+    result_state: rows.length ? RESULT_STATE.QUALIFYING : RESULT_STATE.NONE,
     rows,
     //  Deliberately absent: projected_occupancy_rate, revenue_denominator,
     //  scheduled_rent_total. See the header — a rate over an unknown
@@ -303,4 +341,7 @@ async function datedPositionRows(pool, { property_id, as_of = null } = {}) {
   };
 }
 
-module.exports = { datedPositionRows, denominatorClass, RENT_AUTHORITY, REVENUE_USE_TYPES };
+module.exports = {
+  datedPositionRows, denominatorClass,
+  RENT_AUTHORITY, REVENUE_USE_TYPES, EVIDENCE_STATE, RESULT_STATE,
+};

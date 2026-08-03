@@ -15,7 +15,7 @@
 "use strict";
 const path = require("path");
 const { Pool } = require("pg");
-const { datedPositionRows, denominatorClass } = require(path.join(__dirname, "..", "src/tenancy/dated_position_rows"));
+const { datedPositionRows, denominatorClass, EVIDENCE_STATE, RESULT_STATE } = require(path.join(__dirname, "..", "src/tenancy/dated_position_rows"));
 
 const CONN = process.env.HARNESS_DATABASE_URL;
 if (!CONN) { console.error("need HARNESS_DATABASE_URL"); process.exit(1); }
@@ -157,6 +157,7 @@ const TARGET = "2026-09-01";
   const R = byId(out.rows);
   const row = (id) => R.get(String(id));
 
+  const noTzEarly = await datedPositionRows(pool, { property_id: F.NOTZ });
   console.log("\n════ SLICE 10B — DATED POSITION ROWS (synthetic data only) ════");
 
   section("A  denominator class, from the governed spaces.use_type authority");
@@ -247,6 +248,27 @@ const TARGET = "2026-09-01";
   ok("a fully governed row carries NO blockers", row(F.dated).blockers.length === 0);
   ok("every blocker names what it affects",
     out.rows.every((r) => r.blockers.every((b) => b.code && Array.isArray(b.affects) && b.detail)));
+
+  section("D3 named evidence state and honest result states");
+  ok("a governed dated schedule → contractually_supported",
+    row(F.dated).evidence_state === EVIDENCE_STATE.SUPPORTED);
+  ok("legacy inside its provable month → qualified_legacy",
+    row(F.legacyIn).evidence_state === EVIDENCE_STATE.QUALIFIED_LEGACY);
+  ok("legacy beyond its provable month → incomplete, NOT quietly supported",
+    row(F.legacyOut).evidence_state === EVIDENCE_STATE.INCOMPLETE);
+  ok("no recorded rent → incomplete", row(F.norent).evidence_state === EVIDENCE_STATE.INCOMPLETE);
+  ok("competing leases → conflicting", two.evidence_state === EVIDENCE_STATE.CONFLICTING);
+  ok("competing economic lines → conflicting",
+    row(F.econConflict).evidence_state === EVIDENCE_STATE.CONFLICTING);
+  ok("evidence state is a named source fact, never a confidence score",
+    out.rows.every((r) => Object.values(EVIDENCE_STATE).includes(r.evidence_state))
+    && !out.rows.some((r) => typeof r.confidence === "number"));
+  ok("a property with positions reports qualifying_result_exists",
+    out.result_state === RESULT_STATE.QUALIFYING);
+  ok("a property with no operating day reports authority_missing, NOT empty",
+    noTzEarly.result_state === RESULT_STATE.AUTHORITY_MISSING);
+  ok("and that is a different state from having no positions",
+    RESULT_STATE.AUTHORITY_MISSING !== RESULT_STATE.NONE);
 
   section("D  independent coverage axes");
   ok("known occupancy + missing rent → occupancy complete, rent partial",
