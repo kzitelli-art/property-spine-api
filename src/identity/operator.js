@@ -35,7 +35,11 @@ const crypto = require("crypto");
 const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 const proposedTerms = require("../applications/proposed_terms_service"); // Part 3: governed proposed-terms confirmation (Part 2 service)
+// Slice 9: the canonical application READ authority. One definition of
+// "did this ever reach approval", shared with the leasing desk.
+const lifecycleRead = require("../applications/application_lifecycle_read");
 const applicationSendCommand = require("../applications/application_send_command"); // composite Send-application command (intent→prepare→dispatch)
+const applicationTargetAuthority = require("../applications/application_target_authority"); // Slice 9 Commit A: the ONE application-target resolver
 
 module.exports = function operatorModule(deps) {
   const {
@@ -1690,6 +1694,32 @@ module.exports = function operatorModule(deps) {
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null }); }
   });
 
+  // ── SLICE 9 — MARKET EVIDENCE (demand + conversion) ─────────────────
+  //  Read-only. Property scope from the session, never the query. The window
+  //  is property-local and server-resolved: the browser cannot know when a
+  //  day starts at a property, so it does not get to say.
+  router.get("/operator/pricing/evidence", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { marketEvidenceProjection } = require("../evidence/evidence_projection");
+      return res.json(await marketEvidenceProjection(pool, {
+        property_id: req.operator.property_id,   // session only, never the query
+        start_local: req.query.start_local || null,
+        end_local: req.query.end_local || null,
+        as_of: req.query.as_of || null,
+        //  BOUNDED TRANSPORT: whitelisted page/filter preferences. None of
+        //  these can widen scope — they only narrow or page a set already
+        //  bounded by the session property.
+        rows: {
+          limit: req.query.limit, cursor: req.query.cursor,
+          funnel: req.query.funnel, evidence_state: req.query.evidence_state,
+          lifecycle_state: req.query.lifecycle_state,
+          pending_state: req.query.pending_state, source_id: req.query.source_id,
+        },
+      }));
+    } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null }); }
+  });
+
   // ── SLICE 8 — GOVERNED CONCESSION READ ──────────────────────────────
   //  Slice 7's audit recorded that concessions had governed tables but no
   //  operator read. Read-only: authors nothing, approves nothing. Effective
@@ -2363,7 +2393,7 @@ module.exports = function operatorModule(deps) {
   //  Resolved through the ONE shared resolver (property_timezone.js) — the SAME
   //  truth leasingleads.js uses for agent tour-offer local times. An
   //  UNCONFIGURED property gets an honest null (never an invented day).
-  const { resolvePropertyOperatingTimeZone } = require("../shared/property_timezone");
+  const { loadPropertyOperatingTimeZone } = require("../shared/property_timezone");
   // The board's DAY CONTRACT — offsets, clamping, and the SQL fragments that
   // enforce them. Shared with tours_conveyor.test.js so the harness exercises
   // the real predicate rather than a re-typed copy. (tour_window.js)
@@ -2387,7 +2417,7 @@ module.exports = function operatorModule(deps) {
     res.set("Cache-Control", "no-store");
     try {
       // "Today" is the PROPERTY'S OPERATIONAL DAY — resolved, never assumed.
-      const PROPERTY_TZ = resolvePropertyOperatingTimeZone(req.operator.property_id);
+      const PROPERTY_TZ = await loadPropertyOperatingTimeZone(pool, req.operator.property_id);
       // ── DAY WINDOW (the conveyor) ───────────────────────────────────
       // The board reads a RANGE of operating days, not just forward from
       // today. Offsets are relative to the property's today, resolved
@@ -2898,21 +2928,11 @@ module.exports = function operatorModule(deps) {
              left join units un on un.id = tu.unit_id
              -- APPLICANT SUB-STATUS (Slice 2): event-backed only, minimal set.
              -- Application truth wins over invitation truth; honest null else.
-             left join lateral (
-               select case
-                 when exists (select 1 from lease_applications la where la.conversion_id = lco.conversion_id
-                              and la.status in ('approved','lease_ready','tenant_signed','countersigned','active'))
-                   then 'approved'
-                 when exists (select 1 from lease_applications la where la.conversion_id = lco.conversion_id
-                              and la.status in ('denied','declined','withdrawn'))
-                   then 'declined'
-                 when exists (select 1 from lease_applications la where la.conversion_id = lco.conversion_id
-                              and la.status = 'submitted')
-                   then 'submitted'
-                 when exists (select 1 from application_invitations ai where ai.conversion_id = lco.conversion_id
-                              and ai.status in ('manually_sent','provider_dispatched'))
-                   then 'application_sent'
-                 else null end as applicant_substatus
+             -- CANONICAL (Slice 9 read authority). This CASE ladder previously
+             -- lived here AND byte-identically in leasing_desk_loader.js, and
+             -- both answered a HISTORY question from a current status label:
+             -- an application approved and later withdrawn reported 'declined'.
+             left join lateral (${lifecycleRead.SQL_APPLICANT_SUBSTATUS}
              ) subst on true
             where c.property_id = $1 and lco.outcome is null
          )
@@ -3137,9 +3157,14 @@ module.exports = function operatorModule(deps) {
   router.post("/operator/leasing/conversations/:conversationId/close-not-fit", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
-      const { reason_code, reason_note, idempotency_key } = req.body || {};
+      //  conversion_id is REQUIRED (migration 128). The conversation cannot
+      //  identify the opportunity — it covers every opportunity this person has
+      //  at this property — so the service refuses without it rather than
+      //  closing whichever one happens to be active.
+      const { reason_code, reason_note, idempotency_key, conversion_id } = req.body || {};
       const out = await leasingLifecycle.closeNotFit({
         conversationId: req.params.conversationId, propertyId: req.operator.property_id,
+        conversionId: conversion_id,
         actorUserId: req.operator.id, reasonCode: reason_code, reasonNote: reason_note,
         idempotencyKey: idempotency_key,
       });
@@ -3153,9 +3178,12 @@ module.exports = function operatorModule(deps) {
   router.post("/operator/leasing/conversations/:conversationId/reopen", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
-      const { idempotency_key } = req.body || {};
+      //  conversion_id is REQUIRED (migration 128) — reopening one opportunity
+      //  must never reopen another that shares the conversation.
+      const { idempotency_key, conversion_id } = req.body || {};
       const out = await leasingLifecycle.reopen({
         conversationId: req.params.conversationId, propertyId: req.operator.property_id,
+        conversionId: conversion_id,
         actorType: "operator", actorUserId: req.operator.id, idempotencyKey: idempotency_key,
       });
       return res.json(out);
@@ -3176,39 +3204,30 @@ module.exports = function operatorModule(deps) {
   //   POST /operator/leasing/application-invitations/:id/sent
   //        → attest a manual send → 'manually_sent'. Only this moves the status.
   // ══════════════════════════════════════════════════════════════════
-  // LEASEABLE ALLOWLIST — explicit, from availability semantics. NOT "!= unavailable".
-  //   ready_now      : vacant, ready to lease now.
-  //   vacant_turning : vacant, turn in progress → leaseable-forward.
-  //   on_notice      : occupied but resident vacating → leaseable-forward (not tourable).
-  // EXCLUDED: committed_future (ALREADY leased to someone else — not open supply),
-  //           unavailable (down/model/occupied-no-notice).
-  const LEASEABLE_STATES = ["ready_now", "vacant_turning", "on_notice"];
-
-  // is a specific unit currently offerable at this property? Reads the SAME
-  // availability projection (no second system). Used for the selector AND for
-  // send-time revalidation of a unit attached to a conversation. Optionally
-  // checks the unit can be ready for an intended move-in date.
-  async function unitOfferableState(property_id, unit_id, intended_move_in) {
-    const availability = require("../tenancy/availability")({ pool });
-    const proj = await availability._service.readAvailability(property_id);
-    const space = (proj.spaces || []).find((s) => String(s.unit_id) === String(unit_id));
-    if (!space) return { offerable: false, reason: "not_at_property", state: null };
-    if (!LEASEABLE_STATES.includes(space.availability_state)) {
-      return { offerable: false, reason: "not_leaseable", state: space.availability_state, space };
-    }
-    // future/turning units: if an intended move-in is known and the unit has a
-    // projected ready date, the ready date must not be AFTER the move-in.
-    if (intended_move_in && space.projected_ready_date) {
-      try {
-        const ready = new Date(space.projected_ready_date);
-        const want = new Date(intended_move_in);
-        if (isFinite(ready) && isFinite(want) && ready > want) {
-          return { offerable: false, reason: "not_ready_by_move_in", state: space.availability_state,
-                   projected_ready_date: space.projected_ready_date, space };
-        }
-      } catch (_) { /* if either date won't parse, don't block on it */ }
-    }
-    return { offerable: true, state: space.availability_state, space };
+  // ── APPLICATION TARGET — ONE AUTHORITY, NOT A SECOND OPINION ────────
+  //  This was a bespoke allowlist (ready_now | vacant_turning | on_notice)
+  //  over the LEGACY availability projection, with its own date rule. It is
+  //  now a thin adapter over the canonical application-target authority, so
+  //  the selector, the prepare doors and the composite send command all ask
+  //  ONE question and get ONE answer.
+  //
+  //  What the cutover changes, deliberately:
+  //   · committed_future was already excluded, but the legacy module labelled
+  //     EVERY standalone future lease 'locked' regardless of proof. The
+  //     canonical read distinguishes pending from locked, and both refuse.
+  //   · the old date rule compared a projected_ready_date derived from a
+  //     five-day placeholder turn window. The authority requires a GOVERNED
+  //     available_from and refuses when there is none, rather than offering
+  //     against an assumed date.
+  //   · multi-space units now refuse explicitly instead of being silently
+  //     offered against whichever space the legacy projection listed first.
+  //
+  //  The return shape keeps `offerable` so existing call sites are untouched;
+  //  callers that want to explain the refusal read refusal_code/refusal_reason.
+  async function unitOfferableState(property_id, unit_id, q = pool) {
+    return applicationTargetAuthority.resolveApplicationTarget(q, {
+      property_id, unit_id, require_offerable: true,
+    });
   }
 
     // ══════════════════════════════════════════════════════════════════
@@ -3309,7 +3328,7 @@ module.exports = function operatorModule(deps) {
       return res.status(503).json({ error: "applicant_link_origin_not_configured",
         receipt: "APP_BASE_URL is not set. Refusing to create an invitation whose applicant link cannot be built." });
     }
-    const { prepare_obligation_id, unit_id, expires_at = null, intended_move_in = null } = req.body || {};
+    const { prepare_obligation_id, unit_id, expires_at = null } = req.body || {};
     if (!prepare_obligation_id) return res.status(400).json({ error: "prepare_obligation_id is required — prepare acts on the exact open commitment." });
     if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
     const client = await pool.connect();
@@ -3326,8 +3345,8 @@ module.exports = function operatorModule(deps) {
       const out = await applicationInvitations.prepareApplicationLinkForObligation(client, {
         prepare_obligation_id, unit_id, expires_at,
         actor_user_id: req.operator.id,
-        unitOfferable: async (_c, { property_id, unit_id }) =>
-          unitOfferableState(property_id, unit_id, intended_move_in),
+        unitOfferable: async (c, { property_id, unit_id }) =>
+          unitOfferableState(property_id, unit_id, c),
       });
       await client.query("commit");
       out.link = `${APPLICANT_ORIGIN}/t/application/${out.token}`;
@@ -3343,7 +3362,7 @@ module.exports = function operatorModule(deps) {
   router.post("/operator/leasing/application-invitations/send", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     if (!svcGuard(res, "dispatchPreparedLinkProvider")) return;
-    const { prepare_obligation_id, unit_id, expires_at = null, intended_move_in = null, message_prefix = "" } = req.body || {};
+    const { prepare_obligation_id, unit_id, expires_at = null, message_prefix = "" } = req.body || {};
     if (!prepare_obligation_id) return res.status(400).json({ error: "prepare_obligation_id is required." });
     if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
     const client = await pool.connect();
@@ -3361,8 +3380,8 @@ module.exports = function operatorModule(deps) {
       prepared = await applicationInvitations.prepareApplicationLinkForObligation(client, {
         prepare_obligation_id, unit_id, expires_at,
         actor_user_id: req.operator.id,
-        unitOfferable: async (_c, { property_id, unit_id }) =>
-          unitOfferableState(property_id, unit_id, intended_move_in),
+        unitOfferable: async (c, { property_id, unit_id }) =>
+          unitOfferableState(property_id, unit_id, c),
       });
       await client.query("commit");
     } catch (e) {
@@ -3417,7 +3436,6 @@ module.exports = function operatorModule(deps) {
         unit_id,
         idempotency_key,
         expires_at = null,
-        intended_move_in = null,
         message_prefix = "",
       } = req.body || {};
 
@@ -3476,8 +3494,8 @@ module.exports = function operatorModule(deps) {
             unitId: unit_id,
             idempotencyKey: idempotency_key,
             expiresAt: expires_at,
-            unitOfferable: async (_client, { property_id, unit_id: candidateUnitId }) =>
-              unitOfferableState(property_id, candidateUnitId, intended_move_in),
+            unitOfferable: async (c, { property_id, unit_id: candidateUnitId }) =>
+              unitOfferableState(property_id, candidateUnitId, c),
           }
         );
 
@@ -3654,22 +3672,92 @@ module.exports = function operatorModule(deps) {
   });
 
 
-  // LEASEABLE UNITS for the send-application selector. Session-gated, read-only,
-  // over the EXISTING availability projection (availability.js readAvailability)
-  // — no second availability system. Returns only spaces that can be offered
-  // (availability_state !== 'unavailable'); property is the session's scope.
+  // ══════════════════════════════════════════════════════════════════
+  //  LEASEABLE UNITS — the send-application selector.
+  //
+  //  Session-gated, read-only, over CANONICAL availability and the ONE
+  //  application-target authority. The legacy availability projection is gone
+  //  from this route, which is what makes the module deletable.
+  //
+  //  TWO LISTS, NOT ONE FILTERED LIST. A multi-space unit is not absent
+  //  because it failed a marketing test — it is present and unselectable
+  //  because the durable chain cannot carry a space choice. Dropping those
+  //  rows silently would leave an operator hunting for a unit they can see in
+  //  every other surface, with no statement of why it is missing here.
+  //
+  //  ONE ROW PER UNIT, NEVER ONE PER SPACE. The application segment is
+  //  unit-grained; returning a selectable row per space would offer a choice
+  //  the invitation cannot preserve.
+  //
+  //  resolved_space_id on an eligible row is a SERVER-AUTHORED VALIDATION
+  //  RECEIPT — the space availability was evaluated against. It is not a
+  //  "selected space" and the browser must not send it back.
+  // ══════════════════════════════════════════════════════════════════
   router.get("/operator/leasing/leaseable-units", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
-      const availability = require("../tenancy/availability")({ pool });
-      const proj = await availability._service.readAvailability(req.operator.property_id);
-      const spaces = (proj.spaces || []).filter((s) => LEASEABLE_STATES.includes(s.availability_state));
-      const units = spaces.map((s) => ({
-        unit_id: s.unit_id, unit_number: s.unit_number,
-        availability_state: s.availability_state,
-        projected_ready_date: s.projected_ready_date || null,
-      }));
-      return res.json({ property_id: req.operator.property_id, count: units.length, units });
+      const property_id = req.operator.property_id;         // SERVER-DERIVED, never the query string
+
+      // Space grain per unit, including units with none. LEFT JOIN so a
+      // zero-space unit is a row rather than an absence.
+      const shapes = (await pool.query(
+        `select u.id as unit_id, u.unit_number, count(s.id)::int as space_count
+           from units u
+           left join spaces s on s.unit_id = u.id
+          where u.property_id = $1
+          group by u.id, u.unit_number
+          order by u.unit_number asc`,
+        [property_id]
+      )).rows;
+
+      // ONE canonical availability read for the whole property. The authority's
+      // OWN policy function is then applied per row — resolveApplicationTarget
+      // per unit would re-read availability for the entire property once per
+      // unit, which is quadratic. Same rule, evaluated once per position.
+      const avail = await availabilityRead(pool, { property_id });
+      const byUnit = new Map(avail.rows.map((r) => [String(r.unit_id), r]));
+
+      const eligible_units = [];
+      const unsupported_multi_space_units = [];
+
+      for (const u of shapes) {
+        if (u.space_count > 1) {
+          unsupported_multi_space_units.push({
+            unit_id: u.unit_id,
+            unit_number: u.unit_number,
+            rentable_space_count: u.space_count,
+            reason_code: applicationTargetAuthority.REFUSAL.MULTI_SPACE,
+            reason: applicationTargetAuthority.REFUSAL_TEXT[applicationTargetAuthority.REFUSAL.MULTI_SPACE],
+          });
+          continue;
+        }
+        if (u.space_count === 0) continue;   // unconfigured: not eligible, not a grain refusal
+
+        const row = byUnit.get(String(u.unit_id));
+        if (!row) continue;                  // classified by nobody: not evidence of availability
+        const verdict = applicationTargetAuthority.evaluateOfferability(row);
+        if (!verdict.offerable) continue;    // ordinary not-offerable, not a grain refusal
+
+        eligible_units.push({
+          unit_id: row.unit_id,
+          unit_number: row.unit_number,
+          resolved_space_id: row.space_id,   // validation receipt, NOT a selection
+          position_kind: row.position_kind,
+          space_label: row.space_label,
+          marketing_state: row.marketing_state,
+          available_from: row.available_from,
+          availability_confidence: row.availability_confidence,
+          resolution_basis: "sole_space_unit",
+        });
+      }
+
+      return res.json({
+        property_id,
+        eligible_count: eligible_units.length,
+        unsupported_count: unsupported_multi_space_units.length,
+        eligible_units,
+        unsupported_multi_space_units,
+      });
     } catch (e) {
       return res.status(e.httpStatus || 500).json({ error: e.message || "leaseable-units read failed" });
     }

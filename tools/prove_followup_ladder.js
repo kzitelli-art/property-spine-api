@@ -7,8 +7,24 @@
 const path = require("path");
 const { nextFollowup, LADDER, HOUR, DAY } =
   require(path.join(__dirname, "..", "src", "leasing", "followup_ladder.js"));
+// The operating timezone is a GOVERNED COLUMN as of Slice 9 (migration 123),
+// not a hardcoded allowlist — resolvePropertyOperatingTimeZone is now only a
+// non-production env override, so it honestly returns null when nothing is
+// configured. This stub therefore has to serve what the real row holds:
+// migration 123 backfills the Demo Building to America/New_York. An
+// empty-rows stub would make every window check read
+// "send_window_timezone_unconfigured" and prove nothing about the window.
+// Any OTHER id still resolves to nothing, which is what keeps the
+// unknown-timezone refusal an honest test.
+const DEMO_PROPERTY_ID = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
 const commsBoundary = require(path.join(__dirname, "..", "src", "comms", "communications_boundary.js"))({
-  pool: { query: async () => ({ rows: [] }) }, sms: null,
+  pool: {
+    query: async (_sql, params) => ({
+      rows: params && String(params[0]) === DEMO_PROPERTY_ID
+        ? [{ operating_timezone: "America/New_York" }] : [],
+    }),
+  },
+  sms: null,
 });
 const { withinSendWindow } = commsBoundary;
 
@@ -82,28 +98,36 @@ check("a booked tour is not a quiet lead",
   r => !r.send && /booked/.test(r.reason), "conversion ladder owns that, not this");
 
 // ── The send window ──────────────────────────────────────────────────────────
-const DEMO = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe"; // America/New_York
+const DEMO = DEMO_PROPERTY_ID; // America/New_York, per migration 123
 const at = (h) => new Date(Date.UTC(2026, 6, 27, h + 4, 0, 0)); // EDT = UTC-4
 
-check("4am proactive send is refused", withinSendWindow(DEMO, "followup", at(4)),
-  r => !r.allowed && r.reason === "outside_send_window", "quiet hours hold");
-check("10pm proactive send is refused", withinSendWindow(DEMO, "followup", at(22)),
-  r => !r.allowed, "21:00 is the cutoff");
-check("10am proactive send is allowed", withinSendWindow(DEMO, "followup", at(10)),
-  r => r.allowed, "inside the window");
-check("8am boundary is open", withinSendWindow(DEMO, "followup", at(8)),
-  r => r.allowed, "start hour inclusive");
+// AWAITED as of Slice 9. withinSendWindow became async when the operating
+// timezone moved from a hardcoded allowlist to a governed properties column,
+// so resolving it is a read. Passing the un-awaited Promise into check() made
+// every predicate read `.allowed` off a Promise — undefined — and this whole
+// block reported FAIL regardless of the real answer. A window harness that
+// cannot tell an open window from a closed one is worse than no harness.
+async function checkWindow() {
+  check("4am proactive send is refused", await withinSendWindow(DEMO, "followup", at(4)),
+    r => !r.allowed && r.reason === "outside_send_window", "quiet hours hold");
+  check("10pm proactive send is refused", await withinSendWindow(DEMO, "followup", at(22)),
+    r => !r.allowed, "21:00 is the cutoff");
+  check("10am proactive send is allowed", await withinSendWindow(DEMO, "followup", at(10)),
+    r => r.allowed, "inside the window");
+  check("8am boundary is open", await withinSendWindow(DEMO, "followup", at(8)),
+    r => r.allowed, "start hour inclusive");
 
-// The distinction the whole guard exists for.
-check("a REPLY at 4am is never held", withinSendWindow(DEMO, "agent", at(4)),
-  r => r.allowed, "someone texted us; replying is not a proactive send");
-check("an OTP at 4am is never held", withinSendWindow(DEMO, "sms_otp", at(4)),
-  r => r.allowed, "a person locked out at 4am needs their code");
+  // The distinction the whole guard exists for.
+  check("a REPLY at 4am is never held", await withinSendWindow(DEMO, "agent", at(4)),
+    r => r.allowed, "someone texted us; replying is not a proactive send");
+  check("an OTP at 4am is never held", await withinSendWindow(DEMO, "sms_otp", at(4)),
+    r => r.allowed, "a person locked out at 4am needs their code");
 
-check("unknown timezone refuses a proactive send",
-  withinSendWindow("00000000-0000-0000-0000-000000000000", "followup", at(10)),
-  r => !r.allowed && /timezone/.test(r.reason),
-  "cannot prove it is a decent hour there, so do not send");
+  check("unknown timezone refuses a proactive send",
+    await withinSendWindow("00000000-0000-0000-0000-000000000000", "followup", at(10)),
+    r => !r.allowed && /timezone/.test(r.reason),
+    "cannot prove it is a decent hour there, so do not send");
+}
 
 // ── The runner ───────────────────────────────────────────────────────────────
 const runnerFor = (rows) => require(path.join(__dirname, "..", "src", "leasing", "followup_runner.js"))({
@@ -148,6 +172,9 @@ check("opted_out row is stopped by the runner too",
 
 // The safety default that matters most.
 (async () => {
+  // First, so the summary below cannot print before these resolve.
+  await checkWindow();
+
   const r = runnerFor([row({})]);
   const out = await r.runFollowups({ propertyId: PROP, now: T0 + 2 * HOUR });
   check("runFollowups defaults to DRY RUN", out,

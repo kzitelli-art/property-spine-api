@@ -25,6 +25,8 @@
 // ════════════════════════════════════════════════════════════════════
 
 const express = require("express");
+// Slice 9: canonical application READ authority (TERMINAL group, status vocabulary).
+const lifecycleRead = require("../applications/application_lifecycle_read");
 const staffIdentity = require("../identity/staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 
 module.exports = function leasingConversionModule({ pool, spawnObligationFromEvent, completeObligation, closureAuthority }) {
@@ -475,12 +477,22 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     // rung-specific lifecycle facts
     if (link.rung === "applicant_followup") {
       const app = (await client.query(
+        // CURRENT SUBMISSION-REACHED STATE — "has an application on this
+        // conversation reached submission?" Matches the canonical group
+        // exactly; the literal list omitted accepted_term_required, so an
+        // application awaiting term confirmation read as no downstream work.
         `select 1 from lease_applications where conversion_id=$1
-          and status in ('submitted','approved','lease_ready','tenant_signed','countersigned','active') limit 1`,
-        [link.conversion_id])).rows[0];
+          and status = any($2::text[]) limit 1`,
+        [link.conversion_id, lifecycleRead.STATUS_GROUP_PARAMS.submissionReached])).rows[0];
       if (app) return { reopenable: false, reason_code: "DOWNSTREAM_WORK_EXISTS", link };
     }
     if (link.rung === "lease_signature_followup") {
+      // DOMAIN-SPECIFIC (not a lifecycle group). This asks "has a signature
+      // already been taken on this deal", which is a signature-history
+      // question, not submission-reached or approval-reached. It RESEMBLES a
+      // canonical group and is deliberately NOT replaced by one: mapping it to
+      // APPROVAL_REACHED would treat a merely-approved application as signed.
+      // Whether accepted_term_required belongs here is a Pass 2 question.
       const sig = (await client.query(
         `select 1 from lease_applications where conversion_id=$1
           and status in ('tenant_signed','countersigned','active') limit 1`,
@@ -812,11 +824,15 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     // The approving transaction writes the application's post-approval status
     // BEFORE calling this, so this same-transaction read sees it. A caller with
     // a conversion_id but no approved application gets nothing.
+    // CURRENT APPROVAL-REACHED STATE. Deliberately current, not historical:
+    // signature-chasing work must not be created for an application that was
+    // approved and has since been withdrawn or expired. The literal list
+    // omitted accepted_term_required.
     const approved = (await client.query(
       `select 1 from lease_applications
         where conversion_id=$1
-          and status in ('approved','lease_ready','tenant_signed','countersigned','active')
-        limit 1`, [conversion_id])).rows[0];
+          and status = any($2::text[])
+        limit 1`, [conversion_id, lifecycleRead.STATUS_GROUP_PARAMS.approvalReached])).rows[0];
     if (!approved) throw httpErr(409, "No approved application on this conversion — signature-chasing work is created only by approval.");
     const existing = (await client.query(
       `select * from leasing_conversion_obligations where conversion_id=$1 and rung='lease_signature_followup' limit 1`,
@@ -885,9 +901,21 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     if (!conv) throw httpErr(404, "conversion not found.");
 
     // pre-application only: a nonterminal application refuses new intent
+    // CURRENT TERMINAL STATE — "does a live application already exist on this
+    // conversation right now?" Present tense, so a status read is correct; what
+    // was wrong is the list. It omitted 'expired', so an expired application
+    // read as LIVE and permanently blocked a new one, and it filtered 'denied',
+    // which the CHECK constraint does not permit and no row can hold.
+    // The canonical TERMINAL group is bound as a parameter — no literal ladder.
     const nonterminal = (await client.query(
-      `select 1 from lease_applications where conversion_id=$1
-        and status not in ('denied','declined','withdrawn') limit 1`, [conversion_id])).rows[0];
+      `select status from lease_applications where conversion_id=$1
+        and status <> all($2::text[]) limit 1`,
+      [conversion_id, lifecycleRead.STATUS_GROUP_PARAMS.terminal])).rows[0];
+    // An unrecognized status is not silently "live": it is surfaced as its own
+    // refusal, because we cannot say what it means.
+    if (nonterminal && !lifecycleRead.isKnownStatus(nonterminal.status)) {
+      throw httpErr(409, `This conversation has an application in an unrecognized state ('${nonterminal.status}'). Resolve it before continuing.`);
+    }
     if (nonterminal) throw httpErr(409, "This conversation already has a live application — prepare-application intent does not apply.");
 
     // server-generated source_identity (a browser key alone is never authoritative)
@@ -1064,9 +1092,21 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
              and related_id in (select id from application_invitations where conversion_id=$1)))
         limit 1`, [conversion_id, CHILD_PREPARE, CHILD_SEND])).rows[0];
     if (openChild) throw httpErr(409, "Open prepare/send work already exists — retry would duplicate it.");
+    // CURRENT TERMINAL STATE — "does a live application already exist on this
+    // conversation right now?" Present tense, so a status read is correct; what
+    // was wrong is the list. It omitted 'expired', so an expired application
+    // read as LIVE and permanently blocked a new one, and it filtered 'denied',
+    // which the CHECK constraint does not permit and no row can hold.
+    // The canonical TERMINAL group is bound as a parameter — no literal ladder.
     const nonterminal = (await client.query(
-      `select 1 from lease_applications where conversion_id=$1
-        and status not in ('denied','declined','withdrawn') limit 1`, [conversion_id])).rows[0];
+      `select status from lease_applications where conversion_id=$1
+        and status <> all($2::text[]) limit 1`,
+      [conversion_id, lifecycleRead.STATUS_GROUP_PARAMS.terminal])).rows[0];
+    // An unrecognized status is not silently "live": it is surfaced as its own
+    // refusal, because we cannot say what it means.
+    if (nonterminal && !lifecycleRead.isKnownStatus(nonterminal.status)) {
+      throw httpErr(409, `This conversation has an application in an unrecognized state ('${nonterminal.status}'). Resolve it before continuing.`);
+    }
     if (nonterminal) throw httpErr(409, "A live application exists — retry does not apply.");
 
     const currentIntent = (await client.query(

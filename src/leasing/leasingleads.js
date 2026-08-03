@@ -27,6 +27,8 @@ const staffIdentity = require("../identity/staff_identity_resolver.js"); // 067:
 const { recordPersonFact } = require("../identity/person_facts.js"); // 092: the ONE person × property fact write
 const crypto = require("crypto");
 const aiLeasingStrategy = require("./ai_leasing_strategy");
+// Slice 9 attribution foundation: the ONE place an appointment binds to an opportunity.
+const attribution = require("./appointment_attribution");
 const aiLeasingStrategyRuntime = require("./ai_leasing_strategy_runtime");
 const AI_FIRST_RESPONSE_PROMPT_REVISION = "leasing-first-response-v2";
 // Rule-0 capture-first attribution buckets (Fable ruling): two materially different
@@ -1560,9 +1562,15 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // Property operating timezone — resolved through the ONE shared resolver
   // (property_timezone.js), the SAME truth operator.js uses. Honest null for an
   // unconfigured property; booking/offers refuse rather than invent local times.
-  const { resolvePropertyOperatingTimeZone } = require("../shared/property_timezone");
-  function propertyTimezone(propertyId) {
-    return resolvePropertyOperatingTimeZone(propertyId); // null = unconfigured
+  const { loadPropertyOperatingTimeZone } = require("../shared/property_timezone");
+  // Slice 9 ruling 1A: the name says ASYNC. A sync-looking name returning a
+  // Promise already cost one regression in a proof fixture; the next caller
+  // does not get to make that mistake.
+  // DECLARED async, not merely Promise-returning. A sync function that hands
+  // back a Promise reads as sync to every shape check and to every human
+  // skimming it — the exact trap ruling 1A was written to close.
+  async function loadPropertyOperatingTimezone(propertyId) {
+    return loadPropertyOperatingTimeZone(pool, propertyId); // null = unconfigured
   }
 
   // ── OFFERABLE SLOTS READER — the slots the agent may OFFER this turn,
@@ -1571,7 +1579,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   //    book (honest refusal, never an invented local time). Returns real open,
   //    future slots with a stable id + human label.
   async function readOfferableSlots(client, { propertyId, limit = 4 }) {
-    const tz = propertyTimezone(propertyId);
+    const tz = await loadPropertyOperatingTimezone(propertyId);
     if (!tz) return null; // unconfigured tz → no offer set (honest)
     const rows = (await (client || pool).query(
       `select id, starts_at, ends_at, unit_id
@@ -2465,11 +2473,23 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
         actorType: b.actor_type === "prospect" ? "prospect" : "human", actorId: b.actor_id || null,
         metadata: { to_slot: b.new_slot_id },
       });
-      // new tour onto the new slot
+      // ── NEW TOUR ONTO THE NEW SLOT — ATTRIBUTION MUST SURVIVE ────────
+      //  A reschedule successor CONTINUES an attempt; it does not begin one.
+      //  This insert copied lead_id, property_id, unit_id, leasing_agent_id,
+      //  slot_id, scheduled_for, status and rescheduled_from — and NOT
+      //  conversion_id. A chain that began attributed became unattributed at its
+      //  second occurrence, silently, and no later pass could repair it because
+      //  the inference that would have to fill it is forbidden.
+      //
+      //  The successor INHERITS verbatim: no re-resolution, no lookup, no
+      //  re-validation against current state. Whatever the predecessor was
+      //  attributed to, the continuation is attributed to.
+      const inherited = attribution.inheritAttribution(oldTour);
       const newTour = (await client.query(
-        `insert into leasing_tours (lead_id, property_id, unit_id, leasing_agent_id, slot_id, scheduled_for, status, rescheduled_from)
-         values ($1,$2,$3,$4,$5,$6,'scheduled',$7) returning *`,
-        [oldTour.lead_id, oldTour.property_id, newSlot.unit_id, newSlot.leasing_agent_id, b.new_slot_id, newSlot.starts_at, tourId])).rows[0];
+        `insert into leasing_tours (lead_id, property_id, unit_id, leasing_agent_id, slot_id, scheduled_for, status, rescheduled_from, conversion_id)
+         values ($1,$2,$3,$4,$5,$6,'scheduled',$7,$8) returning *`,
+        [oldTour.lead_id, oldTour.property_id, newSlot.unit_id, newSlot.leasing_agent_id,
+         b.new_slot_id, newSlot.starts_at, tourId, inherited.conversion_id])).rows[0];
       await client.query(`update tour_availability set status='booked', booked_tour_id=$1, updated_at=now() where id=$2`, [newTour.id, b.new_slot_id]);
       await recordTourEvent(client, {
         tourId: newTour.id, leadId: oldTour.lead_id, type: "scheduled",
@@ -2603,7 +2623,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     consumeTourOffer,          // mark an offer consumed on booking
     attachOutboundToOffer,     // best-effort provenance link to the dispatched outbound
     propertyAgentBookingEnabled, // permanent per-property booking capability
-    propertyTimezone,          // shared honest-null tz resolver
+    loadPropertyOperatingTimezone,  // ASYNC — governed column read, honest null
   };
   // TEST-ONLY (Class 3, inert at runtime): exposes the opener drafter so the
   // voice harness asserts against the REAL emitted text, not a copy. No route,

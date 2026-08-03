@@ -146,7 +146,7 @@ module.exports = function followupRunner(deps) {
 
       // Quiet hours, asked BEFORE composing so a closed window costs nothing.
       const win = commBoundary && commBoundary.withinSendWindow
-        ? commBoundary.withinSendWindow(propertyId, "followup", new Date(now))
+        ? await commBoundary.withinSendWindow(propertyId, "followup", new Date(now))
         : { allowed: false, reason: "no_boundary" };
       if (!win.allowed) { results.skipped.push({ name: row.name, reason: win.reason }); continue; }
 

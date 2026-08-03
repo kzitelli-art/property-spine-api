@@ -21,32 +21,57 @@ const path = require("path");
 const { Pool } = require("pg");
 
 const REPO = path.resolve(__dirname, "..");
-const DEMO = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
-const FUTURE = "2026-10-25";
+const { seedInventory } = require("./fixtures/slice9_inventory_fixture");
+
+// DERIVED, not hardcoded. This was the literal "2026-10-25", which quietly
+// becomes a PAST date once the clock passes it — at which point "positions
+// whose lease ends before FUTURE" stops meaning what the assertion says. The
+// fixture dates are relative to today, so this horizon is too: 90 days sits
+// between the fixture's near expiry (+20d) and its far expiry (+120d).
+const FUTURE = new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10);
 
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { fail++; console.log("   FAIL  " + m); } };
 
+const ssl = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || "")
+  ? false : { rejectUnauthorized: false };
+
 (async () => {
   const url = process.env.DATABASE_URL;
   if (!url) { console.log("FATAL: DATABASE_URL required"); process.exit(1); }
-  const pool = new Pool({ connectionString: url, ssl: { rejectUnauthorized: false } });
+  const pool = new Pool({ connectionString: url, ssl });
+  const pg = await pool.connect();
+  await pg.query("begin");
+  const seeded = await seedInventory(pg);
+  const DEMO = seeded.property_id;   // the SCRATCH property, seeded by this proof
 
   const { datedPropertyPositions } = require(path.join(REPO, "src/tenancy/dated_positions"));
   const { currentRentRoll } = require(path.join(REPO, "src/surfaces/rent_roll_canonical"));
   const { futureRentRollFacts } = require(path.join(REPO, "src/surfaces/future_rent_roll_facts"));
   const { renewalsCohort } = require(path.join(REPO, "src/leasing/renewals_read"));
 
+  // POPULATION FIRST. This proof hardcoded Demo Building and seeded nothing, so
+  // on a database where that property has no spaces its one failure was really
+  // an assertion over an empty set — and every other assertion was passing
+  // vacuously beside it.
+  console.log("\n══ FIXTURE POPULATION ══");
+  const popn = (await pg.query(
+    `select (select count(*) from units where property_id=$1)::int u,
+            (select count(*) from spaces s join units n on n.id=s.unit_id
+              where n.property_id=$1)::int s`, [DEMO])).rows[0];
+  ok(popn.u === 20, `20 units seeded (${popn.u})`);
+  ok(popn.s === 20, `20 spaces seeded (${popn.s})`);
+
   console.log("\n══ ONE CLASSIFICATION PER POSITION PER as_of ══");
-  const dpA = await datedPropertyPositions(pool, { property_id: DEMO });
-  const dpB = await datedPropertyPositions(pool, { property_id: DEMO });
+  const dpA = await datedPropertyPositions(pg, { property_id: DEMO });
+  const dpB = await datedPropertyPositions(pg, { property_id: DEMO });
   ok(JSON.stringify(dpA.positions) === JSON.stringify(dpB.positions),
     "the shared read is deterministic for the same property and as_of");
 
-  const rr = await currentRentRoll(pool, { property_id: DEMO });
-  const rn = await renewalsCohort(pool, { property_id: DEMO });
-  const frToday = await futureRentRollFacts(pool, { property_id: DEMO });
-  const frFuture = await futureRentRollFacts(pool, { property_id: DEMO, as_of: FUTURE });
+  const rr = await currentRentRoll(pg, { property_id: DEMO });
+  const rn = await renewalsCohort(pg, { property_id: DEMO });
+  const frToday = await futureRentRollFacts(pg, { property_id: DEMO });
+  const frFuture = await futureRentRollFacts(pg, { property_id: DEMO, as_of: FUTURE });
 
   const byId = new Map(dpA.positions.map((p) => [p.space_id, p]));
   const rrById = new Map(rr.rows.map((r) => [r.space_id, r]));
@@ -177,7 +202,7 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
   // against a locally-defined predicate. They now run against the shipped
   // service, so a regression in it fails here.
   const { availabilityRead } = require(path.join(REPO, "src/surfaces/availability_read"));
-  const avail = await availabilityRead(pool, { property_id: DEMO });
+  const avail = await availabilityRead(pg, { property_id: DEMO });
   const avById = new Map(avail.rows.map((r) => [r.space_id, r]));
   const mkt = avail.rows.filter((r) => r.marketing_state === "marketable_now");
 
@@ -225,7 +250,9 @@ const ok = (c, m) => { if (c) { pass++; console.log("   PASS  " + m); } else { f
       "a bad request errors or returns real rows — never a fabricated empty state");
   }
 
+  await pg.query("rollback");   // the scratch property never persists
+  pg.release();
   await pool.end();
   console.log(`\n════ ${pass} passed, ${fail} failed ════\n`);
   process.exit(fail === 0 ? 0 : 1);
-})().catch((e) => { console.log("FATAL:", e.message); process.exit(1); });
+})().catch((e) => { console.log("FATAL:", e.message, "\n", e.stack); process.exit(1); });

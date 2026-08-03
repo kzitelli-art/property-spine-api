@@ -69,11 +69,50 @@ function rangesOverlap(a, b) {
 //   unproven                 anything else. Never counts as locked.
 // Deliberately NOT collapsed: an imported lease is real operating truth, but
 // it did not pass proof steps it never passed, and that stays visible.
+// THE governed locked rule, written ONCE. proofBasis and
+// classifyFutureCommitment both ask it, so "executed AND funded" cannot drift
+// into two subtly different tests — which it briefly had.
+function isNativelyProven(lease) {
+  return !!(lease && lease.executed_verified && lease.move_in_funds_cleared);
+}
+
 function proofBasis(lease) {
   if (!lease) return null;
-  if (lease.executed_verified && lease.move_in_funds_cleared) return "native_verified";
+  if (isNativelyProven(lease)) return "native_verified";
   if (lease.source_type === "historical_snapshot" && lease.confidence === "confirmed") return "confirmed_opening_import";
   return "unproven";
+}
+
+// ── ONE FUTURE-COMMITMENT CLASSIFICATION ─────────────────────────────
+//  Used for BOTH shapes of future commitment:
+//    · a successor after a current/governing lease
+//    · a standalone future lease on an otherwise vacant position
+//
+//  Before this existed only the successor path carried proof. A standalone
+//  future lease produced successor.state === 'none' (the successor block
+//  requires a governing lease with an end_date), so availability_read fell
+//  through to an unconditional committed_future → successor_locked. An
+//  unfunded pending future lease on a vacant position was therefore suppressed
+//  from marketing correctly and then LABELLED LOCKED — a state stronger than
+//  the proof the lease actually carried.
+//
+//  LOCKED is the same governed rule everywhere: executed AND funded. A
+//  'pending' lease_status alone never closes a position, and absence of a
+//  required move-in charge set is NOT funded (see space_position.js).
+//
+//  proof_basis is carried, never collapsed. A confirmed opening import is real
+//  operating truth that may suppress marketing, but it did not pass native
+//  execution and funding, and callers must be able to tell the difference.
+function classifyFutureCommitment(lease) {
+  if (!lease) return { state: "none", lease_id: null, start_date: null, proof_basis: null, locked: false };
+  const locked = isNativelyProven(lease);
+  return {
+    state: locked ? "locked" : "pending",
+    lease_id: lease.id,
+    start_date: lease.start_date || null,
+    proof_basis: proofBasis(lease),
+    locked,
+  };
 }
 
 // ── THE CLASSIFIER ───────────────────────────────────────────────────
@@ -169,8 +208,7 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     if (next) {
       // LOCKED uses the SAME governed rule as everywhere else: executed AND
       // funded. A 'pending' lease_status alone never closes the position.
-      const locked = !!(next.executed_verified && next.move_in_funds_cleared);
-      successor = { state: locked ? "locked" : "pending", lease_id: next.id, proof_basis: proofBasis(next), locked };
+      successor = classifyFutureCommitment(next);
     }
   }
 
@@ -200,12 +238,18 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     conflict_state: conflict_ids.length ? "conflicted" : "clear",
     conflicting_lease_ids: conflict_ids,
     successor,
+    // THE STANDALONE FUTURE COMMITMENT. Same helper, same governed locked rule.
+    // availability_read consumes this instead of assuming committed_future
+    // implies locked, so no availability state can be stronger than its proof.
+    future_commitment: classifyFutureCommitment(future),
     _compat_occupancy: row.compat_occupancy,
   };
 }
 
 module.exports = {
   classifyPosition,
+  classifyFutureCommitment,
+  isNativelyProven,
   // shared vocabulary, exported so no caller redefines it
   TERMINAL_LEASE_STATUSES,
   CURRENT_ECONOMIC_STATUSES,

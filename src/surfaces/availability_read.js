@@ -50,6 +50,20 @@ const MARKETABLE_USE_TYPES = new Set(["residential", "commercial"]);
 // Ordered most-blocking first. The FIRST match wins and becomes the single
 // stated reason, so a row never shows a queue of complaints — and the
 // reason shown is the one that must be resolved first.
+// PROOF-AWARE PENDING LANGUAGE.
+//
+// "awaiting execution and funding" is true of a lease that entered natively and
+// has not finished those steps. It is FALSE of a confirmed opening import,
+// which is governed operating truth that never took the native path at all —
+// telling an operator it is "waiting" for steps it will never take is a
+// confident-wrong label, not a harmless simplification.
+function pendingReason(commitment) {
+  const basis = commitment && commitment.proof_basis;
+  if (basis === "confirmed_opening_import") return "future_commitment_confirmed_opening_truth";
+  if (basis === "unproven") return "future_commitment_native_proof_or_funding_incomplete";
+  return "future_commitment_proof_unavailable";
+}
+
 function marketingState(p, liveOk) {
   if (!liveOk) return { state: "unavailable", reason: "live_read_failed" };
 
@@ -80,11 +94,30 @@ function marketingState(p, liveOk) {
   if (p.successor && p.successor.state === "locked")
     return { state: "successor_locked", reason: "committed_to_a_future_resident" };
   if (p.successor && p.successor.state === "pending")
-    return { state: "successor_pending", reason: "successor_awaiting_execution_and_funding" };
+    return { state: "successor_pending", reason: pendingReason(p.successor) };
 
   // Committed to a future resident even though nothing spans today.
-  if (p.availability_state === "committed_future")
-    return { state: "successor_locked", reason: "committed_to_a_future_start_date" };
+  //
+  // This branch previously returned successor_locked UNCONDITIONALLY. The
+  // `successor` tests above only fire when a governing lease exists, so a
+  // STANDALONE future lease on a vacant position never reached them and every
+  // such position — funded or not — was reported locked. Suppression was
+  // right; the label was stronger than the proof.
+  //
+  // The canonical future_commitment now answers it, using the same governed
+  // locked rule (executed AND funded). No availability state may claim more
+  // proof than the lease carries.
+  if (p.availability_state === "committed_future") {
+    const fc = p.future_commitment;
+    if (fc && fc.state === "locked")
+      return { state: "successor_locked", reason: "committed_to_a_future_start_date" };
+    if (fc && fc.state === "pending")
+      return { state: "successor_pending", reason: pendingReason(fc) };
+    // committed_future with no carried commitment object means the projection
+    // did not supply one. Marketing stays suppressed — the position IS
+    // committed — but it is never upgraded to locked on missing evidence.
+    return { state: "successor_pending", reason: "future_commitment_proof_unavailable" };
+  }
 
   if (p.lease) {
     return p.notice_state === "on_notice"
@@ -178,6 +211,24 @@ function marketingState(p, liveOk) {
 //  duration exists as a property fact. So a dated expectation is returned
 //  as 'incomplete' with the exact fact that is missing, rather than a
 //  confident date the building cannot stand behind.
+// ── ONE DATE NORMALIZER ──────────────────────────────────────────────
+//  Dates reach this file in TWO shapes and the difference is invisible until
+//  it corrupts a value. Lease dates arrive through json_agg in
+//  space_position, so they are already 'YYYY-MM-DD' STRINGS. notice_date is
+//  selected as a bare `date` column, so node-pg parses it into a JS DATE.
+//
+//  `String(d).slice(0, 10)` is correct for the first and silently wrong for
+//  the second: String(new Date(...)) is 'Sat Aug 22 2026 …', whose first ten
+//  characters are 'Sat Aug 22'. Every `upcoming` position was returning that
+//  as available_from, and `within_horizon` then compared it lexically against
+//  a real ISO date — so it was ALWAYS false and expected_within_horizon
+//  silently undercounted. Found by Slice 9's deterministic fixtures.
+function ymd(d) {
+  if (!d) return null;
+  if (d instanceof Date) return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  return String(d).slice(0, 10);
+}
+
 function availableFrom(p, state, asOf) {
   if (state === "marketable_now") {
     return { available_from: asOf, availability_confidence: "confirmed", blocking_fact: null };
@@ -187,7 +238,7 @@ function availableFrom(p, state, asOf) {
     // and marketable is the turn, and its duration is not governed.
     const d = p.available_from || (p.lease ? p.lease.end_date : null);
     return {
-      available_from: d ? String(d).slice(0, 10) : null,
+      available_from: ymd(d),
       availability_confidence: "incomplete",
       blocking_fact: "no_governed_turnover_duration",
     };
@@ -215,7 +266,7 @@ function availableFrom(p, state, asOf) {
     };
   }
   if (state === "occupied") {
-    const d = p.lease && p.lease.end_date ? String(p.lease.end_date).slice(0, 10) : null;
+    const d = p.lease ? ymd(p.lease.end_date) : null;
     return {
       available_from: null,   // an expiration is not an availability date
       availability_confidence: "incomplete",
@@ -407,6 +458,32 @@ async function availabilityRead(pool, { property_id, as_of = null, horizon_days 
       notice_state: p.notice_state,
       successor_state: p.successor.state,
       successor_lease_id: p.successor.lease_id,
+
+      // ── THE FROZEN CANONICAL COMMITMENT CONTRACT ──────────────────
+      // Three INDEPENDENT dated positions, never one ladder. A position can
+      // hold a current lease AND a future commitment simultaneously; flattening
+      // them into a single commitment_state made that unrepresentable and
+      // implied "all commitment on this position" when the value only ever
+      // described the future one.
+      //
+      // The earlier flattened fields also carried a dead fallback:
+      // classifyFutureCommitment(null) returns a truthy {state:'none'} object,
+      // so `p.future_commitment ? … : p.successor` could never reach the
+      // successor branch. Removed rather than repaired — the objects below make
+      // the fallback unnecessary.
+      future_commitment: p.future_commitment || {
+        state: "none", lease_id: null, start_date: null, proof_basis: null },
+      activation_pending: p.activation_pending_lease_position ? {
+        lease_id: p.activation_pending_lease_position.lease_id,
+        start_date: p.activation_pending_lease_position.start_date,
+        proof_basis: p.activation_pending_lease_position.proof_basis || null,
+      } : null,
+      current_lease: p.lease ? {
+        lease_id: p.lease.lease_id,
+        start_date: p.lease.start_date,
+        end_date: p.lease.end_date,
+        proof_basis: p.proof_basis || null,
+      } : null,
       conflict_state: p.conflict_state,
       evidence_state: p.evidence_state,
       tenancy_state: p.tenancy_state,

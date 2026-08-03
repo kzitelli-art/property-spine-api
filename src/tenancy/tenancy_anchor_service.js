@@ -45,6 +45,10 @@
 //  Then inject BOTH into applications.js AND operator.js as deps.
 // ════════════════════════════════════════════════════════════════════
 
+// The canonical lifecycle authority — status and its milestones are authored
+// only here (Path E).
+const lifecycle = require("../applications/application_lifecycle");
+
 module.exports = function tenancyAnchorService(deps) {
   const {
     spawnObligationFromEvent,
@@ -309,10 +313,18 @@ module.exports = function tenancyAnchorService(deps) {
     } catch (e) { if (e.code !== "ALREADY_COMPLETE") throw e; }
 
     // ── NOW promote: application → active, person → tenant ──
-    const updApp = (await client.query(
-      `update lease_applications
-          set status='active', activated_at=now(), updated_at=now()
-        where id=$1 returning *`, [app.id])).rows[0];
+    // PATH E — through the canonical authority. It verifies the lease anchor
+    // belongs to THIS application and that the term_required obligation is
+    // genuinely complete (completed immediately above), so 'active' can never
+    // be asserted without the work that justifies it.
+    //
+    // It also preserves the FIRST activation instant instead of overwriting
+    // it: the raw write set activated_at=now() unconditionally, so any re-run
+    // silently moved the tenancy's start of life to the re-run's clock.
+    const activated = await lifecycle.markActiveFromConfirmedTerm(client, {
+      applicationId: app.id, leaseId: lease.id, termRequiredObligationId: termObligation.id,
+    });
+    const updApp = activated.application;
     if (app.person_id) {
       await client.query("update persons set lifecycle_status='tenant' where id=$1", [app.person_id]).catch(() => {});
     }

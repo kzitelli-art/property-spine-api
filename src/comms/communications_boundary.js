@@ -340,9 +340,12 @@ module.exports = function communicationsBoundary({ pool, sms }) {
   const SEND_WINDOW_END_HOUR = 21;   // exclusive (21:00 = last minute is 20:59)
 
   // Local wall-clock hour at the property, or null when tz is unconfigured.
-  function localHourAtProperty(property_id, now = new Date()) {
-    const { resolvePropertyOperatingTimeZone } = require("../shared/property_timezone");
-    const tz = resolvePropertyOperatingTimeZone(property_id);
+  // ASYNC as of Slice 9: the operating timezone is now a governed column
+  // (properties.operating_timezone) rather than a hardcoded allowlist, so
+  // resolving it is a read. Both callers were already async.
+  async function localHourAtProperty(property_id, now = new Date()) {
+    const { loadPropertyOperatingTimeZone } = require("../shared/property_timezone");
+    const tz = await loadPropertyOperatingTimeZone(pool, property_id);
     if (!tz) return null;
     try {
       const hour = new Intl.DateTimeFormat("en-US", {
@@ -356,9 +359,9 @@ module.exports = function communicationsBoundary({ pool, sms }) {
   // { allowed, reason }. Exported for the proof harness and for a scheduler to
   // consult BEFORE queueing, so it can defer to the next open window rather
   // than burning an attempt against a closed door.
-  function withinSendWindow(property_id, purpose, now = new Date()) {
+  async function withinSendWindow(property_id, purpose, now = new Date()) {
     if (!PROACTIVE_PURPOSES.has(purpose)) return { allowed: true, reason: "not_proactive" };
-    const hour = localHourAtProperty(property_id, now);
+    const hour = await localHourAtProperty(property_id, now);
     if (hour === null) return { allowed: false, reason: "send_window_timezone_unconfigured" };
     if (hour < SEND_WINDOW_START_HOUR || hour >= SEND_WINDOW_END_HOUR) {
       return { allowed: false, reason: "outside_send_window" };
@@ -401,7 +404,7 @@ module.exports = function communicationsBoundary({ pool, sms }) {
     // scheduled send outside the window never even reads a consent row; it is
     // simply not a thing we do at that hour. Reactive replies fall straight
     // through (withinSendWindow returns allowed for non-proactive purposes).
-    const windowCheck = withinSendWindow(property_id, purpose);
+    const windowCheck = await withinSendWindow(property_id, purpose);
     if (!windowCheck.allowed) return { allowed: false, reason: windowCheck.reason };
 
     // 1. Consent — read once; opted_out blocks EVERYTHING, every mode.

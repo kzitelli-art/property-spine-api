@@ -183,14 +183,19 @@ async function main() {
     const unknownRead = await svc.readOfferableSlots(pool, { propertyId: propA.id, limit: 20 });
     check("4. UNKNOWN property tz → readOfferableSlots returns null (no invented labels)",
       unknownRead === null, `got ${unknownRead === null ? "null" : JSON.stringify(unknownRead && unknownRead.slice(0,1))}`);
-    check("4. UNKNOWN property tz → propertyTimezone returns null (honest, not Eastern)",
-      svc.propertyTimezone(propA.id) === null, `got ${svc.propertyTimezone(propA.id)}`);
+    // Slice 9: loadPropertyOperatingTimezone is ASYNC — the operating timezone is a governed
+    // column read (properties.operating_timezone), no longer a hardcoded map.
+    const unknownTz = await svc.loadPropertyOperatingTimezone(propA.id);
+    check("4. UNKNOWN property tz → loadPropertyOperatingTimezone returns null (honest, not Eastern)",
+      unknownTz === null, `got ${unknownTz}`);
 
-    // Configured tz: the Demo Building UUID is in the always-present allowlist,
-    // so its offerable read produces tz-formatted labels (proves the happy path
-    // without env-load-timing games). Create a demo-property slot and read it.
+    // Configured tz: the timezone is now CONFIGURED DATA, not a code allowlist,
+    // so this fixture sets it the same way production does (migration 123
+    // backfilled exactly this value for this property). The happy path then
+    // produces tz-formatted labels.
     const DEMO = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
     await pool.query(`insert into properties (id,name,sms_number) values ($1,'Property Spine Demo Building','+12154452021') on conflict (id) do nothing`, [DEMO]);
+    await pool.query(`update properties set operating_timezone='America/New_York' where id=$1`, [DEMO]);
     const demoUnit = track("units", uuid());
     await pool.query(`insert into units (id,property_id,unit_number,bedrooms,bathrooms,market_rent,occupancy_status) values ($1,$2,'D-1',1,1,1500,'vacant')`, [demoUnit, DEMO]);
     const s1 = track("slots", uuid());

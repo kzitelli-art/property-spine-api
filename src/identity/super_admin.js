@@ -525,5 +525,48 @@ module.exports = function superAdminModule({ pool }) {
     }
   });
 
+  // ── SLICE 9 (ruling 1B) — SET PROPERTY OPERATING TIMEZONE ────────────────
+  //  Migration 123 created the truth; this is its governed authoring path.
+  //  Without it every property except the backfilled Demo Building would be
+  //  permanently unavailable for every dated metric.
+  //
+  //  AUTHORITY: mounted here deliberately. No property-settings capability
+  //  exists in the capability vocabulary, and the ruling forbids inventing
+  //  browser authority, so this reuses platform administration —
+  //  requireSuperAdmin re-reads platform_role from the users row rather than
+  //  trusting the session. REMOVAL CONDITION: when a property-settings
+  //  capability exists, this command moves to it.
+  //
+  //  The command validates against BOTH Postgres and Node's Intl before
+  //  writing: the database trigger proves pg_timezone_names accepts the name,
+  //  which does not prove the runtime can render with it.
+  router.put("/admin/properties/:propertyId/operating-timezone", requireSuperAdmin, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { setPropertyOperatingTimezone } = require("../shared/timezone_command");
+      const b = req.body || {};
+      const out = await setPropertyOperatingTimezone(pool, {
+        property_id: req.params.propertyId,
+        timezone: b.timezone,
+        actor_user_id: req.operator.id,          // session only, never the body
+        reason: b.reason || null,
+        idempotency_key: b.idempotency_key || null,
+      });
+      return res.json(out);
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null });
+    }
+  });
+
+  router.get("/admin/properties/:propertyId/operating-timezone/history", requireSuperAdmin, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    try {
+      const { operatingTimezoneHistory } = require("../shared/timezone_command");
+      return res.json(await operatingTimezoneHistory(pool, { property_id: req.params.propertyId }));
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null });
+    }
+  });
+
   return router;
 };

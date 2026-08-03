@@ -41,6 +41,7 @@
 // =============================================================
 
 const express = require("express");
+const packetEligibility = require("./lease_packet_eligibility");
 const crypto = require("crypto");
 
 module.exports = function leasePacketsModule(deps) {
@@ -398,24 +399,40 @@ module.exports = function leasePacketsModule(deps) {
     if (!app) {
       throw packetError(404, "application_not_found", "No application with that id.");
     }
-    if (expectedPropertyId && String(app.property_id) !== String(expectedPropertyId)) {
-      throw packetError(403, "not_permitted", "This action is not permitted.");
-    }
-    if ((!app.terms_review_obligation_id && !app.activation_obligation_id) ||
-        !["lease_ready", "tenant_signed", "approved"].includes(app.status)) {
+    // ── THE ONE ELIGIBILITY PREDICATE ────────────────────────────────
+    //  The existing packet is read FIRST so a single assessment sees every
+    //  fact. Lock order is unchanged: lease_applications above, then
+    //  lease_packets. Both were already `for update` selects.
+    const existingPacket = (await client.query(
+      `select * from lease_packets
+        where application_id=$1 and superseded_at is null
+        order by version desc limit 1 for update`,
+      [app.id]
+    )).rows[0] || null;
+
+    const verdict = packetEligibility.assessLeasePacketEligibility(app, {
+      existingPacket, expectedPropertyId, createNewVersion,
+    });
+    if (!verdict.eligible) {
       throw packetError(
-        409,
-        "application_not_approved",
-        `Application is '${app.status}' with no open approval gate — approve it first.`,
-        { status: app.status }
+        verdict.reason_code === packetEligibility.REASON.NOT_AT_PROPERTY ? 403 : 409,
+        verdict.reason_code,
+        verdict.message,
+        {
+          status: verdict.current_status,
+          existing_packet_id: verdict.existing_packet_id,
+          required_fact_missing: verdict.required_fact_missing,
+        }
       );
     }
 
     const confirmationId = app.proposed_terms_confirmation_id || null;
     if (!confirmationId) {
+      // Unreachable via the predicate above, which refuses on this fact first.
+      // Kept as a belt-and-braces guard because everything below dereferences it.
       throw packetError(
         409,
-        "no_current_proposed_terms_confirmation",
+        packetEligibility.REASON.NO_TERMS,
         "Confirm the proposed terms before generating the resident review packet."
       );
     }
@@ -477,29 +494,8 @@ module.exports = function leasePacketsModule(deps) {
 
     const rendered = buildRendered(terms, check.cfg);
     const renderedHash = stableHash(rendered);
-    const current = (await client.query(
-      `select * from lease_packets
-        where application_id=$1 and superseded_at is null
-        order by version desc limit 1 for update`,
-      [app.id]
-    )).rows[0] || null;
-
-    if (current && current.status === "submitted") {
-      throw packetError(
-        409,
-        "packet_immutable",
-        "This packet was acknowledged — it is frozen evidence. Terms changes after acknowledgment are a governed correction (Path B), never a regeneration.",
-        { packet_id: current.id, version: current.version, status: current.status }
-      );
-    }
-    if (current && ["sent", "in_progress", "tenant_in_progress"].includes(current.status) && !createNewVersion) {
-      throw packetError(
-        409,
-        "packet_immutable",
-        "This packet was already issued — it will not be silently regenerated. Create a governed new version to issue changed terms; the prior version remains evidence.",
-        { packet_id: current.id, version: current.version, status: current.status }
-      );
-    }
+    // Already read and already assessed by the predicate above.
+    const current = existingPacket;
 
     let pk;
     if (current && current.status === "draft") {
@@ -673,7 +669,11 @@ module.exports = function leasePacketsModule(deps) {
         "This draft was generated from an older proposed-terms confirmation. Regenerate it before issue."
       );
     }
-    if (!["lease_ready", "tenant_signed", "approved"].includes(row.application_status)) {
+    // The SAME hand-maintained list lived here too. Issuing is a different act
+    // from generating, so it keeps its own reason code — but the status
+    // prerequisite is identical and now comes from the one derived set rather
+    // than a second copy that could drift from the first.
+    if (!packetEligibility.PACKET_ELIGIBLE_STATUSES.includes(row.application_status)) {
       throw packetError(
         409,
         "application_not_issuable",

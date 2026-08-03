@@ -25,6 +25,9 @@
 //   - composeLeasingDesk (pure placement)
 
 const { composeLeasingDesk } = require("./leasing_desk");
+// Slice 9: the canonical application READ authority — the SAME fragment
+// operator.js uses, so the two surfaces cannot disagree.
+const lifecycleRead = require("../applications/application_lifecycle_read");
 
 // The rail's own next-move label map — kept identical to the live task-queue so
 // the desk and the queue never disagree on wording. (Mirror of operator.js.)
@@ -214,21 +217,10 @@ const FOLLOWUP_SQL = `
        where la.conversion_id = lco.conversion_id
        order by la.created_at desc nulls last limit 1
     ) la on true
-    left join lateral (
-      select case
-        when exists (select 1 from lease_applications la where la.conversion_id = lco.conversion_id
-                     and la.status in ('approved','lease_ready','tenant_signed','countersigned','active'))
-          then 'approved'
-        when exists (select 1 from lease_applications la where la.conversion_id = lco.conversion_id
-                     and la.status in ('denied','declined','withdrawn'))
-          then 'declined'
-        when exists (select 1 from lease_applications la where la.conversion_id = lco.conversion_id
-                     and la.status = 'submitted')
-          then 'submitted'
-        when exists (select 1 from application_invitations ai where ai.conversion_id = lco.conversion_id
-                     and ai.status in ('manually_sent','provider_dispatched'))
-          then 'application_sent'
-        else null end as applicant_substatus
+    -- CANONICAL (Slice 9 read authority) — the same fragment operator.js uses.
+    -- Both surfaces must answer identically for the same rows; two copies of
+    -- this ladder is how they came to disagree.
+    left join lateral (${lifecycleRead.SQL_APPLICANT_SUBSTATUS}
     ) subst on true
    where c.property_id = $1 and lco.outcome is null
    order by coalesce(o.due_at,'infinity'::timestamptz), o.created_at, o.id`;

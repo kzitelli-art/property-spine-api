@@ -3070,7 +3070,6 @@ app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation
 const deliveryHelper = require("./src/comms/delivery")({ satisfyObligation, completeObligation }); // Slice D shared completion-feed
 app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, deliveryHelper, recordEffectivePossession }));
 app.use("/", noticeModule({ pool }));   // Availability Slice A — notice writes unit_events only; no obligation spawns at notice
-app.use("/", require("./src/tenancy/availability")({ pool })); // Availability Slice C — read-only forward-supply projection; derives from live tables, writes nothing
 // Canonical dated space position (read-only): GET /properties/:id/space-position?as_of=YYYY-MM-DD
 // One shared truth for current rent roll / forward rent roll / availability — distinct fields, never one status.
 app.get("/properties/:id/space-position", async (req, res) => {

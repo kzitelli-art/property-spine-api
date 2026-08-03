@@ -126,5 +126,104 @@ module.exports = function operatorObligationActions(deps) {
     }
   });
 
+  // ══════════════════════════════════════════════════════════════════
+  //  RESOLVE THE INBOUND-OPPORTUNITY DECISION — the one named action for
+  //  the resolve_inbound_opportunity workflow. A real product workflow now
+  //  exists, which is exactly the condition the header above set for a new
+  //  door.
+  //
+  //  THE TRANSACTION, in the ruled order:
+  //    lock and re-read the obligation → validate still open → validate the
+  //    selected opportunity (property + person lineage, inside the lifecycle
+  //    service) → record the exact attributed reopen event → satisfy the
+  //    obligation with structured proof → commit.
+  //
+  //  A failed reopen rolls everything back: the decision stays open and
+  //  visible with the exact blocked reason. The selected opportunity UUID is
+  //  structured proof through the canonical obligation service — never notes,
+  //  never free text. The browser supplies ONLY the opaque opportunity token;
+  //  conversation, property and actor are all server-derived.
+  // ══════════════════════════════════════════════════════════════════
+  const decisionSvc = require("../leasing/inbound_opportunity_decision");
+  const lifecycleForDecisions = require("../leasing/leasing_lifecycle_service")({ pool });
+
+  router.post("/operator/obligations/:id/inbound-decision/resolve", ...gate, async (req, res) => {
+    const opportunityId = (req.body || {}).opportunity_id || null;
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+
+      //  Scope and lock in one statement; outside scope is NOT FOUND.
+      const ob = (await client.query(
+        `select id, status, property_id, person_id, related_id, related_type, dedupe_key
+           from obligations
+          where id = $1 and property_id = $2 and module = any($3::text[]) and type = $4
+          for update`,
+        [req.params.id, req.operator.property_id,
+         req.operator.allowed_modules || [], decisionSvc.DECISION_TYPE])).rows[0];
+      if (!ob) {
+        await client.query("rollback");
+        return res.status(404).json({ error: "No such decision on this property." });
+      }
+
+      const inboundId = decisionSvc.inboundEventIdOf(ob);
+
+      //  ── ALREADY RESOLVED: explicit, and idempotent for a true replay ──
+      if (ob.status === "complete") {
+        //  A replay of the SAME successful resolution finds its own reopen
+        //  event by the deterministic idempotency key. Anything else is
+        //  stale, said plainly — never a duplicate write.
+        const replay = inboundId && opportunityId ? (await client.query(
+          `select id from leasing_lead_lifecycle_events where idempotency_key = $1`,
+          [`reopen_decision:${inboundId}:${opportunityId}`])).rows[0] : null;
+        await client.query("rollback");
+        if (replay) {
+          return res.json({ ok: true, idempotent: true, obligation_id: ob.id,
+            opportunity_id: String(opportunityId), reopen_event_id: replay.id,
+            receipt: "Already resolved with this exact selection. Nothing was changed." });
+        }
+        return res.status(409).json({ ok: false, refusal_code: "already_resolved",
+          error: "This decision was already resolved. Nothing was changed." });
+      }
+
+      const out = await decisionSvc.resolveInboundOpportunityDecision(client, {
+        obligation_id: ob.id,
+        conversation_id: ob.related_id,               // server-derived, never the body
+        property_id: req.operator.property_id,        // session, never the body
+        conversion_id: opportunityId,                 // the ONE client input: an opaque token
+        actor_user_id: req.operator.id,               // session, never the body
+        source_comm_event_id: inboundId,
+        lifecycleService: lifecycleForDecisions,
+      });
+
+      if (!out.ok) {
+        //  FAILED REOPEN OR REFUSED SELECTION: nothing committed, decision
+        //  stays open, exact reason returned.
+        await client.query("rollback");
+        return res.status(out.httpStatus || 422).json({
+          ok: false, decision_remains_open: true,
+          refusal_code: out.refusal_code, error: out.refusal_reason,
+        });
+      }
+
+      await client.query("commit");
+      return res.json({
+        ok: true,
+        obligation_id: ob.id,
+        opportunity_id: out.opportunity_id,
+        reopen_event_id: out.reopen_event_id,
+        opportunity_already_open: out.opportunity_already_open === true,
+        resolved_by: req.operator.id,
+        receipt: out.receipt,
+      });
+    } catch (e) {
+      try { await client.query("rollback"); } catch (_) {}
+      console.error("inbound-decision resolve error", e);
+      return res.status(500).json({ error: "Could not resolve this decision." });
+    } finally {
+      client.release();
+    }
+  });
+
   return router;
 };
