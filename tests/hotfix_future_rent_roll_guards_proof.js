@@ -120,18 +120,19 @@ const get = async (p, token) => {
 
     section("C  property scope is server-derived");
     const bScoped = await get("/operator/rent-roll/future-facts", tokB);
-    ok("neighbouring property's session gets its OWN property", bScoped.status === 200 && bScoped.body.property_id === F.B);
+    ok("neighbouring property's session gets its OWN property",
+      bScoped.status === 200 && bScoped.body.property.property_id === F.B);
     const forged = await get(`/operator/rent-roll/future-facts?property_id=${F.B}`, tokLease);
     ok("a client-supplied property_id cannot change scope",
-      forged.status === 200 && forged.body.property_id === F.A);
-    const aIds = (good.body.rows || []).map((r) => r.space_id);
+      forged.status === 200 && forged.body.property.property_id === F.A);
+    const aIds = (good.body.positions || []).map((r) => r.space_id);
     ok("no neighbouring-property space leaks into the response",
       !aIds.includes(F.sB.space) && aIds.includes(F.sA.space));
-    ok("exactly one row per canonical space on this property", (good.body.rows || []).length === 1);
+    ok("exactly one row per canonical space on this property", (good.body.positions || []).length === 1);
 
     section("D  STRICT as_of VALIDATION — a real ISO calendar date or 400");
     const dated = await get("/operator/rent-roll/future-facts?as_of=2026-09-01", tokLease);
-    ok("a valid target date is accepted", dated.status === 200 && dated.body.as_of === "2026-09-01");
+    ok("a valid target date is accepted", dated.status === 200 && dated.body.window.as_of === "2026-09-01");
     const leap = await get("/operator/rent-roll/future-facts?as_of=2028-02-29", tokLease);
     ok("a REAL leap day is accepted (2028-02-29)", leap.status === 200);
     for (const [v, why] of [
@@ -151,24 +152,49 @@ const get = async (p, token) => {
     const beforeQ = await pool.query("select sum(calls) c from (select count(*) calls from leases) t");
     const rejected = await get("/operator/rent-roll/future-facts?as_of=not-a-date", tokLease);
     ok("a refused date returns no rows at all", rejected.status === 400 && !(rejected.body || {}).rows);
-    ok("and no as_of is echoed back", !(rejected.body || {}).as_of);
+    ok("and no window is echoed back", !(rejected.body || {}).window);
     void beforeQ;
+
+    section("E0 forward_rent_roll_rows_v1 through real HTTP");
+    ok("the route declares the frozen contract", good.body.contract === "forward_rent_roll_rows_v1");
+    ok("response separates contract/property/window/state/coverage/positions",
+      !!good.body.property && !!good.body.window && !!good.body.state
+      && !!good.body.coverage && Array.isArray(good.body.positions));
+    ok("the window states its basis", ["explicit_property_local_date", "property_local_today"].includes(good.body.window.as_of_basis));
+    const pos = good.body.positions[0];
+    ok("a position carries the typed row contract",
+      !!pos.denominator_class && !!pos.evidence_state && !!pos.resolution_state
+      && Array.isArray(pos.blockers) && Array.isArray(pos.rent_lineage));
+    ok("coverage counts every position", good.body.coverage.total_positions === good.body.positions.length);
+    ok("no occupancy percentage is published", good.body.projected_occupancy_rate === undefined);
+    ok("no scheduled rent total is published", good.body.scheduled_rent_total === undefined);
+    ok("withholding reasons are stated", !!good.body.withheld.projected_occupancy_rate);
+    ok("a position with no obligation says the exact sentence",
+      good.body.positions.every((p) => p.resolution_state !== "no_canonical_action"
+        || p.resolution_explanation === "No canonical action is recorded yet."));
+    //  The deprecated shape must still be truthful.
+    ok("the deprecated rows[] is retained for compatibility", Array.isArray(good.body.rows));
+    ok("and never publishes an arbitrary winner under conflict",
+      good.body.rows.every((r, i) => good.body.positions[i].conflict_state !== "conflicted"
+        || (r.lease_id === null && r.contractual_rent === null && r.successor_lease_id === null)));
 
     section("E  the CURRENT response contract, recorded verbatim");
     const top = Object.keys(good.body || {}).sort();
-    const rowKeys = Object.keys((good.body.rows || [])[0] || {}).sort();
+    const rowKeys = Object.keys((good.body.positions || [])[0] || {}).sort();
     console.log("   top-level: " + top.join(" "));
     console.log("   row keys : " + rowKeys.join(" "));
     ok("response carries rows", Array.isArray(good.body.rows));
     ok("row is keyed on space_id", rowKeys.includes("space_id"));
-    ok("economics is a separate axis (economics_state present)", rowKeys.includes("economics_state"));
+    ok("economics is a separate axis (evidence_state + coverage present)",
+      rowKeys.includes("evidence_state") && rowKeys.includes("coverage"));
     ok("conflict is exposed (conflict_state present)", rowKeys.includes("conflict_state"));
-    ok("NO denominator class is currently emitted", !rowKeys.includes("denominator_class"));
-    ok("NO use_type is currently emitted", !rowKeys.includes("use_type"));
-    ok("NO existing-action projection is currently emitted",
-      !rowKeys.some((k) => /obligation|action/.test(k)));
-    ok("NO rent authority/provenance is currently emitted",
-      !rowKeys.some((k) => /rent_authority|provenance/.test(k)));
+    ok("denominator class IS now emitted", rowKeys.includes("denominator_class"));
+    ok("use_type and its provenance are emitted",
+      rowKeys.includes("use_type") && rowKeys.includes("classified_by_user_id"));
+    ok("the existing-action projection is emitted",
+      rowKeys.includes("existing_action") && rowKeys.includes("resolution_state"));
+    ok("rent authority and lineage are emitted",
+      rowKeys.includes("rent_authority") && rowKeys.includes("rent_lineage"));
 
     section("F  read-only");
     const before = await pool.query("select (select count(*) from leases) l, (select count(*) from events) e, (select count(*) from obligations) o");

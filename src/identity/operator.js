@@ -57,7 +57,8 @@ module.exports = function operatorModule(deps) {
   const { renewalsCohort, renewalsCohortEnriched } = require("../leasing/renewals_read"); // R1 cohort + Slice 6 operating rail
   const { loadAiLeasingStrategyProjection } = require("../leasing/ai_leasing_strategy_projection"); // read-only strategy status + conversation attribution
   const { currentRentRoll } = require("../surfaces/rent_roll_canonical");   // canonical Current Rent Roll (migration route)
-  const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts"); // factual Future Rent Roll (migration route)
+  const { datedPositionRows } = require("../tenancy/dated_position_rows");
+const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts"); // factual Future Rent Roll (migration route)
   const { institutionalRentRoll, institutionalCsv } = require("../surfaces/rent_roll_institutional"); // formal as-of schedule + CSV
   const { availabilityRead } = require("../surfaces/availability_read");   // Availability over the shared classifier
   const { effectivePropertyPricing } = require("../money/effective_pricing"); // the Pricing & Concessions truth sheet
@@ -1949,11 +1950,66 @@ module.exports = function operatorModule(deps) {
       });
     }
     try {
-      const out = await futureRentRollFacts(pool, {
+      //  ── forward_rent_roll_rows_v1 ───────────────────────────────────
+      //  The canonical dated position rows replace the prior facts shape on
+      //  this same route. No second route, no second truth store.
+      //
+      //  COMPATIBILITY, NOT PRESERVATION OF A FALSE WINNER. The legacy row
+      //  shape is still emitted for consumers that read it, but a conflicted
+      //  position now publishes lease_id, successor_lease_id and
+      //  contractual_rent as null. The old read named a governing lease chosen
+      //  by first match among records the system cannot govern; keeping that
+      //  for compatibility would be publishing a known-false winner.
+      const out = await datedPositionRows(pool, {
         property_id: req.operator.property_id,   // session only
         as_of: rawAsOf || null,
       });
-      return res.json({ ...out, _migration_route: true });
+      if (out.state !== "ok") {
+        return res.json({ contract: "forward_rent_roll_rows_v1", ...out });
+      }
+      const cov = out.rows.reduce((a, r) => {
+        a.total_positions++;
+        a[r.denominator_class === "unknown" ? "denominator_unknown" : "denominator_known"]++;
+        a["occupancy_" + (r.coverage.occupancy === "conflict" ? "conflict"
+          : r.coverage.occupancy === "partial" ? "partial" : "complete")]++;
+        a["economics_" + (r.evidence_state === "contractually_supported" ? "complete"
+          : r.evidence_state === "qualified_legacy" ? "qualified_legacy"
+          : r.evidence_state === "conflicting" ? "conflict" : "incomplete")]++;
+        a[r.resolution_state === "existing_action" ? "existing_action"
+          : r.resolution_state === "conflict" ? "action_conflict" : "no_canonical_action"]++;
+        return a;
+      }, { total_positions: 0, denominator_known: 0, denominator_unknown: 0,
+           occupancy_complete: 0, occupancy_partial: 0, occupancy_conflict: 0,
+           economics_complete: 0, economics_qualified_legacy: 0,
+           economics_incomplete: 0, economics_conflict: 0,
+           existing_action: 0, no_canonical_action: 0, action_conflict: 0 });
+
+      return res.json({
+        contract: "forward_rent_roll_rows_v1",
+        property: { property_id: out.property_id, operating_timezone: out.operating_timezone },
+        window: { as_of: out.as_of, as_of_basis: out.as_of_basis },
+        state: out.state,
+        result_state: out.result_state,
+        coverage: cov,
+        withheld: out.withheld,
+        positions: out.rows,
+        //  DEPRECATED. Retained only while it remains truthful; a conflicted
+        //  row carries nulls here rather than an arbitrary winner.
+        rows: out.rows.map((r) => ({
+          space_id: r.space_id, unit_id: r.unit_id, unit_number: r.unit_number,
+          space_label: r.space_label, position_kind: r.position_kind,
+          future_state: r.position_state,
+          lease_id: r.governing_lease_id,
+          lease_end: r.governing_lease_end,
+          successor_state: r.successor_state,
+          successor_lease_id: r.conflict_state === "conflicted" ? null : r.successor_lease_id,
+          proof_basis: r.proof_basis,
+          conflict_state: r.conflict_state,
+          economics_state: r.coverage.rent === "complete" ? "available" : "unavailable",
+          contractual_rent: r.contractual_rent,
+        })),
+        _migration_route: true,
+      });
     } catch (e) {
       return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
     }

@@ -266,13 +266,65 @@ const GOVERNED_DESTINATIONS = Object.freeze({
 //  the obligation rail today is is_overdue (due_at < now()). This states the
 //  minimum honest distinctions on top of it, and "today" is the PROPERTY's
 //  today, consistent with every other date in this engine.
+//  FROZEN. Exported so a renderer or a future governed tool consumes the
+//  vocabulary rather than reconstructing it from labels.
+const DUE_STATE = Object.freeze({
+  OVERDUE: "overdue", DUE_TODAY: "due_today", NOT_DUE: "not_due",
+  NO_DUE_DATE: "no_due_date", TERMINAL: "terminal",
+});
+
+// ── THE FIVE COMPUTED ACTION STRINGS, CLASSIFIED ────────────────────
+//  position_classifier.js emits these next_required_action values. None is an
+//  obligation: no id, no owner, no due state, no closing act, no destination.
+//  The structured obligation projection is the authority; these strings are
+//  not upgraded into actions merely because they sound operational.
+//
+//  A sixth value, confirm_physical_readiness, is invented at the read in
+//  snapshot_loader.js:490 when the classifier returned nothing. It is an
+//  unsupported_instruction and does not appear here at all.
+const ACTION_STRING_CLASSIFICATION = Object.freeze({
+  economic_tenancy_activation_required: {
+    states_fact: true, implies_assigned_work: true,
+    classification: "noncanonical_recommendation",
+    replacement: "removed from the action contract; the condition remains in the row position state",
+  },
+  possession_outstanding: {
+    states_fact: true, implies_assigned_work: true,
+    classification: "noncanonical_recommendation",
+    replacement: "removed from the action contract; possession state remains readable",
+  },
+  review_early_possession: {
+    states_fact: true, implies_assigned_work: true,
+    classification: "unsupported_instruction",
+    replacement: "removed; review names no closing act and no obligation type matches it",
+  },
+  turn_before_committed_start: {
+    states_fact: true, implies_assigned_work: true,
+    classification: "noncanonical_recommendation",
+    replacement: "removed; a real turn obligation would project through the obligation rail like any other",
+  },
+  possession_without_current_lease: {
+    states_fact: true, implies_assigned_work: false,
+    classification: "plain_explanation",
+    replacement: "retained as explanation only; it states a sourced condition and claims no assigned work",
+  },
+});
+const EXPLANATORY_ACTION_STRINGS = new Set(
+  Object.entries(ACTION_STRING_CLASSIFICATION)
+    .filter(function (e) { return e[1].classification === "plain_explanation"; })
+    .map(function (e) { return e[0]; })
+);
+
 function dueState(ob, todayLocal) {
-  if (!ACTIVE_OBLIGATION_STATUSES.has(String(ob.status))) return "terminal";
-  if (!ob.due_at) return "no_due_date";
+  if (!ACTIVE_OBLIGATION_STATUSES.has(String(ob.status))) return DUE_STATE.TERMINAL;
+  if (!ob.due_at) return DUE_STATE.NO_DUE_DATE;
+  //  DATE comparison against the PROPERTY's today, not a clock comparison
+  //  against server UTC. An obligation due today is not overdue at 09:00
+  //  merely because its timestamp was midnight.
   const due = new Date(ob.due_at).toISOString().slice(0, 10);
-  if (due < todayLocal) return "overdue";
-  if (due === todayLocal) return "due_today";
-  return "not_due";
+  if (due < todayLocal) return DUE_STATE.OVERDUE;
+  if (due === todayLocal) return DUE_STATE.DUE_TODAY;
+  return DUE_STATE.NOT_DUE;
 }
 
 //  ONE property-wide query. No per-row lookup, and the obligation join cannot
@@ -445,6 +497,9 @@ async function datedPositionRows(pool, { property_id, as_of = null } = {}) {
       rent_note: ec.rent_note,
       rent_lineage: ec.rent_lineage || [],
 
+      //  Only a plain_explanation string survives, and only as explanation.
+      position_note: EXPLANATORY_ACTION_STRINGS.has(String(p.next_required_action))
+        ? p.reason || null : null,
       resolution_state: act.resolution_state,
       resolution_explanation: act.explanation,
       existing_action: act.existing_action,
@@ -490,4 +545,5 @@ module.exports = {
   datedPositionRows, denominatorClass,
   RENT_AUTHORITY, REVENUE_USE_TYPES, EVIDENCE_STATE, RESULT_STATE,
   ACTIVE_OBLIGATION_STATUSES, GOVERNED_DESTINATIONS, dueState,
+  DUE_STATE, ACTION_STRING_CLASSIFICATION, EXPLANATORY_ACTION_STRINGS,
 };
