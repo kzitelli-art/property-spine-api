@@ -221,6 +221,14 @@ async function forwardRentRollSummary(pool, { property_id, as_of = null } = {}) 
     contract_version: "forward_rent_roll_summary_v1",
     property_id,
     operating_timezone: current.operating_timezone,
+    //  Surfaced so a transport layer does not have to reach into the row
+    //  engine for the window it is already describing.
+    as_of: targetDate,
+    as_of_basis: as_of ? "explicit_property_local_date" : "property_local_today",
+    //  The row engine's withholding statements stay on the response: the
+    //  summary refines WHY a total is withheld, it does not make the
+    //  top-level statement redundant.
+    withheld: target.withheld,
     state: "ok",
     result_state: target.rows.length ? "qualifying_result_exists" : "no_qualifying_result",
     summary: {

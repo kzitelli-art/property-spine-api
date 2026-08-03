@@ -155,6 +155,42 @@ async function forwardRentRollPage(pool, { property_id, as_of = null, limit, cur
     if (start < 0) start = sorted.length;
   }
 
+  //  COMPLETE-PROPERTY STATISTICS, computed before slicing. The route needs
+  //  coverage and the deprecated compatibility totals to describe the WHOLE
+  //  property; if it derived them from the page they would silently become
+  //  page-scoped, which is the exact failure bounded transport is meant to
+  //  avoid. Counted here because this is the last place that sees every row.
+  const all = full.rows;
+  const countBy = (fn) => all.filter(fn).length;
+  const complete_stats = {
+    positions: all.length,
+    contractually_locked: countBy((r) => r.position_state === "contractually_locked"),
+    covered_unproven: countBy((r) => r.position_state === "covered_unproven"),
+    successor_pending_not_locked: countBy((r) => r.position_state === "successor_pending_not_locked"),
+    open_or_uncovered: countBy((r) => r.position_state === "open" || r.position_state === "open_or_uncovered"),
+    contested: countBy((r) => r.conflict_state === "conflicted"),
+    locked_with_known_economics: countBy((r) => r.evidence_state === "contractually_supported"),
+    locked_economics_unavailable: countBy((r) => r.evidence_state === "incomplete"),
+    monthly_contractual_rent_known: Math.round(all.reduce((sum, r) =>
+      sum + (r.evidence_state === "contractually_supported" && r.contractual_rent != null
+        ? Number(r.contractual_rent) : 0), 0) * 100) / 100,
+    locked_proof_split: {
+      native_verified: countBy((r) => r.position_state === "contractually_locked" && r.proof_basis === "native_verified"),
+      confirmed_opening_import: countBy((r) => r.position_state === "contractually_locked" && r.proof_basis === "confirmed_opening_import"),
+    },
+    denominator_known: countBy((r) => r.denominator_class !== "unknown"),
+    denominator_unknown: countBy((r) => r.denominator_class === "unknown"),
+    occupancy_conflict: countBy((r) => r.coverage.occupancy === "conflict"),
+    occupancy_complete: countBy((r) => r.coverage.occupancy === "complete"),
+    economics_complete: countBy((r) => r.evidence_state === "contractually_supported"),
+    economics_qualified_legacy: countBy((r) => r.evidence_state === "qualified_legacy"),
+    economics_incomplete: countBy((r) => r.evidence_state === "incomplete"),
+    economics_conflict: countBy((r) => r.evidence_state === "conflicting"),
+    existing_action: countBy((r) => r.resolution_state === "existing_action"),
+    action_conflict: countBy((r) => r.resolution_state === "conflict"),
+    no_canonical_action: countBy((r) => r.resolution_state === "no_canonical_action"),
+  };
+
   const page = sorted.slice(start, start + lim.limit);
   const has_more = start + lim.limit < sorted.length;
   const last = page[page.length - 1];
@@ -162,6 +198,7 @@ async function forwardRentRollPage(pool, { property_id, as_of = null, limit, cur
   return {
     ...full,
     rows: page,
+    complete_stats,
     page: {
       limit: lim.limit,
       returned: page.length,

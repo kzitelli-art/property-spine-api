@@ -193,6 +193,46 @@ const get = async (p, token) => {
       good.body.property.property_id === good.body.property_id
       && good.body.window.as_of === good.body.as_of);
 
+    section("E3 BOUNDED TRANSPORT through real HTTP (10D)");
+    ok("the route declares both contracts",
+      good.body.contract === "forward_rent_roll_rows_v1"
+      && good.body.summary_contract === "forward_rent_roll_summary_v1");
+    ok("a page object is returned with cursor metadata",
+      good.body.page && typeof good.body.page.limit === "number"
+      && typeof good.body.page.has_more === "boolean");
+    ok("the page discloses ordering-field mutability, not snapshot consistency",
+      good.body.page.ordering_fields.some((f) => f.mutable === true)
+      && /not snapshot isolation/i.test(good.body.page.concurrent_change_limitation));
+    ok("a complete-property summary rides every response", !!good.body.summary);
+    const lim1 = await get("/operator/rent-roll/future-facts?limit=1", tokLease);
+    ok("limit=1 returns exactly one position", lim1.body.positions.length === 1);
+    const over = await get("/operator/rent-roll/future-facts?limit=5000", tokLease);
+    ok("limit above maximum is clamped WITH disclosure",
+      over.body.page.limit === 200 && over.body.page.limit_clamped_from === 5000);
+    for (const bad of ["0", "-3", "abc"]) {
+      const r = await get("/operator/rent-roll/future-facts?limit=" + bad, tokLease);
+      ok(`limit=${bad} is refused with a typed code`, r.status === 400 && r.body.code === "limit_invalid");
+    }
+    const badCur = await get("/operator/rent-roll/future-facts?cursor=not-a-cursor", tokLease);
+    ok("a malformed cursor is refused, never a silent page one",
+      badCur.status === 400 && badCur.body.code === "cursor_malformed" && !badCur.body.positions);
+    //  A cursor minted for property A must not be honoured on property B.
+    //  This fixture has one space per property, so no page ever has_more and
+    //  the route never mints a next_cursor here — the cursor is therefore
+    //  minted in-process. The server child inherits the same CURSOR_SECRET,
+    //  so the signature is genuinely valid and the refusal proves the BINDING
+    //  rather than a signature failure.
+    const { cursorEncode } = require(path.join(__dirname, "..", "src/tenancy/forward_rent_roll_page"));
+    const aCursor = cursorEncode({ property_id: F.A, as_of: good.body.window.as_of,
+      unit_number: "A-101", space_id: F.sA.space });
+    const crossed = await get("/operator/rent-roll/future-facts?cursor=" + encodeURIComponent(aCursor), tokB);
+    ok("a cursor cannot cross property scope",
+      crossed.status === 400 && crossed.body.code === "cursor_property_mismatch");
+    ok("the deprecated totals still describe the COMPLETE property, not the page",
+      good.body.totals.positions === good.body.summary.positions.total_canonical_positions);
+    ok("and coverage counts the whole property too",
+      good.body.coverage.total_positions === good.body.totals.positions);
+
     section("E  the CURRENT response contract, recorded verbatim");
     const top = Object.keys(good.body || {}).sort();
     const rowKeys = Object.keys((good.body.positions || [])[0] || {}).sort();

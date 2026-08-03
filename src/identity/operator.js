@@ -58,6 +58,7 @@ module.exports = function operatorModule(deps) {
   const { loadAiLeasingStrategyProjection } = require("../leasing/ai_leasing_strategy_projection"); // read-only strategy status + conversation attribution
   const { currentRentRoll } = require("../surfaces/rent_roll_canonical");   // canonical Current Rent Roll (migration route)
   const { datedPositionRows } = require("../tenancy/dated_position_rows");
+const { forwardRentRollPage } = require("../tenancy/forward_rent_roll_page");
 const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts"); // factual Future Rent Roll (migration route)
   const { institutionalRentRoll, institutionalCsv } = require("../surfaces/rent_roll_institutional"); // formal as-of schedule + CSV
   const { availabilityRead } = require("../surfaces/availability_read");   // Availability over the shared classifier
@@ -1960,29 +1961,34 @@ const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts"); /
       //  contractual_rent as null. The old read named a governing lease chosen
       //  by first match among records the system cannot govern; keeping that
       //  for compatibility would be publishing a known-false winner.
-      const out = await datedPositionRows(pool, {
+      //  BOUNDED TRANSPORT (10D). positions is the current page; summary and
+      //  totals always describe the COMPLETE property.
+      const out = await forwardRentRollPage(pool, {
         property_id: req.operator.property_id,   // session only
         as_of: rawAsOf || null,
+        limit: req.query.limit,
+        cursor: req.query.cursor,
       });
+      if (out.error) return res.status(400).json({ error: out.detail || out.error, code: out.error });
       if (out.state !== "ok") {
         return res.json({ contract: "forward_rent_roll_rows_v1", property_id: out.property_id, ...out });
       }
-      const cov = out.rows.reduce((a, r) => {
-        a.total_positions++;
-        a[r.denominator_class === "unknown" ? "denominator_unknown" : "denominator_known"]++;
-        a["occupancy_" + (r.coverage.occupancy === "conflict" ? "conflict"
-          : r.coverage.occupancy === "partial" ? "partial" : "complete")]++;
-        a["economics_" + (r.evidence_state === "contractually_supported" ? "complete"
-          : r.evidence_state === "qualified_legacy" ? "qualified_legacy"
-          : r.evidence_state === "conflicting" ? "conflict" : "incomplete")]++;
-        a[r.resolution_state === "existing_action" ? "existing_action"
-          : r.resolution_state === "conflict" ? "action_conflict" : "no_canonical_action"]++;
-        return a;
-      }, { total_positions: 0, denominator_known: 0, denominator_unknown: 0,
-           occupancy_complete: 0, occupancy_partial: 0, occupancy_conflict: 0,
-           economics_complete: 0, economics_qualified_legacy: 0,
-           economics_incomplete: 0, economics_conflict: 0,
-           existing_action: 0, no_canonical_action: 0, action_conflict: 0 });
+      //  Declared before both consumers: cov and legacyTotals each read it.
+      const cs = out.complete_stats;
+      const cov = {
+        total_positions: cs.positions,
+        denominator_known: cs.denominator_known,
+        denominator_unknown: cs.denominator_unknown,
+        occupancy_complete: cs.occupancy_complete,
+        occupancy_conflict: cs.occupancy_conflict,
+        economics_complete: cs.economics_complete,
+        economics_qualified_legacy: cs.economics_qualified_legacy,
+        economics_incomplete: cs.economics_incomplete,
+        economics_conflict: cs.economics_conflict,
+        existing_action: cs.existing_action,
+        no_canonical_action: cs.no_canonical_action,
+        action_conflict: cs.action_conflict,
+      };
 
       //  DEPRECATED COMPATIBILITY BLOCK. Three fields are retained because
       //  consumers read them TODAY, and the additive rule says a truthful
@@ -1995,33 +2001,32 @@ const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts"); /
       //      and the app is suspended, not deleted.
       //  Computed from the same typed rows, so there is no second read and no
       //  second interpretation. A conflicted position contributes no rent.
+      //  COMPLETE-PROPERTY, not the page. out.rows is now bounded, so these are
+      //  taken from complete_stats — computed over every position before the
+      //  slice. Deriving them from the page would silently turn a
+      //  whole-property compatibility field into a page count.
       const legacyTotals = {
-        positions: out.rows.length,
-        contractually_locked: out.rows.filter((r) => r.position_state === "contractually_locked").length,
-        contested: out.rows.filter((r) => r.conflict_state === "conflicted").length,
-        locked_with_known_economics: out.rows.filter((r) => r.evidence_state === "contractually_supported").length,
-        locked_economics_unavailable: out.rows.filter((r) => r.evidence_state === "incomplete").length,
-        //  The renderer reads these four as well (index.html:20316-20345).
-        //  Omitting them would have rendered "undefined" rather than breaking
-        //  loudly — the quiet failure this compatibility block exists to stop.
-        covered_unproven: out.rows.filter((r) => r.position_state === "covered_unproven").length,
-        successor_pending_not_locked: out.rows.filter((r) => r.position_state === "successor_pending_not_locked").length,
-        open_or_uncovered: out.rows.filter((r) => r.position_state === "open" || r.position_state === "open_or_uncovered").length,
-        locked_proof_split: {
-          native_verified: out.rows.filter((r) => r.position_state === "contractually_locked" && r.proof_basis === "native_verified").length,
-          confirmed_opening_import: out.rows.filter((r) => r.position_state === "contractually_locked" && r.proof_basis === "confirmed_opening_import").length,
-        },
-        monthly_contractual_rent_known: Math.round(out.rows.reduce(
-          (sum, r) => sum + (r.evidence_state === "contractually_supported" && r.contractual_rent != null
-            ? Number(r.contractual_rent) : 0), 0) * 100) / 100,
+        positions: cs.positions,
+        contractually_locked: cs.contractually_locked,
+        covered_unproven: cs.covered_unproven,
+        successor_pending_not_locked: cs.successor_pending_not_locked,
+        open_or_uncovered: cs.open_or_uncovered,
+        contested: cs.contested,
+        locked_with_known_economics: cs.locked_with_known_economics,
+        locked_economics_unavailable: cs.locked_economics_unavailable,
+        monthly_contractual_rent_known: cs.monthly_contractual_rent_known,
+        locked_proof_split: cs.locked_proof_split,
         deprecated: "Superseded by summary/coverage under forward_rent_roll_rows_v1.",
       };
 
       return res.json({
         contract: "forward_rent_roll_rows_v1",
+        summary_contract: "forward_rent_roll_summary_v1",
         property_id: out.property_id,
         as_of: out.as_of,
         totals: legacyTotals,
+        page: out.page,
+        summary: out.summary,
         property: { property_id: out.property_id, operating_timezone: out.operating_timezone },
         window: { as_of: out.as_of, as_of_basis: out.as_of_basis },
         state: out.state,
