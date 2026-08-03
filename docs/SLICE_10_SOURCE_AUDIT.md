@@ -937,3 +937,272 @@ Roll is further along than expected — the grain is settled, the claim classes 
 already governed, conflicts are already detected, and the transport is already
 proven. What is not settled is what a rate is divided by, where a future date's
 rent comes from, and whether any action shown would be real.
+
+---
+
+# AUDIT PASS 2 — corrections and closures
+
+Pass 1 was discovery. This pass traces. **Two Pass-1 conclusions were wrong, and
+both were wrong the same way: I concluded absence from a search that was too
+narrow.** Both corrections make Slice 10 smaller, not larger.
+
+## P2.1 — CORRECTION: the non-revenue denominator authority EXISTS
+
+**Pass 1 said:** *"No governed non-revenue source… every position is
+`denominator_class = unknown`… the single most consequential unanswered question."*
+
+**That was wrong.** `migrations/100_durable_position_classification.sql` creates
+exactly the authority Pass 1 said was missing, at exactly the right grain:
+
+```sql
+alter table spaces add column if not exists use_type text;
+alter table spaces add constraint ck_spaces_use_type
+  check (use_type is null or use_type in ('residential','commercial','non_revenue','other'));
+alter table spaces add column if not exists classification_source  text;
+alter table spaces add column if not exists classified_by_user_id  uuid references users(id);
+alter table spaces add column if not exists classified_at          timestamptz;
+```
+
+Migration 100's own header states the ruling that put it on the space rather
+than the unit (2026-07-27): *"Current Rent Roll, Availability, Renewals and
+Future Rent Roll all operate per rentable position, and **leasable denominators
+are position-based**. A by-bed property must not depend on a unit-level
+assumption, and a position-level exception (one bed taken out of residential
+use) must be expressible without reclassifying its siblings."*
+
+It is classified **Class 1 permanent primitive**, carries provenance
+(`classification_source`, `classified_by_user_id`, `classified_at`), and
+deliberately populates nothing: *"Every column is nullable and every existing row
+stays NULL, which the surfaces render as 'Not configured'… NO INFERENCE from
+occupancy_status, unit_type text, or any status string. The previous
+`is_commercial` was a regex over a status field; reproducing that in a column
+would make a guess permanent."*
+
+Evidence: **SOURCE PROVEN** (migration text) · **SOURCE DECLARED** for the
+production column state.
+
+**It is already loaded, and already consumed correctly elsewhere.**
+
+- `dated_positions.js:157` selects `s.use_type, s.position_kind`; `:186` carries
+  `use_type` onto every position row.
+- `availability_read.js:199–202` consumes it honestly: no `use_type` yields
+  `{state:"use_not_configured", reason:"no_governed_use_type"}`, and a
+  non-marketable use yields `not_marketable_use`. That is the honest-blank
+  pattern already implemented against this exact column.
+
+**The real gap is narrower and different from what Pass 1 claimed.**
+`future_rent_roll_facts.js` and `dated_positions.js` contain **no `non_revenue`
+handling at all** — `use_type` is carried on the row and never turned into a
+denominator class. So:
+
+```
+CURRENT FACT       the governed denominator authority exists, at position grain,
+                   with provenance, and is already loaded onto every row.
+CONFLICT OR GAP    it is not wired into the Forward Rent Roll surface, and its
+                   production population is UNKNOWN — REQUIRES PROOF (§15-Q13).
+SMALLEST RULE      denominator_class = revenue when use_type in
+                   ('residential','commercial'); non_revenue when 'non_revenue';
+                   unknown when NULL or 'other'. Any unknown in the population
+                   withholds the rate (null), exactly as Slice 9 withholds a rate
+                   under unresolved evidence.
+AUTHORITY          NO owner ruling needed on the model — ruling 2026-07-27
+                   already settled grain and vocabulary. The only open question
+                   is population, which is an operational act (a reviewed
+                   mapping receipt), not a schema change.
+```
+
+**Consequence: no migration is required for the denominator.** Pass 1's proposed
+"smallest durable source" would have rebuilt a Class 1 primitive that already
+exists. Recommended sequencing changes accordingly (P2.6).
+
+## P2.2 — CORRECTION: exact transitive obligation lineage EXISTS
+
+**Pass 1 said:** *"an obligation that cannot name a space cannot correlate
+exactly to a position."* That framed direct `space_id` as the only exact
+lineage. It is not — relational traversal is not inference.
+
+`obligations` carries, across baseline and later migrations:
+
+| column | origin | path to a space | exact? |
+|---|---|---|---|
+| `lease_id` | added post-baseline | `obligations.lease_id → leases.space_id` | **YES — one-to-one.** `leases.space_id` is NOT NULL, so a lease resolves to exactly one space |
+| `unit_id` | `001_baseline` | `obligations.unit_id → units → spaces` | **only when the unit has exactly one space**; otherwise ambiguous and forbidden |
+| `application_id` | post-baseline | → `lease_applications` → conversion | needs tracing; not required for 10B |
+| `conversion_id` | post-baseline | → `leasing_conversions` | opportunity grain, not position grain |
+| `related_id` + `related_type` | `001_baseline` | generic pointer; `related_type` includes `lease` | exact **only** when `related_type='lease'` |
+| `person_id` | `001_baseline` | — | never a position bridge |
+
+```
+CURRENT FACT     obligations.lease_id → leases.space_id is an exact, one-to-one,
+                 same-property transitive path to a canonical position.
+CONFLICT OR GAP  which obligation TYPES actually populate lease_id, and whether
+                 any represents an unresolved Forward Rent Roll condition, is
+                 UNKNOWN — REQUIRES PROOF (§15-Q9, revised below).
+SMALLEST RULE    resolution_state = existing_action only via lease_id (or
+                 related_type='lease'), same property, same unresolved condition,
+                 one destination. unit_id is usable ONLY where the unit has
+                 exactly one space, and must refuse otherwise rather than pick.
+AUTHORITY        none — owner ruling 5 already permits exact transitive lineage.
+```
+
+## P2.3 — The five `next_required_action` strings, classified
+
+All five are computed in `position_classifier.js` and consumed by
+`management_read.js:228–235` as `issue:`. None is an obligation record.
+
+| string | condition | classification | disposition in 10B |
+|---|---|---|---|
+| `economic_tenancy_activation_required` | pending lease whose dates span as_of | **noncanonical recommendation** — names work ("confirm and collect required move-in charges") | replace with exact obligation projection if one exists on that lease; else `no_canonical_action` + keep the sentence as explanation |
+| `possession_outstanding` | active lease, no move-in event | **noncanonical recommendation** | same |
+| `review_early_possession` | possession before committed start | **unsupported operating instruction** — "review" names no closing act | remove as an action; retain the fact as explanation |
+| `turn_before_committed_start` | future term + turn in progress | **exact existing action projection candidate** — `unit_turn_scopes` exists and may carry the work | project the real turn obligation if lineage resolves; else `no_canonical_action` |
+| `possession_without_current_lease` | possession, no current/pending/future lease | **plain explanation** — states a condition, names no work | retain as explanation |
+
+A sixth is invented at the read: `snapshot_loader.js:490` supplies
+`confirm_physical_readiness` when the classifier returned nothing. That is a
+**browser-adjacent invention of work** and must not survive into 10B.
+
+## P2.4 — Economics: the two rails, traced
+
+| question | `leases.rent` | `lease_economic_lines` |
+|---|---|---|
+| exact space lineage | via `leases.space_id` (NOT NULL) | via `lease_economic_schedules.space_id` (NOT NULL, *"D5: ALWAYS exact"*) |
+| dated applicability | **none** — one undated amount | `effective_month date not null`, one row per month |
+| concessions | **cannot express** | `concession_credit`, `fee_waiver`, sign-constrained negative |
+| corrections | **none** — no supersession column | schedule `status: locked/active/cancelled/superseded`; rows never edited |
+| claim class | operational account | locked/active governed schedule |
+| current writers | `snapshot_loader` import paths, lease services | `executed_lease_service.js`, `application_review.js`, `proposed_terms_service.js`, `commitmentledger.js` |
+| current consumers | `dated_positions.js:97`, `future_rent_roll_facts.js:106` | `commitmentledger.js`, `tenancy_anchor_service.js`, `application_terms.js` — **not the position read** |
+| production population | UNKNOWN — §15-Q8 | UNKNOWN — §15-Q8 |
+
+**Classification of `lease_economic_lines`: canonical, actively written by the
+application/execution lane, but DORMANT with respect to the position read.**
+Both rails are live; they simply do not meet.
+
+**Owner options, with consequences:**
+
+| option | truth consequence | coverage consequence | migration | production risk |
+|---|---|---|---|---|
+| **A. dated lines only** | correct on every date, including rent steps and concessions | any lease without a schedule reports `rent_unknown` — possibly most legacy leases | none | rent totals could collapse to mostly-partial overnight |
+| **B. dated lines, `leases.rent` as governed fallback where no schedule exists** | correct where governed; legacy answers stay available and are labelled as fallback provenance | full coverage retained | none | a fallback row is silently wrong if a step exists but no schedule was written — mitigated by recording provenance per row |
+| **C. keep `leases.rent`** | wrong on any date after a rent step; cannot express concessions | full | none | silent future-date error — the Slice 9 defect in arithmetic |
+
+**Recommendation: B, with per-row provenance naming which rail supplied the
+number, and the row marked partial when the fallback is used on a date later
+than the lease start month.** A is honest but converts a working surface into
+mostly-unavailable before anyone has been given a path to populate schedules;
+C is not defensible on a future date. B is the only option that is both honest
+today and convergent on A once schedules are populated. It requires no
+migration. Gated on §15-Q8 for whether the dated rail is populated at all.
+
+## P2.5 — Overlap conflict: the actual ceiling
+
+Traced in `position_classifier.js`:
+
+- Conflict detection is **complete for pairs**: nested loops over all valid
+  leases, `rangesOverlap(leases[i], leases[j])`, collecting every participating
+  id into `conflicting_lease_ids`. Three-way overlap is therefore fully
+  represented — every pair among the three registers.
+- Terminal leases are excluded first (`leases.filter(leaseIsValid)`), so a
+  cancelled predecessor cannot manufacture a conflict.
+- **But `current`, `activationPending` and `future` are each chosen with
+  `.find()` — the first match wins**, and `conflict_state` does not suppress
+  that selection. So a contested position still selects one governing lease,
+  and `future_rent_roll_facts.js:106` reads `p.lease.rent` from it.
+- `future_rent_roll_facts.js:69` maps `conflict_state === "conflicted"` to
+  `contested` and contributes **zero locked rent**, which is what prevents the
+  contested rent from reaching the total.
+
+```
+CURRENT FACT     conflict detection is complete; contested positions contribute
+                 zero rent at the summary level.
+CONFLICT OR GAP  the ROW still exposes a rent and a lease chosen by first-match
+                 among conflicting records. Correct in the total, arbitrary in
+                 the row.
+SMALLEST RULE    when conflict_state is conflicted, the row's rent, lease id and
+                 term dates are null and the row names the conflicting records.
+                 Do not select a governing lease that the system cannot govern.
+AUTHORITY        doctrine settles it — "honest blank beats confident wrong."
+```
+
+Boundary behaviour: `datesSpan` uses `start_date <= asOf && end_date >= asOf`,
+so both ends are **inclusive**. A term ending on D and a term starting on D
+therefore **overlap on D** and register as a conflict. That is defensible but is
+a product decision worth stating explicitly, because same-day turnover is
+ordinary. Fixture 4 in §14 covers it.
+
+## P2.6 — Revised sequencing recommendation
+
+Pass 1 proposed 10B as a forward-position service and flagged denominator and
+economics as prerequisites needing new foundations. With P2.1 and P2.2, **no new
+schema foundation is required for either.**
+
+Recommended next packet: **Slice 10B — Canonical Dated Position Rows**, as the
+owner has now scoped it. It is buildable today because:
+
+- grain is settled and enforced (`spaces.id`);
+- claim classes are governed and already implemented;
+- the denominator authority exists and is already loaded — it needs wiring and
+  an honest `unknown`, not a migration;
+- exact transitive action lineage exists via `lease_id`;
+- economics has a defensible option B needing no migration;
+- conflicts are detected; the fix is to stop selecting inside a conflict.
+
+Withheld until population and runtime verification: the occupancy percentage,
+the revenue denominator, and any unqualified rent total.
+
+## P2.7 — Revised runtime queries (priority order)
+
+Supersedes the §15 ordering. First production pass, in dependency order:
+
+1. **Q1/Q2** — ledger, ceiling, duplicates.
+2. **Q13 (new, decisive)** — denominator population:
+   `select use_type, count(*) from spaces group by 1;` and
+   `select count(*) from spaces where use_type is null;`
+   Clears the rate: zero NULLs on the served property. Any NULL ⇒ rate stays null.
+3. **Q8** — is `lease_economic_lines` populated, and does any schedule carry more
+   than one `base_rent` month? Decides option A vs B.
+4. **Q14 (new)** — rail disagreement:
+   compare `leases.rent` against the applicable `base_rent` line per space, count
+   mismatches only.
+5. **Q9 (revised)** — `select type, count(*) from obligations where lease_id is not null group by 1;`
+   Names which obligation types can reach a position exactly.
+6. **Q5/Q6** — overlapping terms; open-ended terms.
+7. **Q4** — multi-space units.
+8. **Q10** — timezone on served properties.
+
+## P2.8 — Route proof ceiling — NOT CLOSED
+
+`GET /operator/rent-roll/future-facts` (`src/identity/operator.js:1924`) was
+**not** exercised locally in this pass. Its middleware, property-scope
+derivation, target-date parsing and response contract remain **SOURCE DECLARED**.
+
+Reason stated plainly rather than omitted: this pass was interrupted by the
+static-data exposure incident, and the local browser/API stack was not rebuilt
+afterwards. The proof ceiling for that route is therefore **read, not run**.
+Closing it requires only the existing disposable-Postgres harness and no code
+change, and it is the first item of Slice 10B.
+
+## P2.9 — Amended blockers
+
+```
+BLOCKED — live migration ledger and production schema not independently verified
+          (unchanged; owner-supplied ledger is REPORTED, schema never dumped)
+
+BLOCKED — contractual rent authority on a future date  (§P2.4, owner option B recommended)
+
+WITHHELD, NOT BLOCKED — occupancy rate and revenue denominator
+          The authority exists (spaces.use_type). Population is unknown. The rate
+          is withheld as null until Q13 shows zero NULLs. This is no longer an
+          architecture blocker.
+
+RESOLVED — exact existing-action correlation
+          obligations.lease_id → leases.space_id is exact and one-to-one.
+          Which types populate it is a runtime question (Q9), not a design gap.
+
+OPEN — route proof ceiling (§P2.8): read, not run.
+
+OPEN — app fixture reachability. Superseded in urgency by the static-data
+       exposure incident; the app is suspended and its production-data static
+       libraries are the subject of a separate incident record.
+```
