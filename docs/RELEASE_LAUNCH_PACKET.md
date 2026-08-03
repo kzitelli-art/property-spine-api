@@ -575,3 +575,89 @@ Browser acceptance:        passed
 Aggregate release smoke:   30/31
 Open unrelated defect:     leasing reassignment assertion 5b
 ```
+
+---
+
+# ASK SPINE SLICE 1 — DEPLOYED 2026-08-02
+
+```text
+API PR #31 merged .... efb8c71   9:25 PM ET   Deploy live confirmed
+App PR #25 merged .... 5cbe948   9:28 PM ET   Deploy live confirmed
+Order ................ API first (additive route, no caller until the app ships)
+/health .............. {"ok":true,"db_time":"2026-08-03T01:24:44.668Z"}  9:24 PM ET
+Migrations applied ... none
+```
+
+## Live acceptance — what was verified on production
+
+Property home, Solo on Chestnut, signed in, real session:
+
+- composer renders **above** the desk cards, `ASK SPINE` label + chip
+- **"Here's what needs attention."** with five ranked items
+- each item: reason chip (`OVERDUE · NO OWNER`), title, `Overdue · <date> · <module>`
+- **"Showing 5 of 20 open items."**
+- persistent scope line: *"Currently checks recorded open work for this property."*
+- the word **"obligation" appears nowhere** in the interface
+- **My Work simultaneously showed its legitimate empty line** — a *successful*
+  read with nothing qualifying for the persona, rendered next to Ask Spine's
+  populated list. Both honest states coexisting on one page is precisely what
+  was broken this afternoon and is now correct.
+
+**Cross-surface consistency, unplanned but meaningful:** the obligations read
+reported 23 open earlier, three were claimed during the security acceptance,
+and Ask Spine independently reports **20**. Two surfaces, one truth, no shared
+client state.
+
+## Not verified — stated, not glossed
+
+```text
+Ask Spine request headers on production ....... NOT CAPTURED
+  (x-staff-session present / x-operator-key absent / no property_id)
+Click-through from a result to the record ..... NOT EXERCISED
+```
+
+Both are proven in the harnesses against this exact artifact — the API-backed
+browser rungs assert the header set and the navigation path — but **neither was
+re-verified on the deployed surface.** The owner closed the window before those
+two checks. Recorded as an evidence gap, not as a pass.
+
+## Final proof state at deploy
+
+| Rung | Result |
+|---|---|
+| Contract | 31 / 0 |
+| Real Postgres | 23 / 0 |
+| Real HTTP | 27 / 0 |
+| Browser UI states | 27 / 0 |
+| API-backed desktop | 11 / 0 |
+| API-backed phone | 11 / 0 |
+| Real outage | 8 / 0 |
+| Visual repair | 24 / 0 |
+| App suite | 749 / 0 |
+| Obligation security regressions | 21 / 12 / 61 / 25, all 0 failed |
+
+## What shipped, stated plainly
+
+One authenticated endpoint answering one question from real recorded work,
+property and permissions decided by the server, ranked by four tiers of
+recorded fact, capped at five, with a failure state that admits failure instead
+of inventing an empty answer.
+
+**What is NOT built, and was never claimed:** no text input (the composer is a
+single chip — the recognizer beneath it is unreachable from the UI), no
+interpretation, no conversation or thread, no writes, one question and one
+dataset.
+
+## Open items carried out of this programme
+
+| Item | Owner |
+|---|---|
+| Conversational composer — a real input, prose vs cards, thread, what it says when it doesn't know | **Slice 2 — new build, owner-directed** |
+| Leasing-task reassignment smoke `5b` — 400, `convOwner=true` | separate lane |
+| Obligations unavailable banner still shows developer language | UI follow-up |
+| Claim button gates on the retired User ID field (no authority, visibility only) | UI follow-up |
+| Migration 121 — branch-only migration live in production, inert | baseline lane, Appendix J |
+| `docs/deployment.md` teaches the false-green migration pattern | baseline lane, Appendix I |
+| Migration chain cannot rebuild from empty (`012`) | baseline lane, Appendix H |
+
+**Both releases are deployed. The programme is closed.**
