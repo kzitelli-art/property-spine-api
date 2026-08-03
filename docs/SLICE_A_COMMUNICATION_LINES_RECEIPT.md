@@ -10,9 +10,9 @@
 | | |
 |---|---|
 | Branch | `claude/sms-work-order-handoff-qo3s8i` |
-| **SHA that earned this result** | **`95f13c7`** (committed as `7135e84`'s parent) |
-| **Current branch tip / merge candidate** | **`edd6647`** — *not proven at this SHA* |
-| Base | `main` @ `a792b9f` |
+| SHA that first earned 61/61 | `95f13c7` (against `main` @ `a792b9f`) |
+| **Re-proven at** | **`523cca8`** — reconciled with `main` @ `fbd7a3a`, 61/61, exit 0 |
+| **Merge candidate** | the branch tip at merge time — **re-prove there, whatever it is** |
 | Migration claimed | **130** — `130_communication_lines.sql` |
 | Design | `docs/COMMUNICATION_LINE_MODEL_DESIGN.md` (approved, rulings 2026-08-03) |
 | Database | PostgreSQL **16.13**, isolated scratch database, `HARNESS_DATABASE_URL` only |
@@ -20,13 +20,16 @@
 | Result | **61 run · 61 passed · 0 failed** |
 | Exit code | **0** |
 
-> **Proof identity.** The 61/61 run was executed against the tree committed as
-> `95f13c7`. `7135e84` and `edd6647` follow it and are **documentation only** —
-> `git diff 95f13c7..edd6647 -- src/ migrations/ tests/ server.js` is empty, so
-> the implementation is byte-identical. **That is not a substitute for running
-> the suite.** No suite has executed at `edd6647`. The final receipt must attach
-> to the actual reconciled commit that merges, re-run after reconciliation with
-> current `main` and against the provisioned full-schema database.
+> **Proof identity.** 61/61 was first earned at `95f13c7`. `main` then moved
+> eight commits (PRs #33, #35, #36 — the last touching `src/identity/operator.js`),
+> so that proof no longer described a merge candidate. The branch was reconciled
+> by MERGE at `523cca8` and **the suite was re-run there: 61/61, exit 0**, with
+> `npm run verify` 8/8 and the local regression set green.
+>
+> **This still is not the final receipt.** The five full-schema harnesses have
+> never run against these changes, and the branch tip will move again before
+> merge. Re-prove at whatever SHA actually merges — the exact artifact being
+> advanced must be the artifact that earned the proof.
 
 ---
 
