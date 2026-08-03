@@ -767,7 +767,7 @@ documented on the surface.
 **Q9 — can any obligation name a position? (§9, decisive).**
 ```sql
 select table_name, column_name from information_schema.columns
- where column_name in ('space_id','unit_id') and table_name like '%obligation%';
+ where column_name in ('space_id','unit_id','related_id','related_type') and table_name like '%obligation%';
 select type, count(*) from obligations group by 1 order by 2 desc limit 40;
 ```
 Clears: an obligation table carrying `space_id`.
@@ -1025,23 +1025,39 @@ lineage. It is not — relational traversal is not inference.
 
 | column | origin | path to a space | exact? |
 |---|---|---|---|
-| `lease_id` | added post-baseline | `obligations.lease_id → leases.space_id` | **YES — one-to-one.** `leases.space_id` is NOT NULL, so a lease resolves to exactly one space |
+| `related_id` + `related_type='lease'` | `001_baseline` | `obligations.related_id → leases.id → leases.space_id` | **YES — one-to-one.** `leases.space_id` is NOT NULL, so a lease resolves to exactly one space. Written by `activation.js:434`, read by `move_in_queue.js:106` |
 | `unit_id` | `001_baseline` | `obligations.unit_id → units → spaces` | **only when the unit has exactly one space**; otherwise ambiguous and forbidden |
 | `application_id` | post-baseline | → `lease_applications` → conversion | needs tracing; not required for 10B |
 | `conversion_id` | post-baseline | → `leasing_conversions` | opportunity grain, not position grain |
 | `related_id` + `related_type` | `001_baseline` | generic pointer; `related_type` includes `lease` | exact **only** when `related_type='lease'` |
 | `person_id` | `001_baseline` | — | never a position bridge |
 
+> **CORRECTED 2026-08-03 during Slice 10B implementation.** This section
+> originally stated the path was `obligations.lease_id`. **That column does not
+> exist.** The `add column if not exists lease_id` matches cited belong to
+> `lease_economic_schedules` (`071_bridge_prep.sql`) and `unit_events`
+> (`074_unit_events_lease_link.sql`) — a column name was matched without
+> confirming its table. The conclusion (exact transitive lineage exists) stands;
+> the path does not. The real path is `related_id` + `related_type='lease'`,
+> proven by implementation and 84 local assertions.
+>
+> **Standing rule adopted from this error:** a schema-lineage conclusion
+> requires all three of a table-qualified column, a writer, and an existing
+> reader. A grep match without table context is discovery evidence, not a
+> conclusion.
+
 ```
-CURRENT FACT     obligations.lease_id → leases.space_id is an exact, one-to-one,
-                 same-property transitive path to a canonical position.
+CURRENT FACT     obligations.related_id (related_type='lease') → leases.id →
+                 leases.space_id is an exact, one-to-one, same-property
+                 transitive path to a canonical position.
 CONFLICT OR GAP  which obligation TYPES actually populate lease_id, and whether
                  any represents an unresolved Forward Rent Roll condition, is
                  UNKNOWN — REQUIRES PROOF (§15-Q9, revised below).
-SMALLEST RULE    resolution_state = existing_action only via lease_id (or
-                 related_type='lease'), same property, same unresolved condition,
-                 one destination. unit_id is usable ONLY where the unit has
-                 exactly one space, and must refuse otherwise rather than pick.
+SMALLEST RULE    resolution_state = existing_action only via related_id with
+                 related_type='lease', same property (BOTH obligation and lease
+                 walls), same unresolved condition, one destination. unit_id is
+                 unit grain and is NOT used: a multi-space unit cannot resolve
+                 to one position without inference.
 AUTHORITY        none — owner ruling 5 already permits exact transitive lineage.
 ```
 
@@ -1165,7 +1181,7 @@ Supersedes the §15 ordering. First production pass, in dependency order:
 4. **Q14 (new)** — rail disagreement:
    compare `leases.rent` against the applicable `base_rent` line per space, count
    mismatches only.
-5. **Q9 (revised)** — `select type, count(*) from obligations where lease_id is not null group by 1;`
+5. **Q9 (revised)** — `select type, count(*) from obligations where related_type='lease' and related_id is not null group by 1;`
    Names which obligation types can reach a position exactly.
 6. **Q5/Q6** — overlapping terms; open-ended terms.
 7. **Q4** — multi-space units.
