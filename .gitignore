@@ -2,3 +2,6 @@ node_modules/
 .env
 *.env.local
 tmp_*.js
+
+# 10D scale-fixture handle — generated per disposable database, never committed
+.slice10d_fixture.json
