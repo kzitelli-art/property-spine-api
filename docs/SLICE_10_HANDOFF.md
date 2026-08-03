@@ -3,7 +3,7 @@
 > ## SUPERSEDED IN PART — 2026-08-03, later the same day.
 >
 > **§1 and §5 are stale.** They say 10E is OPEN and its browser acceptance has
-> not started. It has been run: **95 assertions, 0 failed**, desktop and 390px,
+> not started. It has been run: **96 assertions, 0 failed**, desktop and 390px,
 > against real Postgres, real HTTP and canonical staff sessions on synthetic
 > data. Slice 10 is **BROWSER VERIFIED — not merged, not deployed, not
 > production accepted.**
@@ -94,7 +94,7 @@ tests/slice10d_build_fixture.js                    21
 |---|---|---|
 | `claude/slice-10e-future-rent-roll-renderer` | `ab856b7` | The Future Rent Roll renderer, `docs/SLICE_10E_STATE.md` **and** `docs/INCIDENT_STATIC_DATA_EXPOSURE.md`. |
 | `security/incident-receipt-static-exposure` | `261247f` | The incident receipt alone. |
-| **`claude/slice-10e-browser-acceptance-t0zk33`** | **`0f3e17c`** | **The accepted app head.** Browser acceptance, the six renderer repairs it found, and the allowlisted publish artifact. |
+| **`claude/slice-10e-browser-acceptance-t0zk33`** | **`c1684d3`** | **The accepted app head.** Browser acceptance, the six renderer repairs it found, and the allowlisted publish artifact. |
 
 > **Two SHAs on this branch line, and they are not interchangeable.**
 > `a365381` was written here as the renderer branch head; the head was
@@ -103,7 +103,7 @@ tests/slice10d_build_fixture.js                    21
 >
 > `ab856b7` is the **historical 10E renderer state** — complete at harness
 > level, never through a browser.
-> `0f3e17c` is the **present accepted app head** — browser verified, 95/0.
+> `c1684d3` is the **present accepted app head** — browser verified, 96/0.
 > Do not read either as the other. §5 below describes `ab856b7`; it is kept as
 > written and marked, because it is the record of what was believed before the
 > browser was involved.
