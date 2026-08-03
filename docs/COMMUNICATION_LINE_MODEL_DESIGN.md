@@ -362,6 +362,24 @@ ledger *and* rechecking active branches, coordinated with the Slice 9/10 thread.
 
 ---
 
+## 10b. The agent-capability constraint
+
+The SMS work-order path is the **first bounded capability of the Property Spine
+agent**, not a text parser. Six pieces must stay separate and reusable: the raw
+message and conversation thread; resolved sender/property/channel authority;
+structured intent and referenced records; clarification before a write; the
+canonical action; and the receipt.
+
+Slice A strengthens seam 2 — authority is now a property of the LINE, enforced
+structurally. It changes nothing about seams 3, 4 and 6, which are currently
+co-located inside `tenantlink.js` as private closures.
+
+**Binding on the technician loop:** do not deepen that co-location. Extract
+first, then use from both callers. Full audit and per-seam removal conditions:
+`docs/AGENT_CAPABILITY_SEAMS.md`.
+
+---
+
 ## 11. Explicitly NOT in this design
 
 The technician SMS workflow · operations-number procurement and provisioning ·
