@@ -29,6 +29,10 @@
 "use strict";
 
 const { datedPropertyPositions } = require("./dated_positions");
+//  The governed future-state classifier, reused rather than reimplemented.
+//  Writing a second one here would make this file a competing interpretation
+//  of the same contractual question.
+const { futureState } = require("../surfaces/future_rent_roll_facts");
 const { loadPropertyOperatingTimeZone, TZ_UNAVAILABLE } = require("../shared/property_timezone");
 
 // ── WHAT "TODAY" MEANS (owner ruling, Slice 10B) ────────────────────
@@ -479,7 +483,7 @@ async function datedPositionRows(pool, { property_id, as_of = null } = {}) {
       classification_source: (cls.get(String(p.space_id)) || {}).classification_source || null,
 
       // position on the selected date
-      position_state: conflicted ? "conflict" : p.future_state || null,
+      position_state: conflicted ? "conflict" : futureState(p),
       governing_lease_id: governing ? governing.lease_id : null,
       governing_lease_end: governing ? governing.end_date : null,
       successor_state: p.successor ? p.successor.state : null,
