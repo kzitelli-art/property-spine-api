@@ -7,6 +7,22 @@ session as current truth.
 
 ---
 
+> ### ⚠ There is a second active lane. Read both.
+>
+> This file is the **SMS / work-order lane**. It has no account of Slice 9,
+> Slice 10, the `property-spine-app` repository, or the 2026-08-03 static-data
+> security incident — that lane is documented in
+> **[`SLICE_10_HANDOFF.md`](SLICE_10_HANDOFF.md)**, written 2026-08-03.
+>
+> **One correction to the section below:** it states `main` is at `a08c1da`.
+> `main` is at **`47ed0f0`** — PR #36 merged a leasing-entitlement and strict
+> `as_of` hotfix. That merge added **no migrations**, so every migration-ledger
+> statement in §2 below remains true exactly as written, including that 129 is
+> claimed-but-unreleased and `main` will therefore refuse to boot until it is
+> released.
+
+---
+
 ## ══════════════════════════════════════════════════════════════════
 ##  HANDOFF — 2026-08-03. Read this whole section before touching anything.
 ## ══════════════════════════════════════════════════════════════════
