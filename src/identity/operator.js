@@ -1921,12 +1921,37 @@ module.exports = function operatorModule(deps) {
   //   is a later calculation over these same rows, not a change to them.
   //   Retires with the rest of the migration surface.
   // ══════════════════════════════════════════════════════════════════
-  router.get("/operator/rent-roll/future-facts", requireOperator, async (req, res) => {
+  //  ── AS_OF IS VALIDATED BEFORE ANY PROJECTION QUERY RUNS ────────────
+  //  Date spanning compares STRINGS (`start_date <= asOf`). An unvalidated
+  //  value therefore becomes a comparison operand, and a garbage string like
+  //  'not-a-date' sorts above every real ISO date — so every lease appears to
+  //  span it. The failure was silent and the answer was wrong rather than
+  //  absent. Only a real ISO calendar date is accepted; anything else is
+  //  refused before a single row is read.
+  //
+  //  JavaScript's own parsing is deliberately NOT trusted: new Date() rolls
+  //  2026-02-30 forward to March and accepts many non-ISO forms. The round
+  //  trip below is what proves the submitted date is the date it claims.
+  const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+  function validCalendarDate(s) {
+    if (typeof s !== "string" || !ISO_DAY.test(s)) return false;
+    const d = new Date(s + "T00:00:00Z");
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+  }
+
+  router.get("/operator/rent-roll/future-facts", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
+    const rawAsOf = req.query.as_of;
+    if (rawAsOf != null && rawAsOf !== "" && !validCalendarDate(String(rawAsOf))) {
+      return res.status(400).json({
+        error: "as_of must be a real calendar date in YYYY-MM-DD form.",
+        code: "invalid_as_of",
+      });
+    }
     try {
       const out = await futureRentRollFacts(pool, {
         property_id: req.operator.property_id,   // session only
-        as_of: req.query.as_of || null,
+        as_of: rawAsOf || null,
       });
       return res.json({ ...out, _migration_route: true });
     } catch (e) {
