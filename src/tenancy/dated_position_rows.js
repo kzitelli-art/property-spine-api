@@ -223,6 +223,136 @@ function economicsForRow(p, econ, asOf) {
                         detail: "Neither a dated schedule nor a lease amount exists for this position." }] };
 }
 
+// ── EXACT EXISTING ACTIONS ──────────────────────────────────────────
+//  ONE lineage is admitted in this phase, and only because it is exact:
+//
+//      obligation.related_id (where related_type='lease') → leases.space_id
+//
+//  There is NO obligations.lease_id column. The obligation rail carries object
+//  lineage through the generic (related_id, related_type) pair, and
+//  related_type='lease' is already written by activation.js and read by
+//  move_in_queue.js — so this is the established path, not a new one.
+//
+//  leases.space_id is NOT NULL, so a lease resolves to exactly one canonical
+//  position. obligations.unit_id also exists but is UNIT grain and is
+//  deliberately not used: a unit with more than one space cannot resolve to
+//  one position without inference, which is forbidden. That is relational traversal, not inference. Correlation through
+//  a resident name, a unit number, a leasing agent, a last editor or similar
+//  dates is forbidden and is not attempted anywhere below.
+//
+//  An obligation is shown ONLY when every one of these holds:
+//    · the obligation's property is the authenticated property;
+//    · the lease's property is the SAME property (both walls, not one);
+//    · the lease resolves to exactly one space;
+//    · that lease is one THIS row actually references — the governing lease,
+//      or one of its conflicting leases. An obligation about some other lease
+//      on the same space is not the same unresolved condition;
+//    · the obligation is still active under the governed lifecycle.
+const ACTIVE_OBLIGATION_STATUSES = new Set(["open", "in_progress", "escalated"]);
+
+//  GOVERNED DESTINATIONS ONLY. A destination is returned when a canonical
+//  operator route demonstrably exists for that obligation type in this
+//  codebase. Where none exists the contract says so with null and discloses
+//  the limitation — it does not invent a route or emit prose like
+//  "go review the lease".
+const GOVERNED_DESTINATIONS = Object.freeze({
+  resolve_inbound_opportunity: {
+    surface: "operator_obligations",
+    route_key: "operator.obligations.inbound_decision",
+  },
+});
+
+//  DUE STATE. No Forward-Rent-Roll-specific ladder: the only due vocabulary in
+//  the obligation rail today is is_overdue (due_at < now()). This states the
+//  minimum honest distinctions on top of it, and "today" is the PROPERTY's
+//  today, consistent with every other date in this engine.
+function dueState(ob, todayLocal) {
+  if (!ACTIVE_OBLIGATION_STATUSES.has(String(ob.status))) return "terminal";
+  if (!ob.due_at) return "no_due_date";
+  const due = new Date(ob.due_at).toISOString().slice(0, 10);
+  if (due < todayLocal) return "overdue";
+  if (due === todayLocal) return "due_today";
+  return "not_due";
+}
+
+//  ONE property-wide query. No per-row lookup, and the obligation join cannot
+//  duplicate a position row because obligations are grouped by space in memory.
+async function loadObligations(pool, { property_id }) {
+  const { rows } = await pool.query(
+    `select o.id, o.type, o.status, o.label, o.due_at, o.assigned_user_id,
+            u.name as owner_name, o.related_id as lease_id, l.space_id
+       from obligations o
+       join leases l on l.id = o.related_id and o.related_type = 'lease'
+       left join users u on u.id = o.assigned_user_id
+      where o.property_id = $1
+        and l.property_id = $1`,
+    [property_id]
+  );
+  const bySpace = new Map();
+  for (const r of rows) {
+    const k = String(r.space_id);
+    if (!bySpace.has(k)) bySpace.set(k, []);
+    bySpace.get(k).push(r);
+  }
+  return bySpace;
+}
+
+function actionForRow(p, obligations, todayLocal, referencedLeaseIds) {
+  const all = obligations.get(String(p.space_id)) || [];
+  //  Same unresolved condition: the obligation's lease must be one this row
+  //  actually references.
+  const relevant = all.filter((o) => referencedLeaseIds.has(String(o.lease_id)));
+  const active = relevant.filter((o) => ACTIVE_OBLIGATION_STATUSES.has(String(o.status)));
+
+  if (active.length === 0) {
+    return {
+      resolution_state: "no_canonical_action",
+      explanation: "No canonical action is recorded yet.",
+      existing_action: null,
+      //  Terminal obligations stay visible as lineage — they explain WHY there
+      //  is no active action without being presented as one.
+      closed_action_lineage: relevant.map((o) => ({ obligation_id: o.id, type: o.type, status: o.status })),
+    };
+  }
+  if (active.length > 1) {
+    return {
+      resolution_state: "conflict",
+      explanation: "More than one active obligation represents this condition; none is selected.",
+      existing_action: null,
+      conflicting_obligation_ids: active.map((o) => o.id),
+      closed_action_lineage: [],
+    };
+  }
+  const o = active[0];
+  const dest = GOVERNED_DESTINATIONS[String(o.type)] || null;
+  return {
+    resolution_state: "existing_action",
+    explanation: null,
+    existing_action: {
+      obligation_id: o.id,
+      obligation_type: o.type,
+      source_object_type: "lease",
+      source_object_id: o.lease_id,
+      space_id: p.space_id,
+      owner: o.assigned_user_id ? { user_id: o.assigned_user_id, name: o.owner_name || null } : "UNASSIGNED",
+      due_state: dueState(o, todayLocal),
+      due_at: o.due_at || null,
+      closing_act: o.label || null,
+      canonical_destination: dest
+        ? { ...dest, object_type: "obligation", object_id: o.id }
+        : null,
+      destination_note: dest ? null
+        : "No governed operator destination is recorded for this obligation type.",
+      evidence: {
+        correlation: "obligation.related_id(related_type=lease) -> leases.space_id",
+        lease_id: o.lease_id,
+        property_walled: "obligation.property_id and lease.property_id both matched",
+      },
+    },
+    closed_action_lineage: [],
+  };
+}
+
 // ── THE ROW ─────────────────────────────────────────────────────────
 async function datedPositionRows(pool, { property_id, as_of = null } = {}) {
   if (!pool || typeof pool.query !== "function") throw new TypeError("pool is required");
@@ -246,6 +376,7 @@ async function datedPositionRows(pool, { property_id, as_of = null } = {}) {
   const asOf = dp.as_of;
   const econ = await loadEconomics(pool, { property_id, month: monthOf(asOf) });
   const cls  = await loadClassification(pool, { property_id });
+  const obls = await loadObligations(pool, { property_id });
 
   const rows = dp.positions.map((p) => {
     const conflicted = p.conflict_state === "conflicted";
@@ -259,6 +390,13 @@ async function datedPositionRows(pool, { property_id, as_of = null } = {}) {
     const dclass = denominatorClass(p.use_type);
     const ec = economicsForRow(withGoverning, econ, asOf);
 
+    //  Leases THIS row references — the governing one plus any in conflict.
+    const referenced = new Set([
+      ...(governing && governing.lease_id ? [String(governing.lease_id)] : []),
+      ...(p.conflicting_lease_ids || []).map(String),
+    ]);
+    const act = actionForRow(p, obls, asOf, referenced);
+
     //  PER-AXIS COVERAGE. Four independent questions. A missing rent never
     //  erases a proven occupancy, and an unclassified position never erases a
     //  proven lease.
@@ -270,7 +408,8 @@ async function datedPositionRows(pool, { property_id, as_of = null } = {}) {
             ? (ec.legacy_qualification === "within_initial_month" ? "complete" : "partial")
             : "partial",
       denominator: dclass === "unknown" ? "unknown" : "complete",
-      action: "no_canonical_action",       // Phase E replaces this with a real projection
+      action: act.resolution_state === "existing_action" ? "complete"
+            : act.resolution_state === "conflict" ? "conflict" : "no_canonical_action",
     };
 
     return {
@@ -305,6 +444,12 @@ async function datedPositionRows(pool, { property_id, as_of = null } = {}) {
       legacy_qualification: ec.legacy_qualification,
       rent_note: ec.rent_note,
       rent_lineage: ec.rent_lineage || [],
+
+      resolution_state: act.resolution_state,
+      resolution_explanation: act.explanation,
+      existing_action: act.existing_action,
+      closed_action_lineage: act.closed_action_lineage,
+      ...(act.conflicting_obligation_ids ? { conflicting_obligation_ids: act.conflicting_obligation_ids } : {}),
 
       evidence_state: evidenceStateFor(conflicted, ec.rent_authority, ec.legacy_qualification),
       coverage,
@@ -344,4 +489,5 @@ async function datedPositionRows(pool, { property_id, as_of = null } = {}) {
 module.exports = {
   datedPositionRows, denominatorClass,
   RENT_AUTHORITY, REVENUE_USE_TYPES, EVIDENCE_STATE, RESULT_STATE,
+  ACTIVE_OBLIGATION_STATUSES, GOVERNED_DESTINATIONS, dueState,
 };

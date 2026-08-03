@@ -144,6 +144,39 @@ const TARGET = "2026-09-01";
     await mkLine(sX, "2026-09", "base_rent", 2100);
     await mkLine(sX, "2026-09", "base_rent", 2600);   // two applicable base rents
 
+    // ── obligation geometries ──
+    F.obActive   = await mkSpace(A, "OB-A", "residential");
+    F.obUnassign = await mkSpace(A, "OB-U", "residential");
+    F.obOverdue  = await mkSpace(A, "OB-O", "residential");
+    F.obDone     = await mkSpace(A, "OB-D", "residential");
+    F.obTwo      = await mkSpace(A, "OB-2", "residential");
+    F.obNoDest   = await mkSpace(A, "OB-N", "residential");
+    F.obXProp    = await mkSpace(A, "OB-X", "residential");
+    const leaseFor = async (space, prop) => {
+      await mkLease(prop || A, space, "2026-01-01", "2026-12-31", "active", 1500);
+      return (await one(`select id from leases where space_id=$1 order by created_at desc limit 1`, [space])).id;
+    };
+    F.lActive   = await leaseFor(F.obActive);
+    F.lUnassign = await leaseFor(F.obUnassign);
+    F.lOverdue  = await leaseFor(F.obOverdue);
+    F.lDone     = await leaseFor(F.obDone);
+    F.lTwo      = await leaseFor(F.obTwo);
+    F.lNoDest   = await leaseFor(F.obNoDest);
+    F.lXProp    = await leaseFor(F.obXProp);
+    const mkObl = async (prop, lease, type, status, due, owner, label) => (await one(
+      `insert into obligations (property_id, module, type, status, related_id, related_type, due_at, assigned_user_id, label)
+       values ($1,'leasing',$2,$3,$4,'lease',$5,$6,$7) returning id`,
+      [prop, type, status, lease, due, owner, label])).id;
+    F.oActive   = await mkObl(A, F.lActive, 'resolve_inbound_opportunity', 'open', '2099-01-01', user, 'Resolve the inbound reply');
+    F.oUnassign = await mkObl(A, F.lUnassign, 'resolve_inbound_opportunity', 'open', '2099-01-01', null, 'Resolve the inbound reply');
+    F.oOverdue  = await mkObl(A, F.lOverdue, 'resolve_inbound_opportunity', 'open', '2020-01-01', user, 'Resolve the inbound reply');
+    F.oDone     = await mkObl(A, F.lDone, 'resolve_inbound_opportunity', 'complete', '2020-01-01', user, 'Already handled');
+    await mkObl(A, F.lTwo, 'resolve_inbound_opportunity', 'open', '2099-01-01', user, 'First');
+    await mkObl(A, F.lTwo, 'resolve_inbound_opportunity', 'in_progress', '2099-01-01', user, 'Second');
+    F.oNoDest   = await mkObl(A, F.lNoDest, 'lease_review', 'open', '2099-01-01', user, 'Review the lease');
+    //  ADVERSARIAL: an obligation on property B pointing at a property-A lease.
+    F.oXProp    = await mkObl(B, F.lXProp, 'resolve_inbound_opportunity', 'open', '2099-01-01', user, 'Wrong property');
+
     // ── neighbouring-property noise ──
     F.bSpace = await mkSpace(B, "B-1", "residential");
     await mkLease(B, F.bSpace, "2026-01-01", "2026-12-31", "active", 7777);
@@ -274,8 +307,50 @@ const TARGET = "2026-09-01";
   ok("known occupancy + missing rent → occupancy complete, rent partial",
     row(F.norent).coverage.occupancy === "complete" && row(F.norent).coverage.rent === "partial");
   ok("conflict → occupancy conflict AND rent conflict", two.coverage.occupancy === "conflict" && two.coverage.rent === "conflict");
-  ok("no obligation projection yet → action = no_canonical_action",
-    out.rows.every((r) => r.coverage.action === "no_canonical_action"));
+  ok("every row's action coverage is one of the three governed values",
+    out.rows.every((r) => ["complete", "conflict", "no_canonical_action"].includes(r.coverage.action)));
+
+  section("E2 exact existing-action projection");
+  const A1 = row(F.obActive);
+  ok("one exact active obligation projects an action",
+    A1.resolution_state === "existing_action" && A1.existing_action.obligation_id === F.oActive);
+  ok("the correlation evidence names the traversal it used",
+    A1.existing_action.evidence.correlation === "obligation.related_id(related_type=lease) -> leases.space_id");
+  ok("both property walls are recorded as evidence",
+    /both matched/.test(A1.existing_action.evidence.property_walled));
+  ok("a real owner is returned as {user_id,name}",
+    A1.existing_action.owner.user_id === F.user);
+  ok("an unowned obligation returns the literal UNASSIGNED, never a nearby staffer",
+    row(F.obUnassign).existing_action.owner === "UNASSIGNED");
+  ok("a future due date → not_due", A1.existing_action.due_state === "not_due");
+  ok("a past due date → overdue", row(F.obOverdue).existing_action.due_state === "overdue");
+  ok("a governed destination is structured, not prose",
+    A1.existing_action.canonical_destination.route_key === "operator.obligations.inbound_decision"
+    && A1.existing_action.canonical_destination.object_id === F.oActive
+    && A1.existing_action.canonical_destination.object_type === "obligation");
+  ok("an obligation type with NO governed route returns null and discloses it",
+    row(F.obNoDest).existing_action.canonical_destination === null
+    && /No governed operator destination/.test(row(F.obNoDest).existing_action.destination_note));
+  ok("a COMPLETE obligation is not presented as the current action",
+    row(F.obDone).resolution_state === "no_canonical_action"
+    && row(F.obDone).existing_action === null);
+  ok("but it remains visible as lineage explaining why none is active",
+    row(F.obDone).closed_action_lineage.some((l) => l.obligation_id === F.oDone && l.status === "complete"));
+  ok("two active obligations for one condition → typed conflict, neither selected",
+    row(F.obTwo).resolution_state === "conflict" && row(F.obTwo).existing_action === null);
+  ok("and both obligation ids are preserved",
+    (row(F.obTwo).conflicting_obligation_ids || []).length === 2);
+  ok("a cross-property obligation is refused",
+    row(F.obXProp).resolution_state === "no_canonical_action" && row(F.obXProp).existing_action === null);
+  ok("a position with no obligation says so in the exact words",
+    row(F.resid).resolution_state === "no_canonical_action"
+    && row(F.resid).explanation === undefined
+    && row(F.resid).resolution_explanation === "No canonical action is recorded yet.");
+  ok("the obligation join does not duplicate any row",
+    out.rows.length === new Set(out.rows.map((r) => String(r.space_id))).size);
+  ok("coverage.action reflects the projection",
+    A1.coverage.action === "complete" && row(F.obTwo).coverage.action === "conflict"
+    && row(F.resid).coverage.action === "no_canonical_action");
 
   section("E  withheld aggregates");
   ok("no projected occupancy rate is published", out.projected_occupancy_rate === undefined);
@@ -288,7 +363,7 @@ const TARGET = "2026-09-01";
   ok("no neighbouring-property space appears", !R.has(String(F.bSpace)));
   ok("no row is duplicated by the economics join",
     out.rows.length === new Set(out.rows.map((r) => String(r.space_id))).size);
-  ok("one row per canonical space on this property", out.rows.length === 16);
+  ok("one row per canonical space on this property", out.rows.length === 23);
   const ordered = out.rows.map((r) => String(r.space_id));
   const second = await datedPositionRows(pool, { property_id: F.A, as_of: TARGET });
   ok("ordering is deterministic across calls",
