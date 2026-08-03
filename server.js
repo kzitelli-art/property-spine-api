@@ -3039,6 +3039,13 @@ app.use("/", require("./src/agent/staff_agent")({ pool, staffAgentService }));
 app.use("/", require("./src/obligations/operator_obligations")({ pool }));
 app.use("/", require("./src/obligations/operator_obligation_actions")({ pool }));
 
+// ── ASK SPINE (SLICE 1) — read-only sibling of the staff agent ───────────
+//  Answers "What needs attention?" from live obligations, property-scoped by
+//  the operator session. No proposals, no confirmations, no writes, and the
+//  question is not recorded as a staff-agent message. It shares the authority
+//  seam above and nothing else.
+app.use("/", require("./src/agent/ask_spine")({ pool }));
+
 // ── THE ONE UNIT TURN PAGE (BUILD 6A) ────────────────────────────────────
 //  READ-ONLY consolidation of the Build 1-5 canonical reads. Creates no state
 //  and owns no domain model; every write action on the page posts to the
