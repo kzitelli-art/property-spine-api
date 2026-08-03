@@ -386,8 +386,17 @@ async function conversionFunnels(pool, window, rowsOpts = {}) {
     && !TERMINATED.has(a.status)).length;
   const uncorrelatedLeases = execs.filter((e) => !e.application_id).length;
 
+  //  SERVER-AUTHORED: how many distinct opportunities carry incomplete
+  //  evidence (unresolved appointment state, or an unlinked application that
+  //  may belong). The browser renders this number in the partial banner; it
+  //  never counts anything itself.
+  const unresolvedOpportunityCount = f2rows.rows.filter((r) =>
+    !RESOLVED_APPT.has(r.appointment_evidence_state)
+    || r.application_link === "unlinked_application_may_belong").length;
+
   return {
     state: "ok",
+    unresolved_opportunity_count: unresolvedOpportunityCount,
     //  THE FROZEN CONTRACTS ride the response by reference — the browser and
     //  every other reader consume the meaning, never re-derive it.
     contracts: FUNNEL_CONTRACTS,

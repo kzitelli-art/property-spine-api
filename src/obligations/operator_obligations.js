@@ -160,10 +160,22 @@ module.exports = function operatorObligations(deps) {
       const unitIds = [];
       const raw = cand.ok ? cand.candidates : [];
       //  Exact unit context only: the opportunity's own preferred unit.
+      //  EXACT recognition facts only: a toured date comes from a completed
+      //  tour carrying THIS opportunity's conversion_id (migration 127); an
+      //  applied date from lease_applications.submitted_at exactly linked by
+      //  conversion_id (migration 051). Nothing is inferred from lead, person
+      //  or time — a candidate without exact facts keeps its opening date.
       const prefs = raw.length ? (await pool.query(
-        `select lc.id, un.unit_number from leasing_conversions lc
+        `select lc.id, un.unit_number,
+                (select max(t.completed_at) from leasing_tours t
+                  where t.conversion_id = lc.id and t.completed_at is not null) as toured_on,
+                (select max(la.submitted_at) from lease_applications la
+                  where la.conversion_id = lc.id and la.submitted_at is not null) as applied_on
+           from leasing_conversions lc
            left join units un on un.id = lc.preferred_unit_id
           where lc.id = any($1::uuid[])`, [raw.map((x) => x.opportunity_id)])).rows : [];
+      const factsOf = new Map(prefs.map((r) => [String(r.id),
+        { unit: r.unit_number || null, toured_on: r.toured_on || null, applied_on: r.applied_on || null }]));
       const unitOf = new Map(prefs.map((r) => [String(r.id), r.unit_number || null]));
 
       const candidates = raw.map((x) => ({
@@ -175,6 +187,8 @@ module.exports = function operatorObligations(deps) {
         closed_because: x.closed_by_event
           ? (PLAIN_REASON[x.last_close_reason] || null) : null,
         unit: unitOf.get(String(x.opportunity_id)) || null,
+        toured_on: (factsOf.get(String(x.opportunity_id)) || {}).toured_on || null,
+        applied_on: (factsOf.get(String(x.opportunity_id)) || {}).applied_on || null,
       }));
 
       if (!blocked_reason && candidates.length === 0) {

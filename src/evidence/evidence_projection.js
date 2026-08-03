@@ -88,6 +88,7 @@ async function marketEvidenceProjection(pool, { property_id, start_local = null,
       }];
     })),
     source_attribution: conv.source_attribution || null,
+    unresolved_opportunity_count: conv.unresolved_opportunity_count ?? null,
   } : null;
 
   return {
