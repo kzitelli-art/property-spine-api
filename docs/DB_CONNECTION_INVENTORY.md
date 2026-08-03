@@ -2122,3 +2122,214 @@ Done.
 
 **Proof level of Appendix G: Reported** for the ruling (G1–G5, G7);
 **Locally exercised** for G6, which is read directly from the two scripts.
+
+---
+
+# Appendix H — Migration chain cannot rebuild from an empty database
+
+**Reproduced against a real empty Postgres 16.13** while building an unrelated
+proof. Filed here because this is the baseline/clean-database lane, and because
+it is the concrete counterpart to A090-2's thesis: there, a ledger entry did not
+prove applied schema; here, **the migrations themselves do not reconstruct.**
+
+**Not fixed. Do not patch `012` on a feature branch.** The canonical remedy —
+repair in place, or a sanitized baseline — is the baseline owner's call.
+
+## The failure
+
+| | |
+|---|---|
+| **Failing migration** | `migrations/012_bank_intake.sql` |
+| **Exact error** | `ERROR: column "yardi_code" does not exist` (at `012_bank_intake.sql:42`) |
+| **Reproducible from empty?** | **Yes** — `initdb` → `create database` → `node migrations/migrate.js` |
+
+## Mechanism
+
+```text
+001_baseline.sql:238   create table if not exists vendors (…)   ← no yardi_code
+012_bank_intake.sql:33 create table if not exists vendors (…)   ← WITH yardi_code
+                       the table already exists, so the whole
+                       declaration is SILENTLY SKIPPED
+012_bank_intake.sql:43 create unique index … on vendors (yardi_code)
+                       → the column was never added → ERROR
+```
+
+`create table if not exists` is being used as though it were additive. It is
+not: when the table exists, **every column in the new declaration is discarded
+without warning.** The failure only surfaces at the first statement that depends
+on one.
+
+Observed `vendors` columns on the fresh database after `001`:
+`id, preferred, created_at, phone, email, note, insurance_status, name, trade` —
+no `yardi_code`.
+
+## Applied and skipped
+
+**109 of 122 applied; 15 skipped.** Applying files individually (rather than
+through the runner, which halts on first failure) separates the causes:
+
+| Class | Files | Cause |
+|---|---|---|
+| **Genuine defect** | `012` | the mechanism above |
+| **Cascade from 012** | `017`, `021`, `022`, `023`, `031`, `037` | need `bank_transactions` / `bank_accounts`, which `012` never created |
+| **Artifact of per-file application** | `053`, `054`, `087` | ledger-head preflight (`expected head NNN`) — these assert the recorded head before running, and per-file application records versions afterwards. **Through the real runner they pass.** |
+| **Cascade from those artifacts** | `077`, `106`, `110`, `120` | need objects `053`/`054` create |
+
+**So the honest count is 1 genuine defect, 6 real cascade, 8 method artifacts —
+not 15 broken migrations.**
+
+## What this implies about production
+
+Production's `vendors` **does** carry `yardi_code`, or the banking features
+would not work. Since no migration in this repository can have added it on a
+chain that halts at `012`, **it arrived by a path not represented in
+`migrations/`** — a hand-run statement, a console edit, or an since-edited file.
+That is the same class of gap A090-2 anticipated, now observed rather than
+inferred.
+
+## Intersection with other lanes
+
+**None with Ask Spine.** Its table closure — `obligations`, `properties`,
+`users`, `property_team_assignments`, `staff_sessions`, `persons` — was checked
+mechanically against every skipped file for `create table` / `alter table`
+matches. **No match.** The Ask Spine proof therefore stands on a complete
+schema for the tables it uses.
+
+## Suggested checks for whoever owns the remedy
+
+1. Audit every `create table if not exists` in `migrations/` for the same
+   shape — a re-declaration that assumes it is additive.
+2. Decide: repair `012` in place, or cut a sanitized baseline and re-anchor.
+3. Whatever is chosen, add a **rebuild-from-empty** check so this cannot regress
+   silently. That check is the one thing that would have caught it years ago.
+
+---
+
+# Appendix I — The deployment guide teaches the false-green pattern
+
+**Registered here, deliberately not fixed in the security release.** Recorded
+2026-08-02 while establishing the deployment topology for the obligation
+security lane. This belongs to the baseline / migration-hardening lane, and it
+is now owned rather than merely observed.
+
+## The finding
+
+`docs/deployment.md:76`, under **"Adding a migration"**, instructs every future
+author:
+
+> **Special case — `ALTER TYPE … ADD VALUE`:** Postgres does not allow using a
+> newly added enum value in the same transaction as an `INSERT` referencing it.
+> Use a `DO $$ BEGIN … EXCEPTION WHEN others THEN null; END $$;` block, then a
+> separate `UPDATE` in the next statement. **See `migrations/090_admin_users.sql`
+> for the pattern.**
+
+That is **defect A090-2** — recorded in this document's false-green inventory —
+being recommended as the house style, and the exact file carrying the defect
+cited as the model to copy.
+
+## Why this outranks a single bad migration
+
+`090` is one file. **A090-2 is one instance of a pattern the documentation
+propagates.** Every migration written to this guidance inherits it. The
+programme can repair `090` and still receive `091`, `092`, `093` with the same
+construct, written correctly according to the docs.
+
+`EXCEPTION WHEN others THEN null` catches **everything** — a syntax error, a
+missing table, a permission failure, a typo in a column name — and reports
+success. The migration runner records the file as applied. `/health/migrations`
+reports green. **The ledger and the schema diverge silently**, which is exactly
+the divergence Appendix H observed at `012` and could not explain from
+`migrations/` alone.
+
+## What the corrected guidance must say
+
+The real constraint is narrow and worth stating precisely, because the current
+text is a legitimate problem with an illegitimate remedy:
+
+- The genuine limitation is that a newly added enum value **cannot be used in
+  the same transaction** in which it was added. That is real.
+- The remedy is **not** to swallow all errors. It is to catch the **specific**
+  condition (`duplicate_object` for a re-added value) — or to split the
+  statements across migrations so no exception handler is needed at all.
+
+The corrected documentation must **explicitly reject**:
+
+```sql
+EXCEPTION WHEN others THEN null
+```
+
+as a general migration pattern, and say why: it converts every failure mode into
+a recorded success.
+
+## Ownership
+
+| | |
+|---|---|
+| **Lane** | baseline / migration hardening — this lane |
+| **Not** | the obligation security release. It ships no migration and must not carry a documentation change to `deployment.md` |
+| **Blocks the security release?** | **No.** It affects migrations written in future, not this deploy |
+| **Removal condition** | `docs/deployment.md:76` no longer recommends a blanket handler, **and** a rebuild-from-empty check exists (Appendix H, item 3) so a silently-skipped migration cannot pass again |
+
+---
+
+# Appendix J — Duplicate migration 121, and a branch-only migration in production
+
+**Registered here, deliberately not repaired.** Established 2026-08-02 during
+the obligation-security preflight. Reconciliation belongs to this lane; it was
+kept out of the security release entirely.
+
+## Two migrations were numbered 121, eight minutes apart
+
+| | Slice 8 | AI-leasing |
+|---|---|---|
+| Commit | `844bd0f` — 2026-08-01 **11:27:37Z** | `5d2b2ad` — 2026-08-01 **11:35:32Z** |
+| File | `121_governed_economics_lineage.sql` | `121_ai_leasing_operating_context.sql` |
+| Now | renumbered → `122_…` by `10e13a7` (11:43:22Z) | still 121, parked on `claude/getting-up-to-speed-nyf4ww` |
+| On `main`? | yes, as 122 | **no** |
+
+The renumber changed **one comment line** (`-- MIGRATION 121` → `-- MIGRATION
+122`); the 95 lines of SQL are otherwise byte-identical and unchanged since.
+
+## Production ran the branch-only one
+
+```text
+schema_migrations:  121 ai_leasing_operating_context
+                    122 governed_economics_lineage
+```
+
+`prestart` runs `migrate.js` against the service's own `DATABASE_URL`, so
+**deploying that branch to the production service and migrating production were
+the same operation** — the trap already recorded in `THREAD_HANDOFF.md:91–98`.
+
+## A governing document is wrong and must be corrected
+
+`docs/THREAD_HANDOFF.md:49–52` states that
+`121_ai_leasing_operating_context.sql` *"has never been applied to a database or
+exercised over HTTP."* **Production contradicts it.** Line 95–96 of the same
+document is the accurate account. A handoff document is read as current truth;
+this line will mislead the next person who trusts it.
+
+## Live drift, verified read-only
+
+`ai_leasing_operating_rules` exists with **0 rows**, both history/lineage
+triggers enabled, four indexes, and three validated constraints plus two
+columns on `agent_runs`. **No source file in `main` describes any of it.**
+
+It is inert — no release code references it, the triggers sit on a table nothing
+writes, and the `agent_runs` constraints are satisfied by their own defaults —
+so it did not block the security release. **Inert is not reconciled.**
+
+## What this lane owns
+
+1. Correct `THREAD_HANDOFF.md:49–52`.
+2. Decide the 121 endgame: land the parked file so source matches production
+   (it will apply *after* 122 — harmless, they touch unrelated tables), or
+   retire it and record what production keeps. **Do not edit the ledger row to
+   make the sequence look tidy.**
+3. Add the duplicate-number check to whatever gate exists: a number must be
+   unique across **every branch**, not merely absent from `ls migrations/`.
+4. Add a rebuild-from-empty check (Appendix H) — it would also have caught this.
+
+**Removal condition:** source and production agree on 121, the handoff line is
+corrected, and a duplicate-number check exists that fails on a second file
+claiming a taken number.
