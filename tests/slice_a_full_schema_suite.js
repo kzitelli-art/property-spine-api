@@ -51,11 +51,33 @@
    fallback — the runner never reads an ambient DATABASE_URL for any
    purpose except refusing to match it.
 
-   Repairing the harnesses themselves is a separate, required follow-up:
-   they must move to harnessConnectionString(). It is deliberately NOT done
-   here, because this session cannot execute them to verify the change, and
-   shipping a guard that has never run is the failure this project keeps
-   rediscovering.
+   ⚠ THIS RUNNER IS TEMPORARY CONTAINMENT, NOT THE FIX.
+
+   It does not remove the unsafe direct-execution path. Both harnesses
+   remain dangerous when invoked by hand in any environment where
+   DATABASE_URL may point at production. Safety that depends on remembering
+   to launch through a wrapper is not structural safety, and this project
+   does not accept "safe only when started the right way" — including in
+   its own proof tooling.
+
+   OWNER RULING 2026-08-03: repairing both harnesses is a MERGE REQUIREMENT
+   for Slice A, not a future note. Once the provisioned full-schema database
+   exists, and BEFORE Slice A merges, each must:
+
+     · require HARNESS_DATABASE_URL;
+     · have no fallback to DATABASE_URL;
+     · refuse when the harness target matches production;
+     · print safe database identity, branch and exact SHA;
+     · print assertion-start and assertion-complete receipts;
+     · preserve its own exit code;
+     · use no real transport or reachable phone numbers.
+
+   Then run each DIRECTLY and through this runner. This runner stays as
+   useful orchestration; it stops being the thing that makes them safe.
+
+   Not done in this session because it cannot execute them to verify the
+   change, and shipping a guard that has never run is the failure this
+   project keeps rediscovering.
 
    ── USAGE ───────────────────────────────────────────────────────────
 

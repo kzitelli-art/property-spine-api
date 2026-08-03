@@ -188,3 +188,98 @@ preserve the proven engine work
   → finish the proof
   → clean production deliberately
 ```
+
+---
+
+# ⚠ THE CONVENTION HAS A HOLE — measured 2026-08-03
+
+**The guard keys on a NAMING convention, and most database-touching harnesses are
+named outside it.**
+
+Everything above describes `*.db.js`. That is how the rule is written, audited and
+remembered. Nothing enforces the naming, so a harness that opens a database and
+is *not* named `*.db.js` inherits none of it.
+
+## The measurement
+
+| | Count |
+|---|---|
+| `*.db.js` harnesses the guard covers | **8** |
+| Harnesses that build a connection from `process.env.DATABASE_URL` with **no** `harnessConnectionString()` | **69** |
+| — of those, **write-capable** (`insert` / `update` / `delete` / `create table` / `commit`) | **55** |
+| — of those, deliberately deployment-targeted (`*.deployed.js`) | 2 |
+
+Reproduce:
+
+```bash
+for f in $(grep -rl "process\.env\.DATABASE_URL" tests/); do
+  grep -qE "connectionString:\s*process\.env\.DATABASE_URL|new (Pool|Client)\(\{[^}]*process\.env\.DATABASE_URL" "$f" || continue
+  grep -q "harnessConnectionString" "$f" && continue
+  echo "$f"
+done
+```
+
+**On Render, `DATABASE_URL` is production.** Any of those 55 run by hand where it
+is set writes to whatever it points at — the same shape as the incident that put
+synthetic properties, users, persons, prospects and obligations into the live
+operating database.
+
+## What this corrects
+
+This section originally said **two** harnesses were affected. That was wrong by an
+order of magnitude — those two were simply the two inside Slice A's required
+proof set. The honest statement is:
+
+> The `.db.js` isolation guard is real and works. It covers **8 of roughly 77
+> database-touching harnesses.** "Harnesses may never target production" describes
+> the convention, not the repository.
+
+That is a guard reporting safety it is not providing, at scale — and the reason
+nobody saw it is that every audit asked "are the `.db.js` harnesses guarded?",
+which returned a true and incomplete answer.
+
+## The rule this changes
+
+> A harness needs the guard because it **touches a database**, not because of what
+> it is **called**. Audit by connection, never by filename.
+
+## Scope of repair — NOT one slice
+
+55 harnesses cannot be repaired blindly, and most cannot be executed without a
+provisioned full-schema database. Converting one unverified is exactly the
+"guard that has never run" failure. This needs its own governed slice with an
+owner ruling on sequencing.
+
+**Two are already a MERGE REQUIREMENT for Slice A** (owner ruling 2026-08-03),
+because they sit inside its required proof set:
+
+| Harness | Reads | Writes | Guard | Receipt |
+|---|---|---|---|---|
+| `tests/work_order_authority_proof.js` | `DATABASE_URL` directly | commits fixtures | none | none |
+| `tests/work_order_canonical_path_proof.js` | `DATABASE_URL` directly | commits fixtures | none | none |
+
+Once a full-schema harness database is provisioned, and **before Slice A merges**,
+both must: require `HARNESS_DATABASE_URL`; have no fallback to `DATABASE_URL`;
+refuse when the target matches production; print safe database identity, branch
+and exact SHA; print assertion-start and assertion-complete receipts; preserve
+their own exit codes; and use no real transport or reachable phone numbers. Then
+each is executed **directly** *and* **through the runner**, and must pass both
+ways.
+
+## Interim containment — and its limit
+
+`tests/slice_a_full_schema_suite.js` deletes `DATABASE_URL` from every child
+environment and re-supplies an already-verified harness target only to the two it
+runs.
+
+**That is containment, not repair**, and it covers only those two.
+**Safety that depends on remembering to launch through a wrapper is not
+structural safety** — this project does not accept "safe only when started the
+right way", including in its own proof tooling.
+
+**Until repaired: do not run any unguarded harness in an environment where
+`DATABASE_URL` may point at production.**
+
+**Removal condition for this section:** closed when the reproduce command above
+returns only files that legitimately *compare against* `DATABASE_URL` rather than
+connect to it, plus the documented deployment smokes.

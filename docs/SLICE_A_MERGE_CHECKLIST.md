@@ -4,6 +4,22 @@
 Nothing here is a feature. This is the exact sequence and the exact commands for
 the day 129 is activated.
 
+```text
+confirm 129 production activation
+→ fetch current origin/main
+→ merge main into the shared branch
+→ recheck migration 130 against the ledger and active branches
+→ provision isolated full-schema database
+→ repair and directly prove the two unsafe harnesses   ◀── MERGE BLOCKER
+→ run the 61/61 Slice A suite at the reconciled SHA
+→ run all five full-schema harnesses through the receipt runner
+→ review the final diff and receipts
+→ merge Slice A
+```
+
+**If any required harness cannot execute, fails, or reports a different SHA than
+the merge candidate, Slice A does not merge.**
+
 | | |
 |---|---|
 | Branch | `claude/sms-work-order-handoff-qo3s8i` |
@@ -136,28 +152,49 @@ exercises. Its 31/0 predates that change.
 
 ---
 
-### ⚠ An isolation gap found while building the runner
+### ⚠ MERGE BLOCKER — two harnesses are unsafe when run directly
 
 `work_order_authority_proof.js` and `work_order_canonical_path_proof.js` read
 `process.env.DATABASE_URL` **directly** — no `harnessConnectionString()` guard,
-no run receipt — and **both COMMIT fixtures**. The convention in
-`DB_HARNESS_ISOLATION.md` covers `*.db.js`; these are named `*_proof.js`, so it
-missed them. **On Render, `DATABASE_URL` is production.** Run by hand on a box
-where it is set, those two write to whatever it points at — the same shape as the
-incident that put synthetic rows in the live database.
+no run receipt — and **both COMMIT fixtures**. `DB_HARNESS_ISOLATION.md` covers
+`*.db.js`; these are `*_proof.js`, so the convention missed them. **On Render,
+`DATABASE_URL` is production.**
 
-`slice_a_full_schema_suite.js` closes this at the orchestration layer: it deletes
-`DATABASE_URL` from every child environment and re-supplies the already-verified
-harness target only to the two that read it.
+**These two are not the whole problem.** Measured 2026-08-03: **69 harnesses**
+connect via `DATABASE_URL` with no guard, **55 of them write-capable**, against
+**8** covered `*.db.js` files. That needs its own governed slice — see
+`DB_HARNESS_ISOLATION.md`. Only these two are a Slice A merge requirement,
+because only these two are in its required proof set.
 
-**Required follow-up, deliberately not done here:** move both to
-`harnessConnectionString()`. It was not done in this session because the change
-could not be executed to verify it, and shipping a guard that has never run is
-the failure this project keeps rediscovering. **Removal condition:** closed when
-both call `harnessConnectionString()` and have been executed against a
-provisioned full-schema database.
+`slice_a_full_schema_suite.js` contains this at the orchestration layer — it
+deletes `DATABASE_URL` from every child and re-supplies the verified harness
+target only to those two. **That is temporary containment. It does not remove the
+unsafe direct-execution path**, and safety that depends on remembering to use a
+wrapper is not structural safety.
 
-Until then: **never run those two by hand. Use the suite runner.**
+**Owner ruling 2026-08-03 — this is a MERGE REQUIREMENT, not a future note.**
+
+Once the full-schema database is provisioned, and **before Slice A merges**,
+repair both so each:
+
+- requires `HARNESS_DATABASE_URL`;
+- has **no fallback** to `DATABASE_URL`;
+- refuses when the harness target matches production;
+- prints safe database identity, branch and exact SHA;
+- prints assertion-start and assertion-complete receipts;
+- preserves its own exit code;
+- uses no real transport or reachable phone numbers.
+
+Then execute each **directly** *and* **through the suite runner**. Both must pass
+both ways. The runner remains useful orchestration; it stops being the thing that
+makes them safe.
+
+**Do not patch them blindly before the database exists.** A guard that has never
+executed is a claim, not a control — that is the failure this repository has
+recorded three times.
+
+**Until the repair is proven: never run either harness directly in any
+environment where `DATABASE_URL` may point at production.**
 
 ---
 
