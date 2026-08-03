@@ -13,15 +13,28 @@
 //  property or one date is refused against another rather than silently
 //  restarting at page one.
 //
-//  CONSISTENCY, STATED HONESTLY. This is a BEST-EFFORT LIVE CURSOR. Each page
-//  is a fresh read; there is no snapshot spanning requests, because a
-//  PostgreSQL transaction cannot span HTTP requests and no projection-version
-//  store exists to bind to. What is stable is the ORDERING KEY: rows are
-//  ordered by (unit_number, spaces.id) and the cursor carries the last key
-//  seen, so a row inserted earlier in the order during traversal is simply
-//  not visited, and a row deleted mid-traversal is skipped. Neither
-//  duplicates nor reorders what has already been returned. That guarantee is
-//  disclosed in the response rather than dressed up as snapshot isolation.
+//  CONSISTENCY, STATED HONESTLY — AND THE ORDERING FIELD IS MUTABLE.
+//  This is a BEST-EFFORT LIVE CURSOR. Each page is a fresh read; no snapshot
+//  spans requests, because a PostgreSQL transaction cannot span HTTP requests
+//  and no projection-version store exists to bind to.
+//
+//  The ordering tuple is (units.unit_number, spaces.id). spaces.id is
+//  immutable; **unit_number is NOT** — an operator can rename a unit. So the
+//  guarantee must be stated in two parts, and an earlier draft of this file
+//  overstated it as "rows never re-serve or reorder":
+//
+//    · UNDER STATIC DATA, traversal is exact: every row exactly once, in one
+//      deterministic order, no duplicate and no omission.
+//    · UNDER CONCURRENT CHANGE, a row whose unit_number is edited mid-
+//      traversal may be revisited (renamed to a later key) or skipped
+//      (renamed to an earlier one). Inserts earlier in the order are not
+//      visited; deletions are skipped.
+//
+//  Display order is kept deliberately: a rent roll ordered by internal UUID
+//  is not usable by an operator, and the alternative — ordering primarily by
+//  spaces.id — would buy an immutable key at the cost of the surface's whole
+//  purpose. The limitation is narrow and disclosed in the page object rather
+//  than dressed up as snapshot isolation.
 // ════════════════════════════════════════════════════════════════════
 
 "use strict";
@@ -36,12 +49,31 @@ const ROW_CONTRACT = "forward_rent_roll_rows_v1";
 const SUMMARY_CONTRACT = "forward_rent_roll_summary_v1";
 const CURSOR_VERSION = "frr_cur_v1";
 
-//  A process secret is sufficient: a cursor is a position marker, not an
-//  authorization. Property scope is still enforced from the session on every
-//  request, so a forged cursor cannot reach another property's rows even if
-//  the signature were defeated.
-const SECRET = process.env.CURSOR_SECRET || crypto.createHash("sha256")
-  .update("forward_rent_roll_cursor:" + (process.env.DATABASE_URL || "local")).digest("hex");
+//  ── SIGNING AUTHORITY ───────────────────────────────────────────────
+//  No general-purpose governed signing secret exists in this codebase: staff
+//  sessions use random tokens stored in the database, not HMAC. So this
+//  introduces CURSOR_SECRET, and governs it rather than defaulting it.
+//
+//  An earlier draft derived the key from DATABASE_URL when the variable was
+//  absent. That is exactly the silent insecure fallback this must not do — it
+//  looks configured, and its strength is whatever the connection string
+//  happens to be.
+//
+//    · CURSOR_SECRET set            → used.
+//    · absent, NODE_ENV=production  → pagination REFUSES. A cursor that cannot
+//                                     be signed under a governed secret is not
+//                                     issued at all.
+//    · absent, non-production       → a random per-process key, DISCLOSED in
+//                                     the page object. Cursors then do not
+//                                     survive a restart or span instances, and
+//                                     an old one is refused as
+//                                     cursor_signature_invalid — a typed
+//                                     refusal the contract already carries.
+const CONFIGURED_SECRET = process.env.CURSOR_SECRET || null;
+const IS_PRODUCTION = String(process.env.NODE_ENV) === "production";
+const EPHEMERAL_SECRET = CONFIGURED_SECRET ? null : crypto.randomBytes(32).toString("base64url");
+const SECRET = CONFIGURED_SECRET || EPHEMERAL_SECRET;
+const SECRET_SOURCE = CONFIGURED_SECRET ? "env_cursor_secret" : "ephemeral_process_key";
 
 const b64u = (s) => Buffer.from(s, "utf8").toString("base64url");
 const unb64u = (s) => Buffer.from(String(s), "base64url").toString("utf8");
@@ -98,6 +130,10 @@ const afterKey = (r, after) => {
 };
 
 async function forwardRentRollPage(pool, { property_id, as_of = null, limit, cursor } = {}) {
+  if (IS_PRODUCTION && !CONFIGURED_SECRET) {
+    return { error: "cursor_secret_not_configured",
+             detail: "Paged transport requires CURSOR_SECRET to be configured. Cursors are not issued unsigned." };
+  }
   const lim = resolveLimit(limit);
   if (lim.error) return { error: lim.error, detail: lim.detail };
 
@@ -139,15 +175,26 @@ async function forwardRentRollPage(pool, { property_id, as_of = null, limit, cur
       max_limit: PAGE_MAX,
       ...(lim.clamped ? { limit_clamped_from: Number(limit) } : {}),
       consistency: "best_effort_live",
-      consistency_note:
-        "Each page is a fresh read. Ordering by (unit_number, space_id) is stable, so a page never "
-        + "re-serves or reorders rows already returned; a record inserted earlier in the order during "
-        + "traversal is not visited, and one removed mid-traversal is skipped. No snapshot spans requests.",
+      ordering_fields: [
+        { field: "units.unit_number", mutable: true },
+        { field: "spaces.id", mutable: false },
+      ],
+      static_data_guarantee:
+        "Under static data a full traversal returns every position exactly once, in one deterministic order, "
+        + "with no duplicate and no omission.",
+      concurrent_change_limitation:
+        "No snapshot spans requests. unit_number is mutable, so a position renamed during a multi-request "
+        + "traversal may be revisited or skipped. Positions inserted earlier in the order are not visited; "
+        + "positions removed are skipped. This is not snapshot isolation and is not claimed as such.",
+      cursor_signing: SECRET_SOURCE,
+      ...(SECRET_SOURCE === "ephemeral_process_key"
+        ? { cursor_signing_note: "CURSOR_SECRET is not configured, so cursors are signed with a per-process key: they do not survive a restart and do not span instances." }
+        : {}),
     },
   };
 }
 
 module.exports = {
   forwardRentRollPage, cursorEncode, cursorDecode, resolveLimit,
-  PAGE_DEFAULT, PAGE_MAX, ORDERING, CURSOR_VERSION,
+  PAGE_DEFAULT, PAGE_MAX, ORDERING, CURSOR_VERSION, SECRET_SOURCE,
 };
