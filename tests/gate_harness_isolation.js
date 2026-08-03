@@ -79,16 +79,6 @@ const DEAD = [
     reason: "one-off migration-076 matrix check, invoked nowhere; its direct properties.sms_number insert is now refused by the 130 write guard" },
 ];
 
-/*  FROZEN INVENTORY — measured 2026-08-03 at main a792b9f + branch work.
- *
- *  This is KNOWN DEBT, deliberately not repaired here: 67 write-capable
- *  scripts cannot be converted blindly, most cannot execute without a
- *  provisioned full-schema database, and a mass textual replacement would
- *  create 55 unexecuted safety claims. Remediation is its own governed
- *  slice AFTER Slice A (owner ruling 2026-08-03).
- *
- *  Entries are REMOVED as each script is repaired and proven. The gate
- *  fails if an entry no longer qualifies, so this list cannot silently rot. */
 /*  FROZEN DEBT REGISTER — measured 2026-08-03 on this tree.
  *
  *  This is a TEMPORARY DEBT REGISTER, NOT AN APPROVAL LIST. Presence here
@@ -459,6 +449,40 @@ const FROZEN_INVENTORY = [
 ];
 const FROZEN_UNGUARDED = new Set(FROZEN_INVENTORY.map((e) => e.path));
 
+/*  SECOND CATEGORY — reads HARNESS_DATABASE_URL directly, skipping
+ *  harnessConnectionString().
+ *
+ *  NOT the same risk as the DATABASE_URL group. These REQUIRE the harness
+ *  variable, so they cannot silently pick up production from an ambient
+ *  DATABASE_URL. But they never call harnessConnectionString(), so they never
+ *  perform its SAME-TARGET REFUSAL: point HARNESS_DATABASE_URL at production
+ *  and they run against it without complaint.
+ *
+ *  "Safe only if you configure it correctly" is the same shape as "safe only
+ *  if you launch it the right way". Narrower, still not structural.
+ *
+ *  Frozen for the same reason as the register above — converting a harness
+ *  that cannot be executed here would be an unexecuted safety claim. Growth
+ *  fails the gate. */
+const FROZEN_HARNESS_VAR_DIRECT = [
+  { path: "tests/hotfix_future_rent_roll_guards_proof.js", write: true,
+    reason: "landed 2026-08-03 with PR #36; requires the harness var, performs no same-target refusal",
+    until: "converted to harnessConnectionString() and executed against an isolated database" },
+  { path: "tests/slice9_evidence_http_proof.js", write: true,
+    reason: "pre-existing Slice 9 harness; requires the harness var, performs no same-target refusal",
+    until: "converted to harnessConnectionString() and executed against an isolated database" },
+  { path: "tests/slice9_inbound_decision_http_proof.js", write: true,
+    reason: "pre-existing Slice 9 harness; requires the harness var, performs no same-target refusal",
+    until: "converted to harnessConnectionString() and executed against an isolated database" },
+  { path: "tests/slice9_scale_proof.js", write: true,
+    reason: "pre-existing Slice 9 harness; requires the harness var, performs no same-target refusal",
+    until: "converted to harnessConnectionString() and executed against an isolated database" },
+  { path: "tools/ask_spine_e2e_seed.js", write: true,
+    reason: "pre-existing seed tool; requires the harness var, performs no same-target refusal",
+    until: "converted to harnessConnectionString() and executed against an isolated database" },
+];
+const FROZEN_HARNESS_VAR = new Set(FROZEN_HARNESS_VAR_DIRECT.map((e) => e.path));
+
 const SLICE_A_BLOCKERS = [
   /*  ⚠ MERGE BLOCKERS for Slice A — these two are in its required proof set
    *  and must be repaired and proven BEFORE it merges (owner ruling
@@ -489,12 +513,17 @@ function classify(rel) {
   if (approved) return { rel, kind: "approved_production_tool", reason: approved.reason };
   if (DEAD.find((d) => d.file === rel)) return { rel, kind: "dead" };
   if (/harnessConnectionString/.test(src)) return { rel, kind: "guarded_harness" };
+  //  Requires the harness variable but never performs its same-target
+  //  refusal. Tracked separately because the risk differs in kind.
+  if (/process\.env\.HARNESS_DATABASE_URL/.test(src)) {
+    return { rel, kind: "harness_var_no_refusal", write: WRITES.test(src) };
+  }
   if (!CONNECTS.test(src)) return { rel, kind: "no_direct_connection" };
   return { rel, kind: WRITES.test(src) ? "unguarded_write_capable" : "unguarded_read_only" };
 }
 
 const HARNESS = __filename;
-const EXPECTED = 6;
+const EXPECTED = 8;
 let passed = 0, failed = 0, ran = 0;
 const ok = (label, cond, detail) => {
   ran++;
@@ -515,6 +544,7 @@ console.log(`     guarded harness                 ${byKind("guarded_harness").le
 console.log(`     approved production tool        ${byKind("approved_production_tool").length}`);
 console.log(`     unguarded WRITE-CAPABLE         ${byKind("unguarded_write_capable").length}`);
 console.log(`     unguarded read-only             ${byKind("unguarded_read_only").length}`);
+console.log(`     harness-var, no same-target check ${byKind("harness_var_no_refusal").length}`);
 console.log(`     dead / obsolete                 ${byKind("dead").length}`);
 console.log(`     no direct connection            ${byKind("no_direct_connection").length}`);
 console.log(`     scanned                         ${results.length}`);
@@ -577,6 +607,24 @@ const misclassified = FROZEN_INVENTORY.filter((e) => {
 ok("register write-classification matches the measured source",
   misclassified.length === 0,
   misclassified.length ? misclassified.map((e) => `register says write=${e.write}: ${e.path}`).join("\n        ") : null);
+
+// ── 3c. THE SECOND CATEGORY DOES NOT GROW EITHER ───────────────────
+const hv = byKind("harness_var_no_refusal");
+const hvNew = hv.filter((r) => !FROZEN_HARNESS_VAR.has(r.rel));
+ok("no NEW script reading HARNESS_DATABASE_URL without a same-target refusal",
+  hvNew.length === 0,
+  hvNew.length
+    ? hvNew.map((r) => `NEW: ${r.rel}`).join("\n        ") +
+      "\n        Use harnessConnectionString() — it refuses when the harness target" +
+      "\n        resolves to the same host/port/database as DATABASE_URL. Requiring" +
+      "\n        the variable is not the same as refusing the wrong value."
+    : null);
+
+const hvStale = [...FROZEN_HARNESS_VAR].filter((f) =>
+  !hv.find((r) => r.rel === f));
+ok("the harness-var register is still accurate (repaired entries removed)",
+  hvStale.length === 0,
+  hvStale.length ? hvStale.map((f) => `no longer qualifies: ${f}`).join("\n        ") : null);
 
 // ── 4. EVERY ALLOWLIST ENTRY CARRIES A REASON ──────────────────────
 ok("every PRODUCTION_APPROVED entry states why it may see production",
