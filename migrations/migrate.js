@@ -171,6 +171,95 @@ async function main() {
     process.exit(1);
   }
 
+  // ════════════════════════════════════════════════════════════════════
+  //  VERIFY BY DEFAULT. APPLYING IS AN EXPLICIT, GOVERNED RELEASE.
+  //
+  //  This script used to APPLY on every run, and `prestart` runs it on every
+  //  deploy against the service's own DATABASE_URL. On the production service
+  //  that meant DEPLOYING A BRANCH TO TEST IT AND MIGRATING PRODUCTION WERE THE
+  //  SAME OPERATION, with no confirmation and no distinction between them.
+  //
+  //  It happened at least twice. Migration 121 exists only on an unmerged
+  //  branch yet is applied in production — it got there when that branch was
+  //  deployed for testing. Migration 126 went the same way. Both were recorded
+  //  as curiosities before anyone connected them to the mechanism.
+  //
+  //  The fix is NOT to skip migrations and boot anyway: that trades a silent
+  //  schema CHANGE for a silent schema MISMATCH, and starts code against a
+  //  database it does not understand. So:
+  //
+  //    default  → VERIFY. Every file must already be in the ledger. If any is
+  //               pending, REFUSE TO START and name it. Nothing is applied and
+  //               nothing boots against an unknown schema.
+  //    --apply  → RELEASE. Requires the operator to prove they read the ledger
+  //               first, and to pin the code being released.
+  //
+  //  A feature-branch deploy therefore cannot migrate production, and cannot
+  //  quietly run against a schema that does not match its code either.
+  // ════════════════════════════════════════════════════════════════════
+  const APPLY = process.argv.includes("--apply") || process.env.MIGRATION_RELEASE === "1";
+  const pending = files.filter((f) => !applied.has(f.slice(0, 3)));
+  const ceiling = [...applied.keys()].sort().pop() || "000";
+
+  if (!APPLY) {
+    if (pending.length === 0) {
+      console.log(`\n  ✓ SCHEMA VERIFIED — ${files.length} migrations, all applied. Ledger ceiling ${ceiling}.`);
+      console.log("    (verify-only; applying requires an explicit release)\n");
+      await client.end();
+      return;
+    }
+    console.error("\n  ✗ REFUSING TO START — the schema does not match this code.\n");
+    console.error(`    ${pending.length} migration(s) in this build are NOT applied to the target database:`);
+    for (const f of pending) console.error(`      · ${f}`);
+    console.error(`\n    Ledger ceiling is ${ceiling}. This code expects those migrations to exist.`);
+    console.error("    Starting anyway would run new code against an older schema, so it stops here.");
+    console.error("\n    A deploy does not migrate. Releasing schema is a separate, deliberate act:");
+    console.error(`      MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=${ceiling} \\`);
+    console.error("        [EXPECTED_SHA=<sha>] node migrations/migrate.js --apply");
+    console.error("\n    Nothing was applied.\n");
+    await client.end();
+    process.exit(1);
+  }
+
+  // ── RELEASE MODE — prove the operator looked before they leapt ──────
+  const expectedCeiling = process.env.EXPECTED_LEDGER_CEILING;
+  if (!expectedCeiling) {
+    console.error("\n  ✗ RELEASE REFUSED — EXPECTED_LEDGER_CEILING is required.\n");
+    console.error(`    Read the ledger first, then state what you expect to find. It is ${ceiling}.`);
+    console.error("    This exists so a release cannot be run by someone who has not looked.\n");
+    await client.end();
+    process.exit(1);
+  }
+  if (String(expectedCeiling) !== String(ceiling)) {
+    console.error("\n  ✗ RELEASE REFUSED — the ledger is not in the expected state.\n");
+    console.error(`    You expected ceiling ${expectedCeiling}; the database says ${ceiling}.`);
+    console.error("    Something applied migrations since you looked. Re-inspect before releasing.\n");
+    await client.end();
+    process.exit(1);
+  }
+  const deployedSha = process.env.RENDER_GIT_COMMIT;
+  if (deployedSha) {
+    const expectedSha = process.env.EXPECTED_SHA;
+    if (!expectedSha) {
+      console.error("\n  ✗ RELEASE REFUSED — EXPECTED_SHA is required when releasing a deployed build.\n");
+      console.error(`    This instance is running ${deployedSha.slice(0, 12)}. Pin it deliberately.\n`);
+      await client.end();
+      process.exit(1);
+    }
+    if (!deployedSha.startsWith(expectedSha) && !expectedSha.startsWith(deployedSha)) {
+      console.error("\n  ✗ RELEASE REFUSED — this is not the build you authorised.\n");
+      console.error(`    expected ${expectedSha}`);
+      console.error(`    running  ${deployedSha}\n`);
+      await client.end();
+      process.exit(1);
+    }
+  }
+  console.log("\n  ── MIGRATION RELEASE ──────────────────────────────────");
+  console.log(`     ledger ceiling (verified): ${ceiling}`);
+  console.log(`     build:                     ${deployedSha ? deployedSha.slice(0, 12) : "(not a Render deploy)"}`);
+  console.log(`     to apply:                  ${pending.length ? pending.join(", ") : "nothing pending"}`);
+  console.log("  ───────────────────────────────────────────────────────\n");
+
   let ranAny = false;
   for (const file of files) {
     const version = file.slice(0, 3);            // '001'
