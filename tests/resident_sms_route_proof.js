@@ -70,10 +70,10 @@ function ok(cond, name) {
 }
 function section(t) { console.log(`\n── ${t} ${"─".repeat(Math.max(0, 60 - t.length))}`); }
 
-if (!process.env.DATABASE_URL) {
+if (!process.env.HARNESS_DATABASE_URL) {
   console.error(`
 ════════════════════════════════════════════════════════════════════
-  NOT RUN — DATABASE_URL is not set.
+  NOT RUN — HARNESS_DATABASE_URL is not set.
 
   This harness asserts against EXECUTED route behaviour and persisted
   database state. It refuses to report green without a real database:
@@ -86,7 +86,7 @@ if (!process.env.DATABASE_URL) {
 (async function main() {
   const { Pool } = require("pg");
   const realPool = new Pool({
-    connectionString: process.env.DATABASE_URL,
+    connectionString: require("./_run_receipt.js").harnessConnectionString(),
     ssl: { rejectUnauthorized: false },
   });
   const c = await realPool.connect();
