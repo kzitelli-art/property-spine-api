@@ -221,6 +221,33 @@ const TARGET = "2026-09-01";
   ok("every row names its rent authority",
     out.rows.every((r) => ["dated_economic_line", "legacy_lease_rent", "missing", "conflict"].includes(r.rent_authority)));
 
+  section("D2 agent-consumable contract: lineage, typed blockers, result class");
+  //  "Which lease created this future rent change?" must be answerable from the
+  //  row itself, not by re-querying.
+  const stepRow = row(F.step);
+  ok("a dated amount names the schedule that produced it",
+    stepRow.rent_lineage.length > 0 && !!stepRow.rent_lineage[0].schedule_id);
+  ok("and the application/offer lineage behind that schedule",
+    !!stepRow.rent_lineage[0].application_id && !!stepRow.rent_lineage[0].source_offer_id);
+  ok("and the effective month the amount belongs to",
+    stepRow.rent_lineage.some((l) => l.effective_month === "2026-09"));
+  ok("a legacy fallback names the lease it came from",
+    row(F.legacyOut).rent_lineage[0].lease_id && row(F.legacyOut).rent_lineage[0].basis === "legacy_lease_rent");
+  //  Typed, not prose. A consumer must not parse sentences to learn why.
+  ok("a conflicted row carries a typed blocker",
+    two.blockers.some((b) => b.code === "conflicting_leases" && b.affects.includes("rent")));
+  ok("conflicting economic lines carry their own typed blocker",
+    row(F.econConflict).blockers.some((b) => b.code === "conflicting_economic_lines"));
+  ok("an unqualified legacy amount carries a typed blocker",
+    row(F.legacyOut).blockers.some((b) => b.code === "undated_rent_beyond_opening_month"));
+  ok("no recorded rent carries a typed blocker",
+    row(F.norent).blockers.some((b) => b.code === "no_contractual_rent_recorded"));
+  ok("an unclassified position carries a denominator blocker",
+    row(F.unclass).blockers.some((b) => b.code === "position_use_type_unclassified" && b.affects.includes("denominator")));
+  ok("a fully governed row carries NO blockers", row(F.dated).blockers.length === 0);
+  ok("every blocker names what it affects",
+    out.rows.every((r) => r.blockers.every((b) => b.code && Array.isArray(b.affects) && b.detail)));
+
   section("D  independent coverage axes");
   ok("known occupancy + missing rent → occupancy complete, rent partial",
     row(F.norent).coverage.occupancy === "complete" && row(F.norent).coverage.rent === "partial");

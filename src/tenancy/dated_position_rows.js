@@ -108,7 +108,8 @@ async function loadClassification(pool, { property_id }) {
 //  ONE query for the whole property. Indexed by space, then by month.
 async function loadEconomics(pool, { property_id, month }) {
   const { rows } = await pool.query(
-    `select s.space_id, l.line_type, l.amount, to_char(l.effective_month,'YYYY-MM') as ym
+    `select s.space_id, s.id as schedule_id, s.application_id, s.source_offer_id,
+            l.id as line_id, l.line_type, l.amount, to_char(l.effective_month,'YYYY-MM') as ym
        from lease_economic_schedules s
        join lease_economic_lines   l on l.schedule_id = s.id
       where s.property_id = $1
@@ -119,8 +120,14 @@ async function loadEconomics(pool, { property_id, month }) {
   const bySpace = new Map();
   for (const r of rows) {
     const k = String(r.space_id);
-    if (!bySpace.has(k)) bySpace.set(k, { base: [], credits: [] });
+    if (!bySpace.has(k)) bySpace.set(k, { base: [], credits: [], lineage: [] });
     const b = bySpace.get(k);
+    //  LINEAGE, not just the number. "Which lease created this rent change?"
+    //  is answerable only if the row names the schedule and line that produced
+    //  the amount, and the application/offer that schedule came from.
+    b.lineage.push({ schedule_id: r.schedule_id, line_id: r.line_id, line_type: r.line_type,
+                     effective_month: r.ym, application_id: r.application_id,
+                     source_offer_id: r.source_offer_id });
     if (r.line_type === "base_rent") b.base.push(Number(r.amount));
     else if (r.line_type === "concession_credit" || r.line_type === "fee_waiver") b.credits.push(Number(r.amount));
     // recurring_fee and one_time_fee are deliberately not monthly contract rent
@@ -145,19 +152,23 @@ function economicsForRow(p, econ, asOf) {
   if (p.conflict_state === "conflicted") {
     return { contractual_rent: null, rent_authority: RENT_AUTHORITY.CONFLICT,
              rent_note: "Incompatible leases cover this date, so no contractual rent can be attributed.",
-             legacy_qualification: null };
+             legacy_qualification: null, rent_lineage: [],
+             blockers: [{ code: "conflicting_leases", affects: ["occupancy", "rent"],
+                          detail: "More than one non-terminal lease covers this date." }] };
   }
   const e = econ.get(String(p.space_id));
   if (e && e.base.length > 1) {
     return { contractual_rent: null, rent_authority: RENT_AUTHORITY.CONFLICT,
              rent_note: "More than one base rent applies in this month; no amount is selected.",
-             legacy_qualification: null };
+             legacy_qualification: null, rent_lineage: e.lineage,
+             blockers: [{ code: "conflicting_economic_lines", affects: ["rent"],
+                          detail: "More than one base rent is effective in this month." }] };
   }
   if (e && e.base.length === 1) {
     const net = e.base[0] + e.credits.reduce((a, b) => a + b, 0);   // credits are negative by constraint
     return { contractual_rent: Math.round(net * 100) / 100, rent_authority: RENT_AUTHORITY.DATED,
              rent_note: e.credits.length ? "Dated schedule, net of concessions effective this month." : "Dated schedule.",
-             legacy_qualification: null };
+             legacy_qualification: null, rent_lineage: e.lineage, blockers: [] };
   }
   if (lease && lease.rent != null && Number(lease.rent) !== 0) {
     const q = legacyQualification(lease, asOf);
@@ -165,11 +176,16 @@ function economicsForRow(p, econ, asOf) {
              rent_note: q === "within_initial_month"
                ? "No dated schedule exists; the lease's own amount covers its opening month."
                : "No dated schedule exists. The lease carries a single undated amount, which cannot prove a later month's rent.",
-             legacy_qualification: q };
+             legacy_qualification: q, rent_lineage: [{ lease_id: lease.lease_id, basis: "legacy_lease_rent" }],
+             blockers: q === "within_initial_month" ? []
+               : [{ code: "undated_rent_beyond_opening_month", affects: ["rent"],
+                    detail: "The amount is the lease's single undated rent and cannot prove this month." }] };
   }
   return { contractual_rent: null, rent_authority: RENT_AUTHORITY.MISSING,
            rent_note: "No contractual rent is recorded for this position on this date.",
-           legacy_qualification: null };
+           legacy_qualification: null, rent_lineage: [],
+           blockers: [{ code: "no_contractual_rent_recorded", affects: ["rent"],
+                        detail: "Neither a dated schedule nor a lease amount exists for this position." }] };
 }
 
 // ── THE ROW ─────────────────────────────────────────────────────────
@@ -252,8 +268,18 @@ async function datedPositionRows(pool, { property_id, as_of = null } = {}) {
       rent_authority: ec.rent_authority,
       legacy_qualification: ec.legacy_qualification,
       rent_note: ec.rent_note,
+      rent_lineage: ec.rent_lineage || [],
 
       coverage,
+      //  TYPED, machine-readable. A consumer must not have to parse prose to
+      //  learn why an answer is absent.
+      blockers: [
+        ...(ec.blockers || []),
+        ...(dclass === "unknown"
+          ? [{ code: "position_use_type_unclassified", affects: ["denominator"],
+               detail: "This position has no governed use_type, so it cannot be placed in a revenue denominator." }]
+          : []),
+      ],
     };
   });
 
