@@ -1,11 +1,12 @@
 {
   "name": "property-spine-api",
   "version": "1.0.0",
-  "description": "Property Spine backend — API server v1",
+  "description": "Property Spine backend \u2014 API server v1",
   "main": "server.js",
   "scripts": {
     "prestart": "node migrations/migrate.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "release:migrate": "node migrations/migrate.js --apply"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
