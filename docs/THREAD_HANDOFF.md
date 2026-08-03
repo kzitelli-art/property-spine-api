@@ -7,52 +7,296 @@ session as current truth.
 
 ---
 
-## READ THIS FIRST — state as of 2026-08-03
+## ══════════════════════════════════════════════════════════════════
+##  HANDOFF — 2026-08-03. Read this whole section before touching anything.
+## ══════════════════════════════════════════════════════════════════
 
-Three things changed today that invalidate parts of the text below. Where they
-conflict, THIS section wins.
+Where this conflicts with anything further down this file, **this section wins.**
+Everything below the marked history line describes an earlier state.
 
-**1. A DEPLOY NO LONGER MIGRATES PRODUCTION.** `prestart` now runs
-`migrations/migrate.js` in VERIFY mode: every migration file must already be in
-the ledger, or the service REFUSES TO START and names the pending file. It does
-not skip and boot — that would run new code against an older schema.
+---
 
-Applying is a separate, deliberate act:
+### 0. The doctrine is not preamble. It is the specification.
+
+`docs/PHILOSOPHY.md` is not style guidance you skim before writing code. It is
+the thing the code is judged against, and on this project it has repeatedly been
+the *fastest* route to the right answer — not a tax on it.
+
+Every significant decision recorded below was **derived** from a numbered
+principle, not decorated with one afterwards. §6 in this handoff shows the
+derivations in full, because the pattern matters more than any individual
+outcome: **when we reasoned from doctrine we got it right the first time, and
+every time we skipped that step we had to come back.**
+
+The five that governed this session:
+
+| | Principle | What it actually forces |
+|---|---|---|
+| **§5** | Honest Blank Beats Confident Wrong | A missing owner reads `UNASSIGNED`. A test that proves nothing reports `RUN INVALID`. A harness that cannot verify its own safety **refuses to run**. Silence is never evidence. |
+| **§17** | One Canonical Architecture | One meaning per fact, one implementation per rule. Two copies of one engine is a defect even while they agree, because agreement is not a mechanism. |
+| **§18** | Classify Every Component | Anything temporary carries an explicit class and an exact removal condition. `properties.sms_number` is a temporary adapter — say so, in writing, with what retires it. |
+| **§21** | Server-Derived Identity and Authority | The browser requests; the server decides. A caller may never supply the fact that authorises it. This is why `recognizeObligationMissed` derives its own threshold. |
+| **§33** | Definition of Done | Reported → Locally exercised → Built-but-dormant → **Proven** (real DB + real HTTP) → **Browser verified**. Naming your rung honestly is the whole discipline. |
+
+And §32's stop-signs are live tripwires, not a list to nod at. *"We'll wire it to
+the real path later"* and *"we can clean up the history after"* both appeared in
+this session's work and both turned out to name a real defect.
+
+---
+
+### 1. The mission
 
 ```
-MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=<what you just read in the ledger> \
+resident texts the property line in their own words
+  → Spine records the claim ONCE as a canonical work order
+  → it routes to one accountable human, or stays honestly UNASSIGNED
+  → the technician executes and proves it, by text
+  → verified status returns to the resident
+```
+
+The resident never learns the system. The technician never opens an app. The
+truth is captured at the moment of work and every surface reads the same record
+(§7, §35).
+
+**Roughly 60% complete.** The resident-facing half is live and proven. The staff
+execution loop does not exist yet.
+
+---
+
+### 2. What is LIVE on `main` and honestly proven
+
+`main` is at `42977e6` + the handoff commit. Production carries migrations
+**120–128 unbroken**.
+
+| Capability | Proof | §33 rung |
+|---|---|---|
+| Resident SMS → canonical work order | `resident_sms_work_order_proof.js` **78/0**, `resident_sms_route_proof.js` **31/0**, real Postgres + real HTTP, isolated DB | **Proven** |
+| One obligation engine (`src/shared/obligation_engine.js`) | one-implementation **14/14**, import smoke **8/8** | **Proven** |
+| Durable missed recognition (`src/shared/obligation_missed.js`, migration 126) | conversion rail **15/15**, production smoke **23/23** | **Proven**, live in production |
+| Migration release gate (ITEM 5) | gate test **11/11** + real-Postgres verify, exit 0 | **Proven** |
+
+**None of it is Browser verified.** Per §33 that matters and must not be blurred:
+for operator workflows, browser verification is part of done. Say "proven at the
+service layer" and stop there.
+
+The two SMS harnesses are worth studying as a model. The work-order proof states
+in its own output: *"17/22 exercised here; 5 require an HTTP-level harness (cases
+5, 9, 10, 11, 14). Those five are NOT proven by this run and must not be reported
+as such."* The route proof then proves exactly those five. **A harness that
+polices its own claim is doing §5 in the only place it counts** — where nobody is
+watching.
+
+---
+
+### 3. Traps, each with the principle it violates
+
+**A deploy no longer migrates production — do not undo this.** `prestart` runs
+`migrations/migrate.js` in VERIFY mode. Every migration file must already be in
+the ledger, or the service **refuses to start** and names the pending file.
+
+It does **not** skip and boot. Skipping would trade a silent schema *change* for
+a silent schema *mismatch* — new code against an older database, which is §5's
+confident-wrong wearing a hard hat. Releasing is deliberate:
+
+```
+MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=<what you just read> \
   EXPECTED_SHA=<deployed sha> node migrations/migrate.js --apply
 ```
 
-`EXPECTED_LEDGER_CEILING` exists so a release cannot be run by someone who has
-not read the ledger. Proven on real Postgres (`SCHEMA VERIFIED`, exit 0) plus
-`tests/migration_release_gate.test.js` 11/11. See `BLOCKING_DESIGN_ITEMS.md`
-ITEM 5.
+`EXPECTED_LEDGER_CEILING` exists so **a release cannot be run by someone who has
+not read the ledger.** That is §21 applied to deployment: the operator asserts
+what they believe, and the system refuses if reality disagrees.
 
-**2. THE 121 GAP IS CLOSED.** `migrations/121_ai_leasing_operating_context.sql`
-is on `main`. The ledger name matched, so nothing was renumbered and no history
-was rewritten. **`main` now holds 120 through 128 unbroken.** The section below
-titled "MIGRATION LEDGER — there is a GAP at 121" is HISTORY, not current state.
+**No harness may target production.** Every `.db.js` requires
+`HARNESS_DATABASE_URL`, with no fallback, and refuses when it resolves to the
+same host/port/database as `DATABASE_URL`. The sole exception is
+`tests/prod_smoke_missed_readonly.js`, which runs inside `BEGIN TRANSACTION READ
+ONLY` and **proves** it cannot write before reading anything.
 
-**3. RESIDENT SMS → WORK ORDER IS MERGED AND PROVEN.** A resident texts the
-property line in their own words; Spine records the claim once as a canonical
-work order. `resident_sms_work_order_proof.js` 78/0 and
-`resident_sms_route_proof.js` 31/0 on real Postgres and real HTTP against an
-isolated database — all 22 contract cases between them.
+**`now()` inside a transaction is the transaction's start time.** This produced a
+false green that survived review. Ordering by it is meaningless within one
+transaction.
 
-**Harnesses may never target production.** Every `.db.js` harness requires
-`HARNESS_DATABASE_URL` with no fallback, and refuses when it resolves to the
-same host/port/database as `DATABASE_URL`. The one exception is
-`tests/prod_smoke_missed_readonly.js`, which is structurally read-only. See
-`DB_HARNESS_ISOLATION.md` — production still contains synthetic rows from
-earlier runs, inventoried but NOT yet cleaned.
+**Absence of red is not green.** `test_conversion_rail.db.js` threw at
+construction and ran **zero assertions for 204 commits** while reading as
+passing. Every critical harness now prints `ASSERTIONS STARTED`, an expected
+count, a completed count and an exit code, and reports `RUN INVALID` when it runs
+fewer than expected (§5).
 
-**Next in the mission:** duplicate property-line hardening → canonical
-communication-line model → operations number → technician SMS loop. Roughly 60%
-of the resident-to-maintenance mission is done; the resident-facing intake is
-built, the staff execution loop is not.
+**`$?` after a pipeline is the pipe's status, not the program's.** This misled
+this session three times. Never pipe a harness whose exit code you intend to
+read.
+
+**The reorg left stale paths.** Three found so far — `test_release3.db.js` (two
+`readFileSync` paths), `gate_closure_boundary.js` (a regex that made the gate
+**blind** since the move), `seeds/seed_demo_slots.js` (still failing softly at
+boot). Assume more. A gate that cannot see is worse than no gate, because it
+reports safety it is not providing.
 
 ---
+
+### 4. Open rulings — do not decide these alone
+
+**ITEM 2 — `conversation_owner_user_id` conflates attribution with ownership.**
+Written from a host claim without eligibility resolution, read by operating logic
+at `leasingconversion.js:385`, and labelled **"owned by"** on two desk surfaces
+next to a separate "toured by" field. The column is `NOT NULL`, so §5's honest
+blank is *unrepresentable by construction*. Property Spine deliberately keeps
+attribution, eligible assignment, task ownership and authenticated authority
+separate (§10, §21); this column straddles all four. Full audit in
+`BLOCKING_DESIGN_ITEMS.md`. **Blocks conversion-rail activation, not the SMS
+loop.**
+
+**Production fixture cleanup.** Earlier harness runs committed synthetic
+properties, users, persons, prospects and obligations into production.
+Inventoried read-only in `DB_HARNESS_ISOLATION.md`; **nothing has been deleted.**
+The conversion-rail rows carry *no marker at all* — ordinary human names, no
+email, and a property literally named `Solo on Chestnut`. **Never infer that a
+row is synthetic from its name.** Cleanup needs an ID-based, dependency-ordered
+dry run and explicit owner approval. Note `069` sets `ON DELETE RESTRICT`
+deliberately: history is not cascade-deletable, and that is a feature.
+
+**The missed-recognition human path is unexercised.** Migration 126 is live and
+the primitive is proven, but no operator UI ever sends `result: 'missed'` — the
+route accepts it, nothing calls it. Five eligible Demo Building candidates exist.
+Do not manufacture one by backdating a `due_at` (§32: *"we can clean up the
+history after"*).
+
+**`RESOLUTION_BASES` has no vocabulary for "the window elapsed."** It offers
+`coverage | manager_intervention | completed_together | no_longer_needed |
+unassigned_pickup` — all written for *someone closing work*. A missed window is
+not that. Recorded, not papered over.
+
+---
+
+### 5. The next slice: duplicate property-line hardening
+
+Fully designed in `COMMUNICATION_LINE_ARCHITECTURE.md`, with the rulings already
+made. Build exactly this and no more (§30 — one narrow, vertically complete
+slice):
+
+1. read-only duplicate-number preflight;
+2. database uniqueness for active, non-null property-facing numbers;
+3. an inbound resolver that treats **zero, one and multiple** matches explicitly;
+4. multiple matches **fail closed with zero operating writes**;
+5. tests proving a message can never bind arbitrarily to one property.
+
+**Why this is next and not the technician loop.** `properties.sms_number` has no
+unique index, and inbound does `where sms_number = $1 limit 1` with no `order
+by`. Two properties sharing a number silently binds a resident's message to the
+wrong property's ledger — §5's confident-wrong at the property boundary, which is
+the one wall the system must never leak through (§12). Unknown lines already fail
+honestly; ambiguous ones do not. It is latent today because one guarded route is
+the only writer — one row of defence with no database backstop.
+
+**The Eight Questions (§31), pre-answered where they already have answers:**
+
+1. *Real-world fact?* Which physical phone line received this message.
+2. *Canonical service?* The inbound resolver in `communications_boundary.js`.
+3. *Authenticated actor and property?* Neither — resolution happens **before**
+   identity, because the receiving line is the property wall (§21).
+4. *Durable object?* None new. A uniqueness constraint on existing config.
+5. *Immutable history?* Unchanged; the refusal path writes nothing by design.
+6. *What reads it automatically?* Every inbound message, and every outbound
+   `from`.
+7. *When it is missing?* **Answer for ambiguity, not just absence** — that is the
+   entire slice.
+8. *Class and removal condition?* `properties.sms_number` is a **temporary
+   adapter** (§18): current role, one property-facing line per property;
+   limitation, cannot express an organisation-owned operations line; retired when
+   a canonical communication-line model resolves both inbound and outbound.
+
+**Migration number: query the ledger, never assume.** Ceiling is 128. Other
+threads hold unmerged numbers.
+
+---
+
+### 6. How the doctrine actually earned its keep today
+
+Read this part. It is the reason for the rest.
+
+**§17 caught a live defect.** `tests/_engine.js` was a hand-maintained copy of
+the obligation engine kept in sync "by discipline." It had drifted in three
+places, **all permissive** — a missing `dedupe_key`, a missing reserved-input
+guard, a missing conversion-rail guard. Every harness importing it asserted
+against an engine *more permissive than production*. Doctrine said two
+implementations of one rule is a defect **even while they agree**; the drift
+proved why.
+
+**§5 turned a dead test into a finding.** `test_conversion_rail.db.js` had run
+zero assertions for 204 commits. Applying "absence is not evidence" surfaced a
+product defect the silence had been hiding: `obligations.status='missed'` was
+**unwritable** against `ck_obl_status`, so a crossed follow-up window recorded
+*nothing at all*. Zero missed rows existed in production, and the path had never
+once succeeded.
+
+**Doctrine overruled my own analysis, correctly.** I concluded the fix was to
+widen `ck_obl_status` to admit `missed` and called it the only honest option.
+**That was wrong.** Lifecycle status is mutually exclusive; missedness is
+orthogonal — an obligation can be open *and* missed, escalated *because* it was
+missed, complete *having been* missed. Widening the enum erases all four truths
+and creates another overloaded field — precisely the defect ITEM 2 documents one
+section away. The two-axis model came from doctrine, not from me:
+
+```
+lifecycle status        open | in_progress | complete | escalated
+timeliness / recovery   on_time | due | overdue | missed
+```
+
+**And it caught a second-order version of the same error.** My first projection
+read `missed` from the durable fact *with the clock as fallback*. That quietly
+reintroduced the conflation: with no sweeper, an obligation would become "missed"
+**because someone opened a page after the deadline.** `overdue` is a clock-derived
+operating condition; `missed` is a durable institutional fact with a recorded time
+and actor. **`missed` is never derived from the clock.**
+
+**§18 killed speculative schema.** A recovery-queue index was drafted for
+migration 126 and removed: no query in the slice used that shape. Every read was
+`where id = $1`. An index for a capability the slice explicitly excluded is
+schema built for a query that does not exist.
+
+**The recurring failure was mine, three times: shipping a safety check that had
+never run.** A production smoke whose read-only probe aborted its own
+transaction. A closure gate blind since the reorg. A probe testing DDL permission
+when the property that mattered was write permission. All three *read* as
+protection. **A guard you have not executed is a claim, not a control** — which
+is §33's whole point, applied to the tools rather than the product.
+
+**The largest finding came from connecting two things already written down.**
+`prestart` ran migrations against the service's own `DATABASE_URL`, so deploying a
+branch to test it and migrating production were the *same operation*. The
+evidence had been sitting in this very file as "the migration GAP at 121" — a
+migration applied in production whose file existed only on a branch. It was
+recorded as a curiosity for weeks. Every guard built this session protected
+against a *harness* writing to production; **none protected against a deploy
+migrating it**, because that path went through no harness. The protection was one
+layer short of the risk, and the proof of it was already in the handoff.
+
+---
+
+### 7. What "done" means for the technician loop
+
+Not "the code exists." Not "the harness passes." **§33, in full**, and for
+operator workflows that includes the browser.
+
+The loop is done when a real resident texts a real property line, a real
+technician replies `accept` / `on my way` / `no access` / findings / proof /
+`complete` from a real phone, the work order and its obligation carry durable
+history at every step, one accountable human owns it or it reads honestly
+`UNASSIGNED`, verified status returns to the resident, and an operator sees the
+same truth on the board — **from one canonical record, with no demo path, no
+fixture fallback, no invented ownership, and no second meaning of truth** (§35).
+
+Anything less, name by its actual rung and say what is missing.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  EVERYTHING BELOW THIS LINE IS HISTORY (pre-2026-08-03)
+##  Kept because the reasoning is still the clearest account of how each
+##  trap was found. Where it conflicts with the handoff above, it is stale.
+## ══════════════════════════════════════════════════════════════════
+
 
 ## What is LIVE on `main`
 
