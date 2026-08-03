@@ -23,9 +23,9 @@ the merge candidate, Slice A does not merge.**
 | | |
 |---|---|
 | Branch | `claude/sms-work-order-handoff-qo3s8i` |
-| SHA that earned 61/61 | `95f13c7` |
-| Current tip / merge candidate | `edd6647` — **not proven at this SHA** |
-| Base at build time | `main` @ `a792b9f` |
+| First earned 61/61 | `95f13c7` (against `main` @ `a792b9f`) |
+| Last re-proven at | `523cca8` — reconciled with `main` @ `fbd7a3a`, 61/61, exit 0 |
+| Merge candidate | **the branch tip at merge time — re-prove there, whatever it is.** Do not paste a SHA here; it goes stale and this checklist gets executed literally. |
 | Migration claimed | **130** (unreleased) |
 | Prerequisite | migration **129** activated **and receipted** in production |
 
@@ -55,8 +55,10 @@ git log --oneline -3 origin/main
 git rev-list --left-right --count origin/main...origin/claude/sms-work-order-handoff-qo3s8i
 ```
 
-Record what `main` actually is. If it moved past `a792b9f`, step 2 is a real
-merge and step 4 is mandatory rather than confirmatory.
+Record what `main` actually is. The branch was last reconciled against
+`fbd7a3a`; if `main` has moved past that, step 2 is a real merge and step 4 is
+mandatory rather than confirmatory. **Proof never survives a merge** — re-run it
+even when the merge is clean.
 
 ---
 
@@ -120,7 +122,7 @@ node tests/obligation_engine_one_implementation.test.js   # 14/0
 node tests/obligation_engine_import_smoke.test.js
 node tests/gate_closure_boundary.js               # PASS
 node tests/gate_no_raw_bridge_joins.js            # PASS
-node tests/gate_harness_isolation.js              # 4/4 — no new DATABASE_URL consumer
+npm run verify                                    # 8/8 — all source-governance gates
 ```
 
 ### ⚠ Requires a provisioned full-schema database — ONE governed command
@@ -163,7 +165,8 @@ no run receipt — and **both COMMIT fixtures**. `DB_HARNESS_ISOLATION.md` cover
 
 **These two are not the whole problem.** Measured 2026-08-03 across `tests/`
 **and** `tools/`: **87 scripts** connect via `DATABASE_URL` with no guard, **67
-write-capable**, against **8** covered `*.db.js` files. Enforcement against
+write-capable**, against **8** covered `*.db.js` files — plus **5 more** that
+require `HARNESS_DATABASE_URL` but never perform its same-target refusal. Enforcement against
 further growth is `tests/gate_harness_isolation.js`; remediation is its own
 governed slice **after** Slice A. Only these two are a Slice A merge requirement,
 because only these two are in its required proof set.
