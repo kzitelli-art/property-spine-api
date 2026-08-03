@@ -1050,9 +1050,12 @@ lineage. It is not — relational traversal is not inference.
 CURRENT FACT     obligations.related_id (related_type='lease') → leases.id →
                  leases.space_id is an exact, one-to-one, same-property
                  transitive path to a canonical position.
-CONFLICT OR GAP  which obligation TYPES actually populate lease_id, and whether
-                 any represents an unresolved Forward Rent Roll condition, is
-                 UNKNOWN — REQUIRES PROOF (§15-Q9, revised below).
+CONFLICT OR GAP  which obligation TYPES actually write related_type='lease'
+                 with a related_id, and whether any represents an unresolved
+                 Forward Rent Roll condition, is UNKNOWN — REQUIRES PROOF
+                 (§15-Q9, revised below).
+                 CORRECTED 2026-08-03 — this line still said "populate
+                 lease_id" inside the very block that retracts that column.
 SMALLEST RULE    resolution_state = existing_action only via related_id with
                  related_type='lease', same property (BOTH obligation and lease
                  walls), same unresolved condition, one destination. unit_id is
@@ -1160,7 +1163,10 @@ owner has now scoped it. It is buildable today because:
 - claim classes are governed and already implemented;
 - the denominator authority exists and is already loaded — it needs wiring and
   an honest `unknown`, not a migration;
-- exact transitive action lineage exists via `lease_id`;
+- exact transitive action lineage exists via `obligations.related_type = 'lease'`
+  + `obligations.related_id` → `leases.id` → `leases.space_id`
+  (**corrected 2026-08-03** — this bullet still named `lease_id`, the column
+  P2.2 had already retracted two sections earlier);
 - economics has a defensible option B needing no migration;
 - conflicts are detected; the fix is to stop selecting inside a conflict.
 
@@ -1213,8 +1219,16 @@ WITHHELD, NOT BLOCKED — occupancy rate and revenue denominator
           architecture blocker.
 
 RESOLVED — exact existing-action correlation
-          obligations.lease_id → leases.space_id is exact and one-to-one.
-          Which types populate it is a runtime question (Q9), not a design gap.
+          obligations.related_type = 'lease' + obligations.related_id
+            -> leases.id -> leases.space_id
+          is exact and one-to-one (leases.space_id is NOT NULL).
+          Which obligation TYPES populate it is a runtime question (Q9), not a
+          design gap.
+          CORRECTED 2026-08-03 — this block still named obligations.lease_id,
+          the column P2.2 had already retracted. No lease_id column was added
+          and none should be: the generic (related_id, related_type) pair is
+          the established path, written by activation.js and read by
+          move_in_queue.js.
 
 OPEN — route proof ceiling (§P2.8): read, not run.
 
