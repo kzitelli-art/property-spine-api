@@ -597,11 +597,21 @@ module.exports = function communicationsBoundary({ pool, sms }) {
   //  Outcomes:
   //    unknown To line  → { unknownLine:true }, ZERO rows written (T2),
   //                       server log only
+  //    AMBIGUOUS To line→ { ambiguousLine:true, lineCandidates:[ids] },
+  //                       ZERO rows written, server log naming every
+  //                       candidate property
   //    duplicate sid    → { idempotentReplay:true }, existing event id,
   //                       zero new rows
   //    resolved sender  → { property, person }, no event written here
   //    0 or >1 senders  → { ambiguous:true, comm_event }, person-less
   //                       property-scoped record; NO outbound (Phase A)
+  //
+  //  `ambiguous` and `ambiguousLine` are NOT the same failure and must not
+  //  be collapsed. An ambiguous SENDER still has a known property, so the
+  //  claim is preserved on that property's ledger for a human. An ambiguous
+  //  LINE means the property wall itself is unknown — there is no ledger
+  //  the message can honestly belong to, so nothing is attached to any
+  //  property at all.
   // ── CONSENT KEYWORDS (Twilio-standard) ─────────────────────────────
   //  A STOP is a consent signal, not a conversation. When a RESOLVED
   //  sender texts one, the boundary: records the inbound event
@@ -637,13 +647,19 @@ module.exports = function communicationsBoundary({ pool, sms }) {
   // the tier — never a false match). Twilio's own `From` is already E.164.
   const { normalizeE164 } = require("../identity/phone_identity");
 
+  //  Receiving-line resolution. Separate module because the LINE is the
+  //  property wall and its zero/one/many discipline is the subject of its
+  //  own proof — and because the write path and the preflight tool must
+  //  normalize with the same function, not a second reading of it.
+  const { resolvePropertyByLine } = require("./property_line");
+
   async function resolveInboundSmsContext({ To, From, MessageSid, body = null }, clientArg = null) {
     const q = clientArg || pool;
 
     if (!MessageSid || !From || !To) {
       // Malformed at the domain layer (route should have rejected).
       // Write nothing.
-      return { property: null, person: null, ambiguous: false, unknownLine: false, comm_event: null, idempotentReplay: false, malformed: true };
+      return { property: null, person: null, ambiguous: false, unknownLine: false, ambiguousLine: false, comm_event: null, idempotentReplay: false, malformed: true };
     }
 
     // Idempotency FIRST — a Twilio retry must never create a second event.
@@ -655,25 +671,54 @@ module.exports = function communicationsBoundary({ pool, sms }) {
       return {
         property: dup.property_id ? { id: dup.property_id } : null,
         person: dup.person_id ? { id: dup.person_id } : null,
-        ambiguous: false, unknownLine: false,
+        ambiguous: false, unknownLine: false, ambiguousLine: false,
         comm_event: dup, idempotentReplay: true,
       };
     }
 
     // TO → PROPERTY. The receiving line is the property wall; resolve it
-    // before touching the sender.
-    const prop = (await q.query(
-      `select id, name, address, sms_number from properties where sms_number = $1 limit 1`,
-      [To]
-    )).rows[0];
+    // before touching the sender. Zero, one and many are each answered
+    // explicitly — see src/comms/property_line.js. This used to be
+    // `limit 1` with no `order by`, which answered "many" by picking.
+    const lineResolution = await resolvePropertyByLine(q, To);
 
-    if (!prop) {
+    if (lineResolution.outcome === "none" || lineResolution.outcome === "unresolvable") {
       // No property owns this line → no property ledger exists. Write
       // NOTHING to operating history (T2). Loud server log; Twilio's own
       // logs retain the raw message.
       console.error(`communications_boundary: UNKNOWN LINE ${To} — message ${MessageSid} from ${From} NOT attached; zero rows written.`);
-      return { property: null, person: null, ambiguous: false, unknownLine: true, comm_event: null, idempotentReplay: false };
+      return { property: null, person: null, ambiguous: false, unknownLine: true, ambiguousLine: false, comm_event: null, idempotentReplay: false };
     }
+
+    if (lineResolution.outcome === "many") {
+      //  AMBIGUOUS RECEIVING LINE. Deliberately NOT the sender-ambiguity
+      //  path, and the difference is the whole point:
+      //
+      //    ambiguous SENDER → the property is still known, so the claim is
+      //      preserved on that property's ledger, person-less and flagged
+      //      needs_human. A human can pick up a real message.
+      //
+      //    ambiguous LINE   → the property WALL itself is unknown. There is
+      //      no ledger this message can honestly belong to, so nothing is
+      //      attached to any property: no comm_event, no work order, no
+      //      obligation, no outbound. Writing it to one of the candidates
+      //      would be the arbitrary bind this slice exists to remove, just
+      //      performed one layer later.
+      //
+      //  The message is not lost — Twilio retains it, and this log names
+      //  every candidate property so an operator can resolve the collision.
+      //  Migration 129 makes this state unreachable through the database;
+      //  this branch is what happens if it is ever reached anyway, and it
+      //  must never become a silent pick again.
+      console.error(
+        `communications_boundary: AMBIGUOUS LINE ${To} — message ${MessageSid} from ${From} NOT attached; ` +
+        `${lineResolution.candidates.length} properties hold this line: ` +
+        `${lineResolution.candidates.map((c) => c.id).join(", ")}. Zero rows written.`
+      );
+      return { property: null, person: null, ambiguous: false, unknownLine: false, ambiguousLine: true, comm_event: null, idempotentReplay: false, lineCandidates: lineResolution.candidates.map((c) => c.id) };
+    }
+
+    const prop = lineResolution.property;
 
     // SENDER resolution inside this property. Phone is RELATIONSHIP EVIDENCE,
     // not identity — we resolve only when there is exactly ONE eligible durable
@@ -773,7 +818,7 @@ module.exports = function communicationsBoundary({ pool, sms }) {
       console.error(`communications_boundary: ${why} sender ${From} at ${prop.name || prop.address} — saved ${saved.id}, needs_human, zero outbound.`);
       return {
         property: { id: prop.id, name: prop.name, sms_number: prop.sms_number },
-        person: null, ambiguous: true, unknownLine: false,
+        person: null, ambiguous: true, unknownLine: false, ambiguousLine: false,
         comm_event: saved, idempotentReplay: false,
       };
     }
@@ -798,7 +843,7 @@ module.exports = function communicationsBoundary({ pool, sms }) {
       console.error(`communications_boundary: CONSENT SIGNAL ${consentSignal} from ${person.id} at ${prop.name || prop.address} — canonical consent updated, event ${saved.id}, zero outbound.`);
       return {
         property: { id: prop.id, name: prop.name, sms_number: prop.sms_number },
-        person, ambiguous: false, unknownLine: false,
+        person, ambiguous: false, unknownLine: false, ambiguousLine: false, ambiguousLine: false,
         comm_event: saved, idempotentReplay: false,
         consentSignal, relationship,
       };

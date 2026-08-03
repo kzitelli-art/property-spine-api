@@ -68,6 +68,7 @@
 const express = require("express");
 const crypto = require("crypto");
 const { classifyUrgency } = require("../maintenance/maintenance_urgency.js"); // narrow urgency decision for tenant maintenance
+const { normalizePropertyLine } = require("./property_line"); // the one canonical property-line normalizer
 
 module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService, getAgentService }) {
   const router = express.Router();
@@ -114,13 +115,18 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
   }
 
   // ── helpers ──────────────────────────────────────────────────────────
-  function normalizePhone(raw) {
-    if (!raw) return null;
-    const d = String(raw).replace(/\D/g, "");
-    if (d.length === 10) return "+1" + d;
-    if (d.length === 11 && d[0] === "1") return "+" + d;
-    return null; // not a US number we can normalize — reject honestly
-  }
+  //  normalizePhone WAS DEFINED HERE. It is now the shared
+  //  normalizePropertyLine in src/comms/property_line.js — same function,
+  //  moved rather than changed, so this file's behaviour is identical.
+  //
+  //  Why it moved: the property line is compared at three places — this
+  //  write path, the inbound resolver, and the preflight tool — and until
+  //  now only this one normalized at all. The inbound lookup compared the
+  //  RAW `To` against a normalized store, so a line stored in any other
+  //  format was not mis-routed but silently UNREACHABLE. One rule needs one
+  //  implementation; owner ruling 2026-08-03 made this function's output
+  //  the canonical stored and compared form.
+  const normalizePhone = normalizePropertyLine;
   function maskPhone(e164) {
     if (!e164 || e164.length < 4) return "***";
     return `(***) ***-${e164.slice(-4)}`;
@@ -1186,6 +1192,17 @@ Rules: classification "emergency" only for active danger or major damage in prog
         // Unknown receiving line → zero rows written (no property ledger
         // exists). Boundary logged it; Twilio's logs keep the raw message.
         if (ctx.unknownLine) return emptyTwiml(res);
+
+        // AMBIGUOUS receiving line → more than one property holds this
+        // number, so the property wall itself is unknown. Zero rows
+        // written, nothing attached to any property ledger, no outbound.
+        //
+        // This is deliberately NOT the ctx.ambiguous branch below. That one
+        // has a KNOWN property and preserves the claim on it. Here there is
+        // no property we could honestly attach to, and picking one of the
+        // candidates would reintroduce the arbitrary bind — the boundary
+        // already logged every candidate id for an operator to resolve.
+        if (ctx.ambiguousLine) return emptyTwiml(res);
 
         // Unknown or ambiguous sender → the boundary saved the message on
         // the PROPERTY (person-less, needs_human). Phase A dispatches ZERO
