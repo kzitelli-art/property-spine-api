@@ -182,8 +182,8 @@ const TARGET = "2026-12-01";
 
   section("D  current-to-target changes, from two governed reads");
   ok("a dated step is a rent increase with both authorities named",
-    clean.summary.changes.rent_increases.length === 3
-    && clean.summary.changes.rent_increases.every((x) => x.from_authority && x.to_authority));
+    clean.summary.changes.rent_increases.count === 3
+    && clean.summary.changes.rent_increases.sample.every((x) => x.from_authority && x.to_authority));
   //  TWO unchanged, not one: the commercial position (5000 on both dates) and
   //  the non_revenue position, which carries a legacy amount and still appears
   //  in changes because changes span every canonical position, not only the
@@ -191,9 +191,9 @@ const TARGET = "2026-12-01";
   ok("unchanged amounts are counted across ALL canonical positions, not just revenue",
     clean.summary.changes.unchanged_contractual_rent === 2);
   ok("no renewal or move-in is inferred from a rent difference",
-    clean.summary.changes.contractual_starts.length === 0 && clean.summary.changes.newly_occupied.length === 0);
+    clean.summary.changes.contractual_starts.count === 0 && clean.summary.changes.newly_occupied.count === 0);
   ok("a conflicted side is unresolved rather than given a direction",
-    ov.summary.changes.unresolved.length >= 1 && ov.summary.changes.rent_increases.length === 0);
+    ov.summary.changes.unresolved.count >= 1 && ov.summary.changes.rent_increases.count === 0);
 
   section("E  zero-result behaviour is not collapsed");
   const empty = await S(P.empty);

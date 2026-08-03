@@ -143,6 +143,21 @@ function rentSide(rows, label) {
 
 //  CHANGES. Derived from two governed dated results for the SAME spaces.id.
 //  A rent difference alone never implies a renewal, a move-in or a move-out.
+//  BOUNDED REFERENCE. A change collection grows with the property: at 10,000
+//  positions the unbounded arrays made the summary alone 306KB, which is what
+//  pushed a maximum page over the transport ceiling. Each collection now
+//  reports its full count and a bounded sample, and says whether more exist.
+//  This is disclosure, not silent truncation — the count is the complete
+//  number and has_more is explicit.
+const CHANGE_SAMPLE = 25;
+function bounded(list) {
+  return { count: list.length, sample: list.slice(0, CHANGE_SAMPLE),
+           has_more: list.length > CHANGE_SAMPLE,
+           sample_note: list.length > CHANGE_SAMPLE
+             ? `Showing ${CHANGE_SAMPLE} of ${list.length}. The count is complete; the list is a bounded sample.`
+             : null };
+}
+
 function changes(currentRows, targetRows) {
   const byId = (rows) => new Map(rows.map((r) => [String(r.space_id), r]));
   const cur = byId(currentRows), tgt = byId(targetRows);
@@ -175,7 +190,17 @@ function changes(currentRows, targetRows) {
       out.unresolved.push({ space_id: id, reason: "one or both sides have no governed amount" });
     }
   }
-  return out;
+  //  Bound every collection before it leaves this function.
+  return {
+    contractual_starts: bounded(out.contractual_starts),
+    contractual_ends: bounded(out.contractual_ends),
+    rent_increases: bounded(out.rent_increases),
+    rent_decreases: bounded(out.rent_decreases),
+    unchanged_contractual_rent: out.unchanged_contractual_rent,
+    newly_occupied: bounded(out.newly_occupied),
+    newly_unoccupied: bounded(out.newly_unoccupied),
+    unresolved: bounded(out.unresolved),
+  };
 }
 
 async function forwardRentRollSummary(pool, { property_id, as_of = null } = {}) {

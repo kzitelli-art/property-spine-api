@@ -129,11 +129,29 @@ const TARGET = "2026-12-01";
     ok(`${label} → ${expected}`, r.error === expected);
     ok(`${label} does NOT silently restart at page one`, !r.rows || r.rows.length === 0);
   }
-  const badContract = cursorEncode({ property_id: A, as_of: TARGET, unit_number: "S000001", space_id: "x" })
-    .replace("forward_rent_roll_rows_v1", "forward_rent_roll_rows_v0");
-  const bc = await forwardRentRollPage(pool, { property_id: A, as_of: TARGET, limit: 25, cursor: badContract });
-  ok("a cursor from another contract version is refused",
-    bc.error === "cursor_signature_invalid" || bc.error === "cursor_contract_mismatch");
+  //  An earlier version of this assertion string-replaced inside a BASE64URL
+  //  payload, so the replace was a no-op and the cursor stayed valid — the
+  //  test proved nothing and correctly failed. A wrong-contract cursor has to
+  //  be forged properly: build the payload, then sign it with the same secret.
+  //  This requires CURSOR_SECRET to be set, which also exercises the governed
+  //  signing path rather than the ephemeral one.
+  if (process.env.CURSOR_SECRET) {
+    const crypto = require("crypto");
+    const b64u = (x) => Buffer.from(x, "utf8").toString("base64url");
+    const payload = b64u(JSON.stringify({
+      v: "frr_cur_v1", p: A, d: TARGET, o: "unit_number asc, space_id asc",
+      rc: "forward_rent_roll_rows_v0", sc: "forward_rent_roll_summary_v1",
+      u: "S000001", s: "00000000-0000-0000-0000-000000000000",
+    }));
+    const sig = crypto.createHmac("sha256", process.env.CURSOR_SECRET).update(payload).digest("base64url").slice(0, 32);
+    const bc = await forwardRentRollPage(pool, { property_id: A, as_of: TARGET, limit: 25, cursor: payload + "." + sig });
+    ok("a VALIDLY SIGNED cursor from another contract version is refused",
+      bc.error === "cursor_contract_mismatch");
+    ok("and it does not silently restart at page one", !bc.rows || bc.rows.length === 0);
+    ok("the governed signing path is in use", SECRET_SOURCE === "env_cursor_secret");
+  } else {
+    ok("contract-version refusal is UNPROVEN without CURSOR_SECRET (rerun with it set)", false);
+  }
   for (const [label, lim, expect] of [["zero", 0, "limit_invalid"], ["negative", -5, "limit_invalid"],
                                       ["non-numeric", "abc", "limit_invalid"]]) {
     const r = await forwardRentRollPage(pool, { property_id: A, as_of: TARGET, limit: lim });
