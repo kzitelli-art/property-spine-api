@@ -1,5 +1,28 @@
 # Slice 10 — Forward Rent Roll Authority. Thread Handoff.
 
+> ## SUPERSEDED IN PART — 2026-08-03, later the same day.
+>
+> **§1 and §5 are stale.** They say 10E is OPEN and its browser acceptance has
+> not started. It has been run: **95 assertions, 0 failed**, desktop and 390px,
+> against real Postgres, real HTTP and canonical staff sessions on synthetic
+> data. Slice 10 is **BROWSER VERIFIED — not merged, not deployed, not
+> production accepted.**
+>
+> **They are kept as written, not rewritten**, because §5's claim that *"the
+> renderer is done… the browser proof that has not been run"* turned out to be
+> the load-bearing error of this lane, and deleting it would delete the
+> evidence for why §33 exists. Six real defects sat in that gap, two of which
+> made pagination inoperative.
+>
+> Current state, contracts, measurements and remaining blockers:
+> **[`SLICE_10_RECEIPT.md`](SLICE_10_RECEIPT.md)** and
+> **[`SLICE_10_RELEASE_READINESS.md`](SLICE_10_RELEASE_READINESS.md)** on
+> `claude/slice-10e-browser-acceptance-t0zk33`.
+>
+> Everything else in this file — §2's branch map (as corrected below), §3's
+> frozen contracts, §4's server proof totals, §6's traps, §7's blockers — was
+> re-verified on 2026-08-03 and stands.
+
 **Written 2026-08-03. API `main` @ `47ed0f0`. App `main` @ `357fb15`.**
 
 Read this alongside [`THREAD_HANDOFF.md`](THREAD_HANDOFF.md), not instead of it.
@@ -69,8 +92,21 @@ tests/slice10d_build_fixture.js                    21
 
 | Branch | Head | Contents |
 |---|---|---|
-| `claude/slice-10e-future-rent-roll-renderer` | `a365381` | The Future Rent Roll renderer **and** `docs/INCIDENT_STATIC_DATA_EXPOSURE.md`. |
+| `claude/slice-10e-future-rent-roll-renderer` | `ab856b7` | The Future Rent Roll renderer, `docs/SLICE_10E_STATE.md` **and** `docs/INCIDENT_STATIC_DATA_EXPOSURE.md`. |
 | `security/incident-receipt-static-exposure` | `261247f` | The incident receipt alone. |
+| **`claude/slice-10e-browser-acceptance-t0zk33`** | **`0f3e17c`** | **The accepted app head.** Browser acceptance, the six renderer repairs it found, and the allowlisted publish artifact. |
+
+> **Two SHAs on this branch line, and they are not interchangeable.**
+> `a365381` was written here as the renderer branch head; the head was
+> **`ab856b7`**, one commit further on, which added `docs/SLICE_10E_STATE.md`.
+> Corrected 2026-08-03.
+>
+> `ab856b7` is the **historical 10E renderer state** — complete at harness
+> level, never through a browser.
+> `0f3e17c` is the **present accepted app head** — browser verified, 95/0.
+> Do not read either as the other. §5 below describes `ab856b7`; it is kept as
+> written and marked, because it is the record of what was believed before the
+> browser was involved.
 
 **Know this before you branch from it:** `claude/slice-10e-…` was cut from
 `261247f`, so it carries the incident receipt as well as the renderer. It is not
