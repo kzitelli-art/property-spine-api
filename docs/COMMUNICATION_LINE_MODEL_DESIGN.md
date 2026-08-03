@@ -1,7 +1,8 @@
 # Canonical communication-line model — DESIGN
 
-**Status: DESIGN APPROVED. Nothing here is built. No migration number claimed.**
-**Implementation waits on the migration-129 production activation receipt.**
+**Status: DESIGN APPROVED. Slice A is BUILT AND PROVEN ON BRANCH `7135e84`
+(61/61) and migration **130** is claimed there. It is NOT on `main` and NOT in
+production.** Merge waits on the migration-129 production activation receipt.
 
 Base `main` @ `224f33d` · designed 2026-08-03 · owner rulings 2026-08-03 (§9).
 Expands the *Future canonical line model* sketch in
@@ -370,9 +371,11 @@ message and conversation thread; resolved sender/property/channel authority;
 structured intent and referenced records; clarification before a write; the
 canonical action; and the receipt.
 
-Slice A strengthens seam 2 — authority is now a property of the LINE, enforced
-structurally. It changes nothing about seams 3, 4 and 6, which are currently
-co-located inside `tenantlink.js` as private closures.
+Slice A strengthens seam 2 — on branch `7135e84` the authority ceiling becomes a
+structural property of the LINE. **On `main` it is not yet:** the ceiling there
+still holds only because no staff sender tier exists. It changes nothing about
+seams 3, 4 and 6, which remain co-located inside `tenantlink.js` as private
+closures.
 
 **Binding on the technician loop:** do not deepen that co-location. Extract
 first, then use from both callers. Full audit and per-seam removal conditions:

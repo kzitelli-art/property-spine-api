@@ -1,0 +1,207 @@
+# Slice A — merge / reconciliation checklist
+
+**Do not begin any step until the migration-129 activation receipt is clean.**
+Nothing here is a feature. This is the exact sequence and the exact commands for
+the day 129 is activated.
+
+| | |
+|---|---|
+| Branch | `claude/sms-work-order-handoff-qo3s8i` @ `7135e84` |
+| Slice A commit | `95f13c7` (61/61) · seams doctrine `7135e84` |
+| Base at build time | `main` @ `a792b9f` |
+| Migration claimed | **130** (unreleased) |
+| Prerequisite | migration **129** activated **and receipted** in production |
+
+---
+
+## ⚠ Two things to know before starting
+
+**1. Reconcile by MERGE, never by rebase.** The branch is pushed and shared. A
+rebase rewrites shared history, which the owner ruled against and which
+`THREAD_HANDOFF.md` records as a trap that nearly destroyed 19 unmerged commits.
+Merge `origin/main` into the branch.
+
+**2. Merging Slice A makes `main` un-deployable again until 130 is released.**
+Exactly the 129 pattern: 130 will be in the build and in no ledger, so the verify
+gate refuses and Render keeps serving the previous build — production looks
+healthy while running older code. This is expected, not a regression, and the fix
+is to release 130, not to revert. Sequence it: **merge → release 130 → deploy.**
+
+---
+
+## Step 1 — fetch current `origin/main`
+
+```bash
+cd property-spine-api
+git fetch origin --prune
+git log --oneline -3 origin/main
+git rev-list --left-right --count origin/main...origin/claude/sms-work-order-handoff-qo3s8i
+```
+
+Record what `main` actually is. If it moved past `a792b9f`, step 2 is a real
+merge and step 4 is mandatory rather than confirmatory.
+
+---
+
+## Step 2 — reconcile without rewriting shared history
+
+```bash
+git checkout claude/sms-work-order-handoff-qo3s8i
+git merge origin/main            # MERGE. Never rebase, never force-push.
+```
+
+Conflicts to expect if `main` moved: `src/comms/communications_boundary.js` and
+`src/comms/tenantlink.js` are the files Slice A changed. Resolve by keeping both
+intents, then re-run step 4 in full — a conflict resolution is a code change and
+inherits no prior proof.
+
+---
+
+## Step 3 — confirm 130 is still free and consistent with the live ledger
+
+```bash
+# a. repository ceiling and all-branch scan
+git ls-tree --name-only origin/main migrations/ | grep -oE '[0-9]{3}' | sort -n | tail -1
+for b in $(git branch -r | grep -v HEAD); do
+  git ls-tree -r --name-only "$b" migrations/ 2>/dev/null; done \
+  | grep -oE '^migrations/[0-9]{3}' | sort -u | tail -3
+
+# b. any branch holding 130 or 131 (docs included)
+for b in $(git branch -r | grep -v HEAD); do git ls-tree -r --name-only "$b" 2>/dev/null; done \
+  | grep -E '(^|/)(130|131)_' | sort -u
+
+# c. the live ledger — read-only, whole ledger, same decision module as the boot gate
+DATABASE_URL="<prod>" node tools/ledger_reconcile.js
+```
+
+**Required:** `130` absent from every branch, and `ledger_reconcile.js` exits 0
+with `✓ RECONCILED` and applied ceiling **129**.
+
+**If Slice 10B has taken 130:** renumber THIS branch to the next free number. Do
+not renumber or overwrite their work. Renaming touches
+`migrations/130_communication_lines.sql` and the `M("130_…")` reference in
+`tests/communication_lines_slice_a.db.js`; re-run step 4 afterwards.
+
+---
+
+## Step 4 — re-prove on the reconciled tree
+
+Proof does not survive a merge. Re-run everything.
+
+### Runs locally (these harnesses build their own scoped schema)
+
+```bash
+export HARNESS_DATABASE_URL="postgresql://postgres@127.0.0.1:55432/postgres"
+unset DATABASE_URL
+
+node tests/communication_lines_slice_a.db.js      # expect 61 run · 61 passed · exit 0
+node tests/property_line_hardening.db.js          # expect 41 run · 41 passed · exit 0
+node tests/migration_ledger_inverse_gate.db.js    # expect 24 run · 24 passed · exit 0
+node tests/migration_ledger_verdict.test.js       # expect 40 run · 40 passed · exit 0
+node tests/migration_release_gate.test.js         # expect 11 passed · 0 failed
+node tests/obligation_engine_one_implementation.test.js   # 14/0
+node tests/obligation_engine_import_smoke.test.js
+node tests/gate_closure_boundary.js               # PASS
+node tests/gate_no_raw_bridge_joins.js            # PASS
+```
+
+### ⚠ Requires a provisioned full-schema database
+
+These five build **no** schema of their own — they assume a complete database and
+must point at a **disposable Neon branch**, never production. They could not be
+run in the build session and are therefore **unverified against the Slice A
+changes**:
+
+```bash
+export HARNESS_DATABASE_URL="postgres://…<disposable Neon branch>…"
+node tests/resident_sms_work_order_proof.js       # SMS → canonical work order
+node tests/resident_sms_route_proof.js            # route boundary, real HTTP
+node tests/work_order_authority_proof.js          # authorization
+node tests/work_order_canonical_path_proof.js     # canonical path
+node tests/operator_obligations_security_proof.db.js   # authorization
+```
+
+**This is the highest-risk gap in the merge.** Slice A changed
+`resolveInboundSmsContext` — the exact function `resident_sms_route_proof.js`
+exercises. Its 31/0 result predates that change. **Treat these five as required,
+not optional**, and do not merge on the local set alone.
+
+---
+
+## Step 5 — merge
+
+```bash
+git checkout main
+git merge --ff-only claude/sms-work-order-handoff-qo3s8i
+git push origin main
+```
+
+---
+
+## Step 6 — release 130, then verify startup
+
+```bash
+# read the ledger first; 129 must now be applied
+DATABASE_URL="<prod>" node tools/ledger_reconcile.js
+
+MIGRATION_RELEASE=1 \
+EXPECTED_LEDGER_CEILING=129 \
+EXPECTED_SHA=<merge sha> \
+node migrations/migrate.js --apply
+
+DATABASE_URL="<prod>" node migrations/migrate.js     # verify → ceiling 130, exit 0
+```
+
+Note the ceiling is **129**, not 128 — 129 will have been applied by its own
+activation. If the release refuses on the ceiling, something moved since you
+looked; re-inspect rather than override.
+
+Then confirm:
+
+| Check | Expected |
+|---|---|
+| ledger contains `130` exactly once | name `communication_lines` |
+| `communication_lines` populated | one `property_facing` row per property holding a line |
+| no operations line created | activation is a separate governed act |
+| projection intact | `properties.sms_number` matches the canonical value for every property |
+| legacy write refused | a direct `update properties set sms_number` raises |
+| verify mode | `✓ SCHEMA VERIFIED`, ceiling 130, exit 0 |
+| API starts | Render deploy reaches live |
+| deployed identity | `echo $RENDER_GIT_COMMIT` equals the merge sha — not the dashboard label |
+| no unrelated migration applied | ceiling exactly 130 |
+
+---
+
+## Step 7 — stop and report
+
+**Do not begin Slice B or the technician loop.** Report the receipt with source
+SHA, merge SHA, deploy action, deployed identity and verification time as
+**five separate facts**.
+
+Then the proof language may move to:
+
+> Slice A is merged and production-active. The authority ceiling is structural in
+> production. Slice B, the operations-number activation and the technician loop
+> remain unbuilt.
+
+**Not before.** Until every step above is complete the exact statement is:
+
+> Slice A is built and proven on branch `7135e84` (61/61, isolated PostgreSQL
+> 16.13 and real HTTP). It is not on `main` and not in production.
+
+---
+
+## The rule that governs what comes next
+
+```text
+conversation understands and proposes
+  → canonical Property Spine service decides and writes
+  → receipt explains the resulting truth
+```
+
+**No interpreted message may itself become operating truth.**
+
+After Slice A merges, the next design step is the operations-number activation
+and the technician capability boundary — and its **first task is extraction of
+the shared conversational seams**, not copying `processInboundClaim`. See
+`docs/AGENT_CAPABILITY_SEAMS.md` §5 for the exact extraction trigger.

@@ -73,7 +73,7 @@ second is *separable* but not *separated*.
 | # | Piece | Where it lives | Verdict |
 |---|---|---|---|
 | 1 | Raw message + conversation thread | `comm_events` insert in T1 (`tenantlink.js:1102`), carrying `conversation_id` | **SEPARATE.** Durable, its own record, written before any interpretation. T1 commits the claim flagged `needs_human=true` before processing begins. |
-| 2 | Sender, property, channel authority | `commBoundary.resolveInboundSmsContext` + `communication_lines.lineAuthority` | **SEPARATE.** Its own module, its own proof. Strengthened by Slice A: authority is now a property of the *line*, structurally. |
+| 2 | Sender, property, channel authority | `commBoundary.resolveInboundSmsContext` | **SEPARATE.** Its own module, its own proof. On `main` today the authority ceiling is **not** structural — it holds only because no staff sender tier exists (FLAG 3). Slice A makes it structural **on branch `7135e84` only**, proven 61/61, pending merge and activation. |
 | 3 | Structured intent + referenced records | `classifyMessage()` — a **private closure** in `tenantlink.js:809` | **CO-LOCATED.** It produces a structured object, but nothing outside the SMS route can call it. Unit/`place` resolution is entangled in the processing step. |
 | 4 | Clarification before a write | `workOrderService.appendClarification` (canonical) + `recognizeAnswer()` — private closure at `:867` | **SPLIT.** The write half is canonical and shared; the recognition half is private. |
 | 5 | Canonical work-order action | `workOrderService.createWorkOrder` | **SEPARATE.** The strongest seam. Every tenant work order produces an event and a routing obligation; the two raw inserts that bypassed this were removed in the SMS slice. |
@@ -113,8 +113,10 @@ piece the technician loop will be tempted to copy rather than lift.
    obligation engine's ordering. "Why is Unit 302 first?" is that ordering
    explaining itself. Neither is the agent deciding.
 3. **Authority comes from the line and the person, never from the message.**
-   Slice A made the ceiling structural; a conversational request may lower what
-   is appropriate and may never raise it.
+   A conversational request may lower what is appropriate and may never raise
+   it. Note the current state exactly: on `main` the ceiling holds by accident,
+   not by construction. Slice A makes it structural on branch `7135e84`, proven
+   61/61 — **not on `main`, not in production.**
 4. **A receipt is a projection of canonical truth**, not a sentence composed
    alongside the decision. When seam 6 is extracted, the receipt reads the
    durable record rather than restating what the writer believed it wrote.
@@ -135,6 +137,20 @@ piece the technician loop will be tempted to copy rather than lift.
 
 None of these is a defect today. Each is recorded so that "we'll separate it
 later" has a written condition attached rather than being a hope.
+
+### The extraction trigger, exactly
+
+> **Before any second conversational caller — especially the technician loop —
+> needs intent recognition, clarification, confirmation, or receipt composition,
+> those functions must be extracted into transport-independent services and used
+> by both paths.**
+
+**Do not extract them merely for cleanliness.** Extract them when a second real
+capability would otherwise duplicate or deepen the SMS-only implementation.
+
+The co-location is acceptable precisely *because* it has this trigger. It is a
+named temporary condition, not an architectural emergency — the expensive
+boundary, the canonical work-order service, was never crossed.
 
 ---
 
