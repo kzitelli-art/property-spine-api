@@ -962,12 +962,46 @@ module.exports = function applicationSubmissionModule(deps) {
   //    (rail kept outcome) AND records the disposition with a distinct reason.
   //    reason ∈ declined (leasing decision) | withdrawn (applicant/staff) |
   //    expired (window elapsed). NOT collapsed into one status.
-  router.post("/applications/:id/deny", requireOperator, (req, res) => tx(async (client) => {
-    const { reason = "declined", note = null, decided_by_user_id = null } = req.body || {};
+  // ══════════════════════════════════════════════════════════════════
+  //  THE CANONICAL DENIAL. One service, two doors, no fork.
+  //
+  //  This transaction used to live inline in the shared-key route, which made
+  //  a session-gated door impossible to add without duplicating it — and two
+  //  implementations of one decision is a defect even while they agree. It is
+  //  moved here VERBATIM: same order, same guards, same writes, same receipt.
+  //  Nothing about the decision changed.
+  //
+  //  ── WHO DECIDED, AND WHY IT IS NOW A PARAMETER ────────────────────
+  //  `decidedByUserId` is supplied BY THE DOOR, never read from the body in
+  //  here. The operator door passes the authenticated session's user. The
+  //  legacy shared-key door passes what it always passed, so its behaviour is
+  //  unchanged until it is retired. The service cannot tell them apart and
+  //  does not try: establishing identity is the door's job, and recording the
+  //  decision is this one's.
+  //
+  //  ── PROVENANCE PRESERVED (future accounting layer) ────────────────
+  //  A denial ends an application that may carry fees and a proposed term, so
+  //  its provenance must survive this move intact, and it does:
+  //    responsible actor   decidedByUserId → closeApprovalGate + markTerminal
+  //    property            app.property_id, from the row
+  //    canonical object    lease_applications.id
+  //    recorded_at         recordEvent + markTerminal's terminal_at
+  //    before/after state  status guard in, ended.application out
+  //    consequence         signature follow-up released, with a stated basis
+  //    durable event       events row, type 'application_denied'
+  //    correction lineage  markTerminal is IMMUTABLE — a terminal application
+  //                        is never rewritten; a later pursuit is a NEW one
+  //  See the receipt's FUTURE ACCOUNTING PROVENANCE note for what is still
+  //  missing here (occurred_at distinct from recorded_at, and the monetary
+  //  terms the denial voids). Not repaired in this packet.
+  // ══════════════════════════════════════════════════════════════════
+  async function denyApplicationService(client, { applicationId, body = {}, decidedByUserId = null }) {
+    const { reason = "declined", note = null } = body || {};
+    const decided_by_user_id = decidedByUserId;
     if (!["declined", "withdrawn", "expired"].includes(reason)) {
       throw httpErr(400, "reason must be 'declined', 'withdrawn', or 'expired'.");
     }
-    const app = (await client.query("select * from lease_applications where id=$1 for update", [req.params.id])).rows[0];
+    const app = (await client.query("select * from lease_applications where id=$1 for update", [applicationId])).rows[0];
     if (!app) throw httpErr(404, "No application with that id.");
     if (!["submitted", "approved", "lease_ready"].includes(app.status)) {
       throw httpErr(409, `Cannot deny from status '${app.status}'.`);
@@ -1025,6 +1059,20 @@ module.exports = function applicationSubmissionModule(deps) {
     });
 
     return { receipt: `Application ${reason}.`, application: ended.application };
+  }
+
+  //  ── DOOR 1: the legacy shared-key door. BEHAVIOUR UNCHANGED. ──────
+  //  It still reads decided_by_user_id from the body, because retiring it is
+  //  a separate disposition decision and silently changing it would break a
+  //  consumer this repository cannot see. It is DEPRECATED, not retired: the
+  //  actor it records is caller-asserted and must not be read as an
+  //  authenticated staff decision.
+  router.post("/applications/:id/deny", requireOperator, (req, res) => tx(async (client) => {
+    const b = req.body || {};
+    return denyApplicationService(client, {
+      applicationId: req.params.id, body: b,
+      decidedByUserId: b.decided_by_user_id || null,
+    });
   }, res));
 
   // expose the service for in-process tests + the approve route to close the gate
@@ -2584,6 +2632,9 @@ module.exports = function applicationSubmissionModule(deps) {
     inspectDispatchState, prepareApplicationLinkForObligation, finalizeInvitationSent,
     regenerateInvitation, expireInvitationService, revokeInvitationCorrection,
     reconcileCorrection, beginRetryWithDispatchGate, dispatchPreparedLinkProvider,
+    //  THE canonical denial. Exposed so the session-gated operator door calls
+    //  THIS transaction rather than growing a second one.
+    denyApplicationService,
   };
 
   return router;

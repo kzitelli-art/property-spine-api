@@ -50,6 +50,11 @@ module.exports = function operatorModule(deps) {
     // implementation. Absent (older server.js) → the route fails closed 503.
     applicationsService = null,
     leasePacketsService = null,
+    //  The applicationSubmission service surface. The session-gated denial
+    //  door calls its denyApplicationService — the SAME transaction the legacy
+    //  shared-key door calls. Absent (older server.js) → that route fails
+    //  closed 503 rather than growing a second denial.
+    submissionService = null,
   } = deps;
   const { rankTurnPriority } = require("../maintenance/turn_priority"); // shared Turn-Priority ranking (slice 1)
   const { buildReviewList, buildReviewDetail } = require("../applications/application_review"); // application review reads (slice 2)
@@ -4017,6 +4022,94 @@ module.exports = function operatorModule(deps) {
   // POST /operator/leasing/applications/:id/proposed-terms
   // Records the governed "management confirmed these proposed economics for
   // resident review" fact. Changes no status, creates no lease, satisfies no
+  // ══════════════════════════════════════════════════════════════════
+  //  POST /operator/leasing/applications/:id/deny — THE SESSION-GATED DENIAL.
+  //
+  //  An application rejection is a durable institutional decision, and until
+  //  now it was reachable ONLY through the shared portfolio-wide operator key,
+  //  which accepted `decided_by_user_id` FROM THE REQUEST BODY. The browser
+  //  read that value out of a hidden input backed by localStorage. So the
+  //  durable record of who declined an application was a string somebody typed
+  //  into a text box.
+  //
+  //  This door establishes identity, property scope and entitlement, then
+  //  calls THE SAME canonical service the legacy door calls. There is no
+  //  second denial implementation and this route contains no decision logic.
+  //
+  //  ATTRIBUTION IS SESSION-DERIVED, AND A BODY ACTOR IS REFUSED — not
+  //  ignored. A caller sending decided_by_user_id is either a stale client or
+  //  an attempt; silently substituting the session actor would let a stale app
+  //  keep sending a field it believes is honoured, and would leave nobody
+  //  aware the value is dead. 400 says so out loud.
+  //
+  //  Structure mirrors the approve door above deliberately: same middleware,
+  //  same property wall, same opaque refusal with a full stderr audit. Two
+  //  decisions on one object should not have two authority shapes.
+  // ══════════════════════════════════════════════════════════════════
+  const DENY_BODY_AUTHORITY_FIELDS = ["decided_by_user_id", "by_user_id", "actor_user_id", "property_id"];
+
+  router.post("/operator/leasing/applications/:id/deny", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!submissionService || typeof submissionService.denyApplicationService !== "function") {
+      return res.status(503).json({ receipt: "Denial service is not wired on this deploy (submissionService.denyApplicationService missing)." });
+    }
+    const op = req.operator;
+    const b = req.body || {};
+
+    //  A body that tries to declare WHO acted, or WHICH property authorises
+    //  it, is refused before anything is read.
+    const asserted = DENY_BODY_AUTHORITY_FIELDS.filter((f) => b[f] !== undefined && b[f] !== null);
+    if (asserted.length) {
+      return res.status(400).json({
+        error: "client_supplied_authority",
+        receipt: "This request tried to declare who acted or which property authorises it. "
+               + "Both come from your signed-in session. Remove: " + asserted.join(", ") + ".",
+        fields: asserted,
+      });
+    }
+
+    const audit = (reason, appRow) => {
+      console.error("[operator/deny] REFUSED", JSON.stringify({
+        reason, user_id: op.id, session_property: op.property_id,
+        application_id: req.params.id,
+        application_property: appRow ? appRow.property_id : null,
+      }));
+    };
+
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      //  PROPERTY WALL — the ROW decides, not the request. Read before the
+      //  service runs so a neighbouring application is refused without the
+      //  denial transaction ever starting.
+      const app = (await client.query(
+        "select id, property_id from lease_applications where id=$1", [req.params.id])).rows[0];
+      if (!app) {
+        await client.query("rollback");
+        return res.status(404).json({ receipt: "No application with that id." });
+      }
+      if (String(app.property_id) !== String(op.property_id)) {
+        audit("property_mismatch", app);
+        await client.query("rollback");
+        return res.status(403).json({ error: "not_permitted" });
+      }
+
+      const out = await submissionService.denyApplicationService(client, {
+        applicationId: req.params.id,
+        body: { reason: b.reason, note: b.note },
+        decidedByUserId: op.id,          // SERVER-DERIVED — never the body
+      });
+      await client.query("commit");
+      return res.json({ ...out, decided_by_user_id: op.id, property_id: op.property_id });
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      if (e.httpStatus) return res.status(e.httpStatus).json(e.body || { receipt: e.message });
+      if (e.status) return res.status(e.status).json({ receipt: e.message });
+      console.error("operator deny error", e);
+      return res.status(500).json({ receipt: "Could not record the decision.", error: e.message });
+    } finally { client.release(); }
+  });
+
   // terms-review input. Opaque refusal on authority/property (audited server-side).
   router.post("/operator/leasing/applications/:id/proposed-terms", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     const op = req.operator;
