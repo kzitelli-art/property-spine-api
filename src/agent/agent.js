@@ -31,6 +31,7 @@ const { compareEconomicSources, staleReasonForOperator } =
   require("./draft_source_identity");
 const aiLeasingStrategy = require("../leasing/ai_leasing_strategy");
 const aiLeasingStrategyRuntime = require("../leasing/ai_leasing_strategy_runtime");
+const aiLeasingOperatingContext = require("../leasing/ai_leasing_operating_context"); // GOVERNED OPERATING CONTEXT LEASING v1
 
 const PROMPT_REVISION = "stage-a-v8"; // v8: voice tuning from AI_VOICE_TUNING.md cases 1-5 — one-sentence default, no reflexive trailing question, no unowned follow-up promises ("I'm on it" removed from approved language), always AFFIRM a protected class before helping, no markdown in SMS (new deterministic strip), no self-deprecating apology, low-rate apostrophe-drop humanization.
 // v7.1: greeting fix — contentless messages get a warm greeting, never a fake verification promise. v7: flag model — human-needed operating requests are answered honestly (team can see the conversation); live model no longer creates obligations. v6: tour-pressure suppression, lived-experience selling, conversational local; dead PERSONA removed.
@@ -1089,6 +1090,7 @@ Reply with ONLY the message text.`;
 
       // ── model call OUTSIDE any transaction ──
       let generated = null, providerReqId = null, genErr = null, factSnapshot = [], snapshotHash = "";
+      let operatingContextSnapshot = [], operatingContextHash = null;
       let strategyApplied = false;
       let runtimeStrategyEnvelope = null;
       let offeredUnits = null; // real units surfaced by the inventory tool this run (offered ≠ selected)
@@ -1103,6 +1105,10 @@ Reply with ONLY the message text.`;
         finally { client0.release(); }
         factSnapshot = ctx.facts;
         snapshotHash = sha(factSnapshot);
+        operatingContextSnapshot = aiLeasingOperatingContext.canonicalRuleSnapshot(
+          await aiLeasingOperatingContext.loadActiveRules(pool, tx1.property_id)
+        );
+        operatingContextHash = aiLeasingOperatingContext.snapshotHash(operatingContextSnapshot);
 
         // history (the real thread) for context
         const client1 = await pool.connect();
@@ -1134,6 +1140,9 @@ Reply with ONLY the message text.`;
             surface: "ongoing_reply", model: MODEL, promptRevision: PROMPT_REVISION,
           });
           built.system = aiLeasingStrategyRuntime.appendStrategyDirective(built.system, runtimeStrategyEnvelope);
+          built.system = aiLeasingOperatingContext.appendOperatingContextDirective(
+            built.system, operatingContextSnapshot
+          );
           // If they already have an upcoming tour, shift the goal from earn-a-tour
           // to be-their-contact (and below, tour tools are withheld).
           const _tourAddendum = await upcomingTourAddendum(tx1.conversation_id);
@@ -1703,10 +1712,11 @@ Reply with ONLY the message text.`;
 
         // record the resolved fact snapshot + hash + provider id on the run.
         await client.query(
-          "update agent_runs set resolved_fact_snapshot_json=$2, fact_snapshot_hash=$3, provider_request_id=$4, policy_decision=$5, handoff_reason_code=$6, offered_units_json=coalesce($7::jsonb, offered_units_json), selected_unit_id=coalesce($8, selected_unit_id), ai_leasing_strategy_applied=$9 where id=$1",
+          "update agent_runs set resolved_fact_snapshot_json=$2, fact_snapshot_hash=$3, provider_request_id=$4, policy_decision=$5, handoff_reason_code=$6, offered_units_json=coalesce($7::jsonb, offered_units_json), selected_unit_id=coalesce($8, selected_unit_id), ai_leasing_strategy_applied=$9, ai_operating_context_snapshot_json=$10::jsonb, ai_operating_context_hash=$11 where id=$1",
           [run.id, JSON.stringify(factSnapshot), snapshotHash, providerReqId, policyDecision, policyCode,
            offeredUnits ? JSON.stringify(offeredUnits) : null,
-           (tx1.selected_unit && tx1.selected_unit.id) || null, strategyApplied]
+           (tx1.selected_unit && tx1.selected_unit.id) || null, strategyApplied,
+           JSON.stringify(operatingContextSnapshot), operatingContextHash]
         );
 
         if (genErr || (!generated && policyDecision !== "blocked")) {
@@ -1924,7 +1934,8 @@ Reply with ONLY the message text.`;
       )).rows;
       const draft = (await client.query(
         `select d.id, d.generated_body, d.status, r.policy_decision, r.handoff_reason_code,
-                r.status as run_status, r.resolved_fact_snapshot_json
+                r.status as run_status, r.resolved_fact_snapshot_json,
+                r.ai_operating_context_snapshot_json
            from agent_drafts d join agent_runs r on r.id=d.agent_run_id
           where r.conversation_id=$1 and d.status='ready'
           order by d.created_at desc limit 1`,
@@ -1945,11 +1956,24 @@ Reply with ONLY the message text.`;
             Array.isArray(draft.resolved_fact_snapshot_json) ? draft.resolved_fact_snapshot_json : [],
             live.facts);
         } catch (e) { econ = null; }
-        draft.stale = !!(econ && econ.had_economic_sources && !econ.match);
+        let operatingContextStale = false;
+        let operatingContextUnavailable = false;
+        try {
+          const liveRules = await aiLeasingOperatingContext.loadActiveRules(client, conv.property_id);
+          operatingContextStale = !aiLeasingOperatingContext.snapshotsMatch(
+            draft.ai_operating_context_snapshot_json, liveRules
+          );
+        } catch (_) { operatingContextUnavailable = true; }
+        const economicStale = !!(econ && econ.had_economic_sources && !econ.match);
+        draft.stale = economicStale || operatingContextStale || operatingContextUnavailable;
         // Operator language only — no digests, fact keys or schema words.
-        draft.stale_reason = draft.stale ? staleReasonForOperator(econ) : null;
+        draft.stale_reason = economicStale ? staleReasonForOperator(econ)
+          : operatingContextStale ? "The governed operating rules changed after this draft was prepared. Regenerate it before sending."
+          : operatingContextUnavailable ? "The current governed operating rules could not be verified. Retry or regenerate before sending."
+          : null;
         draft.sendable = !draft.stale;
         delete draft.resolved_fact_snapshot_json; // internal; never leaves the server
+        delete draft.ai_operating_context_snapshot_json; // internal; never leaves the server
       }
 
       return {
@@ -2060,6 +2084,20 @@ Reply with ONLY the message text.`;
       if (econ.had_economic_sources && !econ.match) {
         const e = httpErr(409, staleReasonForOperator(econ));
         e.stale_reason = "economic_source_changed";
+        throw e;
+      }
+
+      let liveOperatingRules;
+      try {
+        liveOperatingRules = await aiLeasingOperatingContext.loadActiveRules(client, conv.property_id);
+      } catch (_) {
+        throw httpErr(503, "The current governed operating rules could not be read, so this draft cannot be sent right now. Try again in a moment.");
+      }
+      if (!aiLeasingOperatingContext.snapshotsMatch(
+        run.ai_operating_context_snapshot_json, liveOperatingRules
+      )) {
+        const e = httpErr(409, "The governed operating rules changed after this draft was prepared. Regenerate it before sending.");
+        e.stale_reason = "ai_operating_context_changed";
         throw e;
       }
 
@@ -2289,6 +2327,7 @@ Reply with ONLY the message text.`;
       // model OUTSIDE txn (reuse the same generation path)
       const pre = preGenerationPolicy(prep.inboundText);
       let generated = null, providerReqId = null, genErr = null, factSnapshot = [], snapshotHash = "";
+      let operatingContextSnapshot = [], operatingContextHash = null;
       let strategyApplied = false;
       let runtimeStrategyEnvelope = null;
       try {
@@ -2297,6 +2336,10 @@ Reply with ONLY the message text.`;
         try { ctx = await resolveContext(c0, { property_id: prep.property_id, unit_id: prep.unit_id }); }
         finally { c0.release(); }
         factSnapshot = ctx.facts; snapshotHash = sha(factSnapshot);
+        operatingContextSnapshot = aiLeasingOperatingContext.canonicalRuleSnapshot(
+          await aiLeasingOperatingContext.loadActiveRules(pool, prep.property_id)
+        );
+        operatingContextHash = aiLeasingOperatingContext.snapshotHash(operatingContextSnapshot);
         const c1 = await pool.connect();
         let history;
         try {
@@ -2318,6 +2361,9 @@ Reply with ONLY the message text.`;
             surface: "regenerated_reply", model: MODEL, promptRevision: PROMPT_REVISION,
           });
           built.system = aiLeasingStrategyRuntime.appendStrategyDirective(built.system, runtimeStrategyEnvelope);
+          built.system = aiLeasingOperatingContext.appendOperatingContextDirective(
+            built.system, operatingContextSnapshot
+          );
           built.system += await upcomingTourAddendum(prep.conv.id);
           const r = await anthropic.messages.create({ model: MODEL, max_tokens: 320, system: built.system, messages: built.messages });
           providerReqId = (r && r.id) || null;
@@ -2368,8 +2414,9 @@ Reply with ONLY the message text.`;
           return { superseded: true };
         }
         await client.query(
-          "update agent_runs set resolved_fact_snapshot_json=$2, fact_snapshot_hash=$3, provider_request_id=$4, policy_decision=$5, handoff_reason_code=$6, ai_leasing_strategy_applied=$7 where id=$1",
-          [run.id, JSON.stringify(factSnapshot), snapshotHash, providerReqId, policyDecision, policyCode, strategyApplied]
+          "update agent_runs set resolved_fact_snapshot_json=$2, fact_snapshot_hash=$3, provider_request_id=$4, policy_decision=$5, handoff_reason_code=$6, ai_leasing_strategy_applied=$7, ai_operating_context_snapshot_json=$8::jsonb, ai_operating_context_hash=$9 where id=$1",
+          [run.id, JSON.stringify(factSnapshot), snapshotHash, providerReqId, policyDecision, policyCode, strategyApplied,
+           JSON.stringify(operatingContextSnapshot), operatingContextHash]
         );
         if (genErr || (!generated && policyDecision !== "blocked")) {
           await client.query("update agent_runs set status='failed' where id=$1", [run.id]);
