@@ -6,8 +6,9 @@ the day 129 is activated.
 
 | | |
 |---|---|
-| Branch | `claude/sms-work-order-handoff-qo3s8i` @ `7135e84` |
-| Slice A commit | `95f13c7` (61/61) · seams doctrine `7135e84` |
+| Branch | `claude/sms-work-order-handoff-qo3s8i` |
+| SHA that earned 61/61 | `95f13c7` |
+| Current tip / merge candidate | `edd6647` — **not proven at this SHA** |
 | Base at build time | `main` @ `a792b9f` |
 | Migration claimed | **130** (unreleased) |
 | Prerequisite | migration **129** activated **and receipted** in production |
@@ -105,26 +106,58 @@ node tests/gate_closure_boundary.js               # PASS
 node tests/gate_no_raw_bridge_joins.js            # PASS
 ```
 
-### ⚠ Requires a provisioned full-schema database
+### ⚠ Requires a provisioned full-schema database — ONE governed command
 
-These five build **no** schema of their own — they assume a complete database and
-must point at a **disposable Neon branch**, never production. They could not be
-run in the build session and are therefore **unverified against the Slice A
-changes**:
+These five build **no** schema of their own. Run them through the suite runner,
+which enforces every precondition and preserves each harness's own evidence and
+exit code:
 
 ```bash
-export HARNESS_DATABASE_URL="postgres://…<disposable Neon branch>…"
-node tests/resident_sms_work_order_proof.js       # SMS → canonical work order
-node tests/resident_sms_route_proof.js            # route boundary, real HTTP
-node tests/work_order_authority_proof.js          # authorization
-node tests/work_order_canonical_path_proof.js     # canonical path
-node tests/operator_obligations_security_proof.db.js   # authorization
+HARNESS_DATABASE_URL="postgres://…<disposable full-schema branch>…" \
+  node tests/slice_a_full_schema_suite.js
 ```
+
+It refuses to start unless: `HARNESS_DATABASE_URL` is set (no fallback); it does
+not resolve to the same target as `DATABASE_URL`; no carrier credentials are
+present; `SMS_SEND_MODE=disabled`; and the harness ledger matches this tree in
+**both** directions. It prints branch, exact SHA, a dirty-tree warning, and safe
+database identity, then runs the five individually with stdio inherited — it
+**orchestrates, it does not reinterpret**. First non-zero exit stops the suite and
+becomes the suite's exit code.
 
 **This is the highest-risk gap in the merge.** Slice A changed
 `resolveInboundSmsContext` — the exact function `resident_sms_route_proof.js`
-exercises. Its 31/0 result predates that change. **Treat these five as required,
-not optional**, and do not merge on the local set alone.
+exercises. Its 31/0 predates that change.
+
+> **"Previously green before the resolver changed" is not evidence for the
+> changed resolver.**
+
+**If any of the five cannot execute, Slice A does not merge.**
+
+---
+
+### ⚠ An isolation gap found while building the runner
+
+`work_order_authority_proof.js` and `work_order_canonical_path_proof.js` read
+`process.env.DATABASE_URL` **directly** — no `harnessConnectionString()` guard,
+no run receipt — and **both COMMIT fixtures**. The convention in
+`DB_HARNESS_ISOLATION.md` covers `*.db.js`; these are named `*_proof.js`, so it
+missed them. **On Render, `DATABASE_URL` is production.** Run by hand on a box
+where it is set, those two write to whatever it points at — the same shape as the
+incident that put synthetic rows in the live database.
+
+`slice_a_full_schema_suite.js` closes this at the orchestration layer: it deletes
+`DATABASE_URL` from every child environment and re-supplies the already-verified
+harness target only to the two that read it.
+
+**Required follow-up, deliberately not done here:** move both to
+`harnessConnectionString()`. It was not done in this session because the change
+could not be executed to verify it, and shipping a guard that has never run is
+the failure this project keeps rediscovering. **Removal condition:** closed when
+both call `harnessConnectionString()` and have been executed against a
+provisioned full-schema database.
+
+Until then: **never run those two by hand. Use the suite runner.**
 
 ---
 
@@ -169,6 +202,24 @@ Then confirm:
 | API starts | Render deploy reaches live |
 | deployed identity | `echo $RENDER_GIT_COMMIT` equals the merge sha — not the dashboard label |
 | no unrelated migration applied | ceiling exactly 130 |
+
+---
+
+## Proof identity — the rule this checklist exists to enforce
+
+```text
+95f13c7   → Slice A implementation proof: 61/61
+edd6647   → current branch tip and eventual merge candidate
+<merge>   → the SHA the FINAL receipt must attach to
+```
+
+`7135e84` and `edd6647` are documentation-only on top of `95f13c7`
+(`git diff 95f13c7..edd6647 -- src/ migrations/ tests/ server.js` is empty). That
+makes inherited proof *plausible*. It does not make it *evidence*.
+
+**The exact artifact being advanced must be the artifact that earned the proof.**
+Re-run at the reconciled SHA. Do not describe any commit as proven 61/61 unless
+the suite has run at that exact SHA.
 
 ---
 

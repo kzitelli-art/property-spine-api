@@ -10,6 +10,8 @@
 | | |
 |---|---|
 | Branch | `claude/sms-work-order-handoff-qo3s8i` |
+| **SHA that earned this result** | **`95f13c7`** (committed as `7135e84`'s parent) |
+| **Current branch tip / merge candidate** | **`edd6647`** — *not proven at this SHA* |
 | Base | `main` @ `a792b9f` |
 | Migration claimed | **130** — `130_communication_lines.sql` |
 | Design | `docs/COMMUNICATION_LINE_MODEL_DESIGN.md` (approved, rulings 2026-08-03) |
@@ -17,6 +19,14 @@
 | Harness | `tests/communication_lines_slice_a.db.js` |
 | Result | **61 run · 61 passed · 0 failed** |
 | Exit code | **0** |
+
+> **Proof identity.** The 61/61 run was executed against the tree committed as
+> `95f13c7`. `7135e84` and `edd6647` follow it and are **documentation only** —
+> `git diff 95f13c7..edd6647 -- src/ migrations/ tests/ server.js` is empty, so
+> the implementation is byte-identical. **That is not a substitute for running
+> the suite.** No suite has executed at `edd6647`. The final receipt must attach
+> to the actual reconciled commit that merges, re-run after reconciliation with
+> current `main` and against the provisioned full-schema database.
 
 ---
 
