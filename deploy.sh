@@ -12,6 +12,14 @@ if [ -z "$RENDER_API_KEY" ] || [ -z "$RENDER_SERVICE_ID" ]; then
   exit 1
 fi
 
+# ── SOURCE-GOVERNANCE GATES, BEFORE ANY DEPLOY IS TRIGGERED ──────────
+#  These gates existed for months and nothing invoked them; one of them was
+#  blind since a directory move and nothing noticed, because nothing ran it.
+#  A gate you have to remember to run is documentation. `set -e` above means
+#  a non-zero exit here aborts the deploy.
+echo "Running source-governance gates before deploy..."
+node "$(dirname "$0")/tests/verify_source_governance.js"
+
 echo "Triggering deploy for service $RENDER_SERVICE_ID..."
 
 RESPONSE=$(curl -s -X POST \
