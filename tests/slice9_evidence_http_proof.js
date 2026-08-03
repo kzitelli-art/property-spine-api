@@ -169,8 +169,28 @@ const PORT = 3400 + Math.floor(Math.random() * 200);
         && rEmpty.json.sections.conversion.metrics[k].rate === null),
       "all four funnels: zero denominator ⇒ empty, rate null — never 0%");
     ok(!/sample|demo|fixture/i.test(rEmpty.json.sections.conversion.state || "") &&
-       rEmpty.json.sections.conversion.opportunity_rows.length === 0,
+       rEmpty.json.sections.conversion.supporting_rows.total_rows === 0,
       "no fixture fallback — an empty property is an HONEST empty, not sample data");
+
+    console.log("\n── BOUNDED TRANSPORT ────────────────────────────────────");
+    const sr = rA.json.sections.conversion.supporting_rows;
+    ok(sr.default_page_size === 100 && sr.max_page_size === 250,
+      "the frozen page sizes travel on the wire (100 default, 250 max)");
+    ok(sr.page.length <= 100 && sr.total_rows >= sr.page.length,
+      `one bounded first page with a total count (${sr.page.length} of ${sr.total_rows})`);
+    ok(/opened_at asc, opportunity_id asc/.test(sr.sort),
+      "the sort is server-authored and deterministic");
+    ok(!!sr.as_of_utc && /own as_of/.test(sr.snapshot_note),
+      "each page carries its own as_of and does NOT claim a cross-request snapshot");
+    const rLim = await GET(WINDOW + "&limit=9999", tokA);
+    ok(rLim.json.sections.conversion.supporting_rows.page.length <= 250,
+      "a client cannot exceed the hard maximum of 250");
+    const rFilt = await GET(WINDOW + "&evidence_state=observed_visit", tokA);
+    const srF = rFilt.json.sections.conversion.supporting_rows;
+    ok(srF.filters.evidence_state === "observed_visit"
+       && srF.page.every((r) => r.appointment_evidence_state === "observed_visit"),
+      "server-side filtering — the browser never loads the full population to filter");
+    ok(srF.total_matching <= srF.total_rows, "with the matching total stated");
 
     console.log("\n── WINDOWS AND STABLE as_of ─────────────────────────────");
     const rDefault = await GET("", tokA);

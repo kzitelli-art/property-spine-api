@@ -43,7 +43,7 @@ async function settleSection(name, fn) {
   }
 }
 
-async function marketEvidenceProjection(pool, { property_id, start_local = null, end_local = null, as_of = null } = {}) {
+async function marketEvidenceProjection(pool, { property_id, start_local = null, end_local = null, as_of = null, rows = {} } = {}) {
   if (!pool || typeof pool.query !== "function") throw new TypeError("pool is required");
   if (!property_id) throw new TypeError("property_id is required");
 
@@ -55,7 +55,7 @@ async function marketEvidenceProjection(pool, { property_id, start_local = null,
   const [lead, tour, conv] = await Promise.all([
     settleSection("lead_demand", () => leadDemand(pool, window)),
     settleSection("tour_demand", () => tourDemand(pool, window)),
-    settleSection("conversion", () => conversionFunnels(pool, window)),
+    settleSection("conversion", () => conversionFunnels(pool, window, rows)),
   ]);
 
   // ── THE FROZEN TOP-LEVEL STATE — one deterministic derivation ──────

@@ -284,7 +284,7 @@ const asPool = (c) => ({ query: (...a) => c.query(...a) });
     ok("it is NOT counted into funnel 2's numerator by inference",
       out2.sections.conversion.metrics.f2.numerator === 0);
     ok("an application with no conversion_id is never assigned to an opportunity",
-      out2.sections.conversion.opportunity_rows.every(
+      out2.sections.conversion.supporting_rows.page.every(
         (r) => r.application_link !== "exact_conversion_id" || r.submitted_application_ids.length > 0));
 
     section("G  milestone achievement beats current status");

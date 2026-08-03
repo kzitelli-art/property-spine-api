@@ -1707,6 +1707,15 @@ module.exports = function operatorModule(deps) {
         start_local: req.query.start_local || null,
         end_local: req.query.end_local || null,
         as_of: req.query.as_of || null,
+        //  BOUNDED TRANSPORT: whitelisted page/filter preferences. None of
+        //  these can widen scope — they only narrow or page a set already
+        //  bounded by the session property.
+        rows: {
+          limit: req.query.limit, cursor: req.query.cursor,
+          funnel: req.query.funnel, evidence_state: req.query.evidence_state,
+          lifecycle_state: req.query.lifecycle_state,
+          pending_state: req.query.pending_state, source_id: req.query.source_id,
+        },
       }));
     } catch (e) { return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null }); }
   });

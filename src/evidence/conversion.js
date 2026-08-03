@@ -72,7 +72,91 @@ function reached(status, milestone) {
   return i >= 0 && m >= 0 && i >= m;
 }
 
-async function conversionFunnels(pool, window) {
+// ── BOUNDED TRANSPORT ────────────────────────────────────────────────
+//  The service computes EVERY opportunity row (the aggregates must reconcile
+//  to the full population), but the WIRE carries one bounded page. At 10,000
+//  opportunities the full row set is ~12MB — a truthful number nobody should
+//  ship to a browser. Summaries, coverage and suppression reasons stay
+//  complete; the supporting rows page.
+const PAGE_DEFAULT = 100;
+const PAGE_MAX = 250;
+
+const cursorEncode = (row, fhash) => Buffer.from(JSON.stringify(
+  { o: row.opened_at ? new Date(row.opened_at).toISOString() : null,
+    id: String(row.opportunity_id), f: fhash })).toString("base64url");
+const cursorDecode = (cur) => {
+  try { return JSON.parse(Buffer.from(String(cur), "base64url").toString("utf8")); }
+  catch (_) { return null; }
+};
+
+//  Stable order: cohort timestamp (opened_at) ascending, then the opportunity
+//  UUID as the deterministic tie-breaker. Server-authored; not configurable.
+const rowOrder = (a, b) => {
+  const ta = a.opened_at ? new Date(a.opened_at).getTime() : 0;
+  const tb = b.opened_at ? new Date(b.opened_at).getTime() : 0;
+  if (ta !== tb) return ta - tb;
+  return String(a.opportunity_id) < String(b.opportunity_id) ? -1 : 1;
+};
+
+function pageSupportingRows(allRows, { rowsOpts = {}, sourceIdsBySource, asOfIso }) {
+  //  WHITELISTED server-side filters — the ones a renderer genuinely needs.
+  //  Anything else is ignored, never passed to matching.
+  const f = {
+    funnel: ["f1", "f2"].includes(rowsOpts.funnel) ? rowsOpts.funnel : null,
+    evidence_state: rowsOpts.evidence_state || null,
+    lifecycle_state: rowsOpts.lifecycle_state || null,
+    pending_state: rowsOpts.pending_state || null,
+    source_id: rowsOpts.source_id || null,
+  };
+  let rows = allRows;
+  if (f.funnel === "f2") rows = rows.filter((r) => r.observed_visit === true);
+  if (f.evidence_state) rows = rows.filter((r) => r.appointment_evidence_state === f.evidence_state);
+  if (f.lifecycle_state) rows = rows.filter((r) => r.lifecycle_state === f.lifecycle_state);
+  if (f.pending_state) rows = rows.filter((r) => r.pending_state === f.pending_state);
+  if (f.source_id) {
+    const inSrc = sourceIdsBySource.get(String(f.source_id)) || new Set();
+    rows = rows.filter((r) => inSrc.has(String(r.opportunity_id)));
+  }
+  rows = [...rows].sort(rowOrder);
+
+  const fhash = JSON.stringify(f);
+  const limit = Math.max(1, Math.min(PAGE_MAX, Number(rowsOpts.limit) || PAGE_DEFAULT));
+
+  let start = 0, cursor_rejected = null;
+  if (rowsOpts.cursor) {
+    const cur = cursorDecode(rowsOpts.cursor);
+    if (!cur || cur.f !== fhash) {
+      //  A cursor minted under different filters cannot honestly continue this
+      //  sequence. Said plainly; the response restarts from the first page.
+      cursor_rejected = "The cursor does not match these filters; starting from the first page.";
+    } else {
+      start = rows.findIndex((r) =>
+        (new Date(r.opened_at || 0).getTime() > new Date(cur.o || 0).getTime())
+        || (String(new Date(r.opened_at || 0).toISOString()) === String(cur.o)
+            && String(r.opportunity_id) > String(cur.id)));
+      if (start < 0) start = rows.length;
+    }
+  }
+
+  const page = rows.slice(start, start + limit);
+  const hasMore = start + limit < rows.length;
+  return {
+    page,
+    page_size: page.length,
+    default_page_size: PAGE_DEFAULT,
+    max_page_size: PAGE_MAX,
+    total_matching: rows.length,
+    total_rows: allRows.length,
+    cursor: hasMore ? cursorEncode(page[page.length - 1], fhash) : null,
+    ...(cursor_rejected ? { cursor_rejected } : {}),
+    filters: f,
+    sort: "opened_at asc, opportunity_id asc — server-authored, deterministic",
+    as_of_utc: asOfIso,
+    snapshot_note: "Each page is its own coherent repeatable-read response at its own as_of. One database snapshot does NOT persist across HTTP requests.",
+  };
+}
+
+async function conversionFunnels(pool, window, rowsOpts = {}) {
   const unavailable = (code) => buildMetric({ metric_code: code, window });
   const CODES = {
     f1all: "s9.conversion.all_opportunity_to_completed_tour.v1",
@@ -307,11 +391,14 @@ async function conversionFunnels(pool, window) {
     //  THE FROZEN CONTRACTS ride the response by reference — the browser and
     //  every other reader consume the meaning, never re-derive it.
     contracts: FUNNEL_CONTRACTS,
-    //  The opportunity rows the Funnel 2 aggregate is computed from. Published
-    //  so the aggregate can be RECONCILED against its own inputs rather than
-    //  trusted — every population count above is derivable from these rows.
-    //  The internal cohort-membership marker is stripped; it is not contract.
-    opportunity_rows: f2rows.rows.map(({ _first_visit_in_window, ...r }) => r),
+    //  ONE BOUNDED PAGE of the rows the aggregates were computed from —
+    //  complete summaries, paged evidence. total_rows lets a reader reconcile
+    //  the aggregate without shipping 10,000 rows to a browser.
+    supporting_rows: pageSupportingRows(
+      f2rows.rows.map(({ _first_visit_in_window, ...r }) => r),
+      { rowsOpts,
+        sourceIdsBySource: new Map([...srcMap.values()].map((x) => [String(x.source_id), x.ids])),
+        asOfIso: window.as_of_utc }),
     correlation: {
       applications_total: apps.length,
       correlated_count: correlatedApps,

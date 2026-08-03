@@ -183,6 +183,42 @@ const IN_PROP = 10000, NEIGHBOURS = 100000, NEIGHBOUR_PROPS = 10;
         ? `STOP CONDITION 8: property predicate not indexed on ${seqScanOnBigTable.table}`
         : "every big-table read is bounded by its property index — no missing index demonstrated");
 
+    console.log("\n── THE BOUNDED WIRE RESPONSE AT 10,000 OPPORTUNITIES ────");
+    //  What a browser would actually receive: complete summaries + ONE page.
+    const { marketEvidenceProjection } = require(path.join(REPO, "src/evidence/evidence_projection"));
+    const wire = await marketEvidenceProjection(pool, {
+      property_id: P, start_local: "2026-07-01", end_local: "2026-08-31",
+      as_of: "2026-08-20T00:00:00.000Z" });
+    const wireBytes = Buffer.byteLength(JSON.stringify(wire));
+    const sr = wire.sections.conversion.supporting_rows;
+    console.log(`  wire response ${(wireBytes / 1024).toFixed(0)}KB · page ${sr.page.length} of ${sr.total_rows} · cursor ${sr.cursor ? "present" : "none"}`);
+    ok(wireBytes < 500 * 1024,
+      `summaries + first page stay under 500KB at 10,000 opportunities (${(wireBytes / 1024).toFixed(0)}KB)`);
+    ok(sr.page.length === 100 && sr.total_rows === IN_PROP,
+      `one default page of 100 with the full total stated (${sr.page.length} of ${sr.total_rows})`);
+    //  f1's cohort is the PROPERTY-LOCAL window, so fixture rows opened at
+    //  UTC midnight on the boundary day fall before the 04:00Z local start —
+    //  correct window semantics, asserted exactly rather than hand-waved.
+    const windowed = (await c.query(
+      `select count(*)::int n from leasing_conversions
+        where property_id = $1
+          and opened_at >= '2026-07-01T04:00:00Z' and opened_at < '2026-09-01T04:00:00Z'`, [P])).rows[0].n;
+    ok(wire.state && wire.coverage
+       && wire.sections.conversion.metrics.f1all.denominator === windowed,
+      `the four-funnel summaries remain COMPLETE over the whole windowed population (${wire.sections.conversion.metrics.f1all.denominator} === ${windowed})`);
+
+    //  Cursor walk: page 2 continues exactly where page 1 ended, no overlap.
+    const wire2 = await marketEvidenceProjection(pool, {
+      property_id: P, start_local: "2026-07-01", end_local: "2026-08-31",
+      as_of: "2026-08-20T00:00:00.000Z", rows: { cursor: sr.cursor } });
+    const sr2 = wire2.sections.conversion.supporting_rows;
+    const ids1 = new Set(sr.page.map((r) => String(r.opportunity_id)));
+    ok(sr2.page.length === 100 && sr2.page.every((r) => !ids1.has(String(r.opportunity_id))),
+      "the cursor's second page overlaps the first by zero rows");
+    const last1 = sr.page[sr.page.length - 1], first2 = sr2.page[0];
+    ok(new Date(first2.opened_at) >= new Date(last1.opened_at),
+      "and continues in the stable server-authored order");
+
     console.log("\n── NEIGHBOUR VOLUME DOES NOT CHANGE THE PLAN ────────────");
     //  Re-run against ONE neighbour property (~10k rows of its own): the same
     //  query shape, the same index-bounded plan, comparable time.

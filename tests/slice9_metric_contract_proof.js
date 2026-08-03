@@ -171,8 +171,8 @@ const asPool = (c) => ({ query: (...a) => c.query(...a) });
     const bucketSum = ["observed_visit", "pending_future_appointment", "unresolved_past_appointment",
       "no_appointment", "no_show", "cancelled", "conflict", "untrackable"]
       .reduce((n, k) => n + pops[k], 0);
-    ok(bucketSum === cv1.opportunity_rows.length,
-      `the aggregate reconciles to its rows (${bucketSum} === ${cv1.opportunity_rows.length})`);
+    ok(bucketSum === cv1.supporting_rows.total_rows,
+      `the aggregate reconciles to its rows (${bucketSum} === ${cv1.supporting_rows.total_rows})`);
     ok(cv1.metrics.f2.detail.reconciles === true, "and says so itself");
 
   } catch (e) {
