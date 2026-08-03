@@ -180,6 +180,19 @@ through a line resolver rather than reading `properties` directly.
 **Small enough to change without rewriting anything — provided nothing new starts
 reading `properties.sms_number` directly.** That is the seam to protect.
 
+> **CORRECTION 2026-08-03 — this counts the ASSUMPTION, not the COLUMN.**
+> The two functions above are where the 1:1 *resolution* assumption lives, and
+> that count is right. It is **not** the cost of retiring
+> `properties.sms_number`, and it must not be carried forward as though it were.
+>
+> Measured on `590f2c9`: **24 call sites across 7 files** — 2 resolution, ~5
+> configuration write, ~16 display/read-only across `super_admin.js`,
+> `org_admin.js`, `teamaccess.js`, `demo_preflight.js` and `tenantlink.js`, and
+> 1 dead. Switching resolution is small; dropping the column is not.
+>
+> See `COMMUNICATION_LINE_MODEL_DESIGN.md` §1 and §6, which split those into
+> Slice A and Slice B for exactly this reason.
+
 ---
 
 ## The rule going forward
