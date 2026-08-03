@@ -4,19 +4,22 @@
 
    WHAT IT DOES (in plain terms):
    1. Connects to whatever database DATABASE_URL points at.
-   2. Makes sure the schema_migrations ledger table exists.
-   3. Looks in this folder for files named like 001_something.sql,
-      002_something.sql, and so on — in numeric order.
-   4. For each one NOT already recorded in the ledger, it runs the whole
-      file inside a transaction, then records it as applied.
-   5. Files already in the ledger are skipped. So running this twice is
-      safe — it never re-runs a migration.
+   2. Reads the schema_migrations ledger and this folder's .sql files, and
+      checks that they describe the same database IN BOTH DIRECTIONS:
+        · every file here must be recorded in the ledger, and
+        · every ledger version must still have its file here.
+   3. By DEFAULT it stops there. It verifies and applies nothing — running
+      it is not a migration. If anything disagrees it REFUSES TO START and
+      names what, rather than booting against a schema it does not match.
+   4. With --apply (a deliberate release) it runs each unapplied file in a
+      transaction and records it. That path, and only that path, writes.
 
    HOW TO RUN IT:
-     Against production (be careful):
-       DATABASE_URL="<your neon connection string>" node migrate.js
-     Against the test database (the normal case):
-       DATABASE_URL="$TEST_DATABASE_URL" node migrate.js
+     Verify a database (safe; works on a read-only connection):
+       DATABASE_URL="<connection string>" node migrate.js
+     Release schema — deliberate, and it will make you prove you looked:
+       MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=<what the ledger says> \
+         [EXPECTED_SHA=<sha>] node migrate.js --apply
 
    It prints exactly what it did. If a migration fails, that migration's
    transaction is rolled back (nothing half-applied) and the script stops
@@ -28,6 +31,7 @@
 const fs = require("fs");
 const path = require("path");
 const { Client } = require("pg");
+const { classifyLedger } = require("./ledger_verdict");
 
 const MIGRATIONS_DIR = __dirname;
 
@@ -39,22 +43,61 @@ async function main() {
     process.exit(1);
   }
 
+  //  Decided before we open the connection, because it decides whether this
+  //  run is allowed to write to the database at all.
+  const APPLY = process.argv.includes("--apply") || process.env.MIGRATION_RELEASE === "1";
+
   const client = new Client({ connectionString: url, ssl: { rejectUnauthorized: false } });
   await client.connect();
-  console.log("\n  Connected to the database.");
+  console.log(`\n  Connected to the database.  (${APPLY ? "RELEASE" : "verify-only"})`);
 
-  // 1. Ensure the ledger exists (idempotent).
-  await client.query(`
-    create table if not exists schema_migrations (
-      version     text primary key,
-      name        text not null,
-      applied_at  timestamptz not null default now()
-    );
-  `);
+  // 1. Ensure the ledger exists — ONLY when releasing.
+  //
+  //    This used to run unconditionally, which quietly made the verify path
+  //    a WRITING path: `create table if not exists` is DDL, and Postgres
+  //    checks write permission BEFORE it checks existence. Confirmed on 16.13
+  //    — inside `begin transaction read only` it fails with "cannot execute
+  //    CREATE TABLE in a read-only transaction" even though the table is
+  //    already there, and as a SELECT-only role it fails with "permission
+  //    denied for schema public".
+  //
+  //    So a verify could not be run against a read-only connection, which is
+  //    the one way to check production's schema with no possibility of
+  //    changing it. Verification now reads and nothing else.
+  if (APPLY) {
+    await client.query(`
+      create table if not exists schema_migrations (
+        version     text primary key,
+        name        text not null,
+        applied_at  timestamptz not null default now()
+      );
+    `);
+  }
 
-  // 2. Which migrations are already applied? Keep the NAME too — the guard
-  //    below needs to know not just that a number was used, but by what.
-  const { rows } = await client.query("select version, name from schema_migrations");
+  // 2. Which migrations are already applied? Keep the NAME too — the guards
+  //    below need to know not just that a number was used, but by what.
+  //
+  //    In verify mode the ledger may legitimately not exist yet (a fresh
+  //    database). That is its own answer, and a different one from "no
+  //    migrations are applied" — so it is named rather than papered over by
+  //    creating an empty ledger and reporting 127 pending files.
+  let rows;
+  try {
+    ({ rows } = await client.query("select version, name from schema_migrations"));
+  } catch (err) {
+    if (err && err.code === "42P01") {   // undefined_table
+      console.error("\n  ✗ NO MIGRATION LEDGER — refusing to start.\n");
+      console.error("    This database has no schema_migrations table, so there is no record");
+      console.error("    of what has been applied to it. This code cannot know what it is");
+      console.error("    running against.");
+      console.error("\n    If this database is meant to be built from scratch, that is a release:");
+      console.error("      MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=000 node migrations/migrate.js --apply");
+      console.error("\n    Nothing was applied.\n");
+      await client.end();
+      process.exit(1);
+    }
+    throw err;
+  }
   const applied = new Map(rows.map(r => [r.version, r.name]));
 
   // 3. Find migration files: NNN_label.sql, numerically ordered.
@@ -84,18 +127,19 @@ async function main() {
   //  shape available, so this refuses to run at all until it is resolved.
   //  Stopping the whole deploy is the point: half-applied schema on a
   //  system with no staging is not a thing to be clever about.
-  const seen = new Map();
-  const clashes = [];
-  for (const f of files) {
-    const v = f.slice(0, 3);
-    if (seen.has(v)) clashes.push([v, seen.get(v), f]);
-    else seen.set(v, f);
-  }
-  if (clashes.length) {
+  //  The decision itself lives in ./ledger_verdict.js so it can be exercised
+  //  directly, as the same code this deploy runs. Everything from here down
+  //  is reporting and exiting.
+  const verdict = classifyLedger({
+    files,
+    ledgerRows: [...applied].map(([version, name]) => ({ version, name })),
+  });
+
+  if (verdict.duplicateFileNumbers.length) {
     console.error("\n  ✗ DUPLICATE MIGRATION NUMBER(S) — refusing to run.\n");
-    for (const [v, a, b] of clashes) {
-      console.error(`      ${v}  ${a}`);
-      console.error(`      ${v}  ${b}   <-- this one would be SILENTLY SKIPPED`);
+    for (const { version, first, second } of verdict.duplicateFileNumbers) {
+      console.error(`      ${version}  ${first}`);
+      console.error(`      ${version}  ${second}   <-- this one would be SILENTLY SKIPPED`);
     }
     console.error("\n    The ledger is keyed on the number alone, so the second file");
     console.error("    would never run and never say so. Renumber it to the next free");
@@ -131,42 +175,78 @@ async function main() {
   //  Those are the SAME migration under a messier name, so normalising is
   //  telling the truth, not waving something through. A genuinely different
   //  migration still trips the guard.
-  const norm = (s) => String(s || "")
-    .replace(/\.sql$/i, "")        // full filename was recorded
-    .replace(/^\d{3}_/, "")        //   ...prefix and all
-    .replace(/\s*\(\d+\)$/, "")    // 'name (1)' — a duplicated download
-    .trim().toLowerCase();
-
-  const stolen = [];
-  for (const f of files) {
-    const v = f.slice(0, 3), name = f.slice(4, -4);
-    if (applied.has(v) && norm(applied.get(v)) !== norm(name)) {
-      // ── ONE DOCUMENTED EXCEPTION, verified 2026-07-26 ────────────────
-      //  Ledger 012 = 'property_noi_goals'; the folder's 012 is
-      //  'bank_intake'. property_noi_goals was renumbered to 029 and the
-      //  012 row was never corrected. bank_intake DID run — checked
-      //  against live: vendors 51 rows, vendor_aliases 121, bank_accounts
-      //  2, bank_transactions 160, check_register_orphans 4. Nothing is
-      //  missing, so blocking every deploy over a stale label would be the
-      //  guard lying about a problem instead of the ledger lying about a
-      //  name. Remove this once the 012 row is corrected to 'bank_intake'.
-      if (v === "012" && norm(applied.get(v)) === "property_noi_goals") {
-        console.log(`  ! ${f} — ledger 012 is mislabelled 'property_noi_goals' (known, verified applied).`);
-        continue;
-      }
-      stolen.push([v, applied.get(v), name, f]);
-    }
+  //  Documented legacy naming exceptions are announced, never silent. A
+  //  forgiven mismatch the operator cannot see is indistinguishable from a
+  //  guard that is not running.
+  for (const e of verdict.acceptedLegacyNames) {
+    console.log(`  ! ${e.file} — ledger ${e.version} is mislabelled '${e.ledgerName}' (known, verified applied).`);
+    console.log(`      accepted because: ${e.reason}`);
+    console.log(`      stops being accepted when: ${e.removeWhen}`);
   }
-  if (stolen.length) {
+
+  if (verdict.versionNameConflicts.length) {
     console.error("\n  ✗ MIGRATION NUMBER ALREADY SPENT — refusing to run.\n");
-    for (const [v, ledgerName, fileName, f] of stolen) {
-      console.error(`      ${v}  the ledger says: ${ledgerName}  (already applied)`);
-      console.error(`      ${v}  this folder has: ${fileName}`);
-      console.error(`           -> ${f} would print "already applied" and NEVER RUN.\n`);
+    for (const { version, ledgerName, fileLabel, file } of verdict.versionNameConflicts) {
+      console.error(`      ${version}  the ledger says: ${ledgerName}  (already applied)`);
+      console.error(`      ${version}  this folder has: ${fileLabel}`);
+      console.error(`           -> ${file} would print "already applied" and NEVER RUN.\n`);
     }
     console.error("    If this is a new migration, renumber it to the next free slot.");
     console.error("    If you renamed a migration that already ran, rename it back.");
     console.error("    Nothing was applied.\n");
+    await client.end();
+    process.exit(1);
+  }
+
+  // ── A LEDGER VERSION THIS REPOSITORY CANNOT ACCOUNT FOR = HARD STOP ──
+  //  The inverse of every check above. Those all ask whether a file in this
+  //  folder is safe to run. This one asks the question nothing asked before
+  //  2026-08-03: does the database contain a migration THIS REPOSITORY HAS
+  //  NO FILE FOR?
+  //
+  //  It is not a runtime hazard the way a pending migration is — the schema
+  //  is a superset of what this code expects, so the service would run. It
+  //  is a TRUTH hazard, and a worse-shaped one:
+  //
+  //    · the schema cannot be rebuilt, because part of it exists in no file;
+  //    · that part was never reviewed, because it is in no diff;
+  //    · a contributor reading `ls migrations/` sees a free number that the
+  //      ledger has already spent, and the collision guard above cannot warn
+  //      them, because it only compares numbers to FILES.
+  //
+  //  This is precisely what "the migration GAP at 121" was: a migration
+  //  applied in production whose file lived only on an unmerged branch. It
+  //  sat in the handoff as a curiosity for weeks, and it was the visible
+  //  symptom of a deploy silently migrating production — the failure ITEM 5
+  //  now prevents at the source. This closes the reporting side of it: the
+  //  same condition can never again be present without the deploy saying so.
+  //
+  //  Documented historical exceptions live in ledger_verdict.js, pinned to
+  //  both version and ledger name, one entry per accepted orphan.
+  for (const e of verdict.acceptedLedgerOnly) {
+    console.log(`  ! ledger ${e.version} '${e.ledgerName}' has no file here (documented historical exception).`);
+    console.log(`      accepted because: ${e.reason}`);
+    console.log(`      stops being accepted when: ${e.removeWhen}`);
+  }
+
+  if (verdict.ledgerVersionMissingFromRepo.length) {
+    console.error("\n  ✗ LEDGER VERSION MISSING FROM THIS REPOSITORY — refusing to start.\n");
+    console.error(`    ${verdict.ledgerVersionMissingFromRepo.length} migration(s) are recorded as applied to this`);
+    console.error("    database, but this build carries no file for them:\n");
+    for (const { version, ledgerName } of verdict.ledgerVersionMissingFromRepo) {
+      console.error(`      ${version}  the ledger says: ${ledgerName}`);
+      console.error(`           -> migrations/${version}_*.sql does not exist in this build.\n`);
+    }
+    console.error("    The database contains changes this codebase cannot describe, so the");
+    console.error("    schema cannot be rebuilt or reviewed, and the number is spent without");
+    console.error("    being visible to anyone allocating the next one.");
+    console.error("\n    Resolve it, do not silence it:");
+    console.error("      · the file exists on an unmerged branch  -> merge it, as 121 was;");
+    console.error("      · the migration was applied by hand      -> commit the file it ran;");
+    console.error("      · it is genuinely historical             -> add a documented entry to");
+    console.error("        DOCUMENTED_LEDGER_ONLY in migrations/ledger_verdict.js, naming the");
+    console.error("        reason and what removes it.");
+    console.error("\n    Nothing was applied.\n");
     await client.end();
     process.exit(1);
   }
@@ -197,14 +277,18 @@ async function main() {
   //  A feature-branch deploy therefore cannot migrate production, and cannot
   //  quietly run against a schema that does not match its code either.
   // ════════════════════════════════════════════════════════════════════
-  const APPLY = process.argv.includes("--apply") || process.env.MIGRATION_RELEASE === "1";
-  const pending = files.filter((f) => !applied.has(f.slice(0, 3)));
-  const ceiling = [...applied.keys()].sort().pop() || "000";
+  //  APPLY was decided before the connection opened. `pending` and `ceiling`
+  //  come from the same verdict as every gate above, so there is one reading
+  //  of the ledger and not two.
+  const pending = verdict.fileMissingFromLedger;
+  const ceiling = verdict.ceiling;
 
   if (!APPLY) {
     if (pending.length === 0) {
       console.log(`\n  ✓ SCHEMA VERIFIED — ${files.length} migrations, all applied. Ledger ceiling ${ceiling}.`);
-      console.log("    (verify-only; applying requires an explicit release)\n");
+      console.log("    (verify-only; applying requires an explicit release)");
+      console.log("    (both directions checked: every file is in the ledger, and every");
+      console.log("     ledger version has its file)\n");
       await client.end();
       return;
     }
