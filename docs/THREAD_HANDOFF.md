@@ -65,8 +65,29 @@ execution loop does not exist yet.
 
 ### 2. What is LIVE on `main` and honestly proven
 
-`main` is at `42977e6` + the handoff commit. Production carries migrations
-**120–128 unbroken**.
+`main` is at `a08c1da`.
+
+**The migration state, exactly.** Read from the production ledger 2026-08-03,
+not inferred from `ls migrations/`:
+
+```text
+applied:                       120, 121, 122, 123, 124, 126, 127, 128
+unused historical gap:         125
+repository migration ceiling:  129
+applied migration ceiling:     128  (until 129 is released)
+```
+
+**125 never ran.** It is absent from the production ledger *and* from
+`migrations/` — it is staged at `docs/slices-6-to-10/deployment_b/`, outside the
+runner. The sequence is NOT contiguous and nothing should be written as though
+it were. An earlier version of this file said "120–128 unbroken"; that was
+wrong, and it was wrong in the direction that matters — it implied a number had
+been used when it had not.
+
+**129 is CLAIMED** (`129_property_line_uniqueness.sql`, merged in `a08c1da`) and
+**not yet released**. The next free number is **130**. Because 129 is in the
+build and not in the ledger, a deploy of current `main` will correctly REFUSE TO
+START until it is released — see `docs/PROPERTY_LINE_ACTIVATION.md`.
 
 | Capability | Proof | §33 rung |
 |---|---|---|
@@ -206,8 +227,14 @@ the only writer — one row of defence with no database backstop.
    limitation, cannot express an organisation-owned operations line; retired when
    a canonical communication-line model resolves both inbound and outbound.
 
-**Migration number: query the ledger, never assume.** Ceiling is 128. Other
-threads hold unmerged numbers.
+**Migration number: query the ledger, never assume.** Applied ceiling is 128;
+**129 is claimed and merged**, so the next free number is **130**. Other threads
+hold unmerged numbers — scan every branch, not `ls migrations/`.
+
+Do not reuse **125**. It is an unused historical gap, and authoring a new 125
+after 126–128 are live would backfill the sequence behind applied migrations and
+create a second misleading migration story. Resolve the staged
+`docs/slices-6-to-10/deployment_b/125_*.sql` artifact separately.
 
 ---
 

@@ -1,7 +1,8 @@
 # Migration ledger — the inverse gate
 
-**Status: implemented and proven. MERGE IS BLOCKED on one read of the production
-ledger — see §6. Everything else in this document is done.**
+**Status: merged (`6238d48`) and proven. Merge precondition CLEARED — see §6.**
+**Not yet production-active: the gate ships in a build that has not been
+deployed.**
 
 Base: `main` @ `67442a5` · proved 2026-08-03 on PostgreSQL 16.13.
 
@@ -130,35 +131,45 @@ and reporting 127 pending migrations.
 
 ## 6. ⚠ BLOCKING PRECONDITION FOR MERGE
 
-**If production's ledger contains a version this repository has no file for, the
-API will refuse to start on the next deploy.** That is the gate working
-correctly, and it is a production boot failure. So the ledger must be read
-*before* this merges, not after.
+**CLEARED 2026-08-03 for versions 109–130.** The production ledger was read
+read-only and reconciled against `migrations/`:
 
-`migrations/125_application_lifecycle_enforcement.sql` **is not in
-`migrations/`** — it is staged at
-`docs/slices-6-to-10/deployment_b/125_application_lifecycle_enforcement.sql`,
-deliberately outside the runner (`SLICE_9_DEPLOYMENT_RECEIPT.md` §41, §49). The
-repository holds 120, 121, 122, 123, 124, **126**, 127, 128 — so
-`THREAD_HANDOFF.md`'s "production carries migrations 120–128 unbroken" cannot be
-confirmed from the repository, and the current gate could not have detected the
-difference.
-
-Required, by someone with authorized Render or Neon access, read-only:
-
-```sql
-select version, name
-  from schema_migrations
- where version between '120' and '130'
- order by version;
+```text
+applied:                 120, 121, 122, 123, 124, 126, 127, 128
+unused historical gap:   125  (absent from the ledger AND from migrations/)
 ```
 
-Then, per row that has no file in `migrations/`:
+Every listed ledger row has its file, and no repository file in range lacks a
+row. **No `DOCUMENTED_LEDGER_ONLY` entry was required, and the list ships
+empty.** A parallel thread independently reconciled 109–128. Combined confirmed
+coverage is therefore **109–130**.
+
+**125 never ran anywhere.** It is staged at
+`docs/slices-6-to-10/deployment_b/125_application_lifecycle_enforcement.sql`,
+outside the runner (`SLICE_9_DEPLOYMENT_RECEIPT.md` §41, §49), and it is absent
+from the production ledger. The earlier claim in `THREAD_HANDOFF.md` that
+production carried "120–128 unbroken" was wrong: there is a real, benign hole at
+125.
+
+### Still open: the ledger below version 109
+
+The gate evaluates the **entire** ledger, not a range. Nobody has reconciled
+below 109. Use `tools/ledger_reconcile.js` — read-only, and it imports the same
+`classifyLedger` the deploy gate uses, so it cannot disagree with what the boot
+will decide:
+
+```bash
+DATABASE_URL="<prod>" node tools/ledger_reconcile.js
+```
+
+Per row it reports as missing from the repository:
 
 - **the file exists on an unmerged branch** → merge it, as `121` was;
 - **it was applied by hand** → commit the file that ran;
 - **it is genuinely historical** → add one entry to `DOCUMENTED_LEDGER_ONLY`
   with its version, exact ledger name, reason, and removal condition.
+
+Full activation runbook: `docs/PROPERTY_LINE_ACTIVATION.md`.
 
 The same read settles the next free migration number, which the property-line
 slice needs. **Do not claim a number from `ls migrations/` — that is the reading

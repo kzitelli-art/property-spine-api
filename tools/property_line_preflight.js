@@ -66,11 +66,18 @@ async function main() {
 
   // ── PROVE READ-ONLY BEFORE READING ANYTHING ───────────────────────
   await client.query("begin transaction read only");
+  //  THE PROBE MUST NOT POISON THE TRANSACTION. A failed statement aborts the
+  //  whole transaction block, so every read after it dies with "current
+  //  transaction is aborted". That is verbatim the documented incident — a
+  //  read-only smoke whose own safety probe aborted its own transaction and
+  //  then reported nothing. The savepoint is what makes the probe survivable.
   let writable = false;
+  await client.query("savepoint write_probe");
   try {
     await client.query("create temporary table __preflight_write_probe (x int)");
     writable = true;
   } catch { /* expected: read-only transaction */ }
+  await client.query("rollback to savepoint write_probe");
   if (writable) {
     console.error("\n  ✗ REFUSED — this transaction accepted a write.");
     console.error("    A read-only tool that can write is not read-only. Nothing was read.\n");
