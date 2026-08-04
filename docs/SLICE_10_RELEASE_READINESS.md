@@ -1,13 +1,55 @@
 # Slice 10 — Release readiness
 
-**`SLICE 10 RELEASE READY — BLOCKED ON DEPLOYMENT GATES`**
+**`SLICE 10 SOURCE RELEASE CANDIDATE — PRODUCTION GATES REMAIN`**
 
-Source, browser and documentation are closed. Every remaining blocker is
-external to this lane: a migration release, a manual security verification, or
-a production credential this environment does not have.
+Source, browser and documentation are closed **against current `main`**. Every
+remaining blocker is external to this lane: a migration release, a manual
+security verification, or a production credential this environment does not
+have.
 
 The full evidence is in [`SLICE_10_RECEIPT.md`](SLICE_10_RECEIPT.md). This file
 is the release sheet only.
+
+---
+
+## ⚠ An earlier version of this sheet said every blocker was external. It was wrong.
+
+`main` moved to `fbd7a3a` after Slice 10 froze, and that commit added a second
+direction to `tests/gate_harness_isolation.js`: requiring
+`HARNESS_DATABASE_URL` is no longer enough, a harness must **refuse** a value
+that resolves to the same host, port and database as `DATABASE_URL`.
+
+Four Slice 10 harnesses failed it. `deploy.sh` runs the gate under `set -e`, so
+this blocked a **deploy**, not merely a merge — and because the gate runs first
+and the runner stops at the first failure, the other two gates were not running
+at all.
+
+```
+slice-10e alone                verify  6 assertions · 6 passed · EXIT 0
+main (fbd7a3a)                 verify  8 assertions · 8 passed · EXIT 0
+slice-10e + main, BEFORE fix   verify  8 run · 7 passed · 1 FAILED · EXIT 1
+slice-10e + main, AFTER fix    verify  8 run · 8 passed · 0 failed · EXIT 0
+                                       3 of 3 gates invoked, all exited 0
+```
+
+**Repaired in-lane, not exempted.** All four now take their connection from
+`receipt.harnessConnectionString()`. Three had compared the two URLs as
+*strings* — which a different user, a trailing `sslmode`, or an extra query
+parameter defeats while still resolving to the same database.
+`slice10d_scale_transport_proof` only checked the variable was present, and
+`slice10d_build_fixture` — which commits roughly 110,000 spaces, the most
+write-capable script in the set — had no guard at all.
+
+The gate classifies a file as guarded by **grepping for the identifier**, so a
+decorative mention would have satisfied it while proving nothing. Checked by
+execution instead: with the two variables spelled differently but resolving to
+the same target, all four refuse and run no assertions; all four also refuse
+with the variable unset.
+
+*Known and out of lane:* `sameTarget()` compares hostnames literally, so
+`localhost` and `127.0.0.1` are not recognised as the same host. It never
+claimed otherwise — it is documented as host + port + database — and changing
+it belongs to the harness-remediation slice, not here.
 
 ---
 
@@ -16,11 +58,11 @@ is the release sheet only.
 | | |
 |---|---|
 | API branch | `claude/slice-10e-browser-acceptance-t0zk33` |
-| API `main` | `4983e5d` (PRs #33, #35 — documentation only, no migrations, no source) |
-| API ahead / behind `main` | **ahead, behind 0** — `origin/main` merged in, and is an ancestor |
+| API `main` | **`fbd7a3a`** — was `4983e5d` when this sheet was first written |
+| API ahead / behind `main` | **behind 0** — `fbd7a3a` merged in, and is an ancestor |
 | App branch | `claude/slice-10e-browser-acceptance-t0zk33` @ `c1684d3` |
-| App `main` | `357fb15` — an ancestor; **behind 0** |
-| Documentation corrections | `claude/slice-10a-forward-rent-roll-audit` @ `8709ed1` · `claude/slice-10-handoff` @ `1f422f6` |
+| App `main` | `357fb15` — an ancestor; **behind 0**. The app side never drifted. |
+| Documentation branches | resolved — see *Orphan branch disposition* below |
 | Migrations changed by this work | **none** — `git diff --name-only origin/main...HEAD -- migrations/` is empty |
 | Deployed API / app SHAs | **NOT READ — see gate 3** |
 
@@ -86,7 +128,7 @@ refuses    rails present with zero globals extracted (broken measurement)
 | 1 | Migration 129 released | SMS lane | **BLOCKED.** `129_property_line_uniqueness.sql` is on `main`, claimed, unreleased. Slice 10 adds no migration and cannot clear this. |
 | 2 | API `main` boots after 129 | SMS lane | blocked by 1 — the runner refuses to start on a file not in the ledger |
 | 3 | Deployed API and app identities recorded | owner | **UNRESOLVED PRODUCTION-VERIFICATION GATE.** No production credential and no route to the production origin exist here. Not inferred from repository history. |
-| 4 | PR #36 guards proven live | owner, after 5 | leasing entitlement + strict `as_of`, proven locally 62/0; never against production |
+| 4 | PR #36 guards proven live | owner, after 5 | **PR #36 is MERGED** (2026-08-03) and its source is on `main` — landing is done. What is outstanding is *production proof*: leasing entitlement + strict `as_of`, re-proven locally 62/0 at this candidate, never against production. |
 | 5 | Render app suspension verified in a private window | owner | manual |
 | 6 | Both repositories private | owner | manual |
 | 7 | Public forks checked | owner | manual |
@@ -96,22 +138,70 @@ refuses    rails present with zero globals extracted (broken measurement)
 release path to call the source landed. **Do not** reactivate the app before
 gates 5–8.
 
+## Orphan branch disposition
+
+Three branches carried Slice 10 work outside PR #37 with no PR of their own.
+Reviewed against current facts rather than merged because they existed.
+
+```
+LANDED    docs/SLICE_10_SOURCE_AUDIT.md          from claude/slice-10a-…
+          the pre-build authority audit and its two correction passes,
+          including "obligations.lease_id does not exist". Durable
+          reasoning record for why Slice 10 was built the way it was.
+          Not superseded by the receipt — the receipt records what was
+          built, this records why it was blocked.
+
+LANDED    docs/AGENT_READINESS_AUDIT_BRIEF.md    from claude/slice-10-handoff
+          owner-authored charter, preserved as issued. Its three output
+          documents were already in this branch WITHOUT it; an audit's
+          output without its charter cannot be reviewed.
+
+ABANDONED docs/SLICE_10_HANDOFF.md               from claude/slice-10-handoff
+          §5 states 10E browser acceptance "has not been run" and is "the
+          entire remaining scope". It HAS been run — 96/0. Landing it
+          would put a false claim into docs/. Superseded by
+          SLICE_10_RECEIPT.md and this sheet.
+
+ABANDONED its THREAD_HANDOFF.md diff (+16)       from claude/slice-10-handoff
+          corrected main from a08c1da to 47ed0f0; main is now fbd7a3a, so
+          the correction was two moves stale before it could land. The
+          OBSERVATION inside it was revalidated and still holds — Slice 10
+          and the Forward Rent Roll are absent from main's handoff
+          entirely, Slice 9 and the app repo get one mention each — and is
+          landed rewritten, citing documents rather than SHAs.
+
+SUPERSEDED claude/slice-10b-dated-position-rows
+          its head d1279de is already inside this branch. Redundant.
+          Remove when branch cleanup is authorized.
+```
+
 ## Release order, once the gates clear
 
 ```
  1  release migration 129 through its own lane
  2  prove API main boots
- 3  integrate the Slice 10 API PR onto current main
- 4  rerun API, HTTP, scale and regression proofs
- 5  merge and deploy the API
- 6  prove PR #36 entitlement and date guards in production
- 7  prove Forward Rent Roll against an authenticated real property
- 8  integrate the app PR onto current app main
- 9  rerun publish-boundary and browser proofs
-10  merge and deploy ONLY the allowlisted artifact
-11  run production desktop and 390px acceptance
-12  record exact deployed API and app SHAs
+ 3  merge PR #38 (write-authority hardening) FIRST — it is already based on
+    current main and green, so merging it second would invalidate a Slice 10
+    proof run the moment it landed
+ 4  integrate the resulting main into the Slice 10 branch
+ 4a REPAIR any harness the isolation gate refuses at that point, then rerun
+    npm run verify and CONFIRM ALL THREE GATES RAN — the failing gate is
+    first in the list and stops the others from executing at all
+ 5  rerun API, HTTP, scale and regression proofs AT THAT SHA
+ 6  merge and deploy the API
+ 7  prove PR #36 entitlement and date guards in production
+ 8  prove Forward Rent Roll against an authenticated real property
+ 9  integrate the app PR onto current app main
+10  rerun publish-boundary and browser proofs
+11  merge and deploy ONLY the allowlisted artifact
+12  run production desktop and 390px acceptance
+13  record exact deployed API and app SHAs
 ```
+
+**Steps 3–5 are the lesson this candidate paid for.** A proof run is evidence
+for the tree it ran against and nothing else. Do not carry a green from one
+candidate onto another because the merge was textually clean — the merge that
+broke this branch changed no Slice 10 file at all.
 
 ## Remaining blockers, in one list
 

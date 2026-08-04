@@ -10,6 +10,29 @@ current truth. Re-date it whenever `main` moves materially.
 
 ---
 
+> ### ⚠ There is a second active lane, and this file has no account of it.
+>
+> Everything below is the **SMS / work-order lane**. Slice 10 and the Forward
+> Rent Roll appear nowhere in it; Slice 9 and the `property-spine-app`
+> repository get one passing mention each; the 2026-08-03 static-data security
+> incident is absent entirely. A reader who takes this file as the whole state
+> will not learn that lane exists.
+>
+> That lane's evidence is [`SLICE_10_RECEIPT.md`](SLICE_10_RECEIPT.md) and its
+> release sheet is
+> [`SLICE_10_RELEASE_READINESS.md`](SLICE_10_RELEASE_READINESS.md). **Read the
+> release sheet before assuming Slice 10 can merge:** integrating current `main`
+> turned it red. The harness-isolation gate this file describes gained a second
+> direction, and four Slice 10 harnesses failed it. That is repaired on the
+> Slice 10 branch and is the reason the branch is not simply mergeable at the
+> SHA its own earlier documents named.
+>
+> **This block deliberately cites no SHA.** The predecessor of this pointer
+> corrected `main` from one SHA to another and was two moves out of date before
+> it could land. Documents move slower than commits; point at documents.
+
+---
+
 ## ══════════════════════════════════════════════════════════════════
 ##  STATE — 2026-08-03 (late). THIS SECTION WINS over everything below.
 ## ══════════════════════════════════════════════════════════════════
