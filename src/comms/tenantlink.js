@@ -69,6 +69,11 @@ const express = require("express");
 const crypto = require("crypto");
 const { classifyUrgency } = require("../maintenance/maintenance_urgency.js"); // narrow urgency decision for tenant maintenance
 const { normalizePropertyLine } = require("./property_line"); // the one canonical property-line normalizer
+//  SHARED CONVERSATIONAL SEAMS — transport-independent, one implementation.
+//  Extracted out of this file so a second conversational caller uses the SAME
+//  logic rather than a copy. Do not reintroduce local copies here.
+const clarification = require("../conversation/clarification");
+const { operatingReceipt, deliveryReceipt, composeReceipt } = require("../conversation/receipt");
 
 module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService, getAgentService }) {
   const router = express.Router();
@@ -831,6 +836,7 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
   async function pendingClarifications(client, { propertyId, personId }) {
     return (await client.query(
       `select o.id as obligation_id, o.related_id as work_order_id,
+              ce.property_id,                 -- carried so the seam can VERIFY scope, never derive it
               ce.id as question_event_id, ce.body as question_body
          from comm_events ce
          join obligations o
@@ -884,128 +890,110 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
   //  that represents "we did something about this claim" lives here, so a
   //  failure leaves the claim preserved and flagged and nothing half-done.
   async function processInboundClaim(client, { personId, propertyId, body, place, smsSid }) {
-    const unitLabel = place ? `Unit ${place.unit_number}` : "your unit";
+    const context = { unitLabel: place ? `Unit ${place.unit_number}` : "your unit" };
     const c = await classifyMessage(body);
-    let createdType = null, createdId = null, reply = null;
 
-    // 1) Is this an answer to a question we asked? (§7.1)
-    const pending = await pendingClarifications(client, { propertyId, personId });
-
-    if (pending.length > 1) {
-      // §7.1.4 — never guess between them, never ask the resident to choose:
-      // no column can durably hold the offered options.
+    // Every return below carries the OPERATING receipt itself, not only its
+    // text. Delivery is a separate fact, decided later by the transport, and
+    // the two are never merged into one "it worked".
+    const speak = (r, { createdType = null, createdId = null, needsHuman }) => {
+      if (r.text === null) {
+        // The composer refused: it had no committed fact to describe. Failing
+        // here rolls T2 back — the claim is preserved and flagged and no reply
+        // is sent — rather than acknowledging something that may not exist.
+        throw new Error(`receipt refused (${r.refusal}) — no reply composed for outcome ${r.outcome}`);
+      }
+      return { c, createdType, createdId, reply: r.text, needsHuman,
+               askedClarification: r.isClarificationQuestion, receipt: r };
+    };
+    const held = (reasonCode) => {
       c.needs_human = true;
-      return { c, createdType: null, createdId: null, needsHuman: true,
-        reply: "Thanks — you have more than one open request with us, so I'm passing this to the team to make sure it lands on the right one." };
+      return speak(operatingReceipt({ outcome: "held_for_human", result: { reasonCode }, context }),
+                   { needsHuman: true });
+    };
+
+    // 1) Is this an answer to a question we asked? (§7.1–7.6)
+    //    The seam owns the ladder; this file owns the two determinations it
+    //    names, because both need this database.
+    let step = clarification.assessOpenClarification({
+      scope: { property_id: propertyId },
+      open: await pendingClarifications(client, { propertyId, personId }),
+    });
+    if (step.needs === "answer_verdict") {
+      step = clarification.resolveAnswerVerdict({
+        pending: step,
+        answerVerdict: await recognizeAnswer({ question: step.question, reply: body }),
+      });
+    } else if (step.needs === "prior_resolution_check") {
+      step = clarification.resolvePriorResolution({
+        pending: step,
+        priorAnsweredResolved: await hasAnsweredQuestionAlreadyResolved(client, { propertyId, personId }),
+      });
     }
 
-    if (pending.length === 1) {
-      const p = pending[0];
-      const verdict = await recognizeAnswer({ question: p.question_body, reply: body });
+    if (step.action === "hold_for_human") return held(step.state);
 
-      if (verdict === "answers_question") {
-        const out = await workOrderService.appendClarification(client, {
-          work_order_id: p.work_order_id, person_id: personId, text: body, classifyUrgency,
-        });
-        createdType = "work_order"; createdId = p.work_order_id;
-        c.needs_human = out.outcome === "unresolved";
-        if (out.outcome === "escalated_emergency") {
-          reply = "Thank you — I've marked this as an emergency and management has been notified in the system. If there is immediate danger to anyone, call 911 first.";
-        } else if (out.outcome === "resolved_regular") {
-          reply = `Thanks — that helps. Your ${unitLabel} request is recorded as a routine repair and stays open with the team.`;
-        } else {
-          reply = "Thanks — I've added that to your request. Your manager will follow up here.";
-        }
-        return { c, createdType, createdId, reply, needsHuman: c.needs_human };
-      }
-
-      if (verdict === "both" || verdict === "unclear") {
-        // Preserve and flag. Touch NO work order — an uncertain reading must
-        // never enrich a record or open a second one.
-        c.needs_human = true;
-        return { c, createdType: null, createdId: null, needsHuman: true,
-          reply: "Got it — your manager will follow up with you right here." };
-      }
-      // verdict === 'separate_problem' → fall through to the normal path (§7.3)
-    } else if (await hasAnsweredQuestionAlreadyResolved(client, { propertyId, personId })) {
-      // §7.6 — we asked this person something, and the obligation is no longer
-      // open. Their reply is an answer to a question already resolved, not a
-      // new problem. Preserve and flag rather than duplicate the work.
-      c.needs_human = true;
-      return { c, createdType: null, createdId: null, needsHuman: true,
-        reply: "Thanks — your manager will follow up with you right here." };
+    if (step.action === "append_to_existing") {
+      const out = await workOrderService.appendClarification(client, {
+        work_order_id: step.target.work_order_id, person_id: personId, text: body, classifyUrgency,
+      });
+      const r = operatingReceipt({ outcome: "clarification_appended", result: out, context });
+      // The SERVICE decided this, both directions — not the interpreter.
+      c.needs_human = r.requiresHuman === true;
+      return speak(r, { createdType: "work_order", createdId: step.target.work_order_id,
+                        needsHuman: c.needs_human });
     }
 
-    // 2) Normal path. Work orders now go through THE canonical service, so
-    //    every one produces an event and a routing obligation. The two raw
-    //    inserts this replaces produced neither.
+    // 2) Normal path (step.action === 'propose_new_action'). Work orders go
+    //    through THE canonical service, so every one produces an event and a
+    //    routing obligation.
     const isMaintenanceClaim = c.classification === "emergency"
       || (c.classification === "maintenance" && c.confidence >= 0.7 && !c.needs_human);
 
     if (isMaintenanceClaim) {
-      const u = classifyUrgency(body);
-      let urgency_status = u.urgency;
-      let askedClarification = false;
-      let emergency_type = u.emergency_type;
-      let clarifying_question = u.clarifying_question;
-
-      // §7.4 — the model called it an emergency but the narrow urgency
-      // classifier produced no valid type. NEVER invent one to satisfy the
-      // service: open at needs_confirmation and ask.
-      if (c.classification === "emergency" && !emergency_type && urgency_status !== "needs_confirmation") {
-        urgency_status = "needs_confirmation";
-        emergency_type = null;
-        clarifying_question = clarifying_question
-          || "Just to be sure — is this an emergency that needs someone right away, or can it wait for normal hours?";
-      }
+      // §7.4 — a consequential reading may not be acted on when the fact that
+      // makes it actionable is missing. The seam decides; nothing is invented.
+      const decision = clarification.assessConsequentialInterpretation({
+        classification: c.classification, urgency: classifyUrgency(body),
+      });
 
       const created = await workOrderService.createWorkOrder(client, {
         property_id: propertyId, unit_id: place ? place.unit_id : null,
         reported_by_person_id: personId, affected_person_id: personId,
-        title: urgency_status === "emergency"
+        title: decision.urgency_status === "emergency"
           ? "EMERGENCY: " + (c.suggested_title || c.field_category || "tenant report")
           : (c.suggested_title || `${c.field_category} request`),
         description: body,                 // stored VERBATIM by the service
         field_category: c.field_category,
         source: "tenant",
-        urgency_status, urgency_basis: u.basis,
+        urgency_status: decision.urgency_status, urgency_basis: decision.basis,
         urgency_decided_by: "system",
-        emergency_type,
+        emergency_type: decision.emergency_type,
         // The provider's own message id makes a redelivery idempotent at the
         // service layer too, not only at the boundary dedupe.
         idempotency_key: smsSid || null,
       });
-      createdType = "work_order"; createdId = created.workOrder.id;
 
-      // §7.5 — truthful acknowledgment only. No response time, no technician,
-      // no dispatch or assignment claim.
-      if (urgency_status === "emergency") {
-        reply = "Emergency received — management has been notified in the system. If there is immediate danger to anyone, call 911 first.";
-      } else if (urgency_status === "needs_confirmation") {
-        reply = `Got it — I've opened a request for ${unitLabel}. ${clarifying_question}`;
-        askedClarification = true;   // this outbound IS a question — mark it as one
-      } else {
-        reply = `Got it — ${String(c.field_category || "maintenance").replace("_", "/")} request opened for ${unitLabel}. We'll keep you updated right here.`;
-      }
-      return { c, createdType, createdId, reply, needsHuman: c.needs_human, askedClarification };
+      // §7.5 — truthful acknowledgment only, composed from the row that was
+      // COMMITTED rather than from what we asked for. No response time, no
+      // technician, no dispatch or assignment claim.
+      const r = operatingReceipt({ outcome: "work_order_opened",
+                                   result: { workOrder: created.workOrder, decision, deduped: !!created.deduped },
+                                   context });
+      if (r.requiresHuman === true) c.needs_human = true;
+      return speak(r, { createdType: "work_order", createdId: created.workOrder.id,
+                        needsHuman: c.needs_human });
     }
 
     if (c.classification === "balance" && c.confidence >= 0.7 && !c.needs_human && place) {
-      createdType = "balance_inquiry";
-      const bal = place.balance == null ? null : Number(place.balance);
-      reply = bal == null
-        ? "Your balance isn't loaded in the system yet — your manager will confirm it here."
-        : bal <= 0
-          ? `You're all paid up — current balance $${bal.toFixed(2)}.${place.rent ? ` Rent is $${Number(place.rent).toFixed(2)}/month.` : ""}`
-          : `Your current balance is $${bal.toFixed(2)}.${place.rent ? ` Rent is $${Number(place.rent).toFixed(2)}/month.` : ""}`;
-      return { c, createdType, createdId, reply, needsHuman: c.needs_human };
+      const r = operatingReceipt({ outcome: "balance_read",
+                                   result: { balance: place.balance, rent: place.rent }, context });
+      return speak(r, { createdType: "balance_inquiry", needsHuman: c.needs_human });
     }
 
     // document / lease_question / general / unknown / low confidence /
     // sensitive — the honest human queue. No pretending.
-    c.needs_human = true;
-    return { c, createdType: null, createdId: null, needsHuman: true,
-      reply: "Got it — your manager will follow up with you right here." };
+    return held("not_actionable");
   }
 
   async function runInbound({ personId, propertyId, body, channel, smsSid }) {
@@ -1070,7 +1058,11 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
       throw e;
     } finally { t2.release(); }
 
-    return { inbound, out, reply: result.reply, c: result.c,
+    //  `operating` is the receipt for what was COMMITTED here. Whether the
+    //  resident was actually told is a separate fact that this function does
+    //  not know and must not imply — each door composes it from its own
+    //  transport outcome.
+    return { inbound, out, reply: result.reply, c: result.c, operating: result.receipt,
              createdType: result.createdType, createdId: result.createdId, convo, place };
   }
 
@@ -1107,8 +1099,17 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
         personId: sess.person_id, propertyId: sess.property_id, body, channel: "portal",
       });
 
+      //  The portal door has NO transport: the reply is the HTTP response
+      //  itself. `not_attempted` is the honest delivery state — it is not
+      //  "delivered" (no message was sent) and not "failed" (nothing failed).
+      //  Composed rather than assumed so the two axes stay distinguishable on
+      //  both doors; the response body is unchanged.
+      const composed = composeReceipt({
+        operating: r.operating, delivery: deliveryReceipt({ state: "not_attempted" }),
+      });
+
       res.json({
-        receipt: r.reply,
+        receipt: composed.operating.text,
         message_id: r.inbound.id, reply_id: r.out.id, conversation_id: r.convo.id,
         classification: r.c.classification, confidence: r.c.confidence,
         created_object_type: r.createdType, created_object_id: r.createdId,
@@ -1274,10 +1275,23 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
             purpose: "ai_reply", person_id: person.id, eventId: r.out.id,
           });
         } catch (sendErr) {
-          wire = { sent: false, reason: `transport_threw: ${sendErr.message}` };
+          wire = { sent: false, reason: `transport_threw: ${sendErr.message}`, sid: null };
         }
-        if (!wire.sent) {
-          await flagUndeliveredReply({ inboundEventId: r.inbound.id, reason: wire.reason || "unknown" });
+
+        //  TWO RECEIPTS, NEVER ONE. The operating receipt above already
+        //  describes what was committed and is not revised by anything the
+        //  carrier does. This describes only what the wire did. A provider sid
+        //  on a failed send stays on the record and still does not make it
+        //  delivered.
+        const composed = composeReceipt({
+          operating: r.operating,
+          delivery: deliveryReceipt(wire.sent
+            ? { state: "delivered", providerRef: wire.sid || null }
+            : { state: "failed", providerRef: wire.sid || null, failureReason: wire.reason || "unknown" }),
+        });
+        if (!composed.delivery.delivered) {
+          await flagUndeliveredReply({ inboundEventId: r.inbound.id,
+                                       reason: composed.delivery.failureReason });
         }
       } catch (e) {
         console.error("inbound-sms:", e);

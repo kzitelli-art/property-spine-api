@@ -40,12 +40,18 @@ const receipt = require("./_run_receipt");
 
 const HARNESS = __filename;
 const EXPECTED = 34;
-let passed = 0, failed = 0, ran = 0;
+let passed = 0, failed = 0, ran = 0, notProven = 0;
 const ok = (label, cond, detail) => {
   ran++;
   if (cond) { passed++; console.log("  ok    " + label); }
   else { failed++; console.log("  FAIL  " + label + (detail ? "  →  " + detail : "")); }
 };
+//  DEFECT FIXED 2026-08-04: the git-identity check used to report itself as
+//  `ok` when the prior revision was unreachable. That is the harness declaring
+//  a check it never ran to be passing — the exact shape of every false green
+//  this repository has recorded. Unavailable is now neither pass nor fail: it
+//  is counted, printed, and it stops the run from reading as clean.
+const unproven = (label, why) => { notProven++; console.log("  ????  NOT PROVEN  " + label + "  →  " + why); };
 const section = (t) => console.log(`\n── ${t} ${"─".repeat(Math.max(0, 56 - t.length))}`);
 
 const makeIntentReader = require("../src/conversation/intent");
@@ -76,10 +82,14 @@ try {
   // ── 1. THE MOVE IS A MOVE ────────────────────────────────────────
   section("EXTRACTION IDENTITY");
   {
+    //  PINNED, not HEAD~1. This branch keeps growing commits, and `HEAD~1`
+    //  would silently start comparing against a revision that ALREADY has the
+    //  extraction — at which point the check inverts and fails for the wrong
+    //  reason. `1454330` is the revision this move was made from.
     let prior = null;
     try {
-      prior = execSync("git show HEAD~1:src/comms/tenantlink.js", { cwd: path.join(__dirname, ".."), stdio: ["ignore", "pipe", "ignore"] }).toString();
-    } catch { /* shallow history or first commit — reported below, not assumed away */ }
+      prior = execSync("git show 1454330:src/comms/tenantlink.js", { cwd: path.join(__dirname, ".."), stdio: ["ignore", "pipe", "ignore"] }).toString();
+    } catch { /* shallow history — reported below as NOT PROVEN, not assumed away */ }
 
     if (prior) {
       //  Boundary-hunting for the end of a function is fragile — the first
@@ -99,8 +109,8 @@ try {
         foreign.length === 0,
         foreign.length ? "changed lines: " + foreign.slice(0, 3).join(" | ") : null);
     } else {
-      ok("prior revision unavailable — identity checked by the other assertions",
-        true, null);
+      unproven("every extracted line appears verbatim in the tenantlink original",
+        "HEAD~1 is unreachable (shallow clone or first commit) — run 'git fetch --unshallow' and re-run");
     }
   }
 
@@ -248,6 +258,11 @@ try {
   }
 
   code = receipt.complete({ harness: HARNESS, passed, failed, expectedAtLeast: EXPECTED });
+  if (notProven > 0) {
+    console.error(`  ⚠  ${notProven} check(s) NOT PROVEN — see above. This run is not clean.`);
+    if (code === 0) code = 3;
+    console.error("  EXIT      " + code + "   (unproven checks are not passing checks)\n");
+  }
 } catch (e) {
   code = receipt.died(HARNESS, e, ran);
 }

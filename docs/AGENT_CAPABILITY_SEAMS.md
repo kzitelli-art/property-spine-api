@@ -79,6 +79,28 @@ second is *separable* but not *separated*.
 | 5 | Canonical work-order action | `workOrderService.createWorkOrder` | **SEPARATE.** The strongest seam. Every tenant work order produces an event and a routing obligation; the two raw inserts that bypassed this were removed in the SMS slice. |
 | 6 | Execution receipt + updated truth | `reply` composed inside `processInboundClaim()`; the T2 `comm_events` update at `:1121` | **CO-LOCATED.** The receipt is composed at the same place the decision is made. |
 
+## 3b. Status after the Phase 1 extraction (branch `claude/conversational-seams-and-technician-loop`)
+
+The audit above is a record of `95f13c7` and is left as written. Three of the
+co-located pieces have since been extracted. **Extracted, proven locally, not
+merged and not production-active.**
+
+| # | Piece | Now | Proof |
+|---|---|---|---|
+| 3 | Structured intent | `src/conversation/intent.js` — `classifyMessage`, `recognizeAnswer` | `tests/conversation_intent_extraction.test.js` · 45/45 |
+| 4 | Clarification / confirmation | `src/conversation/clarification.js` — the ladder and the §7.4 confirmation decision | `tests/conversation_clarification_and_receipt.test.js` · 150/150 |
+| 6 | Execution receipt | `src/conversation/receipt.js` — **operating** and **delivery** receipts, permanently separate | same harness, §10 |
+
+Piece 6 was not merely moved. Composing the acknowledgment at the same place
+the decision was made let a committed action and a delivered text read as one
+outcome. They are now two receipts with no field in which to combine them.
+
+`tenantlink.js` delegates to all three and keeps no copy of any of them; that
+is asserted against comment-stripped source, not asserted in a comment.
+
+**Piece 5 is unchanged and remains the strongest seam** — the extraction moved
+interpretation and acknowledgment, never the write.
+
 ### What this means concretely
 
 `module.exports` returns **only a router**. `classifyMessage`,

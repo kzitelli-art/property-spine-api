@@ -49,6 +49,14 @@ const GATES = [
     what: "closure boundary" },
   { file: "gate_no_raw_bridge_joins.js",
     what: "no raw bridge joins" },
+  //  The conversational seams. DB-free, so they belong on the standard path:
+  //  they check that the extracted logic has ONE implementation, that resident
+  //  wording did not drift, and that an operating receipt and a delivery
+  //  receipt cannot be collapsed into one claim.
+  { file: "conversation_intent_extraction.test.js",
+    what: "intent seam: one implementation, transport-independent, behaviour pinned" },
+  { file: "conversation_clarification_and_receipt.test.js",
+    what: "clarification + receipt seams: wording unchanged, operating ≠ delivery" },
 ];
 
 const bar = "════════════════════════════════════════════════════════════════";
