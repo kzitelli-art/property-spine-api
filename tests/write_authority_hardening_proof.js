@@ -66,7 +66,7 @@ function req(method, p, { session, key, body } = {}) {
 }
 
 (async () => {
-  const t0 = receipt.begin(__filename, { url: CONN, expected: 27 });
+  const t0 = receipt.begin(__filename, { url: CONN, expected: 36 });
   const pool = new Pool({ connectionString: CONN, ssl: false });
   const svc = require(path.join(__dirname, "..", "src/identity/staff_session_service.js"));
   const c = await pool.connect();
@@ -251,6 +251,35 @@ function req(method, p, { session, key, body } = {}) {
     ok("C7  after five refusals the application is STILL untouched", after.status === "submitted");
   }
 
+  section("F  the same standard on APPROVE — the other decision-class route");
+  {
+    const id = await mkApp(A);
+    const APPROVE = `/operator/leasing/applications/${id}/approve`;
+    const rF = await req("POST", APPROVE, { session: sA, body: { approved_by: uImposter } });
+    ok(`F1  a forged approved_by is REFUSED, not silently ignored (got ${rF.status})`, rF.status === 400);
+    ok("F2  and the refusal names the field", rF.body && (rF.body.fields || []).includes("approved_by"));
+    const rP = await req("POST", APPROVE, { session: sA, body: { property_id: B } });
+    ok(`F3  a forged property_id is REFUSED (got ${rP.status})`, rP.status === 400);
+    const rWrongProp = await req("POST", APPROVE, { session: sB, body: {} });
+    ok(`F4  a session scoped to another property is refused (got ${rWrongProp.status})`,
+      rWrongProp.status === 403 || rWrongProp.status === 404);
+    const rNoMod = await req("POST", APPROVE, { session: sNoMod, body: {} });
+    ok(`F5  a real operator without the leasing module is refused (got ${rNoMod.status})`,
+      rNoMod.status === 403 || rNoMod.status === 401);
+    const rNoSess = await req("POST", APPROVE, { body: {} });
+    ok(`F6  no session is refused (got ${rNoSess.status})`, rNoSess.status === 401);
+    const rKey2 = await req("POST", APPROVE, { key: KEY, body: {} });
+    ok(`F7  the shared key alone cannot approve (got ${rKey2.status})`, rKey2.status === 401);
+    const still = await (await pool.query("select status from lease_applications where id=$1", [id])).rows[0];
+    ok("F8  after every refusal the application is untouched", still.status === "submitted");
+    //  ONE REFUSAL RULE, not two copies.
+    const opSrc2 = require("fs").readFileSync(
+      path.join(__dirname, "..", "src/identity/operator.js"), "utf8");
+    ok("F9  approve and deny share ONE authority-refusal implementation",
+      (opSrc2.match(/function refuseClientAssertedAuthority/g) || []).length === 1
+      && (opSrc2.match(/refuseClientAssertedAuthority\(req, res\)/g) || []).length >= 2);
+  }
+
   section("D  one canonical service, two doors, no fork");
   {
     const submission = require(path.join(__dirname, "..", "src/applications/applicationSubmission.js"));
@@ -284,7 +313,7 @@ function req(method, p, { session, key, body } = {}) {
 
   console.log(`\n════ write authority: ${pass} passed, ${fail} failed ════`);
   await pool.end();
-  const code = receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 27 });
+  const code = receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 36 });
   process.exit(code);
 })().catch((e) => {
   console.error("DIED: " + (e && e.stack || e));

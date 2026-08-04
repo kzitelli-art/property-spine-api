@@ -3965,6 +3965,11 @@ module.exports = function operatorModule(deps) {
   // ══════════════════════════════════════════════════════════════════
   router.post("/operator/leasing/applications/:id/approve", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
+    //  This door never read body attribution, so a forged actor was already
+    //  INEFFECTIVE — but silently. The legacy key door accepts `approved_by`,
+    //  so a client migrating here would keep sending it and keep believing it
+    //  mattered. Now it fails visibly on the first call.
+    if (refuseClientAssertedAuthority(req, res)) return;
     if (!applicationsService || typeof applicationsService.approveApplication !== "function") {
       return res.status(503).json({ receipt: "Approve service not wired on this deploy (applicationsService missing). Deploy applications.js + the updated server.js together." });
     }
@@ -4046,7 +4051,41 @@ module.exports = function operatorModule(deps) {
   //  same property wall, same opaque refusal with a full stderr audit. Two
   //  decisions on one object should not have two authority shapes.
   // ══════════════════════════════════════════════════════════════════
-  const DENY_BODY_AUTHORITY_FIELDS = ["decided_by_user_id", "by_user_id", "actor_user_id", "property_id"];
+  //  ── ONE REFUSAL, USED BY EVERY MIGRATED STAFF DECISION ────────────
+  //  Written once. Two copies of one rule is a defect even while they agree,
+  //  and an authority rule is the last place to keep a second copy.
+  //
+  //  These names are refused because each one attempts to DECLARE something
+  //  the server owns: who acted, or which property authorises it. A field is
+  //  on this list only after being classified as an authority assertion — not
+  //  because its name contains user_id. `person_id`, `unit_id`, `space_id`
+  //  and the like are TARGETS of the operation and are deliberately absent.
+  //
+  //  REFUSED, NOT IGNORED. Silently substituting the session actor would let a
+  //  stale client keep sending a field it believes is honoured, with nobody
+  //  aware the value is dead. A 400 makes the staleness visible on the first
+  //  call instead of the first audit.
+  const STAFF_AUTHORITY_ASSERTION_FIELDS = Object.freeze([
+    "approved_by", "decided_by_user_id", "actor_user_id", "by_user_id",
+    "completed_by", "confirmed_by", "recorded_by", "created_by",
+    "user_id", "property_id",
+  ]);
+
+  function refuseClientAssertedAuthority(req, res) {
+    const b = req.body || {};
+    const asserted = STAFF_AUTHORITY_ASSERTION_FIELDS
+      .filter((f) => b[f] !== undefined && b[f] !== null);
+    if (!asserted.length) return null;
+    res.status(400).json({
+      error: "client_supplied_authority",
+      receipt: "This request tried to declare who acted or which property authorises it. "
+             + "Both come from your signed-in session. Remove: " + asserted.join(", ") + ".",
+      fields: asserted,
+    });
+    return asserted;
+  }
+
+  const DENY_BODY_AUTHORITY_FIELDS = STAFF_AUTHORITY_ASSERTION_FIELDS;
 
   router.post("/operator/leasing/applications/:id/deny", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
@@ -4057,16 +4096,8 @@ module.exports = function operatorModule(deps) {
     const b = req.body || {};
 
     //  A body that tries to declare WHO acted, or WHICH property authorises
-    //  it, is refused before anything is read.
-    const asserted = DENY_BODY_AUTHORITY_FIELDS.filter((f) => b[f] !== undefined && b[f] !== null);
-    if (asserted.length) {
-      return res.status(400).json({
-        error: "client_supplied_authority",
-        receipt: "This request tried to declare who acted or which property authorises it. "
-               + "Both come from your signed-in session. Remove: " + asserted.join(", ") + ".",
-        fields: asserted,
-      });
-    }
+    //  it, is refused before anything is read. One shared rule, not a copy.
+    if (refuseClientAssertedAuthority(req, res)) return;
 
     const audit = (reason, appRow) => {
       console.error("[operator/deny] REFUSED", JSON.stringify({
