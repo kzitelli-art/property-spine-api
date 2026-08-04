@@ -2815,6 +2815,103 @@ module.exports = function operatorModule(deps) {
     } finally { client.release(); }
   });
 
+  // ══════════════════════════════════════════════════════════════════
+  //  THE LAST THREE TOUR LIFECYCLE VERBS. Same shape as check-in: the
+  //  canonical service already exists in leasingleads.js, the route is a
+  //  wrapper, and nothing about what these writes MEAN changes here.
+  //
+  //  POST /operator/leasing/tours/:tourId/confirm-prospect
+  //  Confirmation genuinely has two possible actors — the prospect replying,
+  //  or a staff member logging it. actor_type stays an input because it is a
+  //  leasing FACT. What the body may no longer do is name a human staff
+  //  identity: when this door records a human, that human is the session.
+  // ══════════════════════════════════════════════════════════════════
+  router.post("/operator/leasing/tours/:tourId/confirm-prospect", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!leasingTourService || typeof leasingTourService.confirmProspectTourService !== "function") {
+      return res.status(503).json({ receipt: "Prospect confirmation is not wired on this deploy (leasingTourService.confirmProspectTourService missing)." });
+    }
+    if (refuseClientAssertedAuthority(req, res)) return;
+    const b = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      //  A 'prospect' confirmation names no staff user at all — the prospect
+      //  is not a user row. A 'human' confirmation names the session.
+      const asProspect = b.actor_type === "prospect";
+      const out = await leasingTourService.confirmProspectTourService(client, {
+        tourId: req.params.tourId,
+        actorType: asProspect ? "prospect" : "human",
+        actorUserId: asProspect ? null : req.operator.id,   // SERVER-DERIVED
+        via: b.via || "manual",
+        enforcePropertyId: req.operator.property_id,        // the session's wall
+      });
+      await client.query("commit");
+      return res.json({ ...out, confirmed_by_user_id: asProspect ? null : req.operator.id });
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      if (e.svc) return res.status(e.http).json(e.body);
+      console.error("operator tour confirm-prospect:", e);
+      return res.status(500).json({ receipt: "Could not record confirmation.", error: e.message });
+    } finally { client.release(); }
+  });
+
+  //  POST /operator/leasing/tours/:tourId/reminder — the recorded actor stays
+  //  'system'. An employee tapping "Reminder logged" records that a send
+  //  happened; they are not claiming to be the sender. The session decides
+  //  whether the write may happen and against which property, not who sent.
+  router.post("/operator/leasing/tours/:tourId/reminder", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!leasingTourService || typeof leasingTourService.recordTourReminderService !== "function") {
+      return res.status(503).json({ receipt: "Reminder recording is not wired on this deploy (leasingTourService.recordTourReminderService missing)." });
+    }
+    if (refuseClientAssertedAuthority(req, res)) return;
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await leasingTourService.recordTourReminderService(client, {
+        tourId: req.params.tourId,
+        enforcePropertyId: req.operator.property_id,        // the session's wall
+      });
+      await client.query("commit");
+      return res.json(out);
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      if (e.svc) return res.status(e.http).json(e.body);
+      console.error("operator tour reminder:", e);
+      return res.status(500).json({ receipt: "Could not record the reminder.", error: e.message });
+    } finally { client.release(); }
+  });
+
+  //  POST /operator/leasing/tours/:tourId/correct-outcome — a correction is
+  //  the write where attribution matters MOST: it says a recorded fact was
+  //  wrong. The original is never touched; the correction appends, carrying
+  //  the reason and the corrector. That corrector is the session.
+  router.post("/operator/leasing/tours/:tourId/correct-outcome", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!leasingTourService || typeof leasingTourService.correctTourOutcomeService !== "function") {
+      return res.status(503).json({ receipt: "Outcome correction is not wired on this deploy (leasingTourService.correctTourOutcomeService missing)." });
+    }
+    if (refuseClientAssertedAuthority(req, res)) return;
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await leasingTourService.correctTourOutcomeService(client, {
+        tourId: req.params.tourId,
+        b: req.body || {},
+        correctedBy: req.operator.id,                       // SERVER-DERIVED
+        enforcePropertyId: req.operator.property_id,        // the session's wall
+      });
+      await client.query("commit");
+      return res.json(out);
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      if (e.svc) return res.status(e.http).json(e.body);
+      console.error("operator tour correct-outcome:", e);
+      return res.status(e.httpStatus || 500).json({ receipt: e.publicMessage || e.message });
+    } finally { client.release(); }
+  });
+
   router.post("/operator/leasing/tours/:tourId/complete", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     if (!leasingTourService || typeof leasingTourService.completeTour !== "function") {

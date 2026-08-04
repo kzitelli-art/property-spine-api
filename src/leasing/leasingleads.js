@@ -1865,25 +1865,78 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   //  The prospect affirming they're coming. actor_type 'prospect' (inbound
   //  reply) or 'human' (staff logging a call-back). NOT something the system
   //  asserts on its own.
+  // ════════════════════════════════════════════════════════════════════
+  //  confirmProspectTourService — extracted byte-faithfully from the
+  //  operator-key route body so the session door calls the SAME transaction
+  //  (the checkInTourService precedent). Caller owns client + begin/commit.
+  //
+  //  TWO ACTORS, ONE EVENT. A confirmation can genuinely come from the
+  //  PROSPECT (they replied to a text) or from a STAFF MEMBER logging it.
+  //  That distinction is a real leasing fact and is preserved: the key door
+  //  keeps passing what it always passed, and the session door names the
+  //  authenticated employee. What no door may do is take a HUMAN staff
+  //  identity from the body — that is the only thing that changes.
+  // ════════════════════════════════════════════════════════════════════
+  async function confirmProspectTourService(client, {
+    tourId, actorType = "human", actorUserId = null, via = "manual", enforcePropertyId = null,
+  }) {
+    const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
+    if (!tour) throw svcErr(404, { receipt: "No tour with that id." });
+    if (enforcePropertyId && String(tour.property_id) !== String(enforcePropertyId)) {
+      throw svcErr(403, { receipt: "That tour belongs to another property." });
+    }
+    if (!tour.scheduled_for) throw svcErr(409, { receipt: "Tour has no scheduled time yet — book a slot first." });
+    await recordTourEvent(client, {
+      tourId, leadId: tour.lead_id, type: "confirmed_by_prospect",
+      actorType: actorType === "prospect" ? "prospect" : "human",
+      actorId: actorUserId != null ? actorUserId : (tour.confirmed_by || null),
+      metadata: { via },
+    });
+    return { receipt: "Prospect confirmed. This is a truth input to show rate.", tour_id: tourId };
+  }
+
   router.post("/leasing/tours/:tourId/confirm-prospect", requireOperator, async (req, res) => {
     const { tourId } = req.params; const b = req.body || {};
     const client = await pool.connect();
     try {
       await client.query("begin");
-      const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
-      if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
-      if (!tour.scheduled_for) { await client.query("rollback"); return res.status(409).json({ receipt: "Tour has no scheduled time yet — book a slot first." }); }
-      await recordTourEvent(client, {
-        tourId, leadId: tour.lead_id, type: "confirmed_by_prospect",
-        actorType: b.actor_type === "prospect" ? "prospect" : "human",
-        actorId: b.actor_id || tour.confirmed_by || null,
-        metadata: { via: b.via || "manual" },
+      const out = await confirmProspectTourService(client, {
+        tourId, actorType: b.actor_type, actorUserId: b.actor_id || null,
+        via: b.via || "manual", enforcePropertyId: null,
       });
       await client.query("commit");
-      return res.json({ receipt: "Prospect confirmed. This is a truth input to show rate.", tour_id: tourId });
-    } catch (e) { try { await client.query("rollback"); } catch {} console.error("leasing confirm-prospect:", e); return res.status(500).json({ receipt: "Could not record confirmation.", error: e.message }); }
-    finally { client.release(); }
+      return res.json(out);
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      if (e.svc) return res.status(e.http).json(e.body);
+      console.error("leasing confirm-prospect:", e);
+      return res.status(500).json({ receipt: "Could not record confirmation.", error: e.message });
+    } finally { client.release(); }
   });
+
+  // ════════════════════════════════════════════════════════════════════
+  //  recordTourReminderService — extracted byte-faithfully.
+  //
+  //  THE RECORDED ACTOR STAYS 'system', DELIBERATELY. A reminder is sent by
+  //  the reminder machinery; an employee tapping "Reminder logged" is
+  //  recording that the send happened, not claiming to be the sender. This
+  //  packet hardens who may ASK for the write — it does not restate what the
+  //  write means. Changing 'system' to the operator would be a business
+  //  change wearing an authority packet's clothes.
+  // ════════════════════════════════════════════════════════════════════
+  async function recordTourReminderService(client, { tourId, enforcePropertyId = null }) {
+    const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
+    if (!tour) throw svcErr(404, { receipt: "No tour with that id." });
+    if (enforcePropertyId && String(tour.property_id) !== String(enforcePropertyId)) {
+      throw svcErr(403, { receipt: "That tour belongs to another property." });
+    }
+    await recordTourEvent(client, {
+      tourId, leadId: tour.lead_id, type: "reminder_sent",
+      actorType: "system", metadata: { scheduled_for: tour.scheduled_for },
+    });
+    // actual outbound text reuses sms.js like 038 intake; left to the wiring task
+    return { receipt: "Reminder recorded. (Outbound text reuses sms.js once the property line is pointed at leasing.)", tour_id: tourId };
+  }
 
   // ── REMINDER SENT — schema records it; sms.js does the wire (env-gated) ──
   router.post("/leasing/tours/:tourId/reminder", requireOperator, async (req, res) => {
@@ -1891,17 +1944,15 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     const client = await pool.connect();
     try {
       await client.query("begin");
-      const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
-      if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
-      await recordTourEvent(client, {
-        tourId, leadId: tour.lead_id, type: "reminder_sent",
-        actorType: "system", metadata: { scheduled_for: tour.scheduled_for },
-      });
+      const out = await recordTourReminderService(client, { tourId, enforcePropertyId: null });
       await client.query("commit");
-      // actual outbound text reuses sms.js like 038 intake; left to the wiring task
-      return res.json({ receipt: "Reminder recorded. (Outbound text reuses sms.js once the property line is pointed at leasing.)", tour_id: tourId });
-    } catch (e) { try { await client.query("rollback"); } catch {} console.error("leasing reminder:", e); return res.status(500).json({ receipt: "Could not record the reminder.", error: e.message }); }
-    finally { client.release(); }
+      return res.json(out);
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      if (e.svc) return res.status(e.http).json(e.body);
+      console.error("leasing reminder:", e);
+      return res.status(500).json({ receipt: "Could not record the reminder.", error: e.message });
+    } finally { client.release(); }
   });
 
   // ── CHECK IN — TRUTH POINT #2 (on-site only) ──────────────────────────
@@ -2368,23 +2419,27 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   //              entry (tour_events are already projected), original preserved above it.
   // The original completed event and its outcome remain byte-unchanged.
   // ══════════════════════════════════════════════════════════════════
-  router.post("/leasing/tours/:tourId/correct-outcome", requireOperator, async (req, res) => {
-    const { tourId } = req.params; const b = req.body || {};
-    const client = await pool.connect();
-    try {
-      await client.query("begin");
-      const correctedBy = (await resolveRecorderUserId(req)) || b.actor_id || null;
+  // ════════════════════════════════════════════════════════════════════
+  //  correctTourOutcomeService — extracted byte-faithfully from the
+  //  operator-key route body. Caller owns client + begin/commit/rollback.
+  //  correctedBy is resolved by the CALLER, so the session door can pass the
+  //  authenticated operator and the key door keeps its documented fallback.
+  // ════════════════════════════════════════════════════════════════════
+  async function correctTourOutcomeService(client, { tourId, b = {}, correctedBy = null, enforcePropertyId = null }) {
       const reason = (typeof b.reason === "string") ? b.reason.trim() : "";
-      if (!reason) { await client.query("rollback"); return res.status(400).json({ receipt: "A correction needs a reason — the person who recorded it deserves to know why it changed." }); }
+      if (!reason) throw svcErr(400, { receipt: "A correction needs a reason — the person who recorded it deserves to know why it changed." });
 
       const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
-      if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
+      if (!tour) throw svcErr(404, { receipt: "No tour with that id." });
+      if (enforcePropertyId && String(tour.property_id) !== String(enforcePropertyId)) {
+        throw svcErr(403, { receipt: "That tour belongs to another property." });
+      }
 
       // the prior outcome we are correcting must exist (the original completed event)
       const original = (await client.query(
         `select id, metadata, event_at from tour_events
           where tour_id=$1 and event_type='completed' order by event_at asc limit 1`, [tourId])).rows[0];
-      if (!original) { await client.query("rollback"); return res.status(409).json({ receipt: "There's no recorded tour outcome to correct yet." }); }
+      if (!original) throw svcErr(409, { receipt: "There's no recorded tour outcome to correct yet." });
 
       const priorOutcome = (original.metadata && original.metadata.outcome) || null;
       // revised fields — only the outcome-shaped ones, validated against the frozen vocab shape
@@ -2423,15 +2478,28 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
           [revised.disposition, conv.id]);
       }
 
-      await client.query("commit");
-      return res.json({
+      return {
         receipt: `Outcome corrected — the original is preserved and the change is on the record with your reason.`,
         tour_id: tourId, conversion_id: conv ? conv.id : null,
         prior_disposition: priorOutcome ? priorOutcome.disposition : null,
         revised_disposition: revised.disposition,
-      });
+      };
+  }
+
+  //  ── the operator-KEY door: identical external contract to before the
+  //     extraction (same auth, same statuses, same bodies). ──
+  router.post("/leasing/tours/:tourId/correct-outcome", requireOperator, async (req, res) => {
+    const { tourId } = req.params; const b = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const correctedBy = (await resolveRecorderUserId(req)) || b.actor_id || null;
+      const out = await correctTourOutcomeService(client, { tourId, b, correctedBy, enforcePropertyId: null });
+      await client.query("commit");
+      return res.json(out);
     } catch (e) {
       try { await client.query("rollback"); } catch (_) {}
+      if (e.svc) return res.status(e.http).json(e.body);
       return res.status(e.httpStatus || 500).json({ receipt: e.publicMessage || e.message });
     } finally { client.release(); }
   });
@@ -2705,6 +2773,9 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // in operator.js — the same no-fork handoff as agentApp._service.
   router._service = {
     checkInTourService,
+    confirmProspectTourService,   // the ONE prospect-confirmation transaction
+    recordTourReminderService,    // the ONE reminder-recorded transaction
+    correctTourOutcomeService,    // the ONE outcome-correction transaction
     completeTour: completeTourService,
     bookTourIntoSlot,          // the ONE canonical booking transaction
     readOfferableSlots,        // slots the agent may offer this turn (property tz; null if tz unconfigured)

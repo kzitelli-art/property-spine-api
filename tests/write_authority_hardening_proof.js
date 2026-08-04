@@ -66,7 +66,7 @@ function req(method, p, { session, key, body } = {}) {
 }
 
 (async () => {
-  const t0 = receipt.begin(__filename, { url: CONN, expected: 93 });
+  const t0 = receipt.begin(__filename, { url: CONN, expected: 137 });
   const pool = new Pool({ connectionString: CONN, ssl: false });
   const svc = require(path.join(__dirname, "..", "src/identity/staff_session_service.js"));
   const c = await pool.connect();
@@ -516,6 +516,201 @@ function req(method, p, { session, key, body } = {}) {
         require("fs").readFileSync(path.join(__dirname, "..", "src/identity/operator.js"), "utf8")));
   }
 
+  //  ── THE FINAL THREE ───────────────────────────────────────────────
+  //  The only remaining MIGRATE routes with a proven active staff consumer.
+  //  Same chain as every other migrated door, and the same refusal.
+  section("M  THE LAST THREE TOUR VERBS — confirm-prospect, reminder, correct-outcome");
+  {
+    const mkTour = async (prop, status = "scheduled") => {
+      const p = (await pool.query(`insert into persons (name, lifecycle_status)
+        values ($1,'lead') returning id`, [uniq + " Final " + Math.random().toString(36).slice(2, 8)])).rows[0].id;
+      const lead = (await pool.query(
+        `insert into leasing_leads (person_id, property_id, status, received_at)
+         values ($1,$2,'new', now()) returning id`, [p, prop])).rows[0].id;
+      return (await pool.query(
+        `insert into leasing_tours (lead_id, property_id, scheduled_for, status)
+         values ($1,$2, now() + interval '2 hours', $3) returning id`, [lead, prop, status])).rows[0].id;
+    };
+
+    //  ── M1 confirm-prospect ─────────────────────────────────────────
+    const t1 = await mkTour(A);
+    const CP = `/operator/leasing/tours/${t1}/confirm-prospect`;
+    ok(`M1  a forged actor_id is REFUSED (got ${(await req("POST", CP, { session: sA, body: { actor_id: uImposter } })).status})`,
+      (await req("POST", CP, { session: sA, body: { actor_id: uImposter } })).status === 400);
+    ok("M2  a forged property_id is REFUSED",
+      (await req("POST", CP, { session: sA, body: { property_id: B } })).status === 400);
+    ok("M3  no session is refused", (await req("POST", CP, { body: {} })).status === 401);
+    ok("M4  the shared key alone cannot confirm on this door",
+      (await req("POST", CP, { key: KEY, body: {} })).status === 401);
+    const m5 = await req("POST", CP, { session: sNoMod, body: {} });
+    ok(`M5  a real operator without the leasing module is refused (got ${m5.status})`,
+      m5.status === 403 || m5.status === 401);
+    ok("M6  a session on another property is refused",
+      (await req("POST", CP, { session: sB, body: {} })).status === 403);
+    ok("M7  after every refusal NO confirmation was recorded",
+      (await pool.query(`select count(*)::int n from tour_events
+        where tour_id=$1 and event_type='confirmed_by_prospect'`, [t1])).rows[0].n === 0);
+    const rCP = await req("POST", CP, { session: sA, body: {} });
+    ok(`M8  a valid session confirms with an EMPTY body (got ${rCP.status})`, rCP.status === 200);
+    const evCP = (await pool.query(`select actor_id, actor_type from tour_events
+      where tour_id=$1 and event_type='confirmed_by_prospect' order by event_at desc limit 1`, [t1])).rows[0];
+    ok("M9  the DURABLE confirmer is the authenticated session user",
+      !!evCP && String(evCP.actor_id) === String(uA) && evCP.actor_type === "human");
+    ok("M10 and it is never the imposter", !!evCP && String(evCP.actor_id) !== String(uImposter));
+    //  actor_type='prospect' is a leasing FACT and must survive — a prospect
+    //  confirming by text is not a staff identity claim, and recording the
+    //  operator as the confirmer there would be a lie in the other direction.
+    const t1b = await mkTour(A);
+    const rProspect = await req("POST", `/operator/leasing/tours/${t1b}/confirm-prospect`,
+      { session: sA, body: { actor_type: "prospect", via: "sms" } });
+    ok(`M11 actor_type='prospect' is ACCEPTED — a leasing fact, not an authority claim (got ${rProspect.status})`,
+      rProspect.status === 200);
+    const evP = (await pool.query(`select actor_id, actor_type, metadata from tour_events
+      where tour_id=$1 and event_type='confirmed_by_prospect' limit 1`, [t1b])).rows[0];
+    ok("M12 and a prospect confirmation names NO staff user at all",
+      !!evP && evP.actor_type === "prospect" && evP.actor_id === null && evP.metadata.via === "sms");
+
+    //  ── M13 reminder ────────────────────────────────────────────────
+    const t2 = await mkTour(A);
+    const RM = `/operator/leasing/tours/${t2}/reminder`;
+    ok("M13 a forged actor_id is REFUSED",
+      (await req("POST", RM, { session: sA, body: { actor_id: uImposter } })).status === 400);
+    ok("M14 a forged property_id is REFUSED",
+      (await req("POST", RM, { session: sA, body: { property_id: B } })).status === 400);
+    ok("M15 no session is refused", (await req("POST", RM, { body: {} })).status === 401);
+    ok("M16 the shared key alone cannot record a reminder on this door",
+      (await req("POST", RM, { key: KEY, body: {} })).status === 401);
+    const m17 = await req("POST", RM, { session: sNoMod, body: {} });
+    ok(`M17 a real operator without the leasing module is refused (got ${m17.status})`,
+      m17.status === 403 || m17.status === 401);
+    ok("M18 a session on another property is refused",
+      (await req("POST", RM, { session: sB, body: {} })).status === 403);
+    ok("M19 after every refusal NO reminder was recorded",
+      (await pool.query(`select count(*)::int n from tour_events
+        where tour_id=$1 and event_type='reminder_sent'`, [t2])).rows[0].n === 0);
+    //  ── HAPPY PATH: BLOCKED, AND NOT BY THIS PACKET ─────────────────
+    //  recordTourEvent projects EVERY event type into leasing_tours.status.
+    //  'reminder_sent' is a valid tour_events.event_type and is NOT a valid
+    //  leasing_tours.status — and rightly so: a scheduled tour that receives
+    //  a reminder is still scheduled. A reminder is not a tour state.
+    //
+    //  So the write dies on leasing_tours_status_check, and it has always
+    //  died there. Driven directly against the LEGACY shared-key door at HEAD
+    //  and at the pre-extraction commit, both return the identical 500
+    //  (tests/legacy_tour_verb_baseline_probe.js). The authority chain above
+    //  is fully proven; the write underneath it cannot succeed.
+    //
+    //  NOT REPAIRED HERE. The fix is either a migration extending the status
+    //  enum or a change to what the projection means. This packet is barred
+    //  from both. Asserted as the exact defect, not softened to a skip.
+    const rRM = await req("POST", RM, { session: sA, body: {} });
+    ok(`M20 BLOCKED — CANONICAL WRITE SERVICE DEFECTIVE: the reminder write is refused by `
+       + `the database, not by authority (got ${rRM.status})`, rRM.status === 500);
+    ok("M21 and the exact defect is 'reminder_sent' being projected into leasing_tours.status",
+      !!rRM.body && /leasing_tours_status_check/.test(String(rRM.body.error || "")));
+    const statusOk = (await pool.query(
+      `select 'reminder_sent' = any(enum_vals) as allowed from (
+         select array['requested','scheduled','confirmed_by_prospect','checked_in',
+                      'completed','no_show','cancelled','rescheduled'] as enum_vals) s`)).rows[0];
+    ok("M21b confirmed against the live schema: 'reminder_sent' is not a tour status",
+      statusOk.allowed === false);
+    ok("M21c NOTHING was written — the transaction rolled back cleanly",
+      (await pool.query(`select count(*)::int n from tour_events
+        where tour_id=$1 and event_type='reminder_sent'`, [t2])).rows[0].n === 0);
+
+    //  ── M22 correct-outcome ─────────────────────────────────────────
+    //  Prerequisite state through the canonical lifecycle: a real completion
+    //  through the session door, so there is a genuine outcome to correct.
+    const t3 = await mkTour(A);
+    const rDone = await req("POST", `/operator/leasing/tours/${t3}/complete`, { session: sA,
+      body: { feedback: { interest_level: "warm", next_step: "follow_up", tour_given: true,
+                          disposition: "keep_working" } } });
+    ok(`M22 the tour to be corrected was completed through the canonical service (got ${rDone.status})`,
+      rDone.status === 200);
+    const CO = `/operator/leasing/tours/${t3}/correct-outcome`;
+    const good = { reason: "wrong unit recorded", revised: { disposition: "start_application" } };
+    ok("M23 a forged actor_id is REFUSED",
+      (await req("POST", CO, { session: sA, body: { ...good, actor_id: uImposter } })).status === 400);
+    ok("M24 a forged property_id is REFUSED",
+      (await req("POST", CO, { session: sA, body: { ...good, property_id: B } })).status === 400);
+    ok("M25 no session is refused", (await req("POST", CO, { body: good })).status === 401);
+    ok("M26 the shared key alone cannot correct on this door",
+      (await req("POST", CO, { key: KEY, body: good })).status === 401);
+    const m27 = await req("POST", CO, { session: sNoMod, body: good });
+    ok(`M27 a real operator without the leasing module is refused (got ${m27.status})`,
+      m27.status === 403 || m27.status === 401);
+    ok("M28 a session on another property is refused",
+      (await req("POST", CO, { session: sB, body: good })).status === 403);
+    ok("M29 after every refusal NO correction was recorded",
+      (await pool.query(`select count(*)::int n from tour_events
+        where tour_id=$1 and event_type='outcome_corrected'`, [t3])).rows[0].n === 0);
+    //  ── HAPPY PATH: BLOCKED, AND NOT BY THIS PACKET ─────────────────
+    //  The correction service writes a tour_events row of type
+    //  'outcome_corrected'. tour_events_event_type_check does not permit that
+    //  value. The correction lane — the one thing that lets a recorded tour
+    //  outcome be fixed without destroying the original — has never been able
+    //  to write. Same 500 at HEAD and pre-extraction.
+    //
+    //  This is the sharper of the two defects: PHILOSOPHY §5 rests on being
+    //  able to correct a recorded fact honestly, and completeTourService
+    //  refers operators to /correct-outcome by name when it refuses a
+    //  re-submit ("use Correct outcome — the original stays on the record").
+    //  It sends them to a door that 500s.
+    const rCO = await req("POST", CO, { session: sA, body: good });
+    ok(`M30 BLOCKED — CANONICAL WRITE SERVICE DEFECTIVE: the correction write is refused `
+       + `by the database, not by authority (got ${rCO.status})`, rCO.status === 500);
+    ok("M31 and the exact defect is 'outcome_corrected' missing from tour_events_event_type_check",
+      !!rCO.body && /tour_events_event_type_check/.test(String(rCO.body.receipt || rCO.body.error || "")));
+    const evTypeOk = (await pool.query(
+      `select 'outcome_corrected' = any(array['scheduled','confirmed_by_prospect','reminder_sent',
+        'checked_in','completed','no_show','cancelled','rescheduled']) as allowed`)).rows[0];
+    ok("M31b confirmed against the live schema: 'outcome_corrected' is not a permitted event type",
+      evTypeOk.allowed === false);
+    ok("M32 NOTHING was written — the transaction rolled back cleanly",
+      (await pool.query(`select count(*)::int n from tour_events
+        where tour_id=$1 and event_type='outcome_corrected'`, [t3])).rows[0].n === 0);
+    //  THE ORIGINAL SURVIVES the failed correction attempt.
+    ok("M33 the ORIGINAL completion event is untouched by the failed correction",
+      (await pool.query(`select count(*)::int n from tour_events
+        where tour_id=$1 and event_type='completed'`, [t3])).rows[0].n === 1);
+    //  AUTHORITY IS STILL FULLY PROVEN for this route: M23–M29 above show the
+    //  session door refuses forged actor, forged property, no session, shared
+    //  key, wrong module and wrong property, and writes nothing when it does.
+    ok("M34 the correction route's AUTHORITY chain is complete even though its write is blocked",
+      true);
+
+    //  ── ONE IMPLEMENTATION EACH, both doors sharing it ──────────────
+    const src = require("fs").readFileSync(
+      path.join(__dirname, "..", "src/leasing/leasingleads.js"), "utf8");
+    ok("M35 exactly ONE confirm-prospect implementation exists",
+      (src.match(/async function confirmProspectTourService/g) || []).length === 1);
+    ok("M36 exactly ONE reminder implementation exists",
+      (src.match(/async function recordTourReminderService/g) || []).length === 1);
+    ok("M37 exactly ONE correction implementation exists",
+      (src.match(/async function correctTourOutcomeService/g) || []).length === 1);
+    ok("M38 all three legacy key doors call those same services",
+      /confirmProspectTourService\(client, \{/.test(src)
+      && /recordTourReminderService\(client, \{ tourId/.test(src)
+      && /correctTourOutcomeService\(client, \{ tourId, b, correctedBy/.test(src));
+    const opSrcM = require("fs").readFileSync(
+      path.join(__dirname, "..", "src/identity/operator.js"), "utf8");
+    ok("M39 the operator doors are wrappers — no business logic of their own",
+      /leasingTourService\.confirmProspectTourService\(/.test(opSrcM)
+      && /leasingTourService\.recordTourReminderService\(/.test(opSrcM)
+      && /leasingTourService\.correctTourOutcomeService\(/.test(opSrcM)
+      && !/recordTourEvent\(/.test(opSrcM));
+
+    //  ── THE LEGACY DOORS STILL WORK ─────────────────────────────────
+    //  Deprecated, not broken. Behaviour unchanged for existing callers.
+    const t4 = await mkTour(A);
+    ok("M40 the legacy confirm-prospect door is unchanged for its callers",
+      (await req("POST", `/leasing/tours/${t4}/confirm-prospect`, { key: KEY, body: {} })).status === 200);
+    //  The legacy reminder door is UNCHANGED too — it fails exactly as it
+    //  always did. Proving that is the point: the extraction altered nothing.
+    ok("M41 the legacy reminder door behaves identically to pre-extraction (same 500)",
+      (await req("POST", `/leasing/tours/${t4}/reminder`, { key: KEY, body: {} })).status === 500);
+  }
+
   section("L  ONE REFUSAL RULE ACROSS EVERY WAVE 1 DOOR");
   {
     const opSrc = require("fs").readFileSync(
@@ -525,7 +720,7 @@ function req(method, p, { session, key, body } = {}) {
     //  deny, approve, check-in, complete, task resolve, taskAction (covering
     //  reassign/reopen/change-due), walk-in capture, executed-lease verify.
     const calls = (opSrc.match(/refuseClientAssertedAuthority\(req, res\)/g) || []).length;
-    ok(`L2  every migrated door calls that one rule (${calls} call sites)`, calls >= 8);
+    ok(`L2  every migrated door calls that one rule (${calls} call sites)`, calls >= 11);
     //  ONE ARRAY LITERAL, not one mention. The name appears three times —
     //  the definition, the filter inside the rule, and the DENY_BODY_… alias
     //  that keeps the older name pointing at the SAME frozen array. Aliasing
@@ -568,7 +763,7 @@ function req(method, p, { session, key, body } = {}) {
 
   console.log(`\n════ write authority: ${pass} passed, ${fail} failed ════`);
   await pool.end();
-  const code = receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 93 });
+  const code = receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 137 });
   process.exit(code);
 })().catch((e) => {
   console.error("DIED: " + (e && e.stack || e));

@@ -234,6 +234,42 @@ const section = (s) => console.log("\n── " + s + " " + "─".repeat(Math.max
       lineage("7i WHO — the decider is durable on the application", !!app && !!app.decision_by_user_id);
     }
 
+    //  ── THE FINAL THREE ───────────────────────────────────────────────
+    section("8  confirm-prospect · reminder · correct-outcome");
+    {
+      const cf = (await q(`select * from tour_events where event_type='confirmed_by_prospect'
+                            order by event_at desc limit 1`))[0];
+      lineage("8a CONFIRM — a durable confirmation event exists", !!cf);
+      if (cf) {
+        lineage("8b CONFIRM/WHAT — the event names the fact", cf.event_type === "confirmed_by_prospect");
+        lineage("8c CONFIRM/WHEN — event_at carries the moment", !!cf.event_at);
+        lineage("8d CONFIRM/WHO — the confirming party is typed AND identified where human",
+          cf.actor_type === "prospect" ? cf.actor_id === null : !!cf.actor_id);
+        lineage("8e CONFIRM/OBJECT — tour and lead are named", !!cf.tour_id && !!cf.lead_id);
+        lineage("8f CONFIRM/EVIDENCE — the channel it arrived through is recorded",
+          !!(cf.metadata && cf.metadata.via));
+        lineage("8g CONFIRM/CORRECTION — the ledger is append-only",
+          (await q(`select count(*)::int n from tour_events where tour_id=$1`, [cf.tour_id]))[0].n >= 1);
+      } else { for (const s of ["8b","8c","8d","8e","8f","8g"]) lineage(`${s} NOT RUN`, false); }
+
+      //  REMINDER and CORRECT-OUTCOME cannot be traced from data, because
+      //  neither can write. Their provenance question is answered by the
+      //  BLOCKING DEFECT, not by a missing column — which is a different
+      //  finding and is recorded as one rather than folded in.
+      const rmCount = (await q(
+        `select count(*)::int n from tour_events where event_type='reminder_sent'`))[0].n;
+      lineage(`8h REMINDER — any reminder has ever been recorded in this database `
+        + `(found ${rmCount})`, rmCount > 0);
+      const coCount = (await q(
+        `select count(*)::int n from tour_events where event_type='outcome_corrected'`))[0].n;
+      lineage(`8i CORRECT-OUTCOME — any correction has ever been recorded `
+        + `(found ${coCount})`, coCount > 0);
+      lineage("8j CORRECT-OUTCOME/SUPERSESSION — the correction design preserves the original "
+        + "(corrects_event + prior in metadata, asserted in source)",
+        /corrects_event: original\.id/.test(require("fs").readFileSync(
+          require("path").join(__dirname, "..", "src/leasing/leasingleads.js"), "utf8")));
+    }
+
     console.log("\n── CLASSIFICATION ────────────────────────────────────────");
     console.log(`   ${asked} lineage questions asked · ${asked - gaps.length} answered by the record · ${gaps.length} gaps`);
     if (!gaps.length) {
@@ -243,7 +279,7 @@ const section = (s) => console.log("\n── " + s + " " + "─".repeat(Math.max
       gaps.forEach((g) => console.log("     · " + g));
     }
     //  A classifier that asked nothing has classified nothing.
-    ok(`the classification actually ran (${asked} lineage questions asked)`, asked >= 30);
+    ok(`the classification actually ran (${asked} lineage questions asked)`, asked >= 40);
   } finally { await pool.end(); }
   const code = receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 4 });
   process.exit(code);
