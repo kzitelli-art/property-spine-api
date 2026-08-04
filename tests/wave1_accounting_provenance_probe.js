@@ -185,6 +185,55 @@ const section = (s) => console.log("\n── " + s + " " + "─".repeat(Math.max
     lineage("6e SUPERSEDED — a later record can point at the one it replaces",
       cols.includes("supersedes_record_id"));
 
+    //  ── THE DENIAL TRACE, LINK BY LINK ────────────────────────────────
+    //  Asked exactly as the gate asks it:
+    //    application_denied event → exact application → governing offer or
+    //    proposed terms at denial → rent, concessions and fees →
+    //    correction or supersession history.
+    section("7  DENIAL — the five-link economic trace");
+    {
+      const evCols = (await q(
+        `select column_name from information_schema.columns where table_name='events'`))
+        .map((r) => r.column_name);
+      lineage(`7a EVENT → EXACT APPLICATION — the event names the application it ended `
+        + `(events columns: ${evCols.join(",")})`, evCols.includes("application_id"));
+      //  Is there an indirection that recovers it? application_intents carries
+      //  an event_id FK; if the denial wrote one, the link exists by join.
+      const intents = (await q(
+        `select count(*)::int n from application_intents ai
+           join events e on e.id = ai.event_id
+          where e.type='application_denied'`))[0].n;
+      lineage(`7b EVENT → APPLICATION (indirect) — a linking row recovers it `
+        + `(${intents} application_intents joined to a denial event)`, intents >= 1);
+
+      const app = (await q(
+        `select id, rent, deposit, concession_status, proposed_terms_confirmation_id,
+                decision_by_user_id, decision_reason, decided_at, terminal_code, terminal_at
+           from lease_applications where status='declined'
+          order by decided_at desc nulls last limit 1`))[0];
+      lineage("7c APPLICATION — the denied application itself is recoverable and terminal",
+        !!app && !!app.terminal_code);
+      lineage("7d GOVERNING TERMS — the application points at the confirmation that governed it",
+        !!app && app.proposed_terms_confirmation_id !== undefined);
+      const conf = (await q(
+        `select column_name from information_schema.columns
+          where table_name='application_proposed_terms_confirmations'`)).map((r) => r.column_name);
+      lineage("7e RENT + CONCESSIONS — the governing terms carry the economics durably",
+        conf.includes("rent") && conf.includes("security_deposit") && conf.includes("concession_status"));
+      //  FEES. Named explicitly by the gate. Neither the application nor the
+      //  confirmation carries a fee concept; nothing is invented to cover it.
+      const appCols = (await q(
+        `select column_name from information_schema.columns where table_name='lease_applications'`))
+        .map((r) => r.column_name);
+      lineage("7f FEES — a fee is recoverable from the denial lineage",
+        appCols.some((c) => /fee/.test(c)) || conf.some((c) => /fee/.test(c)));
+      lineage("7g SUPERSESSION — a later confirmation points at the one it replaced",
+        conf.includes("supersedes_confirmation_id"));
+      lineage("7h CORRECTION — the decision itself records its reason and moment",
+        !!app && app.decision_reason !== undefined && !!app.decided_at);
+      lineage("7i WHO — the decider is durable on the application", !!app && !!app.decision_by_user_id);
+    }
+
     console.log("\n── CLASSIFICATION ────────────────────────────────────────");
     console.log(`   ${asked} lineage questions asked · ${asked - gaps.length} answered by the record · ${gaps.length} gaps`);
     if (!gaps.length) {

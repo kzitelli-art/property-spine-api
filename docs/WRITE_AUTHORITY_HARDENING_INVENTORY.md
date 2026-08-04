@@ -358,3 +358,99 @@ Dispositions are mutually exclusive. `BLOCKED` means
 shared key is held outside these repositories, so source cannot prove nonuse.
 `/applications/:id/countersign` joined that set once tracing showed the app
 calls a different, nonexistent path.
+
+---
+
+## WAVE 2 — ACTIVE-CONSUMER INVENTORY
+
+The 43-route denominator is **unchanged**. This section adds one fact per
+`MIGRATE` route and changes no disposition: **does a current in-repository
+staff consumer call it?**
+
+### How a consumer was proven
+
+Exact path literals were extracted from every call expression in both
+repositories (`getJSON(…)` / `fetch(…)` in `property-spine-app`, and any
+outbound HTTP in `property-spine-api`), then read individually. Three kinds
+of match were rejected as evidence:
+
+- **A route registration.** `router.post("/x")` is the door, not somebody
+  walking through it.
+- **A comment or docstring.** Several source files name these paths in prose.
+- **A test harness.** `qa_lifecycle_arc.js` and `slice9_route_retirement_proof.js`
+  exercise a number of these routes. A harness proves the route works; it does
+  not prove a human depends on it.
+
+A first pass truncated each route at its first `:param`, so
+`/applications/:id/approve` matched every `/applications/` string in the tree
+and reported 181 "call sites". That count was discarded, not adjusted.
+
+### 31 MIGRATE routes
+
+| status | count |
+|---|---|
+| **COMPLETED** | 4 |
+| **PROCEEDING — active staff consumer proven** | 3 |
+| **DEFERRED — NO ACTIVE STAFF CONSUMER PROVEN** | 24 |
+
+**COMPLETED (4)**
+
+| route | consumer | migrated |
+|---|---|---|
+| `POST /applications/:id/deny` | `submitApprovalDecision`, application review | operator twin + `denyApplicationService` |
+| `POST /applications/:id/approve` | `approveApplication`, `psArWriteMethod` | operator twin hardened |
+| `POST /leasing/tours/:tourId/check-in` | `tourCheckIn` | operator twin + `checkInTourService` |
+| `POST /leasing/tours/:tourId/complete` | `submitTourFeedback`, tour workspace | twin existed; refusal added |
+
+**PROCEEDING (3)** — an active consumer is proven, so these are the next
+routes to migrate. They are **not** started in this packet: they are tour
+lifecycle verbs outside Wave 1's seven.
+
+| route | proven consumer |
+|---|---|
+| `POST /leasing/tours/:tourId/confirm-prospect` | `tourAction('confirm-prospect')` |
+| `POST /leasing/tours/:tourId/reminder` | `tourAction('reminder')` |
+| `POST /leasing/tours/:tourId/correct-outcome` | `tourSaveCorrection` |
+
+**DEFERRED — NO ACTIVE STAFF CONSUMER PROVEN (24)**
+
+`/applications/:id/confirm-term` · `/applications/:id/lease-packet` ·
+`/applications/:id/sign` · `/lease-packets/:id/send` ·
+`/leasing/application-invitations` · `…/:id/mark-sent` · `…/:id/revoke` ·
+`…/dispatch` · `/leasing/availability` · `/leasing/availability/:slotId/block` ·
+`/leasing/conversions` · `…/:id/gates` · `…/:id/handoff` ·
+`…/:id/handoff-required` · `/leasing/intake` · `/leasing/queue/:itemId/claim` ·
+`/leasing/queue/:itemId/resolve` · `/leasing/recovery-attempts/:id/void` ·
+`/leasing/recovery-variants` · `…/:id/retire` ·
+`/leasing/rungs/:obligationId/resolve` · `/leasing/slots/:slotId/book` ·
+`/properties/:propertyId/applications` · `…/applications/internal`
+
+Several of these already have a governed operator twin that the app uses
+instead — the application-invitation pair, the lease-packet pair. The
+shared-key original simply has no caller. Building a second twin for it would
+add a door nobody walks through.
+
+`DEFERRED` is an **implementation status, not a disposition**. Every route
+above stays classified `MIGRATE`: it should eventually leave the shared key.
+It is distinct from the 8 `BLOCKED` routes, where the question is not "does
+anyone use it" but "can source prove nobody outside these repositories does" —
+and the answer there is still no.
+
+### Routes the browser calls that DO NOT EXIST
+
+Proven over real HTTP against the running app, with known-live controls
+(`tests/wave1_route_existence_probe.js`, 19/19). Each returns Express's
+default HTML 404 — no route is registered at any of these paths:
+
+`/leasing/tour-coverage/rules` · `/leasing/tour-coverage/exceptions` ·
+`/leasing/tours/capture` · `/leasing/tours/:id/reassign` ·
+`/leasing/plan/select` · `/leasing/plan/send` ·
+`/leasing/tours/:id/send-followup` · `/leasing/application/signal` ·
+`/leasing/cadence/run` · `/leasing/applications/:id/decide`
+
+These are not migration candidates — there is nothing to migrate onto. They
+are **staff-facing forms writing into the void**, and one of them,
+`/leasing/applications/:id/decide`, carried the Approve and Deny buttons of
+the post-tour decision drawer. That consumer was repointed onto the existing
+governed doors. The other nine had their identity claims removed and their
+failures made honest; building routes for them is not this packet's work.
