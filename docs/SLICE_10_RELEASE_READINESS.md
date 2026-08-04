@@ -66,18 +66,53 @@ it belongs to the harness-remediation slice, not here.
 | Migrations changed by this work | **none** — `git diff --name-only origin/main...HEAD -- migrations/` is empty |
 | Deployed API / app SHAs | **NOT READ — see gate 3** |
 
-## Proof totals, all re-run at closure
+## Proof totals — re-run at the INTEGRATED candidate, not carried forward
+
+Every number below was produced by a run against the tree that contains
+`fbd7a3a` and the harness repair. The earlier run at `4584991` is evidence for
+`4584991` and was not reused.
 
 ```
-server    90 / 36 / 58 / 62      0 failed   real Postgres
-browser   96 / 0                            real HTTP · desktop 1180px · 390px
+server    90 / 36 / 58 / 62      0 failed   real Postgres, isolated harness DB
 app       18 harnesses · 779 / 0            no regression
 publish   19 globals measured · 19 stubbed · 0 divergent
-states     7 of 7 currently reachable evidence/result states rendered
-          17 of 17 position states rendered
-reserved  EVIDENCE_STATE.untrackable · EVIDENCE_STATE.unavailable
-          RESULT_STATE.UNAVAILABLE — declared, defensively consumed, not producible
+verify    3 of 3 gates invoked · all exited 0
+browser   IN PROGRESS at this candidate — see the note below
 ```
+
+Scale re-measured rather than restated: **400 pages at limit 25 (831,288 ms)
+and 50 pages at limit 200 (107,154 ms)**, all 10,000 positions returned exactly
+once in an identical order both times, against a neighbouring property carrying
+100,000. Query count **18 at 10,000 and 18 at 100,000** — flat, not per-row.
+Payload **18 KB summary · 96 KB default page · 325 KB maximum page · 2,229 B
+largest row**.
+
+**A counting correction worth recording.** The first attempt to total the app
+suite reported **219**, because ten of eighteen harnesses use summary formats
+the counter did not parse and were silently counted as zero. The suite was
+never wrong; the measurement was. A harness whose total cannot be parsed now
+fails the counter instead of contributing zero — `0 pass 0 fail exit 0` is
+exactly what a vacuous measurement looks like.
+
+### ⚠ A stale artifact nearly became a false green
+
+The browser acceptance writes to a scratch directory that is **not cleaned
+between sessions**. After the server proofs finished, that directory still held
+`acceptance.out` reading `96 passed, 0 failed`, plus an `api.log` saying the API
+was listening. All three files were **sixteen hours old**, from the run at
+`4584991`, and nothing distinguished them from a fresh result except their
+timestamp.
+
+They survived because the guard meant to chain the browser run behind the scale
+proof was written as `while pgrep -f slice10d_scale_transport; do sleep; done`
+— and `pgrep -f` matched **the very shell running it**. The loop waited on
+itself, the browser run never started, and the previous run's output sat there
+looking exactly like this run's output.
+
+Two rules this is worth stating for: **check the timestamp before believing a
+proof artifact**, and **delete the previous artifact before re-running rather
+than trusting it to be overwritten**. A proof file is evidence only if
+something in this run wrote it.
 
 ## Frozen contracts
 
