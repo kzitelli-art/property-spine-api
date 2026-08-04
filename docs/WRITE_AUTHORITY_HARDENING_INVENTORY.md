@@ -259,3 +259,102 @@ session twin already exists, and the rest whose twin must be built.
 **Requires your answer first:** whether any external holder of `OPERATOR_KEY`
 calls the seven zero-consumer routes. Everything else in the packet can start
 now.
+
+---
+
+# RECONCILED ROUTE INVENTORY — corrected 2026-08-03
+
+**The published denominator of 23 was wrong. The real figure is 43.**
+
+It was wrong because it was **written by hand rather than derived**. Two rows of
+the original table each covered several routes — `/leasing/conversions (+3 sub-routes)`
+was four, `/operator/pricing/{draft,review,publish}` was three — and four route
+families were omitted from the table altogether: the four
+`application-invitations` writes, the two `leasing/queue` writes, the three
+`recovery-*` writes, and `/leasing/intake`.
+
+That is why the dispositions summed to 24 against a stated 23: the arithmetic
+was not the defect, the denominator was. It is now produced by a predicate over
+the route registry, not by counting rows in prose.
+
+**Scope predicate, stated so the number is reproducible:** every `POST`/`PATCH`/
+`PUT`/`DELETE` registered under `/leasing/*`, `/applications/*`,
+`/lease-packets/*` or `/properties/:propertyId/applications*`, plus the three
+`/operator/pricing` writes the brief names.
+
+```
+ROUTES IN PACKET SCOPE      43
+  MIGRATE                   31      completed 2 · not started 29
+  BLOCKED                    8
+  OUT OF SCOPE               4
+                            ---
+  sum                       43      balances
+```
+
+**Completed: 2 of 31** — `/applications/:id/approve` and `/applications/:id/deny`.
+The earlier "2 of 14" understated the work remaining by more than half.
+
+## One proposed reclassification, not applied
+
+`POST /leasing/intake` is currently counted **MIGRATE**. It is gated by
+`requireIntakeSecret`, which is its own governed credential **bound to an
+explicit property allowlist** (`LEASING_INTAKE_PROPERTY_IDS`) and fails closed
+when unbound — structurally the same posture as `/applications/submit-public`,
+which is OUT OF SCOPE. It is a public intake door, not a staff-operating write.
+
+**Left as MIGRATE pending your call**, because reclassifying it would change the
+denominator by intuition, which is the error this reconciliation exists to fix.
+
+## The full table
+
+| Route | Disposition | Migration status | Registered at |
+|---|---|---|---|
+| `POST /applications/:id/approve` | MIGRATE | completed | `src/applications/applications.js:495` |
+| `POST /applications/:id/confirm-term` | MIGRATE | not started | `src/applications/applications.js:584` |
+| `POST /applications/:id/countersign` | BLOCKED | — | `src/applications/applications.js:549` |
+| `POST /applications/:id/deny` | MIGRATE | completed | `src/applications/applicationSubmission.js:1070` |
+| `POST /applications/:id/lease-packet` | MIGRATE | not started | `src/applications/leasepackets.js:727` |
+| `POST /applications/:id/sign` | MIGRATE | not started | `src/applications/applications.js:531` |
+| `POST /applications/submit-public` | OUT OF SCOPE | — | `src/applications/applicationSubmission.js:830` |
+| `POST /lease-packets/:id/send` | MIGRATE | not started | `src/applications/leasepackets.js:757` |
+| `POST /leasing/application-invitations` | MIGRATE | not started | `src/applications/applicationSubmission.js:418` |
+| `POST /leasing/application-invitations/:id/mark-sent` | MIGRATE | not started | `src/applications/applicationSubmission.js:749` |
+| `POST /leasing/application-invitations/:id/revoke` | MIGRATE | not started | `src/applications/applicationSubmission.js:756` |
+| `POST /leasing/application-invitations/dispatch` | MIGRATE | not started | `src/applications/applicationSubmission.js:608` |
+| `POST /leasing/availability` | MIGRATE | not started | `src/leasing/leasingleads.js:1755` |
+| `POST /leasing/availability/:slotId/block` | MIGRATE | not started | `src/leasing/leasingleads.js:1781` |
+| `POST /leasing/conversions` | MIGRATE | not started | `src/leasing/leasingconversion.js:1233` |
+| `POST /leasing/conversions/:id/gates` | MIGRATE | not started | `src/leasing/leasingconversion.js:1262` |
+| `POST /leasing/conversions/:id/handoff` | MIGRATE | not started | `src/leasing/leasingconversion.js:1250` |
+| `POST /leasing/conversions/:id/handoff-required` | MIGRATE | not started | `src/leasing/leasingconversion.js:1256` |
+| `POST /leasing/intake` | MIGRATE | not started | `src/leasing/leasingleads.js:787` |
+| `POST /leasing/leads/:leadId/lost` | BLOCKED | — | `src/leasing/leasingleads.js:1309` |
+| `POST /leasing/leads/:leadId/reply` | BLOCKED | — | `src/leasing/leasingleads.js:1197` |
+| `POST /leasing/leads/:leadId/tour/request` | BLOCKED | — | `src/leasing/leasingleads.js:1230` |
+| `POST /leasing/queue/:itemId/claim` | MIGRATE | not started | `src/leasing/leasingleads.js:1290` |
+| `POST /leasing/queue/:itemId/resolve` | MIGRATE | not started | `src/leasing/leasingleads.js:1300` |
+| `POST /leasing/recovery-attempts/:id/void` | MIGRATE | not started | `src/leasing/leasingleads.js:2621` |
+| `POST /leasing/recovery-variants` | MIGRATE | not started | `src/leasing/leasingleads.js:2596` |
+| `POST /leasing/recovery-variants/:id/retire` | MIGRATE | not started | `src/leasing/leasingleads.js:2611` |
+| `POST /leasing/rungs/:obligationId/resolve` | MIGRATE | not started | `src/leasing/leasingconversion.js:1268` |
+| `POST /leasing/slots/:slotId/book` | MIGRATE | not started | `src/leasing/leasingleads.js:1798` |
+| `POST /leasing/tours/:tourId/cancel` | BLOCKED | — | `src/leasing/leasingleads.js:2483` |
+| `POST /leasing/tours/:tourId/check-in` | MIGRATE | not started | `src/leasing/leasingleads.js:1911` |
+| `POST /leasing/tours/:tourId/complete` | MIGRATE | not started | `src/leasing/leasingleads.js:2305` |
+| `POST /leasing/tours/:tourId/confirm` | BLOCKED | — | `src/leasing/leasingleads.js:1248` |
+| `POST /leasing/tours/:tourId/confirm-prospect` | MIGRATE | not started | `src/leasing/leasingleads.js:1868` |
+| `POST /leasing/tours/:tourId/correct-outcome` | MIGRATE | not started | `src/leasing/leasingleads.js:2342` |
+| `POST /leasing/tours/:tourId/no-show` | BLOCKED | — | `src/leasing/leasingleads.js:2414` |
+| `POST /leasing/tours/:tourId/reminder` | MIGRATE | not started | `src/leasing/leasingleads.js:1889` |
+| `POST /leasing/tours/:tourId/reschedule` | BLOCKED | — | `src/leasing/leasingleads.js:2512` |
+| `POST /operator/pricing/draft` | OUT OF SCOPE | — | `src/identity/operator.js:1773` |
+| `POST /operator/pricing/publish` | OUT OF SCOPE | — | `src/identity/operator.js:1857` |
+| `POST /operator/pricing/review` | OUT OF SCOPE | — | `src/identity/operator.js:1787` |
+| `POST /properties/:propertyId/applications` | MIGRATE | not started | `src/applications/applications.js:346` |
+| `POST /properties/:propertyId/applications/internal` | MIGRATE | not started | `src/applications/applicationSubmission.js:943` |
+
+Dispositions are mutually exclusive. `BLOCKED` means
+**EXTERNAL CONSUMER STATUS UNKNOWN** — zero in-repository consumers, and the
+shared key is held outside these repositories, so source cannot prove nonuse.
+`/applications/:id/countersign` joined that set once tracing showed the app
+calls a different, nonexistent path.
