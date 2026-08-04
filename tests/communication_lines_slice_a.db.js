@@ -122,6 +122,7 @@ const SCOPED_SCHEMA = `
     id uuid primary key default gen_random_uuid(),
     property_id uuid references properties(id) on delete cascade,
     person_id uuid, unit_id uuid, work_order_id uuid,
+    conversation_id uuid,     -- migration 027; 132's ck_comm_one_thread reads it
     channel text not null default 'chat',
     direction text not null default 'inbound',
     body text, transcript text, ai_summary text, sms_sid text,
@@ -269,19 +270,30 @@ const SCOPED_SCHEMA = `
     // ── run the migrations verbatim ──────────────────────────────────
     await db.query(M("129_property_line_uniqueness.sql"));
     await db.query(M("130_communication_lines.sql"));
+    //  132 ships with 130 and the CODE now requires it: the resolver selects
+    //  outbound_policy, which only exists after 132. A harness that stopped at
+    //  130 was proving a schema this tree cannot run against — it died on the
+    //  missing column, correctly. 131 and 133 touch obligations and work
+    //  orders and are not on this code path, so they are deliberately absent:
+    //  a harness runs the migrations its path needs, not all of them.
+    await db.query(M("132_outbound_line_policy.sql"));
 
     section("MIGRATION 130 · backfill and projection");
     {
       const backfilled = (await db.query(
-        `select property_id, e164, line_type, authority_ceiling, permitted_audience, outbound_enabled, status
+        `select property_id, e164, line_type, authority_ceiling, permitted_audience, outbound_enabled, outbound_policy, status
            from communication_lines order by e164`)).rows;
       ok("130 backfilled one property_facing line per property holding a number",
         backfilled.length === 2, JSON.stringify(backfilled.map((b) => b.e164)));
       ok("130 backfill set the external ceiling on every property line",
         backfilled.every((b) => b.line_type === "property_facing" &&
           b.authority_ceiling === "external" && b.permitted_audience === "residents_and_prospects"));
-      ok("130 backfill left outbound disabled (Slice A is inbound-only)",
-        backfilled.every((b) => b.outbound_enabled === false));
+      //  RULING 2026-08-04 — 130's blanket ban is replaced by 132's policy.
+      //  Property-facing lines are proactive (they already originate setup
+      //  links and agent replies); recording them as unable to send would be
+      //  a false blank.
+      ok("132 left every property line on the proactive resident policy",
+        backfilled.every((b) => b.outbound_policy === "proactive" && b.outbound_enabled === true));
       ok("130 created NO operations line — activation is a separate governed act",
         backfilled.every((b) => b.line_type !== "operations"));
     }
@@ -325,12 +337,15 @@ const SCOPED_SCHEMA = `
       ok("HOSTILE: a property with no organization CANNOT receive an operations line", !!e);
     }
     {
+      //  RULING 2026-08-04. The blanket ban is gone; what replaced it is
+      //  stricter, not looser — an operations line may be reply_only, and
+      //  PROACTIVE remains a row that cannot exist.
       const e = await refuse(
-        `insert into communication_lines (e164,line_type,organization_id,authority_ceiling,permitted_audience,outbound_enabled)
-         values ($1,'operations',$2,'operational','staff',true)`, [LINE_FREE, org.id]);
-      ok("outbound cannot be enabled in Slice A", !!e);
-      ok("  ...refused by the inbound-only constraint",
-        !!e && /ck_cl_outbound_disabled_slice_a/.test(e.message));
+        `insert into communication_lines (e164,line_type,organization_id,authority_ceiling,permitted_audience,outbound_enabled,outbound_policy)
+         values ($1,'operations',$2,'operational','staff',true,'proactive')`, [LINE_FREE, org.id]);
+      ok("an operations line can NEVER be proactive", !!e);
+      ok("  ...refused by ck_cl_outbound_policy_by_type",
+        !!e && /ck_cl_outbound_policy_by_type/.test(e.message));
     }
     {
       const e = await refuse(

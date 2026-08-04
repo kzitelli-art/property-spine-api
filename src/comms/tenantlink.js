@@ -74,6 +74,7 @@ const { normalizePropertyLine } = require("./property_line"); // the one canonic
 //  logic rather than a copy. Do not reintroduce local copies here.
 const clarification = require("../conversation/clarification");
 const { operatingReceipt, deliveryReceipt, composeReceipt } = require("../conversation/receipt");
+const technicianConversation = require("../technician/conversation");
 
 module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService, getAgentService }) {
   const router = express.Router();
@@ -1179,17 +1180,73 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
         // this number".
         if (ctx.inactiveLine) return emptyTwiml(res);
 
-        // OPERATIONS LINE. Slice A is inbound-only and performs no
-        // operational action: the boundary resolved organization context,
-        // the authority ceiling, the staff sender and — separately — whether
-        // a property can be named at all. Nothing is written to any property
-        // ledger, and no outbound is sent.
+        // ══ OPERATIONS LINE — THE TECHNICIAN TURN (Phase 2) ═════════════
+        //  The boundary resolved the organization, the authority ceiling and
+        //  the staff sender. An organization number never chooses a building,
+        //  so property scope comes from the sender's OWN assignments, derived
+        //  again inside the turn.
         //
-        // An organization number never chooses a building. When property
-        // context is absent or ambiguous the boundary produced the smallest
-        // useful clarification; DELIVERING it is the technician loop's job,
-        // not this slice's.
-        if (ctx.operationsLine) return emptyTwiml(res);
+        //  UNRESOLVED SENDER → ZERO ROWS AND NO REPLY. We do not know who
+        //  this is; replying would be the operations number messaging an
+        //  unknown handset, which the reply_only policy exists to prevent.
+        //  The boundary already logged it.
+        if (ctx.operationsLine) {
+          if (ctx.staffOutcome !== "one" || !ctx.staffUserId) return emptyTwiml(res);
+
+          //  Ack the provider first — the reply travels by REST, and a slow
+          //  turn must not become a provider timeout and a redelivery.
+          emptyTwiml(res);
+
+          let turn;
+          const t = await pool.connect();
+          try {
+            await t.query("begin");
+            turn = await technicianConversation.runOperationsTurn(t, {
+              organizationId: ctx.organizationId, userId: ctx.staffUserId,
+              lineId: ctx.lineId, body: body || "(empty message)",
+              providerMessageId: MessageSid,
+            });
+            await t.query("commit");
+          } catch (e) {
+            await t.query("rollback").catch(() => {});
+            //  A redelivery that lost the correlation-key race has already
+            //  been answered. Nothing to do, and nothing wrong.
+            if (e.code === "23505") {
+              console.error(`inbound-sms: operations turn already answered (${MessageSid}) — duplicate suppressed.`);
+              return;
+            }
+            console.error("inbound-sms: operations turn failed — inbound preserved, no reply sent:", e.message);
+            return;
+          } finally { t.release(); }
+
+          //  TRANSPORT, AFTER THE COMMIT. The operating action is done and
+          //  is not revised by anything the carrier does.
+          let wire;
+          try {
+            wire = await commBoundary.sendOperationsReply({
+              organization_id: ctx.organizationId, recipient: From, body: turn.operating.text,
+              replyToCommEventId: turn.inbound.id, eventId: turn.outbound.id,
+              actor_user_id: ctx.staffUserId,
+            });
+          } catch (sendErr) {
+            wire = { sent: false, reason: `transport_threw: ${sendErr.message}`, sid: null };
+          }
+
+          const composed = composeReceipt({
+            operating: turn.operating,
+            delivery: deliveryReceipt(wire.sent
+              ? { state: "delivered", providerRef: wire.sid || null }
+              : { state: "failed", providerRef: wire.sid || null, failureReason: wire.reason || "unknown" }),
+          });
+          if (!composed.delivery.delivered) {
+            //  The acceptance STANDS. Only the telling failed, and that is
+            //  flagged on the inbound so a human can see the technician was
+            //  never answered — never by undoing the committed action.
+            await flagUndeliveredReply({ inboundEventId: turn.inbound.id,
+                                         reason: composed.delivery.failureReason });
+          }
+          return;
+        }
 
         // Unknown or ambiguous sender → the boundary saved the message on
         // the PROPERTY (person-less, needs_human). Phase A dispatches ZERO

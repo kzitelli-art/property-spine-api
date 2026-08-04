@@ -240,10 +240,13 @@ section("2. ONE IMPLEMENTATION — NO DUPLICATED LOGIC IN TENANTLINK");
   //  builds a delivery receipt. Any other read of it is the conversational path
   //  forming its own opinion about delivery, which is the collapse this seam
   //  exists to prevent.
+  //  EVERY read must be a receipt-building read. Counting to exactly ONE was
+  //  wrong the moment a second door appeared (the operations line): the rule
+  //  is "no read forms its own opinion about delivery", not "one read".
   const wireReads = (CONV.match(/wire\.sent/g) || []).length;
   const wireReadsIntoReceipt = (CONV.match(/deliveryReceipt\(wire\.sent/g) || []).length;
-  ok("the conversational path reads the wire result ONLY to build a delivery receipt",
-    wireReads === 1 && wireReadsIntoReceipt === 1 && !/if\s*\(!wire\.sent\)/.test(CONV),
+  ok("every read of the wire result builds a delivery receipt and nothing else",
+    wireReads >= 1 && wireReads === wireReadsIntoReceipt && !/if\s*\(!wire\.sent\)/.test(CONV),
     `wire.sent read ${wireReads}×, ${wireReadsIntoReceipt}× into a delivery receipt`);
 
   ok("tenantlink IMPORTS the clarification seam and CALLS it",
@@ -263,8 +266,8 @@ section("2. ONE IMPLEMENTATION — NO DUPLICATED LOGIC IN TENANTLINK");
     !/require\s*\(/.test(RCPT_CODE));
 
   const seamFiles = fs.readdirSync(path.join(ROOT, "src", "conversation")).sort();
-  ok("the conversation seam directory holds exactly the three extracted seams",
-    seamFiles.join(",") === "clarification.js,intent.js,receipt.js", seamFiles.join(","));
+  ok("the conversation seam directory holds exactly the extracted seams",
+    seamFiles.join(",") === "clarification.js,intent.js,receipt.js,work_reference.js", seamFiles.join(","));
 }
 
 // ════════════════════════════════════════════════════════════════════

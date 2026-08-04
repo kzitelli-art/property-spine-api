@@ -52,6 +52,10 @@ const OPERATING_OUTCOMES = [
   "clarification_appended",  // history was added to an existing work order
   "held_for_human",          // nothing was written; a person owns it now
   "balance_read",            // a live lease figure was read; nothing written
+  //  ── technician / operations line (Phase 2) ──
+  "work_accepted",           // a technician took ownership of assigned work
+  "work_reference_needed",   // which work they meant is not established
+  "authorization_refused",   // they asked for something that is not theirs
 ];
 
 /*  Outcomes that ASSERT a durable object exists. Without its id the
@@ -180,6 +184,70 @@ function operatingReceipt({ outcome, result = null, context = null } = {}) {
       serviceOutcome,
       // The service positively determined this, both directions.
       requiresHuman: serviceOutcome === "unresolved",
+      divergedFromDecision: false,
+      refusal: null,
+    });
+  }
+
+  //  ── TECHNICIAN OUTCOMES ─────────────────────────────────────────
+  //  Same composer, same rules: text only from a committed result, and an
+  //  outcome that asserts a durable object needs that object's id.
+  if (outcome === "work_accepted") {
+    assertKeys(result, ["obligation", "workOrderRef", "serviceOutcome"], "result");
+    const ob = result && result.obligation;
+    if (!ob || !ob.id) return refusal(outcome, "no_committed_object");
+    //  The row must actually SAY it is accepted. A service that returned an
+    //  obligation still sitting open is not something to congratulate anyone
+    //  about, whatever outcome word it used.
+    if (!ob.accepted_by_user_id || ob.status !== "in_progress") {
+      return refusal(outcome, "row_does_not_show_acceptance");
+    }
+    const ref = result.workOrderRef;
+    if (ref == null) return refusal(outcome, "no_sayable_reference");
+    const replayed = result.serviceOutcome === "replayed";
+    return Object.freeze({
+      kind: "operating_receipt", outcome,
+      committed: true,
+      object: Object.freeze({ type: "obligation", id: ob.id }),
+      text: replayed
+        ? `You already have Work Order ${ref}. It's assigned to you and in progress.`
+        : `Acceptance recorded. Work Order ${ref} is assigned to you and in progress.`,
+      isClarificationQuestion: false,
+      serviceOutcome: result.serviceOutcome || "accepted",
+      requiresHuman: null,
+      divergedFromDecision: false,
+      refusal: null,
+    });
+  }
+
+  if (outcome === "work_reference_needed") {
+    assertKeys(result, ["question", "reason"], "result");
+    const q = result && result.question;
+    if (!q) return refusal(outcome, "clarification_without_question");
+    return Object.freeze({
+      kind: "operating_receipt", outcome,
+      committed: false,          // asking is not doing
+      object: null, text: q,
+      isClarificationQuestion: true,
+      serviceOutcome: (result && result.reason) || null,
+      requiresHuman: null,
+      divergedFromDecision: false,
+      refusal: null,
+    });
+  }
+
+  if (outcome === "authorization_refused") {
+    assertKeys(result, ["verdict"], "result");
+    //  Honest, and deliberately uninformative about what exists. Naming the
+    //  work would confirm a record the sender has no authority over.
+    return Object.freeze({
+      kind: "operating_receipt", outcome,
+      committed: false,
+      object: null,
+      text: "That isn't assigned to you, so I can't act on it. Your manager can reassign it.",
+      isClarificationQuestion: false,
+      serviceOutcome: (result && result.verdict) || null,
+      requiresHuman: null,
       divergedFromDecision: false,
       refusal: null,
     });

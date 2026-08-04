@@ -62,8 +62,21 @@ const ACTIVE = "active";
 const LINE_COLUMNS = `
   id, e164, line_type, property_id, organization_id,
   authority_ceiling, permitted_audience,
-  inbound_enabled, outbound_enabled, status
+  inbound_enabled, outbound_enabled, outbound_policy, status
 `;
+
+/*  OUTBOUND POLICY (migration 132, owner ruling 2026-08-04).
+ *
+ *    disabled     sends nothing
+ *    reply_only   may answer an inbound message on the same line
+ *    proactive    may originate
+ *
+ *  An operations line can never hold 'proactive' — the database refuses it
+ *  (ck_cl_outbound_policy_by_type), so proactive assignment pushes,
+ *  reminders and staff broadcasts are not unbuilt features, they are rows
+ *  that cannot exist. This vocabulary must stay identical to the check
+ *  constraint's; if either changes, both change in the same commit. */
+const OUTBOUND_POLICIES = ["disabled", "reply_only", "proactive"];
 
 /*  lineAuthority — pure. What this line permits, stated from the line
  *  itself and from nothing else. Never consults the sender. */
@@ -131,10 +144,20 @@ async function resolveInboundLine(q, receivedNumber) {
  *  Preserves the existing no_property_line discipline: with no configured
  *  line the send refuses rather than falling back to a Messaging Service
  *  default. A fallback `from` is a message that appears to come from a
- *  building it did not come from. */
-async function resolveOutboundLine(q, { propertyId = null, organizationId = null } = {}) {
+ *  building it did not come from.
+ *
+ *  ── REPLY-BOUND SENDS (migration 132) ───────────────────────────────
+ *  A 'reply_only' line refuses unless the caller names the inbound message
+ *  being answered. The refusal is here as well as in the database trigger
+ *  deliberately: the resolver is what a send path asks BEFORE composing,
+ *  so an unbound reply is refused before a message body exists rather than
+ *  at insert time with the text already written. The trigger is the
+ *  control; this is the early, honest answer. */
+async function resolveOutboundLine(
+  q, { propertyId = null, organizationId = null, replyToCommEventId = null } = {}
+) {
   if ((propertyId == null) === (organizationId == null)) {
-    return { line: null, refusal: "ambiguous_outbound_owner" };
+    return { line: null, refusal: "ambiguous_outbound_owner", policy: null };
   }
 
   const { rows } = propertyId
@@ -147,10 +170,17 @@ async function resolveOutboundLine(q, { propertyId = null, organizationId = null
           where organization_id = $1 and line_type = 'operations' and status = $2`,
         [organizationId, ACTIVE]);
 
-  if (rows.length === 0) return { line: null, refusal: "no_property_line" };
-  if (rows.length > 1) return { line: null, refusal: "ambiguous_line" };
-  if (!rows[0].outbound_enabled) return { line: null, refusal: "outbound_not_enabled" };
-  return { line: rows[0], refusal: null };
+  if (rows.length === 0) return { line: null, refusal: "no_property_line", policy: null };
+  if (rows.length > 1) return { line: null, refusal: "ambiguous_line", policy: null };
+
+  const line = rows[0];
+  const policy = line.outbound_policy;
+
+  if (policy === "disabled") return { line: null, refusal: "outbound_not_enabled", policy };
+  if (policy === "reply_only" && !replyToCommEventId) {
+    return { line: null, refusal: "reply_only_requires_inbound", policy };
+  }
+  return { line, refusal: null, policy };
 }
 
 /*  resolveStaffSenderForOrganization — is this sender staff of THIS
@@ -280,4 +310,5 @@ module.exports = {
   resolvePropertyContextForStaff,
   clarificationFor,
   ACTIVE,
+  OUTBOUND_POLICIES,
 };
