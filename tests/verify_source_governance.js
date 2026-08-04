@@ -57,6 +57,11 @@ const GATES = [
     what: "intent seam: one implementation, transport-independent, behaviour pinned" },
   { file: "conversation_clarification_and_receipt.test.js",
     what: "clarification + receipt seams: wording unchanged, operating ≠ delivery" },
+  //  The technician work-selection decisions. Every one of them is a refusal,
+  //  and a refusal that only fires against a provisioned database is a refusal
+  //  nobody has seen fire. These run with no credentials.
+  { file: "technician_work_selection.test.js",
+    what: "technician: identity, scope, eligibility, replay, cross-property refusal" },
 ];
 
 const bar = "════════════════════════════════════════════════════════════════";
