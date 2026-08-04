@@ -68,6 +68,10 @@ function createConversionClosureAuthority() {
    */
   async function closeLinkedConversionObligation(client, {
     link, property_id, outcome, resolution, proof = null, by_user_id = null, resolution_basis = null,
+    //  D1-a: the close had NO replay identity at all, so the most consequential
+    //  task operation -- closing work -- could not be replayed even though the
+    //  ledger writer has supported it all along. Threaded through here.
+    idempotency_key = null,
   }) {
     if (!link || !link.id || !link.obligation_id) throw httpErr(500, "closure authority: link row required.");
     // defensive re-check under the caller's lock: terminal state is write-once
@@ -147,16 +151,23 @@ function createConversionClosureAuthority() {
     // R3 (069): the close is also an append-only ledger fact — written in the
     // SAME transaction as the terminal mutation. If 069 has not been applied
     // (pre-R3 deploy window), the ledger write is skipped rather than faked.
-    await appendEvent(client, {
+    const closeEv = await appendEvent(client, {
       conversion_obligation_id: link.id, event_type: "resolved",
       actor_user_id: by_user_id || null, actor_person: snapPerson, actor_assignment: snapAssignment,
       identity_resolution_basis: snapIdBasis,
       prior_status: "open", next_status: resolution === "missed" ? "missed" : "complete",
       resolution_code: resolution, resolution_basis,
+      idempotency_key,
     });
 
+    //  event_id / replayed are INTERNAL, for future receipt construction.
+    //  They are NOT a receipt: nothing here binds the key to the payload, so
+    //  `replayed` means only "an event exists under this key for this
+    //  obligation" -- never "the operation you asked for is what happened".
+    //  No caller may present these to a human as confirmation.
     return { outcome, resolution, closed_by_user_id: by_user_id || null,
-             closed_identity_resolution_basis: snapIdBasis, resolution_basis };
+             closed_identity_resolution_basis: snapIdBasis, resolution_basis,
+             event_id: closeEv && closeEv.event_id, replayed: !!(closeEv && closeEv.replayed) };
   }
 
   // ── the append-only ledger write (069) — shared by close/reopen ──────
@@ -164,9 +175,37 @@ function createConversionClosureAuthority() {
     const has = (await client.query("select to_regclass('leasing_conversion_obligation_events') as t")).rows[0];
     if (!has || !has.t) return null; // 069 not applied yet — never fabricate
     if (e.idempotency_key) {
+      // ── PROPERTY-SAFE DUPLICATE LOOKUP ────────────────────────────────
+      //  This was `where idempotency_key=$1` with no scope at all. Two
+      //  properties minting the same key would collide, and the SECOND caller
+      //  would be handed the FIRST property's event id — which it would then
+      //  treat as its own durable receipt. The protection was the caller's key
+      //  format, which is not a server-side guarantee.
+      //
+      //  The lookup is now bound to the exact obligation as well as the key,
+      //  and the obligation carries the property lineage. So:
+      //    same property + same obligation + same key -> the original event
+      //    different property + same key              -> no row (never theirs)
+      //    same property + different obligation + key -> no row (not this
+      //                                                  obligation's receipt)
+      //
+      //  The UNIQUE index on idempotency_key is still GLOBAL, so a genuine
+      //  cross-property collision now fails loudly on insert instead of
+      //  silently disclosing. That residual is
+      //  BLOCKED — COMPOSITE IDEMPOTENCY SCOPE REQUIRES MIGRATION and is
+      //  acceptable temporarily. Cross-property disclosure is not.
       const dup = (await client.query(
-        "select id from leasing_conversion_obligation_events where idempotency_key=$1", [e.idempotency_key])).rows[0];
-      if (dup) return dup.id; // safe retry: history appends nothing new
+        `select id from leasing_conversion_obligation_events
+          where idempotency_key = $1 and conversion_obligation_id = $2`,
+        [e.idempotency_key, e.conversion_obligation_id])).rows[0];
+      //  NOTE FOR THE READER: a duplicate found here is returned WITHOUT any
+      //  comparison of the incoming operation against the original. That is a
+      //  known and deliberate limit — there is nowhere durable to store a
+      //  material payload hash. It is exactly why no task receipt is exposed:
+      //  see docs/IMMUTABLE_ACTION_AUTHORITY.md. Callers of this function must
+      //  not present its result to a human as confirmation of what they asked
+      //  for, only as "an event under this key already exists".
+      if (dup) return { event_id: dup.id, replayed: true }; // history appends nothing new
     }
     const r = await client.query(
       `insert into leasing_conversion_obligation_events
@@ -186,7 +225,9 @@ function createConversionClosureAuthority() {
        e.resolution_code || null, e.resolution_basis || null, e.reason || null,
        e.prior_due_at || null, e.next_due_at || null,
        e.prior_event_id || null, e.idempotency_key || null]);
-    return r.rows[0].id;
+    //  STRUCTURED, not a bare id. Callers need to know whether history was
+    //  appended or an existing event was returned; a bare id cannot say.
+    return { event_id: r.rows[0].id, replayed: false };
   }
 
   /**
@@ -219,7 +260,7 @@ function createConversionClosureAuthority() {
       } catch (_) { /* honest unbridged snapshot */ }
     }
 
-    const evId = await appendEvent(client, {
+    const evRes = await appendEvent(client, {
       conversion_obligation_id: fresh.id, event_type: "reopened",
       actor_user_id: by_user_id || null, actor_person: snapPerson, actor_assignment: snapAssignment,
       identity_resolution_basis: snapIdBasis,
@@ -241,7 +282,7 @@ function createConversionClosureAuthority() {
       `update obligations set status='open', completed_at=null, due_at=$2, updated_at=now() where id=$1`,
       [fresh.obligation_id, new_due_at]);
 
-    return { reopened: true, event_id: evId, owner_user_id: next_owner_user_id,
+    return { reopened: true, event_id: evRes && evRes.event_id, replayed: !!(evRes && evRes.replayed), owner_user_id: next_owner_user_id,
              owner_eligibility_state, new_due_at };
   }
 

@@ -193,3 +193,97 @@ written under the new projection rule.
 
 Until all five hold, this document is the deliverable and nothing else is
 written.
+
+---
+
+# TOUR OPERATION RECEIPT AUTHORITY — a SECOND, SEPARATE dependency
+
+Added after Receipts Step B. This shares a ledger and a migration sequence
+with the verb repair above; it does **not** share its domain semantics. The
+two are stated apart on purpose, and a repair that conflates them would
+produce a migration nobody can review.
+
+- **The verb repair (§1–13)** is about *what a tour event is allowed to say*
+  — a vocabulary problem.
+- **This section** is about *whether a completed tour operation can be found
+  again* — an access-path problem.
+
+They are evaluated together only because both touch `tour_events` and the
+same migration position.
+
+## What was measured
+
+`tests/receipts_b1_m1_queryability_probe.js` — EXPLAIN (ANALYZE, BUFFERS)
+against the actual proposed recovery lookup, two volumes, with
+neighbouring-property noise:
+
+| | scale 2000 | scale 20000 |
+|---|---|---|
+| selected-property events | 2,001 | 22,002 |
+| neighbouring-property events | 58,066 | 88,066 |
+| total `tour_events` | 60,067 | 110,068 |
+| scan on `tour_events` | Bitmap Index (`tour_events_tour_idx`) | **Seq Scan, 100,068 rows** |
+| buffers hit | 35 | 2,710 |
+| execution | 0.429 ms | 33.31 ms |
+
+The planner uses the tour index at small volume and abandons it as the estate
+grows. **The finding is the shape, not the latency.** 33 ms is tolerable; work
+that grows with total events across all properties is not, on the one surface
+whose job is to answer "did my write land".
+
+Three facts drive it:
+
+1. `tour_events` has **no `property_id`** — property lineage runs
+   `tour_events.tour_id → leasing_tours.property_id`, so every property-scoped
+   lookup is a JOIN, not a column filter.
+2. **No index touches `metadata`.** The only existing replay identity,
+   `capture_idempotency_key`, lives in JSONB and is written by
+   `completeTourService` alone.
+3. A property predicate narrows what is **returned**. It does not stop the
+   planner reading every event row to find it.
+
+## Requirements a repair must satisfy
+
+Stated as requirements. **No SQL, no migration number, no index.**
+
+- **queryable operation identity for `tour_events`** — resolvable without a
+  scan that grows with total events
+- **property-resolvable lookup** — the property must participate in the access
+  path, not only in the filter
+- **operation namespace** — recovery resolves inside exactly one namespace;
+  `tour.check_in` and `tour.complete` must not collide
+- **payload hash or equivalent material binding** — so a reused identity
+  recovers the original and cannot change the recorded outcome
+- **unique replay authority** — at most one durable event per
+  (property, operation, operation_id)
+- **immutable receipt identity** — a `tour_events.id`, never a tour id, a
+  timestamp, an operation_id or a mutable row version
+- **bounded recovery read** — cost governed by the operation looked up, not by
+  estate size
+- **no-outcome walk-in event, or another immutable capture record** — a walk-in
+  captured without an outcome writes `leasing_tours` only and no event at all,
+  so that variant has no durable receipt identity and no immutable record that
+  a named human captured a walk-in at a named moment
+- **property-scoped walk-in idempotency uniqueness** —
+  `leasing_tours_booking_idem_key` is `UNIQUE (booking_idempotency_key)` with
+  no property in the key. The cross-property **read** leak is already closed;
+  property-scoped **replay** is not expressible without a composite key
+
+## Operations blocked on this
+
+```
+tour.check_in         BLOCKED — QUERYABLE OPERATION ID REQUIRES MIGRATION
+tour.complete         BLOCKED — QUERYABLE OPERATION ID REQUIRES MIGRATION
+post_tour_capture     BLOCKED — QUERYABLE OPERATION ID REQUIRES MIGRATION
+tour.walk_in_capture  BLOCKED — COMPOSITE IDEMPOTENCY SCOPE REQUIRES MIGRATION
+                      no-outcome variant additionally
+                      BLOCKED — NO DURABLE RECEIPT IDENTITY
+```
+
+Their namespaces stay reserved in `operation_receipt_v1` with **no resolver
+registered**, so the recovery read answers `501 recovery_unavailable` and says
+explicitly that this does not mean the operation did not happen. No fake
+resolver was registered to make the registry look complete.
+
+Same preconditions as §13 above: 129 released or resolved, ledger verified,
+next number governed.

@@ -3334,7 +3334,7 @@ app.use("/", agentApp);
 // demo-session bootstrap is fail-closed (DEMO_MODE=true only). (operator.js)
 app.use("/", require("./src/identity/operator_session_bootstrap")({ pool })); // BRICK ONE: POST /operator/session + /revoke  the only /operator/* routes that self-protect (they create/end the session)
 const operatorModule = require("./src/identity/operator");
-app.use("/", operatorModule({ pool, agentService: agentApp._service,
+const __operatorRouter = operatorModule({ pool, agentService: agentApp._service,
   leasingTourService: __leasingLeads._service, // the ONE completion service (leasingleads.js) — session door calls the same tx
   // the invitation service (applicationSubmission) — the session-gated operator
   // route calls its create/attest services; no duplicate invitation logic.
@@ -3363,7 +3363,21 @@ app.use("/", operatorModule({ pool, agentService: agentApp._service,
   // (built once at the movein mount). The operator keys-ready door is the PM
   // action delivery.js anticipated; without this injection it fails closed 503.
   deliveryHelper,
-  leasePacketsService: __leasePackets._service }));
+  leasePacketsService: __leasePackets._service });
+app.use("/", __operatorRouter);
+
+// ── THE CONVERSATIONAL READ SURFACE — "what should I do today?"
+//  READ AND RECOMMEND ONLY. It is handed the pool and the session guard and
+//  NOTHING ELSE: no canonical service, no write authority, no closure
+//  capability. It cannot dispatch a write because it holds nothing that
+//  writes. Mounted after operator.js so it reuses that module's requireOperator.
+app.use("/", require("./src/identity/operator_briefing")({
+  router: require("express").Router(),
+  pool,
+  //  THE SAME requireOperator operator.js uses — reached through its own
+  //  _internal export. One session guard, not a second implementation.
+  requireOperator: __operatorRouter._internal.requireOperator,
+}));
 
 // ── STAFF IDENTITY BRIDGE (067) — the authorized point-and-confirm workflow:
 // classify accounts, suggest candidates (exact verified email only, never
