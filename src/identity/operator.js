@@ -32,6 +32,7 @@
 //       the operator-facing actions agent.js exposes. Mounted under "/".
 
 const crypto = require("crypto");
+const OPRC = require("../shared/operation_receipt.js"); // the ONE receipt envelope + replay identity rules
 const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
 const staffIdentity = require("./staff_identity_resolver.js"); // 067: the ONE canonical users↔persons↔assignments read
 const proposedTerms = require("../applications/proposed_terms_service"); // Part 3: governed proposed-terms confirmation (Part 2 service)
@@ -3137,8 +3138,26 @@ module.exports = function operatorModule(deps) {
         ? b.idempotency_key.trim().slice(0, 200) : null;
 
       if (idemKey) {
+        //  ── M3 CROSS-PROPERTY READ LEAK — REPAIRED ────────────────────
+        //  This lookup had NO scope predicate: `where booking_idempotency_key
+        //  = $1` across the whole table. Two properties minting the same key
+        //  would collide, and the second caller would receive the FIRST
+        //  property's tour id, person id and arrival time — under a session
+        //  scoped somewhere else entirely. The only thing preventing it was
+        //  the caller's key format, which is not a server-side guarantee.
+        //
+        //  The lookup is now scoped to the session's property. A collision
+        //  within one property still replays correctly; a collision ACROSS
+        //  properties can no longer return another property's data. The
+        //  underlying column may still be globally unique — if so the second
+        //  property's insert fails loudly on the constraint, which is an
+        //  honest conflict rather than a silent disclosure. That residual
+        //  case is classified BLOCKED — COMPOSITE IDEMPOTENCY SCOPE REQUIRES
+        //  MIGRATION and is not migrated here while 129 is unresolved.
         const prior = (await client.query(
-          `select * from leasing_tours where booking_idempotency_key=$1 limit 1`, [idemKey])).rows[0];
+          `select * from leasing_tours
+            where booking_idempotency_key=$1 and property_id=$2 limit 1`,
+          [idemKey, propertyId])).rows[0];
         if (prior) {
           await client.query("rollback");
           return res.json({
@@ -4650,6 +4669,123 @@ module.exports = function operatorModule(deps) {
     }
   );
 
+  // ══════════════════════════════════════════════════════════════════
+  //  GET /operator/operation-receipts/:operation/:operationId
+  //
+  //  THE RECOVERY READ. A write succeeded, the response was lost, the tab
+  //  reloaded. The caller still holds the operation_id it persisted before
+  //  sending, and asks here whether that operation exists.
+  //
+  //  IT DOES NOT SEARCH. Each operation namespace names exactly one durable
+  //  store and one lookup. A heuristic sweep across tables would sometimes
+  //  find the wrong row and report it with total confidence — the worst
+  //  possible failure for a surface whose entire job is to say what really
+  //  happened. An operation with no resolver returns recovery_unavailable,
+  //  which is an honest "this system cannot answer that", not a 404.
+  //
+  //  IT NEVER CROSSES A PROPERTY. Every resolver filters on the session's
+  //  property. Recovery is a read of your own work, not a lookup service.
+  // ══════════════════════════════════════════════════════════════════
+  const RECEIPT_RESOLVERS = {
+    //  EXECUTED LEASE — the reference implementation. The operation_id was
+    //  stored in the record's own idempotency_key column, scoped to the
+    //  application, so recovery is an exact indexed read.
+    [OPRC.OPERATIONS.EXECUTED_LEASE_VERIFY]: async (operationId, propertyId) => {
+      const r = (await pool.query(
+        `select r.id, r.application_id, r.event_id, r.executed_at, r.effective_date,
+                r.created_at, r.payload_hash, r.document_reference, r.document_sha256,
+                r.space_id, r.verified_by_user_id, a.property_id
+           from executed_lease_records r
+           join lease_applications a on a.id = r.application_id
+          where r.idempotency_key = $1 and a.property_id = $2
+          limit 1`, [operationId, propertyId])).rows[0];
+      if (!r) return null;
+      //  The admission verdict is a separate durable record with its own
+      //  vocabulary: `result`, not a boolean, and `evaluated_at`, not
+      //  created_at. Read it as it actually is rather than as the write path
+      //  happens to phrase it — a receipt that renames a domain's own words
+      //  is a second vocabulary waiting to drift.
+      const adm = (await pool.query(
+        `select result, blockers from executed_lease_admission_evaluations
+          where application_id=$1 order by evaluated_at desc limit 1`,
+        [r.application_id])).rows[0] || {};
+      return OPRC.buildReceipt({
+        operation: OPRC.OPERATIONS.EXECUTED_LEASE_VERIFY,
+        operationId, receiptId: r.id,
+        //  RECOVERED, THEREFORE A REPLAY. The caller is being handed the
+        //  result of an operation that already completed.
+        replayed: true,
+        actor: { user_id: r.verified_by_user_id },
+        propertyId,
+        targets: { application_id: r.application_id, executed_lease_record_id: r.id,
+                   space_id: r.space_id },
+        before: null,   // not reconstructible after the fact — stated as unknown, not invented
+        after: { executed_lease_record_id: r.id, record_state: "verified",
+                 //  HONEST NULL when no evaluation exists. "We have not
+                 //  evaluated admission" is not the same fact as "blocked".
+                 activation_status: adm.result === undefined ? null
+                   : (adm.result === "admitted" ? "admitted" : "blocked") },
+        evidenceIds: [r.document_reference, r.document_sha256].filter(Boolean),
+        eventIds: r.event_id ? [r.event_id] : [],
+        occurredAt: r.executed_at, recordedAt: r.created_at, effectiveAt: r.effective_date,
+        canonicalDestination: "executed_lease_records",
+        recovery: { route: `/operator/operation-receipts/${OPRC.OPERATIONS.EXECUTED_LEASE_VERIFY}/${operationId}`,
+                    operation: OPRC.OPERATIONS.EXECUTED_LEASE_VERIFY, operation_id: operationId },
+        message: null,
+        extra: { payload_hash: r.payload_hash, blockers: adm.blockers || [] },
+      });
+    },
+  };
+
+  router.get("/operator/operation-receipts/:operation/:operationId", requireOperator, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const { operation, operationId } = req.params;
+    if (!OPRC.OPERATION_VALUES.includes(operation)) {
+      return res.status(400).json({
+        state: OPRC.RECOVERY.UNAVAILABLE, error: "unknown_operation",
+        receipt: `"${operation}" is not a governed operation namespace.`,
+      });
+    }
+    if (!OPRC.isValidOperationId(operationId)) {
+      return res.status(400).json({
+        state: OPRC.RECOVERY.UNAVAILABLE, error: "operation_id_invalid",
+        receipt: "operation_id must be a UUID.",
+      });
+    }
+    const resolve = RECEIPT_RESOLVERS[operation];
+    if (!resolve) {
+      //  NOT a 404. "No resolver is wired for this operation yet" and "no
+      //  such operation happened" are different facts, and a caller that
+      //  cannot tell them apart will retry a write that may have succeeded.
+      return res.status(501).json({
+        state: OPRC.RECOVERY.UNAVAILABLE, operation, operation_id: operationId,
+        receipt: "Recovery is not yet wired for this operation. Do NOT retry the write "
+          + "on the strength of this response — it does not mean the operation did not happen.",
+      });
+    }
+    try {
+      const receipt = await resolve(operationId, req.operator.property_id);
+      if (!receipt) {
+        //  A governed lookup ran and proved nothing qualifying exists AT THIS
+        //  PROPERTY. That is the only case where 404 is honest.
+        return res.status(404).json({
+          state: OPRC.RECOVERY.NONE, operation, operation_id: operationId,
+          receipt: "No qualifying operation was recorded under that operation_id at this property. "
+            + "The write can be safely re-sent with the SAME operation_id.",
+        });
+      }
+      return res.json({ state: OPRC.RECOVERY.FOUND, operation_receipt: receipt });
+    } catch (e) {
+      console.error("operation receipt recovery:", e);
+      //  A resolver that threw has not proven absence. Say so.
+      return res.status(500).json({
+        state: OPRC.RECOVERY.UNAVAILABLE, operation, operation_id: operationId,
+        receipt: "Recovery could not complete. This does NOT mean the operation did not happen.",
+        error: e.message,
+      });
+    }
+  });
+
   //  RETIRED (088). "Countersign" described a company signing ceremony that
   //  does not exist: the wall in front of it always required an ALREADY
   //  executed lease. One operator action replaces it — Verify Executed Lease
@@ -4680,6 +4816,25 @@ module.exports = function operatorModule(deps) {
     //  session, and a body that tries to say otherwise is refused, not ignored.
     if (refuseClientAssertedAuthority(req, res)) return;
     const b = req.body || {};
+    //  ── REPLAY IDENTITY ─────────────────────────────────────────────
+    //  ADDITIVE TRANSITION, step 1. operation_id is accepted and honoured
+    //  now; it becomes REQUIRED once the app mints and persists it and the
+    //  existing consumers are migrated. Until then a caller without one gets
+    //  the old behaviour and a receipt marked as unrecoverable, rather than a
+    //  400 that breaks a shipped surface.
+    const opId = OPRC.isValidOperationId(b.operation_id) ? b.operation_id.trim() : null;
+    if (b.operation_id !== undefined && b.operation_id !== null && !opId) {
+      return res.status(400).json({
+        error: "operation_id_invalid",
+        receipt: "operation_id must be a UUID from a governed random source (crypto.randomUUID()). "
+          + "Deriving it from a timestamp or a target id collides across properties.",
+      });
+    }
+    //  The BEFORE state, read before the write so the receipt can state a
+    //  real transition rather than assert one.
+    const priorRecordId = (await pool.query(
+      "select executed_lease_record_id from lease_applications where id=$1", [req.params.id]
+    )).rows[0]?.executed_lease_record_id || null;
     const client = await pool.connect();
     try {
       await client.query("begin");
@@ -4710,12 +4865,70 @@ module.exports = function operatorModule(deps) {
         // SERVER-DERIVED: the verifying staff user is never a body value.
         verified_by_user_id: req.operator.id,
         supersedes_record_id: b.supersedes_record_id || null,
-        idempotency_key: b.idempotency_key || null,
+        //  operation_id IS the replay identity. The service's existing
+        //  idempotency_key parameter is the seam it travels through — the
+        //  reference implementation already scopes it to (application_id,
+        //  key) and refuses a payload mismatch by hash. Nothing is rewritten;
+        //  the caller's stable identity is fed into the mechanism that works.
+        idempotency_key: opId || b.idempotency_key || null,
       }, { spawnObligationFromEvent: deps.spawnObligationFromEvent || null });
       await client.query("commit");
+
+      //  ── THE STRUCTURED RECEIPT, RECONSTRUCTED FROM DURABLE RECORDS ──
+      //  receipt_id is the executed_lease_records id — an identity that
+      //  already exists and already means "this is the durable result". No
+      //  synthetic handle, no receipt table.
+      const rec = (await pool.query(
+        `select id, event_id, executed_at, effective_date, created_at, payload_hash,
+                document_reference, document_sha256, space_id
+           from executed_lease_records where id=$1`, [out.record_id])).rows[0] || {};
+      const receipt = OPRC.buildReceipt({
+        operation: OPRC.OPERATIONS.EXECUTED_LEASE_VERIFY,
+        operationId: opId,
+        receiptId: out.record_id,
+        replayed: !!out.idempotent,
+        actor: { user_id: req.operator.id },
+        propertyId: req.operator.property_id,
+        targets: {
+          application_id: req.params.id,
+          executed_lease_record_id: out.record_id,
+          space_id: rec.space_id || b.space_id || null,
+        },
+        //  MATERIAL LIFECYCLE TRANSITION, not a row dump. What a reader needs
+        //  is whether this application now has a governing executed lease and
+        //  whether it was admitted — not forty columns.
+        before: { executed_lease_record_id: priorRecordId, activation_status: null },
+        after: { executed_lease_record_id: out.record_id,
+                 record_state: out.record_state,
+                 activation_status: out.activation_status },
+        evidenceIds: [rec.document_reference, rec.document_sha256].filter(Boolean),
+        eventIds: rec.event_id ? [rec.event_id] : [],
+        obligationEffects: { created: out.term_obligation_id ? [out.term_obligation_id] : [] },
+        //  THREE DIFFERENT TIMES, kept apart. executed_at is when the parties
+        //  signed; effective_date is when the term begins; created_at is when
+        //  this system learned. An accrual reader needs all three and must
+        //  never have to guess which one it is holding.
+        occurredAt: rec.executed_at || null,
+        recordedAt: rec.created_at || new Date().toISOString(),
+        effectiveAt: rec.effective_date || null,
+        canonicalDestination: "executed_lease_records",
+        recovery: {
+          route: `/operator/operation-receipts/${OPRC.OPERATIONS.EXECUTED_LEASE_VERIFY}/${opId}`,
+          operation: OPRC.OPERATIONS.EXECUTED_LEASE_VERIFY,
+          operation_id: opId,
+        },
+        message: out.receipt || null,   // DEPRECATED prose, retained
+        extra: {
+          payload_hash: out.payload_hash || rec.payload_hash || null,
+          activation_status: out.activation_status,
+          blockers: out.blockers || [],
+        },
+      });
+
       // 200 even when activation is blocked: the requested fact — recording
       // the executed lease — succeeded.
-      return res.json(out);
+      //  ADDITIVE: every existing field is still here. `receipt` is added.
+      return res.json({ ...out, receipt: out.receipt, operation_receipt: receipt });
     } catch (e) {
       await client.query("rollback").catch(() => {});
       if (e.httpStatus) return res.status(e.httpStatus).json({ error: e.code, receipt: e.message, ...(e.extra || {}) });
