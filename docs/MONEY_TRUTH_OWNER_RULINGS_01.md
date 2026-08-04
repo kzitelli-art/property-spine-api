@@ -1,4 +1,35 @@
-# MONEY TRUTH — OWNER RULINGS 01
+# MONEY TRUTH — EXPLORATORY QUESTIONS 01 (formerly "OWNER RULINGS")
+
+> ## ⚠ EXPLORATORY DESIGN — NOT A RULING
+>
+> ```
+> EXPLORATORY DESIGN
+> NOT AN OWNER RULING
+> NOT AN ACCOUNTING POLICY
+> NOT AN IMPLEMENTATION CONTRACT
+> ```
+>
+> Reclassified 2026-08-05. Nothing in this document establishes that the final
+> system will use vendor monetary claims, confirmed economic obligations, a
+> separate financial entitlement, the proposed recognition boundary, the
+> proposed correction model, or the proposed cash/accrual presentation. Those
+> are **hypotheses to evaluate**, not settled architecture.
+>
+> The maintenance-expense story is a useful working model and nothing more.
+> The product-boundary questions in
+> `MONEY_INTEGRATION_DISCOVERY_QUESTIONS.md` come first.
+>
+> Language in this document that reads as settled — "settled", "canonical",
+> "required", "centerline", "must" — should be read as **candidate** and
+> **working hypothesis** wherever it concerns money architecture that does not
+> already exist in the product.
+>
+> **Real and unchanged:** work orders, completion claims, work acceptances,
+> proof attachments, billback decisions, vendors, `money_events`,
+> `ledger_entries`. Everything beyond those is under consideration.
+
+---
+
 
 **Status: DESIGN DOCUMENT ONLY. No product code, no schema, no migration, no
 accounting logic. Nothing here is implemented.**
