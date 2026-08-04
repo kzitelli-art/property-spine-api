@@ -10,16 +10,23 @@
 //  be read as contradictory, or that a first-match implementation would get
 //  wrong. Every case asserts BOTH what must appear and what must be withheld.
 //
-//  Requires HARNESS_DATABASE_URL, distinct from DATABASE_URL.
+//  Requires HARNESS_DATABASE_URL, and REFUSES a value that resolves to the
+//  same target as DATABASE_URL — see the connection note below.
 // ════════════════════════════════════════════════════════════════════
 "use strict";
 const path = require("path");
 const { Pool } = require("pg");
+const receipt = require(path.join(__dirname, "_run_receipt"));
 const { datedPositionRows, denominatorClass, EVIDENCE_STATE, RESULT_STATE } = require(path.join(__dirname, "..", "src/tenancy/dated_position_rows"));
 
-const CONN = process.env.HARNESS_DATABASE_URL;
-if (!CONN) { console.error("need HARNESS_DATABASE_URL"); process.exit(1); }
-if (CONN === process.env.DATABASE_URL) { console.error("HARNESS_DATABASE_URL must differ from DATABASE_URL"); process.exit(1); }
+//  THE GOVERNED HELPER, not a local check. This harness previously compared
+//  the two URLs as STRINGS, which is a weaker rule than it looks: a different
+//  user, a trailing slash, an extra query parameter, or localhost vs
+//  127.0.0.1 all defeat string equality while still resolving to the same
+//  database. harnessConnectionString() parses host, port and database and
+//  refuses on the resolved target. Requiring the variable is not the same as
+//  refusing the wrong value.
+const CONN = receipt.harnessConnectionString();
 
 let pass = 0, fail = 0;
 const ok = (msg, cond) => { if (cond) { pass++; console.log("   PASS  " + msg); } else { fail++; console.log("   FAIL  " + msg); } };

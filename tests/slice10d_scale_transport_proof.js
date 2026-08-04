@@ -8,14 +8,17 @@
 const path = require("path");
 const fs = require("fs");
 const { Pool } = require("pg");
+const receipt = require(path.join(__dirname, "_run_receipt"));
 const { forwardRentRollPage, cursorEncode, SECRET_SOURCE, PAGE_DEFAULT, PAGE_MAX } =
   require(path.join(__dirname, "..", "src/tenancy/forward_rent_roll_page"));
 const { forwardRentRollSummary } = require(path.join(__dirname, "..", "src/tenancy/forward_rent_roll_summary"));
 const { datedPositionRows } = require(path.join(__dirname, "..", "src/tenancy/dated_position_rows"));
 const FIX = require(path.join(__dirname, "fixtures/slice10d_scale_fixture"));
 
-const CONN = process.env.HARNESS_DATABASE_URL;
-if (!CONN) { console.error("need HARNESS_DATABASE_URL"); process.exit(1); }
+//  This harness only required the variable to be PRESENT — it never compared
+//  it to DATABASE_URL at all, so it was the weakest of the four. The governed
+//  helper supplies both the requirement and the same-target refusal.
+const CONN = receipt.harnessConnectionString();
 let pass = 0, fail = 0;
 const ok = (m, c) => { if (c) { pass++; console.log("   PASS  " + m); } else { fail++; console.log("   FAIL  " + m); } };
 const section = (s) => console.log("\n── " + s + " " + "─".repeat(Math.max(0, 58 - s.length)));

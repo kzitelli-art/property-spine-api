@@ -7,12 +7,14 @@
 "use strict";
 const path = require("path");
 const { Pool } = require("pg");
+const receipt = require(path.join(__dirname, "_run_receipt"));
 const { forwardRentRollSummary } = require(path.join(__dirname, "..", "src/tenancy/forward_rent_roll_summary"));
 const { datedPositionRows } = require(path.join(__dirname, "..", "src/tenancy/dated_position_rows"));
 
-const CONN = process.env.HARNESS_DATABASE_URL;
-if (!CONN) { console.error("need HARNESS_DATABASE_URL"); process.exit(1); }
-if (CONN === process.env.DATABASE_URL) { console.error("HARNESS_DATABASE_URL must differ"); process.exit(1); }
+//  Governed refusal on the RESOLVED target (host, port, database), replacing
+//  a string comparison that two different spellings of the same database
+//  would have passed.
+const CONN = receipt.harnessConnectionString();
 
 let pass = 0, fail = 0;
 const ok = (m, c) => { if (c) { pass++; console.log("   PASS  " + m); } else { fail++; console.log("   FAIL  " + m); } };
