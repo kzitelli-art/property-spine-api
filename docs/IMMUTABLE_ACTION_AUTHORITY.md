@@ -156,3 +156,77 @@ combined migration nobody can review is worse than three that can be.
 
 **This note is a constraint for the governed schema discussion after migration
 129. It is not authorization to solve the architecture now.**
+
+---
+
+## Addendum — Step D: task payload binding
+
+`leasing_conversion_obligation_events` **requires durable material-payload
+binding for recoverable task operations.**
+
+This table is otherwise the best operational history in the codebase — it
+already carries the actor, the actor's identity as resolved at that moment,
+before/after status, before/after owner, before/after due time, resolution
+basis, supersession lineage, and a uniquely-indexed replay key. Step D's
+code-only hardening made all of that reachable: the event id is now returned
+by all four services, `resolve` accepts a replay identity for the first time,
+and the duplicate lookup is bound to the exact obligation so it can never
+return another property's event.
+
+One capability is still missing, and it is the one that makes a receipt safe
+to show a human:
+
+> Nothing binds the replay key to the operation that was requested. A retry
+> under the same key asking for a **different owner, due date, resolution or
+> reason** returns the original event, indistinguishable from a true replay.
+
+That is incomplete in the dangerous direction — it would return a confident
+success for an operation the caller did not request. So no task receipt is
+exposed, and none of the four is receipt-safe or agent-eligible.
+
+The later governed schema design must support, at minimum:
+
+```
+operation namespace
+operation_id
+material payload hash
+property-resolvable scope
+immutable event identity
+```
+
+**No migration number. No SQL.** Same preconditions as the other dependencies.
+
+Kept separate, and deliberately not forced into this repair without a broader
+ruling:
+
+- task events do not carry `property_id` directly — attribution runs through
+  a two-hop join across mutable conversion rows
+- evidence (`proof`) passed during resolution has no traced durable landing
+- downstream consequence IDs are unavailable (**PARTIAL RECEIPT**)
+
+## Addendum — Step F: confirm-prospect
+
+`tour.confirm_prospect` is blocked for the same reason as the other three tour
+operations — its only home for an operation identity is the unindexed
+`tour_events.metadata` measured in B1. It adds one requirement the others did
+not surface:
+
+> An operation identity must be recordable on an event whose **actor may
+> legitimately be NULL**. A prospect-confirmed tour has no staff actor, so a
+> replay identity must never be derived from or conflated with the acting user.
+
+## The known migration dependencies — updated
+
+1. **Tour ledger verb repair** — vocabulary
+2. **Tour operation receipt authority** — access path
+   (now covering check-in, complete, post-tour capture, walk-in **and
+   confirm-prospect**)
+3. **Application decision authority** — a missing immutable record
+4. **Task payload binding** — a missing material hash on an otherwise
+   adequate event
+
+Four now, not three. Three touch `tour_events` or the application lifecycle;
+the fourth touches a different table and is the cheapest of the set. They
+share a ledger position and should be **sequenced** together — but their
+domain semantics must not be merged. A vocabulary fix, an access-path fix, a
+missing record and a missing hash are four different changes.
