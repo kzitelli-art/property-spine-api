@@ -2779,11 +2779,55 @@ module.exports = function operatorModule(deps) {
   //     — a body actor_id can never override it on this door, and
   //   • the property wall enforced from the session scope: the tour must
   //     belong to the session's property (checked inside the service).
+  // ══════════════════════════════════════════════════════════════════
+  //  POST /operator/leasing/tours/:tourId/check-in — PHYSICAL PRESENCE.
+  //
+  //  The legacy door demanded `actor_id` in the body and refused without it,
+  //  calling check-in "a human truth point" — then believed whatever string
+  //  arrived. The browser filled it from a text box and refused to proceed
+  //  until an employee typed their own user ID before recording that they
+  //  were standing in the building.
+  //
+  //  The more consequential the attribution, the less it may come from the
+  //  body. Here it comes from the session, and the employee types nothing.
+  // ══════════════════════════════════════════════════════════════════
+  router.post("/operator/leasing/tours/:tourId/check-in", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!leasingTourService || typeof leasingTourService.checkInTourService !== "function") {
+      return res.status(503).json({ receipt: "Check-in is not wired on this deploy (leasingTourService.checkInTourService missing)." });
+    }
+    if (refuseClientAssertedAuthority(req, res)) return;
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const out = await leasingTourService.checkInTourService(client, {
+        tourId: req.params.tourId,
+        actorUserId: req.operator.id,               // SERVER-DERIVED — never the body
+        enforcePropertyId: req.operator.property_id, // the session's wall
+      });
+      await client.query("commit");
+      return res.json({ ...out, checked_in_by_user_id: req.operator.id });
+    } catch (e) {
+      try { await client.query("rollback"); } catch {}
+      if (e.svc) return res.status(e.http).json(e.body);
+      console.error("operator tour check-in:", e);
+      return res.status(500).json({ receipt: "Could not check in the tour.", error: e.message });
+    } finally { client.release(); }
+  });
+
   router.post("/operator/leasing/tours/:tourId/complete", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     if (!leasingTourService || typeof leasingTourService.completeTour !== "function") {
       return res.status(503).json({ receipt: "Tour completion is not wired on this deploy (leasingTourService missing)." });
     }
+    //  A body actor was already INEFFECTIVE here (recordedByUserId is server-
+    //  derived). Silently ignoring it is still the wrong shape: a stale caller
+    //  that believes it is naming the recorder gets a 200 and never learns it
+    //  was overruled. Refuse it, same as deny / approve / check-in.
+    //  actual_tour_host_user_id and follow_up_owner_user_id are NOT refused —
+    //  those are BUSINESS FACTS (who gave the tour, who owns the follow-up),
+    //  not a claim about who is operating. Two meanings, two field names.
+    if (refuseClientAssertedAuthority(req, res)) return;
     const client = await pool.connect();
     try {
       await client.query("begin");
@@ -2835,6 +2879,10 @@ module.exports = function operatorModule(deps) {
     if (!leasingTourService || typeof leasingTourService.completeTour !== "function") {
       return res.status(503).json({ receipt: "Tour completion is not wired on this deploy (leasingTourService missing)." });
     }
+    //  person_id / unit_id / occurred_at are business facts about the walk-in
+    //  and pass through. property_id and any actor field do not: the property
+    //  is the session's and the recorder is the session's.
+    if (refuseClientAssertedAuthority(req, res)) return;
     const b = req.body || {};
     const propertyId = req.operator.property_id;          // SERVER-DERIVED
     const client = await pool.connect();
@@ -3145,6 +3193,11 @@ module.exports = function operatorModule(deps) {
     if (!conversionService || !conversionService.resolveRung) {
       return res.status(503).json({ error: "task resolution is not wired on this deploy (conversionService missing)" });
     }
+    //  Same standard as every other staff decision on this router. by_user_id
+    //  was already server-derived; a caller that believes otherwise now learns
+    //  it instead of getting a 200. resolution_basis / proof / result are
+    //  business inputs and pass untouched.
+    if (refuseClientAssertedAuthority(req, res)) return;
     const client = await pool.connect();
     try {
       await client.query("begin");
@@ -3176,6 +3229,10 @@ module.exports = function operatorModule(deps) {
   // ── R3: shared property-wall + service-call shape for task actions ─────
   async function taskAction(req, res, fn) {
     if (!conversionService) return res.status(503).json({ error: "conversion service not wired on this deploy." });
+    //  One refusal covering reassign / reopen / change-due. to_user_id is NOT
+    //  refused: naming who work goes TO is a business decision. Naming who is
+    //  ACTING is authority, and that only ever comes from the session.
+    if (refuseClientAssertedAuthority(req, res)) return;
     const client = await pool.connect();
     try {
       await client.query("begin");
@@ -4068,7 +4125,7 @@ module.exports = function operatorModule(deps) {
   const STAFF_AUTHORITY_ASSERTION_FIELDS = Object.freeze([
     "approved_by", "decided_by_user_id", "actor_user_id", "by_user_id",
     "completed_by", "confirmed_by", "recorded_by", "created_by",
-    "user_id", "property_id",
+    "user_id", "property_id", "actor_id",
   ]);
 
   function refuseClientAssertedAuthority(req, res) {
@@ -4435,6 +4492,10 @@ module.exports = function operatorModule(deps) {
     if (!executedLease || typeof executedLease.verifyExecutedLease !== "function") {
       return res.status(503).json({ receipt: "Executed-lease intake is not wired on this deploy. Deploy executed_lease_service.js, operator.js and server.js together." });
     }
+    //  The lease terms, the document evidence and the signers are the FACTS of
+    //  the executed lease and pass through untouched. Who verified it is the
+    //  session, and a body that tries to say otherwise is refused, not ignored.
+    if (refuseClientAssertedAuthority(req, res)) return;
     const b = req.body || {};
     const client = await pool.connect();
     try {

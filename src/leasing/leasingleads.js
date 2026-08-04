@@ -1908,25 +1908,54 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   //  The single most important honest input. recordTourEvent refuses this for
   //  any actor_type other than 'human', so the system can never fake an arrival.
   //  The on-site queue is the caller; actor_id is the staff user who tapped it.
+  // ══════════════════════════════════════════════════════════════════
+  //  THE CANONICAL CHECK-IN. One service, two doors, no fork.
+  //
+  //  Check-in records that a human was PHYSICALLY PRESENT. The route it came
+  //  from demanded `actor_id` in the request body and refused without it —
+  //  "check-in is a human truth point" — while accepting whatever string
+  //  arrived. It insisted on an identity and then believed the caller about
+  //  it, which is the strongest possible statement of the wrong thing: the
+  //  more consequential the attribution, the less it may come from the body.
+  //
+  //  The actor is now supplied BY THE DOOR. The operator door passes the
+  //  authenticated session user. The legacy shared-key door passes what it
+  //  always passed, so its behaviour is unchanged until it is retired.
+  //  enforcePropertyId is the session's property wall; the key door passes
+  //  null, exactly as completeTourService already does.
+  // ══════════════════════════════════════════════════════════════════
+  async function checkInTourService(client, { tourId, actorUserId, enforcePropertyId = null }) {
+    if (!actorUserId) throw svcErr(400, { receipt: "Check-in requires an identified on-site human." });
+    const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
+    if (!tour) throw svcErr(404, { receipt: "No tour with that id." });
+    if (enforcePropertyId && String(tour.property_id) !== String(enforcePropertyId)) {
+      throw svcErr(403, { receipt: "That tour belongs to another property." });
+    }
+    await recordTourEvent(client, {
+      tourId, leadId: tour.lead_id, type: "checked_in",
+      actorType: "human", actorId: actorUserId,
+      metadata: { scheduled_for: tour.scheduled_for },
+    });
+    return { receipt: "Checked in — the prospect physically showed. This is the proof the instrument exists to capture.", tour_id: tourId };
+  }
+
+  //  DOOR 1 — the legacy shared-key door. BEHAVIOUR UNCHANGED, deprecated:
+  //  the actor it records is caller-asserted and must not be read as an
+  //  authenticated staff presence claim.
   router.post("/leasing/tours/:tourId/check-in", requireOperator, async (req, res) => {
     const { tourId } = req.params; const b = req.body || {};
     if (!b.actor_id) return res.status(400).json({ receipt: "actor_id (the on-site staff user) is required — check-in is a human truth point." });
     const client = await pool.connect();
     try {
       await client.query("begin");
-      const tour = (await client.query(`select * from leasing_tours where id=$1`, [tourId])).rows[0];
-      if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id." }); }
-      await recordTourEvent(client, {
-        tourId, leadId: tour.lead_id, type: "checked_in",
-        actorType: "human", actorId: b.actor_id,
-        metadata: { scheduled_for: tour.scheduled_for },
-      });
+      const out = await checkInTourService(client, { tourId, actorUserId: b.actor_id });
       await client.query("commit");
-      return res.json({ receipt: "Checked in — the prospect physically showed. This is the proof the instrument exists to capture.", tour_id: tourId });
+      return res.json(out);
     } catch (e) {
       try { await client.query("rollback"); } catch {}
+      if (e.svc) return res.status(e.http).json(e.body);
       console.error("leasing check-in:", e);
-      return res.status(500).json({ receipt: e.message.includes("truth point") ? e.message : "Could not check in the tour.", error: e.message });
+      return res.status(500).json({ receipt: "Could not check in the tour.", error: e.message });
     } finally { client.release(); }
   });
 
@@ -2675,6 +2704,7 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // ONE canonical completion service, exposed for the staff-session door
   // in operator.js — the same no-fork handoff as agentApp._service.
   router._service = {
+    checkInTourService,
     completeTour: completeTourService,
     bookTourIntoSlot,          // the ONE canonical booking transaction
     readOfferableSlots,        // slots the agent may offer this turn (property tz; null if tz unconfigured)
