@@ -114,7 +114,7 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
 
     // R3 (069): birth is a ledger fact. Origin (how ownership was decided) and
     // eligibility (whether the owner is currently eligible) stay TWO fields.
-    await closureAuthority.appendEvent(client, {
+    const _ev = await closureAuthority.appendEvent(client, {
       conversion_obligation_id: link.id, event_type: "created",
       actor_user_id: null, identity_resolution_basis: null,
       prior_status: null, next_status: "open",
@@ -586,7 +586,7 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
         snapPerson = idn.person_id || null; snapAssignment = idn.assignment_id || null; snapBasis = idn.state || "unbridged";
       } catch (_) {}
     }
-    await closureAuthority.appendEvent(client, {
+    const _ev = await closureAuthority.appendEvent(client, {
       conversion_obligation_id: link.id, event_type: "due_changed",
       actor_user_id: by_user_id || null, actor_person: snapPerson, actor_assignment: snapAssignment,
       identity_resolution_basis: snapBasis,
@@ -597,7 +597,9 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     });
     await client.query(`update leasing_conversion_obligations set due_by=$2 where id=$1`, [link.id, due]);
     await client.query(`update obligations set due_at=$2, updated_at=now() where id=$1`, [link.obligation_id, due]);
-    return { due_changed: true, obligation_id, rung: link.rung, next_due_at: due, owner_user_id: link.owner_user_id };
+    //  INTERNAL replay facts, additive — see resolveRung. Not a receipt.
+    return { event_id: _ev && _ev.event_id, replayed: !!(_ev && _ev.replayed),
+             due_changed: true, obligation_id, rung: link.rung, next_due_at: due, owner_user_id: link.owner_user_id };
   }
   const rescheduleTask = changeDueTime; // PRIVATE, DEPRECATED alias only — never exported, never routed.
   void rescheduleTask; // the public contract is POST …/change-due + event_type due_changed
@@ -661,7 +663,7 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
         snapPerson = idn.person_id || null; snapAssignment = idn.assignment_id || null; snapBasis = idn.state || "unbridged";
       } catch (_) {}
     }
-    await closureAuthority.appendEvent(client, {
+    const _ev = await closureAuthority.appendEvent(client, {
       conversion_obligation_id: link.id, event_type: "reassigned",
       actor_user_id: by_user_id || null, actor_person: snapPerson, actor_assignment: snapAssignment,
       identity_resolution_basis: snapBasis,
@@ -687,12 +689,18 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
               owner_eligibility_state=$3, ownership_origin=$4, updated_at=now()
         where id=$1`,
       [obligation_id, to_user_id, unassigning ? "unassigned" : "eligible_assignment", origin]);
-    return { reassigned: true, obligation_id, rung: link.rung,
+    //  INTERNAL replay facts, additive — see resolveRung. Not a receipt.
+    return { event_id: _ev && _ev.event_id, replayed: !!(_ev && _ev.replayed),
+             reassigned: true, obligation_id, rung: link.rung,
              prior_owner_user_id: link.owner_user_id, owner_user_id: to_user_id, ownership_origin: origin };
   }
 
   const RESOLUTION_BASES = ["coverage", "manager_intervention", "completed_together", "no_longer_needed", "unassigned_pickup"];
-  async function resolveRung(client, { obligation_id, result, proof = null, by_user_id = null, suppress_next = false, resolution_basis = null }) {
+  async function resolveRung(client, { obligation_id, result, proof = null, by_user_id = null, suppress_next = false, resolution_basis = null,
+    //  D1-a: resolve was the ONE task operation that accepted no replay
+    //  identity. reassign, reopen and change-due all did. Threaded through to
+    //  the closure authority, which passes it to the append-only ledger.
+    idempotency_key = null }) {
     const link = (await client.query(
       "select * from leasing_conversion_obligations where obligation_id=$1 for update", [obligation_id]
     )).rows[0];
@@ -736,9 +744,9 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
     // THE TERMINAL PART runs through the ONE closure capability: link stamp,
     // identity snapshots, and the obligation mutation — atomic in this tx.
     const conv0 = (await client.query("select property_id from leasing_conversions where id=$1", [link.conversion_id])).rows[0];
-    await closureAuthority.closeLinkedConversionObligation(client, {
+    const closeRes = await closureAuthority.closeLinkedConversionObligation(client, {
       link, property_id: conv0.property_id, outcome, resolution, proof,
-      by_user_id, resolution_basis: basis,
+      by_user_id, resolution_basis: basis, idempotency_key,
     });
 
 
@@ -765,7 +773,12 @@ module.exports = function leasingConversionModule({ pool, spawnObligationFromEve
       await client.query(`update leasing_conversions set status='released', closed_at=now(), updated_at=now() where id=$1`, [conv.id]);
     }
 
-    return { obligation_id, rung: link.rung, outcome, resolution, spawned: spawned ? spawned.link.rung : null, suppressed_next: !!(suppress_next && cfg && cfg.next) };
+    //  INTERNAL replay facts, additive. Existing consumers see every field
+    //  they saw before. event_id / replayed are for FUTURE receipt
+    //  construction only -- they are not a receipt and must not be rendered
+    //  as confirmation, because nothing yet binds the key to the payload.
+    return { obligation_id, rung: link.rung, outcome, resolution, spawned: spawned ? spawned.link.rung : null, suppressed_next: !!(suppress_next && cfg && cfg.next),
+             event_id: closeRes && closeRes.event_id, replayed: !!(closeRes && closeRes.replayed) };
   }
 
   // THE ONLY AUTHORIZED CAUSE of applicant_followup. Called by the
