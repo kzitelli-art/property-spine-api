@@ -77,8 +77,18 @@ server    90 / 36 / 58 / 62      0 failed   real Postgres, isolated harness DB
 app       18 harnesses · 779 / 0            no regression
 publish   19 globals measured · 19 stubbed · 0 divergent
 verify    3 of 3 gates invoked · all exited 0
-browser   IN PROGRESS at this candidate — see the note below
+browser   96 / 0                            real HTTP · desktop · 390px · exit 0
+states     7 of 7 currently reachable evidence/result states rendered
+          17 of 17 position states rendered
+reserved  EVIDENCE_STATE.untrackable · EVIDENCE_STATE.unavailable
+          RESULT_STATE.UNAVAILABLE — declared, defensively consumed, not producible
 ```
+
+The browser run covers nine sections: every row-level axis on the states
+property; published / empty / no-positions / no-operating-day / forbidden; the
+ten contract states and the three that cannot be produced; all seventeen
+position states; pagination against 10,000 real positions; the transport
+ceiling; 390px; and a real outage in which nothing stale survives.
 
 Scale re-measured rather than restated: **400 pages at limit 25 (831,288 ms)
 and 50 pages at limit 200 (107,154 ms)**, all 10,000 positions returned exactly
@@ -113,6 +123,12 @@ Two rules this is worth stating for: **check the timestamp before believing a
 proof artifact**, and **delete the previous artifact before re-running rather
 than trusting it to be overwritten**. A proof file is evidence only if
 something in this run wrote it.
+
+The stale files were deleted and the acceptance re-run. It produced the **same
+96 / 0** — which is the expected result, because no renderer source changed —
+but it is now evidence for *this* candidate rather than for `4584991`. The
+identical number is exactly why the near-miss mattered: nothing about the total
+would have revealed it was the wrong run.
 
 ## Frozen contracts
 
