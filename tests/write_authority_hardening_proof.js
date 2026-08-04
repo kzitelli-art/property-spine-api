@@ -13,32 +13,22 @@
 //  the browser read that value out of a hidden input backed by localStorage.
 //  The durable record of who declined an application was a typed string.
 //
-//  ── CURRENT STATE, STATED HERE SO NOBODY READS THIS AS GREEN ──────
-//  16 assertions PASS — every authority property this packet exists to
-//  establish. 8 assertions FAIL, all of them the HAPPY PATH, and all for one
-//  reason: this fixture cannot yet build an application that carries an open
-//  `application_approval` gate.
+//  ── THE FIXTURE SUBMITS THROUGH THE CANONICAL LIFECYCLE ──────────
+//  An earlier version of this harness inserted lease_applications rows
+//  directly. The denial service refused every one of them with
 //
 //      {"receipt":"No open application_approval gate on this application."}
 //
-//  THAT 409 IS THE PRODUCT BEING RIGHT. A denial closes an approval gate; an
-//  application inserted directly into `lease_applications` never had one,
-//  because only the canonical submission path spawns it. The fixture is what
-//  is wrong, not the service and not the route.
+//  which was the PRODUCT BEING RIGHT: a denial closes an approval gate, and
+//  only the canonical submission path spawns one. The eight resulting
+//  failures were left red rather than relaxed, because relaxing them would
+//  have turned a real gap into a green tick.
 //
-//  The eight failures are LEFT IN PLACE deliberately. Deleting them, or
-//  relaxing them to accept a 409, would convert a known gap into a green tick
-//  — which is the exact failure this codebase keeps finding. They stay red
-//  until the fixture submits through the canonical service.
-//
-//  WHAT IS AND IS NOT PROVEN, precisely:
-//    PROVEN      every refusal — forged actor, forged property, wrong module,
-//                wrong property, no session, invalid session, shared key
-//                alone; and that one canonical service serves both doors.
-//    NOT PROVEN  that a valid session's denial writes the session actor to
-//                the durable record. The route passes op.id to the service
-//                (readable at operator.js) but this harness has not observed
-//                the durable row.
+//  They are fixed the correct way: every application under test is now
+//  created by submitApplicationService — the one service that creates an
+//  application and spawns its gate. No obligation is manufactured with raw
+//  SQL to satisfy the service. The applications under test are applications
+//  the product itself created.
 //
 //  Run:  HARNESS_DATABASE_URL=… OPERATOR_KEY=… node tests/write_authority_hardening_proof.js
 // ════════════════════════════════════════════════════════════════════
@@ -76,7 +66,7 @@ function req(method, p, { session, key, body } = {}) {
 }
 
 (async () => {
-  const t0 = receipt.begin(__filename, { url: CONN, expected: 24 });
+  const t0 = receipt.begin(__filename, { url: CONN, expected: 27 });
   const pool = new Pool({ connectionString: CONN, ssl: false });
   const svc = require(path.join(__dirname, "..", "src/identity/staff_session_service.js"));
   const c = await pool.connect();
@@ -108,24 +98,30 @@ function req(method, p, { session, key, body } = {}) {
 
   const person = (await one(`insert into persons (name, lifecycle_status)
     values ($1,'lead') returning id`, [uniq + " Applicant"])).id;
-  //  THE APPLICATION IS BUILT THROUGH THE CANONICAL GATE SPAWNER, not raw.
-  //  A raw lease_applications row has no application_approval gate, and the
-  //  denial service correctly refuses 409 "No open application_approval gate"
-  //  — which is the product being right and the fixture being wrong. Building
-  //  the gate with the same service the submission path uses keeps the fixture
-  //  honest instead of weakening the assertion that caught it.
-  const submissionSvcForFixture = require(path.join(__dirname, "..", "src/applications/applicationSubmission.js"));
-  let _spawnGate = null;
+  //  ── THE APPLICATION IS CREATED THROUGH THE CANONICAL LIFECYCLE ────
+  //  submitApplicationService is the ONE service that creates an application,
+  //  and it spawns the application_approval gate itself (:296). A raw
+  //  lease_applications insert has no gate, so the denial service correctly
+  //  refuses 409 "No open application_approval gate" — the product being
+  //  right and the fixture being wrong.
+  //
+  //  Manufacturing that obligation with raw SQL would satisfy the service
+  //  while proving nothing about the real lifecycle, so the fixture calls the
+  //  real submission instead. Every application under test is therefore an
+  //  application the product itself created.
+  const submissionModule = require(path.join(__dirname, "..", "src/applications/applicationSubmission.js"));
+  let _submit = null;
   const mkApp = async (prop) => {
     const cc = await pool.connect();
     try {
       await cc.query("begin");
-      const app = (await cc.query(
-        `insert into lease_applications (property_id, person_id, status, submitted_at)
-         values ($1,$2,'submitted', now()) returning *`, [prop, person])).rows[0];
-      await _spawnGate(cc, { conversion_id: null, app });
+      const out = await _submit(cc, {
+        property_id: prop, person_id: person,
+        applicant_name: uniq + " Applicant",
+        source: "applicant",
+      });
       await cc.query("commit");
-      return app.id;
+      return out.application.id;
     } catch (e) { await cc.query("rollback").catch(() => {}); throw e; }
     finally { cc.release(); }
   };
@@ -148,14 +144,13 @@ function req(method, p, { session, key, body } = {}) {
   const app = require(path.join(__dirname, "..", "server.js"));
   await new Promise((r) => setTimeout(r, 1500));
   //  server.js exports nothing, so the fixture builds the SAME module with the
-  //  SAME deps the server gives it. Same implementation, not a reimplementation
-  //  — the gate is spawned by the canonical spawner either way.
+  //  SAME deps the server gives it — one implementation, reached twice.
   const { spawnObligationFromEvent, completeObligation } =
     require(path.join(__dirname, "..", "src/shared/obligation_engine.js"));
-  _spawnGate = submissionSvcForFixture({
+  _submit = submissionModule({
     pool, spawnObligationFromEvent, completeObligation,
     conversionService: null, commBoundary: null, applicationInputAuthority: null,
-  })._service.spawnApprovalGate;
+  })._service.submitApplicationService;
 
   const DENY = "/operator/leasing/applications/";
 
@@ -175,6 +170,34 @@ function req(method, p, { session, key, body } = {}) {
     const ev = await (await pool.query(
       `select count(*)::int n from events where type='application_denied' and property_id=$1`, [A])).rows[0];
     ok("A5  a durable event survives the authority change (provenance preserved)", ev.n >= 1);
+
+    //  THE GATE MUST CLOSE. A denial that leaves the approval gate open would
+    //  leave the team chasing a decision that has already been made.
+    const gate = await (await pool.query(
+      `select o.status from obligations o
+        where o.property_id=$1 and o.type='application_approval'
+        order by o.created_at desc limit 1`, [A])).rows[0];
+    ok(`A6  the application_approval gate is CLOSED by the denial (${gate ? gate.status : "no gate"})`,
+      !!gate && gate.status !== "open" && gate.status !== "in_progress");
+
+    //  THE EVENT MUST REACH THE EXACT APPLICATION. A denial event that names
+    //  only a property cannot tell a later reader WHICH proposal it ended —
+    //  which is the future-accounting lineage question.
+    const evRow = await (await pool.query(
+      `select e.person_id, e.note from events e
+        where e.type='application_denied' and e.property_id=$1
+        order by e.occurred_at desc limit 1`, [A])).rows[0];
+    ok("A7  the denial event carries the person lineage of the exact application",
+      !!evRow && String(evRow.person_id) === String(person));
+
+    //  THE ROUTE IS A WRAPPER, NOT A SECOND SHAPE. The operator response must
+    //  be the canonical service payload plus only the fields the route adds.
+    const canonicalKeys = ["receipt", "application"];
+    const routeAdded = ["decided_by_user_id", "property_id"];
+    const got = Object.keys(r.body || {}).sort();
+    ok(`A8  the payload is the canonical service's, plus only route wrapper fields (${got.join(",")})`,
+      canonicalKeys.every((k) => got.includes(k))
+      && got.every((k) => canonicalKeys.includes(k) || routeAdded.includes(k)));
   }
 
   section("B  forged actor and forged property are ineffective");
@@ -261,7 +284,7 @@ function req(method, p, { session, key, body } = {}) {
 
   console.log(`\n════ write authority: ${pass} passed, ${fail} failed ════`);
   await pool.end();
-  const code = receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 20 });
+  const code = receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 27 });
   process.exit(code);
 })().catch((e) => {
   console.error("DIED: " + (e && e.stack || e));
