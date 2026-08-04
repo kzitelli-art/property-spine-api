@@ -267,7 +267,7 @@ section("2. ONE IMPLEMENTATION — NO DUPLICATED LOGIC IN TENANTLINK");
 
   const seamFiles = fs.readdirSync(path.join(ROOT, "src", "conversation")).sort();
   ok("the conversation seam directory holds exactly the extracted seams",
-    seamFiles.join(",") === "clarification.js,intent.js,receipt.js,work_reference.js", seamFiles.join(","));
+    seamFiles.join(",") === "clarification.js,intent.js,receipt.js,technician_intent.js,work_reference.js", seamFiles.join(","));
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -667,8 +667,13 @@ section("11. WORK-ORDER WRITES STAY IN THE CANONICAL SERVICE");
   //  than being discovered later; it is not a claim that these are correct.
   const updaters = files.filter((f) => /update\s+work_orders/i.test(strip(fs.readFileSync(f, "utf8"))))
     .map((f) => path.relative(ROOT, f)).sort();
-  ok("no NEW direct work-order updater appeared (register pinned at 3 files)",
-    updaters.join(",") === "src/comms/tenantlink.js,src/maintenance/maintenance.js,src/maintenance/work_order_service.js",
+  //  Four now. src/technician/lifecycle_service.js was ADDED deliberately: it
+  //  is the canonical writer of field facts and of governed completion, and it
+  //  is the only place the technician path can move a work order. The register
+  //  grows only with a named reason, never silently.
+  ok("no NEW unexplained direct work-order updater appeared (register pinned at 4 files)",
+    updaters.join(",") === "src/comms/tenantlink.js,src/maintenance/maintenance.js,"
+      + "src/maintenance/work_order_service.js,src/technician/lifecycle_service.js",
     updaters.join(","));
 
   ok("neither conversational seam contains SQL of any kind",

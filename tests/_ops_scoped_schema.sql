@@ -27,11 +27,27 @@
 
   create table persons (
     id uuid primary key default gen_random_uuid(),
-    property_id uuid references properties(id), name text);
+    property_id uuid references properties(id), name text,
+    phone text, primary_phone_e164 text);
   create table units (
     id uuid primary key default gen_random_uuid(),
     property_id uuid references properties(id), unit_number text);
-  create table leases (id uuid primary key default gen_random_uuid());
+  create table leases (
+    id uuid primary key default gen_random_uuid(),
+    property_id uuid references properties(id),
+    unit_id uuid references units(id),
+    tenant_ids uuid[] not null default '{}',
+    lease_status text not null default 'active');
+  create table leasing_leads (
+    id uuid primary key default gen_random_uuid(),
+    person_id uuid references persons(id),
+    property_id uuid references properties(id),
+    status text not null default 'open');
+  create table tenant_invites (
+    id uuid primary key default gen_random_uuid(),
+    person_id uuid references persons(id),
+    property_id uuid references properties(id),
+    status text not null default 'used');
 
   create table property_team_assignments (
     id uuid primary key default gen_random_uuid(),
@@ -98,3 +114,22 @@
     ownership_origin text,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now());
+
+  create table contact_preferences (
+    id uuid primary key default gen_random_uuid(),
+    person_id uuid not null references persons(id) on delete cascade,
+    channel text not null default 'text',
+    consent_state text not null default 'unknown',
+    updated_at timestamptz not null default now(),
+    source text);
+  create unique index contact_prefs_person_channel on contact_preferences(person_id, channel);
+
+  create table person_property_classifications (
+    id uuid primary key default gen_random_uuid(),
+    person_id uuid not null references persons(id),
+    property_id uuid not null references properties(id),
+    record_class text not null check (record_class in ('production','internal_qa')),
+    classified_at timestamptz not null default now(),
+    classification_source text not null default 'operator',
+    superseded_at timestamptz,
+    notes text);

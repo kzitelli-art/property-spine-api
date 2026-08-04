@@ -54,6 +54,14 @@ const OPERATING_OUTCOMES = [
   "balance_read",            // a live lease figure was read; nothing written
   //  ── technician / operations line (Phase 2) ──
   "work_accepted",           // a technician took ownership of assigned work
+  "en_route_recorded",       // they are on the way
+  "no_access_recorded",      // they could not get in
+  "blocked_recorded",        // something else stops the work
+  "finding_recorded",        // what they saw or did
+  "evidence_recorded",       // a photo arrived
+  "completion_blocked",      // they say finished; proof is missing
+  "work_completed",          // governed completion closed it
+  "work_list",               // what is on their plate
   "work_reference_needed",   // which work they meant is not established
   "authorization_refused",   // they asked for something that is not theirs
 ];
@@ -190,67 +198,19 @@ function operatingReceipt({ outcome, result = null, context = null } = {}) {
   }
 
   //  ── TECHNICIAN OUTCOMES ─────────────────────────────────────────
-  //  Same composer, same rules: text only from a committed result, and an
-  //  outcome that asserts a durable object needs that object's id.
-  if (outcome === "work_accepted") {
-    assertKeys(result, ["obligation", "workOrderRef", "serviceOutcome"], "result");
-    const ob = result && result.obligation;
-    if (!ob || !ob.id) return refusal(outcome, "no_committed_object");
-    //  The row must actually SAY it is accepted. A service that returned an
-    //  obligation still sitting open is not something to congratulate anyone
-    //  about, whatever outcome word it used.
-    if (!ob.accepted_by_user_id || ob.status !== "in_progress") {
-      return refusal(outcome, "row_does_not_show_acceptance");
-    }
-    const ref = result.workOrderRef;
-    if (ref == null) return refusal(outcome, "no_sayable_reference");
-    const replayed = result.serviceOutcome === "replayed";
-    return Object.freeze({
-      kind: "operating_receipt", outcome,
-      committed: true,
-      object: Object.freeze({ type: "obligation", id: ob.id }),
-      text: replayed
-        ? `You already have Work Order ${ref}. It's assigned to you and in progress.`
-        : `Acceptance recorded. Work Order ${ref} is assigned to you and in progress.`,
-      isClarificationQuestion: false,
-      serviceOutcome: result.serviceOutcome || "accepted",
-      requiresHuman: null,
-      divergedFromDecision: false,
-      refusal: null,
-    });
-  }
-
-  if (outcome === "work_reference_needed") {
-    assertKeys(result, ["question", "reason"], "result");
-    const q = result && result.question;
-    if (!q) return refusal(outcome, "clarification_without_question");
-    return Object.freeze({
-      kind: "operating_receipt", outcome,
-      committed: false,          // asking is not doing
-      object: null, text: q,
-      isClarificationQuestion: true,
-      serviceOutcome: (result && result.reason) || null,
-      requiresHuman: null,
-      divergedFromDecision: false,
-      refusal: null,
-    });
-  }
-
-  if (outcome === "authorization_refused") {
-    assertKeys(result, ["verdict"], "result");
-    //  Honest, and deliberately uninformative about what exists. Naming the
-    //  work would confirm a record the sender has no authority over.
-    return Object.freeze({
-      kind: "operating_receipt", outcome,
-      committed: false,
-      object: null,
-      text: "That isn't assigned to you, so I can't act on it. Your manager can reassign it.",
-      isClarificationQuestion: false,
-      serviceOutcome: (result && result.verdict) || null,
-      requiresHuman: null,
-      divergedFromDecision: false,
-      refusal: null,
-    });
+  //
+  //  THE PRODUCT BAR. Every reply closes the loop:
+  //      what was recorded → which work → what remains open → what next.
+  //
+  //  Never a status word, a uuid, a constraint name or a routing term. The
+  //  work is named the way the technician would name it — "the Unit 302
+  //  sink leak" — from the property's own title and unit, falling back to
+  //  the sayable reference only when there is no descriptive label.
+  //
+  //  Same rules as everything above: text only from a committed result, and
+  //  an outcome asserting a durable object needs that object's id.
+  if (TECHNICIAN_OUTCOMES.includes(outcome)) {
+    return technicianReceipt({ outcome, result });
   }
 
   // outcome === "work_order_opened"
@@ -350,8 +310,136 @@ function composeReceipt({ operating, delivery } = {}) {
   return Object.freeze({ operating, delivery });
 }
 
+
+/*  ── THE TECHNICIAN COMPOSER ────────────────────────────────────────
+ *  Split out because its rules differ in ONE way from the resident side:
+ *  it names the work. A resident already knows which request they made; a
+ *  technician holds several at once and a reply that does not say which
+ *  one it changed is a reply they have to go and check.
+ */
+const TECHNICIAN_OUTCOMES = [
+  "work_accepted", "en_route_recorded", "no_access_recorded", "blocked_recorded",
+  "finding_recorded", "evidence_recorded", "completion_blocked", "work_completed",
+  "work_list", "work_reference_needed", "authorization_refused",
+];
+
+/*  How the work is named to a technician. Descriptive first, because that
+ *  is how they think about it; the sayable number only when there is
+ *  nothing better. Never a uuid, ever. */
+function workLabelOf(work) {
+  if (!work) return null;
+  const title = String(work.title || "").replace(/^EMERGENCY:\s*/i, "").trim();
+  const unit = work.unit_number ? `Unit ${work.unit_number}` : null;
+  if (title && unit) return `${unit} ${title.toLowerCase()}`;
+  if (title) return title.toLowerCase();
+  if (unit) return `${unit} request`;
+  if (work.work_order_ref != null) return `Work Order ${work.work_order_ref}`;
+  return null;
+}
+
+function technicianReceipt({ outcome, result }) {
+  assertKeys(result, ["work", "progress", "serviceOutcome", "question", "reason",
+                      "verdict", "items", "missing", "evidenceAttempted", "storageState",
+                      "residentUpdateQueued"], "result");
+  const r = result || {};
+  const work = r.work || null;
+  const label = workLabelOf(work);
+  const named = label ? `the ${label}` : "that work";
+
+  const say = (text, over = {}) => Object.freeze(Object.assign({
+    kind: "operating_receipt", outcome,
+    committed: false, object: null, text,
+    isClarificationQuestion: false,
+    serviceOutcome: r.serviceOutcome || null,
+    requiresHuman: null, divergedFromDecision: false, refusal: null,
+  }, over));
+
+  //  Everything that claims a durable field fact needs that fact's id.
+  const NEEDS_PROGRESS = ["en_route_recorded", "no_access_recorded", "blocked_recorded",
+                          "finding_recorded", "work_completed", "completion_blocked"];
+  if (NEEDS_PROGRESS.includes(outcome) && !(r.progress && r.progress.id)) {
+    return refusal(outcome, "no_committed_object");
+  }
+  if (NEEDS_PROGRESS.includes(outcome) && !label) return refusal(outcome, "no_sayable_work");
+  const committedOn = (extra) => say(extra, {
+    committed: true, object: Object.freeze({ type: "work_order_progress", id: r.progress.id }),
+  });
+
+  switch (outcome) {
+    case "work_accepted": {
+      if (!(work && work.id)) return refusal(outcome, "no_committed_object");
+      if (!label) return refusal(outcome, "no_sayable_work");
+      return say(r.serviceOutcome === "replayed"
+        ? `You already have ${named} — it's yours and in progress.`
+        : `Accepted. ${cap(named)} is now yours and in progress.`,
+        { committed: true, object: Object.freeze({ type: "work_order", id: work.id }) });
+    }
+
+    case "en_route_recorded":
+      return committedOn(`Got it — you're on the way to ${named}. I'll keep it open until you tell me how it went.`);
+
+    case "no_access_recorded":
+      //  NOT "I've let the resident know" — that was a DELIVERY claim inside
+      //  an operating receipt, the exact collapse these seams exist to
+      //  prevent. The resident sentence appears only when the update intent
+      //  was actually committed, and it describes what will happen rather
+      //  than asserting a text arrived.
+      return committedOn(`Recorded no access on ${named}. The work stays open, and access follow-up is now needed.`
+        + (r.residentUpdateQueued ? " The resident will be asked to coordinate entry." : ""));
+
+    case "blocked_recorded":
+      return committedOn(`Noted — ${named} is blocked and stays open. Your manager will see what it's waiting on.`);
+
+    case "finding_recorded":
+      return committedOn(`Saved to ${named}: ${String(r.progress.note || "").trim()}`);
+
+    case "evidence_recorded": {
+      //  A photo we could not preserve is NOT proof, and saying "got it"
+      //  would make a technician think the job is covered when it is not.
+      if (r.storageState === "stored") {
+        return say(`Photo saved to ${named}.`, { committed: true });
+      }
+      return say(`I got your photo on ${named} but couldn't save it. Please send it once more.`);
+    }
+
+    case "completion_blocked":
+      return committedOn(r.evidenceAttempted
+        ? `I recorded that you finished ${named}, but the photo didn't save, so I can't close it yet. One more photo of the repair will do it.`
+        : `I recorded that you finished ${named}, but I still need a photo of the repair before I can close it.`);
+
+    case "work_completed":
+      return committedOn(`Done — ${named} is closed.`
+        + (r.residentUpdateQueued ? " The resident will be notified the repair is complete." : ""));
+
+    case "work_list": {
+      const items = Array.isArray(r.items) ? r.items : [];
+      if (!items.length) return say("Nothing else is assigned to you right now.");
+      const lines = items.map((i) => `\u2022 ${workLabelOf(i) || "(unnamed)"}${i.accepted ? " (yours)" : ""}`);
+      return say(`You have ${items.length === 1 ? "one thing" : `${items.length} things`} open:\n${lines.join("\n")}`);
+    }
+
+    case "work_reference_needed": {
+      if (!r.question) return refusal(outcome, "clarification_without_question");
+      return say(r.question, { isClarificationQuestion: true, serviceOutcome: r.reason || null });
+    }
+
+    case "authorization_refused":
+      //  Deliberately uninformative about what exists. Naming the work
+      //  would confirm a record they have no authority over.
+      return say("That isn't assigned to you, so I can't act on it. Your manager can reassign it.",
+        { serviceOutcome: r.verdict || null });
+
+    default:
+      return refusal(outcome, "unknown_outcome");
+  }
+}
+
+const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
 module.exports = {
   OPERATING_OUTCOMES,
+  TECHNICIAN_OUTCOMES,
+  workLabelOf,
   OUTCOMES_REQUIRING_OBJECT,
   DELIVERY_STATES,
   HOLD_TEXT,

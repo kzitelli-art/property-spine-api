@@ -203,8 +203,12 @@ try {
     const out = (await db.query(
       `select * from comm_events where direction='outbound' and reply_reason='execution_receipt'`)).rows;
     ok("exactly one outbound reply intent", out.length === 1);
-    ok("...saying the acceptance was recorded, naming the work order",
-      out[0].body === `Acceptance recorded. Work Order ${a.ref} is assigned to you and in progress.`, out[0].body);
+    //  RULING 2026-08-04 — the work is named the way the technician names it,
+    //  not by its number. The number stays available as a fallback when there
+    //  is no descriptive label, and as something they may type.
+    ok("...naming the work descriptively, with no number and no uuid",
+      /^Accepted\. The leak under sink is now yours and in progress\.$/.test(out[0].body)
+      && !/[0-9a-f]{8}-[0-9a-f]{4}/.test(out[0].body), out[0].body);
     ok("...bound to the inbound message it answers", !!out[0].in_reply_to_comm_event_id);
     ok("...bound to the staff thread, the recipient, and a correlation key",
       !!out[0].staff_thread_id && out[0].to_user_id === dana && !!out[0].correlation_key);
@@ -276,7 +280,7 @@ try {
     ok("a bare request resolves through the THREAD when exactly one work is active there",
       out.length === 1 && out[0].reply_reason === "execution_receipt", out.length && out[0].reply_reason);
     ok("...and says she already has it rather than accepting it twice",
-      out.length === 1 && /already have Work Order/.test(out[0].body), out.length && out[0].body);
+      out.length === 1 && /already have the /.test(out[0].body), out.length && out[0].body);
     ok("...writing no second acceptance",
       (await db.query(`select count(*)::int c from obligations where accepted_at is not null`)).rows[0].c === acceptedBefore);
 

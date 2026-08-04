@@ -1133,6 +1133,37 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
   // ════════════════════════════════════════════════════════════════════
   const emptyTwiml = (res) => res.type("text/xml").send("<Response></Response>");
 
+  //  The resident's own number, server-derived from their person record.
+  //  Never taken from anything a technician typed.
+  async function residentPhone(personId) {
+    if (!personId) return null;
+    const r = await pool.query(
+      `select coalesce(primary_phone_e164, phone) as phone from persons where id = $1`, [personId]);
+    return (r.rows[0] && r.rows[0].phone) || null;
+  }
+
+  //  Twilio describes MMS media as NumMedia + MediaUrl{n} / MediaContentType{n}.
+  //  Only image types this product accepts as evidence are carried forward;
+  //  anything else is dropped here rather than stored as an unreadable row.
+  //  The URL is a REFERENCE — the evidence service decides whether the bytes
+  //  ever become ours, and says so honestly if they do not.
+  const EVIDENCE_MIME = ["image/jpeg", "image/png", "image/webp"];
+  function twilioAttachments(payload) {
+    const n = Number((payload && payload.NumMedia) || 0);
+    if (!Number.isFinite(n) || n <= 0) return [];
+    const out = [];
+    for (let i = 0; i < Math.min(n, 10); i++) {
+      const url = payload[`MediaUrl${i}`];
+      const mime = payload[`MediaContentType${i}`];
+      if (!url || !EVIDENCE_MIME.includes(mime)) continue;
+      //  Twilio's media id is the trailing path segment of the URL. Kept so a
+      //  redelivery is idempotent on the provider's identity, not on ours.
+      const id = String(url).split("/").filter(Boolean).pop() || null;
+      out.push({ provider: "twilio", id, url, mime_type: mime });
+    }
+    return out;
+  }
+
   router.post("/communications/inbound-sms",
     express.urlencoded({ extended: false, limit: "100kb" }),
     async (req, res) => {
@@ -1203,9 +1234,12 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
             await t.query("begin");
             turn = await technicianConversation.runOperationsTurn(t, {
               organizationId: ctx.organizationId, userId: ctx.staffUserId,
-              lineId: ctx.lineId, body: body || "(empty message)",
+              lineId: ctx.lineId, body: body || "",
               providerMessageId: MessageSid,
-            });
+              //  MMS attachments as the carrier described them. The provider's
+              //  own media identity travels; its URL is a reference, never proof.
+              attachments: twilioAttachments(req.body),
+            }, { fetchMedia: sms && typeof sms.fetchMedia === "function" ? sms.fetchMedia : null });
             await t.query("commit");
           } catch (e) {
             await t.query("rollback").catch(() => {});
@@ -1244,6 +1278,27 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
             //  never answered — never by undoing the committed action.
             await flagUndeliveredReply({ inboundEventId: turn.inbound.id,
                                          reason: composed.delivery.failureReason });
+          }
+
+          //  ── THE RESIDENT UPDATE ───────────────────────────────────
+          //  A SEPARATE send, on the PROPERTY-FACING line, of text derived
+          //  from the committed field fact. It is not a forward and not a
+          //  copy: the operations line never carries it, and its delivery
+          //  is its own fact — a resident text that fails does not undo the
+          //  technician's work or their receipt.
+          if (turn.residentEvent && turn.residentIntent && turn.residentIntent.send) {
+            let residentWire;
+            try {
+              residentWire = await commBoundary.sendPropertySms({
+                property_id: turn.residentIntent.propertyId,
+                recipient: await residentPhone(turn.residentIntent.personId),
+                body: turn.residentIntent.text, purpose: "work_order_update",
+                person_id: turn.residentIntent.personId, eventId: turn.residentEvent.id,
+              });
+            } catch (e) { residentWire = { sent: false, reason: `transport_threw: ${e.message}`, sid: null }; }
+            if (!residentWire.sent) {
+              console.error(`resident update undelivered (${residentWire.reason}) — event ${turn.residentEvent.id}; the field fact stands.`);
+            }
           }
           return;
         }

@@ -62,6 +62,8 @@ const GATES = [
   //  nobody has seen fire. These run with no credentials.
   { file: "technician_work_selection.test.js",
     what: "technician: identity, scope, eligibility, replay, cross-property refusal" },
+  { file: "technician_language.test.js",
+    what: "technician language: plain phrases read correctly, nothing guessed into an action" },
 ];
 
 const bar = "════════════════════════════════════════════════════════════════";
