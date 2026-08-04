@@ -411,6 +411,23 @@ production data or a production database; and the acceptance ran against a
 locally built schema, not a Neon branch cut from production. Where those differ,
 this proof does not cover the difference.
 
+### Addendum — 2026-08-04. A third thing it did not claim, and should have.
+
+Everything above was proven at `4584991`. `main` then moved to `fbd7a3a`, which
+changed **no Slice 10 file at all** — and turned this branch red anyway. That
+commit gave `gate_harness_isolation.js` a second direction, and four Slice 10
+harnesses that only *required* `HARNESS_DATABASE_URL` failed the new
+requirement to *refuse* a same-target value.
+
+So the sentence "no Slice 10 source or browser defect is open" was true and was
+not the whole answer. **A proof is evidence for the tree it ran against.** This
+receipt named the two gaps it could see and did not name the one it could not:
+that its own green belonged to a SHA, not to the branch.
+
+Repaired in-lane and re-proven at the integrated candidate; the totals in §2
+were re-run rather than carried forward. Detail is in
+[`SLICE_10_RELEASE_READINESS.md`](SLICE_10_RELEASE_READINESS.md).
+
 ---
 
 ## 11. Doctrine, where it decided something
