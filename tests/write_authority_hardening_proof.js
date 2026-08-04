@@ -66,7 +66,7 @@ function req(method, p, { session, key, body } = {}) {
 }
 
 (async () => {
-  const t0 = receipt.begin(__filename, { url: CONN, expected: 137 });
+  const t0 = receipt.begin(__filename, { url: CONN, expected: 143 });
   const pool = new Pool({ connectionString: CONN, ssl: false });
   const svc = require(path.join(__dirname, "..", "src/identity/staff_session_service.js"));
   const c = await pool.connect();
@@ -603,11 +603,20 @@ function req(method, p, { session, key, body } = {}) {
     //  NOT REPAIRED HERE. The fix is either a migration extending the status
     //  enum or a change to what the projection means. This packet is barred
     //  from both. Asserted as the exact defect, not softened to a skip.
+    //  CONTAINED. The door no longer attempts a write it knows cannot
+    //  succeed; it returns a typed refusal naming the capability and the
+    //  defect, and writes nothing. 503, not 500: the request was well-formed
+    //  and authorized — the capability is unavailable.
     const rRM = await req("POST", RM, { session: sA, body: {} });
-    ok(`M20 BLOCKED — CANONICAL WRITE SERVICE DEFECTIVE: the reminder write is refused by `
-       + `the database, not by authority (got ${rRM.status})`, rRM.status === 500);
-    ok("M21 and the exact defect is 'reminder_sent' being projected into leasing_tours.status",
-      !!rRM.body && /leasing_tours_status_check/.test(String(rRM.body.error || "")));
+    ok(`M20 WITHHELD — the reminder capability refuses honestly instead of `
+       + `crashing (got ${rRM.status})`, rRM.status === 503);
+    ok("M20a the refusal is TYPED as tour_reminder_unavailable",
+      !!rRM.body && rRM.body.error === "tour_reminder_unavailable");
+    ok("M20b it says plainly that nothing was recorded",
+      !!rRM.body && rRM.body.recorded === false
+      && /cannot be recorded through the current tour ledger/.test(rRM.body.receipt || ""));
+    ok("M21 and it names the exact underlying defect",
+      !!rRM.body && /leasing_tours_status_check/.test(String(rRM.body.defect || "")));
     const statusOk = (await pool.query(
       `select 'reminder_sent' = any(enum_vals) as allowed from (
          select array['requested','scheduled','confirmed_by_prospect','checked_in',
@@ -657,10 +666,15 @@ function req(method, p, { session, key, body } = {}) {
     //  re-submit ("use Correct outcome — the original stays on the record").
     //  It sends them to a door that 500s.
     const rCO = await req("POST", CO, { session: sA, body: good });
-    ok(`M30 BLOCKED — CANONICAL WRITE SERVICE DEFECTIVE: the correction write is refused `
-       + `by the database, not by authority (got ${rCO.status})`, rCO.status === 500);
-    ok("M31 and the exact defect is 'outcome_corrected' missing from tour_events_event_type_check",
-      !!rCO.body && /tour_events_event_type_check/.test(String(rCO.body.receipt || rCO.body.error || "")));
+    ok(`M30 WITHHELD — the correction capability refuses honestly instead of `
+       + `crashing (got ${rCO.status})`, rCO.status === 503);
+    ok("M30a the refusal is TYPED as tour_outcome_correction_unavailable",
+      !!rCO.body && rCO.body.error === "tour_outcome_correction_unavailable");
+    ok("M30b it says plainly that nothing was recorded",
+      !!rCO.body && rCO.body.recorded === false
+      && /cannot currently be corrected through the tour ledger/.test(rCO.body.receipt || ""));
+    ok("M31 and it names the exact underlying defect",
+      !!rCO.body && /tour_events_event_type_check/.test(String(rCO.body.defect || "")));
     const evTypeOk = (await pool.query(
       `select 'outcome_corrected' = any(array['scheduled','confirmed_by_prospect','reminder_sent',
         'checked_in','completed','no_show','cancelled','rescheduled']) as allowed`)).rows[0];
@@ -676,8 +690,17 @@ function req(method, p, { session, key, body } = {}) {
     //  AUTHORITY IS STILL FULLY PROVEN for this route: M23–M29 above show the
     //  session door refuses forged actor, forged property, no session, shared
     //  key, wrong module and wrong property, and writes nothing when it does.
-    ok("M34 the correction route's AUTHORITY chain is complete even though its write is blocked",
-      true);
+    //  AUTHORITY IS ENFORCED BEFORE THE WITHHOLD IS DISCLOSED. An
+    //  unauthenticated caller learns "unauthorized", not "unavailable" —
+    //  what a system cannot currently do is not public information.
+    const rAnon = await req("POST", CO, { body: good });
+    ok("M34 an unauthenticated caller is told UNAUTHORIZED, not that the capability is withheld",
+      rAnon.status === 401 && !(rAnon.body && rAnon.body.error === "tour_outcome_correction_unavailable"));
+    const rForgeW = await req("POST", CO, { session: sA, body: { ...good, actor_id: uImposter } });
+    ok("M34a a forged actor is still refused AS a forged actor, not as a withheld capability",
+      rForgeW.status === 400 && rForgeW.body.error === "client_supplied_authority");
+    const rAnonR = await req("POST", RM, { body: {} });
+    ok("M34b same ordering on the reminder door", rAnonR.status === 401);
 
     //  ── ONE IMPLEMENTATION EACH, both doors sharing it ──────────────
     const src = require("fs").readFileSync(
@@ -763,7 +786,7 @@ function req(method, p, { session, key, body } = {}) {
 
   console.log(`\n════ write authority: ${pass} passed, ${fail} failed ════`);
   await pool.end();
-  const code = receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 137 });
+  const code = receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 143 });
   process.exit(code);
 })().catch((e) => {
   console.error("DIED: " + (e && e.stack || e));

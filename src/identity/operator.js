@@ -2856,6 +2856,85 @@ module.exports = function operatorModule(deps) {
     } finally { client.release(); }
   });
 
+  // ══════════════════════════════════════════════════════════════════
+  //  WITHHELD — TWO VERBS WHOSE CANONICAL WRITE CANNOT EXECUTE.
+  //
+  //  The authority chain on both doors below is complete and proven. The
+  //  canonical services underneath them cannot write, for reasons that
+  //  predate this packet:
+  //
+  //    reminder         recordTourEvent projects every event type into
+  //                     leasing_tours.status, and 'reminder_sent' is not a
+  //                     permitted status — correctly, since a tour that gets
+  //                     a reminder is still scheduled.
+  //                     → leasing_tours_status_check
+  //
+  //    correct-outcome  the service appends a tour_events row of type
+  //                     'outcome_corrected', which is not in
+  //                     tour_events_event_type_check.
+  //
+  //  Both are reproduced identically against the legacy shared-key doors at
+  //  this commit and before the service extraction
+  //  (tests/legacy_tour_verb_baseline_probe.js), so neither is an authority
+  //  defect and neither was introduced here.
+  //
+  //  UNTIL THE SCHEMA REPAIR IS AUTHORIZED, THESE REFUSE HONESTLY. A 500
+  //  carrying a Postgres constraint name is not an answer an operator can
+  //  act on, and attempting the write teaches the caller nothing it does not
+  //  already know. A typed refusal says the capability is unavailable and
+  //  why, and writes nothing. This is CONTAINMENT, not repair: the enums are
+  //  untouched and the services are unchanged.
+  //
+  //  REMOVAL CONDITION (Class 3, temporary): delete both guards when the
+  //  tour-ledger vocabularies admit 'reminder_sent' as a status projection
+  //  and 'outcome_corrected' as an event type, and the proofs below flip
+  //  from asserting the refusal to asserting the durable write.
+  //
+  //  The LEGACY shared-key doors are deliberately NOT guarded. They already
+  //  fail, their external consumers are unknown, and changing what they
+  //  return would be a contract change made blind.
+  // ══════════════════════════════════════════════════════════════════
+  const WITHHELD_TOUR_VERBS = Object.freeze({
+    reminder: {
+      error: "tour_reminder_unavailable",
+      receipt: "A reminder cannot be recorded through the current tour ledger.",
+      defect: "leasing_tours_status_check does not permit 'reminder_sent' as a tour status.",
+    },
+    correct_outcome: {
+      error: "tour_outcome_correction_unavailable",
+      receipt: "A completed tour outcome cannot currently be corrected through the tour ledger.",
+      defect: "tour_events_event_type_check does not permit 'outcome_corrected'.",
+    },
+  });
+  //  THE WITHHOLD RUNS LAST, AFTER THE WHOLE AUTHORITY CHAIN.
+  //
+  //  A first version returned the refusal as soon as the route was entered,
+  //  which short-circuited the property wall — that wall lives inside the
+  //  canonical service, and the service is no longer called. A session scoped
+  //  to another property was then told "unavailable" instead of "not yours",
+  //  which is both the wrong answer and a small disclosure: it confirms a
+  //  tour id exists to someone with no right to know.
+  //
+  //  So the wall is enforced here, in the route, before withholding. This is
+  //  authority, not business logic — the same shape the executed-lease door
+  //  already uses. 404 for a tour that does not exist, 403 for one that
+  //  belongs elsewhere, and only then the typed unavailability.
+  async function withholdAfterPropertyWall(req, res, which) {
+    const w = WITHHELD_TOUR_VERBS[which];
+    const tour = (await pool.query(
+      "select id, property_id from leasing_tours where id=$1", [req.params.tourId])).rows[0];
+    if (!tour) return res.status(404).json({ receipt: "No tour with that id." });
+    if (String(tour.property_id) !== String(req.operator.property_id)) {
+      return res.status(403).json({ receipt: "That tour belongs to another property." });
+    }
+    //  503, not 500: the request was well-formed and fully authorized. The
+    //  capability is unavailable. Nothing was written and nothing changed.
+    return res.status(503).json({
+      error: w.error, receipt: w.receipt, defect: w.defect,
+      recorded: false, capability: "withheld_pending_schema_repair",
+    });
+  }
+
   //  POST /operator/leasing/tours/:tourId/reminder — the recorded actor stays
   //  'system'. An employee tapping "Reminder logged" records that a send
   //  happened; they are not claiming to be the sender. The session decides
@@ -2866,6 +2945,11 @@ module.exports = function operatorModule(deps) {
       return res.status(503).json({ receipt: "Reminder recording is not wired on this deploy (leasingTourService.recordTourReminderService missing)." });
     }
     if (refuseClientAssertedAuthority(req, res)) return;
+    //  AUTHORITY FIRST, THEN THE WITHHOLD. Ordering matters: a forged actor
+    //  must still be refused as a forged actor, and an unauthorized caller
+    //  must still be refused as unauthorized. Learning that a capability is
+    //  unavailable is not a right an unauthenticated caller has.
+    if (WITHHELD_TOUR_VERBS.reminder) return withholdAfterPropertyWall(req, res, "reminder");
     const client = await pool.connect();
     try {
       await client.query("begin");
@@ -2893,6 +2977,8 @@ module.exports = function operatorModule(deps) {
       return res.status(503).json({ receipt: "Outcome correction is not wired on this deploy (leasingTourService.correctTourOutcomeService missing)." });
     }
     if (refuseClientAssertedAuthority(req, res)) return;
+    //  See WITHHELD_TOUR_VERBS above. Authority is enforced first.
+    if (WITHHELD_TOUR_VERBS.correct_outcome) return withholdAfterPropertyWall(req, res, "correct_outcome");
     const client = await pool.connect();
     try {
       await client.query("begin");
