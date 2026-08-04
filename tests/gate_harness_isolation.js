@@ -493,6 +493,10 @@ const SLICE_A_BLOCKERS = [
 ];
 
 // ── classification, by behaviour ────────────────────────────────────
+//  Both must hold. See classify().
+const GUARD_IMPORTED = /require\([^)]*_run_receipt[^)]*\)/;
+const GUARD_CALLED = /harnessConnectionString\s*\(/;
+
 const CONNECTS = /connectionString:\s*process\.env\.DATABASE_URL|new\s+(Pool|Client)\s*\(\s*\{[^}]*process\.env\.DATABASE_URL/;
 const WRITES = /insert\s+into|update\s+[a-z_"]+\s+set|delete\s+from|create\s+table|\bcommit\b/i;
 
@@ -507,12 +511,30 @@ function walk(dir, out = []) {
   return out;
 }
 
+/*  The guard's own implementation. It DEFINES harnessConnectionString and
+ *  therefore cannot import it, and it must read HARNESS_DATABASE_URL because
+ *  reading it is the whole job. Exempt by exact path, with a reason — not by
+ *  pattern. */
+const GUARD_MODULE = "tests/_run_receipt.js";
+
 function classify(rel) {
+  if (rel === GUARD_MODULE) return { rel, kind: "guard_implementation" };
   const src = fs.readFileSync(path.join(REPO, rel), "utf8");
   const approved = PRODUCTION_APPROVED.find((a) => a.file === rel);
   if (approved) return { rel, kind: "approved_production_tool", reason: approved.reason };
   if (DEAD.find((d) => d.file === rel)) return { rel, kind: "dead" };
-  if (/harnessConnectionString/.test(src)) return { rel, kind: "guarded_harness" };
+  //  A MENTION IS NOT A GUARD. This was a bare /harnessConnectionString/
+  //  test until 2026-08-03, and a file whose only reference was a COMMENT —
+  //  while it connected straight to DATABASE_URL and wrote — was classified
+  //  "guarded harness" and the gate passed clean. Proven by probe.
+  //
+  //  A gate that detects a guard by grepping for its name can be satisfied
+  //  by a decorative mention. Require the module to be IMPORTED and the
+  //  function to be CALLED: both together are hard to satisfy by accident
+  //  and hard to satisfy dishonestly without meaning to.
+  if (GUARD_IMPORTED.test(src) && GUARD_CALLED.test(src)) {
+    return { rel, kind: "guarded_harness" };
+  }
   //  Requires the harness variable but never performs its same-target
   //  refusal. Tracked separately because the risk differs in kind.
   if (/process\.env\.HARNESS_DATABASE_URL/.test(src)) {
@@ -545,6 +567,7 @@ console.log(`     approved production tool        ${byKind("approved_production_
 console.log(`     unguarded WRITE-CAPABLE         ${byKind("unguarded_write_capable").length}`);
 console.log(`     unguarded read-only             ${byKind("unguarded_read_only").length}`);
 console.log(`     harness-var, no same-target check ${byKind("harness_var_no_refusal").length}`);
+console.log(`     guard implementation            ${byKind("guard_implementation").length}`);
 console.log(`     dead / obsolete                 ${byKind("dead").length}`);
 console.log(`     no direct connection            ${byKind("no_direct_connection").length}`);
 console.log(`     scanned                         ${results.length}`);
