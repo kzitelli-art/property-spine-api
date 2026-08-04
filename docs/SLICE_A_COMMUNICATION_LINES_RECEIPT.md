@@ -11,7 +11,7 @@
 |---|---|
 | Branch | `claude/sms-work-order-handoff-qo3s8i` |
 | SHA that first earned 61/61 | `95f13c7` (against `main` @ `a792b9f`) |
-| **Re-proven at** | **`2db937c`** — reconciled with `main` @ `8330aec`, 61/61, exit 0 |
+| **Re-proven at** | **`d467808`** — the branch tip, full local set green, 61/61, exit 0 |
 | **Merge candidate** | the branch tip at merge time — **re-prove there, whatever it is** |
 | Migration claimed | **130** — `130_communication_lines.sql` |
 | Design | `docs/COMMUNICATION_LINE_MODEL_DESIGN.md` (approved, rulings 2026-08-03) |
@@ -23,10 +23,15 @@
 > **Proof identity.** 61/61 was first earned at `95f13c7`. `main` then moved
 > eight commits (PRs #33, #35, #36 — the last touching `src/identity/operator.js`),
 > so that proof no longer described a merge candidate. It has since been
-> reconciled twice more by MERGE — most recently at **`2db937c`** against `main`
-> @ `8330aec`, which tightened the harness-isolation gate. **The suite was re-run
-> there: 61/61, exit 0**, with `npm run verify` 8/8 and the full local regression
-> set green.
+> reconciled by MERGE against `main` @ `8330aec`, which tightened the
+> harness-isolation gate. The reconciled implementation is `2db937c`; the design
+> commit on top made **`d467808`** the tip, and **the complete locally executable
+> set was re-run at `d467808`** — 61/61, exit 0, `npm run verify` 8/8, every
+> regression green. Proof at `2db937c` did not transfer to the tip by assumption.
+>
+> **This commit moves the tip again.** That is the nature of the rule, not an
+> exception to it: whatever SHA actually merges must carry its own run. The
+> receipt records the SHA a run happened at; it never claims the tip inherits it.
 >
 > **This still is not the final receipt.** The five full-schema harnesses have
 > never run against these changes, and the branch tip will move again before
