@@ -41,6 +41,58 @@ module.exports = function maintenance(deps) {
   //  THE READ. No second status layer — it derives everything from canonical
   //  rows that already exist. See src/surfaces/work_order_status_read.js.
   const workOrderStatusRead = require("../surfaces/work_order_status_read");
+  //  THE FOUR OPERATOR WRITES. One service per rendered verb; a control
+  //  without one is a promise the product does not keep.
+  const operatorActions = require("../technician/operator_actions");
+
+  //  Every action runs in ONE transaction, commits, and only then attempts
+  //  transport — so a carrier failure can never roll back the operating fact.
+  //  The receipt names what happened and what is now responsible; delivery is
+  //  reported separately or not at all.
+  const runAction = async (req, res, fn) => {
+    const client = await pool.connect();
+    let out;
+    try {
+      await client.query("begin");
+      out = await fn(client, { propertyId: req.operator.property_id, operatorUserId: req.operator.user_id });
+      await client.query("commit");
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      console.error("operator action:", e.message);
+      return res.status(e.code === "NOT_FOUND" ? 404 : e.code === "BAD_INPUT" ? 400 : 500)
+        .json({ error: e.code || "action_failed", detail: e.message });
+    } finally { client.release(); }
+
+    if (out.outcome === "refused") {
+      return res.status(409).json({ outcome: "refused", refusal: out.refusal,
+        receipt: { text: "That can't be done right now.", reason: out.refusal } });
+    }
+    //  TRANSPORT, AFTER THE COMMIT, from the spec the service derived.
+    let delivery = null;
+    if (out.sendSpec && out.commEventId) {
+      const sp = out.sendSpec;
+      let wire;
+      try {
+        wire = sp.kind === "operations_reply"
+          ? await commBoundary.sendOperationsReply({
+              organization_id: sp.organization_id, recipient: sp.recipient, body: sp.body,
+              replyToCommEventId: sp.replyToCommEventId, eventId: out.commEventId })
+          : await commBoundary.sendPropertySms({
+              property_id: sp.property_id, recipient: sp.recipient, body: sp.body,
+              purpose: "work_order_update", person_id: sp.person_id, eventId: out.commEventId });
+      } catch (e) { wire = { sent: false, reason: `transport_threw: ${e.message}`, sid: null }; }
+      //  A retry's attempt row records the wire result and moves the current
+      //  projection with it. Prior attempts are never overwritten.
+      if (out.attemptNo) {
+        await operatorActions.recordAttemptResult(pool, {
+          commEventId: out.commEventId, attemptNo: out.attemptNo,
+          sent: wire.sent, providerRef: wire.sid || null, failureReason: wire.reason });
+      }
+      delivery = { state: wire.sent ? "sent" : "failed", provider_ref: wire.sid || null,
+                   reason: wire.sent ? null : wire.reason };
+    }
+    res.json({ outcome: out.outcome, receipt: out.receipt, delivery });
+  };
   // BRICK ONE: the ONE session resolver. Required directly, exactly as
   // operator.js:35 does — not injected, so this adds no new boot-fatal
   // dependency to the module's wire-up.
@@ -611,6 +663,36 @@ module.exports = function maintenance(deps) {
       res.status(503).json({ error: "unavailable", detail: "The live work-order read is unavailable. Retry." });
     }
   });
+
+  //  Candidates for Assign — derived, so the picker cannot offer somebody
+  //  the write would refuse.
+  router.get("/operator/work-orders/technicians", ...operatorGate, async (req, res) => {
+    try {
+      res.json({ technicians: await operatorActions.eligibleTechnicians(pool,
+        { propertyId: req.operator.property_id }) });
+    } catch (e) { res.status(503).json({ error: "unavailable" }); }
+  });
+
+  router.post("/operator/work-orders/:id/assign", ...operatorGate, (req, res) =>
+    runAction(req, res, (c, ctx) => operatorActions.assignWork(c, Object.assign({
+      workOrderId: req.params.id,
+      technicianUserId: (req.body || {}).technician_user_id,
+      idempotencyKey: (req.body || {}).idempotency_key || null }, ctx))));
+
+  router.post("/operator/work-orders/:id/ask-photo", ...operatorGate, (req, res) =>
+    runAction(req, res, (c, ctx) => operatorActions.askForPhoto(c, Object.assign({
+      workOrderId: req.params.id, idempotencyKey: (req.body || {}).idempotency_key || null }, ctx))));
+
+  router.post("/operator/work-orders/:id/coordinate-entry", ...operatorGate, (req, res) =>
+    runAction(req, res, (c, ctx) => operatorActions.coordinateEntry(c, Object.assign({
+      workOrderId: req.params.id, idempotencyKey: (req.body || {}).idempotency_key || null }, ctx))));
+
+  //  RETRY — a new attempt at an EXISTING intent. It creates no work order,
+  //  no completion event and no new message.
+  router.post("/operator/work-orders/:id/retry-resident", ...operatorGate, (req, res) =>
+    runAction(req, res, (c, ctx) => operatorActions.prepareRetry(c, Object.assign({
+      commEventId: (req.body || {}).comm_event_id,
+      idempotencyKey: (req.body || {}).idempotency_key || null }, ctx))));
 
   router.get("/operator/work-orders/:id/status", ...operatorGate, async (req, res) => {
     try {
