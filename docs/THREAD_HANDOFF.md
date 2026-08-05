@@ -1,6 +1,6 @@
 # Property Spine — Thread Handoff
 
-**Current as of API `main` @ `bf65a00` · APP `main` @ `6220ca5` · 2026-08-05 (late).**
+**Current as of API `main` @ `62db770` · APP `main` @ `6220ca5` · 2026-08-05 (late).**
 Read the top section first — it wins over everything below it. Each dated
 section supersedes the ones under it; nothing is deleted, because the reasoning
 in the older sections is still the clearest account of how each trap was found.
@@ -15,13 +15,30 @@ current truth. Re-date it whenever `main` moves materially.
 ## ══════════════════════════════════════════════════════════════════
 
 ```text
-API   main   bf65a001f7817ebe7218bdf2c84a5c5703dc4dfb   deployed SHA still unread
-APP   main   6220ca5907137aa9036adaee23e8fee78a88a3f0   CONFIRMED LIVE in the browser
+API   main   62db770313c851783172a0c401ab235be532467a   DEPLOYED · live 17:53 · healthy
+APP   main   6220ca5907137aa9036adaee23e8fee78a88a3f0   DEPLOYED · confirmed in browser
+ledger ceiling 136 · granted property "Solo on Chestnut" a50fbdd0-3642-431e-b532-0dcd6ab8a4fe
 ```
 
-The APP deploy question that has been open since the release is **closed**.
-`6220ca5` is live. Two items previously listed as unproven are now proven,
-and one assumption in the section below is DISPROVEN.
+**Both services are deployed, live, and agree with their repositories.** The
+deploy questions that were open since the release are closed. Two items
+previously listed as unproven are now proven, and one assumption in the
+section below is DISPROVEN.
+
+The release is **deployed and browser-verified. It is NOT phone-verified** —
+that is the only product proof outstanding, and it is Part B of
+`ACTIVATION_SMS_WORK_ORDER_HANDOFF.md`. Nothing is mid-flight: no pending
+migration, no half-applied change, no unmerged branch. This is a coherent
+resting state, not a paused one.
+
+### The ledger ceiling is established, not carried
+
+`136` is not a number copied forward from the last release. The build's
+highest migration is `136_one_resident_update_per_cause.sql`, and the
+`62db770` deploy **went live** — which only happens if the verify gate
+passed, and that gate refuses to boot when a migration is in the build and
+not in the ledger (see the 2026-08-03 section). A live deploy therefore
+proves applied == build == 136.
 
 ### How to read the deployed APP SHA — do this instead of guessing
 
@@ -40,6 +57,17 @@ String(renderMaintenance).includes('oblFailed')   // true ⇒ 6220ca5 or later
 Pick any string that exists only in the build you are looking for. This
 beats every indirect signal, including Events, because it interrogates what
 is actually executing.
+
+**The same trick does NOT work on the API, and nothing else does either.**
+`/health` returns only `{ok, db_time}`. There is no `/version`, no commit,
+no build, and no migration-status route anywhere in `server.js`. **The
+Render Events page is the only way to read the deployed API SHA**, and the
+applied ledger ceiling is not readable over HTTP at all — it must be
+inferred from a successful boot (above) or read from Neon.
+
+If this question is tiresome by the next release, a `/version` returning
+`RENDER_GIT_COMMIT` and the applied ceiling is roughly ten lines and would
+retire it permanently.
 
 ### ⚠ NEW TRAP, AND THE WORST ONE IN THIS FILE
 ### Deleting a file from git does NOT remove it from the Render static site
@@ -163,19 +191,21 @@ the CORS receipt.**
    The only way to get real rows in front of the operator is to **create**
    them in the property the session already grants. The activation script
    does exactly that, so acceptance and the real-row proof are one task.
-3. **Read the deployed API SHA.** API `main` is `bf65a00` and auto-deploys on
-   merge; the deployed SHA has never been read from Render Events. Ledger
-   ceiling 136 is carried from the release and has not been re-verified live.
-5. **Two back controls on the Work Orders route**, and **seven orphaned nav
+3. **Two back controls on the Work Orders route**, and **seven orphaned nav
    keys**. Cosmetic, deliberately deferred until after acceptance.
-6. **A write returning 200 with an unparseable body reports "Done."**
+4. **A write returning 200 with an unparseable body reports "Done."**
    Pre-existing, low likelihood, still a confident-wrong if it fires.
+
+**CLOSED 2026-08-05 (late), do not re-open:** the deployed APP SHA, the
+deployed API SHA, the applied ledger ceiling, cross-origin, and "find a
+property that has work orders" (which was never possible — see 2 above).
 
 ### Not proven, and must not be claimed
 
 - Everything under "Open, ranked" above.
-- **Nothing about the deployed API.** The APP is confirmed live; the API is
-  not. Do not report them together.
+- **Real-phone acceptance.** Both services are deployed and browser-verified.
+  Neither is phone-verified. "Deployed" and "accepted" are different rungs of
+  the §33 ladder and must not be reported as one.
 
 ---
 
