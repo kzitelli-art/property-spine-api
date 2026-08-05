@@ -1,6 +1,6 @@
 # Property Spine — Thread Handoff
 
-**Current as of `main` @ `4983e5d` · 2026-08-03 (late).**
+**Current as of API `main` @ `d0627ce` · APP `main` @ `17823a1` · 2026-08-05 (evening).**
 Read the top section first — it wins over everything below it. Each dated
 section supersedes the ones under it; nothing is deleted, because the reasoning
 in the older sections is still the clearest account of how each trap was found.
@@ -11,7 +11,172 @@ current truth. Re-date it whenever `main` moves materially.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
-##  BRANCH STATE — 2026-08-05. THIS SECTION WINS over everything below.
+##  RELEASED — 2026-08-05 (evening). THIS SECTION WINS over everything below.
+## ══════════════════════════════════════════════════════════════════
+
+Both repositories are merged, pushed, and released. Migration 129 was
+activated, 130–136 applied, and the ledger reconciled. **The 2026-08-03
+"`main` cannot boot" section below is RESOLVED — do not act on it.**
+
+```text
+API   main   d0627ce3945e14f01ba47033372a0f454b0af860   live · ledger ceiling 136
+APP   main   17823a1100f2b431e1559b935c1f978b67c60402   see "what is actually deployed"
+```
+
+**Resident SMS → canonical work order → technician lifecycle → operator
+action** is live. The technician holds an ordinary text conversation; every
+fact they report is written canonically; the operator sees one queue where
+every control performs a governed write and returns a receipt.
+
+### ⚠ THE LESSON THAT COST THIS RELEASE A DAY
+
+The feature was **built, proven, and deployed while being completely
+unreachable.** `index.html` referenced `window.__psWorkOrders` **zero times**.
+`Maintenance → Work Orders` opened a fixture dashboard reading
+`window.__WO_FLOW_LIBRARY` — a static per-property array with invented
+`(215) 555-01xx` resident numbers and no network call at all. A signed-in
+operator saw sample residents where live work belongs (§19–20 violation).
+
+It passed 99 browser assertions because the proof called
+`window.__psWorkOrders.open()` **directly**. That proved the door worked. It
+never proved anything *opened* it.
+
+> **RULE, from the owner, 2026-08-05:** a surface is not shipped until the
+> proof enters it the way the operator enters it. "The component works" and
+> "the component is reachable" are two facts and need two assertions.
+
+That was break **one**. Behind it sat two more, each independently fatal —
+wiring the route alone would have fixed nothing:
+
+- **THE LIVE SEAM WAS NEVER REGISTERED.** The door calls seven `__psLive`
+  methods. None were in `PRODUCTION_LIVE_RESOURCES` / `WRITE_ACTIONS`. Even
+  a correctly wired route would have thrown on the first read and rendered
+  unavailable forever.
+- **THE DOOR READ THE ENVELOPE AS THE PAYLOAD.** `__psLive` returns
+  `{ data, meta }` from every read *and every write*. The door used the
+  envelope directly — invisible against a harness stub returning bare JSON,
+  an empty queue against the real loader. **The stub was modelling a
+  contract production never produces.** That is what let it through.
+
+A fourth, found only once navigation was real: `render()` prefers
+`state.detail` whenever set and `open()` left it standing, so leaving for the
+Maintenance desk and re-entering Work Orders dropped the operator on the last
+job they had opened instead of the queue. Fixed in `17823a1`.
+
+### What is actually deployed — READ THIS BEFORE DEBUGGING
+
+**APP auto-deploy is OFF.** Every deploy is manual. On 2026-08-05 the live
+door was confirmed in the browser by screenshot — correct header, `0 NEED
+ACTION`, honest empty, no fixture names. **The exact deployed SHA was not
+read from the Render Events page.** It is `badd5ea` or `17823a1`; both carry
+the route replace, only `17823a1` carries the re-entry fix. **Confirm in
+Render Events before assuming.**
+
+API deploys on merge to `main`. Last verified live and healthy at `d0627ce`
+with ledger ceiling 136 earlier on 2026-08-05.
+
+### Proof state at release
+
+```text
+API   database + HTTP suites                       399 assertions green
+APP   run_harnesses.sh (18 × *.test.js)            779 passed · 0 failed · 0 red
+APP   work_lifecycle_browser_proof.browser.js      144 passed · 0 failed
+```
+
+The browser proof now has **two** entry proofs and keeps both. Section 9c
+drives the deployed `index.html` and every script it loads, a session
+rehydrated the way a reload does it, and a real click on the real
+`Maintenance → Work orders` tile — with the pinned production origin routed
+to the harness API at the transport layer, so the app's own **frozen**
+`__psLive` loader builds every path, header and body. Nothing in the page is
+patched to make it pass. All four operator writes cross that real loader.
+
+Run it:
+
+```bash
+HARNESS_DATABASE_URL="postgresql://<user>:<pw>@127.0.0.1:5432/postgres" \
+  node work_lifecycle_browser_proof.browser.js      # in property-spine-app
+```
+
+### Traps this release created or exposed
+
+1. **A harness that silenced its own death.** `work_lifecycle_browser_proof`
+   intercepts `console.error` to keep expected route noise out of the log —
+   and silenced `receipt.died()` with it. A harness that died printed
+   *nothing* and read like a clean stop. It cost a full debug cycle. Now
+   restored before reporting. **If you add a console.error sentinel to any
+   harness, never let it swallow the receipt.**
+2. **`window.__OFFLINE_MODE = true` is assigned unconditionally**
+   (`index.html:4593`) and is never set false anywhere in the repo.
+   `getJSON()` checks it *first*, so **every** `getJSON` read in `index.html`
+   is answered from the baked snapshot and every write throws
+   `405 read-only snapshot`. This is by design: `index.html` is a historical
+   snapshot shell, and live operator work happens in the door modules through
+   `__psLive`. **Do not "fix" `__OFFLINE_MODE`. Do route new live work
+   through `__psLive`.**
+3. **`__psLive` is frozen, non-writable, non-configurable, and pinned to the
+   production origin.** You cannot override it from a test. Redirect the
+   origin at the transport layer instead (Playwright `page.route`), and
+   rehydrate a real session through `sessionStorage.__ps_staff_session__` —
+   the loader's own reload path.
+4. **A feature stylesheet was appended inside the shared `.wrap` frame's
+   `<style>` block**, putting dozens of ordinary `padding:` shorthands into
+   the slice `shared_frame_proof` reads. It was red on `main` from the
+   moment the Work Orders release merged. Feature CSS gets its own `<style>`
+   tag. Document order — and so the cascade — is unaffected.
+
+### Known-and-accepted, NOT defects to re-litigate
+
+- **The Coordinate entry control is absent once the resident has been asked.**
+  That is the §7.1 ruling (migration 136), not a regression. Do not restore it.
+- **`137` is the next free migration number.** Re-read the ledger and scan all
+  branches before authoring it.
+- **The full schema still cannot be rebuilt from empty** —
+  `012_bank_intake.sql:44`, `column "yardi_code" does not exist`. Predates
+  all of this and bounds every proof to the scoped schema.
+
+### Open, ranked — carried into the next thread
+
+1. **Confirm the deployed APP SHA in Render Events**, and redeploy `17823a1`
+   if it is anything older.
+2. **Verify rows render in production.** The 2026-08-05 confirmation was on
+   Property Spine Demo Building, which has no work orders — an honest empty
+   proves the read succeeds, not that it reads *right*. Open a property that
+   has work orders.
+3. **Confirm the private datasets 404.** Rent-roll and seed JSON were
+   publicly served from 2026-08-03 because the security commits merged but
+   were never deployed. Deploying the app should have closed it. **Unverified.**
+4. **Real-phone acceptance** — `ACTIVATION_SMS_WORK_ORDER_HANDOFF.md`, the
+   script at the end. Stop conditions are listed there and are binding.
+5. **A failed `/operator/obligations` read makes Work Orders unreachable.**
+   `renderMaintenance` (`index.html:11534`) bails to a desk-wide unavailable
+   banner with **no tiles at all**. The live door has no dependency on
+   obligations; the *route* to it does. Real coupling, deliberately left
+   outside the hotfix scope.
+6. **Two back controls on the Work Orders route** — the app bar's
+   `‹ BACK MAINTENANCE` and the door's own `‹ MAINTENANCE`. The Unit Turn
+   route solved this with a header slot; this one has not. Cosmetic.
+7. **Seven orphaned nav keys.** `work_inprogress`, `work_done`,
+   `work_closed`, `proof`, `work_emergency`, `work_new`, `work_open` are now
+   reachable only from the retired dashboard's own markup. Dead, not broken.
+8. **A write returning 200 with an unparseable body reports "Done."**
+   `writeAction` yields `data: null`; the door falls back to `{}`. Pre-existing
+   shape, low likelihood, but it is a confident-wrong if it ever fires.
+
+### Not proven, and must not be claimed
+
+- **CORS is not exercised by the browser proof.** Playwright's `route.fulfill`
+  bypasses it entirely. It is covered *by construction* — `server.js:101`
+  applies `operatorCors` to every `/operator/*` path with `x-staff-session`
+  on GET/POST, and the app already signs in through that same middleware —
+  but it **fails closed** if `OPERATOR_APP_ORIGIN` does not exactly match the
+  app origin.
+- Everything under "Open, ranked" above.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  BRANCH STATE — 2026-08-05 (earlier). SUPERSEDED by the release section above.
 ## ══════════════════════════════════════════════════════════════════
 
 `main` has NOT moved. It is still `8330aec` and it still cannot boot, for the
@@ -76,7 +241,7 @@ branches already carry merges from `main`.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
-##  STATE — 2026-08-03 (late). Superseded above; still current for `main`.
+##  STATE — 2026-08-03 (late). SUPERSEDED — `main` boots; 129 is released.
 ## ══════════════════════════════════════════════════════════════════
 
 ### ⚠ `main` CANNOT BOOT RIGHT NOW. That is deliberate.
