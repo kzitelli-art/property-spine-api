@@ -855,6 +855,35 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
       [propertyId, personId])).rows;
   }
 
+  /*  The SAME outstanding questions, whose delivery FAILED.
+   *
+   *  Deliberately a second query rather than a relaxation of the first: a
+   *  reply must never be read as an answer to a question the resident did
+   *  not receive, so these must not join the `open` set. But their absence
+   *  from it previously read as "nothing outstanding", which let an
+   *  ambiguous reply become a new work order — the defect Gate A found.
+   *  The seam is given both facts and decides. */
+  async function undeliveredClarifications(client, { propertyId, personId }) {
+    return (await client.query(
+      `select o.id as obligation_id, o.related_id as work_order_id,
+              ce.property_id, ce.id as question_event_id, ce.body as question_body,
+              ce.sms_status
+         from comm_events ce
+         join obligations o
+           on o.related_type = 'work_order'
+          and o.related_id   = ce.created_object_id
+          and o.property_id  = ce.property_id
+          and o.status       = 'open'
+          and o.type         = 'confirm_urgency'
+        where ce.property_id = $1
+          and ce.person_id   = $2
+          and ce.direction   = 'outbound'
+          and ce.created_object_type = 'work_order'
+          and coalesce(ce.sms_status,'') in ('failed','refused','undelivered')
+        order by ce.occurred_at desc`,
+      [propertyId, personId])).rows;
+  }
+
   // A clarification QUESTION is marked as one when it is sent. Every outbound
   // reply about a work order carries created_object_type='work_order' —
   // including the ordinary "request opened" acknowledgment — so that column
@@ -919,6 +948,8 @@ module.exports = function tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms,
     let step = clarification.assessOpenClarification({
       scope: { property_id: propertyId },
       open: await pendingClarifications(client, { propertyId, personId }),
+      //  A question we FAILED to ask is not a question that was settled.
+      undelivered: await undeliveredClarifications(client, { propertyId, personId }),
     });
     if (step.needs === "answer_verdict") {
       step = clarification.resolveAnswerVerdict({

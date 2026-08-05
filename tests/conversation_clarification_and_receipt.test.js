@@ -297,6 +297,52 @@ section("4. CLARIFICATION LADDER — EVERY BRANCH");
 {
   const step1 = (open) => clar.assessOpenClarification({ scope: { property_id: PROP }, open });
 
+  // ── QUESTION_NOT_DELIVERED ───────────────────────────────────────
+  //  A PRE-EXISTING PRODUCTION DEFECT, found by Gate A against a
+  //  production-derived schema. A clarification question whose delivery
+  //  failed is absent from `open` — correctly, since a reply cannot answer
+  //  a question the resident never received. But that absence used to read
+  //  as "nothing outstanding", so an ambiguous reply became a NEW WORK
+  //  ORDER with needs_human unset, and the ambiguity verdict was never
+  //  consulted at all.
+  //
+  //  Failure to deliver a clarification cannot turn ambiguity into
+  //  operating truth.
+  {
+    const undel = (o = {}) => openRow(Object.assign({ sms_status: "failed" }, o));
+    const both = (open, undelivered) =>
+      clar.assessOpenClarification({ scope: { property_id: PROP }, open, undelivered });
+
+    const notSent = both([], [undel()]);
+    ok("an UNDELIVERED question holds for a human, never proposes new work",
+      notSent.action === "hold_for_human" && notSent.state === "question_not_delivered",
+      `${notSent.action}/${notSent.state}`);
+    ok("...and says a human is required — this module's own call",
+      notSent.requiresHuman === true);
+    ok("...naming the fact it does not have",
+      notSent.missingFact === "a_question_the_resident_actually_received", notSent.missingFact);
+    ok("...and proposes nothing to append to",
+      notSent.target === null && notSent.needs === null);
+
+    ok("a DELIVERED question still wins — the reply is read against it",
+      both([openRow()], [undel()]).needs === "answer_verdict");
+    ok("neither delivered nor undelivered is still the prior-resolution question",
+      both([], []).needs === "prior_resolution_check");
+    ok("omitting `undelivered` entirely keeps the old behaviour",
+      clar.assessOpenClarification({ scope: { property_id: PROP }, open: [] }).needs
+        === "prior_resolution_check");
+
+    //  An unreadable set is not an empty set — the same rule `open` follows.
+    ok("an unreadable undelivered set is REFUSED, not treated as none",
+      throws(() => clar.assessOpenClarification(
+        { scope: { property_id: PROP }, open: [], undelivered: "nope" }), "undelivered_not_an_array"));
+
+    //  Every delivery state the query selects on must reach the same hold.
+    ok("every failed delivery state holds identically",
+      ["failed", "refused", "undelivered"].every((s) =>
+        both([], [undel({ sms_status: s })]).state === "question_not_delivered"));
+  }
+
   const many = step1([openRow(), openRow({ obligation_id: "ob-2", work_order_id: "wo-2" })]);
   ok("more than one outstanding → ambiguous_open_set", many.state === "ambiguous_open_set");
   ok("more than one outstanding → hold, never a choice", many.action === "hold_for_human" && many.target === null);

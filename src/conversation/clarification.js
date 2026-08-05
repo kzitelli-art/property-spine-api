@@ -111,7 +111,7 @@ const terminal = (o) => Object.freeze({
  *  context and fails loudly rather than being silently dropped (dropping
  *  it would turn "there is an open question" into "open a new request").
  */
-function assessOpenClarification({ scope, open } = {}) {
+function assessOpenClarification({ scope, open, undelivered = [] } = {}) {
   if (!scope || !scope.property_id) {
     throw new ClarificationContextError(
       "scope.property_id is required — clarification state is never evaluated outside an explicit property scope",
@@ -121,6 +121,11 @@ function assessOpenClarification({ scope, open } = {}) {
     throw new ClarificationContextError(
       "open must be an array of outstanding clarifications — an unreadable set is not an empty set",
       "open_not_an_array");
+  }
+  if (!Array.isArray(undelivered)) {
+    throw new ClarificationContextError(
+      "undelivered must be an array — an unreadable set of failed questions is not an empty set",
+      "undelivered_not_an_array");
   }
 
   open.forEach((row, i) => {
@@ -167,6 +172,33 @@ function assessOpenClarification({ scope, open } = {}) {
       missingFact: "whether_reply_answers_open_question",
       requiresHuman: null,
       reason: "one outstanding clarification — the reply must be read against the exact question asked",
+    });
+  }
+
+  //  ── WE FAILED TO ASK. NOT "NOTHING OUTSTANDING." ─────────────────
+  //  Found by Gate A on a production-derived schema, and it is a
+  //  PRE-EXISTING DEFECT ON `main`, not one this branch introduced.
+  //
+  //  A clarification question whose delivery failed is deliberately absent
+  //  from `open` — a reply cannot be read as an answer to a question the
+  //  resident never received, and treating it as one would be its own
+  //  confident wrong. But falling through to "nothing outstanding" is
+  //  worse: it made an undelivered question look like a settled one, so an
+  //  ambiguous reply became a NEW WORK ORDER with `needs_human` unset. The
+  //  ambiguity verdict was never even consulted.
+  //
+  //  FAILURE TO DELIVER A CLARIFICATION CANNOT TURN AMBIGUITY INTO
+  //  OPERATING TRUTH. Neither wrong answer is available here: we cannot
+  //  read the reply as an answer, and we cannot treat the ambiguity as
+  //  fresh work. It stops, and a human sees it.
+  //
+  //  Once the question is successfully sent, it appears in `open` and only
+  //  a reply AFTER that is evaluated against it.
+  if (undelivered.length > 0) {
+    return terminal({
+      state: "question_not_delivered", action: "hold_for_human",
+      missingFact: "a_question_the_resident_actually_received", requiresHuman: true,
+      reason: `${undelivered.length} clarification question(s) could not be delivered; nothing here establishes what this reply is about`,
     });
   }
 

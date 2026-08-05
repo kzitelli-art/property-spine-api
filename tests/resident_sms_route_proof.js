@@ -221,6 +221,28 @@ if (!process.env.HARNESS_DATABASE_URL) {
     const commBoundary = require(path.join(__dirname, "../src/comms/communications_boundary.js"))({
       pool: shim, sms: smsDouble,
     });
+
+    // ── THE SEND GATE IS SATISFIED, NEVER BYPASSED ──────────────────
+    //  The OUTER suite still requires SMS_SEND_MODE=disabled and no carrier
+    //  credentials in the environment, and nothing here changes that
+    //  precondition. What this does is establish a controlled mode IN THIS
+    //  PROCESS — and only after proving that nothing real is reachable from
+    //  it and that the transport the boundary holds is this file's double.
+    //
+    //  Why it is needed: with the mode disabled, every send is refused
+    //  UPSTREAM of the double, so the clarification question is stamped
+    //  `refused` and cases 10 and 11 never reach the branch they name.
+    //  sendPropertySms is untouched and its eligibility ladder runs in
+    //  full — this satisfies the gate rather than stepping around it.
+    const carrierEnv = Object.keys(process.env)
+      .filter((k) => /^TWILIO_|^SMS_ACCOUNT|^MESSAGING_SERVICE/i.test(k));
+    ok(carrierEnv.length === 0,
+       `no carrier credential exists in this process (${carrierEnv.join(", ") || "none present"})`);
+    ok(String(smsDouble.sendSms).includes(HARNESS_SID),
+       "the transport handed to the boundary is THIS FILE'S double — every sid it can mint is harness-prefixed");
+    process.env.SMS_SEND_MODE = "customer_care";
+    ok(process.env.SMS_SEND_MODE === "customer_care",
+       "the send mode is satisfied in-process, AFTER the double is proven and with no carrier reachable");
     const { makeWorkOrderService } = require(path.join(__dirname, "../src/maintenance/work_order_service.js"));
     const { spawnObligationFromEvent, satisfyObligation } = require(path.join(__dirname, "./_engine.js"));
     const { transitionObligation } = require(path.join(__dirname, "../src/shared/obligation_transitions.js"));
