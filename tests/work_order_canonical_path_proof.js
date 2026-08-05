@@ -142,9 +142,22 @@ async function main() {
   // injecting something server.js does not.
   const maintenanceModule = require("../src/maintenance/maintenance.js");
 
+  //  THE CANONICAL LINE MODEL (migration 130). `properties.sms_number` is a
+  //  READ-ONLY PROJECTION of `communication_lines`; writing it directly is
+  //  refused by trg_properties_guard_legacy_line, correctly, because it would
+  //  create a second truth about which number serves this property. The line
+  //  is configured where line configuration belongs and
+  //  trg_cl_project_property_line fills the column.
   await pool.query(
-    `insert into properties (id,name,sms_number) values ($1,$2,$3)`,
-    [PROP, PROP_NAME, PROP_SMS]
+    `insert into properties (id,name) values ($1,$2)`, [PROP, PROP_NAME]
+  );
+  await pool.query(
+    `insert into communication_lines
+       (e164, line_type, property_id, authority_ceiling, permitted_audience,
+        inbound_enabled, outbound_enabled, outbound_policy, status)
+     values ($1,'property_facing',$2,'external','residents_and_prospects',
+             true, true, 'proactive', 'active')`,
+    [PROP_SMS, PROP]
   );
   lines.push(`  scratch property ${PROP} (${PROP_NAME})`);
 
@@ -506,6 +519,12 @@ async function cleanup() {
     await pool.query("delete from events where property_id=$1", [PROP]);
     if (track.persons.length)
       await pool.query("delete from persons where id = any($1::uuid[])", [track.persons]);
+    //  The line goes FIRST. `communication_lines.property_id` is `on delete
+    //  restrict`, deliberately — a line is history and must not be silently
+    //  erased with the property it served — so the property delete below is
+    //  blocked while its line exists. This harness's own line is scratch and
+    //  goes with it; nothing else is touched.
+    await pool.query("delete from communication_lines where property_id=$1", [PROP]);
     const gone = await pool.query(
       "delete from properties where id=$1 and name like '__WOPROOF__P %'", [PROP]);
     lines.push(`  cleanup complete. scratch property removed: ${gone.rowCount}`);
