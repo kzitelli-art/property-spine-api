@@ -247,6 +247,12 @@ async function readPropertyWorkOrderStatuses(db, { propertyId, limit = 100 }) {
         proof: { required: s.proof.required, satisfied: s.proof.satisfied,
                  not_preserved_count: s.proof.not_preserved_count },
         resident_update_count: s.resident_update.length,
+        //  The LIST must be able to band on an unresolved resident update.
+        //  Carrying only a count made a completed work order with a failed
+        //  text indistinguishable from a clean one, so it sorted into
+        //  "recently completed" and the operator never saw it.
+        resident_update_failed: s.resident_update.filter(
+          (r) => r.delivery && r.delivery.state === "failed").length,
       });
     }
   }
