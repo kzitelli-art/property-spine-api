@@ -514,9 +514,27 @@ if (!process.env.HARNESS_DATABASE_URL) {
       ok(qRows.length === 1,
          `exactly one outbound exists for this resident (${qRows.length}) — selected without ordering`);
       const q12 = qRows[0];
-      ok(q12.sms_status === "failed",
-         `the clarification question is recorded as FAILED (${q12.sms_status})`);
-      ok(!!q12.sms_error,
+      //  THE ROUTE ACKS BEFORE IT SENDS. The webhook returns 200 as soon as
+      //  the claim is captured — Twilio must not be made to retry — and the
+      //  reply goes on the wire after that. Reading sms_status the instant
+      //  inboundSms resolves reads it BEFORE the send stamped it. The first
+      //  version of this case did exactly that and reported null, while
+      //  every later assertion on the same row correctly saw 'failed'.
+      //  Waiting for the row to settle is not waiting for the answer.
+      const settledStatus = async (id) => {
+        let r;
+        for (let i = 0; i < 100; i++) {
+          r = (await c.query(`select sms_status, sms_error from comm_events where id=$1`, [id])).rows[0];
+          if (r && r.sms_status) return r;
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((res) => setTimeout(res, 20));
+        }
+        return r || {};
+      };
+      const q12s = await settledStatus(q12.id);
+      ok(q12s.sms_status === "failed",
+         `the clarification question is recorded as FAILED (${q12s.sms_status})`);
+      ok(!!q12s.sms_error,
          "…and the failure says WHY — an unexplained failure is a blank pretending to be a fact");
 
       // ── the ambiguous reply to a question she never received ──────────
@@ -546,6 +564,20 @@ if (!process.env.HARNESS_DATABASE_URL) {
          "PERSISTED: the original inbound claim survives, verbatim");
       ok(claim12.needs_human === true,
          "…and was re-flagged for a human when its question could not be delivered");
+
+      //  THE HOLD MUST SPEAK. Found by this case: `held()` composes an
+      //  operating receipt, the receipt vocabulary had no text for
+      //  question_not_delivered, so it REFUSED and speak() THREW — the claim
+      //  was flagged and the resident was told NOTHING. A hold that cannot
+      //  speak is exactly the "captured, never acknowledged" state the
+      //  ruling forbids.
+      const heldReply = (await c.query(
+        `select body from comm_events where property_id=$1 and person_id=$2
+           and direction='outbound' and id <> $3`, [prop.id, person2.id, q12.id])).rows;
+      ok(heldReply.length === 1,
+         `the hold SPOKE — exactly one reply was written for the ambiguous message (${heldReply.length})`);
+      ok(/follow up with you/i.test((heldReply[0] || {}).body || ""),
+         `…telling the resident a human will follow up — "${((heldReply[0] || {}).body || "").slice(0, 60)}"`);
 
       const qAfter = (await c.query(
         `select id, body, sms_status, sms_error from comm_events where id=$1`, [q12.id])).rows[0];

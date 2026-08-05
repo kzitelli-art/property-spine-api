@@ -341,6 +341,28 @@ section("4. CLARIFICATION LADDER — EVERY BRANCH");
     ok("every failed delivery state holds identically",
       ["failed", "refused", "undelivered"].every((s) =>
         both([], [undel({ sms_status: s })]).state === "question_not_delivered"));
+
+    // ── NO HOLD MAY BE SILENT ────────────────────────────────────────
+    //  `question_not_delivered` reached `held()`, which composes an
+    //  operating receipt — and the receipt vocabulary had no text for it,
+    //  so it REFUSED, `speak()` threw, and the resident's claim was flagged
+    //  while the resident was told NOTHING. Adding one string fixed that
+    //  instance; this gate is what stops the next one, by reading the hold
+    //  states out of the seam's own source rather than from a list someone
+    //  has to remember to update.
+    const CLAR_SRC = require("fs").readFileSync(
+      require("path").join(__dirname, "../src/conversation/clarification.js"), "utf8");
+    const holdStates = [...new Set(
+      (CLAR_SRC.match(/state:\s*"([a-z_]+)",\s*action:\s*"hold_for_human"/g) || [])
+        .map((m) => m.match(/"([a-z_]+)"/)[1]))];
+    ok(`the seam declares ${holdStates.length} hold states, and they were found in source`,
+      holdStates.length >= 5, holdStates.join(", "));
+    const silent = holdStates.filter((s) =>
+      rcpt.operatingReceipt({
+        outcome: "held_for_human", result: { reasonCode: s }, context: { unitLabel: "your unit" },
+      }).refusal === "unknown_hold_reason");
+    ok("EVERY hold state the seam can produce composes a receipt — no hold is silent",
+      silent.length === 0, silent.join(", ") || "none");
   }
 
   const many = step1([openRow(), openRow({ obligation_id: "ob-2", work_order_id: "wo-2" })]);

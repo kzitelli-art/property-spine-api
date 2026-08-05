@@ -80,6 +80,13 @@ const HOLD_TEXT = {
   unusable_question_context: "Got it — your manager will follow up with you right here.",
   answer_to_resolved:        "Thanks — your manager will follow up with you right here.",
   not_actionable:            "Got it — your manager will follow up with you right here.",
+  //  A question we could not deliver. Found by the full-schema persistence
+  //  case: the seam correctly held for a human, and then `held()` THREW on
+  //  an unknown hold reason — so the claim was flagged and the resident was
+  //  told NOTHING. A hold that cannot speak is the "captured, never
+  //  acknowledged" state this vocabulary exists to prevent. Every reachable
+  //  hold state must have text here, or the hold is silent.
+  question_not_delivered:    "Got it — your manager will follow up with you right here.",
 };
 
 const DELIVERY_STATES = ["not_attempted", "delivered", "failed"];
