@@ -54,13 +54,32 @@ function lifecycleStateOf({ workOrder, acceptance, latestByKind }) {
 }
 
 /*  What a human should do next. Derived from the same facts, so it cannot
- *  contradict the state above. */
-function nextActionFor({ state, proof }) {
+ *  contradict the state above.
+ *
+ *  ── NO ACCESS IS FOUR SITUATIONS, NOT ONE ──────────────────────────
+ *  Reporting no access already derives the coordinate-entry message to the
+ *  resident. So "coordinate entry with resident" is the right instruction
+ *  in exactly one of the four states — the one where nobody has asked them
+ *  yet. In the others the operator is waiting, not acting, and saying
+ *  otherwise invites them to send a message that has already been sent.
+ */
+const COORDINATION_NEXT = {
+  none:      "Coordinate entry with resident",
+  prepared:  "Resident message prepared, not yet sent",
+  sent:      "Waiting for the resident to reply",
+  delivered: "Waiting for the resident to reply",
+  //  Handed to the carrier, nothing back. Not "sent", not "not sent".
+  unknown:   "Waiting for the resident to reply",
+  failed:    "Retry the resident message",
+};
+
+function nextActionFor({ state, proof, coordination = null }) {
   switch (state) {
     case "scheduled":           return "Assign or accept the work";
     case "accepted":            return "Technician to schedule and travel";
     case "en_route":            return "Technician is travelling";
-    case "no_access":           return "Coordinate entry with resident";
+    case "no_access":           return COORDINATION_NEXT[(coordination && coordination.state) || "none"]
+                                       || COORDINATION_NEXT.none;
     case "blocked":             return "Resolve what the work is waiting on";
     case "completion_claimed":  return proof.satisfied ? "Close out the work order" : "Obtain repair photo before completion";
     case "completed":           return null;
@@ -147,8 +166,9 @@ async function readWorkOrderStatus(db, { propertyId, workOrderId }) {
   //  up to delivered.
   const residentRows = (await db.query(
     `select ce.id, ce.body, ce.occurred_at, ce.sms_status, ce.sms_sid, ce.sms_error,
-            ce.derived_from_progress_id
+            ce.derived_from_progress_id, p.kind as derived_from_kind
        from comm_events ce
+       left join work_order_progress p on p.id = ce.derived_from_progress_id
       where ce.property_id = $1 and ce.derived_from_progress_id is not null
         and ce.created_object_type = 'work_order' and ce.created_object_id = $2
       order by ce.occurred_at asc`, [propertyId, workOrderId])).rows;
@@ -158,8 +178,29 @@ async function readWorkOrderStatus(db, { propertyId, workOrderId }) {
     prepared_at: row.occurred_at,
     text: row.body,
     derived_from_progress_id: row.derived_from_progress_id,
+    //  WHICH FACT caused it. A failed text about a completion and a failed
+    //  text about entry are not the same exception and must not be labelled
+    //  as though they were.
+    derived_from_kind: row.derived_from_kind || null,
     delivery: deliveryStateOf(row),
   }));
+
+  //  ── HAS THE RESIDENT ALREADY BEEN ASKED? ─────────────────────────
+  //  Resolved against the canonical CAUSE — the no-access progress row —
+  //  which is the same thing the automatic derivation and the operator
+  //  action both record, and the same thing migration 136 makes unique.
+  //  There is no second source of truth to disagree with.
+  const coordination = residentCoordinationFor({ state, latestByKind, resident_update });
+
+  //  The latest resident update the wire could not deliver, whatever caused
+  //  it. Carried in `current` so the list and the detail band identically
+  //  and neither has to re-derive it.
+  const failedUpdates = resident_update.filter((r) => r.delivery.state === "failed");
+  const resident_exception = failedUpdates.length
+    ? { comm_event_id: failedUpdates[failedUpdates.length - 1].id,
+        kind: failedUpdates[failedUpdates.length - 1].derived_from_kind,
+        at: failedUpdates[failedUpdates.length - 1].prepared_at }
+    : null;
 
   return {
     work_order: {
@@ -205,8 +246,10 @@ async function readWorkOrderStatus(db, { propertyId, workOrderId }) {
         ? { user_id: latestByKind.completed.reported_by_user_id,
             name: latestByKind.completed.reported_by_name || "(unnamed user)" }
         : null,
+      resident_coordination: coordination,
+      resident_exception,
     },
-    next_action: nextActionFor({ state, proof }),
+    next_action: nextActionFor({ state, proof, coordination }),
     open_follow_up: followUp,
     proof,
     resident_update,
@@ -219,6 +262,37 @@ async function readWorkOrderStatus(db, { propertyId, workOrderId }) {
       //  message it was reported in.
       source_comm_event_id: p.source_comm_event_id,
     })),
+  };
+}
+
+/*  ── THE FOUR COORDINATION STATES ───────────────────────────────────
+ *
+ *    none       nobody has asked the resident      → offer the action
+ *    prepared   an intent exists, nothing sent     → say so, offer nothing
+ *    sent       the wire took it                   → they were asked; wait
+ *    delivered  the carrier confirmed it           → they were asked; wait
+ *    failed     it did not arrive                  → retry THAT message
+ *
+ *  Only `none` is an invitation to act. The other four are the operator
+ *  being told what already happened, which is the whole point: the system
+ *  remembers what it did rather than asking somebody to do it again.
+ *
+ *  Null unless no-access is the CURRENT state — a coordination request is
+ *  not a fact about a work order that has since moved on.
+ */
+function residentCoordinationFor({ state, latestByKind, resident_update }) {
+  if (state !== "no_access") return null;
+  const cause = latestByKind.no_access;
+  if (!cause) return null;
+  const asked = resident_update.find((r) => r.derived_from_progress_id === cause.id);
+  if (!asked) return { state: "none", comm_event_id: null, at: null, cause_progress_id: cause.id };
+  //  `unknown` is NOT rounded down to `prepared`. The carrier has the
+  //  message and has told us nothing; saying "not yet sent" would be a
+  //  confident wrong, and offering a second send on the strength of it is
+  //  exactly the duplicate this whole change exists to prevent.
+  return {
+    state: asked.delivery.state,
+    comm_event_id: asked.id, at: asked.prepared_at, cause_progress_id: cause.id,
   };
 }
 
@@ -258,8 +332,11 @@ async function readPropertyWorkOrderStatuses(db, { propertyId, limit = 100 }) {
         //  Carrying only a count made a completed work order with a failed
         //  text indistinguishable from a clean one, so it sorted into
         //  "recently completed" and the operator never saw it.
-        resident_update_failed: s.resident_update.filter(
-          (r) => r.delivery && r.delivery.state === "failed").length,
+        //
+        //  It is `current.resident_exception` that carries this now — the
+        //  same object the detail reads, naming the message and the fact
+        //  that caused it. A parallel count would be a second answer to a
+        //  question that already has one.
       });
     }
   }

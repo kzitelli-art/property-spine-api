@@ -8,10 +8,11 @@ access, or a phone. **Do not send, paste or request a production connection
 string in any thread.** Where a step produces output, paste back only the
 sanitized rows the step names.
 
-The build being activated, its proof, and its two open items are described in
+The build being activated and its proof are described in
 [`RELEASE_SMS_WORK_ORDER_HANDOFF.md`](RELEASE_SMS_WORK_ORDER_HANDOFF.md). Read
-§7 of that document before step 1 — one open item changes what the acceptance
-script is allowed to do.
+§7 of that document before step 1: §7.1 is a ruling that changed how the
+no-access flow behaves, and §7.2 bounds what the proof set is allowed to
+claim.
 
 ---
 
@@ -51,12 +52,12 @@ tools/property_line_preflight.js  read-only, proven
 
 | | |
 |---|---|
-| API branch | `claude/conversational-seams-and-technician-loop` @ `1724a19` |
-| App branch | `claude/sms-work-order-handoff-qo3s8i` @ `05a4913` |
+| API branch | `claude/conversational-seams-and-technician-loop` — tip named in the release package |
+| App branch | `claude/sms-work-order-handoff-qo3s8i` @ `297cfb2` |
 | API `main` before this | `8330aec` |
 | Applied ledger ceiling expected **before** release | **129** |
-| Applied ledger ceiling expected **after** release | **135** |
-| Releasing | `130`, `131`, `132`, `133`, `134`, `135` — and nothing else |
+| Applied ledger ceiling expected **after** release | **136** |
+| Releasing | `130`, `131`, `132`, `133`, `134`, `135`, `136` — and nothing else |
 
 Reconcile by **merge**. **Never rebase and never force-push** either branch;
 both have shared history with `main`.
@@ -101,13 +102,13 @@ Read the `applied ceiling` from step 2.
   to completion first, then restart this packet from step 1.
 - **Anything else** → stop and report the number.
 
-This is a gate, not a recommendation. Releasing `130`–`135` onto a `128` schema
+This is a gate, not a recommendation. Releasing `130`–`136` onto a `128` schema
 would apply `129` in the same batch without its own activation receipt.
 
 ## Step 4 — confirm the pending set is exactly what you expect
 
 From step 2's pending list, before any merge, the only pending file should be
-none (if `129` is applied) — the `130`–`135` files are not on `main` yet.
+none (if `129` is applied) — the `130`–`136` files are not on `main` yet.
 
 **STOP if** anything unexpected is pending.
 
@@ -119,11 +120,11 @@ git checkout main && git pull origin main
 git merge --no-ff claude/conversational-seams-and-technician-loop
 ```
 
-Confirm the merged tip contains `1724a19`:
+Confirm the merged tip contains the API branch tip in **Required identity**:
 
 ```bash
 git log --oneline -1 claude/conversational-seams-and-technician-loop
-git merge-base --is-ancestor 1724a19 HEAD && echo "tip is in"
+git merge-base --is-ancestor <API tip> HEAD && echo "tip is in"
 ```
 
 Resolve any conflict by merge. **Do not rebase. Do not force-push.**
@@ -145,7 +146,7 @@ git merge --no-ff claude/sms-work-order-handoff-qo3s8i
 git push origin main
 ```
 
-Confirm `05a4913` is an ancestor of the new tip.
+Confirm the app tip in **Required identity** is an ancestor of the new tip.
 
 ## Step 8 — confirm Render built the exact SHA
 
@@ -160,28 +161,29 @@ It must equal the merge commit you pushed in step 6.
 ## Step 9 — expect the boot to REFUSE, and read what it names
 
 The deploy runs `prestart`, which **verifies and never migrates**. With
-`130`–`135` in the build and not in the ledger it will refuse to start and name
+`130`–`136` in the build and not in the ledger it will refuse to start and name
 them:
 
 ```text
 ✗ REFUSING TO START — the schema does not match this code.
-  6 migration(s) in this build are NOT applied to the target database:
+  7 migration(s) in this build are NOT applied to the target database:
     · 130_communication_lines.sql
     · 131_work_acceptance.sql
     · 132_outbound_line_policy.sql
     · 133_work_order_reference.sql
     · 134_technician_lifecycle.sql
     · 135_delivery_attempts.sql
+    · 136_one_resident_update_per_cause.sql
   Ledger ceiling is 129.
 ```
 
 **This is correct.** Production keeps serving the previous build. A deploy does
 not migrate; releasing schema is a separate deliberate act.
 
-**STOP if** it names any file other than those six, or reports a ceiling other
+**STOP if** it names any file other than those seven, or reports a ceiling other
 than `129`.
 
-## Step 10 — release migrations 130–135
+## Step 10 — release migrations 130–136
 
 ```bash
 MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=129 \
@@ -205,14 +207,14 @@ deliberate and was fixed after it was found fatal on any database that had run
 DATABASE_URL="<prod>" node tools/ledger_reconcile.js
 ```
 
-**Required:** `applied ceiling 135`, zero pending, `✓ RECONCILED`, `EXIT 0`.
+**Required:** `applied ceiling 136`, zero pending, `✓ RECONCILED`, `EXIT 0`.
 
 ## Step 12 — confirm the service boots and is healthy
 
 Redeploy or restart. `prestart` should now print:
 
 ```text
-✓ SCHEMA VERIFIED — <n> migrations, all applied. Ledger ceiling 135.
+✓ SCHEMA VERIFIED — <n> migrations, all applied. Ledger ceiling 136.
 ```
 
 Confirm the service reaches healthy and `echo $RENDER_GIT_COMMIT` still equals
@@ -278,7 +280,7 @@ resident.** See §7.1 of the release package for why.
 
 **Roles: technician tester, operator tester, resident tester.**
 
-Do not begin until step 12 reports ceiling `135` and the service is healthy.
+Do not begin until step 12 reports ceiling `136` and the service is healthy.
 
 Record, for every step: the wall-clock time, what was typed, what came back,
 and a screenshot of the operator surface. That set is the acceptance receipt.
@@ -296,7 +298,7 @@ time. Wait for each reply before sending the next.
 | 15.1 | `what do I have` | The work they hold, named in plain words. No codes. |
 | 15.2 | `got it` | Acceptance, confirmed by name — not a reference number. If they hold more than one job, expect **a question**, not a menu. That is correct behaviour. |
 | 15.3 | `on my way` | Acknowledgement. **The resident tester should receive** *"Your technician is on the way for the …"* |
-| 15.4 | `couldn't get in` | Acknowledgement. **The resident tester should receive** *"The technician could not access the unit. Please reply with the best way to coordinate entry."* |
+| 15.4 | `couldn't get in` | Acknowledgement. **The resident tester should receive, exactly once,** *"The technician could not access the unit. Please reply with the best way to coordinate entry."* Nothing else asks them again — see 16.7. |
 | 15.5 | `back on site, valve was corroded` | Recorded as a finding. **The resident tester must receive nothing.** Findings are internal by default. |
 | 15.6 | `all done` | A **claim**, not a closure. Expect to be told a photo is required. **The resident tester must receive nothing** — `completion_claimed` is not resident-safe. |
 | 15.7 | Send a **photo**, with any caption | The photo is evidence; the caption is **not** a finding. |
@@ -319,16 +321,26 @@ Sign in as the operator tester at the test property and open
 | 16.4 | Press **Review** on a claim-without-proof row | The detail opens, says the technician reports the work finished, and names the missing photo. **Nothing is written.** |
 | 16.5 | Press **Ask …** on that detail | Receipt: *"Photo request prepared for …."* Delivery is reported **separately** and is never claimed as delivered by the act of pressing. The technician's handset receives the request. |
 | 16.6 | Press **Ask …** a second time | *"… is already prepared."* **No second text arrives.** |
-| 16.7 | **Coordinate entry** | **See the note below — do not press this against a real resident.** |
+| 16.7 | Open the no-access work order from 15.4 | **No send control.** The row reads *"Asked resident at HH:MM · waiting for reply"*, and the detail says the resident was asked at that time. **See the note below.** |
 | 16.8 | Press **Retry** on a row showing *Resident completion text failed* | Receipt. No new work order, no new message, no new completion event. The attempt is attributed to you. |
 | 16.9 | Reload after a successful retry | The exception clears from that row and it moves to **Recently completed**. |
 
-**16.7 — `Coordinate entry` is held pending an owner ruling.** The resident is
-already sent the coordinate-entry sentence automatically when no access is
-reported, and this control sends byte-identical text a second time
-(release package §7.1). Exercise it **only** against the staff-owned resident
-tester handset, note that two identical messages arrive, and record that as the
-evidence for the ruling. **Do not press it against a real resident.**
+**16.7 — there is deliberately nothing to press.** Reporting no access at 15.4
+already texted the resident the coordinate-entry sentence. Under the §7.1
+ruling the surface reports that rather than inviting a second send, and the
+`Coordinate entry` control only exists where nobody has asked the resident yet.
+
+**This is the acceptance criterion, not a missing feature.** Confirm all three:
+
+- the resident tester received the coordinate-entry sentence **exactly once**;
+- the row says *"Asked resident at HH:MM · waiting for reply"* and carries no
+  verb;
+- the detail's **Next** reads *"Waiting for the resident to reply"*.
+
+**STOP if** a `Coordinate entry` control appears on a work order whose resident
+has already been asked, or if the resident tester receives that sentence twice.
+The database refuses the duplicate, so a second arrival would mean something
+sent it by a path this release does not know about.
 
 ## Step 17 — the resident half
 
@@ -361,8 +373,8 @@ than *deployed*.
 
 ## Step 19 — rollback
 
-**Schema is not rolled back.** Migrations `130`–`135` are additive: new tables,
-new columns, new constraints on new tables. Reverting them is a bigger risk
+**Schema is not rolled back.** Migrations `130`–`136` are additive: new tables,
+new columns, and one unique index on a column `134` introduced. Reverting them is a bigger risk
 than leaving them.
 
 To take the behaviour out of service without touching schema, in order of
@@ -375,7 +387,7 @@ increasing scope:
    operations line.
 3. **Revert the app merge only.** The operator controls disappear; the API and
    the technician path are untouched.
-4. **Revert the API merge.** The code goes; the schema stays at `135`, and the
+4. **Revert the API merge.** The code goes; the schema stays at `136`, and the
    boot gate will then refuse, because the ledger is ahead of the build. If you
    go this far, expect that and plan for it before you push.
 

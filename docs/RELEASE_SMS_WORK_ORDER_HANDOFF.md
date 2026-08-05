@@ -6,7 +6,7 @@ Activation is a separate, deliberate act. See
 which is the operator-facing packet and is self-contained.
 
 This document is the record of what ships, what proves it, what is dormant
-until someone activates it, and what is still an open ruling. It contains no
+until someone activates it, and what remains open. It contains no
 credentials, no connection strings and no phone numbers.
 
 ---
@@ -17,13 +17,13 @@ credentials, no connection strings and no phone numbers.
 |---|---|
 | API repository | `kzitelli-art/property-spine-api` |
 | API branch | `claude/conversational-seams-and-technician-loop` |
-| API tip | `1724a19` |
-| API base | `origin/main` @ `8330aec` — 22 commits behind the tip |
+| API tip | the commit carrying this document — confirm with `git log --oneline -1` |
+| API base | `origin/main` @ `8330aec` |
 | App repository | `kzitelli-art/property-spine-app` |
 | App branch | `claude/sms-work-order-handoff-qo3s8i` |
-| App tip | `05a4913` |
-| App base | `origin/main` — 9 commits behind the tip |
-| Migrations added | `130` – `135` |
+| App tip | `297cfb2` |
+| App base | `origin/main` |
+| Migrations added | `130` – `136` |
 | Production applied ledger ceiling | **128** (to be re-confirmed read-only at activation) |
 | Ceiling this release expects to start from | **129** |
 
@@ -78,7 +78,7 @@ one verb. Five controls, each with exactly one canonical service:
 | Review | *(none — it is a read)* | Opens the same work order's detail. Writes nothing. |
 | Assign | `assignWork` | An eligible technician becomes accountable; `ownership_origin='operator_assigned'`. |
 | Ask *(technician)* | `askForPhoto` | One reply-bound request on the operations line. |
-| Coordinate entry | `coordinateEntry` | One resident-safe message on the property line. |
+| Coordinate entry | `coordinateEntry` | One resident-safe message on the property line — **only where the resident has not already been asked** (§7.1). |
 | Retry | `prepareRetry` + `recordAttemptResult` | A **new attempt** at an **existing** intent. |
 
 `Review` has no service on purpose: it is a read, and a read that writes is the
@@ -126,7 +126,7 @@ record.
 | `src/conversation/{clarification,receipt,work_reference,technician_intent}.js` | 1 — canonical | none |
 | `src/technician/{work_selection,acceptance_service,lifecycle_service,evidence_service,resident_update,conversation,operator_actions}.js` | 1 — canonical | none |
 | `src/surfaces/work_order_status_read.js` | 1 — canonical read | none |
-| Migrations `130`–`135` | 1 — canonical schema | none |
+| Migrations `130`–`136` | 1 — canonical schema | none |
 | `work-lifecycle-door.js`, the `.wo-*` block in `index.html` | 1 — canonical surface | none |
 | `work_lifecycle_browser_proof.browser.js` and the `tests/*.db.js` proofs | 2 — proof scaffolding | never runs in production; see §6 |
 | `docs/mock_work_orders.html`, `docs/mock_work_orders_shell.js` | **3 — superseded** | **delete once the shipped surface is accepted in production.** They are design mocks that the real implementation replaced. |
@@ -149,12 +149,13 @@ browser proof, real Chromium driving real HTTP against a real Express API.
 | `tests/technician_acceptance.db.js` | 32 / 32 |
 | `tests/operations_reply_policy.db.js` | 32 / 32 |
 | `tests/technician_route_proof.db.js` | 48 / 48 |
-| `tests/technician_lifecycle_proof.db.js` | 51 / 51 |
-| app `work_lifecycle_browser_proof.browser.js` | **79 / 79**, three consecutive runs |
+| `tests/technician_lifecycle_proof.db.js` | 57 / 57 |
+| app `work_lifecycle_browser_proof.browser.js` | **99 / 99** |
 | `npm run verify` (source governance) | 7 gates, exit 0 |
 | 4 pure unit suites (clarification, intent, selection, language) | exit 0 |
 
-**368 database-and-browser assertions.**
+**394 database-and-browser assertions.** The count rose from 368 because the
+§7.1 ruling added its own proof — it did not replace anything.
 
 ### What the browser proof actually drives
 
@@ -175,9 +176,11 @@ checked in the database:
 - **Ask Dana** — exactly one outbound intent, reply-bound with all five
   bindings; a second press creates no second message and says "already
   prepared"; the receipt does not claim delivered.
-- **Coordinate entry** — a receipt, delivery reported as its own fact, the row
-  written on the **resident conversation** and never the staff thread, carrying
-  derived text and not the technician's words, and not on the operations line.
+- **Coordinate entry** — offered only where nobody has asked the resident; a
+  receipt, delivery reported as its own fact, the row written on the **resident
+  conversation** and never the staff thread, carrying derived text and not the
+  technician's words, and not on the operations line. Pressed again, it creates
+  no second message and says the resident has already been asked.
 - **Retry** — no new message, work order or completion event; the attempt is
   recorded and attributed to the operator who pressed it; a failed retry stays
   actionable; both attempts are preserved (`failed`, then `sent`); the work
@@ -221,46 +224,61 @@ rows into the live operating database.
 
 ---
 
-## 7. Known defects and open rulings — read before activating
+## 7. Rulings and known limits — read before activating
 
-### 7.1 `Coordinate entry` sends the resident a duplicate sentence — **owner ruling needed**
+### 7.1 The duplicate resident message — **RULED AND CLOSED, 2026-08-05**
 
-**Verified today, in the browser proof, against real Postgres.**
-
-When a technician reports no access, the resident is *already* sent, derived
-and automatically:
+**The defect.** When a technician reported no access, the resident was already
+sent, derived and automatically:
 
 > The technician could not access the unit. Please reply with the best way to coordinate entry.
 
-The operator's `Coordinate entry` control sends **byte-identical** text
-(`ENTRY_TEXT` in `src/technician/operator_actions.js` equals the `no_access`
-case in `src/technician/resident_update.js`). Pressing it therefore texts the
-resident the same sentence a second time.
+The operator's `Coordinate entry` control then sent **byte-identical** text.
+Its duplicate guard could not see the first message — the guard was keyed on
+`correlation_key` and the derived update carries none. Two writers, one cause,
+no shared key.
 
-The duplicate guard inside `coordinateEntry` cannot see the first message: it
-is keyed on `correlation_key`, and the automatically derived update carries
-none. A grouped query over one no-access work order returns:
+**The ruling.** Do not send the same resident message twice. The operator
+surface reports the current communication truth, and the action exists only
+where nobody has asked:
 
-```text
-count 2 · identical body · one row with correlation_key "entry:<wo>:<progress>", one row with none
-```
+| Coordination state | What the operator sees |
+|---|---|
+| no resident coordination intent exists | **Coordinate entry** |
+| intent prepared but not sent | *Resident message prepared* |
+| sent or delivered | *Asked resident at 10:04 AM · waiting for reply* |
+| failed | *Resident text failed* · **Retry** |
 
-This is not a harness artefact and it is not a crash — it works exactly as
-written. What is wrong is the product decision underneath it, and that is the
-owner's to make, not mine. Three coherent answers:
+No differently-worded follow-up was added. Follow-up timing and escalation are
+a separate governed capability and are not in this build.
 
-1. **Do not offer the control when the resident has already been asked.** The
-   surface would say *"Asked the resident at 10:04 · no reply yet"* instead of
-   offering a fresh `Next` action. Honest, and it makes the operator's real
-   state — waiting — visible. This is my recommendation.
-2. **Keep the control as an explicit second ask, with different wording** —
-   a follow-up that reads like a follow-up.
-3. **Leave it.** Re-asking a silent resident is ordinary property management;
-   only the identical wording is wrong.
+**The deduplication is structural, not cosmetic.** Both writers already
+recorded the same canonical cause — the `no_access` progress row, in
+`comm_events.derived_from_progress_id`. Migration `136` makes that column
+unique, so a second resident message about the same fact is refused by the
+database whichever writer attempts it and whether or not it thought to look
+first. Hiding the button is the *consequence* of the fix, not the fix.
 
-Until this is ruled on: **the real-phone acceptance script must not exercise
-`Coordinate entry` against a real resident's phone.** The activation packet
-routes that step to a staff-owned test handset.
+`coordinateEntry` now resolves against that cause before writing, and returns
+`already_asked` with *when* — so a press that cannot send still tells the
+operator what happened. The insert is wrapped in a savepoint so losing the
+race leaves a usable transaction and an explainable answer rather than an
+aborted one.
+
+**Proven, in this order:**
+
+- database — a second insert on the same cause is refused `23505`, and exactly
+  one message survives (`technician_lifecycle_proof.db.js`);
+- read layer — five coordination states derived from that one cause, `unknown`
+  never rounded down to "not sent";
+- browser — the row and the detail both say *"Asked resident at … · waiting for
+  reply"* and neither offers a send control; the control **is** offered and
+  clicked in the one state it exists for (no access reported before the
+  resident was identified); pressing it again through the real route creates no
+  second message, says the resident has already been asked, and claims no
+  delivery; a failed coordination text is named *"Resident text failed"* — not
+  as a completion — offers Retry, and a successful retry clears the exception
+  and returns the row to *"Asked resident at …"*.
 
 ### 7.2 The full schema cannot be rebuilt from empty — pre-existing, still current
 
@@ -279,7 +297,7 @@ migration already made the table without that column.
 Consequence for this release: the two **full-schema resident proofs** cannot be
 run locally, because there is no way to stand up a production-shaped schema
 from the repository. Every proof listed in §5 runs against a scoped schema
-(`tests/_ops_scoped_schema.sql`) plus migrations `130`–`135`.
+(`tests/_ops_scoped_schema.sql`) plus migrations `130`–`136`.
 
 This blocker predates this work and this release does not touch it. It is
 recorded here because it bounds what §5 is allowed to claim.
@@ -300,7 +318,7 @@ recorded here because it bounds what §5 is allowed to claim.
 
 | Role | Who it must be | What only they can do |
 |---|---|---|
-| **Release operator** | Someone with authorized Render **and** Neon access | Steps 1–14 of the activation packet: read-only reconciliation, the merges, the `130`–`135` release, boot verification. |
+| **Release operator** | Someone with authorized Render **and** Neon access | Steps 1–14 of the activation packet: read-only reconciliation, the merges, the `130`–`136` release, boot verification. |
 | **Technician tester** | A real staff user with an active `property_team_assignments` row at the test property, holding the handset | The inbound half of the acceptance script. |
 | **Operator tester** | A signed-in staff session at the same property, in a browser | The five controls, clicked. |
 | **Resident tester** | A **staff-owned second handset** enrolled as a test person with recorded `opted_in` consent — **not a real resident** | The resident-facing half. |
@@ -318,7 +336,7 @@ Stop and do not continue if any of these is true:
 - Migration `129` is not yet in the applied ledger.
 - The read-only reconciliation reports anything other than `✓ RECONCILED` and
   `EXIT 0`.
-- More than `130`–`135` is pending after the merges.
+- More than `130`–`136` is pending after the merges.
 - The applied ceiling before release is anything other than `129`.
 - The boot verify names any pending migration after the release.
 - The operations line's `outbound_policy` is anything other than `reply_only`.

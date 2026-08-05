@@ -82,16 +82,20 @@ try {
     alter table obligations add column if not exists completed_at timestamptz;
     alter table obligations add column if not exists resolution_code text;
   `);
-  section("1. MIGRATIONS 130 → 134 APPLY IN ORDER");
+  section("1. MIGRATIONS 130 → 136 APPLY IN ORDER");
   for (const n of ["130_communication_lines.sql", "131_work_acceptance.sql",
                    "132_outbound_line_policy.sql", "133_work_order_reference.sql",
-                   "134_technician_lifecycle.sql"]) {
+                   "134_technician_lifecycle.sql", "135_delivery_attempts.sql",
+                   "136_one_resident_update_per_cause.sql"]) {
     let e = null;
     try { await db.query(mig(n)); } catch (err) { e = err; }
     ok(`${n} applies cleanly, verbatim`, e === null, e && e.message);
   }
   ok("134 is idempotent",
     await (async () => { try { await db.query(mig("134_technician_lifecycle.sql")); return true; }
+                         catch (e) { realError(e.message); return false; } })());
+  ok("136 is idempotent",
+    await (async () => { try { await db.query(mig("136_one_resident_update_per_cause.sql")); return true; }
                          catch (e) { realError(e.message); return false; } })());
 
   const shim = { query: (...a) => db.query(...a),
@@ -351,6 +355,31 @@ try {
       (await db.query(`select count(*)::int c from comm_events
          where communication_line_id = $1 and person_id is not null`, [opsLineId])).rows[0].c === 0);
     ok("every send used a reserved number", sent.every((s) => /^\+121255501\d\d$/.test(s.to)));
+
+    //  ── ONE FACT, ONE RESIDENT MESSAGE (136) ───────────────────────
+    //  Structural, not procedural. The operator action and the automatic
+    //  derivation record the same canonical cause, so a second message
+    //  about the same fact is refused by the database — whichever writer
+    //  attempts it, and whether or not it thought to look first.
+    const cause = (await db.query(
+      `select derived_from_progress_id p, property_id, person_id, conversation_id, body,
+              created_object_id
+         from comm_events where derived_from_progress_id is not null limit 1`)).rows[0];
+    ok("a resident update records the canonical fact that caused it", !!cause && !!cause.p);
+    let dupErr = null;
+    try {
+      await db.query(
+        `insert into comm_events (property_id, person_id, conversation_id, channel, direction, body,
+           classification, created_object_type, created_object_id, derived_from_progress_id)
+         values ($1,$2,$3,'sms','outbound',$4,'work_order_update','work_order',$5,$6)`,
+        [cause.property_id, cause.person_id, cause.conversation_id, cause.body,
+         cause.created_object_id, cause.p]);
+    } catch (e) { dupErr = e; }
+    ok("a SECOND resident message about the same fact is REFUSED by the database",
+      !!dupErr && dupErr.code === "23505", dupErr ? dupErr.code : "the insert succeeded");
+    ok("...and exactly one message about that fact survives",
+      (await db.query(`select count(*)::int c from comm_events where derived_from_progress_id=$1`,
+        [cause.p])).rows[0].c === 1);
   }
 
   section("7. REPLAY");

@@ -165,8 +165,44 @@ async function askForPhoto(client, { workOrderId, propertyId, operatorUserId, id
  *  A resident-safe message on the PROPERTY-FACING thread. Derived text
  *  only — the technician's own words never travel. The no-access fact is
  *  already committed and is not touched by this.
+ *
+ *  ── ONE FACT, ONE MESSAGE ──────────────────────────────────────────
+ *  Reporting no access ALREADY derives this exact sentence automatically.
+ *  This action and that derivation resolve against the SAME canonical
+ *  cause — the no-access progress row — so the second one cannot be
+ *  written. Not hidden, not discouraged: refused, by migration 136's
+ *  unique index on `derived_from_progress_id`.
+ *
+ *  The lookup below exists so the operator is TOLD what already happened
+ *  and when. The index exists so a replay, a double-click or a future
+ *  third writer cannot get past it anyway.
  */
 const ENTRY_TEXT = "The technician could not access the unit. Please reply with the best way to coordinate entry.";
+
+/*  What the resident has already been told about THIS no-access fact.
+ *  Both writers record the cause, so one query answers it for both. */
+async function existingCoordination(client, causeProgressId) {
+  return (await client.query(
+    `select id, occurred_at, sms_status, actor_user_id
+       from comm_events where derived_from_progress_id = $1 limit 1`, [causeProgressId])).rows[0] || null;
+}
+
+function alreadyAsked(row, wo) {
+  const s = String(row.sms_status || "").toLowerCase();
+  const failed = s === "failed" || s === "undelivered" || s === "refused";
+  return {
+    outcome: "already_asked", refusal: null, commEventId: row.id,
+    //  The delivery state travels with it, because "already asked" and
+    //  "asked and it failed" call for different operator moves.
+    coordination: { comm_event_id: row.id, at: row.occurred_at, failed },
+    receipt: {
+      text: failed
+        ? `The resident of ${label(wo)} was already asked to coordinate entry, and that message failed. Retry it rather than sending a second one.`
+        : `The resident of ${label(wo)} has already been asked to coordinate entry.`,
+      work_order_id: wo.id, responsible: "the resident",
+    },
+  };
+}
 
 async function coordinateEntry(client, { workOrderId, propertyId, operatorUserId, idempotencyKey = null }) {
   const wo = await lockScoped(client, { workOrderId, propertyId });
@@ -179,6 +215,9 @@ async function coordinateEntry(client, { workOrderId, propertyId, operatorUserId
       order by occurred_at desc limit 1`, [workOrderId])).rows[0];
   if (!na) return { outcome: "refused", refusal: "no_access_not_reported", receipt: null };
 
+  const already = await existingCoordination(client, na.id);
+  if (already) return alreadyAsked(already, wo);
+
   const convo = (await client.query(
     `insert into conversations (property_id, person_id) values ($1,$2)
      on conflict (property_id, person_id) do update set last_message_at = now() returning id`,
@@ -186,6 +225,11 @@ async function coordinateEntry(client, { workOrderId, propertyId, operatorUserId
 
   const key = idempotencyKey || `entry:${workOrderId}:${na.id}`;
   let ev;
+  //  SAVEPOINT, because losing the race must leave a USABLE transaction.
+  //  A bare 23505 aborts it, and then the query that would tell the operator
+  //  what already happened cannot run — the caller would be left with the
+  //  duplicate refused and nothing to say about it.
+  await client.query("savepoint coordinate_entry");
   try {
     ev = (await client.query(
       `insert into comm_events (property_id, person_id, conversation_id, channel, direction, body,
@@ -193,9 +237,19 @@ async function coordinateEntry(client, { workOrderId, propertyId, operatorUserId
          correlation_key, actor_user_id)
        values ($1,$2,$3,'sms','outbound',$4,'work_order_update','work_order',$5,$6,$7,$8) returning id`,
       [propertyId, personId, convo.id, ENTRY_TEXT, workOrderId, na.id, key, operatorUserId])).rows[0];
+    await client.query("release savepoint coordinate_entry");
   } catch (e) {
-    if (e.code === "23505") return { outcome: "already_prepared", refusal: null,
-      receipt: { text: `Access coordination for ${label(wo)} is already prepared.`, work_order_id: workOrderId } };
+    await client.query("rollback to savepoint coordinate_entry");
+    //  THE STRUCTURAL BACKSTOP. A concurrent press, a replayed request or a
+    //  writer that forgot to look first all land here, and all land on the
+    //  same answer as the lookup above — because they lost to the same
+    //  index on the same canonical cause.
+    if (e.code === "23505") {
+      const raced = await existingCoordination(client, na.id);
+      if (raced) return alreadyAsked(raced, wo);
+      return { outcome: "already_prepared", refusal: null,
+               receipt: { text: `Access coordination for ${label(wo)} is already prepared.`, work_order_id: workOrderId } };
+    }
     throw e;
   }
   const rp = (await client.query(
