@@ -153,9 +153,27 @@ if (!process.env.HARNESS_DATABASE_URL) {
     const RESIDENT_PHONE = `+1888${RUN.replace(/\D/g, "0").slice(0, 7).padEnd(7, "0")}`;
     const STRANGER_PHONE = `+1777${RUN.replace(/\D/g, "0").slice(0, 7).padEnd(7, "0")}`;
 
+    //  THE CANONICAL LINE MODEL (migration 130). `properties.sms_number` is a
+    //  READ-ONLY PROJECTION of `communication_lines`, and writing it directly
+    //  is refused by trg_properties_guard_legacy_line — correctly, because it
+    //  would create a second truth about which number serves this property.
+    //
+    //  This fixture used to insert the number straight onto the property. That
+    //  predates 130 and was never re-run against the canonical model, so the
+    //  first full-schema run of this proof failed here. The guard was right;
+    //  the fixture was wrong. The line is now configured where line
+    //  configuration belongs, and trg_cl_project_property_line fills the
+    //  column — so the `where sms_number = $1` reads below are unchanged.
     const prop = (await c.query(
-      `insert into properties (name, sms_number) values ($1,$2) returning id`,
-      [`TEST SMS-ROUTE ${RUN}`, LINE])).rows[0];
+      `insert into properties (name) values ($1) returning id`,
+      [`TEST SMS-ROUTE ${RUN}`])).rows[0];
+    await c.query(
+      `insert into communication_lines
+         (e164, line_type, property_id, authority_ceiling, permitted_audience,
+          inbound_enabled, outbound_enabled, outbound_policy, status)
+       values ($1,'property_facing',$2,'external','residents_and_prospects',
+               true, true, 'proactive', 'active')`,
+      [LINE, prop.id]);
     const unit = (await c.query(
       `insert into units (property_id, unit_number) values ($1,$2) returning id`,
       [prop.id, `R-${RUN}`])).rows[0];
