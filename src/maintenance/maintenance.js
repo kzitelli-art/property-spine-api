@@ -38,6 +38,9 @@ module.exports = function maintenance(deps) {
   // ── the closed operational vocabularies + the surviving supply-request
   //    derivation, all owned by the canonical service ──
   const { deriveCategories, CAUSES, WORK_NATURES } = require("./work_order_service");
+  //  THE READ. No second status layer — it derives everything from canonical
+  //  rows that already exist. See src/surfaces/work_order_status_read.js.
+  const workOrderStatusRead = require("../surfaces/work_order_status_read");
   // BRICK ONE: the ONE session resolver. Required directly, exactly as
   // operator.js:35 does — not injected, so this adds no new boot-fatal
   // dependency to the module's wire-up.
@@ -584,6 +587,41 @@ module.exports = function maintenance(deps) {
       res.json({ property_id: req.operator.property_id, work_orders: r.rows });
     } catch (e) {
       res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── LIFECYCLE VISIBILITY ───────────────────────────────────────────
+  //  A READ over canonical rows. It creates no status, keeps no timeline,
+  //  and writes nothing. Property scope is the SESSION'S, never the
+  //  caller's — refuseClientProperty is in the gate and the scope is passed
+  //  into every query rather than checked afterwards, so a work order at
+  //  another property returns 404 instead of leaking a row.
+  router.get("/operator/work-orders/status", ...operatorGate, async (req, res) => {
+    try {
+      const rows = await workOrderStatusRead.readPropertyWorkOrderStatuses(pool, {
+        propertyId: req.operator.property_id,
+        limit: Math.min(Number(req.query.limit) || 100, 200),
+      });
+      //  HONEST EMPTY. An empty list is a fact, and it is returned as one —
+      //  never as sample work, and never as an error.
+      res.json({ property_id: req.operator.property_id, count: rows.length, work_orders: rows });
+    } catch (e) {
+      //  UNAVAILABLE, never fixtures. The surface says the live read failed.
+      console.error("operator work-order status list:", e.message);
+      res.status(503).json({ error: "unavailable", detail: "The live work-order read is unavailable. Retry." });
+    }
+  });
+
+  router.get("/operator/work-orders/:id/status", ...operatorGate, async (req, res) => {
+    try {
+      const status = await workOrderStatusRead.readWorkOrderStatus(pool, {
+        propertyId: req.operator.property_id, workOrderId: req.params.id,
+      });
+      if (!status) return res.status(404).json({ error: "not_found" });
+      res.json(status);
+    } catch (e) {
+      console.error("operator work-order status:", e.message);
+      res.status(503).json({ error: "unavailable", detail: "The live work-order read is unavailable. Retry." });
     }
   });
 

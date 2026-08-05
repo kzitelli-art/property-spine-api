@@ -170,7 +170,42 @@ async function runOperationsTurn(client, {
     threadWorkOrderIds: await threadWorkOrderIds(client, { staffThreadId: threadId }),
   });
 
-  let receipt = null, reason = null, createdObject = null, residentIntent = null;
+  let receipt = null, reason = null, createdObject = null, residentIntent = null, residentEvent = null;
+
+  //  RULING 2026-08-04 — "The resident will be notified" may be said ONLY
+  //  when a durable resident-update intent has ALREADY been committed.
+  //  The first cut passed the DERIVATION decision into the receipt, which is
+  //  a prediction: if the insert then failed, the technician had already been
+  //  told. So the intent is written FIRST, inside a savepoint, and the
+  //  receipt is told what actually exists.
+  //
+  //  A failed intent does not roll back the field fact. The work action
+  //  stands and the receipt says the resident update could not be prepared.
+  const prepareResidentUpdate = async (committedFact, workOrderRow) => {
+    residentIntent = residentUpdate.deriveResidentUpdate({
+      committed: committedFact, workOrder: workOrderRow,
+      recipientPersonId: await residentForWorkOrder(client, { workOrderId: workOrderRow.id }),
+    });
+    if (!residentIntent.send) return { prepared: false, failed: false };
+    await client.query("savepoint resident_intent");
+    try {
+      const convoId = await residentConversationFor(client,
+        { propertyId: residentIntent.propertyId, personId: residentIntent.personId });
+      residentEvent = (await client.query(
+        `insert into comm_events (property_id, person_id, conversation_id, channel, direction, body,
+           classification, created_object_type, created_object_id, derived_from_progress_id)
+         values ($1,$2,$3,'sms','outbound',$4,'work_order_update','work_order',$5,$6) returning id`,
+        [residentIntent.propertyId, residentIntent.personId, convoId, residentIntent.text,
+         workOrderRow.id, residentIntent.derivedFromProgressId])).rows[0];
+      await client.query("release savepoint resident_intent");
+      return { prepared: true, failed: false };
+    } catch (e) {
+      await client.query("rollback to savepoint resident_intent").catch(() => {});
+      residentEvent = null;
+      console.error(`resident update intent could not be prepared for work order ${workOrderRow.id}: ${e.message}`);
+      return { prepared: false, failed: true };
+    }
+  };
 
   //  ── LIST: a read, not an action. No reference needed, ever. ──────
   if (intent === "list_work") {
@@ -233,12 +268,10 @@ async function runOperationsTurn(client, {
         createdObject = { type: "work_order", id: selected.work_order_id };
         reason = "execution_receipt";
         if (out.closed) {
-          residentIntent = residentUpdate.deriveResidentUpdate({
-            committed: out.progress, workOrder: out.workOrder,
-            recipientPersonId: await residentForWorkOrder(client, { workOrderId: selected.work_order_id }),
-          });
+          const ru = await prepareResidentUpdate(out.progress, out.workOrder);
           receipt = operatingReceipt({ outcome: "work_completed",
-            result: { work, progress: out.progress, residentUpdateQueued: !!(residentIntent && residentIntent.send) } });
+            result: { work, progress: out.progress,
+                      residentUpdateQueued: ru.prepared, residentUpdateFailed: ru.failed } });
         } else {
           receipt = operatingReceipt({ outcome: "completion_blocked",
             result: { work, progress: out.progress, missing: out.missing,
@@ -267,13 +300,10 @@ async function runOperationsTurn(client, {
       } else {
         createdObject = { type: "work_order", id: selected.work_order_id };
         reason = "execution_receipt";
-        residentIntent = residentUpdate.deriveResidentUpdate({
-          committed: out.progress, workOrder: out.workOrder,
-          recipientPersonId: await residentForWorkOrder(client, { workOrderId: selected.work_order_id }),
-        });
+        const ru = await prepareResidentUpdate(out.progress, out.workOrder);
         receipt = operatingReceipt({ outcome: INTENT_TO_OUTCOME[intent],
           result: { work, progress: out.progress,
-                    residentUpdateQueued: !!(residentIntent && residentIntent.send) } });
+                    residentUpdateQueued: ru.prepared, residentUpdateFailed: ru.failed } });
       }
     } else if (lastEvidence) {
       //  Photos with nothing else. Evidence is recorded; it never completes.
@@ -296,22 +326,6 @@ async function runOperationsTurn(client, {
     `update comm_events set needs_human = false, classification = $2,
             created_object_type = $3, created_object_id = $4 where id = $1`,
     [inbound.id, receipt.outcome, createdObject && createdObject.type, createdObject && createdObject.id]);
-
-  //  ── THE RESIDENT UPDATE INTENT ──────────────────────────────────
-  //  Derived from the committed fact, attached to the RESIDENT thread,
-  //  and never carrying a word the technician typed. The database refuses
-  //  it on a staff thread (ck_comm_derived_is_resident_facing).
-  let residentEvent = null;
-  if (residentIntent && residentIntent.send) {
-    const convoId = await residentConversationFor(client,
-      { propertyId: residentIntent.propertyId, personId: residentIntent.personId });
-    residentEvent = (await client.query(
-      `insert into comm_events (property_id, person_id, conversation_id, channel, direction, body,
-         classification, created_object_type, created_object_id, derived_from_progress_id)
-       values ($1,$2,$3,'sms','outbound',$4,'work_order_update','work_order',$5,$6) returning id`,
-      [residentIntent.propertyId, residentIntent.personId, convoId, residentIntent.text,
-       createdObject && createdObject.id, residentIntent.derivedFromProgressId])).rows[0];
-  }
 
   const correlationKey = `${providerMessageId || inbound.id}:${reason}`;
   const outbound = (await client.query(

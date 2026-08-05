@@ -340,7 +340,7 @@ function workLabelOf(work) {
 function technicianReceipt({ outcome, result }) {
   assertKeys(result, ["work", "progress", "serviceOutcome", "question", "reason",
                       "verdict", "items", "missing", "evidenceAttempted", "storageState",
-                      "residentUpdateQueued"], "result");
+                      "residentUpdateQueued", "residentUpdateFailed"], "result");
   const r = result || {};
   const work = r.work || null;
   const label = workLabelOf(work);
@@ -385,7 +385,7 @@ function technicianReceipt({ outcome, result }) {
       //  was actually committed, and it describes what will happen rather
       //  than asserting a text arrived.
       return committedOn(`Recorded no access on ${named}. The work stays open, and access follow-up is now needed.`
-        + (r.residentUpdateQueued ? " The resident will be asked to coordinate entry." : ""));
+        + residentClause(r, " The resident will be asked to coordinate entry."));
 
     case "blocked_recorded":
       return committedOn(`Noted — ${named} is blocked and stays open. Your manager will see what it's waiting on.`);
@@ -409,7 +409,7 @@ function technicianReceipt({ outcome, result }) {
 
     case "work_completed":
       return committedOn(`Done — ${named} is closed.`
-        + (r.residentUpdateQueued ? " The resident will be notified the repair is complete." : ""));
+        + residentClause(r, " The resident will be notified the repair is complete."));
 
     case "work_list": {
       const items = Array.isArray(r.items) ? r.items : [];
@@ -435,6 +435,16 @@ function technicianReceipt({ outcome, result }) {
 }
 
 const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
+/*  RULING 2026-08-04. A future-tense promise about the resident is allowed
+ *  ONLY when a durable resident-update intent already exists. If preparing it
+ *  FAILED, that is said out loud: the work action stands, and the technician
+ *  learns the resident was not queued rather than being told they were.
+ *  Delivery remains a separate, later fact in both cases. */
+function residentClause(r, promise) {
+  if (r.residentUpdateFailed) return " The work is recorded, but I couldn't prepare the resident update — your manager will see it.";
+  return r.residentUpdateQueued ? promise : "";
+}
 
 module.exports = {
   OPERATING_OUTCOMES,
