@@ -11,7 +11,72 @@ current truth. Re-date it whenever `main` moves materially.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
-##  STATE — 2026-08-03 (late). THIS SECTION WINS over everything below.
+##  BRANCH STATE — 2026-08-05. THIS SECTION WINS over everything below.
+## ══════════════════════════════════════════════════════════════════
+
+`main` has NOT moved. It is still `8330aec` and it still cannot boot, for the
+reason the 2026-08-03 section below explains: migration `129` is in the build
+and in no ledger. Everything in that section is still true.
+
+What is new is a complete, proven, **unmerged** feature branch.
+
+```text
+API   claude/conversational-seams-and-technician-loop   contains origin/main 8330aec
+APP   claude/sms-work-order-handoff-qo3s8i    11193f4   origin/main 357fb15 MERGED IN
+migrations added                                        130 – 136
+```
+
+**Resident SMS → canonical work order → technician lifecycle → operator
+action.** The technician holds an ordinary text conversation; every fact they
+report is written canonically; the operator sees one queue where all five
+controls perform governed writes and return receipts.
+
+**399 database-and-browser assertions green, re-run 2026-08-05**, including
+`work_lifecycle_browser_proof.browser.js` at **99/99** — real Chromium, real
+HTTP, real Postgres, every control clicked.
+
+### Read these two documents before touching any of it
+
+- [`RELEASE_SMS_WORK_ORDER_HANDOFF.md`](RELEASE_SMS_WORK_ORDER_HANDOFF.md) —
+  what ships, what proves it, component classification, and **§7: the ruling
+  that closed the duplicate-message defect, and the one limit that bounds what
+  may be claimed.**
+- [`ACTIVATION_SMS_WORK_ORDER_HANDOFF.md`](ACTIVATION_SMS_WORK_ORDER_HANDOFF.md) —
+  the 19-step operator packet and the real-phone acceptance script.
+  Self-contained; no thread can run any of it.
+
+### One ruling landed, one limit remains
+
+1. **RULED AND CLOSED — never ask the resident the same thing twice.**
+   Reporting no access already texts the resident the coordinate-entry
+   sentence; the operator control sent byte-identical text and its guard could
+   not see the first message. Migration **136** makes
+   `comm_events.derived_from_progress_id` unique, so both writers now resolve
+   against the same canonical cause and the database refuses the second
+   message. The surface reports *"Asked resident at 10:04 AM · waiting for
+   reply"* and the control only exists where nobody has asked. The index is
+   SCOPED — outbound / sms / work_order_update / resident — so a field fact can
+   still be referenced by other message types; widening it would block
+   legitimate references. Full ruling and its proof: release package §7.1.
+
+   **Do not "restore" the Coordinate entry button on a work order whose
+   resident has been asked.** Its absence is the ruling, not a regression.
+2. **The full schema still cannot be rebuilt from empty.** Re-verified
+   2026-08-05: `012_bank_intake.sql:44` — `column "yardi_code" does not exist`.
+   This bounds every proof to the scoped schema, and predates this work.
+
+### Activation order is a gate, not a preference
+
+`129` first (`UNBLOCK_1_MIGRATION_129_ACTIVATION.md`), **then** `130`–`136`.
+Releasing onto a `128` ledger would sweep `129` in without its own receipt.
+
+Reconcile with `main` by **merge**. Never rebase, never force-push — both
+branches already carry merges from `main`.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  STATE — 2026-08-03 (late). Superseded above; still current for `main`.
 ## ══════════════════════════════════════════════════════════════════
 
 ### ⚠ `main` CANNOT BOOT RIGHT NOW. That is deliberate.

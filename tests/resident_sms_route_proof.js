@@ -113,6 +113,7 @@ if (!process.env.HARNESS_DATABASE_URL) {
 
   // ── test doubles for the OUTSIDE WORLD only ───────────────────────
   const sent = [];                    // every attempted send, recorded
+  let nextSendFails = false;          // armed by case 12, consumed by one send
   const HARNESS_SID = "SM_HARNESS_NEVER_REAL_";
   const smsDouble = {
     enabled: () => true,
@@ -127,6 +128,15 @@ if (!process.env.HARNESS_DATABASE_URL) {
     // asserted below.
     sendSms: async ({ to, from, body }) => {
       sent.push({ to, from, body });
+      //  ONE forced failure, consumed on use. Case 12 needs a clarification
+      //  question that genuinely could not be delivered — stamped `failed` by
+      //  the real gate, through the real transport seam — rather than a
+      //  status written directly onto the row, which would prove the harness.
+      if (nextSendFails) {
+        nextSendFails = false;
+        return { sent: false, reason: "harness_forced_delivery_failure",
+                 error: "the carrier rejected this message (harness)", sid: null };
+      }
       return { sent: true, status: "queued", sid: `${HARNESS_SID}${sent.length}` };
     },
   };
@@ -152,10 +162,29 @@ if (!process.env.HARNESS_DATABASE_URL) {
     const LINE = `+1999${RUN.replace(/\D/g, "0").slice(0, 7).padEnd(7, "0")}`;
     const RESIDENT_PHONE = `+1888${RUN.replace(/\D/g, "0").slice(0, 7).padEnd(7, "0")}`;
     const STRANGER_PHONE = `+1777${RUN.replace(/\D/g, "0").slice(0, 7).padEnd(7, "0")}`;
+    const RESIDENT2_PHONE = `+1866${RUN.replace(/\D/g, "0").slice(0, 7).padEnd(7, "0")}`;
 
+    //  THE CANONICAL LINE MODEL (migration 130). `properties.sms_number` is a
+    //  READ-ONLY PROJECTION of `communication_lines`, and writing it directly
+    //  is refused by trg_properties_guard_legacy_line — correctly, because it
+    //  would create a second truth about which number serves this property.
+    //
+    //  This fixture used to insert the number straight onto the property. That
+    //  predates 130 and was never re-run against the canonical model, so the
+    //  first full-schema run of this proof failed here. The guard was right;
+    //  the fixture was wrong. The line is now configured where line
+    //  configuration belongs, and trg_cl_project_property_line fills the
+    //  column — so the `where sms_number = $1` reads below are unchanged.
     const prop = (await c.query(
-      `insert into properties (name, sms_number) values ($1,$2) returning id`,
-      [`TEST SMS-ROUTE ${RUN}`, LINE])).rows[0];
+      `insert into properties (name) values ($1) returning id`,
+      [`TEST SMS-ROUTE ${RUN}`])).rows[0];
+    await c.query(
+      `insert into communication_lines
+         (e164, line_type, property_id, authority_ceiling, permitted_audience,
+          inbound_enabled, outbound_enabled, outbound_policy, status)
+       values ($1,'property_facing',$2,'external','residents_and_prospects',
+               true, true, 'proactive', 'active')`,
+      [LINE, prop.id]);
     const unit = (await c.query(
       `insert into units (property_id, unit_number) values ($1,$2) returning id`,
       [prop.id, `R-${RUN}`])).rows[0];
@@ -189,6 +218,35 @@ if (!process.env.HARNESS_DATABASE_URL) {
        on conflict (person_id, channel) do update set consent_state='opted_in'`,
       [person.id]);
 
+    //  ── A SECOND RESIDENT, for case 12 only ──────────────────────────
+    //  `pendingClarifications` is scoped BY PERSON. Cases 9-11 deliberately
+    //  leave delivered questions open for the first resident, so running the
+    //  undelivered-question case on her would hold for a human through the
+    //  `ambiguous_open_set` branch and pass for entirely the wrong reason.
+    //  A resident with no clarification history isolates the branch under
+    //  test to the one fact case 12 is about.
+    const unit2 = (await c.query(
+      `insert into units (property_id, unit_number) values ($1,$2) returning id`,
+      [prop.id, `R2-${RUN}`])).rows[0];
+    const space2 = (await c.query(
+      `insert into spaces (unit_id) values ($1) returning id`, [unit2.id])).rows[0];
+    const person2 = (await c.query(
+      `insert into persons (name, phone, primary_phone_e164, lifecycle_status)
+       values ($1,$2,$2,'tenant') returning id`,
+      [`TEST Route Resident TWO ${RUN}`, RESIDENT2_PHONE])).rows[0];
+    await c.query(
+      `insert into leases (property_id, space_id, tenant_ids, lease_status, rent)
+       values ($1,$2,array[$3::uuid],'active',1500)`, [prop.id, space2.id, person2.id]);
+    await c.query(
+      `insert into tenant_invites (person_id, property_id, token, status, expires_at)
+       values ($1,$2,$3,'used', now() + interval '30 days')`,
+      [person2.id, prop.id, `tok-invite2-${RUN}`]);
+    await c.query(
+      `insert into contact_preferences (person_id, channel, consent_state, source, updated_at)
+       values ($1,'text','opted_in','harness fixture', now())
+       on conflict (person_id, channel) do update set consent_state='opted_in'`,
+      [person2.id]);
+
     // The receiving line must resolve to OUR fixture property and nothing
     // else. resolveInboundSmsContext does `where sms_number=$1 limit 1`, so a
     // collision with a real property's number would silently route this
@@ -203,6 +261,34 @@ if (!process.env.HARNESS_DATABASE_URL) {
     const commBoundary = require(path.join(__dirname, "../src/comms/communications_boundary.js"))({
       pool: shim, sms: smsDouble,
     });
+
+    // ── THE SEND GATE IS SATISFIED, NEVER BYPASSED ──────────────────
+    //  The OUTER suite still requires SMS_SEND_MODE=disabled and no carrier
+    //  credentials in the environment, and nothing here changes that
+    //  precondition. What this does is establish a controlled mode IN THIS
+    //  PROCESS — and only after proving that nothing real is reachable from
+    //  it and that the transport the boundary holds is this file's double.
+    //
+    //  Why it is needed: with the mode disabled, every send is refused
+    //  UPSTREAM of the double, so the clarification question is stamped
+    //  `refused` and cases 10 and 11 never reach the branch they name.
+    //  sendPropertySms is untouched and its eligibility ladder runs in
+    //  full — this satisfies the gate rather than stepping around it.
+    const carrierEnv = Object.keys(process.env)
+      .filter((k) => /^TWILIO_|^SMS_ACCOUNT|^MESSAGING_SERVICE/i.test(k));
+    ok(carrierEnv.length === 0,
+       `no carrier credential exists in this process (${carrierEnv.join(", ") || "none present"})`);
+    //  Checks the SOURCE of the injected function, not a value it returns —
+    //  calling it here would push a phantom row into `sent` and break the
+    //  safety assertions that every recorded send used the fixture's own
+    //  line. That every minted sid IS harness-prefixed is proven at the end
+    //  of the run, against the sids actually minted.
+    ok(/sent\.push/.test(String(smsDouble.sendSms))
+       && /HARNESS_SID/.test(String(smsDouble.sendSms)),
+       "the transport handed to the boundary is THIS FILE'S double — it records every send here and can mint only harness-prefixed sids");
+    process.env.SMS_SEND_MODE = "customer_care";
+    ok(process.env.SMS_SEND_MODE === "customer_care",
+       "the send mode is satisfied in-process, AFTER the double is proven and with no carrier reachable");
     const { makeWorkOrderService } = require(path.join(__dirname, "../src/maintenance/work_order_service.js"));
     const { spawnObligationFromEvent, satisfyObligation } = require(path.join(__dirname, "./_engine.js"));
     const { transitionObligation } = require(path.join(__dirname, "../src/shared/obligation_transitions.js"));
@@ -387,6 +473,181 @@ if (!process.env.HARNESS_DATABASE_URL) {
        "and is NOT asked to pick between options the system cannot durably hold");
 
     // ══ transport safety, asserted rather than assumed ══
+    // ══ CASE 12 ══ AN UNDELIVERED CLARIFICATION IS NOT PERMISSION TO OPEN WORK
+    //
+    //  THE DEFECT THIS EXISTS FOR — found by Gate A against a
+    //  production-derived schema, pre-existing and live on `main`. A
+    //  clarification question whose delivery FAILED is deliberately absent
+    //  from the pending set: a reply cannot answer a question the resident
+    //  never received. But that absence read as "nothing outstanding", so an
+    //  ambiguous reply became a NEW WORK ORDER with needs_human unset, and the
+    //  ambiguity verdict was never consulted at all.
+    //
+    //  FAILURE TO DELIVER A CLARIFICATION CANNOT TURN AMBIGUITY INTO
+    //  OPERATING TRUTH. Proven here through the real route, the real gate and
+    //  the real database — not at the decision seam alone.
+    //
+    //  Runs as the SECOND resident. See the fixture note: cases 9-11 leave
+    //  delivered questions open for the first one, and this case would then
+    //  hold via `ambiguous_open_set` and pass for the wrong reason.
+    //
+    //  NO `order by occurred_at` ANYWHERE BELOW — see the hazard note further
+    //  down. Every row in this run shares one transaction timestamp.
+    section("12 · an undelivered clarification cannot become operating truth");
+    {
+      const woBeforeClaim = await countWO();
+      //  Deliberately the SAME wording case 9 uses to raise a clarifying
+      //  question, so the branch under test is reached for a proven reason.
+      nextClassification = { classification: "maintenance", field_category: "plumbing", urgency: "normal",
+                             confidence: 0.95, needs_human: false, summary: "s", suggested_title: "leak" };
+      nextSendFails = true;                       // the question will NOT reach her
+      const rClaim = await inboundSms(RESIDENT2_PHONE, "there's a leak somewhere", `SM_UNDEL_Q_${RUN}`);
+      ok(rClaim.status === 200, "the claim is acked");
+      ok(await countWO() === woBeforeClaim + 1, "the claim itself legitimately opened ONE work order");
+
+      //  Selected by PERSON, not by time: this resident has exactly one
+      //  outbound in the whole run, so the row is unambiguous.
+      const qRows = (await c.query(
+        `select id, body, sms_status, sms_error, created_object_id from comm_events
+          where property_id=$1 and person_id=$2 and direction='outbound'`,
+        [prop.id, person2.id])).rows;
+      ok(qRows.length === 1,
+         `exactly one outbound exists for this resident (${qRows.length}) — selected without ordering`);
+      const q12 = qRows[0];
+      //  THE ROUTE ACKS BEFORE IT SENDS. The webhook returns 200 as soon as
+      //  the claim is captured — Twilio must not be made to retry — and the
+      //  reply goes on the wire after that. Reading sms_status the instant
+      //  inboundSms resolves reads it BEFORE the send stamped it. The first
+      //  version of this case did exactly that and reported null, while
+      //  every later assertion on the same row correctly saw 'failed'.
+      //  Waiting for the row to settle is not waiting for the answer.
+      const settledStatus = async (id) => {
+        let r;
+        for (let i = 0; i < 100; i++) {
+          r = (await c.query(`select sms_status, sms_error from comm_events where id=$1`, [id])).rows[0];
+          if (r && r.sms_status) return r;
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise((res) => setTimeout(res, 20));
+        }
+        return r || {};
+      };
+      const q12s = await settledStatus(q12.id);
+      ok(q12s.sms_status === "failed",
+         `the clarification question is recorded as FAILED (${q12s.sms_status})`);
+      ok(!!q12s.sms_error,
+         "…and the failure says WHY — an unexplained failure is a blank pretending to be a fact");
+
+      // ── the ambiguous reply to a question she never received ──────────
+      const woBeforeReply = await countWO();
+      const oblSnap = JSON.stringify((await openConfirm())
+        .map((o) => [o.id, o.type, o.required_inputs, o.status]).sort());
+      nextVerdict = "both";
+      const r12 = await inboundSms(RESIDENT2_PHONE, "yes and also the hallway light is out",
+                                   `SM_UNDEL_BOTH_${RUN}`);
+      ok(r12.status === 200, "the ambiguous reply is acked");
+
+      ok(await countWO() === woBeforeReply,
+         "PERSISTED: an undelivered question does NOT license a new work order");
+      ok(JSON.stringify((await openConfirm())
+           .map((o) => [o.id, o.type, o.required_inputs, o.status]).sort()) === oblSnap,
+         "PERSISTED: no obligation was created, retyped, restatused or had its required inputs changed");
+
+      const reply12 = (await c.query(
+        `select needs_human, body from comm_events where property_id=$1 and direction='inbound' and sms_sid=$2`,
+        [prop.id, `SM_UNDEL_BOTH_${RUN}`])).rows[0];
+      ok(!!reply12 && reply12.needs_human === true,
+         "PERSISTED: the ambiguous reply is flagged needs_human=true for a human");
+      const claim12 = (await c.query(
+        `select needs_human, body from comm_events where property_id=$1 and direction='inbound' and sms_sid=$2`,
+        [prop.id, `SM_UNDEL_Q_${RUN}`])).rows[0];
+      ok(!!claim12 && /leak somewhere/.test(claim12.body),
+         "PERSISTED: the original inbound claim survives, verbatim");
+      ok(claim12.needs_human === true,
+         "…and was re-flagged for a human when its question could not be delivered");
+
+      //  THE HOLD MUST SPEAK. Found by this case: `held()` composes an
+      //  operating receipt, the receipt vocabulary had no text for
+      //  question_not_delivered, so it REFUSED and speak() THREW — the claim
+      //  was flagged and the resident was told NOTHING. A hold that cannot
+      //  speak is exactly the "captured, never acknowledged" state the
+      //  ruling forbids.
+      const heldReply = (await c.query(
+        `select body from comm_events where property_id=$1 and person_id=$2
+           and direction='outbound' and id <> $3`, [prop.id, person2.id, q12.id])).rows;
+      ok(heldReply.length === 1,
+         `the hold SPOKE — exactly one reply was written for the ambiguous message (${heldReply.length})`);
+      ok(/follow up with you/i.test((heldReply[0] || {}).body || ""),
+         `…telling the resident a human will follow up — "${((heldReply[0] || {}).body || "").slice(0, 60)}"`);
+
+      const qAfter = (await c.query(
+        `select id, body, sms_status, sms_error from comm_events where id=$1`, [q12.id])).rows[0];
+      ok(!!qAfter && qAfter.sms_status === "failed" && qAfter.body === q12.body,
+         "PERSISTED: the failed clarification event is preserved, unchanged");
+      ok(!!qAfter.sms_error,
+         "the delivery failure is visible as a communication exception, with its reason");
+
+      //  THE DECISION ITSELF, from the REAL rows — the same two queries
+      //  tenantlink runs, against this database, at this moment.
+      const clar = require(path.join(__dirname, "../src/conversation/clarification.js"));
+      const CLAR_JOIN = `from comm_events ce
+         join obligations o on o.related_type='work_order' and o.related_id=ce.created_object_id
+          and o.property_id=ce.property_id and o.status='open' and o.type='confirm_urgency'
+        where ce.property_id=$1 and ce.person_id=$2 and ce.direction='outbound'
+          and ce.created_object_type='work_order'`;
+      const openRows = (await c.query(
+        `select o.id as obligation_id, o.related_id as work_order_id, ce.property_id,
+                ce.id as question_event_id, ce.body as question_body ${CLAR_JOIN}
+           and coalesce(ce.sms_status,'') not in ('failed','refused','undelivered')`,
+        [prop.id, person2.id])).rows;
+      const undelRows = (await c.query(
+        `select o.id as obligation_id, o.related_id as work_order_id, ce.property_id,
+                ce.id as question_event_id, ce.body as question_body ${CLAR_JOIN}
+           and coalesce(ce.sms_status,'') in ('failed','refused','undelivered')`,
+        [prop.id, person2.id])).rows;
+      ok(openRows.length === 0 && undelRows.length === 1,
+         `the real rows say: 0 delivered, 1 undelivered (${openRows.length}/${undelRows.length})`);
+      const decision = clar.assessOpenClarification({
+        scope: { property_id: prop.id }, open: openRows, undelivered: undelRows });
+      ok(decision.action === "hold_for_human", `the decision is hold_for_human (${decision.action})`);
+      ok(decision.state === "question_not_delivered", `the state is question_not_delivered (${decision.state})`);
+      ok(decision.requiresHuman === true, "…and it says a human is required");
+
+      // ── RETRY the SAME intent. A retry is not a new message. ──────────
+      const evBefore = Number((await c.query(
+        `select count(*)::int n from comm_events where property_id=$1`, [prop.id])).rows[0].n);
+      const woBeforeRetry = await countWO();
+      const retry = await commBoundary.sendPropertySms({
+        property_id: prop.id, recipient: RESIDENT2_PHONE, body: q12.body,
+        purpose: "ai_reply", person_id: person2.id, eventId: q12.id,
+      });
+      ok(retry.sent === true, `the retry reaches the double (${retry.reason})`);
+      ok(Number((await c.query(
+        `select count(*)::int n from comm_events where property_id=$1`, [prop.id])).rows[0].n) === evBefore,
+         "PERSISTED: the retry created NO duplicate clarification event — the intent already existed");
+      const qRetried = (await c.query(
+        `select sms_status, sms_sid, body, sms_error from comm_events where id=$1`, [q12.id])).rows[0];
+      ok(String(qRetried.sms_sid || "").startsWith(HARNESS_SID),
+         "the EXISTING intent now carries the successful attempt's provider ref");
+      ok(qRetried.body === q12.body, "…and its text was never rewritten by the retry");
+      ok(await countWO() === woBeforeRetry,
+         "PERSISTED: a successful retry creates no work order retrospectively");
+
+      const replyAfterRetry = (await c.query(
+        `select needs_human from comm_events where property_id=$1 and direction='inbound' and sms_sid=$2`,
+        [prop.id, `SM_UNDEL_BOTH_${RUN}`])).rows[0];
+      ok(replyAfterRetry.needs_human === true,
+         "the EARLIER ambiguous reply is not retrospectively read as an answer — it stays flagged");
+
+      //  Only a reply sent AFTER successful delivery may be judged against it.
+      const woBeforeAfter = await countWO();
+      nextVerdict = "answers_question";
+      const r12b = await inboundSms(RESIDENT2_PHONE, "yes it is dripping steadily",
+                                    `SM_UNDEL_AFTER_${RUN}`);
+      ok(r12b.status === 200, "a NEW reply, sent after the question actually arrived, is acked");
+      ok(await countWO() === woBeforeAfter,
+         "…and IS evaluated against that question — appended, never opened as new work");
+    }
+
     section("safety · nothing reached a real wire");
     // The double now reports success, so sends DO occur — against the double.
     // The guarantee is therefore not "zero sends" but "zero REAL sends", and

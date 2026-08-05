@@ -49,6 +49,21 @@ const GATES = [
     what: "closure boundary" },
   { file: "gate_no_raw_bridge_joins.js",
     what: "no raw bridge joins" },
+  //  The conversational seams. DB-free, so they belong on the standard path:
+  //  they check that the extracted logic has ONE implementation, that resident
+  //  wording did not drift, and that an operating receipt and a delivery
+  //  receipt cannot be collapsed into one claim.
+  { file: "conversation_intent_extraction.test.js",
+    what: "intent seam: one implementation, transport-independent, behaviour pinned" },
+  { file: "conversation_clarification_and_receipt.test.js",
+    what: "clarification + receipt seams: wording unchanged, operating ≠ delivery" },
+  //  The technician work-selection decisions. Every one of them is a refusal,
+  //  and a refusal that only fires against a provisioned database is a refusal
+  //  nobody has seen fire. These run with no credentials.
+  { file: "technician_work_selection.test.js",
+    what: "technician: identity, scope, eligibility, replay, cross-property refusal" },
+  { file: "technician_language.test.js",
+    what: "technician language: plain phrases read correctly, nothing guessed into an action" },
 ];
 
 const bar = "════════════════════════════════════════════════════════════════";
