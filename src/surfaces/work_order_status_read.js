@@ -89,9 +89,10 @@ async function readWorkOrderStatus(db, { propertyId, workOrderId }) {
   //  work order's free-text assigned_to column is deliberately not read.
   const acceptance = (await db.query(
     `select o.id, o.status, o.assigned_user_id, o.accepted_by_user_id, o.accepted_at,
-            usr.name as accepted_by_name
+            usr.name as accepted_by_name, asg.name as assigned_name
        from obligations o
        left join users usr on usr.id = o.accepted_by_user_id
+       left join users asg on asg.id = o.assigned_user_id
       where o.related_type = 'work_order' and o.related_id = $1 and o.property_id = $2
       order by o.created_at asc limit 1`, [workOrderId, propertyId])).rows[0] || null;
 
@@ -174,6 +175,12 @@ async function readWorkOrderStatus(db, { propertyId, workOrderId }) {
       accountable: acceptance && acceptance.accepted_by_user_id
         ? { user_id: acceptance.accepted_by_user_id, name: acceptance.accepted_by_name || "(unnamed user)" }
         : "UNASSIGNED",
+      //  ASSIGNED is not ACCEPTED. "Nobody owns this" and "Dana has it and
+      //  hasn't taken it yet" are different situations with different repairs,
+      //  and the surface cannot say so without both facts.
+      assigned_to: acceptance && acceptance.assigned_user_id
+        ? { user_id: acceptance.assigned_user_id, name: acceptance.assigned_name || null }
+        : null,
       accepted_at: (acceptance && acceptance.accepted_at) || null,
       en_route_at: latestByKind.en_route ? latestByKind.en_route.occurred_at : null,
       //  CURRENT means current. A no-access reported at 2:14 is not a fact
