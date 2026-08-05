@@ -149,13 +149,14 @@ browser proof, real Chromium driving real HTTP against a real Express API.
 | `tests/technician_acceptance.db.js` | 32 / 32 |
 | `tests/operations_reply_policy.db.js` | 32 / 32 |
 | `tests/technician_route_proof.db.js` | 48 / 48 |
-| `tests/technician_lifecycle_proof.db.js` | 57 / 57 |
+| `tests/technician_lifecycle_proof.db.js` | 62 / 62 |
 | app `work_lifecycle_browser_proof.browser.js` | **99 / 99** |
 | `npm run verify` (source governance) | 7 gates, exit 0 |
 | 4 pure unit suites (clarification, intent, selection, language) | exit 0 |
 
-**394 database-and-browser assertions.** The count rose from 368 because the
-§7.1 ruling added its own proof — it did not replace anything.
+**399 database-and-browser assertions.** The count rose from 368 because the
+§7.1 ruling and the constraint-scope verification each added their own proof —
+neither replaced anything.
 
 ### What the browser proof actually drives
 
@@ -254,10 +255,47 @@ a separate governed capability and are not in this build.
 
 **The deduplication is structural, not cosmetic.** Both writers already
 recorded the same canonical cause — the `no_access` progress row, in
-`comm_events.derived_from_progress_id`. Migration `136` makes that column
-unique, so a second resident message about the same fact is refused by the
-database whichever writer attempts it and whether or not it thought to look
-first. Hiding the button is the *consequence* of the fix, not the fix.
+`comm_events.derived_from_progress_id`. Migration `136` makes that unique for
+the message it governs, so a second one is refused by the database whichever
+writer attempts it and whether or not it thought to look first. Hiding the
+button is the *consequence* of the fix, not the fix.
+
+**Scope of the constraint — verified 2026-08-05.** The first cut was unique on
+`derived_from_progress_id` outright, which would have stopped *any* future
+comm_event of *any* type from ever referencing the same field fact. That is
+wider than the ruling. It was narrowed before release to name exactly the
+message it governs:
+
+```sql
+create unique index uq_comm_events_resident_update_cause
+  on comm_events (derived_from_progress_id)
+  where derived_from_progress_id is not null
+    and direction = 'outbound'        -- we are telling, not receiving
+    and channel = 'sms'               -- a call or email is a different message
+    and classification = 'work_order_update'
+    and person_id is not null;        -- addressed to a resident
+```
+
+A field fact may be **referenced** any number of times. What it may not do is
+tell the resident the same thing twice.
+
+*Audience is closed elsewhere and does not depend on this index.* `134`'s
+`ck_comm_derived_is_resident_facing` requires any row carrying
+`derived_from_progress_id` to have `staff_thread_id is null and person_id is
+not null`, so a staff-facing row on this cause is unrepresentable regardless.
+The predicate repeats `person_id is not null` so the index states its own
+audience rather than depending on a constraint two files away.
+
+*The read agrees with the constraint.* `residentCoordinationFor` selects the
+same shape the index governs, so a fact that later carries other derived
+messages still has exactly one row answering "has the resident been asked".
+Matching on the cause alone would have let an unrelated message answer it.
+
+**The known limit, stated rather than discovered later:** a writer using a
+different `classification` or `channel` is not caught. That is the deliberate
+cost of scoping. If a second resident-facing work-order message type is ever
+added, it needs its own answer to *"has this fact already been communicated"* —
+not a widening of this index, which would start blocking legitimate references.
 
 `coordinateEntry` now resolves against that cause before writing, and returns
 `already_asked` with *when* — so a press that cannot send still tells the
@@ -267,8 +305,11 @@ aborted one.
 
 **Proven, in this order:**
 
-- database — a second insert on the same cause is refused `23505`, and exactly
-  one message survives (`technician_lifecycle_proof.db.js`);
+- database — a second insert on the same cause is refused `23505` and exactly
+  one message survives; a different message *type* and a different *channel*
+  derived from the same cause are **allowed**, the governed message is still
+  refused alongside them, and a staff-facing row is refused by `134` rather
+  than by this index (`technician_lifecycle_proof.db.js`);
 - read layer — five coordination states derived from that one cause, `unknown`
   never rounded down to "not sent";
 - browser — the row and the detail both say *"Asked resident at … · waiting for

@@ -166,7 +166,8 @@ async function readWorkOrderStatus(db, { propertyId, workOrderId }) {
   //  up to delivered.
   const residentRows = (await db.query(
     `select ce.id, ce.body, ce.occurred_at, ce.sms_status, ce.sms_sid, ce.sms_error,
-            ce.derived_from_progress_id, p.kind as derived_from_kind
+            ce.derived_from_progress_id, ce.classification, ce.channel,
+            p.kind as derived_from_kind
        from comm_events ce
        left join work_order_progress p on p.id = ce.derived_from_progress_id
       where ce.property_id = $1 and ce.derived_from_progress_id is not null
@@ -182,6 +183,8 @@ async function readWorkOrderStatus(db, { propertyId, workOrderId }) {
     //  text about entry are not the same exception and must not be labelled
     //  as though they were.
     derived_from_kind: row.derived_from_kind || null,
+    classification: row.classification || null,
+    channel: row.channel || null,
     delivery: deliveryStateOf(row),
   }));
 
@@ -284,7 +287,13 @@ function residentCoordinationFor({ state, latestByKind, resident_update }) {
   if (state !== "no_access") return null;
   const cause = latestByKind.no_access;
   if (!cause) return null;
-  const asked = resident_update.find((r) => r.derived_from_progress_id === cause.id);
+  //  THE SAME SHAPE MIGRATION 136 GOVERNS. The index is scoped to the
+  //  outbound resident work-order-update SMS, so a fact that later carries
+  //  other derived messages — a different type, a different channel — has
+  //  exactly one row that answers "has the resident been asked". Matching
+  //  on the cause alone would let an unrelated derived message answer it.
+  const asked = resident_update.find((r) => r.derived_from_progress_id === cause.id
+    && r.classification === "work_order_update" && r.channel === "sms");
   if (!asked) return { state: "none", comm_event_id: null, at: null, cause_progress_id: cause.id };
   //  `unknown` is NOT rounded down to `prepared`. The carrier has the
   //  message and has told us nothing; saying "not yet sent" would be a

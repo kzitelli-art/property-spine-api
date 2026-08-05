@@ -378,8 +378,68 @@ try {
     ok("a SECOND resident message about the same fact is REFUSED by the database",
       !!dupErr && dupErr.code === "23505", dupErr ? dupErr.code : "the insert succeeded");
     ok("...and exactly one message about that fact survives",
-      (await db.query(`select count(*)::int c from comm_events where derived_from_progress_id=$1`,
-        [cause.p])).rows[0].c === 1);
+      (await db.query(`select count(*)::int c from comm_events where derived_from_progress_id=$1
+                        and classification='work_order_update' and channel='sms'`, [cause.p])).rows[0].c === 1);
+
+    //  ── AND NO WIDER. ─────────────────────────────────────────────
+    //  A field fact may be REFERENCED any number of times. What it may
+    //  not do is tell the resident the same thing twice. These two prove
+    //  the index governs the message and not the fact: a different type
+    //  and a different channel derived from the same cause are allowed.
+    let otherType = null;
+    try {
+      await db.query(
+        `insert into comm_events (property_id, person_id, conversation_id, channel, direction, body,
+           classification, created_object_type, created_object_id, derived_from_progress_id)
+         values ($1,$2,$3,'sms','outbound','A later, different kind of notice.',
+                 'work_order_escalation','work_order',$4,$5)`,
+        [cause.property_id, cause.person_id, cause.conversation_id, cause.created_object_id, cause.p]);
+    } catch (e) { otherType = e; }
+    ok("a DIFFERENT message type derived from the same fact is ALLOWED",
+      otherType === null, otherType && otherType.message);
+
+    let otherChannel = null;
+    try {
+      await db.query(
+        `insert into comm_events (property_id, person_id, conversation_id, channel, direction, body,
+           classification, created_object_type, created_object_id, derived_from_progress_id)
+         values ($1,$2,$3,'email','outbound',$4,'work_order_update','work_order',$5,$6)`,
+        [cause.property_id, cause.person_id, cause.conversation_id, cause.body,
+         cause.created_object_id, cause.p]);
+    } catch (e) { otherChannel = e; }
+    ok("a DIFFERENT channel derived from the same fact is ALLOWED",
+      otherChannel === null, otherChannel && otherChannel.message);
+
+    //  The one it governs is still governed, with those others present.
+    let stillRefused = null;
+    try {
+      await db.query(
+        `insert into comm_events (property_id, person_id, conversation_id, channel, direction, body,
+           classification, created_object_type, created_object_id, derived_from_progress_id)
+         values ($1,$2,$3,'sms','outbound',$4,'work_order_update','work_order',$5,$6)`,
+        [cause.property_id, cause.person_id, cause.conversation_id, cause.body,
+         cause.created_object_id, cause.p]);
+    } catch (e) { stillRefused = e; }
+    ok("...and the governed message is STILL refused alongside them",
+      !!stillRefused && stillRefused.code === "23505",
+      stillRefused ? stillRefused.code : "the insert succeeded");
+
+    //  A staff-facing row on the same cause is unrepresentable regardless
+    //  of this index — 134 closes the audience. The thread is the real one
+    //  the technician conversation created, not a fabricated id.
+    const thr = (await db.query(`select id from staff_threads limit 1`)).rows[0];
+    ok("the technician conversation created a real staff thread to test against", !!thr);
+    let staffFacing = null;
+    try {
+      await db.query(
+        `insert into comm_events (property_id, channel, direction, body, staff_thread_id,
+           created_object_type, created_object_id, derived_from_progress_id)
+         values ($1,'sms','outbound','internal',$2,'work_order',$3,$4)`,
+        [cause.property_id, thr && thr.id, cause.created_object_id, cause.p]);
+    } catch (e) { staffFacing = e; }
+    ok("a STAFF-facing message on that cause is refused by 134, not by this index",
+      !!staffFacing && /ck_comm_derived_is_resident_facing/.test(staffFacing.message),
+      staffFacing ? staffFacing.message.slice(0, 120) : "the insert succeeded");
   }
 
   section("7. REPLAY");

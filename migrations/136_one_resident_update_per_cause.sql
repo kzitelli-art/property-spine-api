@@ -27,15 +27,59 @@
 --  the existing intent (135), which is exactly the distinction this index
 --  relies on.
 --
+--  ── SCOPED TO WHAT IT GOVERNS, AND NO WIDER ─────────────────────────
+--  The first cut of this index was unique on `derived_from_progress_id`
+--  outright. That does more than the ruling asks: it would stop ANY
+--  future comm_event of ANY type from ever referencing the same field
+--  fact — a follow-up call record, an email, an escalation notice, a
+--  different classification entirely. A field fact is allowed to be
+--  referenced many times. What is not allowed is being TOLD TWICE.
+--
+--  So the predicate names the exact message this governs:
+--
+--    direction      = 'outbound'            we are telling, not receiving
+--    channel        = 'sms'                 a text; a call or an email
+--                                           derived from the same fact is
+--                                           a different message, not a
+--                                           second copy of this one
+--    classification = 'work_order_update'   the type both writers produce
+--    person_id     is not null              addressed to a resident
+--
+--  AUDIENCE IS ALREADY CLOSED ELSEWHERE. 134's
+--  ck_comm_derived_is_resident_facing requires any row carrying
+--  `derived_from_progress_id` to have `staff_thread_id is null and
+--  person_id is not null`, so a staff-facing row referencing this cause
+--  is unrepresentable regardless of this index. `person_id is not null`
+--  is repeated here anyway so the index states its own audience rather
+--  than depending on a constraint two files away.
+--
+--  THE KNOWN LIMIT, stated rather than discovered later: a writer that
+--  used a different `classification` or `channel` would not be caught.
+--  That is the deliberate cost of scoping. If a second resident-facing
+--  work-order message type is ever added, it needs its own answer to
+--  "has this fact already been communicated" — not a widening of this
+--  index, which would start blocking legitimate references.
+--
 --  ── SAFE ON A LIVE DATABASE ─────────────────────────────────────────
 --  The column arrives in 134 and cannot hold a value in any database that
 --  has not run 134, so there is nothing to conflict with here.
+--
+--  The DROP is not defensive noise: an earlier draft of this file created
+--  the same index name with a wider predicate, and `if not exists` would
+--  silently keep it. Dropping first makes re-running this file converge on
+--  what the file actually says.
 -- ════════════════════════════════════════════════════════════════════
 
 begin;
 
-create unique index if not exists uq_comm_events_resident_update_cause
+drop index if exists uq_comm_events_resident_update_cause;
+
+create unique index uq_comm_events_resident_update_cause
   on comm_events (derived_from_progress_id)
-  where derived_from_progress_id is not null;
+  where derived_from_progress_id is not null
+    and direction = 'outbound'
+    and channel = 'sms'
+    and classification = 'work_order_update'
+    and person_id is not null;
 
 commit;

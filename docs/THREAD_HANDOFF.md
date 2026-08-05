@@ -31,15 +31,16 @@ action.** The technician holds an ordinary text conversation; every fact they
 report is written canonically; the operator sees one queue where all five
 controls perform governed writes and return receipts.
 
-**394 database-and-browser assertions green, re-run 2026-08-05**, including
+**399 database-and-browser assertions green, re-run 2026-08-05**, including
 `work_lifecycle_browser_proof.browser.js` at **99/99** — real Chromium, real
 HTTP, real Postgres, every control clicked.
 
 ### Read these two documents before touching any of it
 
 - [`RELEASE_SMS_WORK_ORDER_HANDOFF.md`](RELEASE_SMS_WORK_ORDER_HANDOFF.md) —
-  what ships, what proves it, component classification, and **§7: two open
-  items that bound what may be claimed.**
+  what ships, what proves it, component classification, and **§7: the ruling
+  that closed the duplicate-message defect, and the one limit that bounds what
+  may be claimed.**
 - [`ACTIVATION_SMS_WORK_ORDER_HANDOFF.md`](ACTIVATION_SMS_WORK_ORDER_HANDOFF.md) —
   the 19-step operator packet and the real-phone acceptance script.
   Self-contained; no thread can run any of it.
@@ -53,8 +54,10 @@ HTTP, real Postgres, every control clicked.
    `comm_events.derived_from_progress_id` unique, so both writers now resolve
    against the same canonical cause and the database refuses the second
    message. The surface reports *"Asked resident at 10:04 AM · waiting for
-   reply"* and the control only exists where nobody has asked. Full ruling and
-   its proof: release package §7.1.
+   reply"* and the control only exists where nobody has asked. The index is
+   SCOPED — outbound / sms / work_order_update / resident — so a field fact can
+   still be referenced by other message types; widening it would block
+   legitimate references. Full ruling and its proof: release package §7.1.
 
    **Do not "restore" the Coordinate entry button on a work order whose
    resident has been asked.** Its absence is the ruling, not a regression.
@@ -64,7 +67,7 @@ HTTP, real Postgres, every control clicked.
 
 ### Activation order is a gate, not a preference
 
-`129` first (`UNBLOCK_1_MIGRATION_129_ACTIVATION.md`), **then** `130`–`135`.
+`129` first (`UNBLOCK_1_MIGRATION_129_ACTIVATION.md`), **then** `130`–`136`.
 Releasing onto a `128` ledger would sweep `129` in without its own receipt.
 
 Reconcile with `main` by **merge**. Never rebase, never force-push — both
