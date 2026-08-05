@@ -212,7 +212,13 @@ async function main() {
 
   // Now build the router the way a FIXED server.js must: with the service.
   const { makeWorkOrderService } = require("../src/maintenance/work_order_service.js");
-  const workOrderService = makeWorkOrderService({ spawnObligationFromEvent });
+  //  `spawnObligationFromEvent` stays this file's own double — it is what the
+  //  canonical-path assertions observe. The other two are the REAL engine
+  //  services, which the work-order service refuses to be built without so
+  //  the clarification path cannot become a second obligation implementation.
+  const { satisfyObligation } = require("./_engine.js");
+  const { transitionObligation } = require("../src/shared/obligation_transitions.js");
+  const workOrderService = makeWorkOrderService({ spawnObligationFromEvent, satisfyObligation, transitionObligation });
   const router = maintenanceModule({ pool, spawnObligationFromEvent, workOrderService });
 
   const app = express();

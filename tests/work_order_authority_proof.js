@@ -48,6 +48,14 @@ const { Pool } = require("pg");
 
 const staffSessions = require("../src/identity/staff_session_service.js");
 const { makeWorkOrderService } = require("../src/maintenance/work_order_service.js");
+//  The REAL engine services the work-order service refuses to be built
+//  without. `spawnObligationFromEvent` below is deliberately this file's own
+//  double — it is what the authority assertions observe — but these two are
+//  not: the service requires them precisely so the clarification path cannot
+//  become a second obligation implementation, and handing it doubles would
+//  defeat the guard rather than satisfy it.
+const { satisfyObligation } = require("./_engine.js");
+const { transitionObligation } = require("../src/shared/obligation_transitions.js");
 const maintenanceModule = require("../src/maintenance/maintenance.js");
 const tenantLinkModule = require("../src/comms/tenantlink.js");
 
@@ -89,7 +97,7 @@ async function spawnObligationFromEvent(client, o) {
 }
 
 // ── ONE service instance, instrumented. Both modules receive THIS object. ──
-const realService = makeWorkOrderService({ spawnObligationFromEvent });
+const realService = makeWorkOrderService({ spawnObligationFromEvent, satisfyObligation, transitionObligation });
 const serviceCalls = [];                       // { source, property_id }
 const INSTANCE_TAG = uuid();                   // proves object identity, not shape
 const instrumented = {
