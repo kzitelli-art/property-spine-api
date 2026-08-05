@@ -11,7 +11,62 @@ current truth. Re-date it whenever `main` moves materially.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
-##  STATE — 2026-08-03 (late). THIS SECTION WINS over everything below.
+##  BRANCH STATE — 2026-08-05. THIS SECTION WINS over everything below.
+## ══════════════════════════════════════════════════════════════════
+
+`main` has NOT moved. It is still `8330aec` and it still cannot boot, for the
+reason the 2026-08-03 section below explains: migration `129` is in the build
+and in no ledger. Everything in that section is still true.
+
+What is new is a complete, proven, **unmerged** feature branch.
+
+```text
+API   claude/conversational-seams-and-technician-loop   1724a19   22 ahead of main
+APP   claude/sms-work-order-handoff-qo3s8i              05a4913    9 ahead of main
+migrations added                                        130 – 135
+```
+
+**Resident SMS → canonical work order → technician lifecycle → operator
+action.** The technician holds an ordinary text conversation; every fact they
+report is written canonically; the operator sees one queue where all five
+controls perform governed writes and return receipts.
+
+**368 database-and-browser assertions green, re-run 2026-08-05**, including
+`work_lifecycle_browser_proof.browser.js` at **79/79** over three consecutive
+runs — real Chromium, real HTTP, real Postgres, every control clicked.
+
+### Read these two documents before touching any of it
+
+- [`RELEASE_SMS_WORK_ORDER_HANDOFF.md`](RELEASE_SMS_WORK_ORDER_HANDOFF.md) —
+  what ships, what proves it, component classification, and **§7: two open
+  items that bound what may be claimed.**
+- [`ACTIVATION_SMS_WORK_ORDER_HANDOFF.md`](ACTIVATION_SMS_WORK_ORDER_HANDOFF.md) —
+  the 19-step operator packet and the real-phone acceptance script.
+  Self-contained; no thread can run any of it.
+
+### The two open items, so they are not rediscovered
+
+1. **`Coordinate entry` texts the resident a duplicate sentence.** The derived
+   `no_access` resident update and `ENTRY_TEXT` in `operator_actions.js` are
+   byte-identical, and the duplicate guard is keyed on a `correlation_key` the
+   derived message does not carry. Verified against real Postgres. It needs an
+   owner ruling, not a patch — release package §7.1.
+2. **The full schema still cannot be rebuilt from empty.** Re-verified
+   2026-08-05: `012_bank_intake.sql:44` — `column "yardi_code" does not exist`.
+   This bounds every proof to the scoped schema, and predates this work.
+
+### Activation order is a gate, not a preference
+
+`129` first (`UNBLOCK_1_MIGRATION_129_ACTIVATION.md`), **then** `130`–`135`.
+Releasing onto a `128` ledger would sweep `129` in without its own receipt.
+
+Reconcile with `main` by **merge**. Never rebase, never force-push — both
+branches already carry merges from `main`.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  STATE — 2026-08-03 (late). Superseded above; still current for `main`.
 ## ══════════════════════════════════════════════════════════════════
 
 ### ⚠ `main` CANNOT BOOT RIGHT NOW. That is deliberate.
