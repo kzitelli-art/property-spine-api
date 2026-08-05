@@ -1,12 +1,181 @@
 # Property Spine — Thread Handoff
 
-**Current as of API `main` @ `d0627ce` · APP `main` @ `17823a1` · 2026-08-05 (evening).**
+**Current as of API `main` @ `bf65a00` · APP `main` @ `6220ca5` · 2026-08-05 (late).**
 Read the top section first — it wins over everything below it. Each dated
 section supersedes the ones under it; nothing is deleted, because the reasoning
 in the older sections is still the clearest account of how each trap was found.
 
 This file went 33 commits stale once and was read by every new session as
 current truth. Re-date it whenever `main` moves materially.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  DEPLOYED AND VERIFIED — 2026-08-05 (late). THIS SECTION WINS.
+## ══════════════════════════════════════════════════════════════════
+
+```text
+API   main   bf65a001f7817ebe7218bdf2c84a5c5703dc4dfb   deployed SHA still unread
+APP   main   6220ca5907137aa9036adaee23e8fee78a88a3f0   CONFIRMED LIVE in the browser
+```
+
+The APP deploy question that has been open since the release is **closed**.
+`6220ca5` is live. Two items previously listed as unproven are now proven,
+and one assumption in the section below is DISPROVEN.
+
+### How to read the deployed APP SHA — do this instead of guessing
+
+`build-info.js` is a **manual stamp** and was six days stale (`code_sha`
+`9422d45`, stamped 2026-07-30). It cannot identify the running build and
+must not be used for it. The Render Events page works but needs dashboard
+access.
+
+The reliable probe costs one line in the browser console and reads the
+**running code**:
+
+```js
+String(renderMaintenance).includes('oblFailed')   // true ⇒ 6220ca5 or later
+```
+
+Pick any string that exists only in the build you are looking for. This
+beats every indirect signal, including Events, because it interrogates what
+is actually executing.
+
+### ⚠ NEW TRAP, AND THE WORST ONE IN THIS FILE
+### Deleting a file from git does NOT remove it from the Render static site
+
+On 2026-08-05, with the deployed SHA **confirmed** as `6220ca5`, all nine
+datasets deleted on 2026-08-03 still returned **HTTP 200 with their real
+payloads** — 40KB to 881KB, `content-type` not HTML:
+
+```text
+/1438_seed.json      /1439_seed.json         /berks_1850_seed.json
+/emergency_calls.json /greenery_seed.json    /skyline_1417_seed.json
+/solo_4233_seed.json /temple_nest_seed.json  /solo-rent-roll-data.js
+```
+
+They are absent from the tree at `6220ca5`. Nothing references them.
+**The commit is correct and the files are still served.** The artifact is
+not in the repository — it is on Render's published directory, which is not
+purged between deploys. **Redeploying the same commit changes nothing.**
+The publish root must be purged, or the static site deleted and recreated.
+
+Three rules follow, and each one cost time to learn:
+
+1. **Repo absence is not deployed absence.** Every check before this one
+   confirmed the files were gone from git. They were. That measured the
+   wrong thing. The check must go over HTTP against the production origin.
+2. **A status code is not a payload.** Static hosts commonly rewrite
+   `/*` → `/index.html` with status 200, which makes every path "exist."
+   Always fetch a path that has NEVER existed as a control. If the control
+   returns 404, the server really does 404 and your 200s are real files.
+   If the control returns 200, your 200s mean nothing. Then read the body.
+3. **The `deskObligationsUnavailable` lesson generalises:** a surface can be
+   correct in the repository, correct in the commit, correct in the build,
+   and still wrong in production. Only production answers for production.
+
+### The Aug-3 "security" datasets are SYNTHETIC — do not re-escalate
+
+Ruled by the owner, 2026-08-05: the seed and rent-roll files are **fixtures,
+not resident data.** One `resident_name` in `solo_4233_seed.json` is
+literally `eggw3rhn, fgagevx`.
+
+This matters because the artifacts lie about themselves.
+`solo-rent-roll-data.js` opens with *"This file contains resident names and
+property financial information… Do not publish this file in a public
+repository,"* and the removal commits (`005a9b2`, `9c3386e`) are titled
+"security: remove private datasets". **The labels say private; the contents
+are generated.** A future session reading only the headers and the commit
+messages will conclude there is a live breach. There is not.
+
+**Check the contents before calling anything a breach.** The serving bug
+above is real and worth fixing on its own merits — the next thing left in
+that directory may not be synthetic.
+
+### Work Orders no longer depends on the obligations desk
+
+APP `6220ca5` (fix `208d403`). A failed `/operator/obligations` read used to
+make the **live work-order door unreachable**: `renderMaintenance` called
+`deskObligationsUnavailable()` and returned, which cleared `#intelStrip` —
+the element carrying the four door tiles — and returned *before*
+`lastMaintenance` was assigned, so even a surviving tile would have hit
+`openMaintenanceModule()`'s `if(!st)` guard and toasted "Open Maintenance
+first." Wiring the tile back alone would have fixed nothing.
+
+The other four composed desks keep the whole-desk treatment on purpose:
+obligations are folded into their payloads. Maintenance is the one desk
+where that is not true.
+
+**Two defects the proof found that review did not:**
+
+- `body.maintenance-v6-mode .lanes{display:none!important}` — **the lanes are
+  hidden on the Maintenance desk.** The first version of the fix rendered the
+  honest unavailable state into those lanes, passed every lane assertion, and
+  left the operator looking at a desk that appeared perfectly healthy.
+  **Presence is not visibility.** The assertion that catches this measures
+  `getComputedStyle().display` and a bounding box, not `querySelector`.
+- `renderRows()` never cleared the `data-ps-state` marker
+  `renderObligationsUnavailable()` stamps, so a recovered lane kept
+  announcing an outage that had ended — the confident-wrong pointed the
+  other way.
+
+```text
+APP  work_orders_reachable_when_obligations_fail.browser.js   30 passed · 0 failed
+APP  run_harnesses.sh (18 × *.test.js)                        779 passed · 0 failed
+APP  re-entry cycle at 6220ca5 (desk→door→job→desk→door)         7 passed · 0 failed
+```
+
+The obligations failure in that harness is a **real HTTP 503** through the
+app's own frozen `__psLive` loader — no page function is patched. The stub
+implements only the API's *server* contract (`maintenance.js:651`,
+`operator.js:235`) and is never the thing that unwraps the `{data, meta}`
+envelope; the real loader does that. Navigation is real clicks. Falsified
+against a copied tree with the fix reverted: red, exit 1, naming the
+unreachable door. Receipts: `docs/work-orders-obligations-failure/`.
+
+### CORS IS PROVEN — this supersedes "must not be claimed" below
+
+Observed in a real browser against production on 2026-08-05. A signed-in
+operator opened the Maintenance desk and saw four tiles and **no**
+obligations-unavailable banner. `loadObligations` is an authenticated
+`x-staff-session` GET from the app origin to
+`https://property-spine-api.onrender.com/operator/obligations`. The policy
+at `server.js:101` **fails closed** — a mismatched `OPERATOR_APP_ORIGIN`
+would have thrown and painted the banner. It did not. **The healthy desk is
+the CORS receipt.**
+
+### Open, ranked — carried forward
+
+1. **Purge the Render static-site publish root** (or delete and recreate the
+   service) so it matches the commit. Then re-verify the nine paths return
+   404 *and* that a never-existing control path also returns 404.
+2. **Real-phone acceptance, which IS the real-row production proof.**
+   `ACTIVATION_SMS_WORK_ORDER_HANDOFF.md`; its stop conditions are binding.
+
+   Earlier drafts of this list carried "open a property that has work orders"
+   as a separate item. **That item was impossible and should never have been
+   written.** §21 means the operator's property is server-derived from the
+   session grant, and `renderProperties`/`refreshPropSwitcher` hard-scope the
+   picker to *only* the granted property — every other option is removed
+   (`index.html:10655`). A signed-in operator cannot switch to a property
+   with existing work orders; there is no such control, by design.
+
+   The only way to get real rows in front of the operator is to **create**
+   them in the property the session already grants. The activation script
+   does exactly that, so acceptance and the real-row proof are one task.
+3. **Read the deployed API SHA.** API `main` is `bf65a00` and auto-deploys on
+   merge; the deployed SHA has never been read from Render Events. Ledger
+   ceiling 136 is carried from the release and has not been re-verified live.
+5. **Two back controls on the Work Orders route**, and **seven orphaned nav
+   keys**. Cosmetic, deliberately deferred until after acceptance.
+6. **A write returning 200 with an unparseable body reports "Done."**
+   Pre-existing, low likelihood, still a confident-wrong if it fires.
+
+### Not proven, and must not be claimed
+
+- Everything under "Open, ranked" above.
+- **Nothing about the deployed API.** The APP is confirmed live; the API is
+  not. Do not report them together.
 
 ---
 
