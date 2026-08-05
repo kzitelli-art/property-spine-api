@@ -238,8 +238,14 @@ if (!process.env.HARNESS_DATABASE_URL) {
       .filter((k) => /^TWILIO_|^SMS_ACCOUNT|^MESSAGING_SERVICE/i.test(k));
     ok(carrierEnv.length === 0,
        `no carrier credential exists in this process (${carrierEnv.join(", ") || "none present"})`);
-    ok(String(smsDouble.sendSms).includes(HARNESS_SID),
-       "the transport handed to the boundary is THIS FILE'S double — every sid it can mint is harness-prefixed");
+    //  Checks the SOURCE of the injected function, not a value it returns —
+    //  calling it here would push a phantom row into `sent` and break the
+    //  safety assertions that every recorded send used the fixture's own
+    //  line. That every minted sid IS harness-prefixed is proven at the end
+    //  of the run, against the sids actually minted.
+    ok(/sent\.push/.test(String(smsDouble.sendSms))
+       && /HARNESS_SID/.test(String(smsDouble.sendSms)),
+       "the transport handed to the boundary is THIS FILE'S double — it records every send here and can mint only harness-prefixed sids");
     process.env.SMS_SEND_MODE = "customer_care";
     ok(process.env.SMS_SEND_MODE === "customer_care",
        "the send mode is satisfied in-process, AFTER the double is proven and with no carrier reachable");
