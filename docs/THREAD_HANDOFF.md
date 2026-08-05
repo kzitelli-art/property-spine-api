@@ -1,6 +1,14 @@
 # Property Spine — Thread Handoff
 
-**Current as of API `main` @ `62db770` · APP `main` @ `6220ca5` · 2026-08-05 (late).**
+**Current as of API `main` @ `a9f51da`+ · APP `main` @ `6220ca5` · 2026-08-05 (late).**
+
+> **The API SHA above is ALWAYS one commit stale, by construction.** Editing
+> this file changes API `main`, so the number it records is the commit
+> *before* the one that recorded it. The `+` is that gap, and it is not a
+> mistake to correct — chasing it is an infinite loop. **For the API,
+> `origin/main` and Render Events are the authority; this file is not.**
+> The APP SHA carries no such problem: this file does not live in that repo,
+> so `6220ca5` is exact.
 Read the top section first — it wins over everything below it. Each dated
 section supersedes the ones under it; nothing is deleted, because the reasoning
 in the older sections is still the clearest account of how each trap was found.
@@ -15,10 +23,33 @@ current truth. Re-date it whenever `main` moves materially.
 ## ══════════════════════════════════════════════════════════════════
 
 ```text
-API   main   62db770313c851783172a0c401ab235be532467a   DEPLOYED · live 17:53 · healthy
+API   main   a9f51dac521c54958f0b3bcb2959a5df14c3db91   docs-only; auto-deploys (see note above)
+API   verified deployed at 62db770313c851783172a0c401ab235be532467a  live 17:53 · healthy
 APP   main   6220ca5907137aa9036adaee23e8fee78a88a3f0   DEPLOYED · confirmed in browser
 ledger ceiling 136 · granted property "Solo on Chestnut" a50fbdd0-3642-431e-b532-0dcd6ab8a4fe
 ```
+
+Every API commit after `62db770` has been **documentation only**. No product
+code, no migration, no schema change. If Render shows a later SHA it is one
+of those; if it shows `62db770` the auto-deploy of a docs commit has not
+landed yet. Neither case affects behaviour.
+
+## ▶ RESUME HERE — work is PAUSED, not blocked
+
+Stopped 2026-08-05 evening at the owner's call: real-phone acceptance needs
+two handsets and an uninterrupted hour, and there was no bandwidth for it.
+**Nothing is mid-flight.** No pending migration, no half-applied change, no
+unmerged branch, no exposure. Both services are deployed, live, and agree
+with their repositories. This is a resting state.
+
+**The single next action** is Part B of
+`ACTIVATION_SMS_WORK_ORDER_HANDOFF.md` — steps 14–18, real-phone acceptance
+on Solo on Chestnut. Its preflight is three read-only SQL queries; if any
+returns empty, the missing fixture is created as ordinary data, never as a
+migration and never from `tests/`.
+
+Do **not** restart from the top of this file. Everything above the "Open,
+ranked" list is finished and verified.
 
 **Both services are deployed, live, and agree with their repositories.** The
 deploy questions that were open since the release are closed. Two items
