@@ -53,7 +53,7 @@ tools/property_line_preflight.js  read-only, proven
 | | |
 |---|---|
 | API branch | `claude/conversational-seams-and-technician-loop` — tip named in the release package |
-| App branch | `claude/sms-work-order-handoff-qo3s8i` @ `297cfb2` |
+| App branch | `claude/sms-work-order-handoff-qo3s8i` @ `11193f4` |
 | API `main` before this | `8330aec` |
 | Applied ledger ceiling expected **before** release | **129** |
 | Applied ledger ceiling expected **after** release | **136** |

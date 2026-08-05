@@ -21,9 +21,9 @@ and in no ledger. Everything in that section is still true.
 What is new is a complete, proven, **unmerged** feature branch.
 
 ```text
-API   claude/conversational-seams-and-technician-loop   1724a19   22 ahead of main
-APP   claude/sms-work-order-handoff-qo3s8i              05a4913    9 ahead of main
-migrations added                                        130 – 135
+API   claude/conversational-seams-and-technician-loop   contains origin/main 8330aec
+APP   claude/sms-work-order-handoff-qo3s8i    11193f4   origin/main 357fb15 MERGED IN
+migrations added                                        130 – 136
 ```
 
 **Resident SMS → canonical work order → technician lifecycle → operator
@@ -31,9 +31,9 @@ action.** The technician holds an ordinary text conversation; every fact they
 report is written canonically; the operator sees one queue where all five
 controls perform governed writes and return receipts.
 
-**368 database-and-browser assertions green, re-run 2026-08-05**, including
-`work_lifecycle_browser_proof.browser.js` at **79/79** over three consecutive
-runs — real Chromium, real HTTP, real Postgres, every control clicked.
+**394 database-and-browser assertions green, re-run 2026-08-05**, including
+`work_lifecycle_browser_proof.browser.js` at **99/99** — real Chromium, real
+HTTP, real Postgres, every control clicked.
 
 ### Read these two documents before touching any of it
 
@@ -44,13 +44,20 @@ runs — real Chromium, real HTTP, real Postgres, every control clicked.
   the 19-step operator packet and the real-phone acceptance script.
   Self-contained; no thread can run any of it.
 
-### The two open items, so they are not rediscovered
+### One ruling landed, one limit remains
 
-1. **`Coordinate entry` texts the resident a duplicate sentence.** The derived
-   `no_access` resident update and `ENTRY_TEXT` in `operator_actions.js` are
-   byte-identical, and the duplicate guard is keyed on a `correlation_key` the
-   derived message does not carry. Verified against real Postgres. It needs an
-   owner ruling, not a patch — release package §7.1.
+1. **RULED AND CLOSED — never ask the resident the same thing twice.**
+   Reporting no access already texts the resident the coordinate-entry
+   sentence; the operator control sent byte-identical text and its guard could
+   not see the first message. Migration **136** makes
+   `comm_events.derived_from_progress_id` unique, so both writers now resolve
+   against the same canonical cause and the database refuses the second
+   message. The surface reports *"Asked resident at 10:04 AM · waiting for
+   reply"* and the control only exists where nobody has asked. Full ruling and
+   its proof: release package §7.1.
+
+   **Do not "restore" the Coordinate entry button on a work order whose
+   resident has been asked.** Its absence is the ruling, not a regression.
 2. **The full schema still cannot be rebuilt from empty.** Re-verified
    2026-08-05: `012_bank_intake.sql:44` — `column "yardi_code" does not exist`.
    This bounds every proof to the scoped schema, and predates this work.

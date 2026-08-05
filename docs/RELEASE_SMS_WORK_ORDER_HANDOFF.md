@@ -18,11 +18,11 @@ credentials, no connection strings and no phone numbers.
 | API repository | `kzitelli-art/property-spine-api` |
 | API branch | `claude/conversational-seams-and-technician-loop` |
 | API tip | the commit carrying this document — confirm with `git log --oneline -1` |
-| API base | `origin/main` @ `8330aec` |
+| API base | `origin/main` @ `8330aec` — already contained in the branch; no merge outstanding |
 | App repository | `kzitelli-art/property-spine-app` |
 | App branch | `claude/sms-work-order-handoff-qo3s8i` |
-| App tip | `297cfb2` |
-| App base | `origin/main` |
+| App tip | `11193f4` |
+| App base | `origin/main` @ `357fb15` — **merged in**, so the branch is a current merge candidate |
 | Migrations added | `130` – `136` |
 | Production applied ledger ceiling | **128** (to be re-confirmed read-only at activation) |
 | Ceiling this release expects to start from | **129** |
