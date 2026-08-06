@@ -66,6 +66,56 @@ both have shared history with `main`.
 
 # PART A — RELEASE (steps 1–14)
 
+## ✅ STEPS 1–12 ARE COMPLETE. Verified 2026-08-05.
+
+Do not re-run them. They merged branches, pushed `main`, released migrations and
+confirmed the boot — all of which has happened.
+
+```text
+Step 1   deployed SHA        a04a1df…    echo $RENDER_GIT_COMMIT
+Step 2   reconciliation      EXIT 0      ledger 135 rows · ceiling 136
+Step 3   migration 129       APPLIED     prerequisite satisfied
+Step 5-7 branches merged     main a04a1df
+Step 8   Render built it     confirmed by deployed SHA
+Step 9   boot REFUSAL        did not occur — the gate passes at ceiling 136
+Step 10  migrations 130–136  APPLIED
+Step 11  re-reconciliation   EXIT 0, both directions agree
+Step 12  service healthy     confirmed
+```
+
+The one documented ledger exception is `012` — ledger row `property_noi_goals`
+against file `012_bank_intake.sql`, renumbered to `029`, `bank_intake` verified
+applied. Accepted by the reconciler with a stated removal condition.
+
+## ⚠ STEPS 13–14 ARE THE REMAINING PREREQUISITES
+
+**Step 13 — one of the two required lines does not exist.**
+
+```text
+property_facing   external · residents_and_prospects · in=t · out=t · active   ✓ present
+operations        operational · staff · in=t · out=t · reply_only              ✗ ABSENT
+```
+
+Until the `operations` row exists, **the technician half of the rail has no
+transport** — Part B step 15 cannot be attempted, because there is no
+operations number for a handset to text.
+
+Create it as an ordinary data change. Not a migration, not a script from
+`tests/`. Its `outbound_policy` **must** be `reply_only`; the database enforces
+the ruling this build depends on.
+
+Two further facts, both read-only verified 2026-08-05:
+
+- **`provider_config` is null on the existing line.** Nothing is wired to a
+  carrier, so nothing routes in either direction today. That is the safe state.
+- The existing row's **`outbound_policy` was not read** — the check run today
+  omitted that column. Re-read it as part of step 13.
+
+**Step 14 — acceptance fixtures unverified.** Technician tester assignment and
+resident tester consent still need confirming.
+
+---
+
 **Role: release operator.**
 
 ## Step 1 — confirm what is actually deployed
