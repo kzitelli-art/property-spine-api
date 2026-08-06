@@ -50,19 +50,28 @@ tools/release0_proof_audit.js                    407   the instrument
 ## 2. ⚠ The commit requiring owner authorization
 
 ```text
-AUTHORIZE:  d19cadf34769fc0f15075ba57f8854f9da535b44
+AUTHORIZE:  1e39e58e0bb3772d5fc2711d93b838ab36bd0981
 ```
 
-`d19cadf` contains both the plan and the instrument it authorizes. The plan
-file itself was last modified at `208a457`; `d19cadf` carries it unchanged and
-adds the proven tool.
+**This moved from `d19cadf` on the morning pass, and the reason matters.**
+Closing the untested-exit-path gap changed `tools/release0_proof_audit.js` —
+the connect guard — so `d19cadf` no longer holds the tool you would be
+authorizing. Authorization attaches to content, so the SHA moves whenever the
+content does, even for a fix that improves it.
 
-**`d19cadf` is not the branch tip** — this handoff is a later, documentation-only
-commit on top of it, and writing this file moved the tip again. That is the same
-self-referential lag `THREAD_HANDOFF.md` documents about itself, and it is not a
-mistake to chase. Authorize the content SHA, not whatever `git log -1` happens to
-show. Nothing after `d19cadf` touches the plan, the tool, the fixtures, or the
-test.
+What did **not** change between `d19cadf` and `1e39e58`:
+
+```text
+the query set             untouched — verified by diff, no select/from/where/
+                          group by/order by line differs
+docs/RELEASE_0_AUDIT_PLAN.md          untouched
+tests/fixtures/release0_audit_*.sql   untouched
+tests/release0_audit_forbidden_fields.test.js   untouched
+```
+
+Only error-path handling, its comments, and two receipts changed. **The
+substance under review is the same; the commit naming it is not.** Verify with
+`git diff d19cadf..1e39e58` rather than taking this paragraph's word for it.
 
 **Authorization attaches to a commit, not to a filename.** If the plan is
 edited after the SHA you approve, the approval no longer covers it.
@@ -101,8 +110,24 @@ EXIT  COMMAND
         → ERROR: permission denied for table work_orders
    0  node tests/release0_audit_forbidden_fields.test.js       24 passed · 0 failed
    0  node tests/verify_source_governance.js        7 gates, all exit 0
-   0  git push -u origin claude/release-0-audit-plan-55r5kd    ×3
+   0  git push -u origin claude/release-0-audit-plan-55r5kd    ×4
+
+   —— morning pass: the exit paths that had been written but never run ——
+   2  env -u DATABASE_URL node tools/release0_proof_audit.js
+   2  DATABASE_URL=<empty database> node tools/release0_proof_audit.js
+        → B1: relation "work_order_proof_attachments" does not exist
+   2  DATABASE_URL=<unreachable> node tools/release0_proof_audit.js
+        → was an UNHANDLED REJECTION before the fix below
+   0  regression re-run: text output byte-identical to isolated_run.txt,
+        --json digest unchanged, 24 + 7 assertions still pass
 ```
+
+**One defect found by closing that gap.** `client.connect()` sat outside the
+try block, so an unreachable database threw an unhandled promise rejection and
+printed a Node stack trace. It exited 1, so a table of exit codes looked right
+while the operator could not distinguish *the audit failed* from *the audit
+crashed*. Now guarded; refuses in the tool's own voice with exit 2. This is the
+last of the "asserted but not demonstrated" items from the overnight review.
 
 **Never run:** any query against production. `tools/ledger_reconcile.js` was
 **not** executed — it requires the production connection this handoff is asking

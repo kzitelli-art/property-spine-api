@@ -134,6 +134,40 @@ control  psql … -c "delete from work_orders"
 The tool runs against the safest connection available, and that connection was
 proven unable to write by an independent command.
 
+### 4.5 Every exit path, exercised
+
+The first pass shipped exit codes that had been *written* but never *run* —
+asserting behaviour without demonstrating it, which is the failure this whole
+release is about. All four refusal causes are now exercised:
+
+```text
+DATABASE_URL unset      ✗ DATABASE_URL is not set. Refusing to guess a connection.
+                        exit 2
+
+database unreachable    ✗ Could not connect to the database. Nothing was read.
+                          connect ECONNREFUSED 127.0.0.1:5999
+                        exit 2
+
+required table absent   ✗ B1: a required table does not exist in this database.
+(run against an empty     relation "work_order_proof_attachments" does not exist
+ database)                This is a finding, not a crash — but it is not an audit.
+                        exit 2
+
+transaction can write   ✗ REFUSED — this transaction accepted a write.
+(§4.1)                  exit 2
+```
+
+**Running them found a real defect.** `client.connect()` sat outside the try
+block, so an unreachable database produced an unhandled promise rejection and a
+Node stack trace instead of a refusal. It "exited 1", so a table of exit codes
+would have looked correct while the operator could not tell *the audit failed*
+from *the audit crashed*. A stack trace is not an answer. The connect is now
+guarded and refuses in the tool's own voice.
+
+Regression after the fix: the happy-path text output is byte-identical to
+`isolated_run.txt`, the `--json` digest is unchanged, 24 forbidden-field
+assertions pass, 7 source-governance gates pass.
+
 ## 5. Determinism
 
 ```text

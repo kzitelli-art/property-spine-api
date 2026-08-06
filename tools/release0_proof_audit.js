@@ -49,10 +49,12 @@
      DATABASE_URL="<read-only connection>" node tools/release0_proof_audit.js
      …                                    node tools/release0_proof_audit.js --json
 
-   EXIT
+   EXIT  — every one of these is exercised in
+          docs/release-0-audit/ISOLATED_PROOF_RECEIPT.md §4.5
      0  the audit completed and its findings were emitted
-     2  refused — the connection accepted a write, or a required table is
-        absent. Nothing was read in the write case.
+     2  refused, and nothing usable was read. Four causes, each with its own
+        message: DATABASE_URL unset · the database is unreachable · the
+        connection accepted a write · a required table is absent.
      1  an unexpected error; the transaction is rolled back.
    ════════════════════════════════════════════════════════════════════ */
 
@@ -322,7 +324,23 @@ async function main() {
   }
 
   const client = new Client({ connectionString: url });
-  await client.connect();
+
+  //  CONNECT INSIDE ITS OWN GUARD. An unreachable database is the single
+  //  most likely real failure — wrong host, wrong credentials, no network —
+  //  and an unguarded await here surfaces it as an unhandled rejection and a
+  //  Node stack trace. That is a confident-wrong in miniature: the operator
+  //  cannot tell "the audit failed" from "the audit crashed", and a stack
+  //  trace is not an answer. Refuse in the tool's own voice instead.
+  try {
+    await client.connect();
+  } catch (err) {
+    console.error("");
+    console.error("  ✗ Could not connect to the database. Nothing was read.");
+    console.error(`    ${err && err.message ? err.message : err}`);
+    console.error("");
+    await client.end().catch(() => {});
+    process.exit(2);
+  }
 
   const report = {
     tool: "tools/release0_proof_audit.js",
