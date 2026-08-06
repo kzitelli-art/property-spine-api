@@ -1,0 +1,101 @@
+════════════════════════════════════════════════════════════════
+  RELEASE 0 PROOF AUDIT — read-only
+  database   release0_audit_test  (user release0_auditor)
+  read-only  a write was attempted and refused before any read
+════════════════════════════════════════════════════════════════
+
+── B1  Proof attachments by storage state and classification
+   authority: plan §4 B1 · charter §16 acceptance 1
+   storage_state  proof_classification  n
+   fetch_failed   unclassified          1
+   referenced     unclassified          1
+   stored         access_attempt        1
+   stored         condition             1
+   stored         repair_photo          2
+   stored         unclassified          4
+
+── B2  Work orders whose proof is satisfied ONLY by an unclassified attachment
+   authority: plan §4 B2 · THE NUMBER THAT SIZES THE RELEASE
+   flipping_work_orders
+   3                   
+
+── B3  Identifiers of the flipping work orders
+   authority: plan §4 B3 · identifiers only
+   work_order_id                         property_id                         
+   11111111-0000-0000-0000-000000000001  aaaaaaaa-0000-0000-0000-000000000001
+   55555555-0000-0000-0000-000000000005  aaaaaaaa-0000-0000-0000-000000000001
+   12121212-0000-0000-0000-000000000012  bbbbbbbb-0000-0000-0000-000000000002
+
+── C0  Status census — run before anything filters on status
+   authority: plan §4 C0 · charter §6 (a filter may not define the question)
+   status          n
+   closed          2
+   complete        9
+   needs_followup  1
+   open            1
+
+── C1  Ruling 1 gap: finished work by lane and completion-timestamp presence
+   authority: plan §4 C1 · §19 Ruling 1 predicate
+   status    has_completed_progress_row  n
+   closed    false                       2
+   complete  false                       2
+   complete  true                        7
+
+── C2  Recorded completion-time range (NOT an activation-boundary input)
+   authority: plan §3.3 · the boundary is CAPTURED at the writer's verified-live instant
+   completed_progress_rows  earliest                                                        latest                                                        
+   7                        2026-02-01T10:00:00.000Z                                        2026-02-12T10:00:00.000Z                                      
+
+── C3  Identifiers with no completion timestamp — Ruling 1 cannot evaluate these
+   authority: plan §4 C3 · identifiers and presence booleans only
+   work_order_id                         property_id                           status    has_column_photo  created_at                                                      updated_at                                                    
+   88888888-0000-0000-0000-000000000008  aaaaaaaa-0000-0000-0000-000000000001  closed    true              2026-01-08T00:00:00.000Z                                        2026-01-08T00:00:00.000Z                                      
+   99999999-0000-0000-0000-000000000009  aaaaaaaa-0000-0000-0000-000000000001  closed    true              2026-01-09T00:00:00.000Z                                        2026-01-09T00:00:00.000Z                                      
+   77777777-0000-0000-0000-000000000007  aaaaaaaa-0000-0000-0000-000000000001  complete  false             2026-01-07T00:00:00.000Z                                        2026-01-07T00:00:00.000Z                                      
+   13131313-0000-0000-0000-000000000013  bbbbbbbb-0000-0000-0000-000000000002  complete  false             2026-01-13T00:00:00.000Z                                        2026-01-13T00:00:00.000Z                                      
+
+── C4  Cross-property scoping check (expected zero)
+   authority: plan §4 C4 · §21 property is the scope of every read
+   cross_property_progress_rows
+   0                           
+
+── C5  The third proof model: evidence stored in columns, counted by presence
+   authority: plan §4 C5 · presence permitted, contents forbidden (§5)
+   status    has_column_photo  has_column_note  n
+   closed    true              false            1
+   closed    true              true             1
+   complete  false             false            9
+
+── D1a  Composite foreign keys on the progress and attachment tables
+   authority: plan §4 D1 · confirms migration 134 applied as written
+   conname                                                 definition                                                                                        
+   fk_wop_work_scope                                       FOREIGN KEY (work_order_id, property_id) REFERENCES work_orders(id, property_id) ON DELETE CASCADE
+   fk_wopa_work_scope                                      FOREIGN KEY (work_order_id, property_id) REFERENCES work_orders(id, property_id) ON DELETE CASCADE
+   work_order_progress_property_id_fkey                    FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE                             
+   work_order_progress_reported_by_user_id_fkey            FOREIGN KEY (reported_by_user_id) REFERENCES users(id)                                            
+   work_order_progress_source_comm_event_id_fkey           FOREIGN KEY (source_comm_event_id) REFERENCES comm_events(id)                                     
+   work_order_proof_attachments_property_id_fkey           FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE                             
+   work_order_proof_attachments_source_comm_event_id_fkey  FOREIGN KEY (source_comm_event_id) REFERENCES comm_events(id)                                     
+   work_order_proof_attachments_uploaded_by_user_id_fkey   FOREIGN KEY (uploaded_by_user_id) REFERENCES users(id)                                            
+
+── D1b  The uniquely-constrained (id, property_id) the composite FKs reference
+   authority: plan §4 D1
+   indexname                   indexdef                                                                                          
+   uq_work_orders_id_property  CREATE UNIQUE INDEX uq_work_orders_id_property ON public.work_orders USING btree (id, property_id)
+
+── E1  Finished-work population by lane and Ruling 1 evaluability
+   authority: plan §4 E1 · NO classification claim is made for either gap population
+   status    ruling_1_evaluable        n
+   closed    no_completion_timestamp   2
+   complete  has_completion_timestamp  7
+   complete  no_completion_timestamp   2
+
+── CONCLUSIONS WITHHELD (§19 reserves these to the owner)
+   · What a work order with no completion timestamp emits under the proof-state contract. Ruling 1's predicate reads completed_at; without one, neither branch applies and none of the four published states describes the row.
+   · Whether a status='closed' work order is completed work for Release 0's purposes. lifecycleStateOf tests status='complete' only, so these never reach the classification. See RELEASE_0_COMPLETION_WRITER_MATRIX.md §3.
+   · Whether Open Ruling 2's four proof states cover column-stored photo proof.
+   · Any value for the Release 0 activation boundary. It is CAPTURED at the writer's verified-live instant under Ruling 1 and is never derived from production data, including anything in this audit.
+
+── QUERY A (full ledger reconciliation) IS NOT RUN BY THIS TOOL
+   Run tools/ledger_reconcile.js separately. It shares classifyLedger
+   with migrate.js, so it cannot disagree with what a deploy decides.

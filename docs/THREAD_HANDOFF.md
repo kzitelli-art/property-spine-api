@@ -19,6 +19,115 @@ current truth. Re-date it whenever `main` moves materially.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
+##  ⛔ THE DEPLOYED APP IS BROKEN. 2026-08-06 (latest).
+## ══════════════════════════════════════════════════════════════════
+
+**This supersedes the APP SHA in the header above and every deployment claim
+below it.** APP `main` moved to `8cbfd1a` (step 1), and **that build has a
+runtime defect on the work-order detail surface.**
+
+```text
+APP main          8cbfd1a   DEPLOYED · BROKEN
+code-bearing      b79f192   SUPERSEDED — do not deploy
+REPAIRED          44379d5   deploy this
+APP rollback      6220ca5   still valid
+API main          unchanged. No API deploy, no migration, no schema change.
+```
+
+**The defect.** Step 1 landed `proofOf` and `proofSentence` *inside*
+`stateLine`'s body in `work-lifecycle-door.js`. Both hoisted into that one
+function's scope, so `detailHtml` — a sibling — could not see them. Every
+work-order **detail** render throws `ReferenceError: proofSentence is not
+defined`. It propagates out of `render()` and rejects unhandled.
+
+**Why nobody saw it.** `stateLine` is the one caller that could still reach
+them, so the **list renders normally and hides the break**. Clicking a work
+order does nothing at all — no error, no blank, no unavailable. A silent dead
+click.
+
+**The trap worth carrying forward.** Step 1's production pass recorded three
+honest PASSes over this defect, because the operator's property had no work
+orders and there was no row to click. **An empty-state pass is a true statement
+about the wrong subject.** It is why that receipt refused to call itself
+progress, and refusing was correct.
+
+**Found by** `property-spine-app/proof_presentation_contract.browser.js` on its
+first run — real Chromium against the real deployed file. Not by review, and
+not by any amount of reading.
+
+Full record: `property-spine-app/docs/RELEASE_0_STEP_1_PACKET.md` §9.8–§9.12.
+Step 1 acceptance is now **eleven checks in one pass**, with the legacy
+completion controls split out into a named owed item
+(`property-spine-app/docs/LEGACY_COMPLETION_CONTROL_REGRESSION.md`).
+
+**Also recorded there, for step 2:** `readPropertyWorkOrderStatuses` narrows
+the list projection to three proof fields. Harmless today. The moment the
+canonical writer emits four states, `legacy_indeterminate` and
+`missing_evaluation_defect` arrive as illegal old-shape payloads and every such
+row renders unavailable in the list while the detail renders it correctly.
+Proven, not predicted — §9.10.2.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  RELEASE 0 — DESIGN FROZEN, NOT IMPLEMENTED. 2026-08-06.
+## ══════════════════════════════════════════════════════════════════
+
+**Nothing below this section's deployment claims has changed.** No product
+code, no migration, no schema change, no deploy. The section beneath still
+governs what is live.
+
+```text
+Release 0 architecture   FROZEN at 4f25f73408d90376f45ea0cf501ddebc7bbff131
+PR                       #43, open, BLOCKED from merge
+gate 1 design            CLOSED — architecture frozen, do not revise further
+                         unless implementation reveals a factual contradiction
+gate 2 rotate credential OPEN   ← the only thing in front of implementation
+gate 3 prove old dead    OPEN   ←
+gate 4 phone-verify SMS  OPEN — release-step gate at deployment step 4.
+                         Does NOT block steps 1–3. Step 5 and everything
+                         after it may not proceed until a real handset, a
+                         real inbound image, a preserved attachment, canonical
+                         completion, and operator readback are all proven.
+```
+
+A read-only production audit ran under charter Open Ruling 4 and its receipt is
+preserved. Governing documents: `RELEASE_0_IMPLEMENTATION_PLAN.md` (rev 3),
+`RELEASE_0_APP_CLOSEOUT_AUDIT.md`, `RELEASE_0_COMPLETION_WRITER_MATRIX.md`,
+`ASK_SPINE_BUILD_CONTRACT.md` §19c, `release-0-audit/RECEIPT.md`,
+`CREDENTIAL_ROTATION_RUNBOOK.md`.
+
+**Scope fence.** Release 0 is proof correction and completion consolidation.
+No Ask Spine Build 1. No other maintenance scope. No compliance, vendor,
+attention, authority-map, backlog or payment expansion inside it.
+
+### ⚠ TRAP — the agent container was reclaimed mid-session
+
+Partway through 2026-08-06 the working container was reclaimed. The local clone
+came back rolled to `f9914ce`, **five commits behind**, with the newer files
+simply absent from disk.
+
+Nothing was lost, and the reason is the whole lesson:
+
+```text
+the remote branch was the recovery authority
+no PUSHED work was lost
+no UNPUSHED work should ever be considered durable
+local workspace state is never the governing record
+```
+
+Recovery was `git fetch origin <branch>` then `git reset --hard origin/<branch>`.
+Total cost: one command, because every unit of work had been pushed as it
+completed.
+
+**This is an operational lesson, not a product task.** It generalises the rule
+this file already carries in another form — repo absence is not deployed
+absence, and now: *disk presence is not repository truth.* Push at every
+coherent step; treat anything that exists only on the container as already gone.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
 ##  DEPLOYED AND VERIFIED — 2026-08-05 (late). THIS SECTION WINS.
 ## ══════════════════════════════════════════════════════════════════
 
