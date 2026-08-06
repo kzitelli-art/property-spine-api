@@ -1,5 +1,10 @@
 # Release 0 production audit — AUTHORIZED, NOT RUN
 
+> **SUPERSEDED 2026-08-06.** The audit subsequently RAN. See
+> [`RECEIPT.md`](RECEIPT.md) for the production results. This file is kept
+> because it is the accurate record of the attempts that preceded the
+> successful one, and §3a/§3b contain a correction that still stands.
+
 **Status: the authorized sequence could not be executed from this environment.**
 **No production connection was opened. No production query was run. No result
 is reported, estimated, or inferred.**
