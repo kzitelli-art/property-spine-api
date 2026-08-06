@@ -1,12 +1,32 @@
-# Ask Spine — Maintenance Agent Build Contract
+# Ask Spine — Maintenance Agent Build Charter
 
-**This is the build charter. Read it before writing any Ask Spine code.**
+**Version 3 — Canonical Truth, Declared Coverage, Frictionless Operation**
+
+This is the build charter. Read it before writing any Ask Spine code.
 Companion: [`ASK_SPINE_SLICE_2_DESIGN_INPUT.md`](ASK_SPINE_SLICE_2_DESIGN_INPUT.md) —
-the premortem and schema audit this contract was derived from.
+the premortem and schema audit behind it.
 
-Owner ruling, closing the Ask Spine Slice 1 thread. Sections 1–7 are decided.
-Section 8 lists rulings still owed; nothing in Build 1 may be frozen until they
-are answered.
+The first release is maintenance-specific. It creates the operating pattern later
+domains — including money — can follow, without prematurely pretending that
+maintenance and accounting use identical facts. The build must preserve the
+discipline that got Property Spine here while making the operator experience
+substantially simpler.
+
+```text
+employee      ask → understand → see the work → act → receive confirmation
+
+system        resolve identity and authority → resolve the intended question
+              → execute the published intent contract
+              → identify the complete candidate population
+              → read canonical maintenance truth
+              → evaluate source outcomes and evidence quality
+              → state only supported conclusions
+              → preserve the decision receipt
+              → perform an authorized action
+              → preserve the action receipt
+```
+
+The operator should not need to understand this machinery.
 
 State at authoring:
 
@@ -20,429 +40,540 @@ communication_lines 1 row        property_facing, provider_configured = f
 
 ---
 
-## 1. Purpose
+## 1. Product objective
 
-Let an operator understand and move real maintenance work through ordinary
-conversation, without weakening the authority, evidence and receipt discipline
-already built underneath.
+> Ask Spine about maintenance work, understand what is true, and take the next
+> valid action.
 
-```text
-operator      ask → understand → see the work → act → receive confirmation
+The operator should not need to know which module contains the answer, which
+lifecycle field matters, whether assignment and acceptance differ, where proof is
+stored, how a candidate population was selected, which source failed, which policy
+produced the conclusion, or which service performs the action.
 
-institution   resolve actor and property → resolve the intended question
-              → declare required sources → execute canonical reads
-              → judge source outcomes, fact usability and evidence age
-              → determine supported conclusions → render controlled language
-              → preserve a read receipt → perform an authorized action
-              → preserve a write receipt
-```
-
-The employee should not need to understand the machinery. The system must still
-be able to prove exactly what happened.
-
-**The practical product test.** The system must never confuse:
-
-- a successful query with a complete candidate population;
-- an attachment with valid evidence;
-- no evaluation with a failed evaluation;
-- no recent operating event with stale data;
-- unauthorized access with permission to reveal record existence;
-- a request to create work with a request to send a message.
-
-Each of those is a failure this codebase has actually produced.
+They ask naturally. Spine quietly states what question it understood, answers from
+governed facts, keeps the supporting work visible, and offers only actions that are
+currently valid.
 
 ---
 
-## 2. Release 0 — canonical proof correction
+## 2. Product character
 
-**Ships before Ask Spine, as its own release with its own deployment, browser
-proof and rollback path.**
+### 2.1 Frictionless on the surface
 
-- `unclassified` no longer satisfies valid completion proof.
-  (`src/surfaces/work_order_status_read.js:90` currently includes it.)
-- Audit existing open and completed work orders **first**.
-- Do not reopen historical completions automatically.
-- Add durable proof evaluations **only for new completion attempts**.
-- **Do not backfill evaluations.** No evaluation row means legacy treatment.
-- Evaluations are **append-only**; a re-evaluation creates a new superseding row.
-- Scope evaluations with the composite `(work_order_id, property_id)` foreign key,
-  matching `fk_wop_work_scope` in migration 134.
-- Store supporting attachments through FK-backed rows, not an ID array.
-- Record who or what performed the evaluation.
+Supported questions sound like ordinary work — *"What was reported done but still
+needs proof?"*, *"What is blocked?"*, *"Who has the work in Unit 302?"*, *"Show me
+the leak job."* No internal codes, special syntax, complex filters or module
+knowledge.
 
-### The claim Release 0 may make
+### 2.2 Strict underneath
 
-> There is one canonical implementation of work-order proof validity, and the
-> existing Work Orders surface uses it correctly.
+The model may determine what the operator meant, which record was referenced,
+whether clarification is required, and which governed intent should execute.
 
-Ask Spine agreement is proven later. It cannot be proven here — Ask Spine does
-not exist yet.
+The model does **not** freely state factual operating truth. Statements about
+lifecycle, completion, proof, assignment, acceptance, urgency, priority, authority,
+and communication preparation/sending/delivery come from structured fields through
+controlled renderers.
 
-### Acceptance
+### 2.3 Useful honesty
 
-- `unclassified` does not satisfy proof;
-- valid classified evidence does;
-- legacy completed work renders as **legacy**, not newly failed;
-- no evaluation rows were backfilled.
+Surface uncertainty when it changes what the person should believe or do.
 
-### Ordering — app first
+```text
+DECISIVE   The facts support the requested conclusion.
+BOUNDED    A narrower conclusion is supported, but the broader one is not.
+BLOCKED    The requested conclusion cannot be supported because a required fact
+           is missing, unusable, conflicting, outside scope, or unavailable.
+```
 
-The reader emits `proof: { satisfied: <bool> }` today and the app consumes it.
-Release 0 makes it at least three-valued: satisfied · not satisfied ·
-legacy-indeterminate. That is a shape change to a live operator surface.
+Detailed evidence and receipts remain available behind the answer.
 
-**The app handles the tri-state before the API emits it**, with a mismatch check
-at the gate. The obligation authority release aborted at 2:06 PM on 2 Aug for
-exactly this class of mismatch; that scar is the reason for this rule.
+### 2.4 Conversation does not replace the operating field
 
-Release 0 therefore has an app deliverable, not only a rule change — *"legacy
-renders as legacy"* is a rendering claim.
+Persistent cards preserve the records involved, why they appeared, current
+lifecycle, assignment, acceptance, proof state, last meaningful evidence, and the
+available action. **The transcript is not the queue.**
 
 ---
 
-## 3. Build 1 — intent contracts and canonical reads
+## 3. Stable intent identities
 
-Freeze three intents. **Identify them by stable slug, never by number** — the IDs
-are published immutably and written into every receipt, and the numbering has
-already drifted once between contract revisions:
-
-```text
-maintenance.completion_without_valid_proof     freeze
-maintenance.blocked_work                       freeze
-maintenance.ownership_and_acceptance           freeze
-maintenance.attention                          NOT frozen — see §7
-```
-
-Each intent contract declares:
+**Intent numbering is prohibited.** Numbers changed between contract drafts and are
+not safe identifiers for immutable policies or durable receipts.
 
 ```text
-intent_contract slug / version / digest
-candidate predicate
-required and optional sources
-source evidence-time columns
-evidence-age rules
-result cap
-supported and withheld conclusions
-consequence class
+maintenance.completion_without_valid_proof
+maintenance.blocked_work
+maintenance.ownership_and_acceptance
+maintenance.attention                        ← not frozen
 ```
 
-Published versions are immutable. **Reducing the required source set is a governed
-and reviewed change**, because it weakens the basis on which a conclusion may be
-drawn. The receipt records the exact version and digest used.
+Every receipt carries `intent_slug`, `intent_contract_version`,
+`intent_contract_digest`.
 
-### 3.1 Candidate sets — the defect this exists to prevent
+---
 
-`readPropertyWorkOrderStatuses` (`work_order_status_read.js:325`) selects **the
-latest 100 work orders** and derives each one in a loop (~5 queries apiece). Used
-as-is, an intent answers over a recency window rather than the property: a
-property with 300 work orders whose only unproven completion is #250 returns
-`valid_empty` — a confident, fully-receipted, wrong answer.
+## 4. Initial supported intents
 
-**A fully successful read can still answer the wrong population.** No coverage
-state catches a silently truncated candidate set.
+### 4.1 `maintenance.completion_without_valid_proof`
 
-Therefore:
+**Work orders only.** It does not combine the work-order proof lane with the
+unit-turn lane — `work_completion_claims.proof_satisfied` is a preserved verdict
+under the rule in force at claim time; the work-order lane recomputes. The two must
+not be collapsed into one answer.
 
-- the predicate runs **in SQL** and expresses the actual condition — for Q1, the
-  completion/proof condition, not a recency window;
-- the same predicate produces **selected records, total matching count, and the
-  capped result set**;
-- the cap is enforced **in SQL and again in the service**;
-- exceeding the cap forces coverage `bounded`, **never** `complete`, and the
-  count is stated: *"Showing 20 of 147 matching work orders."*
+The answer distinguishes:
 
-The cap is a presentation limit. It is never a hidden definition of the question.
+1. completion claimed but not completed;
+2. no proof attachment;
+3. attachment referenced but bytes not preserved;
+4. attachment fetch failed;
+5. attachment not preserved;
+6. attachment unclassified;
+7. valid classified evidence;
+8. historical completion governed by legacy treatment;
+9. **post-release completion missing a required evaluation.**
 
-### 3.2 Two layers, kept separate
+A successful proof-table query does not mean valid proof exists.
 
-Do **not** put intent execution inside `work_order_status_read.js`.
+### 4.2 `maintenance.blocked_work`
+
+May show the work order, blocker, assignment, acceptance, latest qualifying
+progress, and whether a valid next action is recorded.
+
+**The system must not claim blocked work has a next owner when no next owner is
+recorded.** No such field exists today; the gap is exposed honestly and becomes a
+later slice.
+
+### 4.3 `maintenance.ownership_and_acceptance`
+
+The answer preserves the differences between assigned user, accepted user,
+responsible role, unassigned, and assigned-but-not-accepted. "Owner" may be
+understood conversationally; it cannot flatten these facts in the rendered answer.
+
+### 4.4 `maintenance.attention`
+
+**Not frozen.** Depends on operational rulings covering the eligible work pool,
+operator role, time horizon, urgency treatment, blocked-work treatment, meaningful
+progress, override authority and ranking hierarchy. The architecture may support it
+earlier; the policy may not be published until the business meaning is settled.
+
+---
+
+## 5. Canonical truth and intent execution are separate layers
 
 | Layer | Answers | Owns |
 |---|---|---|
-| **Canonical maintenance derivation** | What is true about this work order? | lifecycle · proof · assignment · acceptance · progress · coordination · delivery · valid next actions |
-| **Intent execution** (domain-neutral) | What did this question require, what was checked, what conclusion is supported? | candidate predicate · source declaration · source outcomes · evidence age · coverage · supported and withheld conclusions · read receipts |
+| **Canonical maintenance derivation** | What is true about this work order? | lifecycle · proof condition · assignment · acceptance · progress · coordination · delivery · valid next actions |
+| **Intent execution** (domain-neutral) | What did this question require, what was checked, what may be concluded? | immutable contracts · candidate selection · source declarations · evidence timestamps · source outcomes · fact usability · result limits · coverage · supported and withheld conclusions · read receipts |
 
-Ask Spine uses the generic intent layer, which calls the maintenance derivation.
-That gives money a reusable contract engine later without pretending maintenance
-and accounting have identical facts.
+Ask Spine becomes another consumer of the canonical derivation. **It does not create
+a parallel interpretation of work-order truth.**
 
-### 3.3 Evidence age, not staleness
+The intent layer stays separate from the maintenance reader. It is the architecture
+that may later apply to money, where the underlying facts involve transactions,
+accounting periods, budgets, evidence, accrual treatment and approval.
 
-For a live database read the query is current. The concern is that **no new
-operating evidence has been recorded**. Each source declares its evidence
-timestamp:
+---
 
-```text
-work_orders.updated_at
-latest qualifying work_order_progress.occurred_at
-attachment received_at / stored_at
-proof evaluation evaluated_at
-```
+## 6. Candidate population contract
 
-Results carry `evidence_as_of`, `evidence_age`, `no_recent_evidence` — **not**
-`is_stale`, which implies a cached or outdated read.
+Every intent contract declares its candidate predicate. The predicate identifies the
+population relevant to the question — **not an arbitrary recent window.**
 
-This supports *"No meaningful progress has been recorded for three days."* It does
-not falsely claim the database returned old data.
+> The system may not answer *"No matching work exists"* after examining only the
+> most recent 100 work orders.
 
-**Meaningful progress** must enumerate its qualifying `work_order_progress.kind`
-values inside the policy version. `en_route` is probably not one. The qualifying
-set is an explicit policy decision, not an assumption.
+This is not hypothetical: `readPropertyWorkOrderStatuses`
+(`src/surfaces/work_order_status_read.js:325`) selects the latest 100 work orders and
+derives each in a loop. Built on as-is, a property whose only unproven completion
+falls outside that window returns a confident, fully-receipted `valid_empty`.
 
-### 3.4 Source outcomes, usability, coverage
+Each candidate process produces:
 
 ```text
-source outcome     answered · failed · unauthorized · not_applicable
-fact usability     present_and_valid · present_but_unverified
-                   present_but_incomplete · present_but_conflicting · missing
-evidence           evidence_as_of · evidence_age · no_recent_evidence
-
-coverage           complete · bounded · insufficient_for_conclusion
-                   · conflicting · valid_empty · unavailable
-                   · unauthorized · unsupported
+total_matching
+selected_count
+result_cap
+candidate_predicate_version
 ```
 
-Coverage is computed mechanically from the immutable contract. **The renderer
-cannot choose or soften it.**
+The predicate executes **in SQL**. The cap is enforced in SQL **and again in the
+service**. The total is counted over the same predicate used to select candidates.
 
-### 3.5 Internal states and visible states differ
+When results exceed the cap: *"Showing 20 of 147 matching work orders."* The answer
+is `bounded`, never `complete`.
 
-The audit receipt may record `unauthorized`. The operator must not be told that a
-protected record exists.
+**A presentation limit cannot silently become the definition of the question.**
+
+---
+
+## 7. Versioned intent contracts
+
+```text
+intent_slug          candidate_predicate      supported_conclusions
+version              required_sources         withheld_conclusions
+digest               optional_sources         renderer_contract
+scope                evidence_time_rules
+consequence_class    result_cap
+```
+
+Published versions are immutable; a material change creates a new version.
+**Reducing required sources is a reviewed policy change**, because it weakens the
+basis for the answer.
+
+Whether a response requires a durable read receipt is decided by
+`consequence_class` in the contract — not by the renderer.
+
+---
+
+## 8. Source outcomes and fact usability
+
+```text
+source outcome    answered · failed · unauthorized · not_applicable
+
+fact usability    present_and_valid · present_but_unverified
+                  present_but_incomplete · present_but_conflicting · missing
+```
+
+**A source answering successfully does not establish that the underlying evidence is
+valid.**
+
+---
+
+## 9. Evidence age
+
+For direct database reads the query is current. The concern is whether meaningful
+operating evidence has been recorded recently.
+
+```text
+evidence_as_of · evidence_age · no_recent_evidence          not: is_stale
+```
+
+Each source in the contract identifies the timestamp supplying `evidence_as_of` —
+`work_orders.updated_at`, qualifying `work_order_progress.occurred_at`, attachment
+`received_at`/`stored_at`, proof evaluation `evaluated_at`.
+
+**The contract must not substitute query time for evidence time.** A statement like
+*"No meaningful progress has been recorded for three days"* must rest on an
+explicitly identified evidence timestamp and a qualifying-event policy. The
+qualifying `work_order_progress.kind` values are enumerated inside the policy
+version — `en_route` is probably not one.
+
+---
+
+## 10. Coverage and visible answer states
+
+Coverage is computed mechanically from the immutable contract, the complete
+candidate population, source outcomes, fact usability, evidence age, conflict state
+and the result cap. **The renderer cannot choose the coverage result.**
+
+Internal receipt states:
+
+```text
+complete · bounded · insufficient_for_conclusion · conflicting
+valid_empty · unavailable · unauthorized · unsupported · clarification_required
+```
+
+The visible vocabulary is deliberately narrower.
 
 | | Visible |
 |---|---|
-| **Module-level denial** | *"You do not have access to maintenance for this property."* |
-| **Record-level denial** | **Concealed** — bounded scope, valid empty, or not found, depending on the request |
+| **Module-level denial** | *"You do not have maintenance access for this property."* |
+| **Record-level denial** | **Concealment preserved** — bounded scope statement, valid empty, or not found, as appropriate |
 
-The receipt preserves the real refusal internally. The UI preserves record
-concealment.
-
-### 3.6 Clarification and corrections
-
-Add a distinct non-decision state: `clarification_required`. An ambiguous question
-is **not** unsupported, and creates no decision-grade read receipt.
-
-Every answer displays a quiet resolved-question label in operator language —
-*"Answering: work reported complete without valid proof"* — so a misroute is
-correctable without exposing internal codes. A correct answer to the wrong
-interpreted question is still a bad answer.
-
-When the operator corrects it, record a **correction event** linked to the
-original turn, the original resolved intent, the corrected intent or requested
-domain, the actor and the timestamp. That is the strongest real signal of intent
-quality, and it must not require mining chat transcripts.
-
-### 3.7 Read receipts
-
-Decision-grade answers create durable read receipts recording the structured
-basis, not merely the rendered sentence: actor · property · question reference ·
-resolved intent · contract slug/version/digest · required and optional sources ·
-source outcomes · fact usability · evidence timestamps and ages · record
-references used · supported and withheld conclusion codes · coverage outcome ·
-ranking policy details where applicable · renderer version · created_at.
-
-Whether an answer is decision-grade is set by **the intent contract**, not the
-renderer.
-
-**Receipt-write failure is non-fatal.** If the answer can be produced safely the
-operator still receives it, the structured result states `receipt_status:
-not_written`, and the interface shows *"Answer available · audit receipt could not
-be saved."* The failure cannot be silent.
+The operator must not be told that a protected work order exists. The receipt may
+record the true authorization result internally. **Internal audit vocabulary and
+visible operator vocabulary are not identical.**
 
 ---
 
-## 4. Build 2 — Property Home experience
+## 11. Clarification and intent correction
 
-One prominent composer · visible property context · visible resolved question ·
-concise answer · persistent cards · clarification and correction flow · complete,
-bounded, empty, unavailable, conflicting and concealed cases · direct transition
-into Work Orders.
+Ambiguity is not unsupported behavior. When the question cannot be resolved safely
+the system returns `clarification_required`. A clarification round creates **no**
+decision-grade read receipt, because no operating conclusion has been made.
 
-**Do not build a blank full-screen chatbot.** Ask Spine is embedded in the
-operating day.
+Every completed answer displays a quiet resolved-intent label — *"Answering: work
+reported complete without valid proof."* A correct answer to the wrong interpreted
+question is still a bad answer.
 
-**Cards ship with the read layer**, not with the actions. A card may show: unit or
-location · issue · why it appeared · lifecycle state · assigned to · accepted by ·
-proof condition · last meaningful progress · available action. It expands into
-evidence, provenance, history, source freshness, withheld conclusions and the
-receipt. The default stays concise.
-
-The conversation is not the queue. The operator should not have to reconstruct the
-day from a transcript.
+When the user corrects it, record an **intent-correction event** linked to the
+original turn, original resolved intent, corrected intent or requested domain,
+actor, timestamp, and related read receipt where one exists. This is the primary
+operating signal for intent-resolution quality, and it must not require mining chat
+transcripts.
 
 ---
 
-## 5. Build 3 — governed actions
+## 12. Controlled factual rendering
 
-Only actions with fully known canonical consequences and receipts.
+The model produces no visible factual operating prose. The renderer receives
+`resolved_intent`, `answer_state`, canonical facts, source outcomes, fact usability,
+evidence age, supported and withheld conclusions, supporting records, available
+actions, receipt status and renderer version — and produces concise operator
+language.
 
-Each consequential action names the affected work order, states the consequence,
-rereads current state, verifies actor authority, executes through the canonical
-service, returns a structured write receipt, and refreshes the answer and cards.
+> **Answering: work reported complete without valid proof**
+> Two work orders were reported complete but cannot be closed. One has no
+> attachment. One has an attachment that was not preserved.
 
-**"Request proof" is not automatically an action.** Resolve what it does. If it
-creates an obligation or queue item through a canonical service, it can ship. If
-it sends a technician message, it waits for the real **operations** communication
-line and provider configuration — which do not exist. The UI must never present
-one label for two materially different consequences.
-
-**Deferred:** retry resident communication · send resident updates · state or
-promise delivery · anything depending on a real carrier.
-
-### Resident coordination wording
-
-Distinguish preparation, sending and delivery. With no provider-configured line,
-never say *"Resident asked at 10:04 AM · waiting for reply."* Say **"Resident
-update prepared at 10:04 AM · not sent because the line is not configured."**
-"Waiting for reply" requires evidence the message was actually sent.
-
-Do not offer a coordinate-access action when the same no-access cause already
-produced the resident update. `residentCoordinationFor` already performs this
-check; migration 136's unique index remains the final safety boundary, and the
-interface should prevent the duplicate before the database has to refuse it.
+The detailed machinery stays on the cards and the receipt.
 
 ---
 
-## 6. Build 4 — maintenance attention
+## 13. Read receipts
 
-`maintenance.attention` waits for the operational rulings in §7. The read
-architecture may support it earlier; **the ranking contract cannot be published
-before the operating meaning is settled.**
-
-Ranking, when it comes, applies **inside maintenance only** — no universal
-numerical score. Each result carries `ranking_policy_id`, `ranking_version`,
-`policy_digest`, `priority_class`, `priority_reason_code`, `priority_facts`,
-`ranked_at`. Published versions are immutable.
-
-### Urgency and provenance
-
-Maintenance carries more than one urgency-related fact and the build may not
-silently choose between them. Distinguish: confirmed emergency · confirmed regular
-· needs confirmation · conflicting urgency facts · migration-derived historical
-urgency.
-
-`needs_confirmation` is **not** equivalent to regular or low priority. It is an
-unresolved operating condition.
-
-`obligations.severity` defaults to `'normal'` — a default is not a decision.
-Migration 078's backfill set `urgency_decided_by = 'operator'` for every
-pre-existing row, recording a provenance claim that is not true. The **migration
-ledger may be used as a declared source**: where an urgency-decision timestamp
-predates 078's `applied_at`, the fact is classified as migration-derived rather
-than a genuine operator decision. The system must not claim provenance is
-unreliable unless it has computed that state from declared evidence.
-
-### Dispute primitive — later slice
-
-First-class conflict records: subject · conflicting claims · conflict type ·
-resolution owner · open/resolved status · resolution · resolving actor ·
-timestamps. **Ask Spine may expose conflicts before this slice. It may not invent
-who is right or silently reconcile them.**
-
----
-
-## 7. Deferred, and why
-
-| | Reason |
-|---|---|
-| `maintenance.attention` | operating meaning not yet ruled (§8) |
-| *"What is waiting on a resident?"* | no carrier wiring. A prepared update is not a sent update. **No fixture-backed delivery behavior belongs in the production acceptance contract.** |
-| Unit-turn proof questions | different semantics — `work_completion_claims.proof_satisfied` is a preserved verdict; the work-order lane recomputes. The two must not be collapsed into one answer. |
-| Cross-domain ranking | each domain first needs capture, governed reads, coverage contracts, decision rules, receipts and real-user proof |
-
----
-
-## 8. Rulings still owed
-
-### 8.1 Open engineering rulings — block Build 1 freeze
-
-**a. Legacy must be bounded by time, not absence alone.** After Release 0 ships, a
-completion that misses the evaluation writer also has no row, and would be
-silently absorbed into "legacy" instead of surfacing as the defect it is.
+Decision-grade answers create durable receipts recording the structured basis, not
+the displayed sentence:
 
 ```text
-no evaluation row AND completed_at <  release_0_deployed_at   → legacy
-no evaluation row AND completed_at >= release_0_deployed_at   → DEFECT, loud
+actor · property · question reference
+intent slug · contract version · contract digest
+candidate predicate version · total matching · selected count · result cap
+required sources · optional sources · source outcomes · fact usability
+evidence timestamps · evidence-age determinations · record references used
+supported conclusions · withheld conclusions · coverage outcome
+renderer version · created_at
 ```
 
-The second state needs a name and must never render as legacy.
-
-**b. Q2's SQL predicate collides with one-canonical-derivation.** "Blocked" is not
-a column — `lifecycleStateOf` decides it in JS from the latest progress per kind.
-A SQL predicate for "currently blocked" implements the lifecycle rule a second
-time, which §3.2 forbids.
-
-Proposed resolution: the predicate selects a **superset** (any work order with a
-`blocked` progress event, capped in SQL); the canonical derivation confirms current
-state per candidate; the **confirmed** count is reported and the superset count
-never reaches the operator. Q1 and Q3 do not have this problem — their conditions
-are real columns.
-
-**c. The Release 0 production audit needs clearance.** Only
-`tools/ledger_reconcile.js` and `tools/property_line_preflight.js` are cleared to
-run against production. A new audit script needs explicit authorization and must
-be provably read-only — no transaction capable of writing, counts only.
-
-### 8.2 Open operational rulings — block `maintenance.attention` only
-
-- what "needs attention" means, and which work belongs in the pool;
-- what facts move one job ahead of another;
-- treatment of unconfirmed urgency;
-- which events count as meaningful progress;
-- who may override priority;
-- how blocked work receives a next owner;
-- which actions require confirmation;
-- what "done" means by work category;
-- who resolves disputes.
-
-These do not block the three frozen intents.
+**Receipt-write failure is non-fatal** when the operating answer can still be
+produced safely. The result carries `receipt_status: not_written` and the interface
+shows *"Answer available · audit receipt could not be saved."* The failure cannot be
+silent.
 
 ---
 
-## 9. Money carried forward
+## 14. Persistent work cards
 
-Money is the next domain. This build should produce reusable concepts — versioned
-intent contracts, declared source coverage, fact usability, evidence age,
-controlled and withheld conclusions, durable read receipts, versioned policy
-receipts, conflicts, persistent evidence cards.
+Cards ship with the read experience; they do not wait for governed actions.
 
-**Implementation stays concrete to maintenance.** Do not prematurely generalize
-around currency, accounting periods, accrual, rounding, budgets or general-ledger
-behavior. Extract shared abstractions when the second domain is built and the true
-common shape is known.
+```text
+Unit or location · Issue · Why it appeared · Lifecycle
+Assigned to · Accepted by · Proof condition · Last meaningful evidence
+Available action
+```
 
-Whether Property Spine feeds Yardi, maintains an operating subledger, produces
-journal support, or eventually becomes the general ledger is **outside this
-build**.
+Expandable into evidence, provenance, progress history, evidence age, withheld
+conclusions and the read receipt.
 
 ---
 
-## 10. Definition of done
+## 15. Governed actions
 
-A signed-in operator asks a normal supported maintenance question from Property
-Home and:
+Only actions with a known canonical consequence, a current-state reread, authority
+enforcement, a canonical service, and a durable write receipt.
+
+Potential first actions: open the work order · assign eligible staff · review
+existing proof · open the full Work Orders workspace.
+
+**"Request valid proof" is unresolved.** If it creates an obligation or queue item
+through a canonical service it may ship. If it sends a technician message it is
+deferred until a real **operations** communication line and provider configuration
+exist. **One label may not hide two different consequences.**
+
+Resident communication actions remain deferred where no real transport exists. With
+no provider-configured line, never say *"Resident asked at 10:04 AM · waiting for
+reply"* — say **"Resident update prepared at 10:04 AM · not sent because the line is
+not configured."** Do not offer coordinate-access when the same no-access cause
+already produced the resident update; `residentCoordinationFor` already performs this
+check and migration 136's unique index remains the final safety boundary.
+
+---
+
+## 16. Release sequence
+
+### Release 0 — canonical proof correction
+
+**Separate from Ask Spine.** It changes live Work Orders behavior and requires its
+own production-derived audit, migration and schema work, API change, app
+compatibility change, deployment window, browser verification and rollback plan.
+
+**App-first** if the response shape changes from a boolean into a multi-state proof
+result. The app must safely understand the new shape before the API emits it. (The
+obligation authority release aborted at 2:06 PM on 2 Aug for exactly this class of
+mismatch.)
+
+Acceptance:
+
+- `unclassified` does not satisfy valid proof;
+- valid classified evidence still satisfies proof;
+- historical completed work renders as legacy where appropriate;
+- post-release missing evaluations render as **defects**, not legacy;
+- no proof evaluations were backfilled;
+- the existing Work Orders surface remains truthful under the new shape;
+- exactly one canonical implementation determines proof validity.
+
+Evaluations are **append-only** — a re-evaluation creates a new superseding row —
+scoped by the composite `(work_order_id, property_id)` foreign key, storing supporting
+attachments as FK-backed rows rather than an ID array, and recording who or what
+performed the evaluation.
+
+### Build 1 — contract-driven reads
+
+Freeze and implement the three intents. Build intent contracts, candidate predicates,
+total counts, result caps, evidence-time rules, the generic intent executor,
+maintenance projections, read receipts and concealment rules.
+
+### Build 2 — Property Home experience
+
+Real composer · visible property context · resolved-intent label · concise controlled
+answers · persistent work cards · clarification · correction flow · complete,
+bounded, empty, unavailable, conflicting, concealed and unsupported states ·
+transition into Work Orders. **Do not build a blank full-screen chatbot.**
+
+### Build 3 — governed actions
+
+Only actions with complete operating consequences and receipts.
+
+### Build 4 — maintenance attention
+
+After the operational rulings: define the eligible pool, audience and time horizon,
+urgency treatment, meaningful progress, blocked-work treatment and override
+authority; publish the immutable ranking policy; enable `maintenance.attention`.
+
+Ranking applies **inside maintenance only** — no universal numerical score. Each
+result carries `ranking_policy_id`, `ranking_version`, `policy_digest`,
+`priority_class`, `priority_reason_code`, `priority_facts`, `ranked_at`.
+
+**Urgency and provenance.** Distinguish confirmed emergency · confirmed regular ·
+needs confirmation · conflicting urgency facts · migration-derived historical
+urgency. `needs_confirmation` is not equivalent to regular or low priority; it is an
+unresolved operating condition. `obligations.severity` defaults to `'normal'` — a
+default is not a decision — and migration 078's backfill set `urgency_decided_by =
+'operator'` for every pre-existing row, recording a provenance claim that is not
+true. The migration ledger may be a declared source: an urgency-decision timestamp
+predating 078's `applied_at` is migration-derived, not an operator decision. The
+system must not claim provenance is unreliable unless it computed that from declared
+evidence.
+
+**Dispute primitive — later slice.** First-class conflict records: subject ·
+conflicting claims · conflict type · resolution owner · open/resolved · resolution ·
+resolving actor · timestamps. Ask Spine may expose conflicts before this slice. **It
+may not invent who is right or silently reconcile them.**
+
+---
+
+## 17. Browser and production acceptance
+
+Acceptance begins where the employee begins:
+
+```text
+sign in → open Property Home → type a natural question → see what Spine understood
+→ receive the answer → inspect the supporting work → take a valid action
+→ see the work refresh → retrieve the receipt
+```
+
+Required cases: complete answer · bounded answer caused by result cap · refused
+conclusion · conflicting facts · **valid empty over the full candidate predicate** ·
+source failure · no recent evidence · stale screen content removed · module-level
+denial · record-level concealment · clarification · intent correction ·
+receipt-write failure visible and non-fatal · navigation through the real operator
+path · visible rendering, not DOM presence alone · action performed against the
+correct record · unavailable action not offered · **Work Orders and Ask Spine
+agree** · `unclassified` does not satisfy proof · legacy determination renders as
+legacy · post-release missing evaluation renders as a defect.
+
+---
+
+## 18. Money carried forward
+
+Establish reusable operating concepts: stable intent slugs · immutable intent
+contracts · candidate predicates · declared sources · fact usability · evidence
+timestamps · supported and withheld conclusions · read receipts · controlled
+renderers · persistent evidence cards · intent corrections · internal-versus-visible
+authorization states.
+
+**Implementation remains concrete to maintenance.** Do not prematurely generalize
+around currency, rounding, accounting periods, accrual, budgets, chart-of-accounts
+mapping or general-ledger posting. Extract when the money domain provides the second
+real implementation.
+
+---
+
+## 19. Explicit open rulings
+
+Not silently decided by this charter. Each must be closed before the affected
+release begins.
+
+**Open Ruling 1 — time-bounded legacy proof.**
+
+```text
+no evaluation AND completed_at before Release 0 deployment   → legacy
+no evaluation AND completed_at on or after Release 0 deploy  → writer defect
+```
+
+The exact release boundary and defect vocabulary must be frozen before Release 0.
+
+**Open Ruling 2 — app-first tri-state proof contract.** The reader emits a boolean
+today; Release 0 requires at least satisfied · not satisfied · legacy-or-
+indeterminate. The exact API shape, compatibility period, mismatch gate and
+deployment order must be finalized before implementation.
+
+**Open Ruling 3 — blocked-work candidate predicate.** "Currently blocked" is derived
+by canonical lifecycle logic, not stored as a column. Proposed: SQL selects a capped
+superset of work orders with blocked progress; canonical derivation confirms current
+blocked state; only confirmed results are counted and shown; the superset count is
+never presented as the answer. Confirm before publishing the contract.
+
+**Open Ruling 4 — production audit authorization.** The audit must be explicitly
+authorized, structurally read-only, run outside the unsafe harness paths, output only
+the counts and identifiers needed for review, and perform no mutation. **No
+production audit script may run merely because it is named "audit" or "proof."**
+
+**Open Ruling 5 — request-proof consequence.** Determine whether it creates a
+canonical obligation or queue item, sends a technician communication, or is two
+separate actions. It cannot appear in the first action set until its consequence,
+authority, transport dependency and receipt are defined.
+
+### 19a. Raised in review, not yet ruled
+
+**Open Ruling 6 — "assign eligible staff" has the same transport question as
+request-proof.** If a technician learns of assignment only by SMS, assignment depends
+on the same missing operations line. The write is honest either way, but the
+interface must not imply the technician was told. Resolve whether assignment's
+operating consequence is *recorded* or *recorded and communicated* — and if the
+latter, defer it alongside request-proof.
+
+**Open Ruling 7 — the internal→visible state mapping is currently the renderer's
+choice.** §10 forbids the renderer choosing coverage, but nine internal states map to
+three visible levels and nothing specifies the mapping. Does `conflicting` render
+BOUNDED or BLOCKED? Does `valid_empty` render DECISIVE? **Put the mapping in the
+contract's `renderer_contract` and freeze it with the version**, or the renderer is
+choosing the answer level after all.
+
+**Acceptance gap.** §17 tests `valid_empty` over the full candidate predicate, which
+proves the empty case. The dangerous case is the **non-empty** one: a genuine match
+placed deliberately outside the old recency window must be found. That is the direct
+regression test for the defect §6 exists to prevent, and it is not currently listed.
+
+**Ownership of §19.** Rulings 1, 2, 3, 5, 6 and 7 are engineering rulings. Ruling 4
+is an owner authorization. None is assigned in this charter.
+
+---
+
+## 20. Definition of done
+
+A signed-in operator asks a supported maintenance question from Property Home and:
 
 - Spine states what question it understood;
-- the correct immutable intent contract drives the reads;
-- the candidate population is the real one, not a recency window;
+- the immutable intent contract drives the execution;
+- the full candidate population is defined, and result limits are visible and bounded;
 - every required source is accounted for;
-- source availability is not confused with valid evidence;
-- evidence age is evaluated;
-- conflicting facts are surfaced, not reconciled;
-- `unclassified` evidence is not treated as proof;
-- no evaluation is not treated as a failed evaluation, and no evaluation was backfilled;
-- only supported conclusions are stated, and withheld conclusions are named when material;
-- unauthorized records are concealed at record level;
+- evidence age is evaluated from real operating timestamps;
+- source availability is not confused with evidence validity;
+- attachments are not confused with valid proof;
+- legacy absence is not confused with a broken writer;
+- record-level denial does not reveal protected records;
+- ambiguity triggers clarification, and intent corrections are recorded;
+- only supported conclusions are stated, and material withheld conclusions are identified;
 - supporting work remains visible;
-- a valid authorized action can be completed;
-- an unavailable or already-completed action is not falsely offered;
-- the answer leaves a recoverable read receipt; the action leaves a recoverable write receipt;
-- a receipt failure is visible and non-fatal;
-- **Ask Spine and Work Orders agree**;
-- the complete employee path is browser-proven;
+- valid actions use canonical services;
+- reads and writes leave recoverable receipts, and receipt failures are visible and non-fatal;
+- **Work Orders and Ask Spine agree**;
+- the complete operator path is browser-proven;
 - production behaves like the proven build.
 
-**The rejection test.** Does this remove an operating handoff or re-entry step
-while making the resulting truth easier to understand and more accountable? If it
-only creates an impressive answer, do not ship it.
+**The rejection test.** Does this remove an operating handoff or re-entry step while
+making the resulting truth easier to understand, harder to misstate, and easier to
+audit? If it only creates an impressive answer, do not ship it.
