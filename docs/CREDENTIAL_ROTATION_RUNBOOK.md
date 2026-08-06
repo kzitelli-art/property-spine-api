@@ -1,7 +1,30 @@
 # Neon credential rotation — runbook and receipt
 
-**Status: REQUIRED. Blocks all further Release 0 work by owner instruction,
-2026-08-06.**
+**Status: REQUIRED and urgent.**
+
+**What rotation blocks** (owner ruling, 2026-08-06):
+
+```text
+BLOCKED until rotated
+  ·  any production connection
+  ·  any production configuration change beyond the rotation itself
+  ·  anything under src/, migrations/, or app product code
+  ·  deployment
+  ·  any runtime-changing merge
+  ·  Release 0 implementation
+
+NOT BLOCKED
+  ·  preservation of the audit record
+  ·  governing-document amendments
+  ·  design and implementation planning
+```
+
+Audit preservation, governing-document amendments, and design planning may
+continue **because they do not use the exposed credential and do not alter
+production behaviour.** An earlier version of this file said rotation blocked
+*all* further Release 0 work; that was corrected because it would have left the
+governing decisions trapped in a chat transcript, which is the failure mode this
+repository's handoff discipline exists to prevent.
 
 **This runbook contains no secret value and the receipt in §4 must not acquire
 one.**
@@ -132,7 +155,7 @@ step 5  transcript exposure acknowledged
 
 ## 5. After rotation
 
-Release 0 work resumes in the order the owner set:
+Production access and runtime-changing work resume in the order the owner set:
 
 1. a separate PR containing the production audit record, tests, and the
    read-only tooling correction — **no product behaviour**;
