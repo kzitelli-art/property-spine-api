@@ -496,14 +496,51 @@ real implementation.
 Not silently decided by this charter. Each must be closed before the affected
 release begins.
 
-**Open Ruling 1 — time-bounded legacy proof.**
+**Open Ruling 1 — time-bounded legacy proof. RULED, FROZEN.**
+
+The legacy boundary is an **explicit Release 0 activation timestamp stored durably
+in the database**. It is not inferred from the migration `applied_at`, the commit
+time, a documentation date, or the hosting deploy time.
+
+Release order:
 
 ```text
-no evaluation AND completed_at before Release 0 deployment   → legacy
-no evaluation AND completed_at on or after Release 0 deploy  → writer defect
+1.  Deploy the app compatibility change.
+2.  Apply the Release 0 schema.
+3.  Deploy and verify the API proof-evaluation writer.
+4.  Record the immutable Release 0 activation timestamp in the database.
 ```
 
-The exact release boundary and defect vocabulary must be frozen before Release 0.
+Classification:
+
+```text
+no evaluation row AND completed_at <  activation timestamp   → legacy determination
+no evaluation row AND completed_at >= activation timestamp   → missing-evaluation
+                                                                writer defect
+```
+
+**The activation timestamp may be written once and must never be silently
+changed.** "Never silently changed" is a schema obligation, not a convention —
+make a second row or an in-place edit unrepresentable, in the manner of migration
+136, rather than merely discouraged. A correction, if one is ever needed, must
+supersede visibly and leave the original readable.
+
+*Why this differs from §16's urgency provenance.* §16 permits the migration
+ledger's `applied_at` as a declared source, and this ruling forbids the same
+inference for proof. They are not in tension: urgency provenance is a
+**retrospective** judgment about rows that already exist, where no better fact was
+ever recorded and the ledger is the least-wrong evidence available. The proof
+boundary is **prospective** — it governs a cutover we control — so the real fact
+can be recorded instead of inferred, and inferring it would be choosing a worse
+source on purpose.
+
+*Residual gap to close during implementation.* Step 4 records activation after
+step 3 verifies the writer. Any completion landing in that gap has a live writer,
+so it should carry an evaluation row — but if one does not, `completed_at` still
+precedes the activation timestamp and the defect is absorbed into legacy, silently.
+The window is minutes, and it is the same class of hole this ruling exists to
+close. **Capture the writer's verified-live instant at step 3 and persist that
+value at step 4**, so the boundary has no gap.
 
 **Open Ruling 2 — app-first tri-state proof contract.** The reader emits a boolean
 today; Release 0 requires at least satisfied · not satisfied · legacy-or-
