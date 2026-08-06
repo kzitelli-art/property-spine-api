@@ -380,6 +380,31 @@ having bool_or(proof_classification = 'unclassified')
 
 ### C — completion-timestamp coverage
 
+> **⚠ Corrected after the completion-writer audit.** Every query in this
+> section originally filtered `where w.status = 'complete'`. That predicate
+> excludes an entire live completion lane — see
+> [`RELEASE_0_COMPLETION_WRITER_MATRIX.md`](RELEASE_0_COMPLETION_WRITER_MATRIX.md).
+> `PATCH /work-orders/:id/closeout` (`maintenance.js:553`, mounted at
+> `server.js:2985`) writes **`status='closed'`**, stores proof in the
+> `completion_photo` column, and writes no progress row at all. An audit
+> carrying the old filter would have reported a completed-work census missing
+> a whole lane, and reported it as clean.
+>
+> **C0 therefore censuses the status vocabulary instead of assuming it.**
+> `001_baseline.sql` comments the column as `open|scheduled|complete`; the code
+> writes at least `needs_followup` and `closed` beyond that. The comment is not
+> an enumeration and the audit must not treat it as one.
+
+```sql
+-- C0  THE STATUS CENSUS. Run before anything that filters on status.
+--     Counts only — this is what stops a filter from silently defining the
+--     question, per charter §6.
+select status, count(*) as n
+  from work_orders
+ group by status
+ order by status;
+```
+
 **Every join below is scoped on `(work_order_id, property_id)`, never on
 `work_order_id` alone.** `work_order_progress` carries `property_id` as its own
 column and `fk_wop_work_scope` binds the pair; joining on the id alone would be
@@ -388,8 +413,10 @@ scope of every read. A single-column join is also how a cross-property row
 would silently satisfy a check that is supposed to be property-scoped.
 
 ```sql
--- C1  THE RULING 1 GAP, MEASURED.
-select (p.work_order_id is not null) as has_completed_progress_row,
+-- C1  THE RULING 1 GAP, MEASURED — split by status, so the two live
+--     completion lanes are never summed into one number.
+select w.status,
+       (p.work_order_id is not null) as has_completed_progress_row,
        count(*) as n
   from work_orders w
   left join (select distinct work_order_id, property_id
@@ -397,8 +424,9 @@ select (p.work_order_id is not null) as has_completed_progress_row,
               where kind = 'completed') p
     on p.work_order_id = w.id
    and p.property_id  = w.property_id
- where w.status = 'complete'
- group by 1;
+ where w.status in ('complete', 'closed')
+ group by 1, 2
+ order by 1, 2;
 
 -- C2  the recorded completion-time range.
 --
@@ -420,15 +448,30 @@ select count(*) as completed_progress_rows,
 
 -- C3  identifiers for the population with NO completion timestamp, if C1
 --     shows any. These are the rows Ruling 1's predicate cannot evaluate.
-select w.id as work_order_id, w.property_id, w.created_at, w.updated_at
+select w.id as work_order_id, w.property_id, w.status,
+       (w.completion_photo is not null) as has_column_photo,
+       w.created_at, w.updated_at
   from work_orders w
   left join (select distinct work_order_id, property_id
                from work_order_progress
               where kind = 'completed') p
     on p.work_order_id = w.id
    and p.property_id  = w.property_id
- where w.status = 'complete' and p.work_order_id is null
- order by w.property_id, w.created_at;
+ where w.status in ('complete', 'closed') and p.work_order_id is null
+ order by w.property_id, w.status, w.created_at;
+
+-- C5  the third proof model, counted. Writer 2 stores evidence in the
+--     completion_photo COLUMN, which the attachment-based proof reader
+--     cannot see. This is a boolean presence check on a column whose
+--     contents are never selected — see §5.
+select w.status,
+       (w.completion_photo is not null) as has_column_photo,
+       (w.completion_note  is not null) as has_column_note,
+       count(*) as n
+  from work_orders w
+ where w.status in ('complete', 'closed')
+ group by 1, 2, 3
+ order by 1, 2, 3;
 
 -- C4  cross-property scoping check. A progress row whose property_id does not
 --     match its work order's would mean the composite FK is not doing what
@@ -513,9 +556,10 @@ exists to correct: taking an unknown and promoting it to a definite value
 because the definite value is convenient.
 
 ```sql
--- E1  the completed population, split on whether Ruling 1 can evaluate it.
---     Property-scoped join, as in C.
-select case when p.work_order_id is not null
+-- E1  the finished-work population, split by lane AND by whether Ruling 1
+--     can evaluate it. Property-scoped join, as in C.
+select w.status,
+       case when p.work_order_id is not null
               then 'has_completion_timestamp'
               else 'no_completion_timestamp'
        end as ruling_1_evaluable,
@@ -526,52 +570,49 @@ select case when p.work_order_id is not null
               where kind = 'completed') p
     on p.work_order_id = w.id
    and p.property_id  = w.property_id
- where w.status = 'complete'
- group by 1
- order by 1;
+ where w.status in ('complete', 'closed')
+ group by 1, 2
+ order by 1, 2;
 ```
 
 **What may be concluded from E1, and what may not:**
 
 ```text
-has_completion_timestamp     Ruling 1's predicate is evaluable. No evaluation
-                             row exists for any of these (no evaluation table
+status='complete'            Ruling 1's predicate is evaluable. No evaluation
+  + has_completion_timestamp row exists for any of these (no evaluation table
                              exists), and every recorded completion necessarily
                              predates an activation instant captured at a future
                              release step — so these resolve to
                              legacy_indeterminate, which maps to
                              proof.satisfied = null.
 
-no_completion_timestamp      NO CLASSIFICATION CLAIM IS MADE.
-                             Ruling 1's predicate cannot be evaluated. This
+status='complete'            NO CLASSIFICATION CLAIM IS MADE.
+  + no_completion_timestamp  Ruling 1's predicate cannot be evaluated. This
                              population resolves to none of the four published
                              proof states, and this audit does not assert what
                              it emits, whether it is legacy, whether it is a
                              defect, or whether it is null.
+
+status='closed'              NO CLASSIFICATION CLAIM IS MADE, AND A PRIOR
+  (any timestamp state)      QUESTION IS OPEN. These rows do not reach the
+                             classification at all — lifecycleStateOf tests
+                             status = 'complete' and nothing else, so they are
+                             not "completed" to the reader that Release 0
+                             modifies. Whether they are completed work for
+                             Release 0's purposes is an unmade ruling, recorded
+                             in RELEASE_0_COMPLETION_WRITER_MATRIX.md §3.
 ```
 
-The count of the second row is the finding. **It is a number, handed to the
-owner, with no interpretation attached** — because deciding what that population
-means is a ruling, and §19 reserves rulings to the owner and to named engineering
-decisions, not to an audit.
+The counts of the second and third groups are the finding. **They are numbers,
+handed to the owner, with no interpretation attached** — because deciding what
+those populations mean is a ruling, and §19 reserves rulings to the owner and to
+named engineering decisions, not to an audit.
 
 This is also why the Release 0 build stops short of the proof-state contract:
 if that count is non-zero, the four published states of Ruling 2 do not cover
 the real data, and **the contract itself may need to change before anything
 emits it.** Building the writer first would mean building against a contract
 whose completeness has not been established.
-
-### F — is the list cap already hiding rows
-
-```sql
--- readPropertyWorkOrderStatuses selects the latest 100 per property (:325).
--- Any property above that is already answering from a truncated population.
-select property_id, count(*) as total_work_orders
-  from work_orders
- group by property_id
-having count(*) > 100
- order by 2 desc;
-```
 
 ---
 
@@ -583,10 +624,20 @@ containing resident data becomes a thing that must itself be governed.
 ```text
 NEVER   comm_events.body            technician words, resident messages
 NEVER   work_order_progress.note    verbatim field reports
-NEVER   work_orders.description · title · completion_note
+NEVER   work_orders.description · title · completion_note · completion_photo
 NEVER   persons.*                   resident identity of any kind
 NEVER   any phone number, email address, or provider media URL
 NEVER   users.name                  actor UUIDs are sufficient for review
+```
+
+**Presence is not contents, and the distinction is load-bearing here.** Query C5
+needs to know whether `completion_photo` and `completion_note` are populated,
+because that is the third proof model's only visible signal. It reads them as
+`IS NOT NULL` and emits a boolean:
+
+```sql
+(w.completion_photo is not null) as has_column_photo    -- PERMITTED
+w.completion_photo                                      -- FORBIDDEN
 ```
 
 Permitted: UUIDs · counts · timestamps · enum values (`storage_state`,
