@@ -11,16 +11,32 @@ Factual basis: [`release-0-audit/RECEIPT.md`](release-0-audit/RECEIPT.md),
 [`RELEASE_0_COMPLETION_WRITER_MATRIX.md`](RELEASE_0_COMPLETION_WRITER_MATRIX.md),
 [`RELEASE_0_APP_CLOSEOUT_AUDIT.md`](RELEASE_0_APP_CLOSEOUT_AUDIT.md).
 
+> ## ARCHITECTURE FROZEN — 2026-08-06
+>
+> Accepted and frozen at **`4f25f73408d90376f45ea0cf501ddebc7bbff131`**.
+> Gate 1 is CLOSED. **Do not revise the architecture further unless
+> implementation reveals a factual contradiction.**
+>
+> This banner and the gate statuses below are the only things added after the
+> freeze. No schema, sequence, rollback or acceptance section changed —
+> verify with `git diff 4f25f73..HEAD -- docs/RELEASE_0_IMPLEMENTATION_PLAN.md`.
+
 ## Gates before implementation or merge
 
 ```text
 1  revision 3 chain-integrity guard committed and
-   reviewed                                             §2.1.1 · §2.3.1
-2  the exposed Neon credential rotated                  CREDENTIAL_ROTATION_RUNBOOK.md
-3  the old credential proven dead                       runbook §3 step 4
+   reviewed                                             CLOSED 2026-08-06
+2  the exposed Neon credential rotated                  OPEN  ← blocks all
+3  the old credential proven dead                       OPEN  ← implementation
 4  the SMS technician evidence and completion path
-   phone-verified                                       at deployment step 4
+   phone-verified                                       OPEN — release-step
+                                                        gate at step 4
 ```
+
+**After gates 2 and 3 are receipted, implementation may begin at deployment
+step 1.** Gate 4 does not block steps 1–3; step 5 and everything after it may
+not proceed until a real handset, a real inbound image, a preserved attachment,
+canonical completion and operator readback are all proven.
 
 **Implementation does not begin until gates 1–3 are complete.** Gate 4 is a
 release-step condition: it precedes removal of the legacy completion control

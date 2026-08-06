@@ -163,15 +163,17 @@ What rotation unblocks is implementation itself — and rotation is **not the on
 gate**:
 
 ```text
-gate 1  revision 3 chain-integrity guard committed
-        and reviewed                                  plan §2.1.1 · §2.3.1
-gate 2  credential rotated                            this runbook §3
-gate 3  old credential proven dead                    this runbook §3 step 4
+gate 1  revision 3 chain-integrity guard            CLOSED 2026-08-06
+        architecture frozen at 4f25f73
+gate 2  credential rotated                        OPEN  ← YOU ARE HERE
+gate 3  old credential proven dead                OPEN  ←
 gate 4  SMS technician evidence + completion path
-        phone-verified                                plan §5.1 step 4
+        phone-verified                            OPEN — release step 4
 ```
 
-Gates 1–3 precede any product code, migration, deployment, or merge of #43.
+**Gates 2 and 3 are now the only things in front of implementation.** Once both
+are receipted, implementation may begin at deployment step 1, and PR #43 may
+merge.
 Gate 4 is a release-step gate: it precedes removal of the legacy app completion
 control (plan step 5) and everything after it.
 
