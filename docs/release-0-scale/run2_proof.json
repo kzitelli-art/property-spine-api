@@ -1,0 +1,460 @@
+{
+  "phases": {
+    "census": {
+      "ledger_ceiling": "136",
+      "by_status": [
+        {
+          "status": "closed",
+          "n": 15000
+        },
+        {
+          "status": "complete",
+          "n": 45000
+        },
+        {
+          "status": "in_progress",
+          "n": 10000
+        },
+        {
+          "status": "needs_followup",
+          "n": 5000
+        },
+        {
+          "status": "open",
+          "n": 15000
+        },
+        {
+          "status": "scheduled",
+          "n": 10000
+        }
+      ],
+      "by_property": [
+        {
+          "property_id": "625bf15e-d52e-181c-706a-a6c71fca4884",
+          "n": 20000
+        },
+        {
+          "property_id": "a95fd0cd-c509-6a0a-8363-9d804c380b6e",
+          "n": 20000
+        },
+        {
+          "property_id": "ac4bddc3-e226-2980-21d3-ac48b7558df0",
+          "n": 20000
+        },
+        {
+          "property_id": "ae393d20-92a2-e063-16a5-528b692538a2",
+          "n": 20000
+        },
+        {
+          "property_id": "b4ed7c34-2f47-2104-f3b6-e422ebcca7aa",
+          "n": 20000
+        }
+      ],
+      "total": 100000,
+      "terminal": 60000,
+      "complete": 45000,
+      "closed": 15000,
+      "attachments_by_classification": [
+        {
+          "proof_classification": "condition",
+          "storage_state": "stored",
+          "n": 11428
+        },
+        {
+          "proof_classification": "other",
+          "storage_state": "referenced",
+          "n": 2857
+        },
+        {
+          "proof_classification": "repair_photo",
+          "storage_state": "not_preserved",
+          "n": 8571
+        },
+        {
+          "proof_classification": "repair_photo",
+          "storage_state": "stored",
+          "n": 14285
+        },
+        {
+          "proof_classification": "unclassified",
+          "storage_state": "stored",
+          "n": 5714
+        }
+      ],
+      "candidate_inventory_population": 25000,
+      "candidate_defect_population": 7000,
+      "db_size_before": "71 MB",
+      "work_orders_size_before": "37 MB"
+    },
+    "migration": {
+      "total_ms": 57.16,
+      "index_rebuild_ms": {
+        "uq_wope_genesis (rebuild on empty table)": 2.05,
+        "uq_wope_one_successor (rebuild on empty table)": 1.35,
+        "idx_wope_scope (rebuild on empty table)": 0.98
+      },
+      "lock_observations": {
+        "uq_work_orders_id_property AccessShareLock": 10,
+        "uq_work_orders_ref AccessShareLock": 10,
+        "idx_wo_property AccessShareLock": 10,
+        "work_orders_pkey AccessShareLock": 10,
+        "work_orders AccessShareLock": 11,
+        "pg_trigger AccessShareLock": 1,
+        "properties RowShareLock": 1,
+        "uq_work_orders_id_property RowExclusiveLock": 1,
+        "uq_work_orders_ref RowExclusiveLock": 1,
+        "idx_wo_property RowExclusiveLock": 1,
+        "work_orders_pkey RowExclusiveLock": 1,
+        "work_orders RowExclusiveLock": 2,
+        "transactionid ExclusiveLock": 7,
+        "schema_migrations_pkey AccessShareLock": 6,
+        "schema_migrations AccessShareLock": 6,
+        "release_0_scale_harness_guard_pkey AccessShareLock": 6,
+        "release_0_scale_harness_guard AccessShareLock": 6,
+        "pg_type_typname_nsp_index AccessShareLock": 6,
+        "pg_type_oid_index AccessShareLock": 6,
+        "pg_class_tblspc_relfilenode_index AccessShareLock": 6,
+        "pg_class_relname_nsp_index AccessShareLock": 6,
+        "pg_class_oid_index AccessShareLock": 6,
+        "pg_namespace_oid_index AccessShareLock": 6,
+        "pg_namespace_nspname_index AccessShareLock": 6,
+        "pg_type AccessShareLock": 6,
+        "pg_class AccessShareLock": 6,
+        "pg_namespace AccessShareLock": 6,
+        "tables AccessShareLock": 6,
+        "work_order_proof_attachments RowExclusiveLock (WAITING)": 6,
+        "work_order_proof_attachments ShareLock": 7,
+        "work_order_proof_attachments AccessExclusiveLock": 6,
+        "relation AccessExclusiveLock": 18,
+        "pg_class_tblspc_relfilenode_index RowExclusiveLock": 1,
+        "pg_class_relname_nsp_index RowExclusiveLock": 1,
+        "pg_class_oid_index RowExclusiveLock": 1,
+        "pg_class RowExclusiveLock": 1,
+        "pg_attribute_relid_attnam_index RowExclusiveLock": 1,
+        "pg_attribute_relid_attnum_index RowExclusiveLock": 1,
+        "pg_proc RowExclusiveLock": 1,
+        "pg_rewrite_rel_rulename_index RowExclusiveLock": 1,
+        "pg_rewrite RowExclusiveLock": 1,
+        "work_orders RowExclusiveLock (WAITING)": 1,
+        "work_orders ShareRowExclusiveLock": 1,
+        "relation ShareLock": 2,
+        "pg_rewrite_oid_index RowExclusiveLock": 1,
+        "users AccessShareLock": 1,
+        "users ShareRowExclusiveLock": 1,
+        "relation AccessShareLock": 1,
+        "relation ShareRowExclusiveLock": 1,
+        "pg_attribute_relid_attnum_index AccessShareLock": 1,
+        "pg_attribute AccessShareLock": 1,
+        "work_order_proof_attachments RowExclusiveLock": 1
+      },
+      "lock_samples": 10,
+      "control_workload": {
+        "iterations": 147,
+        "reads": 100,
+        "read_fail": 0,
+        "inserts": 43,
+        "insert_fail": 0,
+        "list_reads": 2,
+        "list_fail": 0,
+        "attach_writes": 2,
+        "attach_write_fail": 0,
+        "attach_write_max_ms": 60.15,
+        "read_max_ms": 7.07,
+        "list_max_ms": 50.03,
+        "insert_max_ms": 15.61,
+        "max_latency_ms": 0,
+        "errors": []
+      },
+      "db_size_after": "74 MB",
+      "note": "The candidate creates new tables (no lock on work_orders) but ALTERs work_order_proof_attachments to add uq_wopa_id_scope, which takes ACCESS EXCLUSIVE on that table and builds a unique index over it. That is the one blocking step and it scales with attachment count.",
+      "attachments_at_alter": 42855
+    },
+    "fixture_post_ms": 3800.29,
+    "fixture_cardinalities": {
+      "evaluations": 29630,
+      "heads": 28000,
+      "inventory": 25000,
+      "links": 7143
+    },
+    "chain_depth_distribution": [
+      {
+        "depth": 1000,
+        "n": 1
+      },
+      {
+        "depth": 999,
+        "n": 1
+      },
+      {
+        "depth": 998,
+        "n": 1
+      },
+      {
+        "depth": 997,
+        "n": 1
+      },
+      {
+        "depth": 996,
+        "n": 1
+      },
+      {
+        "depth": 995,
+        "n": 1
+      }
+    ],
+    "invariants": {
+      "counts": {
+        "I1  every evaluation shares its work order's property": 0,
+        "I2  every link is in its evaluation's scope": 0,
+        "I3  at most one genesis per scope": 0,
+        "I4  at most one successor per predecessor": 0,
+        "I5  exactly one head per non-empty chain": 0,
+        "I6  activation history has exactly one head": 0
+      },
+      "refusals": {
+        "I7   self-supersession refused": {
+          "refused": true,
+          "message": "evaluation 932daccf-cfce-464a-9892-a0a5ae08c9ac may not supersede itself",
+          "code": "P0001",
+          "constraint": null
+        },
+        "I8   second genesis refused": {
+          "refused": true,
+          "message": "genesis refused: evaluations already exist for (a20a5209-acb0-4b99-df5b-5797129b4b09, 625bf15e-d52e-181c-706a-a6c71fca4884)",
+          "code": "P0001",
+          "constraint": null
+        },
+        "I9   missing predecessor refused": {
+          "refused": true,
+          "message": "predecessor 74bde248-42f5-470a-929d-10f24fb3d959 does not exist",
+          "code": "P0001",
+          "constraint": null
+        },
+        "I10  successor to a non-head refused": {
+          "refused": true,
+          "message": "predecessor f06614eb-f42e-a33b-e4bb-8108675eae2c is not the head",
+          "code": "P0001",
+          "constraint": null
+        },
+        "I11  cross-scope predecessor refused": {
+          "refused": true,
+          "message": "cross-scope supersession refused",
+          "code": "P0001",
+          "constraint": null
+        },
+        "update": {
+          "refused": true,
+          "message": "work_order_proof_evaluations is append-only: UPDATE is not permitted",
+          "code": "P0001",
+          "constraint": null
+        },
+        "delete": {
+          "refused": true,
+          "message": "work_order_proof_evaluations is append-only: DELETE is not permitted",
+          "code": "P0001",
+          "constraint": null
+        },
+        "inventory_delete": {
+          "refused": true,
+          "message": "release_0_legacy_cutover_inventory is append-only: DELETE is not permitted",
+          "code": "P0001",
+          "constraint": null
+        },
+        "second_activation_genesis": {
+          "refused": true,
+          "message": "genesis refused: activation history is not empty",
+          "code": "P0001",
+          "constraint": null
+        },
+        "activation_blank_reason": {
+          "refused": true,
+          "message": "a superseding activation requires a non-empty reason",
+          "code": "P0001",
+          "constraint": null
+        }
+      }
+    },
+    "concurrency": {
+      "genesis_vs_genesis": {
+        "a_started": 1786045229803,
+        "b_started": 1786045229806,
+        "overlap_proven_by_lock_wait": true,
+        "wait_event": "transactionid",
+        "a_error": null,
+        "b_error": "duplicate key value violates unique constraint \"uq_wope_genesis\"",
+        "b_constraint": "uq_wope_genesis",
+        "winner": "A"
+      },
+      "successor_vs_successor": {
+        "a_started": 1786045229852,
+        "b_started": 1786045229856,
+        "overlap_proven_by_lock_wait": true,
+        "wait_event": "transactionid",
+        "a_error": null,
+        "b_error": "predecessor 1c64b1f6-535f-4560-befb-220815fb9bbd is not the head",
+        "b_constraint": null,
+        "winner": "A"
+      },
+      "activation_genesis_race": {
+        "a_started": 1786045229920,
+        "b_started": 1786045229922,
+        "overlap_proven_by_lock_wait": true,
+        "wait_event": "transactionid",
+        "a_error": null,
+        "b_error": "duplicate key value violates unique constraint \"uq_r0ah_genesis\"",
+        "b_constraint": "uq_r0ah_genesis",
+        "winner": "A"
+      },
+      "activation_correction_race": {
+        "a_started": 1786045229965,
+        "b_started": 1786045229967,
+        "overlap_proven_by_lock_wait": true,
+        "wait_event": "transactionid",
+        "a_error": null,
+        "b_error": "activation 4ef530df-8462-4147-85cc-619d58ffe2cd is not the current head",
+        "b_constraint": null,
+        "winner": "A"
+      },
+      "append_vs_reader": {
+        "head_during_uncommitted": 0,
+        "head_after_commit": 1
+      },
+      "inventory_duplicate_race": {
+        "a_started": 1786045230029,
+        "b_started": 1786045230031,
+        "overlap_proven_by_lock_wait": true,
+        "wait_event": "transactionid",
+        "a_error": null,
+        "b_error": "duplicate key value violates unique constraint \"release_0_legacy_cutover_inventory_pkey\"",
+        "b_constraint": "release_0_legacy_cutover_inventory_pkey",
+        "winner": "A"
+      }
+    },
+    "reader": {
+      "distribution": [
+        {
+          "state": "legacy_indeterminate",
+          "n": "25000"
+        },
+        {
+          "state": "missing_evaluation_defect",
+          "n": "7000"
+        },
+        {
+          "state": "not_due",
+          "n": "40000"
+        },
+        {
+          "state": "not_satisfied",
+          "n": "8000"
+        },
+        {
+          "state": "satisfied",
+          "n": "20000"
+        }
+      ],
+      "ms": 132.59
+    },
+    "sweep": {
+      "sweep_count": 7000,
+      "reader_count": 7000,
+      "only_in_sweep": 0,
+      "only_in_reader": 0,
+      "sweep_ms": 65.16,
+      "second_run_ms": 56.37
+    },
+    "plans": {
+      "four_state_reader": {
+        "ms": 149.19,
+        "planning_ms": 0.55,
+        "node": "Aggregate",
+        "shared_hit": 4294,
+        "shared_read": 0
+      },
+      "defect_sweep": {
+        "ms": 62.28,
+        "planning_ms": 0.38,
+        "node": "Hash Join",
+        "shared_hit": 4252,
+        "shared_read": 0
+      },
+      "list_page_50": {
+        "ms": 16.12,
+        "planning_ms": 0.39,
+        "node": "Limit",
+        "shared_hit": 3239,
+        "shared_read": 0
+      },
+      "detail_single": {
+        "ms": 0.04,
+        "planning_ms": 0.31,
+        "node": "Nested Loop",
+        "shared_hit": 9,
+        "shared_read": 0
+      },
+      "inventory_lookup": {
+        "ms": 0.29,
+        "planning_ms": 0.07,
+        "node": "Index Scan",
+        "shared_hit": 312,
+        "shared_read": 0
+      }
+    },
+    "activation_tx_ms": 2.38,
+    "chain_depth": {
+      "deepest": 1000,
+      "append_at_depth_ms": 8.74,
+      "head_read_ms": 2.29,
+      "distribution": [
+        {
+          "depth": 1000,
+          "n": 1
+        },
+        {
+          "depth": 999,
+          "n": 1
+        },
+        {
+          "depth": 998,
+          "n": 1
+        },
+        {
+          "depth": 997,
+          "n": 1
+        },
+        {
+          "depth": 996,
+          "n": 1
+        },
+        {
+          "depth": 995,
+          "n": 1
+        }
+      ]
+    },
+    "corrupt_chain": {
+      "refused": true,
+      "message": "predecessor 6ee60751-ecb1-47b9-a4f4-aa20cd01da96 is not the head",
+      "code": "P0001",
+      "constraint": null
+    }
+  },
+  "findings": [],
+  "candidate_path": "tools/scale/137_release_0_candidate.sql",
+  "candidate_sha256": "630ac967a27bb623b0ebc48b340fda3f0e13d9c3fcb150a306618ce7f7530354",
+  "fixture_pre_sha256": "cb7a1cae6d42aa5c7de54485791a02488a7c0315d3b816d772264fe8588c715a",
+  "fixture_post_sha256": "512d975026d25f32901b1f1e2e998a824b57cef2be7e043a2d1dc6ac609b2258",
+  "setup_sha256": "4f242898e70a10dea385f6a2adb1ad5c0f67e60dbbe1c46b4e45a12ed14d7823",
+  "seed_sha256": {
+    "a": "0f1c814d85a98dc31da9096fc3ce18d16777187b639eb3c27cf308a5c2017916",
+    "b": "cbce2073174513cbdc7d3dd426f44384cb5b2e12c9564758ad7ea8ec14bd94a3",
+    "c": "78e3f536f3c7dc69ea4ad7ef58c5af651230667cd9446d1e0b70bb8686385a99"
+  },
+  "pg_version": "PostgreSQL 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+  "database": "r0scale",
+  "isolation_guard": "PASSED — sentinel purpose matched on every connection",
+  "summary": {
+    "passed": 63,
+    "failed": 0
+  }
+}

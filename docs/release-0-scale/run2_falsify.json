@@ -1,0 +1,39 @@
+{
+  "passed": 20,
+  "failed": 0,
+  "out": {
+    "defect_predicate": {
+      "real": 7000,
+      "broken": 4000,
+      "hidden": 3000
+    },
+    "permissive_reader": {
+      "satisfied": 20000,
+      "not_due": 72000,
+      "not_satisfied": 8000
+    },
+    "one_successor_index": {
+      "sequential_refusal": "predecessor bc555f45-0ab2-4318-8e42-6f936cec6a68 is not the head"
+    },
+    "self_supersession": {
+      "with_guard": "evaluation 2e761246-5107-477f-af51-9656f323a74b may not supersede itself",
+      "without_guard": "predecessor 2e761246-5107-477f-af51-9656f323a74b does not exist"
+    },
+    "cross_scope": {
+      "with_check": "cross-scope supersession refused",
+      "without_check": "insert or update on table \"work_order_proof_evaluations\" violates foreign key constraint \"fk_wope_supersedes_scope\""
+    },
+    "fake_concurrency": {
+      "winners": 1,
+      "lock_waits_observed": 0
+    },
+    "fixture_count": {
+      "actual": 100000,
+      "wrong_expectation": 99999
+    },
+    "digest": {
+      "recorded": "630ac967a27bb623b0ebc48b340fda3f0e13d9c3fcb150a306618ce7f7530354",
+      "after_one_comment": "0d835b470dc0bbd9e22a7156fc461517cbacc8eeea38e5ed75dbf867cca55a70"
+    }
+  }
+}
