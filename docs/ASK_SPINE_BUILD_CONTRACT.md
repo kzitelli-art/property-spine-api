@@ -542,10 +542,102 @@ The window is minutes, and it is the same class of hole this ruling exists to
 close. **Capture the writer's verified-live instant at step 3 and persist that
 value at step 4**, so the boundary has no gap.
 
-**Open Ruling 2 — app-first tri-state proof contract.** The reader emits a boolean
-today; Release 0 requires at least satisfied · not satisfied · legacy-or-
-indeterminate. The exact API shape, compatibility period, mismatch gate and
-deployment order must be finalized before implementation.
+**Open Ruling 2 — proof state contract and app-first deployment. RULED, FROZEN.**
+
+Release 0 introduces one canonical proof state. **`proof.state` is the
+authoritative field.**
+
+```text
+satisfied
+not_satisfied
+legacy_indeterminate
+missing_evaluation_defect
+```
+
+*Compatibility field.* For one window the API also emits `proof.satisfied`:
+
+```text
+satisfied                  → satisfied = true
+not_satisfied              → satisfied = false
+legacy_indeterminate       → satisfied = null
+missing_evaluation_defect  → satisfied = null
+```
+
+`null` is deliberate. **Legacy and writer-defect states may not be collapsed into
+"proof failed."** The app treats `proof.state` as authoritative whenever present;
+the boolean exists only for compatibility and may not be used by new rendering
+logic.
+
+*App-first deployment.*
+
+```text
+1.  Deploy the app compatibility release first.
+2.  The app accepts both the current boolean-only response
+    and the new state-plus-compatibility response.
+3.  Verify the compatibility app in production while the old API is still live.
+4.  Only then deploy the API that emits proof.state.
+```
+
+The app uses **one proof normalizer**. No individual surface interprets the
+response independently.
+
+```text
+old shape   satisfied = true   → state = satisfied
+            satisfied = false  → state = not_satisfied
+
+new shape   proof.state must be one of the four published values
+            proof.satisfied must match the compatibility mapping
+            unknown state, missing required field, or state/boolean mismatch
+              → CONTRACT FAILURE
+```
+
+**A contract failure renders the proof state as unavailable.** It may not default
+to `not_satisfied`, to legacy, or to an empty result.
+
+*Visible behaviour.*
+
+```text
+satisfied                  Valid proof recorded.
+not_satisfied              Valid completion proof is still required.
+legacy_indeterminate       Completed under the prior proof model. No historical
+                             evaluation was recorded.
+missing_evaluation_defect  Completion occurred after proof evaluation became
+                             required, but no evaluation was recorded.
+```
+
+The defect state must be **visually distinct** and must not be presented as an
+ordinary missing-proof condition.
+
+*Compatibility period.* Keep `proof.satisfied` through the app-first compatibility
+deploy, the API Release 0 deploy, production browser verification of the new state,
+and one subsequent app release proving every consumer uses the shared normalizer.
+Then remove it in a separate, proven cleanup release, after a repository-wide
+consumer search and a mismatch gate confirm nothing reads it directly. **Do not
+leave two permanent proof contracts.**
+
+*Rollback.* During the window the new app may run against either API shape, but
+the new API **requires** the compatibility app. Rolling the app back behind the
+compatibility release requires rolling the API back as well. The release packet
+must name the compatible app and API SHA pair explicitly.
+
+*Activation boundary implementation.* At API verification in Release 0 step 3,
+capture the exact verified-live instant. At step 4, persist that captured value as
+the immutable activation boundary. **Do not use the later database insertion
+time.** This closes the gap in which a post-writer completion could be
+misclassified as legacy.
+
+*Raised in review, not ruled.* Two items to settle during implementation:
+
+- **The list shape needs `state` too.** `readPropertyWorkOrderStatuses` returns a
+  subset — `proof: { required, satisfied, not_preserved_count }`. The board renders
+  from that subset, so if only the detail response carries `state`, the two
+  surfaces disagree on exactly the states this ruling exists to distinguish. Both
+  shapes carry it.
+- **`missing_evaluation_defect` needs a destination.** It is an engineering fault,
+  not an operating condition. Rendering it honestly on the card is correct, but a
+  fault with no route to whoever can fix it renders forever and nobody acts. Decide
+  where it raises — an alert, an obligation, or a named report — before Release 0
+  can emit it.
 
 **Open Ruling 3 — blocked-work candidate predicate.** "Currently blocked" is derived
 by canonical lifecycle logic, not stored as a column. Proposed: SQL selects a capped
@@ -584,8 +676,25 @@ proves the empty case. The dangerous case is the **non-empty** one: a genuine ma
 placed deliberately outside the old recency window must be found. That is the direct
 regression test for the defect §6 exists to prevent, and it is not currently listed.
 
-**Ownership of §19.** Rulings 1, 2, 3, 5, 6 and 7 are engineering rulings. Ruling 4
-is an owner authorization. None is assigned in this charter.
+**Ownership of §19.** Rulings 3, 5, 6 and 7 are engineering rulings. Ruling 4 is an
+owner authorization. Rulings 1 and 2 are ruled and frozen.
+
+### 19b. Remaining ruling sequence
+
+```text
+Release 0 blockers
+  1.  Open Ruling 4 — authorize and define the structurally read-only
+      production audit.
+  2.  Implement the frozen activation-boundary schema and the proof-state
+      compatibility contract (Rulings 1 and 2).
+
+Later Ask Spine blockers
+  ·   Open Ruling 3 — blocked-work candidate selection, before Build 1.
+  ·   Open Ruling 5 — request-proof consequence, before Build 3.
+```
+
+**Open Ruling 4 is the only thing standing in front of Release 0.** Rulings 1 and 2
+are frozen; the audit is what has not been authorized.
 
 ---
 
