@@ -1,80 +1,32 @@
 -- ════════════════════════════════════════════════════════════════════
---  MIGRATION 137 CANDIDATE — release 0 proof evaluations
+--  MIGRATION 137 — PRODUCTION PAYLOAD
 --
---  ⚠ THIS IS NOT A MIGRATION. It deliberately does not live under
---    migrations/ and migrate.js cannot see it.
+--  release 0 proof evaluations, evaluation→attachment links, activation
+--  history and the legacy cutover inventory.
 --
---  It is the EXACT DDL intended for eventual production migration 137,
---  derived from docs/RELEASE_0_IMPLEMENTATION_PLAN.md §2.1–§2.5. It is a
---  candidate so the scale proof measures THE SCHEMA WE INTEND TO SHIP
---  rather than an easier schema that resembles it.
+--  ── THIS FILE IS THE PROMOTABLE ARTIFACT ────────────────────────────
+--  It contains NOTHING that is true only in a harness. No database-name
+--  check, no sentinel, no ledger assertion, no refusal logic. Production
+--  migration 137 is created from THESE EXACT BYTES.
 --
---  ── PROMOTION RULE ──────────────────────────────────────────────────
---  Once the SMS ingress gate closes, production migration 137 must be
---  created FROM THESE EXACT BYTES. Comments and the filename wrapper may
---  differ during promotion. DDL, functions, indexes, constraints,
---  triggers, views and transaction boundaries MAY NOT. Any substantive
---  difference invalidates the scale proof and requires rerunning it.
+--  An earlier revision carried the isolation guard INSIDE this
+--  transaction, which made the file claim two incompatible things at
+--  once: that it was the exact production payload, and that it would
+--  refuse to run anywhere but the scale harness. Both could not be true.
+--  The guard now lives in assert_isolated_environment.sql and the harness
+--  runs it FIRST, as a separate statement, against the same connection.
 --
---  Its sha256 is recorded before every measured run.
+--  ── PROMOTION ───────────────────────────────────────────────────────
+--  Comments and the filename wrapper may differ when this becomes
+--  migrations/137_release_0_proof_evaluations.sql. DDL, functions,
+--  indexes, constraints, triggers, views and the transaction boundary
+--  MAY NOT. Its sha256 is recorded before every measured run and the
+--  harness re-verifies that digest immediately before executing it.
 --
---  ── ISOLATION ───────────────────────────────────────────────────────
---  The guard below refuses before ANY DDL unless all five identity
---  conditions hold. It is keyed to database identity and a sentinel row,
---  NOT to a port or a path — those are operational details that a copied
---  file or a forwarded connection would carry along unchanged.
+--  Derived from docs/RELEASE_0_IMPLEMENTATION_PLAN.md §2.1–§2.5.
 -- ════════════════════════════════════════════════════════════════════
 
 begin;
-
--- ════════════════════════════════════════════════════════════════════
---  0. THE ISOLATION GUARD — refuses before any DDL
--- ════════════════════════════════════════════════════════════════════
-do $guard$
-declare
-  n int;
-  p text;
-  ceil text;
-begin
-  --  1. database identity
-  if current_database() <> 'r0scale' then
-    raise exception 'REFUSED: this candidate runs only against the isolated scale database, not %',
-      current_database();
-  end if;
-
-  --  2. the sentinel table exists
-  select count(*) into n from information_schema.tables
-   where table_schema = 'public' and table_name = 'release_0_scale_harness_guard';
-  if n <> 1 then
-    raise exception 'REFUSED: harness sentinel table is absent — this is not the scale harness';
-  end if;
-
-  --  3. the sentinel carries the EXACT expected purpose
-  select purpose into p from public.release_0_scale_harness_guard where id = true;
-  if p is distinct from 'ISOLATED RELEASE 0 SCALE HARNESS — NEVER PRODUCTION' then
-    raise exception 'REFUSED: harness sentinel purpose does not match; got %', coalesce(p, '<null>');
-  end if;
-
-  --  4. the ledger is exactly at the production ceiling
-  select coalesce(max(version), '000') into ceil from public.schema_migrations;
-  if ceil <> '136' then
-    raise exception 'REFUSED: ledger ceiling is %, expected exactly 136', ceil;
-  end if;
-
-  --  5. 137 is absent — this candidate is not re-runnable over itself
-  select count(*) into n from public.schema_migrations where version = '137';
-  if n <> 0 then
-    raise exception 'REFUSED: migration 137 is already recorded in the ledger';
-  end if;
-  select count(*) into n from information_schema.tables
-   where table_schema = 'public' and table_name = 'work_order_proof_evaluations';
-  if n <> 0 then
-    raise exception 'REFUSED: work_order_proof_evaluations already exists';
-  end if;
-
-  raise notice 'isolation guard passed: db=% ledger=%', current_database(), ceil;
-end
-$guard$;
 
 -- ════════════════════════════════════════════════════════════════════
 --  1. THE ADDITIVE UNIQUE CONSTRAINT the link table needs (§2.2)

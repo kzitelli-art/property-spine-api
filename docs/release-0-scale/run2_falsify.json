@@ -13,11 +13,11 @@
       "not_satisfied": 8000
     },
     "one_successor_index": {
-      "sequential_refusal": "predecessor bc555f45-0ab2-4318-8e42-6f936cec6a68 is not the head"
+      "sequential_refusal": "predecessor 40552fc9-a8bf-4d71-9a85-6973b116bb25 is not the head"
     },
     "self_supersession": {
-      "with_guard": "evaluation 2e761246-5107-477f-af51-9656f323a74b may not supersede itself",
-      "without_guard": "predecessor 2e761246-5107-477f-af51-9656f323a74b does not exist"
+      "with_guard": "evaluation 000e6152-d212-4779-96d3-90cd16eb73b3 may not supersede itself",
+      "without_guard": "predecessor 000e6152-d212-4779-96d3-90cd16eb73b3 does not exist"
     },
     "cross_scope": {
       "with_check": "cross-scope supersession refused",
@@ -32,8 +32,8 @@
       "wrong_expectation": 99999
     },
     "digest": {
-      "recorded": "630ac967a27bb623b0ebc48b340fda3f0e13d9c3fcb150a306618ce7f7530354",
-      "after_one_comment": "0d835b470dc0bbd9e22a7156fc461517cbacc8eeea38e5ed75dbf867cca55a70"
+      "recorded": "ae4b9b774cd9be8568ea24219d4ee4a98350b2bce3a03baf8de33d0cfcc2ea4d",
+      "after_one_comment": "36071b84e02f2f1f2493217b35cd8ea0ebbe968423885ee6441eb14c132e9160"
     }
   }
 }

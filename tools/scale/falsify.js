@@ -20,7 +20,7 @@ const { Client } = require("pg");
 const URL = process.env.SCALE_DATABASE_URL
   || "postgresql://postgres@127.0.0.1:5433/r0scale?sslmode=disable";
 const SENTINEL = "ISOLATED RELEASE 0 SCALE HARNESS — NEVER PRODUCTION";
-const CANDIDATE = path.join(__dirname, "137_release_0_candidate.sql");
+const CANDIDATE = path.join(__dirname, "137_release_0_payload.sql");
 
 let pass = 0, fail = 0;
 const out = {};

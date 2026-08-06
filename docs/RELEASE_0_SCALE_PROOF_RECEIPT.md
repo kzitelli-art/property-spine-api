@@ -2,6 +2,11 @@
 
 **Disposition: SCALE PROOF PASSED.**
 
+*Revision 2 — closes three defects the first receipt carried. The artifact was
+split so the measured bytes are actually promotable, durability was turned back
+on, and the activation transaction was measured for the first time. §14 records
+what each defect was.*
+
 ```text
 production connection opened            NO
 production mutation performed           NO
@@ -9,36 +14,69 @@ migration file created under migrations/ NO
 provider configuration changed          NO
 ```
 
-Two complete clean runs, each from an empty cluster. 63 proof assertions and
-20 falsification assertions per run, all green, both exit 0.
+Two complete clean runs, each from an empty cluster.
+
+```text
+scale / correctness / concurrency   65 assertions   PASSED
+falsification                       20 assertions   PASSED
+activation transaction              18 assertions   PASSED
+```
+
+All green, all three exit 0, both runs.
 
 ---
 
 ## 1. Artifact identity
 
-```text
-API head                    e794f03 (+ this commit)
-candidate                   tools/scale/137_release_0_candidate.sql
-candidate sha256            630ac967a27bb623b0ebc48b340fda3f0e13d9c3fcb150a306618ce7f7530354
+### THE PROMOTABLE ARTIFACT
 
+```text
+production payload          tools/scale/137_release_0_payload.sql
+payload sha256              ae4b9b774cd9be8568ea24219d4ee4a98350b2bce3a03baf8de33d0cfcc2ea4d
+```
+
+**The payload contains no harness-only identity check.** Asserted mechanically
+every run (`M1b`) against `r0scale`, `release_0_scale_harness_guard`, the
+sentinel string and `schema_migrations`. It is `begin; … commit;` and nothing
+else.
+
+### THE HARNESS, WHICH IS NOT PROMOTED
+
+```text
+isolation wrapper           tools/scale/assert_isolated_environment.sql
+isolation wrapper sha256    13b1f322932a6b144401988b68d28e34455ef99b37f1441a3e6b057527b4c9a3
+harness runner sha256       db280889cd4080fe09520780839d39ff1df47cb83bb6134700b8b10070b728f8
+activation_proof.js         50bbdde7bed33b94502e1d298061cbccfbe7c7b158f35603ad0ecc4b8f1f3e29
+falsify.js                  3e727602c294b2aec0a0782f3e6abea855b452517aabbe06ef2a85a4f3f1f746
+setup_baseline.sh           06aa0b84ffe8219c6cea03245dfe1e65f652380f3ddfb9b6db92f798df111ade
 fixture_pre_migration.sql   cb7a1cae6d42aa5c7de54485791a02488a7c0315d3b816d772264fe8588c715a
 fixture_post_migration.sql  512d975026d25f32901b1f1e2e998a824b57cef2be7e043a2d1dc6ac609b2258
-setup_baseline.sh           4f242898e70a10dea385f6a2adb1ad5c0f67e60dbbe1c46b4e45a12ed14d7823
-run_scale_proof.js          0833e7f43b2117781f0f2a56d8c98f68e7eeef8c40185f0895c5e10bf53c7569
-falsify.js                  51db997deb3ed81cee99648db6a9e38596c824b5031e948db1989e4ef5e989df
+fixture_evaluations_only.sql 320cd4848719557d268efbbaaedce4266bc2b586e207f4ccbd1210883009e900
 seed_a_vendors.sql          0f1c814d85a98dc31da9096fc3ce18d16777187b639eb3c27cf308a5c2017916
 seed_b_qa_identity.sql      cbce2073174513cbdc7d3dd426f44384cb5b2e12c9564758ad7ea8ec14bd94a3
 seed_c_governed_charges.sql 78e3f536f3c7dc69ea4ad7ef58c5af651230667cd9446d1e0b70bb8686385a99
-
-PostgreSQL                  16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
-database                    r0scale @ 127.0.0.1:5433, created and destroyed per run
-ledger before / after       136 / 136   (the candidate records NO ledger row —
-                                         it is not a migration)
 ```
+
+### ENVIRONMENT
+
+```text
+API head                    (this commit)
+PostgreSQL                  16.13 (Ubuntu 16.13-0ubuntu0.24.04.1)
+fsync                       on
+synchronous_commit          on
+full_page_writes            on
+shared_buffers              256MB      work_mem 32MB
+database                    r0scale @ 127.0.0.1:5433, destroyed and rebuilt per run
+ledger before / after       136 / 136   (the payload records NO ledger row —
+                                         it is not a migration until promoted)
+```
+
+**These are isolated PostgreSQL 16 measurements on local disk. They are NOT a
+production latency benchmark for Neon.**
 
 ### 1.1 Promotion rule
 
-Production migration 137 must be created **from these exact candidate bytes**.
+Production migration 137 must be created **from the exact payload bytes**.
 Comments and the filename wrapper may differ. **DDL, functions, indexes,
 constraints, triggers, views and transaction boundaries may not.** Any
 substantive difference invalidates this proof and requires re-running it.
@@ -47,9 +85,14 @@ Falsification case 8 demonstrates that a single added comment changes the
 digest — which is why promotion is a reviewed, re-digested step and never a
 silent edit after measurement.
 
+**The harness re-verifies the payload digest immediately before executing it.**
+Hashing a file at startup and running it later proves nothing about what was
+actually run (`M1c`).
+
 ## 2. Isolation
 
-The candidate refuses **before any DDL** unless all five hold:
+`assert_isolated_environment.sql` runs **first, as a separate statement on the
+same connection**, and refuses unless all five hold:
 
 ```text
 current_database() = 'r0scale'
@@ -58,6 +101,9 @@ its purpose is EXACTLY 'ISOLATED RELEASE 0 SCALE HARNESS — NEVER PRODUCTION'
 the ledger ceiling is exactly 136
 migration 137 is absent from the ledger AND its tables do not exist
 ```
+
+It is deliberately **not** part of the payload transaction — a database-name
+check is true only here, and the payload must be byte-promotable.
 
 **Keyed to identity, not location.** A path can be copied and a port can be
 forwarded; neither is checked. Every connection the harness opens — including
@@ -107,14 +153,17 @@ not_due                         40,000     non-terminal; never a defect
 ## 4. Migration and index measurements
 
 ```text
-total candidate duration        47-58 ms      one transaction
-index build (empty tables)      uq_wope_genesis        2.15 ms
-                                uq_wope_one_successor  1.26 ms
-                                idx_wope_scope         0.95 ms
+total payload duration          85-124 ms     one transaction, durability ON
+index build (empty tables)      uq_wope_genesis        ~2 ms
+                                uq_wope_one_successor  ~1 ms
+                                idx_wope_scope         ~1 ms
 db size before → after          71 MB → 74 MB
 work_orders size                37 MB
 attachments at the ALTER        42,855
 ```
+
+*Higher than the 47–58 ms first reported, because that was measured with
+durability disabled. These are the numbers to carry.*
 
 The new tables are empty at creation, so their index builds are trivial. **The
 cost is not there.**
@@ -137,13 +186,13 @@ Confirmed by the control workload, which probed the locked table directly:
 
 | Probe | run 1 | run 2 | Max latency |
 |---|---|---|---|
-| ordinary reads | 113 | 100 | 4.2 / 7.1 ms |
-| `work_orders` inserts | 84 | 43 | 17.0 / 15.6 ms |
-| **`work_order_proof_attachments` writes** | **4** | **2** | **54.7 / 60.2 ms** |
+| ordinary reads | 138 | 129 | 5.4 / 6.1 ms |
+| `work_orders` inserts | 51 | 47 | 18.1 / 19.4 ms |
+| **`work_order_proof_attachments` writes** | **4** | **3** | **83.3 / 127.0 ms** |
 
-**Reads never blocked. Attachment writes did** — two to four completed while a
-hundred reads went through, and the slowest took approximately the whole
-migration duration. Nothing failed; writers waited.
+**Reads never blocked. Attachment writes did** — three to four completed while
+well over a hundred reads went through, and the slowest waited approximately
+the whole migration duration. Nothing failed; writers waited.
 
 **This is a real operational property and it scales with attachment count**, not
 with work-order count.
@@ -215,14 +264,16 @@ that never happened.
 ## 7. Reader, sweep and activation
 
 ```text
-four-state reader           131-156 ms   Aggregate, 4,294 shared hits, 0 reads
-defect sweep                 63-72 ms    Hash Join
-defect sweep, second run     51-64 ms    IDENTICAL SET
+four-state reader           141-173 ms   Aggregate, 4,294 shared hits, 0 reads
+defect sweep                 51-58 ms    Hash Join
+defect sweep, second run     58-69 ms    IDENTICAL SET
 list page (50 rows)          15-20 ms    Limit
 detail (single work order)     0.05 ms   Nested Loop
 inventory lookup               0.25 ms   Index Scan
-activation transaction         2.2 ms
 ```
+
+The activation transaction has its own section — **§7.1** — because the first
+receipt's 2.2 ms figure was a read-back, not an activation.
 
 **Exact-set reconciliation, both directions, not counts:**
 
@@ -235,6 +286,89 @@ only in reader       0
 
 The reader and the sweep share **one** predicate expression, so they cannot
 drift apart by construction. Running the sweep twice returned the identical set.
+
+## 7.1 THE ACTIVATION TRANSACTION — measured for the first time
+
+The first receipt timed a read-back of an already-populated inventory at 2.2 ms
+and said so honestly, which meant the activation transaction had never been
+measured. `tools/scale/activation_proof.js` measures it: the one-shot
+capture → insert → exact-set compare → activation-genesis → commit of §6.
+
+**18 assertions, all green, both runs.**
+
+### 7.1.1 The census, outside the transaction (§6.2)
+
+```text
+census rows                 32,000       every terminal row without an evaluation
+census digest               0658607e06b5beac…   preserved as the cutover receipt
+```
+
+### 7.1.2 The transaction
+
+```text
+                              run 1        run 2
+activation-history genesis     1.74 ms      1.6 ms
+legacy inventory insert      577.72 ms    580.06 ms      32,000 rows
+exact-set comparison         179.19 ms    131.31 ms      both directions
+commit                         1.79 ms     15.09 ms
+─────────────────────────────────────────────────
+TOTAL                        760.87 ms    728.79 ms
+```
+
+```text
+outcome                     COMMITTED
+rows inserted               32,000
+unexpected (live \ expected)     0
+missing    (expected \ live)     0
+final inventory count       32,000
+final activation head       exactly one
+activated_at                2026-02-01T00:00:00.000Z — the CAPTURED instant,
+                            asserted equal to the supplied literal, never now()
+```
+
+`A10` asserts `activated_at` is the supplied instant and not the insertion
+time. §6.1 calls that the single most important line in the release; it is now
+a check that fails the run rather than a paragraph.
+
+### 7.1.3 Locks, and what kept working
+
+```text
+lock observations           release_0_activation_history and its three indexes
+                            RowExclusiveLock — ordinary row locks, not table locks
+                            release_0_legacy_cutover_inventory RowExclusiveLock
+concurrent ordinary reads   2,395 / 2,105 completed, 0 failed
+max read latency            140.8 / 127.1 ms
+```
+
+**The activation takes no ACCESS EXCLUSIVE lock.** It is a bulk insert plus a
+comparison, and readers continue throughout — over two thousand reads completed
+during a ~750 ms transaction. Read latency did rise (to ~140 ms) under the write
+load, which is worth knowing but is not blocking.
+
+### 7.1.4 The negative control — a tampered expected set
+
+The control removes one row from the expected set and adds one that does not
+exist, so the **count is unchanged**:
+
+```text
+N0  the tampered set has the SAME COUNT as the real one — a count
+    comparison would have passed                              PROVEN
+
+outcome                     REFUSED
+refusal                     ACTIVATION REFUSED — unexpected 1, missing 1
+unexpected                  1        reported
+missing                     1        reported — BOTH directions, not the first
+inventory rows after        0
+activation-history rows     0
+```
+
+That is the whole point of §6.2's "a count is never sufficient": one row
+completed and one deleted between census and activation produce a matching
+count over an entirely different population. This control constructs exactly
+that situation and the activation refuses.
+
+**Nothing partial survived.** Zero inventory rows and zero activation-history
+rows — the transaction is genuinely all-or-nothing.
 
 ## 8. Chain depth
 
@@ -304,7 +438,7 @@ Each run destroys the cluster, replays the ledger, re-seeds, regenerates the
 fixture, applies the candidate and runs both suites.
 
 ```text
-IDENTICAL   candidate sha256
+IDENTICAL   payload sha256 · isolation wrapper sha256 · harness runner sha256
 IDENTICAL   census totals and status distribution
 IDENTICAL   fixture cardinalities
 IDENTICAL   chain depth distribution
@@ -314,7 +448,12 @@ IDENTICAL   invariant counts
 IDENTICAL   refusal reasons          (with per-run UUIDs normalized — see below)
 IDENTICAL   concurrency winners and overlap-proven flags
 IDENTICAL   corrupt-chain refusal
-IDENTICAL   63 passed / 0 failed · 20 passed / 0 failed
+IDENTICAL   durability settings (fsync/synchronous_commit/full_page_writes ON)
+IDENTICAL   census rows and census digest
+IDENTICAL   activation outcome, rows inserted, 0 unexpected / 0 missing
+IDENTICAL   activated_at = the captured instant
+IDENTICAL   negative-control refusal and zero-rows-after-rollback
+IDENTICAL   65 passed / 0 failed · 20 passed / 0 failed · 18 passed / 0 failed
 ```
 
 **Raw refusal strings differ between runs and that is correct.** The trigger
@@ -324,7 +463,15 @@ byte-identical. The comparison was refined rather than the difference excused �
 comparing values that are random by design would have been a meaningless check
 in either direction.
 
-Timing varied as expected: candidate 47–58 ms, reader 114–156 ms, sweep 62–72 ms.
+Timing varied as expected, with durability ON:
+
+```text
+payload apply        85 / 124 ms
+attach write block   83 / 127 ms
+reader              141 / 173 ms
+sweep                51 /  58 ms
+activation TOTAL    761 / 729 ms
+```
 
 ## 11. Operational interpretation
 
@@ -333,14 +480,14 @@ classified against the database it will actually run on.
 
 | Measurement | Value | Classification |
 |---|---|---|
-| candidate total | 47–58 ms @ 100k | **acceptable for the current six-row production database** |
-| attachment-table write block | 55–60 ms @ 42,855 attachments | **acceptable with operational caution** — see below |
-| four-state reader | 131–156 ms @ 100k full scan | **acceptable with operational caution** — it is an aggregate over the whole table; the per-work-order read is 0.05 ms |
-| defect sweep | 63–72 ms @ 100k | **acceptable for the current production database** |
+| payload total | 85–124 ms @ 100k | **acceptable for the current six-row production database** |
+| attachment-table write block | 83–127 ms @ 42,855 attachments | **acceptable with operational caution** — see below |
+| four-state reader | 141–173 ms @ 100k full scan | **acceptable with operational caution** — it is an aggregate over the whole table; the per-work-order read is 0.05 ms |
+| defect sweep | 51–58 ms @ 100k | **acceptable for the current production database** |
 | list page (50) | 15–20 ms | **acceptable** |
 | detail read | 0.05 ms | **acceptable** |
 | inventory lookup | 0.25 ms | **acceptable** |
-| activation transaction | 2.2 ms | **acceptable** — but see §11.1 |
+| **activation transaction** | **729–761 ms @ 32,000 rows** | **acceptable with operational caution** — see §11.1a |
 | append at chain depth 1,000 | 5.8 ms | **acceptable** |
 
 **Operational caution on the attachment ALTER:** production currently holds far
@@ -350,17 +497,37 @@ which is the table the SMS evidence-ingress rail writes to. **Do not run
 migration 137 while a technician is mid-upload.** The mitigation is a quiet
 window, not a code change.
 
-### 11.1 What this proof did NOT measure
+### 11.1a The activation transaction, now that it is measured
 
 ```text
-the real activation transaction   Timed here as a read-back of an
-                                  already-populated inventory, NOT as the
-                                  one-shot insert-25,000-rows-and-compare
-                                  transaction §6 describes. The 2.2 ms figure
-                                  is NOT an activation-cost estimate.
-migration 137 against a table with production's index and bloat profile
+729-761 ms for 32,000 rows, durability ON
+  inventory insert   ~578 ms   the dominant cost, linear in row count
+  exact-set compare  ~131-179 ms
+  commit             2-15 ms
+```
+
+**Production holds six work orders.** The real activation will be
+sub-millisecond by comparison. The caution is not about duration — it is that
+this is a **one-shot, run-once transaction with a one-way door**, so the number
+worth knowing is that it takes under a second even at 32,000 rows and does not
+need a maintenance window. Readers were never blocked.
+
+The scaling is linear in the terminal-without-evaluation population, which is
+bounded by the work-order table and is a one-time cost.
+
+### 11.1 What this proof STILL did not measure
+
+```text
+137 against a table carrying production's index and bloat profile
+Neon's storage latency — every number here is local disk
 the canonical writer service — not built, and out of scope
 ```
+
+**Durability is now ON** (`fsync`, `synchronous_commit`, `full_page_writes`),
+so these numbers are no longer optimistic in the way the first receipt's were.
+They remain **isolated PostgreSQL 16 measurements on local disk**, not a Neon
+benchmark. Lock shape, correctness and race outcomes transfer; absolute write
+latency does not.
 
 ### 11.2 Engineering inference at larger cardinalities — NOT a benchmark claim
 
@@ -368,9 +535,10 @@ Labelled as inference. Nothing below was measured.
 
 ```text
 AT 100,000 work orders   (measured)
-  reader full-scan aggregate is ~150 ms; per-row reads unaffected
-  defect sweep ~70 ms
+  reader full-scan aggregate ~150 ms; per-row reads unaffected
+  defect sweep ~55 ms
   the attachment ALTER is the only blocking step
+  activation ~750 ms at 32,000 inventory rows, non-blocking to readers
 
 AT 1,000,000 work orders   (inferred)
   the four-state aggregate is a sequential scan and should grow roughly
@@ -380,6 +548,9 @@ AT 1,000,000 work orders   (inferred)
   the defect sweep likewise → ~0.7 s.
   per-work-order detail reads stay flat; they are index lookups.
   the ALTER scales with ATTACHMENTS, not work orders.
+  activation scales linearly with the terminal-without-evaluation set →
+  ~7.5 s at 320,000 inventory rows. Still one-shot, still non-blocking to
+  readers, but it stops being something to run casually.
 
 AT 10,000,000 work orders   (inferred, lower confidence)
   a full-scan aggregate at ~15 s stops being acceptable on any interactive
@@ -420,7 +591,9 @@ second clean run differed on correctness                   NO
 | Component | Class | Removal condition |
 |---|---|---|
 | This receipt | 1 — permanent | Never. It is the evidence migration 137 was promoted against. |
-| `137_release_0_candidate.sql` | 3 — temporary | Removed when production migration 137 is created from its exact bytes and this receipt records the promotion. |
+| `137_release_0_payload.sql` | 3 — temporary | Removed when production migration 137 is created from its exact bytes and this receipt records the promotion. |
+| `assert_isolated_environment.sql` | 3 — temporary harness | Removed with the rest of the harness. **Never promoted** — it is true only in the scale database. |
+| `activation_proof.js` | 3 — temporary harness | Removed when Release 0 completes. Re-proving a changed payload requires it. |
 | `run_scale_proof.js`, `falsify.js`, fixtures, `setup_baseline.sh`, `run_all.sh` | 3 — temporary harness | Removed when Release 0 completes and the schema is no longer changing. Kept until then: re-proving a changed candidate requires them. |
 | `seed_a/b/c` | 3 — temporary scaffold | Removed when the ledger replays from empty unaided. Deleting them re-hides three blockers. |
 
@@ -428,6 +601,54 @@ second clean run differed on correctness                   NO
 
 **SCALE PROOF PASSED.**
 
+```text
+SCALE SCHEMA / CONCURRENCY PROOF       PASSED
+PRODUCTION-PROMOTABLE ARTIFACT PROOF   PASSED
+ACTIVATION TRANSACTION PROOF           PASSED
+OVERALL SCALE GATE                     CLOSED
+```
+
 Stopping at the production gate. Step 2 is **not** started. The next owner
 decision is SMS transport activation; only after real-handset ingress passes may
 the proven candidate be promoted and production Step 2 begin.
+
+---
+
+## 15. THE THREE CLOSURE DEFECTS THIS REVISION FIXED
+
+Recorded because the first receipt read as complete and was not.
+
+### 15.1 The measured artifact was not promotable as claimed
+
+The candidate declared that production migration 137 must come from its exact
+bytes — while carrying, **inside the same transaction, before the DDL**, a
+guard requiring `current_database() = 'r0scale'` and a harness sentinel.
+
+**One file cannot be both the exact production payload and executable only
+inside the harness.** That is an artifact-identity contradiction, and no amount
+of care in the surrounding prose resolves it.
+
+Split into `137_release_0_payload.sql` (promotable, no harness references) and
+`assert_isolated_environment.sql` (harness only). The split was done
+programmatically and the DDL body was verified **byte-identical** across it.
+The harness now runs: isolation assertion → verify payload digest → execute the
+exact payload.
+
+### 15.2 The activation transaction was never measured
+
+The first receipt said so plainly — 2.2 ms was a read-back of an
+already-populated inventory — but saying so did not discharge the requirement.
+**An honest disclaimer is not a measurement.** §7.1 now measures the real
+one-shot transaction, with a negative control that constructs a same-count
+tampered set and proves the refusal reports both directions and leaves nothing
+behind.
+
+### 15.3 Absolute timings were taken with durability disabled
+
+`fsync=off`, `synchronous_commit=off` and `full_page_writes=off`, with a comment
+acknowledging the timings were optimistic. **A declared caveat does not make a
+number transferable.** Durability is now on for every measured run; the payload
+apply roughly doubled (47–58 ms → 85–124 ms) and the attachment write block rose
+with it (55–60 ms → 83–127 ms).
+
+The earlier numbers are superseded, not merely annotated.

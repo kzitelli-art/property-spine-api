@@ -1,0 +1,111 @@
+{
+  "payload_sha256": "ae4b9b774cd9be8568ea24219d4ee4a98350b2bce3a03baf8de33d0cfcc2ea4d",
+  "isolation_wrapper_sha256": "13b1f322932a6b144401988b68d28e34455ef99b37f1441a3e6b057527b4c9a3",
+  "harness_runner_sha256": "50bbdde7bed33b94502e1d298061cbccfbe7c7b158f35603ad0ecc4b8f1f3e29",
+  "captured_at": "2026-02-01T00:00:00.000Z",
+  "pg_settings": {
+    "fsync": "on",
+    "full_page_writes": "on",
+    "shared_buffers": "32768",
+    "synchronous_commit": "on",
+    "work_mem": "32768"
+  },
+  "census": {
+    "ms": 114.97,
+    "rows": 32000,
+    "digest": "0658607e06b5beacc0bb6591558a81420a8e36b097155eb04e307ab21227e74a"
+  },
+  "activation": {
+    "activation_insert_ms": 1.99,
+    "inventory_insert_ms": 580.06,
+    "rows_inserted": 32000,
+    "comparison_ms": 131.31,
+    "unexpected": 0,
+    "missing": 0,
+    "live_count": 32000,
+    "expected_count": 32000,
+    "commit_ms": 15.09,
+    "outcome": "committed",
+    "activation_id": "a05049a4-8707-46b0-b5ae-21a88d66393a",
+    "total_ms": 728.79,
+    "lock_observations": {
+      "uq_r0ah_one_successor AccessShareLock": 92,
+      "uq_r0ah_one_successor RowExclusiveLock": 1,
+      "uq_r0ah_genesis AccessShareLock": 92,
+      "uq_r0ah_genesis RowExclusiveLock": 1,
+      "release_0_activation_history_pkey AccessShareLock": 92,
+      "release_0_activation_history_pkey RowExclusiveLock": 1,
+      "release_0_activation_history AccessShareLock": 92,
+      "release_0_activation_history RowExclusiveLock": 92,
+      "idx_wope_scope AccessShareLock": 91,
+      "uq_wope_one_successor AccessShareLock": 91,
+      "uq_wope_genesis AccessShareLock": 91,
+      "uq_wope_id_scope AccessShareLock": 91,
+      "work_order_proof_evaluations_pkey AccessShareLock": 91,
+      "uq_work_orders_id_property AccessShareLock": 101,
+      "uq_work_orders_ref AccessShareLock": 102,
+      "idx_wo_property AccessShareLock": 102,
+      "work_orders_pkey AccessShareLock": 104,
+      "work_order_proof_evaluations AccessShareLock": 91,
+      "work_orders AccessShareLock": 109,
+      "release_0_legacy_cutover_inventory RowExclusiveLock": 91,
+      "transactionid ExclusiveLock": 91,
+      "release_0_legacy_cutover_inventory_pkey RowExclusiveLock": 84,
+      "release_0_activation_history RowShareLock": 65,
+      "uq_work_orders_ref RowShareLock": 65,
+      "uq_r0ah_one_successor RowShareLock": 65,
+      "work_orders RowShareLock": 65,
+      "uq_r0ah_genesis RowShareLock": 65,
+      "work_orders_pkey RowShareLock": 65,
+      "uq_work_orders_id_property RowShareLock": 65,
+      "release_0_activation_history_pkey RowShareLock": 65,
+      "idx_wo_property RowShareLock": 65,
+      "release_0_legacy_cutover_inventory_pkey AccessShareLock": 1,
+      "release_0_legacy_cutover_inventory AccessShareLock": 1
+    },
+    "lock_samples": 92,
+    "concurrent_reads": {
+      "reads": 2105,
+      "fail": 0,
+      "max_ms": 127.05,
+      "errors": []
+    },
+    "final_head": {
+      "id": "a05049a4-8707-46b0-b5ae-21a88d66393a",
+      "activated_at": "2026-02-01T00:00:00.000Z",
+      "captured_at_step": "legacy_writer_dead_and_canonical_live"
+    },
+    "final_inventory_count": 32000
+  },
+  "negative_control": {
+    "activation_insert_ms": 0.93,
+    "inventory_insert_ms": 728.8,
+    "rows_inserted": 32000,
+    "comparison_ms": 130.64,
+    "unexpected": 1,
+    "missing": 1,
+    "live_count": 32000,
+    "expected_count": 32000,
+    "outcome": "refused",
+    "refusal": "ACTIVATION REFUSED — unexpected 1, missing 1",
+    "detail": {
+      "unexpected": [
+        "001063a4-39f1-fc6c-8794-49cf1bf7ae28|625bf15e-d52e-181c-706a-a6c71fca4884"
+      ],
+      "missing": [
+        "00000000-0000-4000-8000-000000000001|625bf15e-d52e-181c-706a-a6c71fca4884"
+      ],
+      "live_count": 32000,
+      "expected_count": 32000
+    },
+    "total_ms": 876.98,
+    "rows_after_rollback": {
+      "inventory": 0,
+      "activation_history": 0
+    }
+  },
+  "summary": {
+    "passed": 18,
+    "failed": 0
+  }
+}

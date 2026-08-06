@@ -34,13 +34,17 @@ chmod 700 "$PGDATA"
 su postgres -c "PATH=/usr/lib/postgresql/16/bin:\$PATH initdb -D $PGDATA -U postgres --auth=trust" >/dev/null 2>&1
 say "initdb ok"
 
-#  fsync off is a HARNESS choice, and it is declared rather than hidden:
-#  it makes absolute write timings optimistic. Relative timings, lock
-#  behaviour, correctness and concurrency outcomes are unaffected, and
-#  those are what this proof measures.
+#  DURABILITY IS ON. An earlier revision ran fsync=off,
+#  synchronous_commit=off and full_page_writes=off, and declared that it
+#  made write timings optimistic — but a declared caveat does not make a
+#  number transferable. Timings taken with durability disabled cannot be
+#  compared to any real deployment, so they are not taken that way.
+#
+#  These are still ISOLATED PostgreSQL 16 measurements on local disk. They
+#  are NOT a production latency benchmark for Neon.
 su postgres -c "PATH=/usr/lib/postgresql/16/bin:\$PATH pg_ctl -D $PGDATA \
-  -o '-h 127.0.0.1 -p $PGPORT -c fsync=off -c synchronous_commit=off \
-      -c full_page_writes=off -c max_connections=100 \
+  -o '-h 127.0.0.1 -p $PGPORT -c fsync=on -c synchronous_commit=on \
+      -c full_page_writes=on -c max_connections=100 \
       -c shared_buffers=256MB -c work_mem=32MB \
       -c track_io_timing=on -c log_lock_waits=on -c deadlock_timeout=200ms' \
   -l $PGDATA/log start" >/dev/null 2>&1

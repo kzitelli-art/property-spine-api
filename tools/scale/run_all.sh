@@ -44,9 +44,21 @@ echo
 node "$API_DIR/tools/scale/falsify.js" --json "$OUT/falsify.json"
 FALS=$?
 
+#  THE ACTIVATION PROOF NEEDS ITS OWN CLEAN DATABASE.
+#  Activation history and the legacy inventory must be EMPTY when it
+#  starts, because populating them is exactly what it measures — and the
+#  run above has already filled both.
+echo
+echo "── activation transaction proof: fresh baseline ────────────────"
+bash "$API_DIR/tools/scale/setup_baseline.sh"
+psql "$DATABASE_URL" -q -v ON_ERROR_STOP=1 \
+  -f "$API_DIR/tools/scale/fixture_pre_migration.sql" >/dev/null
+node "$API_DIR/tools/scale/activation_proof.js" --json "$OUT/activation.json"
+ACT=$?
+
 echo
 echo "════════════════════════════════════════════════════════════════"
-echo "  ${LABEL}: proof exit ${PROOF} · falsification exit ${FALS}"
+echo "  ${LABEL}: proof ${PROOF} · falsification ${FALS} · activation ${ACT}"
 echo "  receipts in ${OUT}"
 echo "════════════════════════════════════════════════════════════════"
-exit $(( PROOF + FALS ))
+exit $(( PROOF + FALS + ACT ))

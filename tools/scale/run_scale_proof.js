@@ -28,7 +28,8 @@ const ROOT = path.join(__dirname, "..", "..");
 const HERE = __dirname;
 const URL = process.env.SCALE_DATABASE_URL
   || "postgresql://postgres@127.0.0.1:5433/r0scale?sslmode=disable";
-const CANDIDATE = path.join(HERE, "137_release_0_candidate.sql");
+const PAYLOAD = path.join(HERE, "137_release_0_payload.sql");
+const WRAPPER = path.join(HERE, "assert_isolated_environment.sql");
 const SENTINEL_PURPOSE = "ISOLATED RELEASE 0 SCALE HARNESS — NEVER PRODUCTION";
 
 let pass = 0, fail = 0;
@@ -122,8 +123,11 @@ const READER_SQL = `
   const c = await conn();
   await c.query("set application_name = 'r0_scale_proof'");
 
-  R.candidate_path = path.relative(ROOT, CANDIDATE);
-  R.candidate_sha256 = sha(CANDIDATE);
+  R.payload_path = path.relative(ROOT, PAYLOAD);
+  R.payload_sha256 = sha(PAYLOAD);
+  R.isolation_wrapper_path = path.relative(ROOT, WRAPPER);
+  R.isolation_wrapper_sha256 = sha(WRAPPER);
+  R.harness_runner_sha256 = sha(__filename);
   R.fixture_pre_sha256 = sha(path.join(HERE, "fixture_pre_migration.sql"));
   R.fixture_post_sha256 = sha(path.join(HERE, "fixture_post_migration.sql"));
   R.setup_sha256 = sha(path.join(HERE, "setup_baseline.sh"));
@@ -137,7 +141,8 @@ const READER_SQL = `
   R.isolation_guard = "PASSED — sentinel purpose matched on every connection";
 
   console.log("RELEASE 0 SCALE PROOF");
-  console.log("  candidate        " + R.candidate_sha256);
+  console.log("  payload          " + R.payload_sha256);
+  console.log("  isolation wrapper" + " " + R.isolation_wrapper_sha256);
   console.log("  fixture pre      " + R.fixture_pre_sha256);
   console.log("  fixture post     " + R.fixture_post_sha256);
   console.log("  database         " + R.database);
@@ -278,10 +283,22 @@ const READER_SQL = `
              md5('r0-user-1')::uuid, 'image/jpeg', 'referenced', 'other', now(), 'scale_control')`,
     null, "attach_writes", "attach_write_fail", "attach_write_max_ms");
 
-  //  Apply the candidate. ONE transaction — the boundary the file itself
+  //  ISOLATION FIRST, AS A SEPARATE STATEMENT. The payload is byte-
+  //  promotable to production and therefore cannot carry a database-name
+  //  check; the assertion runs ahead of it on the same connection.
+  await c.query(fs.readFileSync(WRAPPER, "utf8"));
+
+  //  RE-VERIFY THE DIGEST IMMEDIATELY BEFORE EXECUTING. Hashing the file
+  //  once at startup and executing it later proves nothing about what was
+  //  actually run.
+  const payloadSql = fs.readFileSync(PAYLOAD, "utf8");
+  const digestNow = crypto.createHash("sha256").update(payloadSql).digest("hex");
+  if (digestNow !== R.payload_sha256) {
+    throw new Error("payload digest changed between recording and execution");
+  }
+  //  Apply the payload. ONE transaction — the boundary the file itself
   //  declares, which is the boundary production will use.
-  const candidateSql = fs.readFileSync(CANDIDATE, "utf8");
-  const applied = await timed(() => c.query(candidateSql));
+  const applied = await timed(() => c.query(payloadSql));
   R.phases.migration = { total_ms: applied.msec };
   console.log("  candidate applied in      " + applied.msec + " ms");
 
@@ -326,7 +343,11 @@ const READER_SQL = `
             + "  wo-insert " + control.insert_max_ms);
   console.log("  db size after             " + R.phases.migration.db_size_after);
 
-  ok("M1  candidate applied without error", true);
+  ok("M1  payload applied without error", true);
+  ok("M1b the payload carries NO harness-only identity check",
+     !/r0scale|release_0_scale_harness_guard|ISOLATED RELEASE 0|schema_migrations/.test(payloadSql),
+     "payload contains a harness-only reference");
+  ok("M1c the executed bytes match the recorded digest", digestNow === R.payload_sha256);
   ok("M2  the control workload never failed",
      control.read_fail === 0 && control.insert_fail === 0 && control.list_fail === 0
      && control.attach_write_fail === 0,
@@ -345,7 +366,7 @@ const READER_SQL = `
   //  lock on work_orders — except for the ALTER TABLE adding the unique
   //  constraint on the ATTACHMENTS table, which does. Named, not glossed.
   R.phases.migration.note =
-    "The candidate creates new tables (no lock on work_orders) but ALTERs "
+    "The payload creates new tables (no lock on work_orders) but ALTERs "
     + "work_order_proof_attachments to add uq_wopa_id_scope, which takes "
     + "ACCESS EXCLUSIVE on that table and builds a unique index over it. "
     + "That is the one blocking step and it scales with attachment count.";
