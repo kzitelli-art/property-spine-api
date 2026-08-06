@@ -1,7 +1,7 @@
 # Release 0 — implementation and deployment plan
 
-**Revision 3 — evidence source ruled, chain discipline enforced, sequence
-reordered around the technician lane.**
+**Revision 3 — evidence source ruled, chain integrity enforced at insert time,
+sequence reordered around the technician lane.**
 **Documentation only. Nothing in this plan has been implemented.**
 
 Governing rulings: [`ASK_SPINE_BUILD_CONTRACT.md`](ASK_SPINE_BUILD_CONTRACT.md)
@@ -14,12 +14,17 @@ Factual basis: [`release-0-audit/RECEIPT.md`](release-0-audit/RECEIPT.md),
 ## Gates before implementation or merge
 
 ```text
-1  this plan correction committed and reviewed          revision 3
+1  revision 3 chain-integrity guard committed and
+   reviewed                                             §2.1.1 · §2.3.1
 2  the exposed Neon credential rotated                  CREDENTIAL_ROTATION_RUNBOOK.md
-3  the old credential proven dead                       runbook step 4
+3  the old credential proven dead                       runbook §3 step 4
 4  the SMS technician evidence and completion path
    phone-verified                                       at deployment step 4
 ```
+
+**Implementation does not begin until gates 1–3 are complete.** Gate 4 is a
+release-step condition: it precedes removal of the legacy completion control
+(deployment step 5) and everything after it.
 
 Rotation blocks product code, migrations, production access, deployment,
 runtime-changing merge, and implementation. **It does not block this
@@ -40,6 +45,7 @@ owner's evidence-source ruling and five final corrections:
 | 3 | Defect-obligation lifecycle defined end to end | §4.2 |
 | 4 | Sequence reordered: activation captured only after the legacy writer is dead | §5.1 |
 | 5 | A fresh authorized pre-cutover census supplies the expected set | §6.2 |
+| 6 | Insert-time chain guards — rooted, acyclic, no self-supersession | §2.1.1, §2.3.1 |
 
 ---
 
@@ -117,9 +123,124 @@ create index idx_wope_scope on work_order_proof_evaluations (work_order_id, prop
 **How "must supersede the current head" is enforced.** It falls out of
 `uq_wope_one_successor` rather than needing its own rule: any row that is not
 the head already *has* a successor, so an attempt to supersede it violates that
-index. A non-head supersession is therefore **unrepresentable**, not merely
-discouraged — and it is enforced by the database rather than by the service
-remembering to check.
+index.
+
+#### 2.1.1 The indexes alone are not sufficient — the insert guard *(correction 6)*
+
+The three indexes prove *at most* one genesis, *at most* one successor, and no
+cross-scope link. **They do not prove that every component is a rooted acyclic
+chain with exactly one head.** Four states survive them:
+
+```text
+a  a row supersedes itself         A.supersedes_id = A.id
+b  a two-cycle                     A → B and B → A
+c  a component with NO genesis     every cycle has none
+d  a component with NO head        every cycle has none
+```
+
+`uq_wope_genesis` permits *at most* one genesis — **zero is also permitted**, so
+a pure cycle satisfies it. In a two-cycle each row is superseded exactly once,
+so `uq_wope_one_successor` is satisfied. The composite self-FK is satisfied
+because both rows share a scope. Self-supersession survives because a
+self-referencing FK is checked once the row has landed.
+
+A `BEFORE INSERT` guard closes all four.
+
+```sql
+create or replace function wope_chain_guard() returns trigger as $$
+declare
+  pred  work_order_proof_evaluations%rowtype;
+  walk  uuid;
+  hops  int := 0;
+begin
+  -- 1. NO SELF-SUPERSESSION
+  if NEW.supersedes_id is not null and NEW.supersedes_id = NEW.id then
+    raise exception 'evaluation % may not supersede itself', NEW.id;
+  end if;
+
+  -- 2. GENESIS — permitted only when the scope is empty
+  if NEW.supersedes_id is null then
+    perform 1 from work_order_proof_evaluations
+      where work_order_id = NEW.work_order_id
+        and property_id   = NEW.property_id
+      limit 1;
+    if found then
+      raise exception 'genesis refused: evaluations already exist for (%, %)',
+        NEW.work_order_id, NEW.property_id;
+    end if;
+    return NEW;
+  end if;
+
+  -- 3. SUPERSEDING INSERTION
+  --    LOCK the predecessor FIRST, so two concurrent successors serialize
+  --    here rather than racing to the unique index.
+  select * into pred
+    from work_order_proof_evaluations
+   where id = NEW.supersedes_id
+     for update;
+
+  if not found then
+    raise exception 'predecessor % does not exist', NEW.supersedes_id;
+  end if;
+
+  if pred.work_order_id <> NEW.work_order_id
+     or pred.property_id <> NEW.property_id then
+    raise exception 'cross-scope supersession refused';
+  end if;
+
+  perform 1 from work_order_proof_evaluations
+    where supersedes_id = pred.id limit 1;
+  if found then
+    raise exception 'predecessor % is not the head', pred.id;
+  end if;
+
+  -- 4. CYCLE REJECTION — walk back from the predecessor to a genesis.
+  --    The walk must terminate at supersedes_id IS NULL and must never
+  --    encounter NEW.id.
+  walk := pred.id;
+  loop
+    if walk = NEW.id then
+      raise exception 'cycle refused: % is its own ancestor', NEW.id;
+    end if;
+    select supersedes_id into walk
+      from work_order_proof_evaluations where id = walk;
+    exit when walk is null;
+    hops := hops + 1;
+    if hops > 10000 then
+      raise exception 'chain walk exceeded bound — chain is corrupt';
+    end if;
+  end loop;
+
+  return NEW;
+end $$ language plpgsql;
+
+create trigger chain_guard_wope
+  before insert on work_order_proof_evaluations
+  for each row execute function wope_chain_guard();
+```
+
+**Why the backward walk is the whole proof.** It establishes that the
+predecessor's component is *already* rooted and acyclic before the new row
+attaches. Attaching a fresh row to the head of a rooted acyclic chain yields a
+rooted acyclic chain. Since `UPDATE` and `DELETE` are refused by the §2.1
+triggers, **`INSERT` is the only operation that can change the graph** — so the
+invariant is inductive and holds for all time. The hop bound is the
+belt-and-braces case: if a chain were somehow already corrupt, the walk fails
+loudly rather than spinning.
+
+**The trigger and the indexes do different jobs, and neither replaces the
+other:**
+
+```text
+trigger    proves valid rooted, acyclic insertion
+indexes    prevent concurrent genesis and successor races
+```
+
+Two transactions inserting a genesis for the same scope both pass the trigger's
+emptiness check before either commits; `uq_wope_genesis` refuses the second.
+Two transactions superseding the same head serialize on the `FOR UPDATE` lock —
+the second then sees a successor and refuses — with `uq_wope_one_successor` as
+the backstop if that lock is ever bypassed.
 
 **The head is the one unsuperseded row**, not the highest sequence number.
 Revision 2 read "highest `evaluation_seq`", which is only equivalent to the head
@@ -228,6 +349,82 @@ Same discipline as §2.1, same reason: the head is **derived from the chain**,
 never marked by a mutable column and never inferred from ordering. A correction
 is a new row citing the head, with a required reason; the original stays
 readable permanently. Append-only triggers as §2.1.
+
+#### 2.3.1 Activation insert guard *(correction 6)*
+
+The same four holes exist here and are closed the same way. The scope is the
+whole table rather than a work order, so "genesis is permitted only when the
+table is empty" replaces the per-scope emptiness check.
+
+```sql
+create or replace function r0ah_chain_guard() returns trigger as $$
+declare
+  head  release_0_activation_history%rowtype;
+  walk  uuid;
+  hops  int := 0;
+begin
+  -- 1. NO SELF-SUPERSESSION
+  if NEW.supersedes_id is not null and NEW.supersedes_id = NEW.id then
+    raise exception 'activation % may not supersede itself', NEW.id;
+  end if;
+
+  -- 2. GENESIS — permitted only when activation history is EMPTY
+  if NEW.supersedes_id is null then
+    perform 1 from release_0_activation_history limit 1;
+    if found then
+      raise exception 'genesis refused: activation history is not empty';
+    end if;
+    return NEW;
+  end if;
+
+  -- 5. A CORRECTION REQUIRES A NON-EMPTY REASON
+  --    (the CHECK constraint forbids NULL; this forbids whitespace too)
+  if NEW.reason is null or btrim(NEW.reason) = '' then
+    raise exception 'a superseding activation requires a non-empty reason';
+  end if;
+
+  -- 3 + 4. IT MUST CITE THE CURRENTLY VISIBLE HEAD, AND THE HEAD IS LOCKED
+  select * into head
+    from release_0_activation_history
+   where id = NEW.supersedes_id
+     for update;
+
+  if not found then
+    raise exception 'cited activation % does not exist', NEW.supersedes_id;
+  end if;
+
+  perform 1 from release_0_activation_history
+    where supersedes_id = head.id limit 1;
+  if found then
+    raise exception 'activation % is not the current head', head.id;
+  end if;
+
+  -- 6. CYCLE REJECTION
+  walk := head.id;
+  loop
+    if walk = NEW.id then
+      raise exception 'cycle refused: % is its own ancestor', NEW.id;
+    end if;
+    select supersedes_id into walk
+      from release_0_activation_history where id = walk;
+    exit when walk is null;
+    hops := hops + 1;
+    if hops > 10000 then
+      raise exception 'chain walk exceeded bound — chain is corrupt';
+    end if;
+  end loop;
+
+  return NEW;
+end $$ language plpgsql;
+
+create trigger chain_guard_r0ah
+  before insert on release_0_activation_history
+  for each row execute function r0ah_chain_guard();
+```
+
+`uq_r0ah_genesis` and `uq_r0ah_one_successor` are retained as **concurrency
+backstops**, exactly as in §2.1.1 — the trigger proves the shape, the indexes
+win the race.
 
 ### 2.4 Legacy cutover inventory — immutable
 
@@ -760,10 +957,27 @@ CHAIN DISCIPLINE                                                  ← correction
   supersede a non-head historical row         → REFUSED (it has a successor)
   supersedes_id from another work order       → REFUSED (composite self-FK)
   supersedes_id from another property         → REFUSED (composite self-FK)
-  head view after N supersessions             → exactly one row
   UPDATE / DELETE any evaluation              → REFUSED by trigger
   prior row after supersession                → BYTE-IDENTICAL
   DELETE a work order carrying an evaluation  → REFUSED by FK restrict
+
+CHAIN INTEGRITY — rooted and acyclic                              ← correction 6
+  evaluation supersedes itself                → REFUSED
+  activation supersedes itself                → REFUSED
+  evaluation cycle A → B → A                  → REFUSED
+  activation cycle A → B → A                  → REFUSED
+  superseding a nonexistent predecessor       → REFUSED
+  second genesis (evaluations)                → REFUSED
+  second genesis (activation, non-empty)      → REFUSED
+  activation correction NOT citing the head   → REFUSED
+  activation correction with a blank reason   → REFUSED
+  two CONCURRENT successors, same head        → one accepted, one refused
+  two CONCURRENT genesis inserts, same scope  → one accepted, one refused
+  accepted chain after EVERY insert           → exactly one genesis and
+                                                exactly one head
+  head view after multiple valid supersessions→ exactly one row
+  corrupt chain (fixture-injected cycle)      → walk fails loudly at the
+                                                hop bound, never spins
 
 SCOPE
   link an attachment from another work order  → REFUSED
@@ -932,4 +1146,5 @@ requires a production connection, and only at step 7.
 | 8 | `attachStubPhoto` / `woStubPhotos` (app) | **4 — retired** | Removed at deployment step 5. Must never feed a proof evaluation. |
 | 9 | App "Mark done — close" control | **4 — retired** | Removed at deployment step 5, after phone verification. |
 | 10 | `raiseProofEvaluationDefect` + sweep | 1 — permanent | Never. |
+| 10a | `wope_chain_guard` / `r0ah_chain_guard` triggers | 1 — permanent | Never. They are what make the chain invariant inductive. |
 | 11 | This plan | 1 — permanent record | Never. It is the reviewed design implementation is measured against. |

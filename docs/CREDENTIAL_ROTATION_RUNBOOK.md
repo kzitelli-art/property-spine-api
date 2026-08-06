@@ -157,13 +157,14 @@ step 5  transcript exposure acknowledged
 
 The three documentation tracks are **complete** and did not require rotation:
 the audit record (PR #43), the four frozen rulings (contract §19c), and the
-implementation plan (revision 2, corrected against the design review).
+implementation plan (revision 3, corrected across three design reviews).
 
 What rotation unblocks is implementation itself — and rotation is **not the only
 gate**:
 
 ```text
-gate 1  this plan correction committed and reviewed   revision 3
+gate 1  revision 3 chain-integrity guard committed
+        and reviewed                                  plan §2.1.1 · §2.3.1
 gate 2  credential rotated                            this runbook §3
 gate 3  old credential proven dead                    this runbook §3 step 4
 gate 4  SMS technician evidence + completion path
@@ -177,9 +178,9 @@ control (plan step 5) and everything after it.
 The §5.0 evidence-source question is **closed** — Option A, the technician SMS
 lane, ruled 2026-08-06.
 
-**Ask Spine Build 1 does not start. No Release 0 product migration is written
-and nothing under `src/` changes until the implementation plan is reviewed
-against the four rulings.**
+**Implementation does not begin until gates 1–3 are complete.** Gate 4 is the
+release-step condition before the legacy completion control is removed.
+**Ask Spine Build 1 does not start.**
 
 ## 6. Worth doing while you are in there
 
