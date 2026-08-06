@@ -102,9 +102,13 @@ first."* Taken literally, that would leave a signed-in operator with **no way to
 complete any work order**, because the canonical service has no app surface.
 
 That is not an acceptable intermediate state on a live operator surface (§19–20).
-The corrected sequence in
-[`RELEASE_0_IMPLEMENTATION_PLAN.md`](RELEASE_0_IMPLEMENTATION_PLAN.md) §5 splits
-step 1 accordingly.
+
+Under the Option A ruling (§4.2) the resolution is not to give the app a
+completion surface but to **keep the legacy control working until the technician
+lane is phone-verified, then remove it**. See
+[`RELEASE_0_IMPLEMENTATION_PLAN.md`](RELEASE_0_IMPLEMENTATION_PLAN.md) §5.1
+steps 3–5: the legacy done-path stays untouched through step 3, phone
+verification is step 4, and removal is step 5.
 
 ### 4.2 The deeper dependency
 
@@ -134,8 +138,15 @@ c  Release 0 ships the schema, writer and reader, and the operator-facing
    completion occurs through any path.
 ```
 
-**This audit does not choose.** It records that the choice exists and that the
-plan cannot be scheduled without it.
+**RULED 2026-08-06 — OPTION A.** The technician SMS lane is the canonical
+completion-evidence source for Release 0. No operator-app upload pipeline is
+built in this release, and the app does not independently declare a repair
+complete. The SMS lane must be phone-verified before the legacy app completion
+control is removed. See `RELEASE_0_IMPLEMENTATION_PLAN.md` §5.0 and deployment
+steps 4–5.
+
+Consequence for §5 below: call site 1 is **removed**, not redirected. There is
+no canonical completion surface in the app to route it to.
 
 ---
 
@@ -143,11 +154,11 @@ plan cannot be scheduled without it.
 
 | Call site | Change | Deployment step |
 |---|---|---|
-| 1 `closeoutDone` | Stop calling the legacy route. Route to the canonical completion service once it has an app surface. | §5 step 1b |
+| 1 `closeoutDone` | **Removed**, with its "Mark done — close" control. Not redirected — under Option A the app does not declare completion. | step 5 |
 | 2 `closeoutNotDone` | **No change.** Not a completion. Must keep working after the route's done-path fails closed. | — |
 | 3 demo interceptor | Update alongside 1, so demo and live keep identical product meaning (§17). | with 1 |
-| `attachStubPhoto` | Removed or replaced when a real evidence path exists. It may never feed a canonical proof evaluation. | with option (a) or (b) above |
-| `workOrderPanel` closeout block | One panel serves all seven entry points. | with 1 |
+| `attachStubPhoto` + `woStubPhotos` | **Removed.** No replacement in this release — evidence comes from the technician exchange. | step 5 |
+| `workOrderPanel` closeout block | One panel serves all seven entry points, so there is one change, not seven. Keeps the not-done controls; loses the done control. | step 5 |
 
 ---
 
@@ -156,4 +167,4 @@ plan cannot be scheduled without it.
 | Component | Class | Removal condition |
 |---|---|---|
 | This audit | 1 — permanent record | Never removed. It is the source-derived basis for the app half of the retirement sequence. |
-| `attachStubPhoto` + `woStubPhotos` | **4 — retired** | Removed when a genuine evidence path exists. It must never feed a proof evaluation. |
+| `attachStubPhoto` + `woStubPhotos` | **4 — retired** | Removed at deployment step 5, after phone verification. Must never feed a proof evaluation. |

@@ -163,12 +163,19 @@ What rotation unblocks is implementation itself — and rotation is **not the on
 gate**:
 
 ```text
-gate 1  credential rotation                     this runbook
-gate 2  design-plan revision 2 accepted         RELEASE_0_IMPLEMENTATION_PLAN.md
-gate 3  the §5.0 evidence-source decision       owner decision
+gate 1  this plan correction committed and reviewed   revision 3
+gate 2  credential rotated                            this runbook §3
+gate 3  old credential proven dead                    this runbook §3 step 4
+gate 4  SMS technician evidence + completion path
+        phone-verified                                plan §5.1 step 4
 ```
 
-**All three before any product code, migration, deployment, or merge of #43.**
+Gates 1–3 precede any product code, migration, deployment, or merge of #43.
+Gate 4 is a release-step gate: it precedes removal of the legacy app completion
+control (plan step 5) and everything after it.
+
+The §5.0 evidence-source question is **closed** — Option A, the technician SMS
+lane, ruled 2026-08-06.
 
 **Ask Spine Build 1 does not start. No Release 0 product migration is written
 and nothing under `src/` changes until the implementation plan is reviewed
