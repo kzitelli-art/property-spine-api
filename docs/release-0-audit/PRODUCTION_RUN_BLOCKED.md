@@ -123,6 +123,81 @@ while it waits.
 
 ---
 
+## 3a. Render web-shell attempt, 2026-08-06 — also no production read
+
+The owner ran the sequence in the Render web shell. **Production was still
+never contacted.** Three distinct causes, all visible in the output:
+
+```text
+✗ reconciliation could not run: getaddrinfo ENOTFOUND base
+exit=2
+Error: Cannot find module '/opt/render/project/src/tools/release0_proof_audit.js'
+exit=1
+```
+
+**1. The placeholder was pasted literally.** `DATABASE_URL="<production>"` was
+not substituted. Reproduced exactly:
+
+```text
+new Client({connectionString:"<production>"})
+  → host: base    database: <production>    user: undefined
+```
+
+`pg` parsed the angle-bracket string as a hostname `base`, hence
+`ENOTFOUND base`. **No connection to production was attempted.**
+
+**2. The second command ran despite the first exiting 2.** The
+`# ONLY IF THAT EXITED 0:` line in the instructions was a *comment*, not a
+shell guard, so the shell executed the audit anyway. **That is a defect in the
+instructions, not in the tools** — the authorization's ordering constraint was
+being enforced by convention rather than by the shell. Corrected command block
+in §5.1. No harm resulted, because of cause 3.
+
+**3. The authorized instruments are not in that environment.** Render deploys
+`main`, and `/opt/render/project/src` is a `main` checkout:
+
+```text
+tools/release0_proof_audit.js   ABSENT from main — exists only on this branch
+tools/ledger_reconcile.js       PRESENT, but the PRE-AUTHORIZATION version
+                                (39 lines differ from c0d9959: no statement
+                                 reordering, no guarded connect)
+```
+
+So the reconciliation that ran was **not the authorized artifact**, and the
+audit could not run at all. Any future attempt in that shell must first place
+the `c0d9959` versions there and verify the digests in §1.
+
+### 3b. Correction — the `ledger_reconcile.js` connect defect was overstated
+
+This branch justified modifying a shipped tool partly on the grounds that its
+unguarded `client.connect()` would produce an unhandled rejection and a stack
+trace. **That was wrong, and the Render output is the evidence.**
+
+`tools/ledger_reconcile.js` on `main` ends with:
+
+```js
+main().catch((e) => {
+  console.error("\n  ✗ reconciliation could not run: " + (e && e.message ? e.message : e) + "\n");
+  process.exit(2);
+});
+```
+
+A connect failure was already caught and reported with exit 2 — which is
+exactly what the screenshot shows. It was never an unhandled rejection.
+
+`tools/release0_proof_audit.js` has **no** outer `.catch` (`main()` is called
+bare at `:442`), so for that tool the unhandled rejection and stack trace were
+real, and the fix was warranted.
+
+What the `ledger_reconcile.js` change actually bought is narrower than claimed:
+a specific message naming the connect, and the explicit "Nothing was read".
+The statement-reordering fix in the same commit stands on its own and was not
+overstated. **The owner may reasonably decide the `ledger_reconcile.js` connect
+change was unnecessary**, which would shrink the authorization's footprint back
+to one modified tool.
+
+---
+
 ## 4. What was NOT done
 
 ```text
@@ -152,17 +227,50 @@ Any environment that can reach the production host on 5432 — a Render shell,
 the owner's machine, a session whose network policy permits it. The commands
 are exactly:
 
-```bash
-DATABASE_URL="<production>" node tools/ledger_reconcile.js
-echo "exit=$?"
+**Step 0 — put the authorized instruments in place and verify them.** On
+Render this is required, because `main` has neither (see §3a).
 
-#  ONLY IF THE ABOVE EXITED 0:
-DATABASE_URL="<production>" node tools/release0_proof_audit.js --json > release0_audit.json
-echo "exit=$?"
+```bash
+cd /opt/render/project/src
+git rev-parse --is-inside-work-tree           # must print: true
+git fetch origin claude/release-0-audit-plan-55r5kd
+git checkout c0d9959 -- tools/ledger_reconcile.js tools/release0_proof_audit.js
+sha256sum tools/ledger_reconcile.js tools/release0_proof_audit.js
 ```
 
-Run them from a checkout at `c0d9959`, or verify the two digests in §1 first.
-Prefer a `SELECT`-only role; the tools refuse a writable transaction either way.
+Both digests must match §1 exactly. If either differs, **stop** — the
+authorization does not cover what is on disk.
+
+*What step 0 is and is not:* it writes two read-only tool files into an
+ephemeral instance's working directory. It is not a deploy, changes no service
+configuration, and no product code. It does modify a running production
+instance's filesystem, so it is the owner's call; it is reversible with
+`git checkout HEAD -- tools/`. If that is unwelcome, use §5.2 instead.
+
+**Step 1 and 2 — with the gate enforced by the shell, not by a comment.**
+Render already sets `DATABASE_URL` for the service, so no credential needs to
+be pasted anywhere. Confirm it points where you expect, without printing the
+password:
+
+```bash
+node -e 'const u=new URL(process.env.DATABASE_URL); console.log(u.hostname, u.pathname)'
+```
+
+Then:
+
+```bash
+node tools/ledger_reconcile.js; LEDGER=$?; echo "ledger exit=$LEDGER"
+
+if [ "$LEDGER" -eq 0 ]; then
+  node tools/release0_proof_audit.js --json > release0_audit.json; echo "audit exit=$?"
+  sha256sum release0_audit.json
+else
+  echo "STOPPED — ledger exited $LEDGER. Audit NOT run, per the authorization."
+fi
+```
+
+Prefer a `SELECT`-only role if one exists; the tools refuse a writable
+transaction either way.
 
 ### 5.2 Send the raw outputs back
 
