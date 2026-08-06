@@ -1,6 +1,6 @@
 # RELEASE PACKAGE — resident SMS → work order → technician lifecycle → operator action
 
-**Status: built, proven, NOT merged and NOT activated.**
+**Status: MERGED AND DEPLOYED. Not activated — no carrier wiring exists.**
 Activation is a separate, deliberate act. See
 [`ACTIVATION_SMS_WORK_ORDER_HANDOFF.md`](ACTIVATION_SMS_WORK_ORDER_HANDOFF.md),
 which is the operator-facing packet and is self-contained.
@@ -11,31 +11,25 @@ credentials, no connection strings and no phone numbers.
 
 ---
 
-## 1. Identity
+## 1. Identity — verified 2026-08-05
 
 | | |
 |---|---|
-| API repository | `kzitelli-art/property-spine-api` |
-| API branch | `claude/conversational-seams-and-technician-loop` |
-| API tip | the commit carrying this document — confirm with `git log --oneline -1` |
-| API base | `origin/main` @ `8330aec` — already contained in the branch; no merge outstanding |
-| App repository | `kzitelli-art/property-spine-app` |
-| App branch | `claude/sms-work-order-handoff-qo3s8i` |
-| App tip | `11193f4` |
-| App base | `origin/main` @ `357fb15` — **merged in**, so the branch is a current merge candidate |
+| API `main` | `a04a1df` — **deployed and booting**, confirmed by `echo $RENDER_GIT_COMMIT` |
+| App `main` | carries the app side of this rail |
 | Migrations added | `130` – `136` |
-| Production applied ledger ceiling | **128** (to be re-confirmed read-only at activation) |
-| Ceiling this release expects to start from | **129** |
+| **Applied ledger ceiling** | **136** — reconciled, `EXIT 0`, both directions agree |
+| Carrier wiring | **none** — `provider_config` is null; nothing routes |
+| Reachable by a resident | **no** |
+| Reachable by a technician | **no** — no `operations` line exists |
 
-**`main` cannot boot today, and that is deliberate.** `129_property_line_uniqueness.sql`
-is on `main` and in no ledger, so the verify gate refuses to start and Render
-keeps serving the previous build. This release **stacks on top of** that; it does
-not replace it. **Migration 129 must be activated first** — that is
-[`UNBLOCK_1_MIGRATION_129_ACTIVATION.md`](UNBLOCK_1_MIGRATION_129_ACTIVATION.md),
-and it is a hard prerequisite, not a recommendation.
+Both branches are merged. The identity table this section previously carried —
+branch tips, base `8330aec`, ceiling `128`, deployed `d3698d3`, *"main cannot
+boot"* — described the pre-merge state and is superseded.
 
-Reconcile with `main` by **merge**. Never rebase and never force-push either
-branch — both have been merged from `main` before and their history is shared.
+**Released is not activated.** The code and schema are live; no phone number is
+wired to either. Activation is the deliberate act described in
+`ACTIVATION_SMS_WORK_ORDER_HANDOFF.md`, and its remaining work is Part B.
 
 ---
 

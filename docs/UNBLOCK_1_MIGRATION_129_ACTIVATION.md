@@ -1,3 +1,27 @@
+# ⛔ SUPERSEDED — DO NOT EXECUTE
+
+**Migration 129 is applied. This packet cleared a blocker that no longer
+exists, and running it against production would be acting on a false premise.**
+
+Verified in the Render shell, 2026-08-05:
+
+```text
+echo $RENDER_GIT_COMMIT     a04a1df…      main tip, deployed and booting
+node tools/ledger_reconcile.js
+  ledger rows        135
+  applied ceiling    136        ← 129 and 130–136 all applied
+  repository ceiling 136
+  ✓ RECONCILED — both directions agree across the WHOLE ledger.  EXIT 0
+```
+
+The premise below — *"`main` cannot boot… production deployed `d3698d3`…
+applied ledger ceiling 128"* — described the state before the merges of
+2026-08-05. It is retained for history only.
+
+**Remaining work is in `ACTIVATION_SMS_WORK_ORDER_HANDOFF.md`, Part B.**
+
+---
+
 # UNBLOCK PACKET 1 — migration 129 production activation
 
 **For an authorized operator with Render / Neon access. Self-contained: you do
