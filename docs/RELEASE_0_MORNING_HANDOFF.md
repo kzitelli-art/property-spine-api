@@ -1,5 +1,34 @@
 # Release 0 — morning handoff
 
+> ## ⚠ SUPERSEDED — 2026-08-06, design review
+>
+> **This brief is no longer the governing state, and its gate statement is
+> wrong.** It says credential rotation is the only remaining gate. It is not.
+>
+> **The accurate state:**
+>
+> ```text
+> credential rotation      BLOCKS implementation, runtime changes,
+>                          deployment, and merge
+> architecture-plan        CORRECTED in revision 2 of
+>   correction             RELEASE_0_IMPLEMENTATION_PLAN.md (8 findings)
+> app source audit         COMPLETE — RELEASE_0_APP_CLOSEOUT_AUDIT.md
+> evidence-source decision OPEN — owner decision, plan §5.0
+> PR #43                   NOT approved for merge
+> product code / migration MAY NOT BEGIN until BOTH the design corrections
+>                          are accepted AND rotation is complete
+> ```
+>
+> Current governing documents:
+> [`RELEASE_0_IMPLEMENTATION_PLAN.md`](RELEASE_0_IMPLEMENTATION_PLAN.md) (rev 2) ·
+> [`RELEASE_0_APP_CLOSEOUT_AUDIT.md`](RELEASE_0_APP_CLOSEOUT_AUDIT.md) ·
+> [`ASK_SPINE_BUILD_CONTRACT.md`](ASK_SPINE_BUILD_CONTRACT.md) §19c ·
+> [`release-0-audit/RECEIPT.md`](release-0-audit/RECEIPT.md)
+>
+> Kept because §3–§6 remain the accurate record of the audit's execution,
+> its command history, and its falsification evidence.
+
+
 **Overnight session, 2026-08-06. Work is PAUSED at an authorization boundary,
 not blocked by a defect.**
 

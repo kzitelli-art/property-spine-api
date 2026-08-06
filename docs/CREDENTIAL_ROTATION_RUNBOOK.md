@@ -155,12 +155,20 @@ step 5  transcript exposure acknowledged
 
 ## 5. After rotation
 
-Production access and runtime-changing work resume in the order the owner set:
+The three documentation tracks are **complete** and did not require rotation:
+the audit record (PR #43), the four frozen rulings (contract §19c), and the
+implementation plan (revision 2, corrected against the design review).
 
-1. a separate PR containing the production audit record, tests, and the
-   read-only tooling correction — **no product behaviour**;
-2. amend `ASK_SPINE_BUILD_CONTRACT.md` with the four Release 0 rulings;
-3. produce the Release 0 implementation and deployment plan across both repos.
+What rotation unblocks is implementation itself — and rotation is **not the only
+gate**:
+
+```text
+gate 1  credential rotation                     this runbook
+gate 2  design-plan revision 2 accepted         RELEASE_0_IMPLEMENTATION_PLAN.md
+gate 3  the §5.0 evidence-source decision       owner decision
+```
+
+**All three before any product code, migration, deployment, or merge of #43.**
 
 **Ask Spine Build 1 does not start. No Release 0 product migration is written
 and nothing under `src/` changes until the implementation plan is reviewed
