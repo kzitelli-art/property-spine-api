@@ -12,77 +12,88 @@ no deploy happened, and **no production connection was ever opened.**
 
 ```text
 branch          claude/release-0-audit-plan-55r5kd   (API repo only)
-final SHA       d19cadf34769fc0f15075ba57f8854f9da535b44
-pushed          yes — origin/claude/release-0-audit-plan-55r5kd
+authorize       c0d995966cc24f52a20416f84c97a1244e92828a   ← see §2
 base            origin/main ec9887732748e482deab21d76080a0d5f8c347c2
 APP repo        UNTOUCHED — working tree clean, no commits, no branch divergence
 ```
 
-Three commits, oldest first:
+Commits, oldest first:
 
 ```text
-d38f600  Release 0 audit plan: the read-only definition Open Ruling 4 asks to authorize.
+d38f600  Release 0 audit plan: the read-only definition Open Ruling 4 asks to
+         authorize.
 208a457  Completion-writer matrix: there are two live completion lanes, and the
          audit filter missed one.
 d19cadf  Release 0 audit instrument: built, falsified, and proven against an
          isolated Postgres.
+41c6c0f  Morning handoff.
+b7d4262  Exercise every exit path, and fix the unguarded connect it found.
+9dd28e0  Record the authorization SHA.                        (docs only)
+c0d9959  Probe before any read, literally: move connection identity after the
+         read-only proof in both tools.                       ← AUTHORIZE THIS
+<tip>    Record the authorization SHA.                        (docs only)
 ```
 
-### 1.1 Files changed — 9 files, all new, 2282 insertions
+### 1.1 Files — 11, all new except one
 
 ```text
-docs/RELEASE_0_AUDIT_PLAN.md                     699   the authorization request
-docs/RELEASE_0_COMPLETION_WRITER_MATRIX.md       157   source audit, no DB read
-docs/RELEASE_0_MORNING_HANDOFF.md                 —    this file
-docs/release-0-audit/ISOLATED_PROOF_RECEIPT.md   309   falsification evidence
-docs/release-0-audit/RECEIPT_TEMPLATE.md         118   for the real run
-docs/release-0-audit/isolated_run.txt            101   raw tool output
-tests/fixtures/release0_audit_populations.sql     98   edge populations
-tests/fixtures/release0_audit_schema.sql         179   faithful schema subset
-tests/release0_audit_forbidden_fields.test.js    214   §5 enforcement
-tools/release0_proof_audit.js                    407   the instrument
+NEW   docs/RELEASE_0_AUDIT_PLAN.md                     the authorization request
+NEW   docs/RELEASE_0_COMPLETION_WRITER_MATRIX.md       source audit, no DB read
+NEW   docs/RELEASE_0_MORNING_HANDOFF.md                this file
+NEW   docs/release-0-audit/ISOLATED_PROOF_RECEIPT.md   falsification evidence
+NEW   docs/release-0-audit/RECEIPT_TEMPLATE.md         for the real run
+NEW   docs/release-0-audit/isolated_run.txt            raw tool output
+NEW   tests/fixtures/release0_audit_populations.sql    edge populations
+NEW   tests/fixtures/release0_audit_schema.sql         faithful schema subset
+NEW   tests/release0_audit_forbidden_fields.test.js    §5 enforcement
+NEW   tests/release0_readonly_ordering.test.js         ordering regression guard
+NEW   tools/release0_proof_audit.js                    the instrument
+
+MOD   tools/ledger_reconcile.js                        ordering + guarded connect
 ```
 
 **No file under `src/`, `migrations/`, or `server.js` was modified.**
+`tools/ledger_reconcile.js` is the one pre-existing file changed: it ships on
+`main`, it is part of the authorized sequence, and it had the same two defects.
+Its reconciliation logic is untouched — it still imports the same
+`classifyLedger` that `migrate.js` runs at boot, so it still cannot disagree
+with what a deploy decides.
 
 ---
 
 ## 2. ⚠ The commit requiring owner authorization
 
 ```text
-AUTHORIZE:  b7d42627bfcf4e0387cd10a328aa55899fa68637
+AUTHORIZE:  c0d995966cc24f52a20416f84c97a1244e92828a
 ```
 
-**A commit cannot name its own SHA.** `b7d4262` is the commit that holds the
+**A commit cannot name its own SHA.** `c0d9959` is the commit that holds the
 instrument; the commit you are reading is a documentation-only one that follows
 it purely to record that number. This is the same self-referential lag
 `THREAD_HANDOFF.md` documents about itself — the difference is that here the gap
 is closed deliberately by a trailing doc commit rather than left to be chased.
-Nothing after `b7d4262` touches the tool, the plan, the fixtures, or the test;
-`git diff b7d4262..HEAD` should show this file and nothing else.
+Nothing after `c0d9959` touches the tools, the plan, the fixtures, or the tests;
+`git diff c0d9959..HEAD` should show this file and nothing else.
 
-**The SHA moved from `d19cadf` on the morning pass, and the reason matters.**
-Closing the untested-exit-path gap changed `tools/release0_proof_audit.js` —
-the connect guard — so `d19cadf` no longer holds the tool you would be
-authorizing. Authorization attaches to content, so the SHA moves whenever the
-content does, even for a fix that improves it.
+**The SHA has moved twice, and both times for the same reason.**
+`d19cadf` → `b7d4262` (guarded connect) → `c0d9959` (statement ordering). Each
+change touched a tool, so each invalidated the previous authorization target.
+**Authorization attaches to content, not to a filename**, so if anything is
+edited after the SHA you approve, the approval no longer covers it.
 
-What did **not** change between `d19cadf` and `1e39e58`:
+What did **not** change across those two moves — verified by diff, not
+asserted:
 
 ```text
-the query set             untouched — verified by diff, no select/from/where/
-                          group by/order by line differs
-docs/RELEASE_0_AUDIT_PLAN.md          untouched
-tests/fixtures/release0_audit_*.sql   untouched
+the query set                                   untouched
+docs/RELEASE_0_AUDIT_PLAN.md                    untouched
+tests/fixtures/release0_audit_*.sql             untouched
 tests/release0_audit_forbidden_fields.test.js   untouched
 ```
 
-Only error-path handling, its comments, and two receipts changed. **The
-substance under review is the same; the commit naming it is not.** Verify with
-`git diff d19cadf..1e39e58` rather than taking this paragraph's word for it.
-
-**Authorization attaches to a commit, not to a filename.** If the plan is
-edited after the SHA you approve, the approval no longer covers it.
+Only statement ordering, connection-failure handling, their comments, the two
+receipts and one new test changed. **The substance under review is the same;
+the commit naming it is not.**
 
 What is being authorized: **one read-only run of
 `tools/release0_proof_audit.js` against the production database**, plus one
