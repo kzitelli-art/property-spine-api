@@ -1,0 +1,89 @@
+# ── STALENESS NOTICE ────────────────────────────────────────────────
+# This audit was taken 2026-08-05T12:11Z against:
+#     API main  8330aece95e5a242467759e931ffffa7d64816cd
+#     App main  357fb15563cf92d4d40405c298387e6f659c24d5
+#
+# Both have since moved (API a04a1df, App 6220ca5). tools/branch_cleanup.sh
+# verifies every branch tip against the audited SHA below and STOPS on any
+# mismatch, so a stale audit fails safe — it does not delete the wrong thing.
+# Re-audit before running with --apply.
+#
+# Format: repo|branch|audited_tip|action
+# ────────────────────────────────────────────────────────────────────
+# repo|branch|audited_tip|action
+api|agent/governed-terms-review-big-build|e8c3dcafd61c2704ec23062d3b72e5d337653bec|archive
+api|archive/slice-9-pre-main-sync-fc23869|fc23869fc787960bd7514a639183d98e0b8b4ec2|archive
+api|claude/activation-126-package|c759e0e8adc084c443d9ed43b5a536e3eacbaac9|delete
+api|claude/ai-leasing-strategy-foundation|9ae39dd4f0f5642897f5e68a15ca24aa080363b9|delete
+api|claude/ai-leasing-visible-status-api|f3747bc4fdf58b5db20bb4f5a90dc1e222744050|delete
+api|claude/ask-spine-slice-1|a5e7f6c96785faa03dbbaae7dfc320f426a85ee6|delete
+api|claude/ask-spine-source-audit|d2f14c56ffe4b190ea54c1cd246392d7c857ad93|delete
+api|claude/baseline-migration-evidence|ad76d4d8bfd0c14264d99618a806729339d4922f|delete
+api|claude/build-1-6b-integration-audit|bf1015b2602dc15b77ce011dc1a2f43d4ed631c2|archive
+api|claude/build-2-normal-turn-scope|089da416e91f46f14337c7c885b23d1eebcbcfaa|archive
+api|claude/build-3-work-acceptance|c3a1e122f9c8ce8676780e958c852ef9f01851ef|archive
+api|claude/build-4-readiness-certification|f8174c93f488b30bc086b849ad9934cadc527bc8|archive
+api|claude/build-5-staff-agent-capture|8fc498267ed7e632891a9b0f2088dc1ab7d45f50|archive
+api|claude/build-6-live-runtime-proof|a269fce22ddf5f93871b6a596f8b9fead82addb6|archive
+api|claude/build-6a-unit-turn-simplification|62b25e8e7ee5f485f40fdcefb7023cfdf957830f|archive
+api|claude/build-6b-operator-language-cleanup|b5623393f725a567ec321f3700420cb4443f5658|archive
+api|claude/fix-smoke-probe|3c78176a8c1afda4827bd8c928ea42eb04b31c37|delete
+api|claude/fix-smoke-savepoint|dbc5a48c35f10b042459ff9fe8876b039f3ecf4b|delete
+api|claude/gate-coverage-and-handoff|fbd7a3a8b1500e7e9da8c975aeae24e55ba205ea|delete
+api|claude/gate-mention-is-not-a-guard|8330aece95e5a242467759e931ffffa7d64816cd|delete
+api|claude/getting-up-to-speed-nyf4ww|9ac127c4688ecb6f62833e7a2ef400fe2302cb0e|delete
+api|claude/harness-isolation-containment-gate|4bcd20c8e0b002522f28ba6a72b32b3487caed10|delete
+api|claude/item5-migration-release-gate|997db34bd44d78b7c067f2c1824bb92359a0a37a|delete
+api|claude/new-build-git-setup-o5l93r|3b3543f5e3d71f89e5127f945de5efd431ec32cb|delete
+api|claude/new-session-via3v4|1e74c76cb1f86d39c5608c2fd934199f4b1b23e1|delete
+api|claude/obligation-engine-one-implementation|a9126258b1814a09ab5a8e4746f350c18254c26b|delete
+api|claude/resident-sms-work-order|8b391b742b035ff7fb9c3f06764194d6abaa58e7|delete
+api|claude/runtime-baseline-intake-kit|560789acd92fd6541293538b5da21bcf58807ee2|archive
+api|claude/s4-unified-leasing-work|9d4181e9bd7a841ad166ddeb3c97be35dbbf87cf|delete
+api|claude/s5-applications-absorption|66a6b844a9f7d3c664f4489ab8b0514c6b7b5c1f|archive
+api|claude/security-obligations-route|f6ab9f6758c1e36aa30af2e0674776729e48830f|delete
+api|claude/security-release-launch-packet|faed1108b1ea8c073389bb655f2d8cdc10c704ba|archive
+api|claude/slice-9-demand-evidence|795e4619b403d3a9e1a94e037e9c4571e30d7bd3|delete
+api|claude/slice-9-demand-evidence-mcxvav|c726e3eece77a93400844a18ce9f845b524474f0|delete
+api|claude/slice-9-evidence-audit|fc9f0e6f73c9778055c111608b75f7a5341ad336|delete
+api|claude/slice-missed-timeliness|3d7740509a0ce254739fb497552123df1b415e90|delete
+api|claude/sms-reconciled|d95de1b2ce919d415aae040e1798c8768a5a67a2|delete
+api|docs/slice-7-closure|40ab104f11ec185aa331531e5d762bb8d904c810|archive
+api|feat/org-onboarding-wizard|bf169896ef3be1dc10654d845e21c19728fa07b0|archive
+api|feat/slice-6-renewals-rail|b87b1a5c02309ece99b857e24823648f7481f010|archive
+api|fix/prospect-text-punctuation-and-no-promises|ca5f6266b23c1046d5b79ede3a2bdbb64854bcb0|archive
+api|fix/scheduling-adapter-seam-require|c4563836581b5a28c501e9617f06bafb694e35a7|archive
+api|hotfix/future-rent-roll-route-guards|47fa1a7e76fc40a3b88e8bb56da0ab14b4c5c586|delete
+api|rebase/ask-spine-api|a5e7f6c96785faa03dbbaae7dfc320f426a85ee6|delete
+api|scratch/slice-9-appointment-foundation-ledger-blocked|63ea8f238ada21aadf60abc601ce1476b811ea0b|delete
+api|slice-6-renewals-audit|ab3a8f4ce1fb6de701482c7c06a983ece538c18b|archive
+api|tools/qa_provision.js|d46fabfdf2ec7897aee7a10a3dacee1cb0b832db|archive
+app|agent/governed-terms-review-big-build|03744fd4df3eac77aca417dd1e839d2e575e4023|archive
+app|claude/ai-leasing-visible-status-app|043857479b4197a9843a9c4e41bd11e35068669e|delete
+app|claude/ask-spine-slice-1|863a9bd0364cb24a8ce8b5954a90a11dc63ced8f|delete
+app|claude/build-2-normal-turn-scope|f0051a41e6f30a11f9ae3ee72e621acf4c8c03d8|archive
+app|claude/build-3-work-acceptance|978882ce92446ec492f120b198783604cfce610a|archive
+app|claude/build-4-readiness-certification|cf604e2a9c09360e4f12e96d3513c3b7c7ebf5e0|archive
+app|claude/build-5-staff-agent-capture|9e9fff07759f65bccd842f04467b9cc4e36682c5|archive
+app|claude/build-6a-unit-turn-simplification|d3e2ff8d2ee70268cf8bba6bea7e8a6eefafe39d|archive
+app|claude/build-6b-operator-language-cleanup|f60511a82ffc1765fba5f46b98fd8a13c3ba5395|archive
+app|claude/getting-up-to-speed-nyf4ww|5d5ea48abd648c83c6ff9d40b03c5715067ad54d|archive
+app|claude/leasing-naming-order-correction|5a8920bf862a843cb08e4242646c1e8ef52481db|delete
+app|claude/maintenance-home-alignment|28fb85141f3c44b2a76440ccb4a88a3bed1f6119|archive
+app|claude/mobile-code-quality-iy1u16|065fc6d32013ad6c0195d8b98412b4a68146ed59|archive
+app|claude/operator-ui-system-alignment|305a5c1372a300672423e52afbf5512b4ddd5f30|archive
+app|claude/post-merge-verification-fixes|79e5e471b8a75ad96aafbe7411499b3cc6a9441d|delete
+app|claude/s1-authoritative-property-context|7ff64f82c81ca83b57a833d8c06a8d1575e875b7|delete
+app|claude/s2-live-first-safety|e1f405e9253318e878cc1fe57b1d95fd2055c66a|delete
+app|claude/s3-truthful-leasing-home|c7995725eeacf6fc14193b457065edcbd24f3ad2|delete
+app|claude/s4-unified-leasing-work|ef3fd6d6f2f23faa5dbd91487fdae463c66bff9f|delete
+app|claude/s5-applications-absorption|a31f5a7092a4905aa01d3780bc6c2540f2a4304b|delete
+app|claude/security-obligations-route|b35ed666b4ee30f43360e9c6ad5ee6b3efcab0b6|delete
+app|claude/slice-9-demand-evidence-mcxvav|19b7c60a07e2a1cf6dbd7342b0efe4c8f9b563dd|delete
+app|claude/unit-turn-release-candidate|6df2ae1fc6e95b449eb968b755e5ae687199d249|archive
+app|feat/org-onboarding-wizard|4a0f88ae91fcef38c18d99925ca8e0d27024db32|archive
+app|fix/obligations-failure-vs-empty|07b488044757976465db83b6f2f9251dc1c21789|delete
+app|rebase/ask-spine-app|863a9bd0364cb24a8ce8b5954a90a11dc63ced8f|delete
+app|revert/security-app-26|02e821e6ae294c807fc22edc771478589df1b704|delete
+app|security/remove-public-seed-datasets|005a9b2e039506131bc9ce33fecafd45a2b59fcf|delete
+app|security/remove-public-solo-rent-roll-data|9c3386e28c5a5a9b4c03fc463c696139f90e0917|delete
