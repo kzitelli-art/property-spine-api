@@ -19,6 +19,57 @@ current truth. Re-date it whenever `main` moves materially.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
+##  ⛔ THE DEPLOYED APP IS BROKEN. 2026-08-06 (latest).
+## ══════════════════════════════════════════════════════════════════
+
+**This supersedes the APP SHA in the header above and every deployment claim
+below it.** APP `main` moved to `8cbfd1a` (step 1), and **that build has a
+runtime defect on the work-order detail surface.**
+
+```text
+APP main          8cbfd1a   DEPLOYED · BROKEN
+code-bearing      b79f192   SUPERSEDED — do not deploy
+REPAIRED          44379d5   deploy this
+APP rollback      6220ca5   still valid
+API main          unchanged. No API deploy, no migration, no schema change.
+```
+
+**The defect.** Step 1 landed `proofOf` and `proofSentence` *inside*
+`stateLine`'s body in `work-lifecycle-door.js`. Both hoisted into that one
+function's scope, so `detailHtml` — a sibling — could not see them. Every
+work-order **detail** render throws `ReferenceError: proofSentence is not
+defined`. It propagates out of `render()` and rejects unhandled.
+
+**Why nobody saw it.** `stateLine` is the one caller that could still reach
+them, so the **list renders normally and hides the break**. Clicking a work
+order does nothing at all — no error, no blank, no unavailable. A silent dead
+click.
+
+**The trap worth carrying forward.** Step 1's production pass recorded three
+honest PASSes over this defect, because the operator's property had no work
+orders and there was no row to click. **An empty-state pass is a true statement
+about the wrong subject.** It is why that receipt refused to call itself
+progress, and refusing was correct.
+
+**Found by** `property-spine-app/proof_presentation_contract.browser.js` on its
+first run — real Chromium against the real deployed file. Not by review, and
+not by any amount of reading.
+
+Full record: `property-spine-app/docs/RELEASE_0_STEP_1_PACKET.md` §9.8–§9.12.
+Step 1 acceptance is now **eleven checks in one pass**, with the legacy
+completion controls split out into a named owed item
+(`property-spine-app/docs/LEGACY_COMPLETION_CONTROL_REGRESSION.md`).
+
+**Also recorded there, for step 2:** `readPropertyWorkOrderStatuses` narrows
+the list projection to three proof fields. Harmless today. The moment the
+canonical writer emits four states, `legacy_indeterminate` and
+`missing_evaluation_defect` arrive as illegal old-shape payloads and every such
+row renders unavailable in the list while the detail renders it correctly.
+Proven, not predicted — §9.10.2.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
 ##  RELEASE 0 — DESIGN FROZEN, NOT IMPLEMENTED. 2026-08-06.
 ## ══════════════════════════════════════════════════════════════════
 
