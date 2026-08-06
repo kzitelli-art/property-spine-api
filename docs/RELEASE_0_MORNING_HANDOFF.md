@@ -50,10 +50,18 @@ tools/release0_proof_audit.js                    407   the instrument
 ## 2. ⚠ The commit requiring owner authorization
 
 ```text
-AUTHORIZE:  1e39e58e0bb3772d5fc2711d93b838ab36bd0981
+AUTHORIZE:  b7d42627bfcf4e0387cd10a328aa55899fa68637
 ```
 
-**This moved from `d19cadf` on the morning pass, and the reason matters.**
+**A commit cannot name its own SHA.** `b7d4262` is the commit that holds the
+instrument; the commit you are reading is a documentation-only one that follows
+it purely to record that number. This is the same self-referential lag
+`THREAD_HANDOFF.md` documents about itself — the difference is that here the gap
+is closed deliberately by a trailing doc commit rather than left to be chased.
+Nothing after `b7d4262` touches the tool, the plan, the fixtures, or the test;
+`git diff b7d4262..HEAD` should show this file and nothing else.
+
+**The SHA moved from `d19cadf` on the morning pass, and the reason matters.**
 Closing the untested-exit-path gap changed `tools/release0_proof_audit.js` —
 the connect guard — so `d19cadf` no longer holds the tool you would be
 authorizing. Authorization attaches to content, so the SHA moves whenever the
