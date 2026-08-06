@@ -354,15 +354,22 @@ async function main() {
   };
 
   try {
-    try {
-      const who = await client.query("select current_database() as db, current_user as usr");
-      report.connection.database = who.rows[0].db;
-      report.connection.user = who.rows[0].usr;
-    } catch {
-      /*  Identity is a courtesy, not the proof. The probe below is the proof. */
-    }
-
     // ── PROVE READ-ONLY BEFORE READING ANYTHING ─────────────────────
+    //
+    //  THE FIRST STATEMENT THIS TOOL SENDS IS `begin transaction read only`.
+    //  Nothing precedes it — not a version check, not a health ping, and in
+    //  particular NOT the connection-identity query, which used to sit here.
+    //
+    //  Identity is only two catalog functions and could not mutate anything,
+    //  so the temptation is to call it harmless. That misses the point. The
+    //  tool's own claim is "a write was attempted and refused BEFORE ANY
+    //  READ", and the refusal path says "Nothing was read." With an identity
+    //  query first, both sentences were false — narrowly, but a safety
+    //  contract that is narrowly false is not a safety contract, and a
+    //  receipt repeating it is a confident-wrong about the audit itself.
+    //
+    //  Postgres's read-only transaction is still the substantive barrier.
+    //  This ordering is what makes the SENTENCE true as well.
     await client.query("begin transaction read only");
     let writable = false;
     await client.query("savepoint write_probe");
@@ -378,13 +385,25 @@ async function main() {
       console.error("");
       console.error("  ✗ REFUSED — this transaction accepted a write.");
       console.error("    A read-only tool that can write is not read-only.");
-      console.error("    Nothing was read.");
+      console.error("    Nothing was read — not the connection identity, not any");
+      console.error("    domain data. The write probe was the only statement sent.");
       console.error("");
       await client.query("rollback").catch(() => {});
       await client.end();
       process.exit(2);
     }
     report.connection.read_only_proof = "a write was attempted and refused before any read";
+
+    //  ONLY NOW. Identity is a courtesy for the receipt, not the proof, and
+    //  it is read inside the proven read-only transaction like everything
+    //  else. A failure here costs the receipt a label, never the audit.
+    try {
+      const who = await client.query("select current_database() as db, current_user as usr");
+      report.connection.database = who.rows[0].db;
+      report.connection.user = who.rows[0].usr;
+    } catch {
+      /*  An honest blank beats a guessed database name. */
+    }
 
     // ── READ ────────────────────────────────────────────────────────
     for (const q of QUERIES) {

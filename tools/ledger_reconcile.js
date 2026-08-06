@@ -63,17 +63,35 @@ async function main() {
     .sort();
 
   const client = new Client({ connectionString: url, ssl: { rejectUnauthorized: false } });
-  await client.connect();
+
+  //  CONNECT INSIDE ITS OWN GUARD. An unreachable database — wrong host,
+  //  wrong credentials, no network — is the most likely real failure, and an
+  //  unguarded await here surfaces it as an unhandled promise rejection and a
+  //  Node stack trace. The operator then cannot tell "the reconciliation
+  //  failed" from "the reconciliation crashed", and a stack trace is not an
+  //  answer. Refuse in the tool's own voice instead.
+  try {
+    await client.connect();
+  } catch (err) {
+    console.error("\n  ✗ Could not connect to the database. Nothing was read.");
+    console.error(`    ${err && err.message ? err.message : err}\n`);
+    await client.end().catch(() => {});
+    process.exit(2);
+  }
 
   console.log("\n════════════════════════════════════════════════════════════════");
   console.log("  LEDGER RECONCILIATION — read-only, whole ledger");
-  try {
-    const who = await client.query("select current_database() as db, current_user as usr");
-    console.log(`  DATABASE  ${who.rows[0].db}  (user ${who.rows[0].usr})`);
-  } catch { /* identity is a courtesy, not the proof */ }
   console.log(`  REPO      ${files.length} migration files`);
 
   // ── PROVE READ-ONLY BEFORE READING ANYTHING ───────────────────────
+  //
+  //  THE FIRST STATEMENT THIS TOOL SENDS IS THE ONE BELOW. The
+  //  connection-identity query used to run here, above this line. It is only
+  //  two catalog functions and cannot mutate anything — but this tool then
+  //  printed "a write was attempted and refused before any read", and its
+  //  refusal path said "Nothing was read", and with an identity query first
+  //  both were false. A safety sentence that is narrowly false is not a
+  //  safety sentence. Identity is now read after the proof, below.
   await client.query("begin transaction read only");
   //  THE PROBE MUST NOT POISON THE TRANSACTION. A failed statement aborts the
   //  whole transaction block, so every read after it dies with "current
@@ -89,12 +107,21 @@ async function main() {
   await client.query("rollback to savepoint write_probe");
   if (writable) {
     console.error("\n  ✗ REFUSED — this transaction accepted a write.");
-    console.error("    A read-only tool that can write is not read-only. Nothing was read.\n");
+    console.error("    A read-only tool that can write is not read-only. Nothing was");
+    console.error("    read — not the connection identity, not the ledger. The write");
+    console.error("    probe was the only statement sent.\n");
     await client.query("rollback").catch(() => {});
     await client.end();
     process.exit(2);
   }
   console.log("  READ-ONLY proven — a write was attempted and refused before any read.");
+
+  //  ONLY NOW, inside the proven read-only transaction. Identity is a
+  //  courtesy for the receipt, not the proof.
+  try {
+    const who = await client.query("select current_database() as db, current_user as usr");
+    console.log(`  DATABASE  ${who.rows[0].db}  (user ${who.rows[0].usr})`);
+  } catch { /* an honest blank beats a guessed database name */ }
   console.log("════════════════════════════════════════════════════════════════\n");
 
   let rows;

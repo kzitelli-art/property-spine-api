@@ -86,12 +86,16 @@ change   await client.query("begin transaction read only")
 
 result   ✗ REFUSED — this transaction accepted a write.
          A read-only tool that can write is not read-only.
-         Nothing was read.
+         Nothing was read — not the connection identity, not any
+         domain data. The write probe was the only statement sent.
 exit     2
 ```
 
 The probe is not decorative: with a writable transaction it detects the write
-and refuses **before reading anything**.
+and refuses **before reading anything**. §4.6 proves that last clause from the
+server's statement log rather than asking you to take the message's word for it
+— which matters, because until 2026-08-06 the message said this and it was not
+quite true.
 
 ### 4.2 Savepoint — REMOVED the savepoint wrapper
 
@@ -167,6 +171,86 @@ guarded and refuses in the tool's own voice.
 Regression after the fix: the happy-path text output is byte-identical to
 `isolated_run.txt`, the `--json` digest is unchanged, 24 forbidden-field
 assertions pass, 7 source-governance gates pass.
+
+### 4.6 Statement ordering, proven from the server's own log
+
+**Pre-authorization correction, 2026-08-06.** Both tools ran
+`select current_database(), current_user` *before* opening the read-only
+transaction and *before* the write probe. Postgres's read-only transaction was
+and remains the substantive mutation barrier — that was never in doubt. What
+was wrong is that each tool then printed *"a write was attempted and refused
+before any read"*, and its refusal path said *"Nothing was read"*, and with an
+identity query already sent both sentences were false.
+
+A safety sentence that is narrowly false is not a safety sentence, and a
+receipt repeating it is a confident-wrong about the audit itself. The identity
+query now runs **after** the refusal branch, inside the proven transaction.
+
+Evidence is the PostgreSQL statement log (`log_statement = 'all'`), which is
+the authority on what the server actually received — not a source reading.
+
+**`release0_proof_audit.js`, successful run — 18 statements:**
+
+```text
+ 1. begin transaction read only          ← FIRST. Nothing precedes it.
+ 2. savepoint write_probe
+ 3. create temporary table __release0_audit_write_probe (x int)
+ 4. rollback to savepoint write_probe
+ 5. select current_database() as db, current_user as usr   ← AFTER the proof
+ 6-17. the twelve domain queries
+18. rollback
+```
+
+**`release0_proof_audit.js`, writable transaction — 5 statements, then exit 2:**
+
+```text
+ 1. begin                                ← falsified: read-only removed
+ 2. savepoint write_probe
+ 3. create temporary table __release0_audit_write_probe (x int)
+ 4. rollback to savepoint write_probe
+ 5. rollback
+```
+
+**No identity query. No domain query.** The refusal message is now literally
+true: the write probe was the only statement sent.
+
+**`ledger_reconcile.js`, successful run — 7 statements:**
+
+```text
+ 1. begin transaction read only          ← FIRST
+ 2. savepoint write_probe
+ 3. create temporary table __reconcile_write_probe (x int)
+ 4. rollback to savepoint write_probe
+ 5. select current_database() as db, current_user as usr   ← AFTER the proof
+ 6. select version, name from schema_migrations order by version
+ 7. rollback
+```
+
+**`ledger_reconcile.js`, writable transaction — 5 statements, then exit 2.**
+Same shape: probe only, nothing read.
+
+### 4.7 `ledger_reconcile.js` failure paths
+
+The authorized sequence includes this tool, so it must fail the same way.
+
+```text
+unreachable database    ✗ Could not connect to the database. Nothing was read.
+                          connect ECONNREFUSED 127.0.0.1:5999
+                        exit 2   (was an unguarded connect → unhandled rejection)
+
+DATABASE_URL unset      ✗ DATABASE_URL is not set.
+                        exit 2
+```
+
+### 4.8 Regression guard
+
+`tests/release0_readonly_ordering.test.js` — 18 assertions over **both** tools,
+static and database-free. Falsified by moving an identity query back above the
+read-only `begin`: three assertions fire, and they are the right three.
+
+Regression after the reordering: findings byte-identical to `isolated_run.txt`,
+`--json` digest unchanged at `b73aada8`, 24 forbidden-field assertions pass, 7
+source-governance gates pass.
 
 ## 5. Determinism
 

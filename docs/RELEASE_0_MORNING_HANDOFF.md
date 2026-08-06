@@ -134,8 +134,49 @@ EXIT  COMMAND
 try block, so an unreachable database threw an unhandled promise rejection and
 printed a Node stack trace. It exited 1, so a table of exit codes looked right
 while the operator could not distinguish *the audit failed* from *the audit
-crashed*. Now guarded; refuses in the tool's own voice with exit 2. This is the
-last of the "asserted but not demonstrated" items from the overnight review.
+crashed*. Now guarded; refuses in the tool's own voice with exit 2.
+
+### Pre-authorization correction — statement ordering (owner review)
+
+Both tools ran `select current_database(), current_user` **before** opening the
+read-only transaction and **before** the write probe. Postgres's read-only
+transaction was and remains the substantive mutation barrier; what was wrong is
+that each tool printed *"a write was attempted and refused before any read"* and
+*"Nothing was read"* while having already issued a query. Narrowly false — and a
+safety sentence that is narrowly false is not a safety sentence.
+
+```text
+EXIT  COMMAND
+────  ──────────────────────────────────────────────────────────────────────
+   —  moved the identity query in BOTH tools to after the refusal branch
+   —  guarded client.connect() in ledger_reconcile.js
+   0  node tools/release0_proof_audit.js      (log_statement='all' captured)
+        → server received: 1. begin transaction read only  ← FIRST
+                           2-4. savepoint · probe · rollback to savepoint
+                           5. select current_database()    ← AFTER the proof
+                           6-17. domain queries · 18. rollback
+   2  falsified (begin instead of begin transaction read only)
+        → server received 5 statements: begin, savepoint, probe, rollback to
+          savepoint, rollback. NO identity query. NO domain query.
+   0  node tools/ledger_reconcile.js          7 statements, same ordering
+   2  falsified ledger_reconcile              5 statements, probe only
+   2  ledger_reconcile, unreachable database  refuses in its own voice
+   2  ledger_reconcile, DATABASE_URL unset
+   0  node tests/release0_readonly_ordering.test.js   18 passed · 0 failed
+   1  falsified: identity query moved back above the read-only begin
+        → 3 assertions fire, and they are the right 3
+   0  regression: findings byte-identical, --json digest unchanged b73aada8,
+        24 forbidden-field assertions pass, 7 governance gates pass
+```
+
+Evidence is the PostgreSQL statement log — what the server actually received —
+not a source reading. Full detail in
+`docs/release-0-audit/ISOLATED_PROOF_RECEIPT.md` §4.6–4.8.
+
+**`tools/ledger_reconcile.js` is now modified.** It is an existing tool that
+ships on `main`, and it is part of the authorized sequence, so it had to meet
+the same contract. Its reconciliation logic is untouched — it still imports the
+same `classifyLedger` as `migrate.js`.
 
 **Never run:** any query against production. `tools/ledger_reconcile.js` was
 **not** executed — it requires the production connection this handoff is asking
