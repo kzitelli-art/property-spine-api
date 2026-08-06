@@ -1,6 +1,6 @@
 # Neon credential rotation — runbook and receipt
 
-**Status: REQUIRED and urgent.**
+**Status: COMPLETE — rotated and verified 2026-08-06. See §4 for the receipt.**
 
 **What rotation blocks** (owner ruling, 2026-08-06):
 
@@ -51,9 +51,11 @@ agent scratchpad copy                       shredded
 That does not make it safe. **It exists in a conversation transcript, and a
 transcript cannot be un-shared.** Treat the credential as compromised.
 
-## 2. What I cannot do
+## 2. What the agent could not do — resolved
 
-**I cannot perform this rotation.** It requires:
+The rotation was performed by the owner on 2026-08-06 (§4). This section records
+why it could not be done from the agent container, which remains true of any
+future rotation from here:
 
 - Neon console access — no Neon API key or console session exists in this
   environment;
@@ -61,7 +63,7 @@ transcript cannot be un-shared.** Treat the credential as compromised.
 - and the rotation touches live production configuration, which is outside
   every authorization granted on this branch.
 
-This runbook is the part I can do. Steps 1–5 are the owner's.
+Steps 1–5 are the owner's. §3.6 is the measured attempt log.
 
 ## 3. The rotation
 
@@ -151,7 +153,92 @@ machine with console access and Postgres egress.
 
 ---
 
-## 4. Rotation receipt — fill from the real run
+## 4. Rotation receipt — COMPLETED 2026-08-06
+
+**GATES 2 AND 3 CLOSED.** All five required facts are established, each by
+independent evidence. **No credential value appears anywhere in this receipt.**
+
+```text
+rotated at                  2026-08-06, between 15:31:36Z (rotation not yet
+                            performed, agent attempt log §3.6) and 15:43:03Z
+                            (first database-backed health response)
+performed by                owner, Neon console + Render dashboard
+
+FACT 1  the database credential changed
+        method              password reset on the existing role
+        role                neondb_owner — name UNCHANGED
+        evidence            facts 4 and 5 together: the new value authenticates
+                            and the old one no longer does
+
+FACT 2  every known legitimate runtime received the replacement
+        services in account 2
+          API service       UPDATED — sole holder of DATABASE_URL
+          app (static site) NOT APPLICABLE — no environment, never held a
+                            credential
+        env groups/workers/
+          crons/preview     none present
+        unresolved holders  NONE
+
+FACT 3  the production API restarted using the replacement
+        trigger             Render environment save
+        confirmation        service answered on $PORT after restart
+
+FACT 4  a real database query succeeded through the production runtime
+        command             curl -sS "http://localhost:$PORT/health"
+        response            {"ok":true,"db_time":"2026-08-06T15:43:03.729Z"}
+        why it counts       db_time is a Postgres-derived value; the route
+                            cannot return it without reaching the database
+
+FACT 5  the old credential can no longer authenticate
+        tested from         owner's workstation (PowerShell + node-postgres),
+                            OUTSIDE the production runtime, so the result is
+                            independent of the new credential
+        tested at           2026-08-06 ~11:59 local (workstation clock)
+        result              REFUSED: password authentication failed for user
+                            'neondb_owner'          — SQLSTATE 28P01 class
+        NOT a network error — the server answered and rejected the credential
+
+no credential value in this receipt      CONFIRMED
+```
+
+### 4.1 A false pass was caught before it was accepted
+
+The first two attempts at fact 5 ran with the placeholder strings
+`OLDPASSWORD` and `REALOLDPASSWORD` rather than the real leaked value. Both
+printed `REFUSED: password authentication failed` — **and proved nothing**, because
+a password that never existed is rejected whether or not a rotation occurred.
+
+Only the third run, using the actual leaked value, is evidence. This is
+recorded because it is the precise failure this release exists to prevent: a
+green-looking result that does not mean what it appears to mean. **A refusal is
+only proof when the credential being refused is the one that leaked.**
+
+### 4.2 Not captured, and why
+
+```text
+production API SHA after restart    NOT READ
+```
+
+The API exposes no `/version` route and `/health` returns only `{ok, db_time}`,
+so the deployed SHA is not readable over HTTP — the Render Events page is the
+only source. Recorded as an honest blank rather than inferred. This is the same
+gap noted in §6, and it is unchanged by the rotation.
+
+### 4.3 Residual hygiene, owner-side
+
+The leaked value now also sits in the workstation's PowerShell history and in
+the scratch folder used for the test. It is **inert** — proven dead by fact 5 —
+but worth clearing:
+
+```powershell
+Remove-Item Env:OLD
+cd $HOME; Remove-Item -Recurse -Force $HOME\rotcheck
+Clear-History
+```
+
+---
+
+## 4b. Receipt template — retained for any future rotation
 
 **No field in this receipt may contain a connection string, password, host, or
 any fragment of one.** Record classes and outcomes, not values.
@@ -194,8 +281,8 @@ gate**:
 ```text
 gate 1  revision 3 chain-integrity guard            CLOSED 2026-08-06
         architecture frozen at 4f25f73
-gate 2  credential rotated                        OPEN  ← YOU ARE HERE
-gate 3  old credential proven dead                OPEN  ←
+gate 2  credential rotated                        CLOSED 2026-08-06  §4
+gate 3  old credential proven dead                CLOSED 2026-08-06  §4 fact 5
 gate 4  SMS technician evidence + completion path
         phone-verified                            OPEN — release step 4
 ```
