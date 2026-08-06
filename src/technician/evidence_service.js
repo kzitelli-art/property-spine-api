@@ -25,6 +25,14 @@
 const crypto = require("crypto");
 
 const ALLOWED_MIME = ["image/jpeg", "image/png", "image/webp"];
+
+//  Content-Type minus parameters, lowercased — `image/jpeg; charset=binary`
+//  and `IMAGE/JPEG` are the same media type.
+function normalizeMime(v) {
+  if (!v) return null;
+  const t = String(v).split(";")[0].trim().toLowerCase();
+  return t || null;
+}
 const MAX_BYTES = 5 * 1024 * 1024;
 const STORAGE_STATES = ["referenced", "stored", "fetch_failed", "not_preserved"];
 const PROOF_CLASSIFICATIONS = ["unclassified", "repair_photo", "access_attempt", "condition", "other"];
@@ -82,8 +90,12 @@ async function ingestProviderMedia(client, {
     return { outcome: "referenced", attachment: row };
   }
 
+  //  THE CAP IS PASSED IN, not duplicated. The transport must refuse
+  //  before buffering; MAX_BYTES below stays as defense in depth, but a
+  //  second hidden limit inside the transport would drift from the one
+  //  this boundary — and the database — actually enforce.
   let got;
-  try { got = await fetchMedia({ url: provider_media_url, mime_type }); }
+  try { got = await fetchMedia({ url: provider_media_url, mime_type, max_bytes: MAX_BYTES }); }
   catch (e) { got = { ok: false, reason: `fetch_threw: ${e.message}` }; }
 
   if (!got || !got.ok || !Buffer.isBuffer(got.buffer) || got.buffer.length === 0) {
@@ -99,15 +111,42 @@ async function ingestProviderMedia(client, {
     return { outcome: "fetch_failed", attachment: row, reason: "too_large" };
   }
 
+  //  ── THE MIME THE ORIGIN ACTUALLY SERVED ──────────────────────────
+  //  `got.mime` used to be ignored entirely, so the stored mime_type was
+  //  the CARRIER'S CLAIM from the webhook and nothing had ever checked
+  //  it against the bytes. The transport verifies it too; this is the
+  //  boundary re-checking rather than trusting, because these are two
+  //  different modules and only one of them writes the row.
+  //
+  //  Deliberately NOT content inspection. No sniffing, no classification,
+  //  no scoring — this compares two declared media types and stops.
+  const verifiedMime = normalizeMime(got.mime);
+  if (!verifiedMime || !ALLOWED_MIME.includes(verifiedMime)) {
+    row = (await client.query(
+      `update work_order_proof_attachments set storage_state = 'fetch_failed' where id = $1 returning *`,
+      [row.id])).rows[0];
+    return { outcome: "fetch_failed", attachment: row, reason: "unsupported_mime" };
+  }
+  if (verifiedMime !== normalizeMime(mime_type)) {
+    row = (await client.query(
+      `update work_order_proof_attachments set storage_state = 'fetch_failed' where id = $1 returning *`,
+      [row.id])).rows[0];
+    return { outcome: "fetch_failed", attachment: row, reason: "mime_mismatch" };
+  }
+
   //  STORED means all four facts arrive together — the constraint refuses
   //  the row otherwise, so a partial store is not a state that can exist.
+  //  mime_type is rewritten to the VERIFIED value. Where the two agree
+  //  this changes nothing; where they would not, the row above has
+  //  already refused. What is stored is what was served.
   row = (await client.query(
     `update work_order_proof_attachments
         set storage_state = 'stored', content = $2, byte_size = $3,
-            sha256 = $4, stored_at = now()
+            sha256 = $4, stored_at = now(), mime_type = $5
       where id = $1 returning *`,
     [row.id, got.buffer, got.buffer.length,
-     crypto.createHash("sha256").update(got.buffer).digest("hex")])).rows[0];
+     crypto.createHash("sha256").update(got.buffer).digest("hex"),
+     verifiedMime])).rows[0];
 
   return { outcome: "stored", attachment: row };
 }
