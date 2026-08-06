@@ -409,6 +409,13 @@ scoped by the composite `(work_order_id, property_id)` foreign key, storing supp
 attachments as FK-backed rows rather than an ID array, and recording who or what
 performed the evaluation.
 
+> **§19c supersedes the open questions in this section.** Four completion
+> rulings are now frozen on production facts: the legacy cutover inventory
+> (not a timestamp comparison) separates legacy from defect; `status='closed'`
+> is historical vocabulary only; column-stored proof is an evidence-presence
+> signal and never valid proof; and `claimCompletion` becomes the one canonical
+> completion service. The legacy closeout route is retired as a writer.
+
 ### Build 1 — contract-driven reads
 
 Freeze and implement the three intents. Build intent contracts, candidate predicates,
@@ -684,7 +691,7 @@ owner authorization. Rulings 1 and 2 are ruled and frozen.
 ```text
 Release 0 blockers
   1.  Open Ruling 4 — authorize and define the structurally read-only
-      production audit.
+      production audit.                                    CLOSED — see §19c
   2.  Implement the frozen activation-boundary schema and the proof-state
       compatibility contract (Rulings 1 and 2).
 
@@ -693,8 +700,149 @@ Later Ask Spine blockers
   ·   Open Ruling 5 — request-proof consequence, before Build 3.
 ```
 
-**Open Ruling 4 is the only thing standing in front of Release 0.** Rulings 1 and 2
-are frozen; the audit is what has not been authorized.
+**Open Ruling 4 was the only thing standing in front of Release 0.** It was
+authorized against commit `c0d9959`, executed, and its receipt preserved. The
+production facts it returned closed four further questions, ruled in §19c.
+
+---
+
+### 19c. Release 0 completion rulings — RULED, FROZEN
+
+**Ruled by the owner 2026-08-06, on the production facts returned by the
+authorized Open Ruling 4 audit. Frozen.**
+
+Factual basis, and the only factual basis:
+
+- [`release-0-audit/RECEIPT.md`](release-0-audit/RECEIPT.md) — the production
+  audit receipt, ledger exit 0, audit exit 0, output digest `8298d75c…`.
+- [`RELEASE_0_COMPLETION_WRITER_MATRIX.md`](RELEASE_0_COMPLETION_WRITER_MATRIX.md)
+  — the source audit of every work-order completion writer.
+
+**These rulings are frozen.** A material change creates a new ruling with its
+own factual basis; it does not edit these.
+
+#### What the production audit established
+
+```text
+work orders, all statuses                     6
+  open 3 · scheduled 1 · needs_followup 1 · closed 1
+status='complete'                             0
+work_order_proof_attachments rows             0
+work orders relying on 'unclassified' (B2)    0
+work_order_progress kind='completed' rows     0
+finished work                                 1   one 'closed' row, column
+                                                  photo and note present,
+                                                  no completion timestamp
+```
+
+Four consequences follow, and they are why these rulings are narrow rather than
+speculative. **No production work order relies on `unclassified`.** **No
+attachment-based completion has ever reached production.** **The canonical
+completion writer has never completed a production work order.** **There is
+exactly one historical finished record, created through the legacy
+`closed`/column-proof path.**
+
+#### Ruling A — finished work with no completion timestamp
+
+At activation, every terminal work order already present that has no proof
+evaluation is captured in an **immutable legacy cutover inventory**. Those rows
+render:
+
+```text
+legacy_indeterminate
+```
+
+**Completion time is never inferred** — not from `created_at`, not from
+`updated_at`, not from a migration `applied_at`, not from a commit time, not
+from a deploy time.
+
+After activation:
+
+```text
+terminal work order
+  + no proof evaluation
+  + NOT in the legacy cutover inventory
+→ missing_evaluation_defect
+```
+
+This preserves Open Ruling 2's four-state contract **without inventing a fifth
+state and without backfilling proof evaluations.** The inventory, not a
+timestamp comparison, is what distinguishes legacy from defect — which is what
+closes the gap §19 Ruling 1 left open when its predicate referenced a
+`completed_at` column that does not exist.
+
+#### Ruling B — `status='closed'`
+
+`closed` is **historical terminal vocabulary only**, recognised solely for rows
+captured in the legacy cutover inventory. It is not a second permanent meaning
+of completion.
+
+**No future canonical writer may emit `closed`.** After Release 0, canonical
+completion writes:
+
+```text
+status = 'complete'
+  + completed progress event
+  + proof evaluation
+  + obligation closure
+```
+
+The reader may recognise cutover-inventoried `closed` rows for historical
+compatibility. Nothing else may create them.
+
+#### Ruling C — column-stored photo proof
+
+`work_orders.completion_photo` and `work_orders.completion_note` are **legacy
+evidence-presence signals, not canonical valid proof.**
+
+For the one historical row:
+
+```text
+column evidence present
+→ visible as historical context
+→ legacy_indeterminate
+→ never promoted to satisfied
+```
+
+**Do not manufacture attachment records from those columns. Do not backfill a
+proof evaluation from them. Do not claim the bytes were preserved and
+classified**, because that was never established — the audit found zero
+attachment rows of any storage state.
+
+#### Ruling D — the legacy closeout route
+
+**Retired as a completion writer.**
+
+`PATCH /work-orders/:id/closeout` (`maintenance.js:553`) treats non-empty column
+values as proof, writes `status='closed'`, and creates no `completed` progress
+event. **It must not survive as a second completion path.**
+
+`claimCompletion` becomes the **one canonical completion service**, augmented by
+Release 0 to write the durable proof evaluation in the same transaction. It
+already checks preserved evidence, writes `status='complete'`, closes the
+owning obligation, and appends the distinct `completed` progress fact.
+
+In one governed transaction it must produce:
+
+```text
+the completion claim
+the durable proof evaluation and attachment links
+status = 'complete'
+the completed progress event
+the owning obligation closure
+the action receipt
+```
+
+Retirement order: **the app stops calling the legacy completion path first.**
+The API then makes its done-path fail closed, or delegates only through genuine
+canonical attachment ingestion. **A non-empty legacy string may never be
+silently converted into valid proof.**
+
+#### What these rulings do not decide
+
+The activation instant remains governed by §19 Ruling 1: **captured** at the
+proof-evaluation writer's verified-live instant and persisted unchanged, never
+derived from production data, including anything in the audit receipt.
 
 ---
 
