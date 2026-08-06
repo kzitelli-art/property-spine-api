@@ -122,6 +122,35 @@ If it still connects, the rotation did not take. Do not proceed.
 
 ---
 
+## 3.6 Attempt log — agent container, 2026-08-06T15:31:36Z
+
+**ROTATION NOT PERFORMED. Attempted; every required surface is unreachable from
+the agent container.** Recorded so no later session assumes the rotation was
+never tried.
+
+```text
+Neon credential present            NO   — no NEON_* var, no ~/.neon, no neonctl
+Render credential present          NO   — no RENDER_* var, no ~/.render, no CLI
+Neon API   console.neon.tech       BLOCKED  curl (56) CONNECT tunnel failed, 403
+Render API api.render.com          BLOCKED  curl (56) CONNECT tunnel failed, 403
+HTTPS control api.github.com       HTTP 200 — egress works; the block is
+                                   host-specific, not general
+Postgres 5432 to the prod host     TIMEOUT — no wire-protocol egress
+```
+
+**Consequence, step by step.** Runbook steps 1–6 need the Neon console or its
+API and the Render dashboard or its API; both hosts are refused at the proxy and
+no key exists for either. Step 7 — the independent old-credential refusal test —
+needs TCP 5432, which times out. **There is no step of this runbook the agent
+container can perform.**
+
+This is an access boundary, not a defect, and it is not worked around: widening
+it would mean changing production configuration to make a credential rotation
+possible, which is the opposite of the point. Steps 1–9 are the owner's, from a
+machine with console access and Postgres egress.
+
+---
+
 ## 4. Rotation receipt — fill from the real run
 
 **No field in this receipt may contain a connection string, password, host, or
