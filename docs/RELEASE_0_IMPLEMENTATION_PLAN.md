@@ -1,7 +1,7 @@
 # Release 0 — implementation and deployment plan
 
-**Revision 3 — evidence source ruled, chain integrity enforced at insert time,
-sequence reordered around the technician lane.**
+**Revision 4 — external review applied: closed-row defect visibility corrected,
+guards hardened, two pre-deploy proofs added.**
 **Documentation only. Nothing in this plan has been implemented.**
 
 Governing rulings: [`ASK_SPINE_BUILD_CONTRACT.md`](ASK_SPINE_BUILD_CONTRACT.md)
@@ -24,27 +24,26 @@ Factual basis: [`release-0-audit/RECEIPT.md`](release-0-audit/RECEIPT.md),
 ## Gates before implementation or merge
 
 ```text
-1  revision 3 chain-integrity guard committed and
-   reviewed                                             CLOSED 2026-08-06
-2  the exposed Neon credential rotated                  OPEN  ← blocks all
-3  the old credential proven dead                       OPEN  ← implementation
+1  chain-integrity guard reviewed                       CLOSED 2026-08-06
+2  the exposed Neon credential rotated                  CLOSED 2026-08-06
+3  the old credential proven dead                       CLOSED 2026-08-06
+     28P01 refusal of the ACTUAL leaked credential, tested from outside the
+     production runtime. Receipt: CREDENTIAL_ROTATION_RUNBOOK.md §4.
 4  the SMS technician evidence and completion path
-   phone-verified                                       OPEN — release-step
-                                                        gate at step 4
+   phone-verified                                       OPEN — release step 4
 ```
 
-**After gates 2 and 3 are receipted, implementation may begin at deployment
-step 1.** Gate 4 does not block steps 1–3; step 5 and everything after it may
-not proceed until a real handset, a real inbound image, a preserved attachment,
-canonical completion and operator readback are all proven.
+**Gates 1–3 are closed. Implementation may proceed from deployment step 1.**
+Gate 4 is a release-step condition: it precedes removal of the legacy
+completion control (step 5) and everything after it.
 
-**Implementation does not begin until gates 1–3 are complete.** Gate 4 is a
-release-step condition: it precedes removal of the legacy completion control
-(deployment step 5) and everything after it.
+Two additional pre-deploy proofs were added on external review and are NOT
+optional (§5.3, §7.6):
 
-Rotation blocks product code, migrations, production access, deployment,
-runtime-changing merge, and implementation. **It does not block this
-documentation correction.**
+```text
+·  SMS ingress preflight        before step 2
+·  scale and concurrency proof  before migration 137 is applied
+```
 
 ---
 
@@ -62,6 +61,18 @@ owner's evidence-source ruling and five final corrections:
 | 4 | Sequence reordered: activation captured only after the legacy writer is dead | §5.1 |
 | 5 | A fresh authorized pre-cutover census supplies the expected set | §6.2 |
 | 6 | Insert-time chain guards — rooted, acyclic, no self-supersession | §2.1.1, §2.3.1 |
+
+**Revision 4** applies an external design review:
+
+| # | Correction | Closed in |
+|---|---|---|
+| 7 | **Non-inventoried `closed` rows escaped defect detection** — a factual contradiction | §3.2.0 |
+| 8 | Trigger hardening: schema qualification, `search_path`, owner-role caveat | §2.1.2 |
+| 9 | Normalizer: supporting fields are facts, not defaults | app `proof-normalizer.js` |
+| 10 | SMS ingress preflight before step 2, splitting the biggest unknown forward | §5.3 |
+| 11 | Legacy-writer-death proof before capturing the activation instant | §5.4 |
+| 12 | Scale and concurrency proof before migration 137 | §7.6 |
+| 13 | Verification binding rules — every proof binds artifact, input and environment | §7.7 |
 
 ---
 
@@ -243,6 +254,54 @@ triggers, **`INSERT` is the only operation that can change the graph** — so th
 invariant is inductive and holds for all time. The hop bound is the
 belt-and-braces case: if a chain were somehow already corrupt, the walk fails
 loudly rather than spinning.
+
+#### 2.1.2 Implementation requirements for both guards *(external review)*
+
+Binding on `wope_chain_guard` and `r0ah_chain_guard` alike:
+
+```text
+·  SCHEMA-QUALIFY every table and function reference. PostgreSQL resolves
+   unqualified names through search_path, so an unqualified trigger body can
+   be pointed at a different table by whoever controls that setting.
+·  SET a controlled search_path on each function
+     ALTER FUNCTION … SET search_path = public, pg_temp;
+·  Partial unique indexes stay NON-DEFERRABLE. A deferred race check that
+   fires at commit is not a race check.
+·  Keep the REAL concurrent-insert tests (§7.1). Two sessions, actual
+   contention — not two sequential inserts pretending to be concurrent.
+·  Run migration tests at the SAME isolation level production uses.
+```
+
+**A caveat that must be documented rather than assumed away.** The application
+connects as the table-owning role, and **a table owner can disable or drop its
+own triggers.** So "immutable" here means *enforced against normal DML*, not
+*unalterable by the runtime role*. That does not block Release 0 — nothing in
+the application disables triggers — but the guarantee should not be overstated
+in any receipt.
+
+A later database-security slice, explicitly **out of Release 0 scope**, should
+separate:
+
+```text
+migration / ownership role
+runtime application role
+read-only audit role
+```
+
+Until then, immutability is a property of the application's behaviour plus the
+triggers, not of the role model.
+
+#### 2.1.3 On the backward walk
+
+External review notes the walk is more defensive than strictly necessary once
+the predecessor must exist, self-supersession is refused, rows cannot be
+updated, and only the head may be superseded — under those conditions a new row
+can only point backward into an existing chain.
+
+**It stays.** It costs one indexed walk per supersession on a chain that is
+almost always length one, and it is the only check that would detect an
+already-corrupt chain rather than extending it. It is corruption detection, not
+insertion logic.
 
 **The trigger and the indexes do different jobs, and neither replaces the
 other:**
@@ -507,24 +566,66 @@ live evaluation head exists
   → state = that row's state           (satisfied | not_satisfied)
 
 no evaluation head
+  AND terminal
   AND (work_order_id, property_id) IS in the cutover inventory
   → legacy_indeterminate
 
 no evaluation head
-  AND NOT in the inventory
   AND terminal
+  AND NOT in the inventory
   → missing_evaluation_defect
 
 not terminal
   → proof is not yet due; reflects current evidence, never a defect
 ```
 
-**Terminal** = `status = 'complete'`, or `status = 'closed'` for an inventoried
-row (§19c Ruling B). No other status is terminal.
+#### 3.2.0 Terminality and legitimacy are two different questions *(correction 7)*
+
+**TERMINAL, for defect detection:**
+
+```sql
+status in ('complete', 'closed')
+```
+
+**LEGITIMATE HISTORICAL CLOSED:**
+
+```sql
+status = 'closed' AND present in the cutover inventory
+```
+
+Revision 3 defined terminal as *"`complete`, or `closed` **for an inventoried
+row**"*, and that was a factual contradiction with §19c Ruling B. It left a hole:
+
+```text
+status   = 'closed'
+NOT in the inventory
+no evaluation
+  → not "terminal" under the old definition
+  → escapes missing_evaluation_defect
+  → escapes the defect sweep
+  → falls back toward the same scheduled/unstarted rendering that
+    caused Release 0 in the first place
+```
+
+That is precisely the row a surviving legacy writer or an in-flight request
+would create after activation — the case the release exists to catch, silently
+exempted by the definition meant to catch it.
+
+**Inventory membership decides whether a `closed` row is legitimate legacy
+history. It does not decide whether a `closed` row is visible to defect
+detection.** Every `closed` row is terminal; only inventoried ones are legacy.
+
+```text
+closed + inventoried     + no evaluation → legacy_indeterminate
+closed + NOT inventoried + no evaluation → missing_evaluation_defect
+```
+
+The same predicate governs the §4.2 defect sweep, so the reader and the sweep
+cannot disagree about which rows are visible.
 
 **No timestamp comparison appears anywhere.** Inventory membership is the
-discriminator, which closes the missing-`completed_at` gap without a fifth
-state.
+legitimacy discriminator, which closes the missing-`completed_at` gap without a
+fifth state.
 
 ### 3.2.1 An unavailable activation authority makes the READ unavailable, not the state
 
@@ -673,8 +774,13 @@ a  claimCompletion, when it observes a terminal work order it did not just
    evaluate and which is absent from the cutover inventory;
 
 b  a scheduled sweep on the existing followups rail — the same cadence
-   run_followups.js already uses. It scans terminal work orders with no
-   evaluation head and no inventory row, and calls the same service.
+   run_followups.js already uses. It scans work orders with
+   status in ('complete','closed') that have no evaluation head and no
+   cutover-inventory row, and calls the same service.
+
+   THE SWEEP AND THE READER SHARE ONE PREDICATE (§3.2.0). A closed row
+   outside the inventory is terminal for both, so neither can consider a
+   row a defect that the other treats as not-yet-due.
 ```
 
 #### Database idempotency
@@ -836,6 +942,63 @@ inventory, and therefore rendered `missing_evaluation_defect` — a defect the
 system caused itself. Capturing only once the legacy writer is dead closes that
 window by construction.
 
+### 5.3 SMS ingress preflight — BEFORE step 2 *(correction 10)*
+
+**The biggest unknown in this release sits in the middle of the sequence.**
+Option A makes the technician SMS lane the only source of valid completion
+evidence, and that lane has never run against a real handset — production holds
+zero attachment rows. If it fails at step 4, the schema and writer are already
+shipped and there is no way to produce evidence.
+
+**The formal step-4 proof does not move.** It must exercise the canonical
+writer and all eight transactional facts, which do not exist until step 3.
+Instead the risk is split, and the load-bearing half moves to the front.
+
+```text
+PREFLIGHT — before step 2, on a controlled real work order
+
+  real handset
+  → real inbound image
+  → correct conversation / work-order association
+  → attachment row created
+  → storage_state = 'stored'
+  → mime_type present
+  → byte_size present
+  → sha256 digest present
+
+  DO NOT send the completion command. This proves EVIDENCE INGRESS only.
+```
+
+If the preflight fails, **no migration has shipped and nothing needs
+unwinding.** That is the entire point of moving it.
+
+### 5.4 Proving the legacy writer is actually dead — BEFORE capturing the activation instant *(correction 11)*
+
+Step 6 must not treat *"the new API is deployed"* as equivalent to *"the old
+writer is impossible."* A draining instance or an in-flight request can commit a
+`closed` row after the writer is nominally dead.
+
+Before `$1` is captured:
+
+```text
+1  app step 5 is live                    (no completion control in the app)
+2  the new API rollout is COMPLETE       (not "started")
+3  old API instances terminated/drained
+4  no in-flight legacy closeout request can still commit
+5  legacy done-path returns 409
+6  the NOT-done path still works         ← paired control: proves the 409 is
+                                           a rejection, not a dead service
+7  the canonical writer is live
+8  WAIT at least the bounded maximum request/transaction duration
+```
+
+Only then capture the instant.
+
+**The §3.2.0 correction is a second safety net, not a substitute.** A late
+`closed` row now renders `missing_evaluation_defect` and raises an obligation
+rather than vanishing — but a release that relies on its own error handling to
+cover a sequencing gap has not closed the gap.
+
 ### 5.2 SHA pair requirements
 
 ```text
@@ -959,13 +1122,23 @@ PROOF CLASSIFICATION
   referenced, never stored                → not_satisfied
 
 STATE DERIVATION                                                  ← four only
-  terminal, no evaluation, inventoried    → legacy_indeterminate
-  terminal, no evaluation, NOT inventoried→ missing_evaluation_defect
-  non-terminal, no evaluation             → NEITHER legacy NOR defect
+  complete, no evaluation, inventoried    → legacy_indeterminate
+  complete, no evaluation, NOT inventoried→ missing_evaluation_defect
+  closed,   no evaluation, inventoried    → legacy_indeterminate      ← corr. 7
+  closed,   no evaluation, NOT inventoried→ missing_evaluation_defect ← corr. 7
+                                            NOT scheduled, NOT not-yet-due
+  open/scheduled/needs_followup           → NEITHER legacy NOR defect
   activation head absent                  → read_status "unavailable",
                                             `state` key ABSENT, and NOT defect
   proof.state is never a fifth value      → assert the emitted set is exactly
                                             the four
+
+SWEEP AND READER AGREE                                            ← corr. 7
+  closed + NOT inventoried                → the sweep RAISES an obligation
+                                            AND the reader renders defect
+  closed + inventoried                    → sweep raises NOTHING
+                                            AND the reader renders legacy
+  every row: sweep visibility == reader terminality
 
 CHAIN DISCIPLINE                                                  ← correction 2
   second genesis for the same work order      → REFUSED (uq_wope_genesis)
@@ -1084,6 +1257,73 @@ window must be found. Carried here so it is not lost, though the candidate
 predicate is Build 1.
 
 ---
+
+### 7.6 Scale and concurrency proof — BEFORE migration 137 is applied *(correction 12)*
+
+Production holds **six** work orders. That cannot establish migration or query
+behaviour at real cardinality. Isolated real Postgres, production-shaped schema,
+synthetic data — **never production**.
+
+```text
+FIXTURE
+  100,000 work orders
+  mixed complete / closed / open / scheduled / needs_followup
+  terminal rows WITH and WITHOUT evaluations
+  multiple properties
+  multiple evaluation chains, some several supersessions deep
+  concurrent completion claims
+  concurrent chain successors on the same head
+  a large exact-set census
+
+MEASURE
+  migration duration
+  index build duration
+  activation transaction duration
+  locks held, and for how long
+  defect sweep duration, run TWICE
+  reader query count and plans, list and detail
+  exact-set mismatch reporting on a deliberately mismatched set
+  rollback behaviour before the one-way door
+```
+
+Migration 012's un-replayability (`yardi_code`) does **not** need repairing
+inside Release 0. Use a sanitized current-schema baseline or a schema snapshot.
+
+### 7.7 Verification binding rules *(correction 13)*
+
+Three false passes occurred during this release's own preparation. All three
+share one shape: **the check proved an outcome without proving it acted on the
+intended subject.**
+
+```text
+·  a credential test that "REFUSED" a placeholder password nobody had ever set
+·  a row-count assertion that guessed SQL shape by regex and guessed wrong
+·  a comment stripper that flagged a file's own prose
+```
+
+Every release proof must therefore bind:
+
+```text
+artifact identity        which exact commit or digest was exercised
+input identity           which exact subject was fed to it
+execution environment    where it ran
+positive control         a case that must PASS
+negative control         a case that must FAIL
+observed consequence     what actually changed or was rejected
+```
+
+Applied:
+
+```text
+·  a deploy receipt records the exact deployed commit, not "deploy succeeded"
+·  a credential test proves the supplied secret WAS the leaked secret,
+   without recording it
+·  a browser proof inspects rendered visibility, not DOM presence
+·  a database audit records the exact tool commit or digest used
+·  a census receipt preserves exact identifiers, not counts
+·  an API rejection is paired with a neighbouring ALLOWED path, so a dead
+   service cannot masquerade as a safe fail-closed
+```
 
 ## 8. Rollback
 
