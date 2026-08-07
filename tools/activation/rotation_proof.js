@@ -41,6 +41,7 @@
 
 const crypto = require("crypto");
 const { Client } = require("pg");
+const { beginProvenReadOnly, refuseNotReadOnly } = require("./_readonly.js");
 
 const argv = process.argv.slice(2);
 const has = (f) => argv.includes(f);
@@ -51,6 +52,12 @@ async function db() {
   const c = new Client({ connectionString: process.env.DATABASE_URL,
                          ssl: { rejectUnauthorized: false } });
   await c.connect();
+
+  //  This tool only ever reads. Prove that against the open transaction
+  //  BEFORE reading, so the proof is a property of the session and not a
+  //  claim about the source.
+  const ro = await beginProvenReadOnly(c, "rotation_proof");
+  if (!ro.ok) process.exit(await refuseNotReadOnly(c, ro.reason));
   return c;
 }
 

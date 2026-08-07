@@ -71,6 +71,12 @@ const PRODUCTION_APPROVED = [
     reason: "deployment smoke — targets the DEPLOYED service by design" },
   { file: "tests/smoke_release3.deployed.js",
     reason: "deployment smoke — targets the DEPLOYED service by design" },
+  { file: "tools/activation/verify_deployment.js",
+    reason: "Release 0 deployment binding — must read the PRODUCTION checkout and ledger by design, since its whole purpose is proving the running bytes are the reviewed bytes; proves it cannot write before any read" },
+  { file: "tools/activation/rotation_proof.js",
+    reason: "Release 0 credential-rotation proof — must read the PRODUCTION comm_events row the provider attributed, since a rotation cannot be proven anywhere else; proves it cannot write before any read" },
+  { file: "tools/activation/signature_controls.js",
+    reason: "Release 0 webhook signature controls — its own connection is read-only and proves it before any read, but the run DELIBERATELY causes production writes by posting one signed text-only message THROUGH the governed route; that is the control, not a side effect, and it sends no completion language and no media" },
 ];
 
 /*  DEAD — retained but not to be run. Not safe, not active. */

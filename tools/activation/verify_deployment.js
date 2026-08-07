@@ -18,9 +18,11 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { Client } = require("pg");
+const { beginProvenReadOnly, refuseNotReadOnly } = require("./_readonly.js");
 
 //  The digests reviewed and authorized on branch claude/media-preservation-deploy
-//  @ 91220e72899d842e3de8ab81adac6df050230e53
+//  @ 91220e72899d842e3de8ab81adac6df050230e53, merged to main as PR #45
+//  (merge commit dd054d2). These are the bytes the deploy must be running.
 const EXPECTED = {
   "src/comms/sms.js": "15a03280ab081fa41fe81dcbdc914bb8209e87c7ddd8e21b7ae67067c5d9a60e",
   "src/technician/evidence_service.js": "619d6ccc89616994ec24e35b545e93f47ec3ffe0ee27b2d6f94ec6a95b435c22",
@@ -95,8 +97,17 @@ const codeOf = (p) => fs.readFileSync(p, "utf8").split("\n")
     ok("U2  is https", u && u.protocol === "https:", u && u.protocol);
     ok("U3  has no query string", u && !u.search, u && u.search);
     ok("U4  has no fragment", u && !u.hash, u && u.hash);
-    ok("U5  no trailing slash after normalisation",
-       base.replace(/\/+$/, "") === base || true);
+    //  THE SIGNED URL IS `base + req.originalUrl`. A path component here
+    //  is therefore appended to, not replaced by, the route path — a
+    //  configured `https://host/api` signs `https://host/api/communications/...`
+    //  and every message fails validation with a correct-looking 403.
+    //  The previous revision of this check read `=== base || true`, which
+    //  cannot fail: decoration counted as an assertion.
+    ok("U5  is a bare origin — no path component to be doubled into the signed URL",
+       !!u && u.pathname === "/", u && ("pathname " + u.pathname));
+    //  A trailing slash is NOT an error: both the transport and this tool
+    //  strip it. Reported so the operator can compare, not asserted.
+    if (/\/+$/.test(base)) console.log("  note: trailing slash present; normalised away, as the transport does");
     console.log("  configured origin: " + base.replace(/\/+$/, ""));
     console.log("  → this MUST string-equal the origin configured at Twilio,");
     console.log("    scheme, host, path and trailing slash included.");
@@ -109,28 +120,61 @@ const codeOf = (p) => fs.readFileSync(p, "utf8").split("\n")
     const c = new Client({ connectionString: process.env.DATABASE_URL,
                            ssl: { rejectUnauthorized: false } });
     await c.connect();
-    const one = async (s, a) => Object.values((await c.query(s, a))[0] ? {} : {})[0];
-    const val = async (s, a) => Object.values((await c.query(s, a)).rows[0])[0];
+
+    //  This tool reads production. Prove it cannot write BEFORE it reads.
+    const ro = await beginProvenReadOnly(c, "verify_deployment");
+    if (!ro.ok) process.exit(await refuseNotReadOnly(c, ro.reason));
+    console.log("  read-only proven — a write was attempted and refused before any read.");
+
+    //  EACH READ IS SAVEPOINT-WRAPPED. In PostgreSQL one failed statement
+    //  aborts the whole transaction block, so without this a single bad
+    //  read makes every later invariant report "current transaction is
+    //  aborted" — five misleading failures from one real one, on the tool
+    //  that decides whether to roll production back. A failed read must
+    //  fail its OWN check and nothing else.
+    let sp = 0;
+    const read = async (s, a) => {
+      const name = "inv_" + (++sp);
+      await c.query("savepoint " + name);
+      try { return { ok: true, rows: (await c.query(s, a)).rows }; }
+      catch (e) {
+        await c.query("rollback to savepoint " + name);
+        return { ok: false, err: e.code || e.message };
+      }
+    };
+    //  Returns the scalar, or the string "UNREADABLE:<code>" — never a
+    //  silent null that a comparison would quietly treat as a value.
+    const val = async (s, a) => {
+      const r = await read(s, a);
+      if (!r.ok) return "UNREADABLE:" + r.err;
+      return Object.values(r.rows[0])[0];
+    };
 
     const ceiling = await val("select max(version) from schema_migrations");
     ok("I1  ledger ceiling is still 136 — no migration ran", ceiling === "136", String(ceiling));
 
-    const ops = Number(await val(
-      "select count(*) from communication_lines where line_type='operations' and status='active'"));
-    ok("I2  exactly one active operations line", ops === 1, String(ops));
+    //  Kept as the RAW value so an unreadable check reports the SQLSTATE
+    //  rather than a bare NaN.
+    const ops = await val(
+      "select count(*) from communication_lines where line_type='operations' and status='active'");
+    ok("I2  exactly one active operations line", Number(ops) === 1, String(ops));
 
     const pfProv = await val(
       "select coalesce(bool_or(provider_config is not null),false) from communication_lines where line_type='property_facing'");
     ok("I3  property-facing provider_config unchanged (still null)", pfProv === false, String(pfProv));
 
-    const wo = (await c.query(
+    const woRead = await read(
       `select w.status,
         (select count(*) from work_order_progress p where p.work_order_id=w.id and p.kind='completed') completed,
         (select count(*) from work_order_progress p where p.work_order_id=w.id and p.kind='completion_claimed') claimed
-       from work_orders w where w.work_order_ref = 1006`)).rows[0];
-    ok("I4  work order 1006 is still open", wo && wo.status === "open", wo && wo.status);
-    ok("I5  1006 has no completion event", wo && Number(wo.completed) === 0, wo && wo.completed);
-    ok("I6  1006 has no completion claim", wo && Number(wo.claimed) === 0, wo && wo.claimed);
+       from work_orders w where w.work_order_ref = 1006`);
+    const wo = woRead.ok ? woRead.rows[0] : null;
+    //  MISSING IS NOT PASSING. If 1006 cannot be read, or is gone, these
+    //  fail — they do not quietly report "no completion found".
+    const woWhy = woRead.ok ? "work order 1006 not found" : "UNREADABLE:" + woRead.err;
+    ok("I4  work order 1006 is still open", !!wo && wo.status === "open", wo ? wo.status : woWhy);
+    ok("I5  1006 has no completion event", !!wo && Number(wo.completed) === 0, wo ? wo.completed : woWhy);
+    ok("I6  1006 has no completion claim", !!wo && Number(wo.claimed) === 0, wo ? wo.claimed : woWhy);
     await c.end();
   }
 

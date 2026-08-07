@@ -29,6 +29,10 @@
    one comm_event and whatever the operations turn derives from a
    text-only body. It sends NO completion language and attaches no media.
 
+   Those writes happen INSIDE PRODUCTION, through the governed route.
+   This script's own database connection is proven read-only before it
+   reads anything, so no row it reports can have come from the harness.
+
    usage (Render Shell):
      TEST_FROM='+1XXXXXXXXXX' node tools/activation/signature_controls.js
    ════════════════════════════════════════════════════════════════════ */
@@ -37,6 +41,7 @@
 const crypto = require("crypto");
 const twilio = require("twilio");
 const { Client } = require("pg");
+const { beginProvenReadOnly, refuseNotReadOnly } = require("./_readonly.js");
 
 const TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const BASE = process.env.APP_BASE_URL;
@@ -105,6 +110,17 @@ const delta = (a, b) => Object.fromEntries(Object.keys(a).map(k => [k, b[k] - a[
   const c = new Client({ connectionString: process.env.DATABASE_URL,
                          ssl: { rejectUnauthorized: false } });
   await c.connect();
+
+  //  THE HARNESS ITSELF MUST NOT BE ABLE TO WRITE.
+  //  Every assertion below is a DELTA between two censuses. If this
+  //  connection could write, a delta would be ambiguous evidence — it
+  //  could have come from production's governed route or from the
+  //  measuring instrument. Proving the census connection read-only makes
+  //  every row that appears attributable to production, by elimination.
+  const ro = await beginProvenReadOnly(c, "signature_controls");
+  if (!ro.ok) process.exit(await refuseNotReadOnly(c, ro.reason));
+  console.log("  census conn  read-only proven (writes can only come from the route)");
+
   const c0 = await census(c);
   console.log("  census before " + JSON.stringify(c0));
 
