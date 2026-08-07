@@ -164,7 +164,84 @@ remaining honest work is **characterisation and controlled proof against
 existing live transport**, which is a different and more careful thing than
 activation, and needs its own ruling.
 
-## 7. Classification (§18)
+## 7. OWNER RULINGS, 2026-08-07
+
+### Ruling 1 — rotate in a controlled window, not with a code build
+
+**A correction to this project's own advice.** The recommendation here was a
+secondary-auth-token swap described as zero-downtime. **It is not**, with the
+current code.
+
+```text
+Twilio signs inbound webhooks with the PRIMARY auth token only.
+The server uses ONE TWILIO_AUTH_TOKEN for both API auth and signature
+validation.
+```
+
+So placing the secondary into Render *before* promotion means Render validates
+against a token Twilio is not signing with — **every inbound message fails for
+the whole window**, on a live rail. The advice was wrong in the direction that
+causes an outage rather than the direction that causes caution.
+
+**Procedure, ruled:**
+
+```text
+1  create the secondary token in Twilio
+2  prepare the new Render value — DO NOT APPLY IT
+3  promote secondary → Primary in Twilio      (old primary dies here)
+4  immediately update Render and restart
+5  POSITIVELY prove a real signed inbound request succeeds
+```
+
+The window is the restart, not the whole preparation. Do it in a quiet period.
+
+**True zero-downtime would require dual-token webhook validation. That is its
+own security slice and is NOT pulled into Release 0.**
+
+### Ruling 2 — adopt the existing operations line
+
+```text
+line       be0d860b-95f5-4477-a723-a5562f2d7797
+action     ADOPT as the Release 0 staff evidence rail
+           do NOT create another · do NOT supersede this one
+gated on   Solo on Chestnut's organization_id must equal
+           6c580072-8501-4a1e-90fc-624ec93fba15
+first      TELL TOM the line is live, and sequence his final test
+           BEFORE Release 0 touches the shared fixture
+```
+
+### Ruling 3 — `property_facing = proactive` stays, and the decision is explicit
+
+Proactive resident communication is a **legitimate Property Spine capability.**
+Release 0 simply does not authorize it to send anything.
+
+```text
+the line · its carrier wiring · its policy      UNCHANGED by this release
+proactive                                        INTENTIONAL capability
+every future outbound consequence                still requires a governed
+                                                 product path and appropriate
+                                                 authority
+```
+
+**Recorded so production is not changed merely because an undocumented live
+rail was discovered.** Finding something is not a reason to alter it.
+
+---
+
+## 7.1 THE LESSON, preserved deliberately
+
+> A governed system has to reason about the **combined operational state**, not
+> merely whether each individual action was authorized.
+
+The Twilio wiring and the database line row were each reasonable partial
+actions by people who each had authority to take them. **Their composition
+created a live rail nobody decided to switch on.** No per-action review would
+have caught it, because no action was wrong.
+
+That is exactly the class of cross-system truth Property Spine ultimately needs
+to surface. It is recorded here and deliberately **not** built now.
+
+## 8. Classification (§18)
 
 | Component | Class | Removal condition |
 |---|---|---|
