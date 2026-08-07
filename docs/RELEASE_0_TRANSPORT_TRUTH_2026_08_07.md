@@ -62,8 +62,34 @@ ran**, which its `created_at` supports. I had flagged my own count query as a
 possible defect; the evidence says it probably was not. The row is simply
 newer than the reading.
 
-**Who created it, and whether it was deliberate, is not recorded anywhere.**
-`notes` is null. That question is the owner's to answer.
+**Provenance, supplied by the owner after this capture:**
+
+```text
+Twilio wiring of both numbers   the OWNER, "along the way"
+the operations line DB row      TOM, closing out a separate
+                                "SMS work order 2" build
+Tom's Twilio access             NONE
+```
+
+`notes` is null on the row, so none of this is recorded in the database. It is
+recorded here instead.
+
+### 3.1 ⚠ THE LIVE RAIL WAS ASSEMBLED BY TWO PEOPLE, NEITHER OF WHOM BUILT IT
+
+Neither half is wrong. Together they are a live inbound rail that nobody
+decided to switch on:
+
+```text
+owner  wired ****8509 and ****2021 at Twilio     — no DB row implied
+Tom    created the operations line in the DB     — no Twilio access, so from
+                                                   his side the number is not
+                                                   wired and provider_config
+                                                   is false
+```
+
+**This is the exact shape of an accidental production exposure**, and it is
+worth naming as a class rather than an incident: two correct, partial actions
+by two people who each had reason to believe the other half did not exist.
 
 ## 4. ⚠ Real SMS traffic exists, and predates all of this
 
@@ -96,6 +122,35 @@ database will not stop it.
 
 This is not a Release 0 change to make. It is a standing fact the owner should
 decide about deliberately.
+
+## 5.1 ⛔ IMMEDIATE HAZARD — a concurrent build is testing against this
+
+Tom is closing out an "SMS work order 2" build **with a final test**, on the
+same operations line, **without Twilio access**.
+
+From Tom's side the database says `provider_configured = false`, which is the
+same reading that led this project to conclude transport was inactive. It is
+reasonable for him to believe a test is inert.
+
+**It is not inert. Both numbers are wired and the credentials are live.**
+
+```text
+risk   a test Tom expects to write rows and stop could reach the carrier
+       property_facing additionally carries outbound_policy = proactive
+```
+
+**Tom should be told before he runs the final test.** This is the one item in
+this record that is time-sensitive.
+
+### 5.2 Two builds now share one fixture
+
+The operations line is simultaneously Tom's in-flight test fixture and Release
+0's intended evidence rail. Release 0 must not supersede, reconfigure or
+roll back that row — doing so would break another build mid-flight — and Tom's
+test may move state Release 0 later depends on.
+
+**Sequencing between the two builds is an owner decision.** Release 0 has not
+touched the row and will not without one.
 
 ## 6. What this does to the final transport build
 
