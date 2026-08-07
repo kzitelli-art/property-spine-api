@@ -210,6 +210,34 @@ async function census(c, W, lineId) {
          String(A.property_id));
     }
 
+    // ── OUTBOUND HONESTY — reported, never asserted ────────────────────
+    //  The operations turn may create a reply intent on this reply_only
+    //  line. Twilio ACCEPTING a message is not a handset RECEIVING one —
+    //  "accepted ≠ delivered" is the same truth-telling distinction the
+    //  rest of Spine is built on, so the receipt records what happened
+    //  and claims nothing more. None of this can fail the run: outbound
+    //  delivery is an observable operating fact, not a Gate 8 condition.
+    sec("OUTBOUND REPLY — observed, not required");
+    const outs = (await c.query(
+      `select id, sms_status, provider_status, (sms_sid is not null) as has_sid
+         from comm_events
+        where channel = 'sms' and direction = 'outbound'
+          and communication_line_id = $1 and occurred_at > $2::timestamptz
+        order by occurred_at asc`, [line.id, t0])).rows;
+    if (outs.length === 0) {
+      console.log("  no outbound reply intent recorded on this line in the window");
+    } else {
+      for (const o of outs) {
+        const st = o.provider_status || o.sms_status || "(no provider status)";
+        console.log("  reply intent " + o.id);
+        console.log("    provider accepted   " + (o.has_sid ? "yes (sid present)" : "no sid recorded"));
+        console.log("    provider status     " + st);
+        console.log("    handset delivery    " + (/^delivered$/i.test(String(st))
+          ? "delivery receipt present"
+          : "NOT CLAIMED — no delivery receipt"));
+      }
+    }
+
     sec("COMPLETION SAFETY — the photo changed nothing");
     const c1 = await census(c, W, line.id);
     ok("S1  status unchanged — still open", c1.status === "open", c1.status);

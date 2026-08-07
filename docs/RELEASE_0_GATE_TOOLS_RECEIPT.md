@@ -105,3 +105,34 @@ runtime-inert). Then, in order: Gate 2/3 binding → Gate 4 `--pre` → governed
 assignment in the Work Orders door → Gate 4 `--post` → Gate 7 controls →
 Gate 9 `--dry-run` (the rollback test, while nothing is broken) → Gate 8
 `--before` → one real handset photo → Gate 8 `--verify` → Gate 10 receipt.
+
+---
+
+## Addendum — consultant-authorized completion build (same day)
+
+**Gate 8 hardened to the full refusal matrix.** One-axis mismatch controls
+(wrong tester, wrong line, outbound, missing provider SID), an attachment
+landing on another work order, a completion claim, the proof-evaluation table
+existing, and the status leaving `open` — every one observed to refuse. The
+five corrupt-stored-row cases (missing sha256 / content / byte_size /
+stored_at, unsupported MIME) were proven with the database constraints
+**dropped in the isolated harness**, so the tool's refusals are its own and
+not the schema's; the constraints were restored from saved definitions and
+their restoration is itself asserted. Outbound replies are now reported
+honestly: provider acceptance is recorded, handset delivery is **not claimed**
+without a delivery receipt, and none of it can fail the run.
+
+**Gate 10 receipt generator built: `release0_final_receipt.js`.** Every named
+fact is checked by name — no green-count verdicts. Database facts are
+re-derived live with the Gate 8 bindings; non-database facts (PR/merge SHAs,
+deploy event, control results, rollback drill) enter via `--input` and every
+missing key refuses. The deployment digests must agree three ways: authorized
+constant, input claim, and the bytes of the checkout the tool runs in.
+The unsigned and wrong-URL controls are explicitly **NOT CREDITED** when the
+signed positive control is absent — the refusal names the reason.
+
+**Falsification: 52/52, two identical clean runs.** Fifteen of those are
+receipt refusals, including: deployed SHA removed · positive control omitted ·
+unsigned-only · rollback drill absent · binding window absent · assignment
+event deleted from the database under a perfect input · status flipped to
+complete · completion event injected.

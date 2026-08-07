@@ -81,6 +81,8 @@ const PRODUCTION_APPROVED = [
     reason: "Release 0 Gate 4 — verifies the tester identity and work order 1006 in PRODUCTION via the production resolver (resolveStaffSenderForOrganization), because the fixture being verified only exists there; proves it cannot write before any read; never prints the phone" },
   { file: "tools/activation/evidence_ingress_proof.js",
     reason: "Release 0 Gate 8/10 — verifies the real-handset evidence row and completion safety in PRODUCTION, bound to a T0-plus-tester-plus-line window; proves it cannot write before any read; prints receipt fields, never the phone, media URL, or image bytes" },
+  { file: "tools/activation/release0_final_receipt.js",
+    reason: "Release 0 Gate 10 — generates the final evidence-ingress receipt by RE-DERIVING every database fact live in PRODUCTION with the same bindings the gate tools use (pasted output is never trusted); proves it cannot write before any read; refuses unless every NAMED fact is present — no green-count verdicts; never prints phone, e164, media URL, image bytes, or credentials; falsified 15 refusal cases in gate_tools_falsify.sh" },
   { file: "tools/activation/supersede_operations_line.js",
     reason: "Release 0 Gate 9 rollback — WRITE-CAPABLE BY DESIGN: it is the prepared status-supersession command that retires the operations line (status='retired' + superseded_at, the schema's vocabulary for the spec's 'superseded') and proves via resolveInboundLine, pre-commit, that the rail stopped resolving; targets one row by primary key, requires LINE_ID and CONFIRM_SUPERSEDE=yes, --dry-run always rolls back; falsified 23/23 by tools/activation/gate_tools_falsify.sh on the isolated baseline" },
 ];
