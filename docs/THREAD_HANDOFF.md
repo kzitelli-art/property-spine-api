@@ -1,6 +1,6 @@
 # Property Spine — Thread Handoff
 
-**Current as of API `main` @ `a9f51da`+ · APP `main` @ `6220ca5` · 2026-08-05 (late).**
+**Current as of API `main` @ `e8d6143` (ledger 137) · APP `main` @ `6220ca5` · 2026-08-08.**
 
 > **The API SHA above is ALWAYS one commit stale, by construction.** Editing
 > this file changes API `main`, so the number it records is the commit
@@ -19,7 +19,69 @@ current truth. Re-date it whenever `main` moves materially.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
-##  ⏸ OPEN DEBT — SMS VERIFICATION OWED. 2026-08-08 (latest).
+##  ✅ RELEASE 0 STEP 2 IS DONE IN PRODUCTION. 2026-08-08 (latest).
+## ══════════════════════════════════════════════════════════════════
+
+**Migration 137 is applied to production and inert.** Ledger ceiling 137.
+Nothing reads or writes the new objects yet — that is Step 3, still a draft.
+
+```text
+verified   node tools/steps23/verify_137_applied.js   7/7, read-only proven,
+           run in the Render shell against production
+           L1 ledger 137 · L2 four tables · L3 two views · L4 ten triggers
+           L5 four race indexes · L6 the migration wrote ZERO rows
+           L7 no activation row
+deployed   e8d6143 — carried migration 137 AND the text-line silo's tenant
+           setup page fix, legal routes mount and consent gate
+```
+
+**Completion still means exactly what it meant before.** The capacity to record
+proof exists; nothing records it.
+
+### How it was applied, and why that matters next time
+
+`prestart` runs `migrate.js` **verify-only** and refuses to boot on a mismatch in
+either direction — so a deploy cannot migrate production by accident. Migrations
+121 and 126 got in exactly that way, and this is the control that stopped it.
+
+The release was therefore an explicit, pinned act **inside the deploy**:
+
+```text
+MIGRATION_RELEASE=1  EXPECTED_LEDGER_CEILING=136  EXPECTED_SHA=e8d6143
+set on Render → one deploy applied 137 and then booted → all three DELETED
+```
+
+Applying in-deploy is the point: it leaves **no window** where the ledger is
+ahead of the running build. The out-of-band alternative opens one, and a restart
+inside it refuses to boot (`W1`/`W2` in `prove_step2_boundary.js`). Full
+sequence: `RELEASE_0_STEP_2_DEPLOYMENT.md`.
+
+### ⚠ TRAP — the release env must be DELETED, not just ignored
+
+Left set, the next deploy REFUSES on the now-stale ceiling and **the service does
+not boot** (`A3`). Every failure mode is loud rather than silent, which is the
+right shape — but it is still an outage on the next push. The three variables
+were deleted on 2026-08-08.
+
+`EXPECTED_SHA` also earned its keep in production: the first attempt named
+`ec4cbc1` while Render was deploying `e8d6143`, and the release refused and
+printed both values. It cost a retry instead of migrating an unauthorised build.
+
+### Next, in order
+
+```text
+1  run  node tools/steps23/verify_step3_preconditions.js  in the Render shell
+   → is there an OPEN work order that could complete today and could NOT
+     after Step 3? That set is Step 3's entire production risk.
+2  merge PR #54 — the canonical completion writer. Code only, no migration,
+   so the deploy gate is already satisfied and there is no window.
+3  the real handset completion proof — BLOCKED on the text line (below).
+```
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  ⏸ OPEN DEBT — SMS VERIFICATION OWED. 2026-08-08.
 ## ══════════════════════════════════════════════════════════════════
 
 **One deployed fix is PROVEN but NOT SMS-verified. Close this the next time
