@@ -188,6 +188,13 @@ function request(port, method, urlPath, { session, body } = {}) {
   await evaluate(WO_NOT, "not_satisfied");
   const WO_ELSEWHERE = await mkWo("open", OTHER);
 
+  //  A work order somebody has CLAIMED is done. It is the only lifecycle
+  //  state whose next_action depends on the proof block, which makes it the
+  //  only place a failed proof read can become a field instruction.
+  const WO_CLAIMED = await mkWo("open");
+  await c.query(`insert into work_order_progress (work_order_id,property_id,kind,note,reported_by_user_id,occurred_at)
+                 values ($1,$2,'completion_claimed','done',$3,now())`, [WO_CLAIMED, PROP, TECH]);
+
   const { server, port } = await serve(pool);
   //  NOTE THE `null` DEFAULTS, NOT `SESSION`. An earlier revision defaulted
   //  these to the real session, so `list(undefined)` — the "no session"
@@ -256,6 +263,31 @@ function request(port, method, urlPath, { session, body } = {}) {
     ok("U9  …and no row anywhere in the list fabricated a state",
        !/missing_evaluation_defect|legacy_indeterminate/.test(l.raw), l.raw.slice(0, 300));
 
+    //  ── AND NOTHING DOWNSTREAM INVENTS AN INSTRUCTION ──────────────
+    //  `next_action` is the one field derived FROM the proof block, and it
+    //  is what the app prints under "what happens next". A read that did
+    //  not complete must not become "go take a photo".
+    //
+    //  THIS WAS REAL. `nextActionFor` read `proof.satisfied`, which Step 8
+    //  made ABSENT on a failed read; `undefined` is falsy, so the surface
+    //  told the operator to obtain a repair photo on the same screen that
+    //  said the proof state was unavailable.
+    const claimed = await detail(WO_CLAIMED);
+    ok("U10  a claimed completion still reports the claim",
+       claimed.body.current.state === "completion_claimed",
+       JSON.stringify(claimed.body.current.state));
+    ok("U11  …and next_action does NOT invent a field instruction from a failed read",
+       !/photo/i.test(String(claimed.body.next_action)),
+       JSON.stringify(claimed.body.next_action) +
+       " — the surface says the proof state is unavailable and simultaneously " +
+       "tells the operator to go do fieldwork about it");
+    ok("U12  …it says the read is what is unavailable",
+       /unavailable/i.test(String(claimed.body.next_action)),
+       JSON.stringify(claimed.body.next_action));
+    ok("U13  …and the list says exactly the same thing",
+       (await list()).body.work_orders.find((w) => w.work_order.id === WO_CLAIMED)
+         .next_action === claimed.body.next_action);
+
     //  The OTHER failure — the read itself throwing — is asserted in §F
     //  below, AFTER activation. It has to be: with no activation the
     //  derivation returns `unavailable` before it ever touches the
@@ -307,6 +339,23 @@ function request(port, method, urlPath, { session, body } = {}) {
        leg.satisfied !== false && def.satisfied !== false,
        "collapsing legacy or a writer defect into 'proof failed' is exactly the " +
        "conflation that made a hollow closed work order look like a real one");
+
+    //  THE POSITIVE CONTROL for U11–U13. With the read WORKING, the field
+    //  instruction comes back — so "no photo sentence" is a property of the
+    //  failed read, not of a next_action that stopped saying anything.
+    const claimedLive = await detail(WO_CLAIMED);
+    ok("H10  with a LIVE read, the claimed completion gets its real instruction",
+       claimedLive.body.proof.read_status === "ok" &&
+       /photo/i.test(String(claimedLive.body.next_action)),
+       JSON.stringify({ rs: claimedLive.body.proof.read_status,
+                        next: claimedLive.body.next_action }));
+    await photo(WO_CLAIMED);
+    await evaluate(WO_CLAIMED, "satisfied");
+    const closable = await detail(WO_CLAIMED);
+    ok("H11  …and once proof is satisfied it says to close it out instead",
+       closable.body.proof.state === "satisfied" &&
+       /close out/i.test(String(closable.body.next_action)),
+       JSON.stringify({ s: closable.body.proof.state, next: closable.body.next_action }));
 
     //  No fifth value, anywhere on the wire.
     const l = await list();

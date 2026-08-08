@@ -26,6 +26,51 @@ accused of a writer defect at once.**
 
 ---
 
+## ⚠ IT FOUND A REAL DEFECT, AND STEP 8 PUT IT THERE
+
+`next_action` is the field the app prints under *"what happens next"*. It was
+derived from `proof.satisfied`:
+
+```js
+case "completion_claimed":
+  return proof.satisfied ? "Close out the work order" : "Obtain repair photo before completion";
+```
+
+That line was **correct until Step 8**. Before Step 8, `satisfied` was always a
+boolean. Step 8 introduced the proof block where **`satisfied` is ABSENT because
+the read did not complete** — and `undefined` is falsy.
+
+So on a failed proof read the API answered:
+
+```json
+{ "proof":       { "read_status": "unavailable", "reason_code": "activation_absent" },
+  "next_action": "Obtain repair photo before completion" }
+```
+
+**One payload, two answers.** The surface says it cannot determine the proof
+condition and, in the same breath, tells the operator to go do fieldwork about it.
+The app renders `next_action` verbatim (`work-lifecycle-door.js`), so the operator
+would read "Proof state unavailable" in one place and a photo instruction in
+another, on one screen.
+
+This is precisely the class of confident wrong Release 0 exists to remove, and the
+step that exists to remove it is the step that introduced it. **No service-level
+proof could see it** — none of them look at `next_action`. It took the consumer's
+view to find it.
+
+**Fixed here.** `nextActionFor` now switches on `read_status` and `state`, and
+answers `"Proof state unavailable — retry"` when the read did not complete.
+`U11`–`U13` assert it over HTTP, `H10`/`H11` are the positive control that the real
+instruction still appears on a working read, and the `next-action-from-satisfied`
+falsification variant restores the old line and proves the assertions go red.
+
+**It also clears the last one.** `proof.satisfied` now has **zero consumers inside
+this API** — it is emitted purely as the frozen §3.4 compatibility field. That is
+the precondition for the cleanup release, established as a side effect rather than
+claimed.
+
+---
+
 ## What it proves
 
 ```text
@@ -34,6 +79,9 @@ M1–M4   the anti-stub control: the real dependency graph, the real mount,
 U1–U9   with no cutover activation the routes answer 200 and say the READ
         was unavailable; `state` and `satisfied` are ABSENT from the JSON and
         from the bytes; no terminal row is accused of anything
+U10–U13 …and nothing DOWNSTREAM invents an instruction from the failed read:
+        `next_action` says the read is unavailable, and the list says the
+        same thing (see the defect above)
 H·×4    all four states arrive over a real socket with the frozen §3.4
         mapping: true · false · null · null
 H5–H7   legacy and defect are indistinguishable on `satisfied` alone, `state`
@@ -41,6 +89,10 @@ H5–H7   legacy and defect are indistinguishable on `satisfied` alone, `state`
         into `satisfied: false`
 H8–H9   every state on the wire is one of the four, and all four were
         actually observed — so H8 is not vacuous
+H10–H11 the positive control for U11–U13: with a LIVE read the real field
+        instruction comes back, and once proof is satisfied it becomes
+        "close out" — so the U assertions are about the failed read, not
+        about a next_action that stopped saying anything
 F0–F5   when the live read THROWS, both routes answer 503 `unavailable`,
         carry no work order, invent no state, and the list does not degrade
         into a short 200
@@ -85,19 +137,27 @@ ownership ruling nobody made.
 
 ## Falsification
 
-Three mutations, each living **entirely in the HTTP layer** — which is the whole
-reason this step exists. No service-level proof can see any of them.
+Four mutations, each living **outside the service layer** — in the projection, the
+route's failure handler, the authority gate, or the derived `next_action`. That is
+the whole reason this step exists: no service-level proof can see any of them.
 
 ```text
-list-drops-state       the list projection carries only `satisfied`
-swallow-read-failure   a thrown live read becomes a confident 200
-property-from-query    the browser gets to choose the building (§21)
+next-action-from-satisfied  the defect this step found, put back
+list-drops-state            the list projection carries only `satisfied`
+swallow-read-failure        a thrown live read becomes a confident 200
+property-from-query         the browser gets to choose the building (§21)
 ```
 
+`next-action-from-satisfied` deliberately **does not activate the cutover**. The
+condition it needs is a proof read that cannot complete, and the honest way to
+produce that is to leave the cutover unactivated — the same condition §U proves
+against. Staging it any other way would be a falsification of the staging.
+
 ```text
-tools/step10/falsify_http_acceptance.js --variant list-drops-state       exit 0
-tools/step10/falsify_http_acceptance.js --variant swallow-read-failure   exit 0
-tools/step10/falsify_http_acceptance.js --variant property-from-query    exit 0
+--variant next-action-from-satisfied   exit 0
+--variant list-drops-state             exit 0
+--variant swallow-read-failure         exit 0
+--variant property-from-query          exit 0
 ```
 
 Each compiles the mutation **in memory** and installs it in `require.cache` so the
@@ -159,8 +219,8 @@ obligation exists to create. The assertion now reads the **open queue**
 ## Proof
 
 ```text
-tools/step10/prove_http_acceptance.js     57 / 57   exit 0   twice, clean baselines
-tools/step10/falsify_http_acceptance.js   3 variants, each exit 0
+tools/step10/prove_http_acceptance.js     63 / 63   exit 0   twice, clean baselines
+tools/step10/falsify_http_acceptance.js   4 variants, each exit 0
 tools/step9/prove_defect_sweep.js         35 / 35   exit 0   (regression)
 tools/step9/prove_defect_lifecycle.js     25 / 25   exit 0   (regression)
 tools/step9/prove_sweep_runner.js         23 / 23   exit 0   (regression)
@@ -172,7 +232,7 @@ npm run verify (10 gates)                 PASS      exit 0
 bash tools/step10/run.sh                      # baseline → 137 → the proof
 
 DB='postgresql://postgres@127.0.0.1:5433/r0scale?sslmode=disable'
-for V in list-drops-state swallow-read-failure property-from-query; do
+for V in next-action-from-satisfied list-drops-state swallow-read-failure property-from-query; do
   bash tools/steps23/baseline_136.sh
   PROVE_DATABASE_URL="$DB" node tools/steps23/apply_137.js
   FALSIFY10_DATABASE_URL="$DB" node tools/step10/falsify_http_acceptance.js --variant "$V"

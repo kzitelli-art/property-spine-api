@@ -69,6 +69,25 @@ const VARIANTS = {
     }],
   },
 
+  /*  THE DEFECT THIS STEP ACTUALLY FOUND, restored. `nextActionFor` read
+   *  `proof.satisfied`, which Step 8 made ABSENT when the read fails —
+   *  `undefined` is falsy, so a failed read became "go take a photo" on the
+   *  same screen that said the proof state was unavailable. It survived
+   *  every service-level proof because none of them look at next_action. */
+  "next-action-from-satisfied": {
+    file: READER,
+    what: "next_action is derived from `satisfied` again, as it was before this step",
+    breaks: "U11/U12 — a failed read must not become a field instruction",
+    edits: [{
+      from: `    case "completion_claimed":
+      if (!proof || proof.read_status !== "ok") return "Proof state unavailable — retry";
+      return proof.state === "satisfied"
+        ? "Close out the work order"
+        : "Obtain repair photo before completion";`,
+      to: `    case "completion_claimed":  return proof.satisfied ? "Close out the work order" : "Obtain repair photo before completion";`,
+    }],
+  },
+
   /*  §5 — honest blank beats confident wrong. A live read that failed and
    *  answers 200 with a proof block is the exact false green this release
    *  exists to end, and NO service-level proof can see it: the service
@@ -215,14 +234,27 @@ function request(port, method, urlPath, session) {
      (work_order_id,property_id,state,evaluated_by_service,rule_version)
      values ($1,$2,'satisfied','f10proof','x')`, [WO_SAT, PROP]);
   const WO_ELSEWHERE = await mkWo("open", OTHER);
+  const WO_CLAIMED = await mkWo("open");
+  await c.query(`insert into work_order_progress
+                   (work_order_id,property_id,kind,note,reported_by_user_id,occurred_at)
+                 values ($1,$2,'completion_claimed','done',$3,now())`, [WO_CLAIMED, PROP, OPER]);
 
-  const activation = require(path.join(ROOT, "src/release0/activation_service.js"));
-  const census = await activation.readLegacyTerminalSet(c);
-  await c.query("begin");
-  await activation.recordActivation(c, {
-    activated_at: CUTOVER, captured_by: "falsify http", expected: census });
-  await c.query("commit");
-  const WO_DEFECT = await mkWo("closed");   // post-cutover → a real defect
+  /*  ONE VARIANT DELIBERATELY DOES NOT ACTIVATE. `next-action-from-satisfied`
+   *  is about what the surface says when the proof read CANNOT COMPLETE, and
+   *  the honest way to produce that is to leave the cutover unactivated —
+   *  the same condition §U proves against. Faking it any other way would be
+   *  a falsification of the fake. */
+  const NEEDS_ACTIVATION = VARIANT !== "next-action-from-satisfied";
+  let WO_DEFECT = null;
+  if (NEEDS_ACTIVATION) {
+    const activation = require(path.join(ROOT, "src/release0/activation_service.js"));
+    const census = await activation.readLegacyTerminalSet(c);
+    await c.query("begin");
+    await activation.recordActivation(c, {
+      activated_at: CUTOVER, captured_by: "falsify http", expected: census });
+    await c.query("commit");
+    WO_DEFECT = await mkWo("closed");   // post-cutover → a real defect
+  }
 
   // ── the real dependency graph, with the mutation inside it ────────
   const { spawnObligationFromEvent, satisfyObligation } =
@@ -261,6 +293,19 @@ function request(port, method, urlPath, session) {
     ok("V3  …while the DETAIL still knows — the two routes now disagree, so L2 goes RED",
        d.body.proof.state === "missing_evaluation_defect" && defectRow.proof.state === undefined,
        JSON.stringify({ detail: d.body.proof.state, list: defectRow.proof.state }));
+  }
+
+  if (VARIANT === "next-action-from-satisfied") {
+    const d = await request(port, "GET", `/operator/work-orders/${WO_CLAIMED}/status`, SESSION);
+    ok("V1  the proof read is genuinely unavailable (the condition is real, not staged)",
+       d.body.proof.read_status === "unavailable" && !("satisfied" in d.body.proof),
+       JSON.stringify(d.body.proof));
+    ok("V2  …and next_action tells the operator to go take a photo — U11 goes RED",
+       /photo/i.test(String(d.body.next_action)), JSON.stringify(d.body.next_action));
+    ok("V3  …on the same response that says the proof state is unavailable — U12 goes RED",
+       !/unavailable/i.test(String(d.body.next_action)),
+       JSON.stringify({ read_status: d.body.proof.read_status, next_action: d.body.next_action }) +
+       " — one payload, two answers, and the operator only sees the instruction");
   }
 
   if (VARIANT === "swallow-read-failure") {
