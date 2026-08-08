@@ -1748,8 +1748,9 @@ background:var(--panel2);border:1px solid var(--line);border-radius:10px;cursor:
         Unticked by default and never auto-ticked — consent is an act. -->
   <label class="consent" for="su-consent">
     <input type="checkbox" id="su-consent"/>
-    <span>I agree to receive text messages from <b id="su-consent-prop">my property</b>
-    about my tenancy — maintenance updates, account questions and building notices —
+    <span>I agree to receive text messages from <b id="su-consent-prop">my property</b>,
+    operated by Virtus Management LLC, about my tenancy — maintenance updates,
+    account questions and building notices —
     at the mobile number I verify here. Message frequency varies.
     Message &amp; data rates may apply. Reply STOP to opt out, HELP for help.
     See the <a href="/legal/sms-terms" target="_blank" rel="noopener">SMS Terms</a>
