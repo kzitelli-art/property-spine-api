@@ -313,9 +313,14 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
     const s = await reader.readWorkOrderStatus(c, { propertyId: PROP, workOrderId: good.wo });
     ok("S1  the reader reports the work as completed", s.current.state === "completed",
        JSON.stringify(s.current.state));
+    /*  `state`, never `satisfied`. §3.4's compatibility field is being
+     *  retired by the cleanup release, and a Step 4 tool that reads it
+     *  would work today and break the day the removal lands — on the one
+     *  gate that gets exactly one attempt. `state` is correct in both
+     *  worlds. */
     ok("S2  …with proof state `satisfied`, derived and not stored",
-       s.proof.read_status === "ok" && s.proof.state === "satisfied" && s.proof.satisfied === true,
-       JSON.stringify(s.proof.state));
+       s.proof.read_status === "ok" && s.proof.state === "satisfied",
+       JSON.stringify({ rs: s.proof.read_status, state: s.proof.state }));
     ok("S3  …and nobody had to do anything for that to be true",
        s.current.completed_at !== null && s.next_action === null,
        JSON.stringify({ completed_at: s.current.completed_at, next: s.next_action }));

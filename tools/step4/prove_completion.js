@@ -188,9 +188,11 @@ const last4 = (n) => n ? "****" + String(n).replace(/\D/g, "").slice(-4) : "(uns
   //  answers are correct; which one is expected is not this tool's guess.
   const activated = s && s.proof.read_status === "ok";
   if (activated) {
+    //  `state`, never `satisfied`: the compatibility field is being
+    //  retired, and this gate gets exactly one attempt.
     ok("S4  …with proof.state = 'satisfied', derived and not stored",
-       s.proof.state === "satisfied" && s.proof.satisfied === true,
-       JSON.stringify({ state: s.proof.state, satisfied: s.proof.satisfied }));
+       s.proof.state === "satisfied",
+       JSON.stringify({ read_status: s.proof.read_status, state: s.proof.state }));
   } else {
     console.log("  ·     S4  proof.read_status = 'unavailable' (" +
       (s && s.proof.reason_code) + ")");
