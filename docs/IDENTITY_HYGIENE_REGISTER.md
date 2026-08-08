@@ -150,6 +150,44 @@ it would leave the leasing pipeline referencing a retired identity.
 
 ---
 
+## H-3 · A second staff phone is also a reachable prospect identity
+
+| | |
+|---|---|
+| **Recorded** | 2026-08-08, by the Release 0 collision-free tester search |
+| **Kind** | duplicate identity, **reachable** |
+| **Who** | staff user `e0a7659f-ee1a-4bde-9e0c-02c6632ff066` (phone ****3053) |
+| **Reachable today** | **YES — open prospect identity at property `a50fbdd0-3642-431e-b532-0dcd6ab8a4fe`** |
+| **Current operating consequence** | an inbound SMS from that number to the property-facing line can resolve to a prospect rather than to the staff member |
+| **Removal** | close the opportunity through the governed leasing path if it is not a real one; otherwise this is a genuine dual identity and needs a product answer, not a cleanup |
+
+Found the same way H-1 was: by running the production reachability tiers,
+not by inventorying foreign keys. It was not looked for — the tester search
+enumerated every technician the Assign picker would offer and checked each
+one, and this fell out.
+
+**Two independent instances is a pattern, not a coincidence.** The staff
+directory and the leasing pipeline both key on a phone number, and nothing
+prevents one number from carrying an identity in each. H-1 came from a
+boardroom demo; this one's origin is not yet established and should not be
+guessed at.
+
+The register does not assume this is demo residue. If the opportunity is
+real, closing it as "lost" would be recording a falsehood to make an
+unrelated proof convenient — the exact move the H-1 entry exists to warn
+against. Establish what the lead is first.
+
+### What the same search also surfaced
+
+Two of the four technicians the Assign picker offers — `Demo Leasing
+Manager` and `Solo QA Operator [INTERNAL]` — carry **no phone at all** on
+their staff record. They are assignable but cannot receive an attributed
+inbound message. That is not a defect in itself; it is recorded because it
+means the pool of staff who can carry a transport proof is much smaller
+than the pool of staff who can be assigned work.
+
+---
+
 ## H-2 · Method defect — `information_schema` FK walk under-reports
 
 | | |
