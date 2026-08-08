@@ -8,26 +8,36 @@
    ONCE against a live database:
 
      R  two activations racing        → exactly one, by the database
-     K  what the activation LOCKS     → can it stall production writes?
+     K  what the activation LOCKS     → and what that costs, now that it does
      W  the read-to-commit window     → a row that turns terminal mid-flight
 
-   ── W IS A REAL WINDOW AND IT IS NOT CLOSED HERE ────────────────────
+   ── W IS A REAL WINDOW. THE DECISION ABOUT IT WAS REVERSED. ─────────
 
    The set is read inside the transaction, at READ COMMITTED. A row that
    another connection commits AFTER that read but BEFORE the activation
    commits is invisible to the comparison and lands outside the inventory.
 
-   That window is closed by SEQUENCING, not by this transaction: §5.4
-   requires the legacy writer dead, the rollout COMPLETE, old instances
-   drained, no in-flight request able to commit, and a bounded wait —
-   all before the instant is captured. This file MEASURES the window so
-   the sequencing requirement is a demonstrated necessity rather than an
-   inherited instruction.
+   ⚠ THIS HEADER USED TO SAY the window was closed by SEQUENCING alone,
+   and that "closing it in SQL was considered and rejected: locking
+   work_orders for the duration would stall exactly the production writes
+   the release is trying to protect, to defend against a row that §5.4
+   already makes impossible."
 
-   Closing it in SQL was considered and rejected: locking `work_orders`
-   for the duration would stall exactly the production writes the release
-   is trying to protect, to defend against a row that §5.4 already makes
-   impossible.
+   That reasoning was overturned by evidence, not by preference.
+   `falsify_containment.js` A4 showed the same window from the other side:
+   a transaction that BEGINS before the activation and commits after it
+   reads through its own frozen snapshot, never sees the activation, and
+   so escapes migration 140 entirely. The cost of the window is therefore
+   not a mis-inventoried row — it is a completion the containment guard
+   never judges. And "§5.4 makes it impossible" is a claim about a human
+   procedure, which is exactly the kind of claim this release refuses to
+   rest a database invariant on.
+
+   So `recordActivation` now takes `SHARE ROW EXCLUSIVE` on `work_orders`
+   with `lock_timeout = 5s`, and K measures what that actually costs
+   rather than restating either decision. Sequencing is still required —
+   the lock bounds the window, it does not make a drained rollout
+   optional.
 
    ⚠ ISOLATED POSTGRES ONLY. Needs schema 137 and a virgin activation
      history — ONE GENESIS EVER is the invariant under test.
@@ -46,6 +56,12 @@ const { Client } = require("pg");
 
 const ROOT = path.join(__dirname, "..", "..");
 const svc = require(path.join(ROOT, "src/release0/activation_service.js"));
+/*  Migration 140 REFUSES to let recordActivation run without it: a
+ *  guard detected missing AFTER an irreversible act is useless. So a
+ *  harness that activates must install it first. It is inert until the
+ *  activation lands, so it changes nothing about what is proven here. */
+const guardWindow = require("../step12/guard_window.js");
+
 const URL = process.env.STEP7_DATABASE_URL;
 
 let pass = 0, fail = 0;
@@ -84,6 +100,8 @@ const open = async () => {
   }
 
   console.log("STEP 7 — CONCURRENCY AND LOCK BEHAVIOUR — isolated postgres\n");
+
+  await guardWindow.installGuard(c);
 
   await c.query(`insert into organizations (id,name) values ($1,'S7C Org') on conflict (id) do nothing`, [ORG]);
   await c.query(`insert into properties (id,name,organization_id) values ($1,'S7C Property',$2)
@@ -175,52 +193,104 @@ const open = async () => {
     await a.end(); await b.end();
   }
 
-  // ══ K — WHAT DOES IT LOCK? ═════════════════════════════════════════
-  sec("K · THE ACTIVATION MUST NOT STALL PRODUCTION WRITES");
+  // ══ K — WHAT DOES IT LOCK, AND WHAT DOES THAT COST? ════════════════
+  sec("K · THE ACTIVATION DOES STALL WRITES — deliberately, and briefly");
   {
-    /*  The cutover runs against a live database. If reading the legacy set
-     *  took a lock on `work_orders`, every technician write would queue
-     *  behind it — the release protecting completion truth by stopping
-     *  completion. Measured on a second connection, not reasoned about. */
+    /*  ⚠ THIS SECTION USED TO ASSERT THE OPPOSITE, and it passed for a
+     *  bad reason: it simulated the activation with the statements it
+     *  believed the service ran, and never called the service. When
+     *  `recordActivation` started taking a table lock, K went on measuring
+     *  its own simulation and reported "no stall" about code that stalls.
+     *
+     *  A proof against a re-implementation is a proof about the
+     *  re-implementation. So the lock statement is READ OUT OF THE SHIPPED
+     *  SERVICE and executed verbatim — if the service stops taking it, or
+     *  takes a different mode, K0 fails instead of quietly measuring the
+     *  wrong thing.
+     *
+     *  The genesis activation is already spent by §R above (ONE GENESIS
+     *  EVER), so the service cannot be invoked a second time here. Reading
+     *  its statement is the honest substitute, and K0 is what keeps that
+     *  substitution true. */
+    const svcSrc = require("fs").readFileSync(
+      path.join(ROOT, "src/release0/activation_service.js"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^\s*\/\/.*$/gm, " ");
+    const lockStmt = (svcSrc.match(
+      /lock\s+table\s+public\.work_orders\s+in\s+[a-z ]*mode/i) || [])[0];
+    ok("K0  the shipped activation still takes a work_orders table lock",
+       !!lockStmt && /share row exclusive/i.test(lockStmt),
+       JSON.stringify(lockStmt) + " — the statement K measures is no longer the " +
+       "statement the service runs, so everything below it is about nothing");
+    console.log("        from activation_service.js:  " + lockStmt);
+
     const a = await open();
     await a.query("begin");
     await svc.readLegacyTerminalSet(a);          // the read the activation does
-    await a.query(`insert into release_0_legacy_cutover_inventory
-      (work_order_id, property_id, status_at_cutover, had_column_photo, had_column_note, activation_id)
-      select w.id, w.property_id, w.status, false, false,
-             (select id from release_0_activation_current)
-        from work_orders w where w.source='s7cproof' and w.status='closed' limit 1
-      on conflict do nothing`);
+    await a.query(lockStmt);                     // …and the lock it now takes
 
-    //  With that transaction OPEN and holding whatever it holds, can an
-    //  ordinary work-order write proceed?
+    //  With that transaction OPEN and holding the lock, an ordinary
+    //  work-order write must WAIT. That is the point: a writer that could
+    //  proceed here is a writer whose terminal rows escape migration 140
+    //  (falsify_containment A4).
     const t0 = Date.now();
     const b = await open();
     let wrote = false, lockErr = null;
     try {
       await b.query("begin");
+      await b.query("set local lock_timeout = '2s'");
       await mkWo(b, "open");
       await b.query(`update work_orders set updated_at=now() where source='s7cproof'`);
       await b.query("commit");
       wrote = true;
-    } catch (e) { lockErr = e.message; await b.query("rollback").catch(() => {}); }
+    } catch (e) { lockErr = e.code + " " + e.message; await b.query("rollback").catch(() => {}); }
     const ms = Date.now() - t0;
 
-    ok("K1  an ordinary work-order INSERT and UPDATE proceed during the activation",
-       wrote, lockErr + " — the cutover would stall production writes");
-    ok("K2  …without waiting on a lock", ms < 3000, ms + " ms");
-    console.log("        completed in " + ms + " ms with the activation transaction open");
-    console.log("        → the set read takes no row locks; the inventory and history");
-    console.log("          writes touch only tables migration 137 created.");
+    ok("K1  an ordinary work-order write BLOCKS while the activation holds the lock",
+       !wrote && /55P03|lock timeout/i.test(lockErr || ""),
+       (wrote ? "it proceeded in " + ms + " ms" : lockErr) +
+       " — if it proceeds, the straddling-transaction hole (A4) is open again");
+    console.log("        blocked for " + ms + " ms, then: " + (lockErr || "proceeded"));
 
+    //  And the stall ENDS. A lock that is never released is an outage, not
+    //  a control — so the same write is retried after the activation
+    //  transaction finishes.
     await a.query("rollback").catch(() => {});
+    const t1 = Date.now();
+    let after = false;
+    try {
+      await b.query("begin");
+      await b.query("set local lock_timeout = '5s'");
+      await mkWo(b, "open");
+      await b.query("commit");
+      after = true;
+    } catch (e) { await b.query("rollback").catch(() => {}); }
+    ok("K2  …and proceeds immediately once that transaction ends",
+       after && Date.now() - t1 < 3000, (Date.now() - t1) + " ms");
+    console.log("        → THE TRADE, STATED: the cutover is a brief, bounded stall on");
+    console.log("          work_orders writes. lock_timeout=5s means it fails LOUDLY");
+    console.log("          (WRITERS_IN_FLIGHT) rather than queueing production behind a");
+    console.log("          long transaction. §5.4's drained rollout is still required —");
+    console.log("          the lock bounds the window, it does not remove the sequencing.");
+
     await a.end(); await b.end();
   }
 
   // ══ W — THE READ-TO-COMMIT WINDOW ══════════════════════════════════
   sec("W · THE WINDOW — a row turning terminal mid-transaction");
-  {
-    /*  Measured, not assumed, and NOT closed here. See the header. */
+  /*  Measured, not assumed. See the header for why the decision about
+   *  closing it was reversed.
+   *
+   *  ── THE WHOLE SECTION RUNS IN ONE GUARD-OFF WINDOW ─────────────────
+   *  §R already activated, so the "late" row below is post-cutover,
+   *  uninventoried and unevaluated — the exact state migration 140
+   *  refuses. That refusal IS half the answer to this section, and it has
+   *  a practical consequence for the harness: `DROP TRIGGER` needs ACCESS
+   *  EXCLUSIVE on `work_orders`, which the open transaction `a` blocks
+   *  with the ACCESS SHARE its set read takes. So the window opens BEFORE
+   *  `a` begins rather than inside it. Turning the guard off while holding
+   *  a reader open is not possible, which is itself worth knowing.  */
+  await guardWindow.withGuardOff(c,
+    "W must exhibit a row turning terminal after the activation's set read", async () => {
     const a = await open();
     await a.query("begin");
     const seen = await svc.readLegacyTerminalSet(a);   // the activation's read
@@ -248,14 +318,18 @@ const open = async () => {
     console.log("        → so a row that turns terminal between the read and the commit");
     console.log("          would land OUTSIDE the inventory and later read as a");
     console.log("          missing_evaluation_defect rather than legacy history.");
-    console.log("        → CLOSED BY SEQUENCING, NOT BY THIS TRANSACTION. §5.4 requires");
-    console.log("          the legacy writer dead, the rollout COMPLETE, old instances");
-    console.log("          drained, no in-flight request able to commit, and a bounded");
-    console.log("          wait — all BEFORE the instant is captured. This measurement is");
-    console.log("          why those preconditions are load-bearing rather than ritual.");
-    ok("W3  the window is documented as a sequencing requirement, not silently carried",
+    console.log("        → NOW CLOSED FROM THREE SIDES, in this order of strength:");
+    console.log("          1. the LOCK (K) — an in-flight writer cannot overlap the");
+    console.log("             activation at all; it either commits first, and fails the");
+    console.log("             exact-set comparison, or the activation refuses.");
+    console.log("          2. the GUARD — after the activation an ordinary writer cannot");
+    console.log("             commit this row; the construction above needed it off.");
+    console.log("          3. SEQUENCING (§5.4) — still required, not made optional: the");
+    console.log("             legacy writer dead, the rollout COMPLETE, old instances");
+    console.log("             drained, a bounded wait, all BEFORE the instant is captured.");
+    ok("W3  the window is closed by the lock and the guard, with sequencing still required",
        true);
-  }
+  });
 
   sec("VERDICT");
   console.log(`  passed ${pass}   failed ${fail}`);

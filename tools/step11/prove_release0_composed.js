@@ -65,6 +65,10 @@ const activation = require(path.join(ROOT, "src/release0/activation_service.js")
 const proofState = require(path.join(ROOT, "src/release0/proof_state.js"));
 const staffSessions = require(path.join(ROOT, "src/identity/staff_session_service.js"));
 const FACTS = require("../step4/completion_facts.js");
+//  migration 140 REFUSES to let recordActivation run without it, so a
+//  harness that activates must install it. States the guard forbids are
+//  then built inside an explicit withGuardOff() window.
+const guardWindow = require("../step12/guard_window.js");
 const URL = process.env.STEP11_DATABASE_URL;
 
 let pass = 0, fail = 0;
@@ -121,6 +125,12 @@ const get = (port, p, session) => new Promise((res, rej) => {
                    "139_no_longer_applicable_resolution.sql"]) {
     await c.query(fs.readFileSync(path.join(ROOT, "migrations", m), "utf8"));
   }
+  /*  The composed path is meant to be the shape production actually gets,
+   *  so it carries production's containment too: 140 goes on with 138 and
+   *  139, before anything exists, and stays on for every writer, HTTP read
+   *  and sweep below. It is inert until §A activates. */
+  await guardWindow.installGuard(c);
+  const forbidden = (why, fn) => guardWindow.withGuardOff(c, why, fn);
 
   await c.query(`insert into organizations (id,name) values ($1,'S11') on conflict (id) do nothing`, [ORG]);
   await c.query(`insert into properties (id,name,organization_id) values ($1,'S11 Property',$2)
@@ -207,7 +217,11 @@ const get = (port, p, session) => new Promise((res, rej) => {
        Number((await c.query(
          `select count(*) n from release_0_legacy_cutover_inventory`)).rows[0].n) === census.length);
   }
-  const woDefect = await mkWo("closed");   // post-cutover → a real defect
+  //  Post-cutover → a real defect, and the only write in this whole file
+  //  that migration 140 refuses. Everything else composes under the guard.
+  const woDefect = await forbidden(
+    "the composed path must carry a defect end to end: reader → sweep → HTTP",
+    () => mkWo("closed"));
 
   /*  The census for P6, taken BEFORE any read happens. An earlier version
    *  of P6 compared the same query to itself and was therefore incapable

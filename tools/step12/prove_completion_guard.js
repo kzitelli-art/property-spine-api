@@ -307,13 +307,27 @@ const CODE = "R0001";
     const e1 = await direct([
       `insert into work_order_proof_evaluations
          (work_order_id,property_id,state,evaluated_by_service,rule_version)
-       values ('${wo}','${PROP}','not_satisfied','s12','x')`,
+       values ('${wo}','${PROP}','satisfied','s12','x')`,
       `update work_orders set status='closed' where id='${wo}'`,
     ]);
-    ok("E1  recording an evaluation makes the same close legal", e1 === null, e1 && e1.message);
-    ok("E2  …and a `not_satisfied` head is enough — a judgement that WAS made",
-       await statusOf(wo) === "closed",
-       "requiring `satisfied` would enforce more than the forbidden state");
+    ok("E1  recording a SATISFIED evaluation makes the same close legal",
+       e1 === null, e1 && e1.message);
+    /*  REVISION 2. This asserted the opposite — that a `not_satisfied`
+     *  head was enough, "a judgement that WAS made". True, and beside the
+     *  point: Release 0 governs COMPLETION, not whether somebody made a
+     *  judgement. A1 in falsify_containment.js broke that reasoning by
+     *  showing the reader then reports a completed work order as
+     *  not_satisfied — a completion the system cannot stand behind. */
+    const woFail = await mkWo("open");
+    const e2 = await direct([
+      `insert into work_order_proof_evaluations
+         (work_order_id,property_id,state,evaluated_by_service,rule_version)
+       values ('${woFail}','${PROP}','not_satisfied','s12','x')`,
+      `update work_orders set status='closed' where id='${woFail}'`,
+    ]);
+    ok("E2  …and a `not_satisfied` head is NOT enough",
+       !!e2 && e2.code === CODE,
+       "a failed proof evaluation is valid data and does not justify a terminal status");
 
     //  2. do not leave it terminal
     const wo2 = await mkWo("open");
@@ -428,7 +442,7 @@ const CODE = "R0001";
        (await direct([`update work_orders set status='complete' where id=$1`], [wo]) || {})
          .code === CODE);
 
-    await c.query(`drop trigger assert_no_manufactured_defect on work_orders`);
+    await c.query(`drop trigger assert_completion_truth_upd on work_orders`);
     const during = await direct([`update work_orders set status='complete' where id=$1`], [wo]);
     ok("X2  with the guard DROPPED, the identical bypass SUCCEEDS", during === null,
        during && during.message + " — something OTHER than this trigger was refusing, " +

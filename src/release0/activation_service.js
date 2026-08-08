@@ -100,6 +100,77 @@ async function activationSchemaPresent(client) {
  * @param supersedes_id  null for genesis; the current head for a correction.
  * @param reason         required when superseding.
  */
+/*  ── THE EXPECTED CONTAINMENT BOUNDARY ──────────────────────────────
+ *
+ *  Not a trigger name. These are the clauses the predicate MUST contain
+ *  for the activation to be safe, each tied to an attack that broke an
+ *  earlier revision (tools/step12/falsify_containment.js):
+ *
+ *    release_0_activation_current       inert before the cutover
+ *    release_0_legacy_cutover_inventory legacy history is exempt
+ *    work_order_proof_evaluation_head   a governed completion is admitted
+ *    = 'satisfied'                      A1/A2 — a FAILED evaluation is not
+ *                                       a completion
+ *    R0002                              A3 — inventoried legacy may not
+ *                                       leave the terminal state
+ *
+ *  Checking substance rather than a digest is deliberate: a digest would
+ *  make every comment edit in migration 140 a production incident, and
+ *  this is a safety precondition, not a change-control mechanism.
+ */
+const GUARD_FUNCTION = "release_0_assert_completion_truth";
+const GUARD_CLAUSES = [
+  "release_0_activation_current",
+  "release_0_legacy_cutover_inventory",
+  "work_order_proof_evaluation_head",
+  "'satisfied'",
+  "R0002",
+];
+const GUARD_TRIGGERS = [
+  { name: "assert_completion_truth_ins", table: "work_orders" },
+  { name: "assert_completion_truth_upd", table: "work_orders" },
+  { name: "assert_completion_truth_eval", table: "work_order_proof_evaluations" },
+];
+
+async function assertContainmentGuardPresent(client) {
+  const fn = (await client.query(
+    `select p.prosrc from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname = $1`, [GUARD_FUNCTION])).rows[0];
+  if (!fn) {
+    throw activationError("GUARD_ABSENT",
+      `migration 140 is not applied: public.${GUARD_FUNCTION}() does not exist. ` +
+      "Without it, any writer can commit a terminal work order with no proof the " +
+      "moment this activation lands, and the activation cannot be undone.");
+  }
+  const missing = GUARD_CLAUSES.filter((cl) => !fn.prosrc.includes(cl));
+  if (missing.length) {
+    throw activationError("GUARD_STALE",
+      `public.${GUARD_FUNCTION}() exists but does not enforce: ${missing.join(", ")}. ` +
+      "A guard with the right NAME and the wrong body is worse than none, because it " +
+      "reads as protection. Re-apply migration 140.");
+  }
+
+  const live = (await client.query(
+    `select t.tgname, k.relname, t.tgdeferrable, t.tginitdeferred, t.tgconstraint
+       from pg_trigger t join pg_class k on k.oid = t.tgrelid
+      where not t.tgisinternal and t.tgname = any($1::text[])`,
+    [GUARD_TRIGGERS.map((g) => g.name)])).rows;
+  for (const want of GUARD_TRIGGERS) {
+    const got = live.find((r) => r.tgname === want.name && r.relname === want.table);
+    if (!got) {
+      throw activationError("GUARD_ABSENT",
+        `the containment trigger ${want.name} is missing from ${want.table}. ` +
+        "Re-apply migration 140 before activating.");
+    }
+    if (!got.tgdeferrable || !got.tginitdeferred) {
+      throw activationError("GUARD_STALE",
+        `${want.name} is not DEFERRABLE INITIALLY DEFERRED. Made immediate it judges ` +
+        "each statement instead of the committed state, and would refuse the canonical " +
+        "writer depending on its statement order.");
+    }
+  }
+}
+
 async function recordActivation(client, {
   activated_at, captured_by, expected,
   captured_at_step = "step_6", supersedes_id = null, reason = null,
@@ -107,6 +178,54 @@ async function recordActivation(client, {
   if (!await activationSchemaPresent(client)) {
     throw activationError("SCHEMA_MISSING",
       "migration 137 is not applied — there is nowhere to record a cutover");
+  }
+
+  /*  ── THE CONTAINMENT BOUNDARY MUST ALREADY EXIST (migration 140) ────
+   *
+   *  The activation is the ONE irreversible act in this release: the
+   *  history and inventory tables are append-only. The instant it
+   *  commits, every terminal-without-proof write becomes a manufactured
+   *  accountability obligation. Detecting a missing guard AFTERWARDS is
+   *  too late, so the activation refuses to exist without it.
+   *
+   *  It binds to the PREDICATE'S DEFINITION, not to a trigger name. A
+   *  stale or hollowed-out function with the right name would otherwise
+   *  satisfy the precondition — and a name is exactly what an
+   *  accidental re-run of an older migration would restore.  */
+  await assertContainmentGuardPresent(client);
+
+  /*  ── A4: SERIALIZE AGAINST IN-FLIGHT WRITERS ────────────────────────
+   *
+   *  A transaction that opened BEFORE the cutover, wrote a terminal work
+   *  order, and commits AFTER it, is judged by the deferred guard through
+   *  its OWN snapshot. At READ COMMITTED the guard's read is fresh and
+   *  refuses correctly. At REPEATABLE READ the snapshot is frozen before
+   *  the activation existed, so the guard sees the pre-cutover world and
+   *  the write COMMITS. Measured, not theorised — it committed.
+   *
+   *  No SELECT can escape its own snapshot, so this is not fixable inside
+   *  the trigger. It is closed from the other side, and the other side is
+   *  the right one: the activation is a single deliberate act we control.
+   *
+   *  SHARE ROW EXCLUSIVE conflicts with the ROW EXCLUSIVE that every
+   *  INSERT/UPDATE takes, so this statement cannot complete while any
+   *  work_orders writer is in flight. Either that writer commits first —
+   *  and its new terminal row makes the exact-set comparison below FAIL,
+   *  which is the correct refusal — or it rolls back. There is no third
+   *  outcome, and no window between the census and this lock.
+   *
+   *  lock_timeout is set LOCAL and low: a cutover that hangs behind a
+   *  long-running transaction must fail loudly and be retried, never
+   *  block production writes indefinitely while somebody waits.  */
+  await client.query("set local lock_timeout = '5s'");
+  try {
+    await client.query("lock table public.work_orders in share row exclusive mode");
+  } catch (e) {
+    throw activationError("WRITERS_IN_FLIGHT",
+      "could not serialize against work_orders writers within 5s: " + (e.code || e.message) +
+      ". A transaction is holding a write lock. Activating past it would leave a " +
+      "window in which its terminal rows escape the containment guard. Wait for it " +
+      "to finish and re-run the census.");
   }
 
   //  ── THE INSTANT ────────────────────────────────────────────────────

@@ -53,6 +53,10 @@ const activation = require(path.join(ROOT, "src/release0/activation_service.js")
 const proofState = require(path.join(ROOT, "src/release0/proof_state.js"));
 const lifecycle = require(path.join(ROOT, "src/technician/lifecycle_service.js"));
 const staffSessions = require(path.join(ROOT, "src/identity/staff_session_service.js"));
+//  migration 140 REFUSES to let recordActivation run without it, so a
+//  harness that activates must install it. States the guard forbids are
+//  then built inside an explicit withGuardOff() window.
+const guardWindow = require("../step12/guard_window.js");
 const URL = process.env.STEP10_DATABASE_URL;
 
 /*  ── THE CONTRACT CAPTURE ────────────────────────────────────────────
@@ -157,6 +161,12 @@ function request(port, method, urlPath, { session, body } = {}) {
                    "139_no_longer_applicable_resolution.sql"]) {
     await c.query(fs.readFileSync(path.join(ROOT, "migrations", m), "utf8"));
   }
+  /*  Installed with the rest of the deployed shape, before any fixture
+   *  exists — so the whole population below, and the real completion in
+   *  §D, is built through a stack that carries production's containment.
+   *  Inert until the activation further down. */
+  await guardWindow.installGuard(c);
+  const forbidden = (why, fn) => guardWindow.withGuardOff(c, why, fn);
 
   // ── the population ────────────────────────────────────────────────
   await c.query(`insert into organizations (id,name) values ($1,'S10 Org') on conflict (id) do nothing`, [ORG]);
@@ -336,8 +346,11 @@ function request(port, method, urlPath, { session, body } = {}) {
     await c.query("commit");
     console.log(`\n  (activated; ${census.length} row(s) inventoried as legitimate legacy)`);
   }
-  //  Created AFTER the cutover: terminal, uninventoried, unevaluated.
-  const WO_DEFECT = await mkWo("closed");
+  //  Created AFTER the cutover: terminal, uninventoried, unevaluated —
+  //  the one row on this surface that migration 140 refuses to let commit.
+  const WO_DEFECT = await forbidden(
+    "the acceptance suite must SHOW missing_evaluation_defect over HTTP",
+    () => mkWo("closed"));
 
   // ══ H — ALL FOUR STATES, OVER A REAL SOCKET ════════════════════════
   sec("H · THE FOUR STATES, AS A CONSUMER RECEIVES THEM");

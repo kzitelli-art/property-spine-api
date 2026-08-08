@@ -36,6 +36,10 @@ const defect = require(path.join(ROOT, "src/maintenance/proof_defect_service.js"
 const proofState = require(path.join(ROOT, "src/release0/proof_state.js"));
 const activation = require(path.join(ROOT, "src/release0/activation_service.js"));
 const reader = require(path.join(ROOT, "src/surfaces/work_order_status_read.js"));
+//  migration 140 REFUSES to let recordActivation run without it, so a
+//  harness that activates must install it. States the guard forbids are
+//  then built inside an explicit withGuardOff() window.
+const guardWindow = require("../step12/guard_window.js");
 const URL = process.env.STEP9_DATABASE_URL;
 
 let pass = 0, fail = 0;
@@ -61,6 +65,17 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
     console.error("         BEFORE and AFTER activation. Rebuild the baseline.");
     process.exit(3);
   }
+
+  /*  THE SWEEP'S SUBJECT IS THE STATE THE GUARD FORBIDS.
+   *
+   *  Migration 140 refuses to let a post-activation terminal work order
+   *  commit without a `satisfied` evaluation — which is exactly the
+   *  population §4.2 bills to a named role. Both are correct: the guard
+   *  stops it being created, the sweep accounts for any that exists.
+   *  Installed here (inert until activation) so every defect population
+   *  below has to be built in an explicit, reasoned window. */
+  await guardWindow.installGuard(c);
+  const forbidden = (why, fn) => guardWindow.withGuardOff(c, why, fn);
 
   console.log("§4.2 — DEFECT SWEEP PROOF — isolated postgres\n");
 
@@ -144,7 +159,11 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
   sec("D · A POST-CUTOVER TERMINAL ROW RAISES ONE OBLIGATION");
   let defectWo = null;
   {
-    defectWo = await mkWo({ status: "closed" });   // after activation → not inventoried
+    //  After activation → not inventoried. This is the defect population,
+    //  and migration 140 exists to stop it being created at all.
+    defectWo = await forbidden(
+      "D needs the defect the sweep bills; post-activation the guard refuses it",
+      () => mkWo({ status: "closed" }));
     const s = await reader.readWorkOrderStatus(c, { propertyId: PROP, workOrderId: defectWo });
     ok("D1  the reader calls it missing_evaluation_defect",
        s.proof.state === "missing_evaluation_defect", JSON.stringify(s.proof.state));
@@ -193,7 +212,9 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
 
     //  The one that matters. Two runs overlapping is the ORDINARY case for
     //  a scheduled rail, not the exotic one.
-    const fresh = await mkWo({ status: "closed" });
+    const fresh = await forbidden(
+      "I2 needs a second, unswept defect for the concurrent race",
+      () => mkWo({ status: "closed" }));
     const [a, b] = await Promise.all([
       sweep.runProofDefectSweep(pool, { dryRun: false }),
       sweep.runProofDefectSweep(pool, { dryRun: false }),
@@ -233,12 +254,22 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
   // ══ S — SCOPE AND SELECTIVITY ══════════════════════════════════════
   sec("S · IT SWEEPS WHAT IT SHOULD AND NOTHING ELSE");
   {
-    const otherProp = await mkWo({ status: "closed", property: PROP_B });
+    const otherProp = await forbidden(
+      "S1/S4 need a defect in ANOTHER property to prove scoping",
+      () => mkWo({ status: "closed", property: PROP_B }));
     const openWo = await mkWo({ status: "open" });
-    const evaluated = await mkWo({ status: "complete" });
+
+    /*  S3's row is a GOVERNED completion, so it needs no window — status
+     *  and evaluation in one transaction, judged only at COMMIT. That it
+     *  builds cleanly here, beside three that cannot, is the difference
+     *  the sweep is asked to see. */
+    const evaluated = await mkWo({ status: "open" });
+    await c.query("begin");
+    await c.query(`update work_orders set status='complete' where id=$1`, [evaluated]);
     await c.query(`insert into work_order_proof_evaluations
       (work_order_id,property_id,state,evaluated_by_service,rule_version)
       values ($1,$2,'satisfied','step9proof','x')`, [evaluated, PROP]);
+    await c.query("commit");
 
     const scoped = await sweep.runProofDefectSweep(pool, { propertyId: PROP, dryRun: false });
     ok("S1  a property-scoped sweep does not touch another property",

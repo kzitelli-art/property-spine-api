@@ -39,6 +39,12 @@ const URL = process.env.STEP7_DATABASE_URL;
 const SERVICE_DIGEST = crypto.createHash("sha256").update(fs.readFileSync(SERVICE)).digest("hex");
 
 const svc = require(SERVICE);
+/*  Migration 140 REFUSES to let recordActivation run without it: a
+ *  guard detected missing AFTER an irreversible act is useless. So a
+ *  harness that activates must install it first. It is inert until the
+ *  activation lands, so it changes nothing about what is proven here. */
+const guardWindow = require("../step12/guard_window.js");
+
 
 let pass = 0, fail = 0;
 const ok = (l, c, d) => { if (c) { pass++; console.log("  ok    " + l); }
@@ -87,6 +93,8 @@ const ORG = ID("org"), PROP = ID("prop"), PROP_B = ID("propB"), TECH = ID("tech"
   }
 
   console.log("STEP 7 — CUTOVER ACTIVATION PROOF — isolated postgres\n");
+
+  await guardWindow.installGuard(c);
 
   await c.query(`insert into organizations (id,name) values ($1,'Step7 Org') on conflict (id) do nothing`, [ORG]);
   for (const [p, n] of [[PROP, "Step7 Property"], [PROP_B, "Step7 Property B"]]) {

@@ -43,6 +43,16 @@ const path = require("path");
 const fs = require("fs");
 
 const GATES = [
+  /*  FIRST, deliberately. On 2026-08-08 a merge staged conflict markers
+   *  into migrations/140 and this suite stayed GREEN — every gate then on
+   *  the path reads specific files for specific properties, and none of
+   *  them looks for merge debris. A migration carrying `<<<<<<< HEAD`
+   *  does not parse, and prestart REFUSES TO BOOT on an unapplied
+   *  migration, so it would have taken the service down at the next
+   *  deploy. It runs first because nothing below it is meaningful if the
+   *  tree still contains an unresolved merge. */
+  { file: "gate_no_conflict_markers.js",
+    what: "no unresolved merge markers in any tracked file" },
   { file: "gate_harness_isolation.js",
     what: "no new unguarded DATABASE_URL consumer; debt register accurate" },
   { file: "gate_closure_boundary.js",
@@ -66,6 +76,13 @@ const GATES = [
   //  at runtime.
   { file: "gate_completion_guard_terminal_set.js",
     what: "the guard, the reader and the sweep agree on the terminal set; no bypass" },
+  //  …and the set they agree on is the whole vocabulary. Three files
+  //  agreeing that "terminal" means complete-or-closed is worth nothing if
+  //  a fourth writer starts setting `signed_off`: the guard would not fire,
+  //  the reader would not call it terminal, and nothing would report a
+  //  problem. Silent in both directions, so it is checked in source.
+  { file: "gate_work_order_status_vocabulary.js",
+    what: "no shipped writer sets a work_orders.status outside the frozen, classified set" },
   //  §3.4's `satisfied` is published FOR CONSUMERS. When this API reads it
   //  back, the two halves of the four-state contract can disagree — and
   //  they did: next_action was derived from it and answered "obtain a

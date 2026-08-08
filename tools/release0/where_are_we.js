@@ -72,8 +72,9 @@ const srcHas = (file, needle) => {
   //  absolute, so its presence has to be READ, never assumed.
   const guard = (await q(
     `select 1 from pg_trigger t join pg_class c on c.oid = t.tgrelid
-      where c.relname = 'work_orders' and t.tgname = 'assert_no_manufactured_defect'
-        and not t.tgisinternal`)).length > 0;
+      where not t.tgisinternal
+        and t.tgname in ('assert_completion_truth_ins','assert_completion_truth_upd',
+                         'assert_completion_truth_eval')`)).length === 3;
   const inventory = has137
     ? Number((await q(`select count(*) n from release_0_legacy_cutover_inventory`))[0].n) : 0;
   const evaluations = has137
@@ -114,9 +115,9 @@ const srcHas = (file, needle) => {
       d: readerFourState ? (nextActionFixed ? "four-state, next_action fixed"
                                             : "⚠ four-state WITHOUT the next_action fix")
                          : "the old boolean reader is running" },
-    { k: "gd", n: "migration 140 · forbidden-state guard", done: guard,
+    { k: "gd", n: "migration 140 · completion guard", done: guard,
       d: guard ? (activation ? "installed and ARMED" : "installed, inert until activation")
-               : "NOT INSTALLED — any writer can commit the forbidden state" },
+               : "NOT INSTALLED — a work order can commit terminal with no satisfied proof" },
     { k: "b9", n: "migrations 138 + 139", done: has138 && has139,
       d: `138 ${has138 ? "applied" : "absent"} · 139 ${has139 ? "applied" : "absent"}` },
     { k: "b10", n: "§4.2 defect sweep available", done: sweepPresent,
@@ -165,10 +166,11 @@ const srcHas = (file, needle) => {
 
   stop(guard && defects > 0,
     "THE GUARD IS INSTALLED AND DEFECT OBLIGATIONS EXIST",
-    "With the guard armed the defect population should be empty by construction: " +
-    "the census inventoried every pre-cutover terminal row, and nothing can add " +
-    "one after. A non-empty result means the guard was dropped, was deployed late, " +
-    "or has a gap. INVESTIGATE — do not just resolve them.");
+    "With the guard armed, ordinary DML cannot add to this population: the census " +
+    "inventoried every pre-cutover terminal row, and the guard refuses the rest. " +
+    "That is a claim about the GUARD, not a fact about the data — a non-empty " +
+    "result means it was dropped, deployed late, or bypassed by DDL. " +
+    "INVESTIGATE — do not just resolve them.");
 
   stop(defects > 0 && !activation,
     "DEFECT OBLIGATIONS EXIST WITH NO ACTIVATION",

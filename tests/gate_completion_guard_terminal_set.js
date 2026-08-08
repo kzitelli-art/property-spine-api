@@ -108,19 +108,90 @@ ok("G9  it is a DEFERRABLE INITIALLY DEFERRED constraint trigger",
    "transaction that writes the status before the evaluation, coupling a database " +
    "invariant to the canonical writer's statement order");
 
-ok("G10 …and it RE-READS the row rather than judging `NEW`",
-   /from\s+public\.work_orders\s+where\s+id\s*=\s*new\.id/i.test(sql),
-   "NEW is the queued snapshot; by commit time the row may have moved again. " +
-   "Judging NEW.status judges an intermediate state, which is exactly what " +
-   "deferring exists to avoid");
+/*  The predicate takes a work-order id and RE-READS current state. The
+ *  trigger wrappers pass `new.id` / `new.work_order_id` — identity only.
+ *  What must never appear is a decision taken on `new.status`: NEW is the
+ *  queued snapshot, and by commit time the row may have moved again.
+ *  Judging it would judge an intermediate state, which is exactly what
+ *  deferring exists to avoid. */
+ok("G10 the predicate RE-READS the row rather than judging `NEW`",
+   /from\s+public\.work_orders\s+where\s+id\s*=\s*p_work_order/i.test(sql),
+   "the predicate no longer re-reads current status");
+ok("G10a …and no decision is taken on `new.status` anywhere in the function bodies",
+   !/if[^;]{0,80}new\.status/i.test(sql),
+   "a branch on new.status judges the queued snapshot, not the committed state");
 
-/*  It must enforce the ONE forbidden state and not re-implement the
- *  reader. Requiring `satisfied` would refuse a work order that was
- *  evaluated and failed — a judgement that WAS made. */
-ok("G11 it accepts ANY evaluation head, not only `satisfied`",
-   !/head[\s\S]{0,200}?state\s*=\s*'satisfied'/i.test(sql),
-   "requiring `satisfied` enforces more than the forbidden state and blocks a " +
-   "legitimate not_satisfied outcome");
+/*  ⚠ G11 ASSERTED THE OPPOSITE and was WRONG. It required the guard to
+ *  accept ANY head, reasoning that a `not_satisfied` evaluation is "a
+ *  judgement that was made". True, and beside the point: Release 0
+ *  governs COMPLETION, not whether somebody made a judgement. A1 in
+ *  falsify_containment.js showed the reader then reports a completed work
+ *  order as `not_satisfied` — a completion nothing can stand behind,
+ *  reached without ever touching missing_evaluation_defect. */
+ok("G11 a terminal work order requires a SATISFIED head, not merely a head",
+   /'satisfied'/.test(sql),
+   "the guard accepts any evaluation, so terminal + not_satisfied commits");
+
+/*  A2 — the invariant is CROSS-TABLE. A work_orders trigger cannot see an
+ *  evaluation appended later that flips the head out from under a
+ *  completed row. */
+ok("G12 …and it is also enforced from work_order_proof_evaluations",
+   /on\s+public\.work_order_proof_evaluations/i.test(sql),
+   "only work_orders is guarded, so the proof head can be changed after the " +
+   "completion has already passed the check");
+
+/*  A3 — the immutable inventory must not become a reusable licence. */
+ok("G13 …and inventoried legacy may not leave the terminal state",
+   /R0002/.test(sql),
+   "an inventoried row can be reopened and re-closed, laundering a NEW completion " +
+   "into `legacy_indeterminate` with no evaluation");
+
+/*  ── G14 · EVERY ACTIVATING HARNESS CARRIES THE GUARD ────────────────
+ *
+ *  `recordActivation` refuses without the guard (GUARD_ABSENT), so every
+ *  proof and falsification harness that activates has to install it. When
+ *  that precondition landed, ELEVEN harnesses needed the change and FOUR
+ *  were missed by hand — and the way they failed is the dangerous part:
+ *
+ *    · a PROOF harness dies with GUARD_ABSENT — loud, obvious
+ *    · a FALSIFICATION harness reports its variant as UNCAUGHT, because
+ *      the activation was stopped by the guard precondition instead of by
+ *      the assertion under test. It looks like a real finding.
+ *
+ *  The second is the failure this catches. A harness whose refusal comes
+ *  from the wrong place proves nothing and says nothing. */
+const toolsDir = path.join(ROOT, "tools");
+const walk = (d, out = []) => {
+  for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+    const p = path.join(d, e.name);
+    if (e.isDirectory()) walk(p, out);
+    else if (e.name.endsWith(".js")) out.push(p);
+  }
+  return out;
+};
+const activating = walk(toolsDir).filter((f) => {
+  const src = codeOf(f);
+  return /\brecordActivation\s*\(/.test(src) && !/guard_window\.js/.test(f);
+});
+/*  Two ways to satisfy this, both real: use the shared `guard_window`
+ *  helper, or apply migration 140 by name. The guard's OWN proofs do the
+ *  latter — they install, drop and reinstall it as the thing under test,
+ *  and routing that through a helper would put a layer between the proof
+ *  and the artefact it is proving. */
+const installsGuard = (src) =>
+  /guard_window/.test(src) || /140_post_activation_completion_guard/.test(src);
+const missing = activating
+  .filter((f) => !installsGuard(fs.readFileSync(f, "utf8")))
+  .map((f) => path.relative(ROOT, f));
+
+ok("G14 the scan found the harnesses that activate at all",
+   activating.length >= 5, activating.length + " file(s) call recordActivation");
+ok("G15 …and every one of them installs the containment guard",
+   missing.length === 0,
+   missing.join(", ") + "\n          → each of these will now be refused by the " +
+   "guard precondition rather than by whatever it is testing. Add " +
+   "`guardWindow.installGuard(client)` before the activation, and build any state " +
+   "the guard forbids inside `guardWindow.withGuardOff(...)`.");
 
 console.log(`\n  passed ${pass}   failed ${fail}`);
 console.log(fail === 0

@@ -37,6 +37,10 @@ const lifecycle = require(path.join(ROOT, "src/technician/lifecycle_service.js")
 const reader = require(path.join(ROOT, "src/surfaces/work_order_status_read.js"));
 const activation = require(path.join(ROOT, "src/release0/activation_service.js"));
 const F = require("./completion_facts.js");
+//  migration 140 REFUSES to let recordActivation run without it, so a
+//  harness that activates must install it. States the guard forbids are
+//  then built inside an explicit withGuardOff() window.
+const guardWindow = require("../step12/guard_window.js");
 const URL = process.env.STEP4_DATABASE_URL;
 
 let pass = 0, fail = 0;
@@ -76,6 +80,14 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
                  on conflict (id) do nothing`, [TECH]);
   await c.query(`insert into property_team_assignments (user_id,property_id,role_title,allowed_modules,active)
                  values ($1,$2,'Maintenance Tech',array['maintenance'],true)`, [TECH, PROP]);
+
+  /*  The rehearsal runs with production's own containment in place. Every
+   *  genuine completion below therefore also demonstrates that the
+   *  canonical writer commits cleanly UNDER migration 140 — and section H,
+   *  the hollow completion, is the one thing here that has to be built
+   *  with it explicitly off. */
+  await guardWindow.installGuard(c);
+  const forbidden = (why, fn) => guardWindow.withGuardOff(c, why, fn);
 
   const census = await activation.readLegacyTerminalSet(c);
   await c.query("begin");
@@ -237,8 +249,15 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
   sec("H · THE HOLLOW COMPLETION — EVERY SIGN, NO EVALUATION");
   {
     const wo = ID("hollow"), ce = ID("hollowce");
-    await c.query(`insert into work_orders (id,property_id,title,status,source)
-                   values ($1,$2,'hollow','complete','legacy')`, [wo, PROP]);
+    /*  Post-activation this insert is exactly what migration 140 refuses,
+     *  so the scenario Release 0 exists for now has to be manufactured
+     *  with the guard off. That is the strongest single statement of what
+     *  the guard is for — the fact set below still refuses it, and the
+     *  database now refuses it one layer earlier. */
+    await forbidden(
+      "H IS the hollow completion; post-activation the guard makes it uncommittable",
+      () => c.query(`insert into work_orders (id,property_id,title,status,source)
+                     values ($1,$2,'hollow','complete','legacy')`, [wo, PROP]));
     await c.query(`insert into obligations
                      (property_id,related_id,related_type,module,type,label,status,
                       completed_at,resolution_code)

@@ -36,6 +36,12 @@ const path = require("path");
 const crypto = require("crypto");
 const Module = require("module");
 const { Client } = require("pg");
+/*  Migration 140 REFUSES to let recordActivation run without it: a
+ *  guard detected missing AFTER an irreversible act is useless. So a
+ *  harness that activates must install it first. It is inert until the
+ *  activation lands, so it changes nothing about what is proven here. */
+const guardWindow = require("../step12/guard_window.js");
+
 
 const ROOT = path.join(__dirname, "..", "..");
 const SERVICE = path.join(ROOT, "src/release0/activation_service.js");
@@ -147,6 +153,12 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
 
   const V = VARIANTS[VARIANT];
   console.log(`STEP 7 FALSIFICATION — variant "${VARIANT}"\n`);
+
+  /*  The guard the ACTIVATION now requires. Without it every activation
+   *  in this file refuses with GUARD_ABSENT, and a falsification harness
+   *  whose variant is stopped by the WRONG thing proves nothing about
+   *  the variant. It is inert until an activation exists. */
+  await guardWindow.installGuard(c);
   console.log("  breaks:  " + V.what);
   console.log("  targets: " + V.breaks + "\n");
 

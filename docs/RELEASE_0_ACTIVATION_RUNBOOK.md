@@ -174,11 +174,12 @@ boundary 8 persists it.
 
 **This is the containment boundary, and its ordering is the whole point.**
 
-After the cutover, any writer that makes a work order terminal without an
-evaluation manufactures a `missing_evaluation_defect` — an obligation against a
-named role for something the system did. Step 6 closes the one legacy path we know
-about; it cannot close the 67 write-capable unguarded scripts, a `psql` session, or
-a route nobody has written yet. Migration 140 refuses all of them at the database.
+After the cutover, a work order that is terminal without a `satisfied` evaluation is
+a completion the system cannot stand behind — and, for the unevaluated case, an
+obligation raised against a named role for something no human did wrong. Step 6
+closes the one legacy path we know about; it cannot close the 67 write-capable
+unguarded scripts, a `psql` session, or a route nobody has written yet. Migration
+140 refuses all of them at the database, at commit time.
 
 **It is INERT until an activation exists**, so it is safe to apply at any time and
 changes nothing today. That is exactly why it must go **before** boundary 8: the
@@ -192,15 +193,43 @@ MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=<what the ledger says now> \
 **Verify** — `where_are_we.js` reports `migration 140 · completion guard` as
 installed, and treats *activation without the guard* as a stop condition.
 
-**Stop** — do not proceed to boundary 8 until it reads installed.
+**Stop — and this one is enforced, not advisory.** `recordActivation` calls
+`assertContainmentGuardPresent` and **refuses to activate** unless the function
+body still carries every clause the invariant needs and all three constraint
+triggers are still `DEFERRABLE INITIALLY DEFERRED` (`GUARD_ABSENT` / `GUARD_STALE`).
+Detecting a missing guard after an irreversible act is useless.
 
-**Reversible** — yes, by `DROP TRIGGER`, which is deliberate and auditable. There
-is no session flag or bypass: a bypass a utility script can set is not a guarantee.
+**Reversible** — yes, by `DROP TRIGGER`. Measured rather than assumed: a
+**non-superuser that owns `work_orders` CAN drop these triggers**. The honest claim
+is *accidental DML bypass prevented; privileged DDL remains an auditable escape* —
+and the precondition above is what makes a dropped guard fail the one irreversible
+act instead of passing quietly.
 
-**Consequence worth knowing:** with the guard live at activation, the §4.2 defect
-population is empty by construction. **The sweep becomes an audit that the guard
-held, not routine cleanup** — so a non-empty result is a signal to investigate, not
-a queue to work through.
+### ⚠ READ THE LIVE `status` VOCABULARY HERE — read-only
+
+`work_orders.status` is `text` with **no CHECK constraint**. The terminal set
+(`complete`, `closed`) is derived from *shipped source*, and
+`tests/gate_work_order_status_vocabulary.js` keeps source from drifting. It cannot
+tell you what production data actually contains.
+
+```sql
+select status, count(*) from work_orders group by status order by 2 desc;
+```
+
+- Every value must be one of `open · scheduled · needs_followup · closed · complete`.
+- **Any other value → STOP and classify it before boundary 8.** If it means the work
+  is finished, it belongs in migration 140's terminal set and in the reader's
+  `TERMINAL_STATUSES`, or that completion escapes Release 0 entirely.
+- If the vocabulary comes back clean, a `NOT VALID` CHECK constraint pinning it
+  becomes the right follow-up. It is deliberately **not** applied before this read:
+  a constraint built on an assumed vocabulary would start refusing ordinary writes.
+
+**Consequence worth knowing:** with the guard live at activation, ordinary DML can no
+longer add to the §4.2 defect population. That is a claim about the guard, not a fact
+about the data — the population can still be non-empty if the guard was deployed
+late, dropped, or bypassed by DDL. **So the sweep is an audit that the guard held,
+not routine cleanup** — a non-empty result is a signal to investigate, not a queue to
+work through.
 
 ---
 
@@ -218,12 +247,23 @@ an **exact-set comparison in both directions** inside it. Proven in isolation:
 `prove_step7_activation.js` 37/37, `prove_step7_concurrency.js` 11/11, three
 falsification variants.
 
+**It takes `SHARE ROW EXCLUSIVE` on `work_orders` first**, with a 5s `lock_timeout`.
+This is not tidiness. A transaction that **began before** the activation and commits
+after it reads through its own frozen snapshot, never sees the activation row, and so
+slips past the guard entirely — proven at `REPEATABLE READ` (`A4`). No `SELECT`
+escapes its own snapshot, so it cannot be fixed inside the trigger; it is closed here,
+by refusing to open the window underneath an in-flight writer.
+
 **Stop conditions**
 
 - Census set ≠ expected set, in **either** direction → the transaction refuses. Do
   not widen the comparison; re-census and find out what moved.
 - Any legacy `closed` row created after the instant → boundary 7 is not actually
   closed. Stop and fix that first.
+- `GUARD_ABSENT` / `GUARD_STALE` → boundary 7b is not really in place. Do not
+  re-run until it is.
+- `WRITERS_IN_FLIGHT` → a transaction is holding `work_orders`. **Retry**; do not
+  reduce the lock. This refusal is the straddling-transaction hole being closed.
 
 **Reversible — NO. This is the irreversible boundary.** `release_0_activation_history`
 and `release_0_legacy_cutover_inventory` are append-only with `forbid_mutation`
