@@ -55,6 +55,33 @@ const lifecycle = require(path.join(ROOT, "src/technician/lifecycle_service.js")
 const staffSessions = require(path.join(ROOT, "src/identity/staff_session_service.js"));
 const URL = process.env.STEP10_DATABASE_URL;
 
+/*  ── THE CONTRACT CAPTURE ────────────────────────────────────────────
+ *  The app's presentation harness mirrors this API's projection BY HAND,
+ *  and says so: "a fixture that drifts from the server projection proves
+ *  the fixture." This closes that gap. Every case below is lifted from a
+ *  response that came off a real socket, and the app consumes THESE.
+ *
+ *  Only deterministic fields travel. Ids and timestamps would make the
+ *  capture differ on every run, and a capture that always differs cannot
+ *  detect drift — which is the one thing it exists to do.
+ *
+ *  KEY ABSENCE IS PRESERVED. `state` and `satisfied` missing on an
+ *  unavailable read is the contract, so the capture copies keys that are
+ *  present rather than reading a fixed list. */
+const CAPTURE_KEYS = ["required", "read_status", "reason_code", "state", "satisfied",
+                      "legacy_evidence", "preserved_count", "not_preserved_count"];
+const CAPTURE = { cases: {} };
+function capture(name, body, source) {
+  const p = {};
+  for (const k of CAPTURE_KEYS) if (k in body.proof) p[k] = body.proof[k];
+  CAPTURE.cases[name] = {
+    source, lifecycle_state: body.current.state, next_action: body.next_action, proof: p,
+  };
+}
+const CAPTURE_FILE = path.join(ROOT, "docs/release0/http_contract_capture.json");
+const APP_CAPTURE = path.join(ROOT, "..", "property-spine-app", "release0_api_contract_capture.json");
+const WRITE = process.argv.includes("--write-capture");
+
 let pass = 0, fail = 0;
 const ok = (l, c, d) => { if (c) { pass++; console.log("  ok    " + l); }
   else { fail++; console.log("  FAIL  " + l + (d ? "\n          → " + d : "")); } return c; };
@@ -263,6 +290,10 @@ function request(port, method, urlPath, { session, body } = {}) {
     ok("U9  …and no row anywhere in the list fabricated a state",
        !/missing_evaluation_defect|legacy_indeterminate/.test(l.raw), l.raw.slice(0, 300));
 
+    capture("unavailable_detail", d.body, "detail");
+    capture("unavailable_list", { proof: l.body.work_orders[0].proof,
+      current: l.body.work_orders[0].current, next_action: l.body.work_orders[0].next_action }, "list");
+
     //  ── AND NOTHING DOWNSTREAM INVENTS AN INSTRUCTION ──────────────
     //  `next_action` is the one field derived FROM the proof block, and it
     //  is what the app prints under "what happens next". A read that did
@@ -287,6 +318,7 @@ function request(port, method, urlPath, { session, body } = {}) {
     ok("U13  …and the list says exactly the same thing",
        (await list()).body.work_orders.find((w) => w.work_order.id === WO_CLAIMED)
          .next_action === claimed.body.next_action);
+    capture("completion_claimed_unavailable", claimed.body, "detail");
 
     //  The OTHER failure — the read itself throwing — is asserted in §F
     //  below, AFTER activation. It has to be: with no activation the
@@ -316,9 +348,14 @@ function request(port, method, urlPath, { session, body } = {}) {
     [WO_DEFECT, "missing_evaluation_defect", null],
   ];
   {
+    const listNow = (await list()).body.work_orders;
     for (const [wo, state, satisfied] of EXPECTED) {
       // eslint-disable-next-line no-await-in-loop
       const d = await detail(wo);
+      capture(state + "_detail", d.body, "detail");
+      const row = listNow.find((w) => w.work_order.id === wo);
+      if (row) capture(state + "_list",
+        { proof: row.proof, current: row.current, next_action: row.next_action }, "list");
       ok(`H·${state.padEnd(25)} arrives over HTTP with satisfied=${JSON.stringify(satisfied)}`,
          d.status === 200 && d.body.proof.read_status === "ok" &&
          d.body.proof.state === state && d.body.proof.satisfied === satisfied,
@@ -349,6 +386,7 @@ function request(port, method, urlPath, { session, body } = {}) {
        /photo/i.test(String(claimedLive.body.next_action)),
        JSON.stringify({ rs: claimedLive.body.proof.read_status,
                         next: claimedLive.body.next_action }));
+    capture("completion_claimed_live", claimedLive.body, "detail");
     await photo(WO_CLAIMED);
     await evaluate(WO_CLAIMED, "satisfied");
     const closable = await detail(WO_CLAIMED);
@@ -356,6 +394,7 @@ function request(port, method, urlPath, { session, body } = {}) {
        closable.body.proof.state === "satisfied" &&
        /close out/i.test(String(closable.body.next_action)),
        JSON.stringify({ s: closable.body.proof.state, next: closable.body.next_action }));
+    capture("completion_claimed_satisfied", closable.body, "detail");
 
     //  No fifth value, anywhere on the wire.
     const l = await list();
@@ -597,6 +636,75 @@ function request(port, method, urlPath, { session, body } = {}) {
       `select count(*) n from work_order_proof_evaluations where property_id=$1`, [PROP])).rows[0].n);
     ok("W1  replaying every read route changed no progress row", rows === rows2, `${rows} → ${rows2}`);
     ok("W2  …and created no proof evaluation", evs === evs2, `${evs} → ${evs2}`);
+  }
+
+  // ══ C — THE CONTRACT CAPTURE, AND DRIFT ════════════════════════════
+  sec("C · THE CAPTURE THE APP CONSUMES");
+  {
+    const expectedCases = [
+      "unavailable_detail", "unavailable_list", "completion_claimed_unavailable",
+      "completion_claimed_live", "completion_claimed_satisfied",
+      ...proofState.PROOF_STATES.flatMap((s) => [s + "_detail", s + "_list"]),
+    ];
+    const missing = expectedCases.filter((k) => !(k in CAPTURE.cases));
+    ok("C1  every contract case the app needs was captured from a real response",
+       missing.length === 0, "missing: " + missing.join(", "));
+
+    //  Provenance, so a reader of the file knows what produced it and at
+    //  which schema. Nothing volatile: a capture that differs every run
+    //  cannot detect drift, which is the only thing it exists to do.
+    CAPTURE.provenance = {
+      produced_by: "tools/step10/prove_http_acceptance.js",
+      via: "real HTTP against the real Express mount",
+      schema_ledger: (await c.query(`select max(version) v from schema_migrations`)).rows[0].v,
+      migrations_applied_beyond_ledger: ["138", "139"],
+      note: "Deterministic fields only. Key ABSENCE is meaningful: `state` and " +
+            "`satisfied` are missing on an unavailable read, and that is the contract.",
+    };
+    /*  Sorted case keys so the file is stable regardless of the order the
+     *  sections ran in. `null` replacer, deliberately: an ARRAY replacer is
+     *  a RECURSIVE key allow-list, not an ordering hint — an earlier
+     *  revision passed one and every nested object serialized as `{}`. Both
+     *  files then matched, because both were empty, and C2/C3 went green
+     *  over a capture containing nothing. C0 below exists because of that. */
+    const ordered = { provenance: CAPTURE.provenance, cases: {} };
+    for (const k of Object.keys(CAPTURE.cases).sort()) ordered.cases[k] = CAPTURE.cases[k];
+    const serialized = JSON.stringify(ordered, null, 2) + "\n";
+
+    ok("C0  the serialized capture actually carries the contract, so C2/C3 are not vacuous",
+       proofState.PROOF_STATES.every((s) => serialized.includes(`"${s}"`)) &&
+       serialized.includes('"read_status": "unavailable"') && serialized.length > 1500,
+       "serialized " + serialized.length + " bytes: " + serialized.slice(0, 200));
+
+    if (WRITE) {
+      fs.mkdirSync(path.dirname(CAPTURE_FILE), { recursive: true });
+      fs.writeFileSync(CAPTURE_FILE, serialized);
+      if (fs.existsSync(path.dirname(APP_CAPTURE))) fs.writeFileSync(APP_CAPTURE, serialized);
+      console.log("  (--write-capture: capture regenerated)");
+    }
+
+    const onDisk = fs.existsSync(CAPTURE_FILE) ? fs.readFileSync(CAPTURE_FILE, "utf8") : null;
+    ok("C2  the committed capture matches what the API just emitted",
+       onDisk === serialized,
+       onDisk === null ? "no capture committed — run with --write-capture"
+         : "THE CONTRACT MOVED AND THE CAPTURE DID NOT. Re-run with " +
+           "--write-capture and re-read the app harness before committing.");
+
+    /*  ── THE CROSS-REPO CHECK ──────────────────────────────────────
+     *  The app's presentation harness mirrors this projection by hand and
+     *  names the risk itself: a fixture that drifts proves the fixture.
+     *  So the app's copy is compared to what came off the socket. When
+     *  the app repo is not checked out this is SKIPPED and SAID — a
+     *  silent skip is how a stale fixture survives. */
+    if (fs.existsSync(path.dirname(APP_CAPTURE))) {
+      const appDisk = fs.existsSync(APP_CAPTURE) ? fs.readFileSync(APP_CAPTURE, "utf8") : null;
+      ok("C3  the APP's copy is byte-identical to the API's — no cross-repo drift",
+         appDisk === serialized,
+         appDisk === null ? "the app has no capture — run with --write-capture"
+           : "the app is consuming a contract this API no longer emits");
+    } else {
+      console.log("  skip  C3  the app repo is not checked out here — cross-repo drift NOT checked");
+    }
   }
 
   sec("VERDICT");
