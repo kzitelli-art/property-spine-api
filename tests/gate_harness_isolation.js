@@ -81,6 +81,8 @@ const PRODUCTION_APPROVED = [
     reason: "Release 0 Gate 4 — verifies the tester identity and work order 1006 in PRODUCTION via the production resolver (resolveStaffSenderForOrganization), because the fixture being verified only exists there; proves it cannot write before any read; never prints the phone" },
   { file: "tools/activation/evidence_ingress_proof.js",
     reason: "Release 0 Gate 8/10 — verifies the real-handset evidence row and completion safety in PRODUCTION, bound to a T0-plus-tester-plus-line window; proves it cannot write before any read; prints receipt fields, never the phone, media URL, or image bytes" },
+  { file: "tools/activation/find_collision_free_tester.js",
+    reason: "Release 0 tester search — must read PRODUCTION staff, leases and leads to find an alternate tester whose phone carries no reachable resident/prospect identity, since routing around an identity collision is what avoids mutating unrelated leasing data; uses the production predicates (eligibleTechnicians, resolveStaffSenderForOrganization, the two inbound reachability tiers) rather than an FK inventory; proves it cannot write before any read; phones appear only as ****last4" },
   { file: "tools/activation/release0_final_receipt.js",
     reason: "Release 0 Gate 10 — generates the final evidence-ingress receipt by RE-DERIVING every database fact live in PRODUCTION with the same bindings the gate tools use (pasted output is never trusted); proves it cannot write before any read; refuses unless every NAMED fact is present — no green-count verdicts; never prints phone, e164, media URL, image bytes, or credentials; falsified 15 refusal cases in gate_tools_falsify.sh" },
   { file: "tools/activation/supersede_operations_line.js",

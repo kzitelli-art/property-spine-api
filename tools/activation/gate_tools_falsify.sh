@@ -182,6 +182,79 @@ psql "$DB" -q -c "delete from tenant_invites where id='9d000000-0000-0000-0000-0
                   delete from units where id='9e000000-0000-0000-0000-00000000009e';
                   delete from persons where id='99999999-0000-0000-0000-000000000099';"
 
+# ════ TESTER SEARCH ═══════════════════════════════════════════════════
+#  The route AROUND an identity collision, rather than through production
+#  data. Every control here pins the difference between "eligible" and
+#  "collision-free", and between "usable" and "already the assignee".
+echo
+echo "TESTER SEARCH — find_collision_free_tester"
+
+#  Tia is eligible and clean; Oscar is eligible but has no team assignment
+#  at the property, so the picker never offers him. One clean candidate.
+expect 0 "TS-1  a clean eligible technician is FOUND" \
+  node tools/activation/find_collision_free_tester.js
+grep -q "CANDIDATE FOUND" /tmp/gate_falsify_last.log \
+  && { PASS=$((PASS+1)); echo "  ok    TS-1b and it says so explicitly"; } \
+  || { FAIL=$((FAIL+1)); echo "  FAIL  TS-1b no CANDIDATE FOUND banner"; }
+
+#  A DORMANT same-phone person must NOT disqualify — that is the whole
+#  H-1 correction, restated here so the two tools cannot drift apart.
+psql "$DB" -q -c "insert into persons (id,name,phone,source) values ('99999999-0000-0000-0000-000000000099','Rita Dormant','+15415550111','boardroom_demo');"
+expect 0 "TS-2  a DORMANT same-phone person does not disqualify" \
+  node tools/activation/find_collision_free_tester.js
+grep -q "dormant same-phone person record" /tmp/gate_falsify_last.log \
+  && { PASS=$((PASS+1)); echo "  ok    TS-2b and the dormant record is reported anyway"; } \
+  || { FAIL=$((FAIL+1)); echo "  FAIL  TS-2b dormant record not surfaced"; }
+
+#  Give that person an OPEN lead and the candidate is no longer clean.
+#  With no other eligible technician, the tool must BLOCK — not fall back
+#  to "closest available", which is how a proof quietly runs on the wrong
+#  identity.
+psql "$DB" -q -v ON_ERROR_STOP=1 -c "insert into leasing_leads (id,person_id,property_id,status,received_at,import_mode)
+  values ('9a000000-0000-0000-0000-00000000009a','99999999-0000-0000-0000-000000000099','bbbbbbbb-0000-0000-0000-00000000000b','tour_scheduled',now(),'live');"
+expect 1 "TS-3  the ONLY candidate becomes reachable → BLOCKED, no fallback" \
+  node tools/activation/find_collision_free_tester.js
+grep -q "RELEASE 0 TESTER IDENTITY BLOCKED" /tmp/gate_falsify_last.log \
+  && { PASS=$((PASS+1)); echo "  ok    TS-3b returns the exact BLOCKED verdict"; } \
+  || { FAIL=$((FAIL+1)); echo "  FAIL  TS-3b wrong or missing blocked verdict"; }
+
+#  A SECOND eligible technician on a clean phone rescues it — proving the
+#  block was about the collision and not about the search being broken.
+psql "$DB" -q -v ON_ERROR_STOP=1 -c "insert into users (id,name,phone,role,is_active) values ('cccccccc-0000-0000-0000-0000000000c3','Nina Clean','+15415550222','maintenance',true);
+  insert into property_team_assignments (user_id,property_id,role_title,active) values ('cccccccc-0000-0000-0000-0000000000c3','bbbbbbbb-0000-0000-0000-00000000000b','Maintenance Tech',true);"
+expect 0 "TS-4  a second CLEAN eligible technician is found instead" \
+  node tools/activation/find_collision_free_tester.js
+grep -q "Nina Clean" /tmp/gate_falsify_last.log \
+  && { PASS=$((PASS+1)); echo "  ok    TS-4b and it is the clean one that is offered"; } \
+  || { FAIL=$((FAIL+1)); echo "  FAIL  TS-4b clean candidate not offered"; }
+
+#  A technician with NO phone cannot receive an attributed inbound.
+psql "$DB" -q -c "update users set phone=null where id='cccccccc-0000-0000-0000-0000000000c3';"
+expect 1 "TS-5  a phoneless technician is not a tester → BLOCKED again" \
+  node tools/activation/find_collision_free_tester.js
+psql "$DB" -q -c "update users set phone='+15415550222' where id='cccccccc-0000-0000-0000-0000000000c3';"
+
+#  ALREADY-ASSIGNED is not usable: assignWork short-circuits on an
+#  unchanged assignee and writes no event, so it cannot produce a freshly
+#  attributed receipt.
+psql "$DB" -q -c "delete from leasing_leads where id='9a000000-0000-0000-0000-00000000009a';
+                  delete from property_team_assignments where user_id='cccccccc-0000-0000-0000-0000000000c3';
+                  delete from users where id='cccccccc-0000-0000-0000-0000000000c3';
+                  update obligations set assigned_user_id='cccccccc-0000-0000-0000-00000000000c' where id='ffffffff-0000-0000-0000-00000000000f';"
+expect 1 "TS-6  the only clean candidate is ALREADY the assignee → BLOCKED" \
+  node tools/activation/find_collision_free_tester.js
+grep -qi "already the assignee" /tmp/gate_falsify_last.log \
+  && { PASS=$((PASS+1)); echo "  ok    TS-6b and it names the unchanged-assignee reason"; } \
+  || { FAIL=$((FAIL+1)); echo "  FAIL  TS-6b did not explain the no-event short-circuit"; }
+
+#  Restore the fixture for the gates that follow.
+psql "$DB" -q -c "update obligations set assigned_user_id=null, ownership_origin=null where id='ffffffff-0000-0000-0000-00000000000f';
+                  delete from persons where id='99999999-0000-0000-0000-000000000099';"
+RESTORED=$(psql "$DB" -tAc "select count(*) from obligations where id='ffffffff-0000-0000-0000-00000000000f' and assigned_user_id is null" | tr -d ' ')
+if [ "$RESTORED" = "1" ]; then PASS=$((PASS+1)); echo "  ok    TS-7  fixture restored UNASSIGNED for the gates that follow";
+else FAIL=$((FAIL+1)); echo "  FAIL  TS-7  fixture NOT restored — later gates would prove nothing"; fi
+
+
 expect 1 "G4-4  --post before any assignment REFUSES" \
   node tools/activation/technician_fixture_proof.js --post
 
