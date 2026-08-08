@@ -43,9 +43,11 @@ const { Pool } = require("pg");
 const ROOT = path.join(__dirname, "..", "..");
 const MAINT = path.join(ROOT, "src/maintenance/maintenance.js");
 const READER = path.join(ROOT, "src/surfaces/work_order_status_read.js");
+const PROOF_STATE = path.join(ROOT, "src/release0/proof_state.js");
 const URL = process.env.FALSIFY10_DATABASE_URL;
 const DIGEST = (f) => crypto.createHash("sha256").update(fs.readFileSync(f)).digest("hex");
 const MAINT_DIGEST = DIGEST(MAINT), READER_DIGEST = DIGEST(READER);
+const PS_DIGEST = DIGEST(PROOF_STATE);
 
 const argIdx = process.argv.indexOf("--variant");
 const VARIANT = argIdx > -1 ? process.argv[argIdx + 1] : null;
@@ -57,15 +59,43 @@ const VARIANTS = {
    *  two different situations as one. */
   "list-drops-state": {
     file: READER,
-    what: "the list projection carries only `satisfied`, not `state`",
+    what: "the list projection stops carrying `state`",
     breaks: "L1/L2/L4 — the board and the detail disagree again",
     edits: [{
       from: `                 ...(s.proof.read_status === "ok"
-                   ? { state: s.proof.state, satisfied: s.proof.satisfied }
+                   ? { state: s.proof.state }
                    : { reason_code: s.proof.reason_code }),`,
       to: `                 ...(s.proof.read_status === "ok"
-                   ? { satisfied: s.proof.satisfied }
+                   ? {}
                    : { reason_code: s.proof.reason_code }),`,
+    }],
+  },
+
+  /*  THE CLEANUP RELEASE, UNDONE. Putting `satisfied` back on the wire is
+   *  not harmless: it re-creates the second source of truth the removal
+   *  exists to end, and every consumer that has moved to `state` now has
+   *  a field it must ignore but can still be tempted to read. */
+  "satisfied-back-on-the-wire": {
+    file: PROOF_STATE,
+    what: "the retired compatibility field is emitted again",
+    breaks: "H·retired + H·<state> — `satisfied` must appear nowhere",
+    edits: [{
+      from: `    return { read_status: "ok", state: head.state };`,
+      to: `    return { read_status: "ok", state: head.state, satisfied: SATISFIED_FOR[head.state] };`,
+    }],
+  },
+
+  /*  THE OTHER DIRECTION, AND THE WORSE ONE. Removing the FIELD is the
+   *  release; removing the MEANING destroys the contract. If the mapping
+   *  stops being exported, every consumer deriving a boolean from `state`
+   *  has nothing to derive it from. */
+  "mapping-deleted": {
+    file: PROOF_STATE,
+    what: "the frozen §3.4 mapping stops being exported",
+    breaks: "the consumer contract itself — `state` becomes underivable",
+    edits: [{
+      from: `  PROOF_STATES, TERMINAL_STATUSES, SATISFIED_FOR,`,
+      to: `  PROOF_STATES, TERMINAL_STATUSES,`,
     }],
   },
 
@@ -285,14 +315,42 @@ function request(port, method, urlPath, session) {
        JSON.stringify(l.map((w) => Object.keys(w.proof))));
     const legacyRow = l.find((w) => w.work_order.id === WO_LEGACY);
     const defectRow = l.find((w) => w.work_order.id === WO_DEFECT);
-    ok("V2  …and the board can no longer tell legacy from a writer defect",
-       legacyRow.proof.satisfied === null && defectRow.proof.satisfied === null &&
-       legacyRow.proof.state === undefined && defectRow.proof.state === undefined,
+    /*  Post-removal the list has NOTHING left once `state` goes: the
+     *  compatibility field it used to fall back on is retired. So the
+     *  board cannot distinguish legacy from a writer defect, and cannot
+     *  describe either one at all. */
+    ok("V2  …and the board is left with no proof verdict whatsoever",
+       legacyRow.proof.state === undefined && defectRow.proof.state === undefined &&
+       !("satisfied" in legacyRow.proof) && !("satisfied" in defectRow.proof),
        JSON.stringify({ legacy: legacyRow.proof, defect: defectRow.proof }));
     const d = await request(port, "GET", `/operator/work-orders/${WO_DEFECT}/status`, SESSION);
     ok("V3  …while the DETAIL still knows — the two routes now disagree, so L2 goes RED",
        d.body.proof.state === "missing_evaluation_defect" && defectRow.proof.state === undefined,
        JSON.stringify({ detail: d.body.proof.state, list: defectRow.proof.state }));
+  }
+
+  if (VARIANT === "satisfied-back-on-the-wire") {
+    const d = await request(port, "GET", `/operator/work-orders/${WO_SAT}/status`, SESSION);
+    ok("V1  the retired field is on the wire again — H·retired goes RED",
+       "satisfied" in d.body.proof && /"satisfied"\s*:/.test(d.raw),
+       JSON.stringify(d.body.proof));
+    ok("V2  …so there are two sources of truth for one verdict again",
+       d.body.proof.state === "satisfied" && d.body.proof.satisfied === true,
+       JSON.stringify({ state: d.body.proof.state, satisfied: d.body.proof.satisfied }) +
+       " — a consumer can now read either, and they can drift");
+  }
+
+  if (VARIANT === "mapping-deleted") {
+    const ps = require(PROOF_STATE);
+    ok("V1  the frozen mapping is no longer exported", ps.SATISFIED_FOR === undefined,
+       JSON.stringify(ps.SATISFIED_FOR));
+    const d = await request(port, "GET", `/operator/work-orders/${WO_SAT}/status`, SESSION);
+    ok("V2  …the wire still carries `state`, so the API looks fine",
+       d.status === 200 && d.body.proof.state === "satisfied",
+       JSON.stringify(d.body.proof));
+    ok("V3  …but nothing can derive the boolean from it any more",
+       (ps.SATISFIED_FOR || {})[d.body.proof.state] === undefined,
+       "the removal took the MEANING with the FIELD — that is not this release");
   }
 
   if (VARIANT === "next-action-from-satisfied") {
@@ -343,6 +401,8 @@ function request(port, method, urlPath, session) {
      DIGEST(MAINT) === MAINT_DIGEST, "the falsification EDITED THE SOURCE. Restore it.");
   ok("Z2  work_order_status_read.js is byte-identical to before this run",
      DIGEST(READER) === READER_DIGEST, "the falsification EDITED THE SOURCE. Restore it.");
+  ok("Z3  proof_state.js is byte-identical to before this run",
+     DIGEST(PROOF_STATE) === PS_DIGEST, "the falsification EDITED THE SOURCE. Restore it.");
 
   console.log(`\n  passed ${pass}   failed ${fail}`);
   console.log(pass > 0 && fail === 0
