@@ -54,6 +54,12 @@ const GATES = [
   //  maintenance action anonymous for as long as it was there.
   { file: "gate_operator_session_fields.js",
     what: "no req.operator read of a field the staff session does not define" },
+  //  Steps 2–3 candidates. Both are source-only and DB-free, so they
+  //  belong on the standard path rather than in a harness nobody runs.
+  { file: "gate_migration_137_promotion.js",
+    what: "migration 137 DDL is the proven scale payload, unchanged" },
+  { file: "gate_completion_writers.js",
+    what: "exactly the expected work-order completion writers; no third writer" },
   //  The conversational seams. DB-free, so they belong on the standard path:
   //  they check that the extracted logic has ONE implementation, that resident
   //  wording did not drift, and that an operating receipt and a delivery
