@@ -1,6 +1,9 @@
 # Release 0 — completion truth, enforced at commit (migration 140)
 
 **⛔ BUILD-AHEAD. Not applied to production.**
+**🔒 FROZEN at revision 4** — digests pinned in `docs/release0/FROZEN_ARTIFACTS.json`,
+enforced by `tests/gate_release0_frozen.js`. Changing any frozen artifact requires
+re-running the falsification package and updating the digest in the same commit.
 
 **REVISION 4.** Every revision was broken by measurement, not opinion.
 
@@ -515,14 +518,30 @@ not by count.
 **Empty is the expected answer.** A row means the guard was dropped, deployed
 late, or bypassed by privileged DDL.
 
-⚠ **Open question for the owner, surfaced rather than decided.** The §4.2 sweep
-raises `proof_evaluation_missing` obligations for one violation class —
-terminal-and-unevaluated. This view reports four: that one, plus
-`terminal_on_failed_evaluation`, `terminal_on_ungrounded_evaluation` and
-`closed_after_cutover`. Pointing the sweep at the view would make it raise
-obligations **against named humans** for three new categories, which is a change
-to §4.2's frozen semantics and a product decision, not an engineering one. The
-view and the sweep are therefore cross-checked, not merged.
+### The sweep ruling — settled
+
+**Do not point the §4.2 sweep at all four violation classes.** Keep its frozen
+semantics narrow.
+
+> **Do not turn system-integrity failures into new human accountability
+> categories.**
+
+The audit view reports four ways the invariant can be violated. That does not mean
+the sweep should create four kinds of employee obligation. After migration 140,
+three of those states are **structurally unreachable through ordinary governed
+operation**. If one appears, it is evidence that the system boundary failed, was
+bypassed, or was administratively altered — a guard failure, a privileged bypass,
+a bad deployment, another architecture defect. That must hard-red the integrity
+audit and trigger investigation. It must not quietly become somebody's task.
+
+| | job | consumer |
+|---|---|---|
+| `release_0_completion_invariant_violations` | integrity / audit truth · **any non-empty result is a hard red** | release + runtime instrumentation, investigate the boundary |
+| §4.2 sweep | **only** `terminal_without_evaluation`, the defect class it was designed for | raises one obligation, against a named role |
+
+Release 0 does not invent three new accountability categories. The two are
+cross-checked — `prove_release0_composed` P11 asserts the view and the canonical
+reader name the same rows — and deliberately not merged.
 
 ---
 
@@ -618,3 +637,25 @@ which is a different mechanism and is enumerated in §0 C2.
 `138`/`139` are Release 0's; so is this, so it takes **`140`**, moving the text-line
 silo to `141`. Flagged because the earlier rule said "the next unrelated migration
 starts at 140" — this one is not unrelated.
+
+
+---
+
+## 11 · Parked, deliberately — not solved here
+
+**Retention, privacy and storage lifecycle.** The whole-row freeze on cited
+evidence is correct for Release 0: proof that justified a governed decision must
+remain intact. It also means a `repair_photo` cited by a completion **cannot be
+deleted or redacted** by ordinary means, and the bytes live in
+`work_order_proof_attachments.content`.
+
+That is a real future concern — retention windows, a deletion request, storage
+growth, moving bytes out of the row — and it is **parked, not overlooked**. It is
+not solved inside Release 0 because a retention mechanism that can erase evidence
+is exactly the mechanism this migration exists to prevent, and designing both at
+once would produce a compromise of each.
+
+When it is taken up, the shape it has to respect: **redaction is new truth, not a
+rewrite.** Whatever replaces the bytes must leave the historical record saying that
+evidence existed, what it was, and that it was deliberately removed — the same
+doctrine, applied to a different verb.

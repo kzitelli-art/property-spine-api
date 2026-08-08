@@ -53,6 +53,13 @@ const GATES = [
    *  tree still contains an unresolved merge. */
   { file: "gate_no_conflict_markers.js",
     what: "no unresolved merge markers in any tracked file" },
+  //  SECOND. tools/step12/* is evidence ABOUT SPECIFIC BYTES — seven
+  //  measured attacks broke revisions 1-3 of migration 140. A changed
+  //  predicate makes every later green run evidence about something else,
+  //  silently. Re-running the package and updating the digest is easy and
+  //  meant to be; updating the digest WITHOUT re-running is what this stops.
+  { file: "gate_release0_frozen.js",
+    what: "the frozen Release 0 artifacts still match their pinned digests" },
   { file: "gate_harness_isolation.js",
     what: "no new unguarded DATABASE_URL consumer; debt register accurate" },
   { file: "gate_closure_boundary.js",
