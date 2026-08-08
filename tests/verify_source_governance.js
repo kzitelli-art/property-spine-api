@@ -54,6 +54,14 @@ const GATES = [
   //  maintenance action anonymous for as long as it was there.
   { file: "gate_operator_session_fields.js",
     what: "no req.operator read of a field the staff session does not define" },
+  //  Step 2. Source-only and DB-free, so it belongs on the standard path
+  //  rather than in a harness nobody runs.
+  //  The writer gate (gate_completion_writers.js) is deliberately NOT here:
+  //  it asserts that lifecycle_service records a proof evaluation, which is
+  //  Step 3's change. Registering it now would fail on a branch that has no
+  //  writer — and a gate that must be disabled to pass is not a gate.
+  { file: "gate_migration_137_promotion.js",
+    what: "migration 137 DDL is the proven scale payload, unchanged" },
   //  The conversational seams. DB-free, so they belong on the standard path:
   //  they check that the extracted logic has ONE implementation, that resident
   //  wording did not drift, and that an operating receipt and a delivery
