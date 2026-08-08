@@ -45,6 +45,9 @@ const TRIGGERS = [
    *  window had not named. */
   ["freeze_cited_evidence_upd", "work_order_proof_attachments"],
   ["freeze_cited_evidence_del", "work_order_proof_attachments"],
+  //  E1's epoch freeze is 140's too. A window that leaves it on is the same
+  //  half-truth the evidence freeze was before it was added here.
+  ["freeze_activation_epoch", "release_0_activation_epoch"],
 ];
 
 /** Apply migration 140. Idempotent — it drops and recreates. */

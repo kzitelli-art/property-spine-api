@@ -1,18 +1,19 @@
 # Release 0 — completion truth, enforced at commit (migration 140)
 
 **⛔ BUILD-AHEAD. Not applied to production.**
-**🔒 FROZEN at revision 4** — digests pinned in `docs/release0/FROZEN_ARTIFACTS.json`,
+**🔒 FROZEN at revision 5** — digests pinned in `docs/release0/FROZEN_ARTIFACTS.json`,
 enforced by `tests/gate_release0_frozen.js`. Changing any frozen artifact requires
 re-running the falsification package and updating the digest in the same commit.
 
-**REVISION 4.** Every revision was broken by measurement, not opinion.
+**REVISION 5.** Every revision was broken by measurement, not opinion.
 
 | | enforced | broken by |
 |---|---|---|
 | rev 1 | "not the `missing_evaluation_defect` state" | 4 attacks (`falsify_containment.js`) |
 | rev 2 | a current `satisfied` head | 3 more (`falsify_activation_boundary.js`, `falsify_proof_trust.js`) |
 | rev 3 | a *grounded* satisfied head, re-checked on every write | evidence could still be **replaced** rather than invalidated |
-| rev 4 | below | — so far |
+| rev 4 | evidence cited by a completion frozen as historical | **E1** — the activation epoch itself could be reset by hand (§0b) |
+| rev 5 | below | — so far |
 
 > **After the cutover a work order is legal only if it is not terminal, or it is
 > `complete` with a current `satisfied` evaluation that CITES qualifying preserved
@@ -223,6 +224,65 @@ path must be built against this shape.
 
 ---
 
+## 0b · E1 — the guard could be disarmed without disarming the reader
+
+Revision 4 froze the evidence and the statuses. It did not freeze **the thing that
+tells the guard the cutover has happened.**
+
+```sql
+update release_0_activation_epoch set activation_id = null;   -- succeeded
+```
+
+That one statement produced the worst shape available:
+
+| | before | after the UPDATE |
+|---|---|---|
+| `release_0_assert_completion_truth` | reads the epoch, judges every commit | reads `null`, **returns immediately** |
+| `release_0_activation_current` | reports the activation | **still reports the activation** |
+| the four-state reader | classifies against the invariant | classifies against the invariant |
+
+So the surface said *activated* and the database enforced *nothing*. Demonstrated
+end to end rather than argued: a bad write is refused while the epoch is stamped;
+the **identical** write commits once the epoch is nulled; the reader then labels the
+result `missing_evaluation_defect`. **Two meanings of truth from one UPDATE, with no
+error anywhere.** Found by `prove_boundary_reversibility.js`, which attacks B8 by
+trying to undo it — not by a review of the SQL.
+
+Revision 5 gives the epoch the same append-only discipline the activation history
+and the cutover inventory already had (`R0006`).
+
+### The first fix was worse than the hole it closed
+
+An outright freeze — *the epoch may never move once set* — passed every containment
+test and **broke Step 7's governed supersession**: an activation superseded with a
+reason could no longer move the epoch to the new head. `prove_step7_activation` O4
+and `prove_step7_concurrency` R4/R6 went red, and they were right to. That is the
+same mistake §0a exists to warn about, one table over: *a gate that fails the fix is
+worse than no gate.*
+
+The shipped rule refuses any **clear** and any **repoint**, but permits movement
+along the governed chain:
+
+```sql
+if old.activation_id is not null and new.activation_id is null then
+  raise exception 'the activation epoch may not be cleared …' using errcode = 'R0006';
+end if;
+
+if old.activation_id is not null
+   and new.activation_id is distinct from old.activation_id
+   and not exists (select 1 from public.release_0_activation_history h
+                    where h.id = new.activation_id
+                      and h.supersedes_id = old.activation_id) then
+  raise exception 'the activation epoch may only move along the supersession chain …'
+    using errcode = 'R0006';
+end if;
+```
+
+The epoch can only ever advance to an activation that **actually supersedes** the
+incumbent. Correction stays possible; disarming does not.
+
+---
+
 ## 1 · First, the real writer count
 
 **"87 scripts open `DATABASE_URL` with no guard, 67 write-capable"** is a true
@@ -416,6 +476,8 @@ R1  SWAP the bytes for another good photo REFUSED   R0005 — a recompute is bli
 R2  rewrite cited evidence while NOT terminal  REFUSED  R0005
 R3  mutate an UNCITED attachment          ALLOWED — ingress must keep working
 P9  correction that REOPENS               ALLOWED — the line that must not be crossed
+E1  clear / repoint / delete the EPOCH    REFUSED   R0006  ← rev 5, see §0b
+O4  supersede along the governed chain    ALLOWED — the fix the first freeze broke
 ```
 
 ### The activation's own refusals, all eleven measured
