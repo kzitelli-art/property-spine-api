@@ -68,8 +68,14 @@ const TERMINAL_STATUSES = Object.freeze(["complete", "closed"]);
 const isTerminal = (workOrder) =>
   !!workOrder && TERMINAL_STATUSES.includes(workOrder.status);
 
-/*  §3.4, frozen. `null` is deliberate: legacy and writer-defect may NOT be
- *  collapsed into "proof failed". */
+/*  §3.4's compatibility mapping. RETIRED FROM THE WIRE by the cleanup
+ *  release — `satisfied` is no longer emitted — but the mapping itself is
+ *  kept and exported, because it is the definition consumers derive from
+ *  and the app's normalizer still applies it to produce the same boolean
+ *  from `state`.
+ *
+ *  `null` is deliberate and stays deliberate: legacy and writer-defect may
+ *  NOT be collapsed into "proof failed". */
 const SATISFIED_FOR = Object.freeze({
   satisfied: true,
   not_satisfied: false,
@@ -130,14 +136,14 @@ async function deriveProofState(db, { workOrder, authority, hasEligibleEvidence 
         `proof_state: evaluation head carries an unwritable state ${JSON.stringify(head.state)} ` +
         `for work order ${workOrder.id} — the chain contract has been violated`);
     }
-    return { read_status: "ok", state: head.state, satisfied: SATISFIED_FOR[head.state] };
+    return { read_status: "ok", state: head.state };
   }
 
   //  2. No head. Not terminal → proof is not yet due, and the block
   //     reflects CURRENT EVIDENCE rather than a defect (§3.2).
   if (!isTerminal(workOrder)) {
     const state = hasEligibleEvidence ? "satisfied" : "not_satisfied";
-    return { read_status: "ok", state, satisfied: SATISFIED_FOR[state] };
+    return { read_status: "ok", state };
   }
 
   //  3. Terminal, no head. Inventory membership is the ONLY discriminator.
@@ -147,7 +153,7 @@ async function deriveProofState(db, { workOrder, authority, hasEligibleEvidence 
     [workOrder.id, workOrder.property_id])).rowCount > 0;
 
   const state = inventoried ? "legacy_indeterminate" : "missing_evaluation_defect";
-  return { read_status: "ok", state, satisfied: SATISFIED_FOR[state] };
+  return { read_status: "ok", state };
 }
 
 /*  §3.3 / §19c Ruling C — presence booleans ONLY. The legacy columns hold

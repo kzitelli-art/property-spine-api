@@ -415,7 +415,7 @@ async function readPropertyWorkOrderStatuses(db, { propertyId, limit = 100 }) {
                  //  completed — absent, not null, when it did not (§3.2.1).
                  read_status: s.proof.read_status,
                  ...(s.proof.read_status === "ok"
-                   ? { state: s.proof.state, satisfied: s.proof.satisfied }
+                   ? { state: s.proof.state }
                    : { reason_code: s.proof.reason_code }),
                  legacy_evidence: s.proof.legacy_evidence,
                  not_preserved_count: s.proof.not_preserved_count },

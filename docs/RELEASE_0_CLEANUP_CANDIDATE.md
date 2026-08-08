@@ -1,6 +1,7 @@
 # Release 0 — cleanup candidate: retiring `proof.satisfied`
 
-**⛔ NOTHING IS REMOVED HERE. This is the inventory and the removal conditions.**
+**⛔ THE REMOVAL IS BUILT AND FALSIFIED. DO NOT MERGE UNTIL THE TWO APP
+RELEASES ARE DEPLOYED — see "The merge block" below.**
 
 §3.4 froze a compatibility mapping so consumers that had not moved to `state` kept
 working:
@@ -90,12 +91,40 @@ The normalizer is different. It reads `proof.satisfied`:
 ## The removal ladder
 
 ```text
-1  DONE      the API has zero internal consumers, and a gate keeps it that way
-2  next      the app door's three reads move from `satisfied` to `state`
-3  BLOCKED   the normalizer's OLD-CONTRACT branch may not be removed while any
-             deployed API can still emit the old shape
-4  BLOCKED   only then may the API stop publishing `satisfied`
+1  DONE   the API has zero internal consumers, and a gate keeps it that way
+2  BUILT  app: the door's three reads move to `state`, and the normalizer
+          TOLERATES an absent `satisfied`   → claude/proof-state-consumer-migration
+3  BUILT  app: the post-removal capture      → claude/proof-state-consumer-removal
+4  BUILT  api: `satisfied` leaves the wire   → THIS CANDIDATE
+5  LATER  the normalizer's OLD-CONTRACT branch. Blocked on no deployed API
+          being able to emit the boolean-only shape. NOT this release.
 ```
+
+## The merge block
+
+**Order is not a preference here.** Merge 4 before 2 and the app renders
+`UNAVAILABLE` for every work order the moment the first response arrives without
+`satisfied` — the normalizer treated its absence as a contract failure until step 2
+changed that.
+
+```text
+2 → 3 → 4        and 5 is a later release entirely
+```
+
+Steps 2 and 3 are stacked in the app repo so they cannot land out of order. Step 4
+is this PR, and it stays draft until 2 and 3 are deployed.
+
+## What actually changed on the wire
+
+```text
+before   { required, read_status: "ok", state, satisfied, legacy_evidence, … }
+after    { required, read_status: "ok", state,            legacy_evidence, … }
+```
+
+**The mapping is kept and still exported.** `SATISFIED_FOR` is the definition
+consumers derive from — the app's normalizer applies it to produce the same boolean
+from `state`. Retiring the FIELD must not change the MEANING, and `mapping-deleted`
+below is the falsification that says so.
 
 **Step 3 is the real gate, and it is not a code question.** The normalizer accepts
 both contracts precisely so the app could ship before the API did, without a
@@ -117,23 +146,66 @@ same shape as the defect this release just fixed, in every consumer at once.
 ```text
 G0    the sweep found the shipped source to search
 G1    nothing in this API READS the compatibility field
-G2    …and the pattern still finds the one place that PUBLISHES it
+G2    the pattern still detects a read — anti-vacuity, anchored on LITERALS
 G3    nextActionFor exists and was found (so G4 is pointed at something)
 G4    …and derives nothing from the `satisfied` FIELD
 G4a   …while the state LITERAL is still allowed, and still used
 G5    …it switches on read_status and state instead
-G6    the compatibility field is STILL PUBLISHED — removing it early is the
-      other way to break this contract, and the one a cleanup release will
-      be tempted by
+G6    the derivation no longer PUTS `satisfied` on the wire
+G7    …and the list projection does not either
+G8    `state` IS still emitted on both shapes — the field of record
+G9    the frozen mapping is KEPT and exported — it is the definition
 ```
 
-Falsified: a new file reading `status.proof.satisfied` turns `G1` red.
+**G2's anchor had to move.** It used to assert the pattern still found the one
+place that PUBLISHED the field — which is exactly the thing this candidate removes.
+**An anti-vacuity check that depends on the thing being removed stops working the
+moment the removal lands.** It now anchors on literal samples that cannot be
+refactored away, and also asserts it does NOT match `proof_satisfied` — the
+unrelated work-acceptance column.
+
+**G6 inverted, deliberately.** It asserted the field was STILL PUBLISHED, and that
+was right up to the moment the consumers moved. G8 and G9 hold the line that
+matters: `state` is still emitted, and the mapping is still exported.
 
 ```text
-gate_proof_compatibility_field.js   7 ok · G1 RED   with a probe consumer present
-gate_proof_compatibility_field.js   8 ok · 0 failed  with it removed
-npm run verify (11 gates)           PASS   exit 0
+gate_proof_compatibility_field.js   11 ok · 0 failed   exit 0
+npm run verify (11 gates)           PASS               exit 0
 ```
+
+## Falsification — both directions
+
+```text
+satisfied-back-on-the-wire   the retired field is emitted again      exit 0
+mapping-deleted              the frozen mapping stops being exported exit 0
+list-drops-state             the list stops carrying `state`         exit 0
+next-action-from-satisfied   the earlier defect, restored            exit 0
+swallow-read-failure         a thrown read becomes a confident 200   exit 0
+property-from-query          the browser chooses the building        exit 0
+```
+
+**`mapping-deleted` is the important one.** Removing the FIELD is this release;
+removing the MEANING destroys the contract. Its `V2` shows why it is dangerous —
+**the wire still carries `state`, so the API looks completely fine** — and `V3`
+shows what actually broke: nothing can derive the boolean any more.
+
+`list-drops-state` had to be re-pointed: its target string changed with the removal
+and the falsifier **REFUSED** rather than passing over a mutation that matched
+nothing. That refusal is the guard working.
+
+## Proof
+
+```text
+tools/step10/prove_http_acceptance.js   68 / 68   exit 0
+tools/step8/prove_step8_reader.js       47 / 47   exit 0
+falsify_http_acceptance.js              6 variants, each exit 0
+npm run verify (11 gates)               PASS      exit 0
+app: full suite                         green · browser 44/44
+```
+
+The Step 8 and Step 10 assertions about `satisfied` were **inverted, not deleted**:
+they now assert its absence on the wire and check the §3.4 mapping where it still
+lives — the exported constant.
 
 ### G4 was wrong before it was right
 

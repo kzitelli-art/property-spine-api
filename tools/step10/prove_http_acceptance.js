@@ -341,6 +341,10 @@ function request(port, method, urlPath, { session, body } = {}) {
 
   // ══ H — ALL FOUR STATES, OVER A REAL SOCKET ════════════════════════
   sec("H · THE FOUR STATES, AS A CONSUMER RECEIVES THEM");
+  /*  The third column is the §3.4 mapping the CONSUMER derives. The
+   *  cleanup release retired `satisfied` from the wire, so it is no longer
+   *  a field to assert — it is the value a consumer must still be able to
+   *  reach from `state`, and it is checked as that. */
   const EXPECTED = [
     [WO_SAT, "satisfied", true],
     [WO_NOT, "not_satisfied", false],
@@ -356,24 +360,28 @@ function request(port, method, urlPath, { session, body } = {}) {
       const row = listNow.find((w) => w.work_order.id === wo);
       if (row) capture(state + "_list",
         { proof: row.proof, current: row.current, next_action: row.next_action }, "list");
-      ok(`H·${state.padEnd(25)} arrives over HTTP with satisfied=${JSON.stringify(satisfied)}`,
+      ok(`H·${state.padEnd(25)} arrives over HTTP, and carries NO \`satisfied\``,
          d.status === 200 && d.body.proof.read_status === "ok" &&
-         d.body.proof.state === state && d.body.proof.satisfied === satisfied,
+         d.body.proof.state === state && !("satisfied" in d.body.proof) &&
+         !/"satisfied"\s*:/.test(d.raw) &&
+         proofState.SATISFIED_FOR[d.body.proof.state] === satisfied,
          "status " + d.status + " :: " + JSON.stringify(d.body && d.body.proof &&
-           { rs: d.body.proof.read_status, s: d.body.proof.state, sat: d.body.proof.satisfied }));
+           { rs: d.body.proof.read_status, s: d.body.proof.state,
+             sat_on_wire: "satisfied" in d.body.proof }));
     }
 
     //  §3.4 — the compatibility mapping is the point of the whole release.
     const leg = (await detail(WO_LEGACY)).body.proof;
     const def = (await detail(WO_DEFECT)).body.proof;
-    ok("H5  legacy and defect are INDISTINGUISHABLE on `satisfied` alone",
-       leg.satisfied === null && def.satisfied === null,
-       JSON.stringify({ leg: leg.satisfied, def: def.satisfied }));
+    ok("H5  legacy and defect are INDISTINGUISHABLE by the §3.4 mapping alone",
+       proofState.SATISFIED_FOR[leg.state] === null &&
+       proofState.SATISFIED_FOR[def.state] === null,
+       JSON.stringify({ leg: leg.state, def: def.state }));
     ok("H6  …and `state` is the only thing that tells them apart",
        leg.state !== def.state, JSON.stringify({ leg: leg.state, def: def.state }) +
        " — if these matched, the release delivered nothing");
-    ok("H7  neither was collapsed into `satisfied: false`",
-       leg.satisfied !== false && def.satisfied !== false,
+    ok("H7  neither was collapsed into `not_satisfied`",
+       leg.state !== "not_satisfied" && def.state !== "not_satisfied",
        "collapsing legacy or a writer defect into 'proof failed' is exactly the " +
        "conflation that made a hollow closed work order look like a real one");
 
@@ -381,6 +389,12 @@ function request(port, method, urlPath, { session, body } = {}) {
     //  instruction comes back — so "no photo sentence" is a property of the
     //  failed read, not of a next_action that stopped saying anything.
     const claimedLive = await detail(WO_CLAIMED);
+    //  THE REMOVAL, ASSERTED ONCE ACROSS EVERYTHING SEEN.
+    ok("H·retired  `satisfied` appears nowhere on the wire, on either shape",
+       !/"satisfied"\s*:/.test((await list()).raw) &&
+       !/"satisfied"\s*:/.test((await detail(WO_SAT)).raw),
+       "the compatibility field is still being emitted");
+
     ok("H10  with a LIVE read, the claimed completion gets its real instruction",
        claimedLive.body.proof.read_status === "ok" &&
        /photo/i.test(String(claimedLive.body.next_action)),
@@ -605,7 +619,7 @@ function request(port, method, urlPath, { session, body } = {}) {
 
     const nowSat = await detail(WO_DEFECT);
     ok("D14  and the SAME route that reported the defect now reports satisfied",
-       nowSat.body.proof.state === "satisfied" && nowSat.body.proof.satisfied === true,
+       nowSat.body.proof.state === "satisfied" && !("satisfied" in nowSat.body.proof),
        JSON.stringify(nowSat.body.proof.state) +
        " — one predicate, one verdict, read wherever you ask");
 
