@@ -73,6 +73,26 @@ async function appendProgress(client, { wo, kind, user_id, note, source_comm_eve
   if (!PROGRESS_KINDS.includes(kind)) {
     throw lifecycleError("BAD_INPUT", `unknown progress kind ${JSON.stringify(kind)}`);
   }
+  /*  ── THE RECOVERY MUST NOT RUN ON A POISONED TRANSACTION ──────────
+   *
+   *  PostgreSQL aborts the WHOLE transaction on a failed statement. The
+   *  duplicate-key recovery below is a SELECT, and a SELECT issued after
+   *  the failing INSERT — with no savepoint between them — does not run:
+   *  it raises `current transaction is aborted, commands ignored until
+   *  end of transaction block`. The handler that exists to make a carrier
+   *  redelivery harmless was itself throwing, rolling back the caller's
+   *  entire operations turn.
+   *
+   *  The savepoint is what makes the failure recoverable. Same discipline
+   *  as the read-only audit probes: a probe must not poison the
+   *  transaction it is probing.
+   *
+   *  Every caller of this service already runs inside an explicit
+   *  transaction — `assertActorMayOperate` takes `for update`, which
+   *  outside one would lock nothing. A SAVEPOINT outside a transaction
+   *  block raises rather than silently doing nothing, which is the
+   *  behaviour we want if that ever stops being true.  */
+  await client.query("savepoint append_progress");
   try {
     const row = (await client.query(
       `insert into work_order_progress
@@ -86,13 +106,24 @@ async function appendProgress(client, { wo, kind, user_id, note, source_comm_eve
       [wo.property_id, wo.unit_id, `work_order_${kind}`,
        JSON.stringify({ work_order_id: wo.id, progress_id: row.id, reported_by_user_id: user_id,
                         note: note || null, source_comm_event_id: source_comm_event_id || null })]);
+    await client.query("release savepoint append_progress");
     return { row, replayed: false };
   } catch (e) {
     //  A carrier redelivery lost the race. The fact is already recorded.
-    if (e.code === "23505") {
+    //  Undo only this attempt; the caller's transaction stays usable.
+    await client.query("rollback to savepoint append_progress");
+    await client.query("release savepoint append_progress");
+
+    //  The ONLY duplicate this may absorb is the idempotency key, which is
+    //  the only unique index on the table (134, partial: `where
+    //  idempotency_key is not null`). Without a key there is nothing to
+    //  look the prior fact up by, so a 23505 here means something else
+    //  collided and swallowing it would invent a replay that never
+    //  happened. Same if the lookup finds nothing.
+    if (e.code === "23505" && idempotency_key) {
       const existing = (await client.query(
         `select * from work_order_progress where idempotency_key = $1`, [idempotency_key])).rows[0];
-      return { row: existing, replayed: true };
+      if (existing) return { row: existing, replayed: true };
     }
     throw e;
   }
