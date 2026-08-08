@@ -1,6 +1,6 @@
 {
   "_": "RELEASE 0 FROZEN ARTIFACTS \u2014 see tests/gate_release0_frozen.js",
-  "frozen_at_commit": "pending (revision 5 \u2014 see the commit that carries this manifest)",
+  "frozen_at_commit": "b3033e57f7a0d4a48e1ca50a78c88678a0d4f55c",
   "why": "Migration 140 reached revision 4 after seven measured attacks broke revisions 1-3. The falsification package (tools/step12/*) is evidence ABOUT THESE EXACT BYTES. Editing any of them invalidates that evidence, so the digest is pinned and changing it is a deliberate act that reopens the package.",
   "digests": {
     "migrations/138_proof_evaluation_defect_obligation.sql": "662a1707bac17c20989f0434a87ea295952e4ac0d1f7eac720271ef07f67647f",
@@ -35,7 +35,7 @@
     "tools/step12/falsify_activation_boundary.js  (--shape update|insert|eval)",
     "tools/step12/falsify_proof_trust.js",
     "tools/step12/falsify_activation_refusals.js  (11 variants)",
-    "tools/step13/prove_boundary_reversibility.js  (R0006 — the ONLY harness that attacks the epoch)",
+    "tools/step13/prove_boundary_reversibility.js  (R0006 \u2014 the ONLY harness that attacks the epoch)",
     "tools/step7/prove_step7_activation.js  (R0006 must not break the governed supersession)"
   ],
   "revision": 5,
