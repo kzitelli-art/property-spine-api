@@ -83,6 +83,8 @@ const PRODUCTION_APPROVED = [
     reason: "Release 0 Gate 8/10 — verifies the real-handset evidence row and completion safety in PRODUCTION, bound to a T0-plus-tester-plus-line window; proves it cannot write before any read; prints receipt fields, never the phone, media URL, or image bytes" },
   { file: "tools/steps23/verify_137_applied.js",
     reason: "Release 0 Step 2 post-migration invariant read — must read the PRODUCTION ledger and catalog to prove migration 137 landed and wrote no rows, which is the whole point of a post-deploy check; proves it cannot write before any read; one short command, committed rather than pasted" },
+  { file: "tools/steps23/verify_step3_preconditions.js",
+    reason: "Release 0 Step 3 precondition read — must count PRODUCTION attachment rows to answer whether any OPEN work order could complete today and could not after the strict evidence gate ships; a constraint proves what can be written from now on, only a count proves what is already there; proves it cannot write before any read; prints counts and work-order references only, never a phone, media URL or attachment bytes" },
   { file: "tools/activation/find_collision_free_tester.js",
     reason: "Release 0 tester search — must read PRODUCTION staff, leases and leads to find an alternate tester whose phone carries no reachable resident/prospect identity, since routing around an identity collision is what avoids mutating unrelated leasing data; uses the production predicates (eligibleTechnicians, resolveStaffSenderForOrganization, the two inbound reachability tiers) rather than an FK inventory; proves it cannot write before any read; phones appear only as ****last4" },
   { file: "tools/activation/release0_final_receipt.js",
