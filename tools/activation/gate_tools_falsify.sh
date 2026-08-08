@@ -118,10 +118,69 @@ expect 1 "G4-2b tester DEACTIVATED: --pre REFUSES (resolver returns none)" \
   node tools/activation/technician_fixture_proof.js --pre
 psql "$DB" -q -c "update users set is_active=true where id='cccccccc-0000-0000-0000-00000000000c';"
 
-psql "$DB" -q -c "insert into persons (id,name,phone) values ('99999999-0000-0000-0000-000000000099','Rita Resident','+15415550111');"
-expect 1 "G4-3  a resident shares the phone: --pre REFUSES" \
+#  ── REACHABILITY, NOT MERE EXISTENCE ────────────────────────────────
+#  T3 originally failed on ANY same-phone persons row, and that failed
+#  the real production fixture on a dormant boardroom_demo record the
+#  inbound resolvers could never reach. The corrected check asks whether
+#  a COMPETING OPERATING IDENTITY exists. These three controls pin both
+#  ends of that distinction, so the check can never silently drift back
+#  to either extreme.
+
+#  G4-3a  DORMANT — a same-phone person with no lease, no invite, no
+#  lead. Exactly the production boardroom_demo shape. Must PASS.
+psql "$DB" -q -c "insert into persons (id,name,phone,source) values ('99999999-0000-0000-0000-000000000099','Rita Dormant','+15415550111','boardroom_demo');"
+expect 0 "G4-3a dormant same-phone person (no reachable path): --pre PASSES" \
   node tools/activation/technician_fixture_proof.js --pre
-psql "$DB" -q -c "delete from persons where id='99999999-0000-0000-0000-000000000099';"
+grep -q "DORMANT same-phone person" /tmp/gate_falsify_last.log \
+  && { PASS=$((PASS+1)); echo "  ok    G4-3b and it is REPORTED as a hygiene item, not hidden"; } \
+  || { FAIL=$((FAIL+1)); echo "  FAIL  G4-3b dormant record passed silently — it must still be surfaced"; }
+
+#  G4-3c  REACHABLE VIA PROSPECT — the same row, now carrying an open
+#  leasing lead. Production would resolve an inbound to it. Must REFUSE.
+psql "$DB" -q -v ON_ERROR_STOP=1 -c "insert into leasing_leads (id,person_id,property_id,status,received_at,import_mode)
+  values ('9a000000-0000-0000-0000-00000000009a','99999999-0000-0000-0000-000000000099','bbbbbbbb-0000-0000-0000-00000000000b','new',now(),'live');"
+expect 1 "G4-3c same person made reachable via OPEN LEAD: --pre REFUSES" \
+  node tools/activation/technician_fixture_proof.js --pre
+#  ...and a TERMINAL lead is not reachable — 'lost' must not block.
+psql "$DB" -q -c "update leasing_leads set status='lost' where id='9a000000-0000-0000-0000-00000000009a';"
+expect 0 "G4-3d the same lead CLOSED ('lost'): --pre PASSES again" \
+  node tools/activation/technician_fixture_proof.js --pre
+psql "$DB" -q -c "delete from leasing_leads where id='9a000000-0000-0000-0000-00000000009a';"
+
+#  G4-3e  REACHABLE VIA RESIDENT — active lease naming the person, plus a
+#  USED tenant invite. Both halves are required by production, so both
+#  are seeded and the half-configured case is proven not to block.
+#
+#  ⚠ NO `|| fallback` HERE, AND THE SEED IS ASSERTED. The first version
+#  chained `psql ... 2>/dev/null || psql ...`; spaces requires a unit_id
+#  and units was empty, so BOTH arms inserted nothing and the chain
+#  reported success. G4-3e then "passed" describing a lease that did not
+#  exist, and only G4-3f's failure revealed it. A seed that silently does
+#  nothing turns every control built on it into decoration.
+psql "$DB" -q -v ON_ERROR_STOP=1 <<'SQL3'
+insert into units (id, property_id, unit_number)
+  values ('9e000000-0000-0000-0000-00000000009e','bbbbbbbb-0000-0000-0000-00000000000b','F1');
+insert into spaces (id, unit_id)
+  values ('9b000000-0000-0000-0000-00000000009b','9e000000-0000-0000-0000-00000000009e');
+insert into leases (id, property_id, space_id, tenant_ids, balance, lease_status)
+  values ('9c000000-0000-0000-0000-00000000009c','bbbbbbbb-0000-0000-0000-00000000000b',
+          '9b000000-0000-0000-0000-00000000009b',
+          array['99999999-0000-0000-0000-000000000099']::uuid[], 0, 'active');
+SQL3
+SEEDED=$(psql "$DB" -tAc "select count(*) from leases where id='9c000000-0000-0000-0000-00000000009c' and lease_status='active' and '99999999-0000-0000-0000-000000000099' = any(tenant_ids)" | tr -d ' ')
+if [ "$SEEDED" = "1" ]; then PASS=$((PASS+1)); echo "  ok    G4-3e0 the active lease really exists (the next control is not vacuous)";
+else FAIL=$((FAIL+1)); echo "  FAIL  G4-3e0 lease seed did not land — G4-3e/f would prove nothing"; fi
+expect 0 "G4-3e active lease but NO used invite: --pre still PASSES (production needs both)" \
+  node tools/activation/technician_fixture_proof.js --pre
+psql "$DB" -q -v ON_ERROR_STOP=1 -c "insert into tenant_invites (id,person_id,property_id,token,status,expires_at)
+  values ('9d000000-0000-0000-0000-00000000009d','99999999-0000-0000-0000-000000000099','bbbbbbbb-0000-0000-0000-00000000000b','tok-falsify','used', now() + interval '30 days');"
+expect 1 "G4-3f lease + USED invite → reachable RESIDENT: --pre REFUSES" \
+  node tools/activation/technician_fixture_proof.js --pre
+psql "$DB" -q -c "delete from tenant_invites where id='9d000000-0000-0000-0000-00000000009d';
+                  delete from leases where id='9c000000-0000-0000-0000-00000000009c';
+                  delete from spaces where id='9b000000-0000-0000-0000-00000000009b';
+                  delete from units where id='9e000000-0000-0000-0000-00000000009e';
+                  delete from persons where id='99999999-0000-0000-0000-000000000099';"
 
 expect 1 "G4-4  --post before any assignment REFUSES" \
   node tools/activation/technician_fixture_proof.js --post

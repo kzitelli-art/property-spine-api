@@ -113,17 +113,79 @@ const digits = (n) => String(n || "").replace(/\D/g, "");
         and right(regexp_replace(coalesce(u.phone,''), '\\D', '', 'g'), 10) = $1`, [d10])).rows[0].n;
   ok("T2  exactly one ACTIVE user anywhere owns this phone", Number(userClash) === 1,
      userClash + " active users match — identity would be a guess");
-  //  The table is persons — communications_boundary aliases it `per`, and
-  //  a hurried reader (this file's first draft included) writes `people`.
-  //  Retired records are excluded: a superseded person row is not a live
-  //  claim on the phone.
-  const personClash = (await c.query(
-    `select count(*) n from persons per
-      where coalesce(per.record_status,'') <> 'retired'
+  //  ── T3: REACHABILITY, NOT MERE EXISTENCE ──────────────────────────
+  //  The first version of this check asked "does ANY persons row share
+  //  this phone", and it failed the real fixture on a dormant
+  //  boardroom_demo row that production could never resolve. That is the
+  //  wrong model of a collision, and correcting the model is the fix —
+  //  not retiring the row so the check turns green. Do not write to
+  //  production identity data to satisfy a checker.
+  //
+  //  A COMPETING OPERATING IDENTITY is one the production inbound
+  //  resolvers can actually reach. communications_boundary.js reaches a
+  //  person by phone through exactly two tiers, and both are replicated
+  //  below verbatim in their essentials:
+  //
+  //    TIER 1  resident  — an ACTIVE lease naming the person in
+  //                        tenant_ids, AND a tenant_invite with
+  //                        status='used' for the same property
+  //    TIER 2  prospect  — a leasing_leads row whose status is not
+  //                        terminal ('leased' | 'lost')
+  //
+  //  A persons row with neither is a filing-cabinet entry, not an
+  //  identity the system will ever resolve an inbound message to.
+  //
+  //  DELIBERATELY NOT PROPERTY-SCOPED. The production resolvers scope to
+  //  the property of the receiving line; this check does not, because a
+  //  person reachable at ANY property is a real operating identity on
+  //  that property's line. Broader in the reachability dimension is the
+  //  safe direction; broader in the mere-existence dimension was not.
+  //
+  //  Retired rows are excluded regardless — migration 104: "A retired
+  //  row cannot receive authority."
+  const reachable = (await c.query(
+    `select per.id, per.name, 'resident' as via, l.property_id
+       from persons per
+       join leases l on l.lease_status = 'active' and per.id = any(l.tenant_ids)
+       join tenant_invites ti on ti.person_id = per.id
+                             and ti.property_id = l.property_id
+                             and ti.status = 'used'
+      where coalesce(per.record_status, 'active') <> 'retired'
+        and right(regexp_replace(coalesce(per.primary_phone_e164, per.phone, ''), '\\D', '', 'g'), 10) = $1
+      union
+     select per.id, per.name, 'prospect' as via, ll.property_id
+       from persons per
+       join leasing_leads ll on ll.person_id = per.id
+      where ll.status not in ('leased', 'lost')
+        and coalesce(per.record_status, 'active') <> 'retired'
         and right(regexp_replace(coalesce(per.primary_phone_e164, per.phone, ''), '\\D', '', 'g'), 10) = $1`,
-    [d10])).rows[0].n;
-  ok("T3  no person record (resident/prospect) shares this phone", Number(personClash) === 0,
-     personClash + " persons match — an inbound could resolve to a resident");
+    [d10])).rows;
+  ok("T3  no REACHABLE person identity (resident or open prospect) shares this phone",
+     reachable.length === 0,
+     reachable.map((r) => r.via + " " + r.id + " at property " + r.property_id).join("  ·  ")
+       + "  — an inbound could genuinely resolve to this person");
+
+  //  Dormant same-phone rows are REPORTED, never asserted on. They are a
+  //  hygiene item for a governed identity-cleanup slice, not a blocker
+  //  for a proof that does not touch them.
+  const dormant = (await c.query(
+    `select per.id, per.name, per.source, per.created_at from persons per
+      where coalesce(per.record_status, 'active') <> 'retired'
+        and right(regexp_replace(coalesce(per.primary_phone_e164, per.phone, ''), '\\D', '', 'g'), 10) = $1
+        and not exists (select 1 from leases l join tenant_invites ti
+                          on ti.person_id = per.id and ti.property_id = l.property_id and ti.status = 'used'
+                         where l.lease_status = 'active' and per.id = any(l.tenant_ids))
+        and not exists (select 1 from leasing_leads ll
+                         where ll.person_id = per.id and ll.status not in ('leased','lost'))
+      order by per.created_at`, [d10])).rows;
+  if (dormant.length) {
+    console.log("  note: " + dormant.length + " DORMANT same-phone person record(s) — unreachable,");
+    console.log("        no operating consequence, logged as an identity-hygiene item:");
+    for (const d of dormant) {
+      console.log("          " + d.id + "  source=" + (d.source || "(none)")
+        + "  created=" + d.created_at.toISOString().slice(0, 10));
+    }
+  }
 
   // ── ELIGIBILITY — the assignWork rule, verbatim semantics ──────────
   sec("ELIGIBILITY FOR " + WO_REF);
