@@ -134,7 +134,18 @@ const PUBLIC_EXACT = new Set([
 // operator-controlled). The agent operates on real records and proposes outbound
 // messages — so before any REAL lead touches this, "/agent/" MUST be removed from
 // this allowlist and the browser views moved behind real auth (token→session).
-const PUBLIC_PREFIXES = ["/tenant/", "/t/", "/public/", "/intake/", "/intake", "/auth/", "/demo/", "/agent/"];
+//  "/legal/" — the A2P 10DLC privacy policy and SMS terms. Public by
+//  REQUIREMENT, not convenience: a carrier reviewer fetches these during
+//  campaign vetting with no session and no key, and a 401 fails the
+//  campaign. They are static text and read nothing.
+//
+//  ⚠ MOUNTING IS NOT REACHABILITY. The routes were mounted below on
+//  2026-08-08 and still answered "Missing or wrong x-operator-key",
+//  because this gate runs first and allowlists by path. The harness did
+//  not catch it: it mounted the legal router into a BARE express app,
+//  which has no gate — a test modelling a server production does not
+//  have. Anything added here must be proven through the real stack.
+const PUBLIC_PREFIXES = ["/tenant/", "/t/", "/public/", "/intake/", "/intake", "/auth/", "/demo/", "/agent/", "/legal/"];
 // SESSION-GATED (NOT public): these routes enforce their OWN staff-session auth
 // (x-staff-session → real users row, property-scoped) inside the route handlers, so
 // they must skip the operator-KEY gate — we never put the raw OPERATOR_KEY in a
