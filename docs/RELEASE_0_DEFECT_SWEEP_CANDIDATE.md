@@ -214,3 +214,108 @@ If it had run, the obligations it raised are ordinary obligations and close
 through the governed path — but **the sweep cannot close them itself**, by
 design (`P3`). A sweep able to close what it raised could erase the very
 accountability it exists to create.
+
+---
+
+# The rest of the lifecycle (added after the sweep)
+
+The sweep covered creation. This covers closure, caller (a), and the
+migration §4.2 turned out to need.
+
+## ⚠ §4.2 SPECIFIES A RESOLUTION CODE THE SCHEMA FORBIDS
+
+§4.2 closes the obligation two ways: `'satisfied'`, and
+`'no_longer_applicable'` when the work order leaves the terminal state.
+
+**`no_longer_applicable` is not in the frozen vocabulary.** Migration 084 froze
+`resolution_code` to five values — `satisfied · superseded · revoked ·
+dispatch_refused · expired` — and `ck_oblig_resolution_code` refuses anything
+else. The frozen plan and the live schema disagree.
+
+Reusing an existing code was considered and rejected, because none is true:
+
+```text
+satisfied         the defect was NOT resolved by proof arriving
+superseded        nothing replaced this obligation
+revoked           implies a human withdrew it; nobody did
+dispatch_refused  unrelated — a transport outcome
+expired           implies time passed; the CONDITION changed
+```
+
+Picking the nearest wrong word is how a resolution vocabulary stops meaning
+anything — and this one is read by reporting. So **migration 139 widens the
+vocabulary by exactly one value**, additively, and says so loudly in its own
+header. `R2` proves the vocabulary is still closed afterwards: an invented code
+is still refused.
+
+**This is the one place today where implementing the frozen plan required
+changing a schema the plan calls frozen.** A reviewer who disagrees can reject
+`139` alone; the rest of the release still stands, with the
+`no_longer_applicable` closure simply unavailable.
+
+## Closure derives its own resolution — the caller's word is not evidence
+
+`resolveProofEvaluationDefect` **takes no resolution code.** It reads the two
+facts §4.2 names and refuses when neither holds.
+
+A service that accepted a code from its caller would make *"closes only on
+genuine resolution"* a comment rather than a rule: any caller could say
+`satisfied` and the obligation would close over a defect still sitting there.
+`M1` asserts the absence of that argument.
+
+When it refuses, nothing happens — and the sweep re-creates the obligation on
+its next run anyway. That is the designed behaviour, and it is why the sweep
+only ever creates.
+
+## Caller (a): the writer reports, and still refuses
+
+`claimCompletion` on an already-complete work order now checks whether that row
+is a `missing_evaluation_defect` — through the reader's predicate, never a copy —
+and raises the obligation **while still refusing the field fact**.
+
+**Reported, not repaired.** A refusal that quietly fixed things would be a second
+completion path by another name. It is also deliberately best-effort: a
+defect-detection failure must never turn a technician's ordinary refusal into a
+thrown turn, and the sweep converges on the same population anyway.
+
+## Proof
+
+```text
+tools/step9/prove_defect_lifecycle.js   25 / 25   exit 0   twice, clean baselines
+tools/step9/prove_defect_sweep.js       35 / 35   exit 0   (unchanged, re-run)
+tools/step8/prove_step8_reader.js       41 / 41   exit 0   (regression)
+tools/steps23/prove.js                  98 / 98   exit 0   (regression)
+npm run verify (10 gates)               PASS      exit 0
+```
+
+```text
+R1–R2   139 permits the new code, and the vocabulary stays closed
+C1–C8   refuses while the defect persists; closes 'satisfied' on an
+        evaluation; closes 'no_longer_applicable' when no longer terminal;
+        a second close is a no-op; every closure writes an event saying WHY
+M1–M3   no resolution_code argument; the resolution is derived; the required
+        input is proof_evaluation and cannot be typed away
+A1–A6   the writer notices, raises, reports on the refusal, attributes it to
+        claimCompletion, and does not raise twice
+E1–E6   raise → real completion → the obligation CLOSES IN THE SAME
+        TRANSACTION that resolved it, and an ordinary completion with no
+        defect reports `nothing_open` rather than an error
+```
+
+### Still NOT built
+
+```text
+NOT built    the scheduled rail wiring. §4.2 puts the sweep on the followups
+             cadence; it is still a function nothing calls.
+NOT built    any un-terminal path. 'no_longer_applicable' is provable and has
+             NO production caller — nothing in the codebase moves a work order
+             out of a terminal status today, and lifecycle_service says
+             reopening is "a different, governed act that this slice does not
+             build". Recorded so the closure is not mistaken for a live path.
+NOT proven   HTTP, browser, production.
+```
+
+## Migration numbers
+
+`138` and now `139` are **both allocated to Release 0**. The text-line silo
+should take `140`.

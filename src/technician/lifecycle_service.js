@@ -36,6 +36,8 @@
 const { preservedEvidenceFor, allEvidenceFor, completionEligibleEvidenceFor,
         COMPLETION_EVIDENCE_CLASSIFICATIONS } = require("./evidence_service");
 const proofEvaluations = require("../maintenance/proof_evaluation_service.js");
+const proofDefects = require("../maintenance/proof_defect_service.js");
+const releaseProofState = require("../release0/proof_state.js");
 
 const PROGRESS_KINDS = ["en_route", "no_access", "blocked", "finding", "completion_claimed", "completed"];
 
@@ -72,6 +74,29 @@ async function assertActorMayOperate(client, { work_order_id, user_id, organizat
     return { wo: null, refusal: "property_outside_actor_scope" };
   }
   return { wo, refusal: null };
+}
+
+/*  §4.2 caller (a). Uses the READER's predicate — never a local copy —
+ *  so the writer, the reader and the sweep cannot disagree about which
+ *  row is a defect (§3.2.0).
+ *
+ *  Returns null when there is nothing to notice, which is the ordinary
+ *  case: a terminal work order carrying a proper evaluation, or a
+ *  legitimate legacy row sitting in the cutover inventory. */
+async function noticeTerminalWithoutEvaluation(client, wo) {
+  const authority = await releaseProofState.activationAuthority(client);
+  //  No activation, no inventory, nothing separating legacy from defect.
+  //  Raising here would accuse every legacy row. Say nothing.
+  if (!authority.available) return null;
+
+  const derived = await releaseProofState.deriveProofState(client, { workOrder: wo, authority });
+  if (derived.read_status !== "ok" || derived.state !== "missing_evaluation_defect") return null;
+
+  const out = await proofDefects.raiseProofEvaluationDefect(client, {
+    work_order_id: wo.id, property_id: wo.property_id, unit_id: wo.unit_id || null,
+    detected_by: "technician.lifecycle_service.claimCompletion",
+  });
+  return { outcome: out.outcome, obligation_id: out.obligation && out.obligation.id };
 }
 
 /*  The one writer of work_order_progress. Every verb goes through it, so
@@ -153,7 +178,29 @@ async function reportFieldFact(client, {
   //  A closed work order does not receive new field facts. Reopening is a
   //  different, governed act that this slice does not build.
   if (wo.status === "complete") {
-    return { outcome: "refused", refusal: "work_order_already_complete", progress: null, workOrder: wo };
+    /*  ── §4.2 CALLER (a) ───────────────────────────────────────────
+     *  This is the canonical writer LOOKING AT a terminal work order it
+     *  did not just evaluate. If that row also has no evaluation and is
+     *  absent from the cutover inventory, something else wrote a terminal
+     *  status after the cutover — the defect this release exists to
+     *  surface — and the writer is the first thing to notice.
+     *
+     *  Reported, not repaired. It records the accountability fact and
+     *  still refuses the field fact; a refusal that quietly fixed things
+     *  would be a second completion path by another name.
+     *
+     *  It is deliberately best-effort: a defect-detection failure must
+     *  never turn a technician's ordinary refusal into a thrown turn. The
+     *  sweep re-derives the same population and converges.  */
+    let defect = null;
+    try {
+      defect = await noticeTerminalWithoutEvaluation(client, wo);
+    } catch (e) {
+      //  Swallowed ON PURPOSE, and named so it is visible in the log.
+      console.error("proof-defect notice failed (non-fatal):", e.message);
+    }
+    return { outcome: "refused", refusal: "work_order_already_complete",
+             progress: null, workOrder: wo, proofDefect: defect };
   }
 
   const { row, replayed } = await appendProgress(client,
@@ -234,6 +281,25 @@ async function claimCompletion(client, {
     attachment_ids: preserved.map((a) => a.id),
   });
 
+  /*  ── §4.2 CLOSURE: the evaluation is the resolution ────────────────
+   *  A `proof_evaluation_missing` obligation exists precisely because
+   *  this work order had no evaluation. It now has one, so the defect is
+   *  genuinely resolved and the obligation closes in the SAME transaction
+   *  that resolved it — never as a follow-up job that could fail and
+   *  leave an accountability item open against work that is proven.
+   *
+   *  The service DERIVES the resolution rather than taking one from here.
+   *  This call cannot close an obligation over a defect that persists,
+   *  even if this code is wrong about why it is calling.
+   *
+   *  Almost always a no-op: the obligation only exists if something wrote
+   *  a terminal status outside this writer. `nothing_open` is the normal
+   *  answer and is not an error.  */
+  const defectClosure = await proofDefects.resolveProofEvaluationDefect(client, {
+    work_order_id, property_id: claim.workOrder.property_id,
+    closed_by: "technician.lifecycle_service.claimCompletion",
+  });
+
   //  CLOSE IT. A second `completed` progress row records the governed
   //  decision as its own fact, distinct from the claim that triggered it.
   //
@@ -270,6 +336,7 @@ async function claimCompletion(client, {
   return { outcome: "completed", refusal: null, progress: done.row, claimProgress: claim.progress,
            workOrder: closedWo, closed: true, missing: null, evidenceAttempted: true,
            evidenceCount: preserved.length,
+           proofDefectClosure: defectClosure,
            evaluation: evaluated.evaluation, supersededEvaluationId: evaluated.supersededId,
            evaluationLinks: evaluated.linked };
 }

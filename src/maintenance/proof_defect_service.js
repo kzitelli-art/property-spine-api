@@ -144,6 +144,102 @@ async function raiseProofEvaluationDefect(client, {
   }
 }
 
+/*  ── CLOSURE — ONLY ON GENUINE RESOLUTION (§4.2) ───────────────────
+ *
+ *      a valid proof evaluation head exists   → 'satisfied'
+ *      the work order is no longer terminal   → 'no_longer_applicable'
+ *
+ *  NO MANUAL CLOSURE. The obligation has no operator-facing "dismiss",
+ *  and there is no path that closes it while the defect persists. The
+ *  required input `proof_evaluation` cannot be satisfied by typing.
+ *
+ *  ── THE CALLER'S WORD IS NOT EVIDENCE ─────────────────────────────
+ *  This function does NOT accept a resolution code. It DERIVES one from
+ *  the database and refuses if neither condition holds. A service that
+ *  took `resolution_code` as an argument would make "closes only on
+ *  genuine resolution" a comment rather than a rule — the caller could
+ *  simply say 'satisfied' and the obligation would close over a defect
+ *  that is still there.
+ *
+ *  If it refuses, nothing happens and the sweep re-creates the obligation
+ *  on its next run anyway. That is the correct behaviour, and it is why
+ *  the sweep only ever creates.
+ */
+const RESOLUTIONS = Object.freeze({
+  SATISFIED: "satisfied",
+  NO_LONGER_APPLICABLE: "no_longer_applicable",
+});
+
+async function resolveProofEvaluationDefect(client, {
+  work_order_id, property_id, closed_by = SERVICE_NAME,
+} = {}) {
+  if (!work_order_id || !property_id) {
+    throw defectError("BAD_INPUT", "work_order_id and property_id are both required");
+  }
+
+  //  Nothing outstanding? Then there is nothing to close, and saying so is
+  //  not a failure — both callers run on paths that may or may not have a
+  //  defect behind them.
+  const open = (await client.query(
+    `select * from obligations
+      where property_id = $1 and related_id = $2 and related_type = 'work_order'
+        and type = $3 and status <> 'complete'`,
+    [property_id, work_order_id, OBLIGATION_TYPE])).rows;
+  if (!open.length) return { outcome: "nothing_open", closed: 0, resolution_code: null };
+
+  //  DERIVE the resolution. Read the two facts §4.2 names, from the rows.
+  const wo = (await client.query(
+    `select status from work_orders where id = $1 and property_id = $2`,
+    [work_order_id, property_id])).rows[0];
+  if (!wo) throw defectError("NOT_FOUND", "work order not found in this property");
+
+  const head = (await client.query(
+    `select 1 from work_order_proof_evaluation_head
+      where work_order_id = $1 and property_id = $2`,
+    [work_order_id, property_id])).rowCount > 0;
+
+  //  §3.2.0's terminality, not a local copy of it.
+  const { isTerminal } = require("../release0/proof_state.js");
+  const terminal = isTerminal(wo);
+
+  let resolution = null;
+  if (head) resolution = RESOLUTIONS.SATISFIED;
+  else if (!terminal) resolution = RESOLUTIONS.NO_LONGER_APPLICABLE;
+
+  if (!resolution) {
+    //  Terminal, still no evaluation. The defect is exactly as real as it
+    //  was. Refuse, loudly enough that a caller cannot mistake it for a
+    //  no-op.
+    return { outcome: "refused", closed: 0, resolution_code: null,
+             refusal: "defect_persists",
+             detail: "the work order is still terminal and still carries no proof " +
+                     "evaluation — closing now would hide the defect, and the sweep " +
+                     "would re-create the obligation on its next run" };
+  }
+
+  const closed = (await client.query(
+    `update obligations
+        set status = 'complete', completed_at = now(),
+            resolution_code = $4, updated_at = now()
+      where property_id = $1 and related_id = $2 and related_type = 'work_order'
+        and type = $3 and status <> 'complete'
+      returning id`,
+    [property_id, work_order_id, OBLIGATION_TYPE, resolution])).rows;
+
+  //  An immutable note of WHY it closed. The obligation carries the code;
+  //  the event carries the reasoning and the actor.
+  await client.query(
+    `insert into events (property_id, type, note) values ($1,$2,$3)`,
+    [property_id, "proof_evaluation_defect_resolved",
+     JSON.stringify({ work_order_id, property_id, resolution_code: resolution,
+                      closed_by, obligations: closed.map((o) => o.id),
+                      basis: resolution === RESOLUTIONS.SATISFIED
+                        ? "a proof evaluation head now exists"
+                        : "the work order is no longer in a terminal status" })]);
+
+  return { outcome: "closed", closed: closed.length, resolution_code: resolution };
+}
+
 /*  Is the idempotency index actually there? A sweep run against a database
  *  without it would insert a duplicate per run rather than converge, and
  *  the failure would be silent — a growing pile of obligations for one
@@ -156,6 +252,7 @@ async function defectIndexPresent(client) {
 }
 
 module.exports = {
-  OBLIGATION_TYPE, SERVICE_NAME, DEFECT_SPEC,
-  raiseProofEvaluationDefect, defectIndexPresent, defectError,
+  OBLIGATION_TYPE, SERVICE_NAME, DEFECT_SPEC, RESOLUTIONS,
+  raiseProofEvaluationDefect, resolveProofEvaluationDefect,
+  defectIndexPresent, defectError,
 };
