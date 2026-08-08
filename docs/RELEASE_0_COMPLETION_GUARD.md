@@ -1,166 +1,224 @@
-# Release 0 — post-activation completion guard (migration 140)
+# Release 0 — the forbidden committed state (migration 140)
 
 **⛔ BUILD-AHEAD. Not applied to production.**
 
-After the cutover, a work order may not become terminal unless a proof evaluation
-justifies it. **Enforced by the database**, so it holds for every writer: application
-code, a utility script, a `psql` session, a route nobody has written yet.
+> **No non-inventoried work order may commit in a terminal state that the canonical
+> reader would classify as `missing_evaluation_defect`.**
+
+Enforced by the database, at commit time.
 
 ---
 
-## The risk this closes
+## 1 · First, the real writer count
 
-Step 6 closes the one legacy done-path we know about. It cannot close the ones we
-do not. This repository still carries **87 scripts that build a connection from
-`DATABASE_URL` with no guard, 67 of them write-capable** (`gate_harness_isolation.js`).
+**"87 scripts open `DATABASE_URL` with no guard, 67 write-capable"** is a true
+warning and the **wrong number for this decision**. Write-capable means a script
+*could* write something. The question is narrower: *which paths can put a terminal
+status on a work order?*
 
-Before activation, a stray `closed` row is untidy. **After activation it is
-terminal, absent from the immutable inventory, and therefore
-`missing_evaluation_defect`** — an obligation raised against a named role for
-something the *system* did. And the activation is not reversible: the inventory
-tables are append-only with `forbid_mutation` triggers.
-
-**A repo-wide cleanup of 67 scripts cannot produce a guarantee**, because it says
-nothing about the 68th. One boundary every write must pass through can.
-
----
-
-## Why a trigger and not the alternatives
-
-| candidate | why not |
-|---|---|
-| `CHECK` constraint | cannot reference other tables; the rule needs three of them |
-| revoke `UPDATE` on `work_orders` | breaks every legitimate non-completion write |
-| a service-layer guard | is exactly what the 67 scripts bypass |
-| patch the 67 scripts | says nothing about the 68th, and never finishes |
-| `RULE` / view indirection | rewrites the statement — a **silent** change, which the brief forbids |
-
-A `BEFORE INSERT OR UPDATE` row trigger is the narrowest thing that sees every
-write and can refuse one explicitly.
-
----
-
-## What it does
+Scanned (`tools/step12/terminal_writers.js`, re-derived every run):
 
 ```text
-1  not entering a terminal status        → pass
-2  already terminal (an ordinary update) → pass
-3  no activation exists                  → pass    (INERT before the cutover)
-4  the row is in the cutover inventory   → pass    (legitimate legacy history)
-5  the row has a proof evaluation head   → pass    (a governed completion)
-6  otherwise                             → RAISE, errcode R0001
+SHIPPED, terminal-capable — 3
+  src/technician/lifecycle_service.js:311   UPDATE 'complete'   the CANONICAL writer
+  src/maintenance/maintenance.js:564        UPDATE 'closed'     the LEGACY closeout (Step 6)
+  src/comms/tenantlink.js:1652              UPDATE $1           PARAMETERIZED
+
+SHIPPED, non-terminal
+  src/maintenance/maintenance.js:511        UPDATE 'needs_followup'
+  src/maintenance/work_order_service.js:299 INSERT 'open'
+
+PRODUCTION UTILITY / REPAIR SCRIPTS writing a terminal status — ZERO
 ```
 
-### It is inert until activation, on purpose
+`tenantlink.js` is counted terminal-capable **even though** the route refuses
+`complete` and allows only `open`/`scheduled` today. The database sees a bound
+parameter; the guard is one edit away from being wrong.
 
-With no activation row the trigger returns immediately. That is not a weakness —
-before the cutover, legacy terminal rows are exactly what the inventory exists to
-record, and blocking them would break the census this release depends on.
-
-**So this migration is safe to apply at any time.** It changes no behaviour until
-Step 7 runs, then arms itself. It needs no deployment window of its own — and it
-**must not be sequenced after activation**, because the window it protects opens
-the instant the activation commits.
-
-### The canonical writer passes with no change to it
-
-`claimCompletion` writes the proof evaluation **before** it sets the status,
-deliberately (§4: *"written first and the rest is contingent on it"*). By the time
-the trigger runs, in the same transaction, the evaluation head already exists.
-
-**The guard required zero changes to the writer.** That is the strongest evidence
-available that it is drawn at the right boundary.
-
-### No bypass
-
-There is deliberately no session flag, no GUC, no service-role exemption. **A
-bypass a utility script can set is not a guarantee; it is a comment.** Removing the
-guard requires `DROP TRIGGER` — a deliberate, auditable DDL act. `G8` asserts no
-`current_setting()` escape has appeared.
+**The conclusion that matters:** no existing production script writes a terminal
+status. **The exposure is hand-run SQL and code not yet written** — precisely what a
+script audit cannot fix and a database boundary can. `W2` freezes this list, so a
+new shipped writer fails a gate instead of arriving unnoticed.
 
 ---
 
-## Proof — every negative case is a real bypass attempt
+## 2 · It protects the state, not the caller
 
-"No path" is not provable by reading source; that is what the 67 scripts already
-demonstrate. So each refusal below is raw SQL **on its own pooled connection** —
-the same driver, the same kind of connection a utility script uses.
+Deliberately **not** *"only `claimCompletion` may write a completion."* Caller
+identity is unenforceable at the database and worthless against hand-run SQL. What
+*is* enforceable is the shape of the committed row — and that is the thing that
+causes harm.
+
+Consequences of choosing the state:
+
+- any writer may complete work, **provided it leaves a legal state**
+- a caller nobody has written yet is already covered
+- no application flag, no session variable, no service role — none of which
+  survives a second process sharing `DATABASE_URL`
+
+---
+
+## 3 · Deferred: only the committed state is judged
+
+A `CONSTRAINT TRIGGER … DEFERRABLE INITIALLY DEFERRED`. It fires at **commit**, so a
+transaction may write its facts in any order:
+
+```sql
+begin;
+  update work_orders set status='complete' ...;   -- terminal FIRST
+  insert into work_order_proof_evaluations ...;   -- evidence AFTER
+commit;                                           -- LEGAL  (D1)
+```
+
+**An immediate trigger would refuse that**, and would pin a database invariant to
+the canonical writer's current statement order. §4 happens to write the evaluation
+first — but then an innocuous refactor breaks production. Deferring removes the
+coupling entirely.
+
+It also means a transaction may pass **through** the forbidden state and still
+commit, provided it does not **end** there (`D3`).
+
+**It re-reads; it does not trust `NEW`.** `NEW` is the row as queued. By commit time
+it may have moved again, so the function reads the current row and uses `NEW` only
+for identity. `G10` asserts this.
+
+---
+
+## 4 · One forbidden state, not a second reader
+
+`proof_state.js` derives four states. This enforces the negation of **one** and
+knows nothing about the other three:
 
 ```text
-tools/step12/prove_completion_guard.js   33 / 33   exit 0
+an evaluation head exists            → satisfied / not_satisfied
+not terminal                         → not yet due
+terminal + inventoried               → legacy_indeterminate
+terminal + NOT inventoried + no head → *** FORBIDDEN ***
+```
+
+**It accepts any head, including `not_satisfied`.** A work order evaluated and
+*failed* is not a defect — it is a judgement that was made. Requiring `satisfied`
+would enforce more than the forbidden state and block a legitimate outcome (`E2`,
+`G11`).
+
+Interpretation still belongs to the reader and the sweep.
+
+---
+
+## 5 · Activation-aware, and safe to apply now
+
+With no activation the reader reports `unavailable`, never `defect` — so there is no
+forbidden state and the trigger returns immediately. Pre-cutover terminal rows are
+exactly what the census inventories.
+
+**So it can be applied at any time, and it must NOT be applied after the
+activation** — the window opens when that transaction commits.
+
+---
+
+## 6 · Proof — every negative case is direct SQL
+
+Proving this through the application services would prove something about the
+services. The threat is the path that avoids them.
+
+```text
+tools/step12/prove_completion_guard.js   47 / 47   exit 0
 ```
 
 ```text
-I1–I2   before activation a raw close SUCCEEDS — required, not a hole
-C1–C4   claimCompletion still completes, and still refuses with no evidence
-B1–B4   a raw UPDATE to 'complete' is refused with errcode R0001, naming what
-        is missing and what to use instead, and the row is UNCHANGED
-B5      'closed' is refused the same way
-B6–B7   a SET-BASED close over a whole property is refused, and NOT ONE row
-        moved — a partial close is worse than a refused one, because some
-        rows would be defects and nobody would know which
-B8–B9   a direct INSERT of a completed work order is refused; no row created
-B10     a preserved PHOTO alone does not satisfy it — the evaluation is the
-        governed judgement, the photo is only its input
-L1–L7   non-terminal statuses, ordinary column updates, inventoried legacy
-        rows and already-complete rows all still work
-A1–A2   the guard's terminal set IS the reader's, checked in source
-A·×2    …and behaviourally: every status the reader calls terminal, the
-        guard refuses
-X1–X5   THE LOAD-BEARING CONTROL
-D1      after every attempt, ZERO manufactured defects exist
+W1–W3   the frozen writer inventory: 3 shipped, 0 production utilities
+I1–I2   before activation, a direct close SUCCEEDS — required, not a hole
+D1–D2   terminal FIRST, evaluation AFTER → commits
+D3–D4   passing THROUGH the forbidden state and leaving it → commits
+D5–D7   the offending STATEMENT succeeds; the COMMIT refuses; nothing remains
+C1–C4   claimCompletion passes unchanged, and still refuses with no evidence
+B1–B5   direct UPDATE to complete/closed refused, errcode R0001, row unchanged
+B6–B7   a SET-BASED close over a whole property refused, NOT ONE row moved
+B8–B9   a direct INSERT of a completed work order refused; no row created
+B10     a preserved photo without an evaluation does not satisfy it
+B11–B12 a terminal write rolled back to a SAVEPOINT commits cleanly
+E1–E6   the two legitimate ways out, and every ordinary write, still work
+K1–K3   a transaction cannot borrow an UNCOMMITTED evaluation
+V1–V3   the bypass surface, measured
+X1–X5   drop the guard and the identical bypass SUCCEEDS
+Z1–Z2   independent census: zero forbidden rows, confirmed by the READER
 ```
 
-### X is the control that matters
+### The three that carry the most weight
 
-Every refusal above is worthless if something *else* was refusing. So the guard is
-**dropped**, the identical bypass is retried, and it **succeeds** — manufacturing
-exactly the defect this release exists to prevent. Then it is restored and refuses
-again.
+**`X2`** — every refusal above is worthless if something *else* was refusing. So the
+guard is dropped, the identical bypass is retried, and it **succeeds**. `X3` then
+has the **canonical reader** classify the result as `missing_evaluation_defect` —
+confirming the forbidden state by the reader's own verdict, not this file's opinion.
 
-Without `X2`, the whole section proves only that *something* said no.
+**`B7`** — a set-based close moves *nothing*. A partial close is worse than a
+refused one: some rows would be defects and nobody would know which.
 
----
-
-## ⚠ What this means for the §4.2 sweep
-
-The census inventories **every** terminal-and-unevaluated row. So immediately after
-activation the defect population is **empty by construction** — and if migration 140
-is live at that moment, nothing can add to it.
-
-**The sweep stops being routine cleanup and becomes an audit that the guard held.**
-
-That is a better job for it, and it resolves the standing concern about there being
-no scheduler: there should be nothing to sweep. **A non-empty sweep result is now a
-signal that the guard was dropped, was deployed late, or has a gap** — which is
-worth investigating rather than worth automating.
-
-It also means the guard should be deployed **before or with** Step 7, never after.
-The runbook now says so.
+**`Z2`** — the verdict is not "47 assertions passed". It counts the forbidden
+population in SQL, then reads **every** work order through the canonical reader and
+requires zero defects.
 
 ---
 
-## Residual gaps, named rather than folded in
+## 7 · What can still defeat it, measured
 
-**`status` has no CHECK constraint on `work_orders`.** A writer could invent
-`'Complete'` or `'COMPLETED'`, which neither this guard nor the reader treats as
-terminal. That row would be **invisible** rather than a manufactured defect — a
-different and smaller problem, but a real one. Constraining the vocabulary is a
-broader change touching existing data, and it is not folded in here.
+```text
+SET CONSTRAINTS ALL IMMEDIATE     does NOT bypass — it moves the check
+                                  EARLIER. Proven (V1), because a reader of
+                                  this trigger might reasonably fear otherwise.
 
-**The guard is scoped to `work_orders`.** It says nothing about other tables, and
-nothing about a script that deletes rows.
+session_replication_role=replica  DOES disable constraint triggers —
+                                  but setting it is SUPERUSER-ONLY. A
+                                  non-superuser role is refused with
+                                  "permission denied to set parameter" (V2).
 
-**It cannot stop a privileged operator dropping it.** That is by design — the
-alternative is a guard nobody can remove when it is wrong — but it means the
-control is *auditable*, not *absolute*. `where_are_we.js` should report whether the
-trigger is installed; that is the next small piece.
+DROP TRIGGER                      by the table owner. Deliberate, auditable
+                                  DDL. No flag, by design.
+```
+
+**Everything holding `DATABASE_URL` is covered.** The application role on Neon is
+not a superuser, so the one runtime bypass is unavailable to every script, route and
+`psql` session in the threat model. The remaining defeats are DDL — auditable acts,
+not accidents.
+
+**This is a control that is auditable, not absolute**, and that is the honest
+description. `where_are_we.js` reads whether the trigger is installed rather than
+assuming it.
 
 ---
 
-## Migration ledger
+## 8 · What it means for the §4.2 sweep
 
-`138` and `139` are Release 0's. **This is also Release 0's, so it takes `140`** —
-which moves the text-line silo's next number to `141`. Flagged because the earlier
-rule said "the next unrelated migration starts at 140", and this one is not
-unrelated.
+The census inventories **every** terminal-and-unevaluated row, so the defect
+population is **empty by construction** at activation — and with the guard live,
+nothing can add to it.
+
+**The sweep becomes an audit that the guard held, not routine cleanup.** That
+resolves the standing "no scheduler" concern: there should be nothing to sweep, and
+**a non-empty result is a signal to investigate** — the guard was dropped, deployed
+late, or has a gap.
+
+---
+
+## 9 · Residual gaps, named rather than folded in
+
+**A pre-existing forbidden row blocks writes to itself.** If one exists (guard
+deployed late, or dropped), any update touching it fails until it is resolved. The
+two resolutions are the governed ones — record an evaluation, or take it out of
+terminal — and both work (`E1`, `E3`). A broad `update … where property_id=X` will
+fail while any such row exists in that property. **Correct, and worth knowing.**
+
+**`status` has no CHECK constraint.** A writer could invent `'Complete'`, which
+neither the guard nor the reader treats as terminal. That row is **invisible** rather
+than a manufactured defect — a different and smaller problem. Constraining the
+vocabulary touches existing data and is not folded in here.
+
+**Scope is `work_orders`.** Nothing about other tables, and nothing about deletes.
+
+---
+
+## 10 · Ledger
+
+`138`/`139` are Release 0's; so is this, so it takes **`140`**, moving the text-line
+silo to `141`. Flagged because the earlier rule said "the next unrelated migration
+starts at 140" — this one is not unrelated.

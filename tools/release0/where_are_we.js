@@ -72,7 +72,7 @@ const srcHas = (file, needle) => {
   //  absolute, so its presence has to be READ, never assumed.
   const guard = (await q(
     `select 1 from pg_trigger t join pg_class c on c.oid = t.tgrelid
-      where c.relname = 'work_orders' and t.tgname = 'guard_terminal_completion'
+      where c.relname = 'work_orders' and t.tgname = 'assert_no_manufactured_defect'
         and not t.tgisinternal`)).length > 0;
   const inventory = has137
     ? Number((await q(`select count(*) n from release_0_legacy_cutover_inventory`))[0].n) : 0;
@@ -114,9 +114,9 @@ const srcHas = (file, needle) => {
       d: readerFourState ? (nextActionFixed ? "four-state, next_action fixed"
                                             : "⚠ four-state WITHOUT the next_action fix")
                          : "the old boolean reader is running" },
-    { k: "gd", n: "migration 140 · completion guard", done: guard,
+    { k: "gd", n: "migration 140 · forbidden-state guard", done: guard,
       d: guard ? (activation ? "installed and ARMED" : "installed, inert until activation")
-               : "NOT INSTALLED — any writer can make a work order terminal" },
+               : "NOT INSTALLED — any writer can commit the forbidden state" },
     { k: "b9", n: "migrations 138 + 139", done: has138 && has139,
       d: `138 ${has138 ? "applied" : "absent"} · 139 ${has139 ? "applied" : "absent"}` },
     { k: "b10", n: "§4.2 defect sweep available", done: sweepPresent,
