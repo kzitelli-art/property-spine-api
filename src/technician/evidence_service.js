@@ -151,6 +151,67 @@ async function ingestProviderMedia(client, {
   return { outcome: "stored", attachment: row };
 }
 
+/*  ── EVIDENCE THAT MAY SATISFY A COMPLETION (Release 0 §3.1, Part C) ──
+ *
+ *  `preservedEvidenceFor` answers "what did we manage to keep?" — a
+ *  reporting question. THIS answers a different and stricter one: "what
+ *  may a completion be built on?" They are deliberately separate
+ *  functions rather than one with a flag, because a caller that wanted
+ *  the lenient answer and got the strict one is a bug that reads as a
+ *  refusal, while the reverse silently completes work on evidence that
+ *  does not exist.
+ *
+ *  Every clause below is a fact ABOUT THE STORED BYTES, not about a
+ *  carrier's claim:
+ *
+ *    storage_state='stored'   referenced / fetch_failed are a photo we
+ *                             cannot produce
+ *    content is not null      the bytes are actually here
+ *    byte_size is not null    and we know how many
+ *    sha256 is not null       and can prove they did not change
+ *    stored_at is not null    and when we took custody
+ *    mime_type allowed        verified at the boundary against what the
+ *                             carrier SERVED, not what it claimed
+ *    classification           the CORRECTED array: 'unclassified' is not
+ *                             proof of a repair. Production impact zero
+ *                             rows (§3.1, audit B2 = 0).
+ *
+ *  ── PROPERTY SCOPE IS PART OF THE QUESTION ──────────────────────────
+ *  Scoped on (work_order_id, property_id) together. The attachment table
+ *  carries property_id, and a row whose property disagrees with the work
+ *  order's is a cross-scope link — refused here rather than discovered
+ *  later by a reader.
+ *
+ *  The legacy `completion_photo` / `completion_note` columns are NEVER
+ *  consulted. The app's only writer of that column emits a `stub://`
+ *  string with no bytes behind it, so it can support a claim about
+ *  PRESENCE and never a claim about proof. */
+const COMPLETION_EVIDENCE_CLASSIFICATIONS = Object.freeze(["repair_photo", "condition"]);
+const COMPLETION_EVIDENCE_MIME = Object.freeze(["image/jpeg", "image/png", "image/webp"]);
+
+async function completionEligibleEvidenceFor(client, { work_order_id, property_id }) {
+  if (!work_order_id || !property_id) {
+    throw evidenceError("BAD_INPUT",
+      "completion evidence must be scoped to a work order AND its property");
+  }
+  const { rows } = await client.query(
+    `select id, proof_classification, mime_type, byte_size, sha256, stored_at, received_at
+       from work_order_proof_attachments
+      where work_order_id = $1
+        and property_id   = $2
+        and storage_state = 'stored'
+        and content    is not null
+        and byte_size  is not null
+        and sha256     is not null
+        and stored_at  is not null
+        and mime_type      = any($3::text[])
+        and proof_classification = any($4::text[])
+      order by received_at asc`,
+    [work_order_id, property_id,
+     COMPLETION_EVIDENCE_MIME.slice(), COMPLETION_EVIDENCE_CLASSIFICATIONS.slice()]);
+  return rows;
+}
+
 /*  What evidence does this work order actually HAVE? Only `stored` rows
  *  count — a referenced or failed row is a photo we cannot produce. */
 async function preservedEvidenceFor(client, { work_order_id, classifications = null }) {
@@ -177,4 +238,5 @@ async function allEvidenceFor(client, { work_order_id }) {
 module.exports = {
   ALLOWED_MIME, MAX_BYTES, STORAGE_STATES, PROOF_CLASSIFICATIONS,
   ingestProviderMedia, preservedEvidenceFor, allEvidenceFor, evidenceError,
+  completionEligibleEvidenceFor, COMPLETION_EVIDENCE_CLASSIFICATIONS, COMPLETION_EVIDENCE_MIME,
 };
