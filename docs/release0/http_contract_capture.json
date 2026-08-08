@@ -1,0 +1,227 @@
+{
+  "provenance": {
+    "produced_by": "tools/step10/prove_http_acceptance.js",
+    "via": "real HTTP against the real Express mount",
+    "schema_ledger": "137",
+    "migrations_applied_beyond_ledger": [
+      "138",
+      "139"
+    ],
+    "note": "Deterministic fields only. Key ABSENCE is meaningful: `state` and `satisfied` are missing on an unavailable read, and that is the contract."
+  },
+  "cases": {
+    "completion_claimed_live": {
+      "source": "detail",
+      "lifecycle_state": "completion_claimed",
+      "next_action": "Obtain repair photo before completion",
+      "proof": {
+        "required": true,
+        "read_status": "ok",
+        "state": "not_satisfied",
+        "satisfied": false,
+        "legacy_evidence": {
+          "column_photo_present": false,
+          "column_note_present": false
+        },
+        "preserved_count": 0,
+        "not_preserved_count": 0
+      }
+    },
+    "completion_claimed_satisfied": {
+      "source": "detail",
+      "lifecycle_state": "completion_claimed",
+      "next_action": "Close out the work order",
+      "proof": {
+        "required": true,
+        "read_status": "ok",
+        "state": "satisfied",
+        "satisfied": true,
+        "legacy_evidence": {
+          "column_photo_present": false,
+          "column_note_present": false
+        },
+        "preserved_count": 1,
+        "not_preserved_count": 0
+      }
+    },
+    "completion_claimed_unavailable": {
+      "source": "detail",
+      "lifecycle_state": "completion_claimed",
+      "next_action": "Proof state unavailable — retry",
+      "proof": {
+        "required": true,
+        "read_status": "unavailable",
+        "reason_code": "activation_absent",
+        "legacy_evidence": {
+          "column_photo_present": false,
+          "column_note_present": false
+        },
+        "preserved_count": 0,
+        "not_preserved_count": 0
+      }
+    },
+    "legacy_indeterminate_detail": {
+      "source": "detail",
+      "lifecycle_state": "scheduled",
+      "next_action": "Assign or accept the work",
+      "proof": {
+        "required": true,
+        "read_status": "ok",
+        "state": "legacy_indeterminate",
+        "satisfied": null,
+        "legacy_evidence": {
+          "column_photo_present": false,
+          "column_note_present": false
+        },
+        "preserved_count": 0,
+        "not_preserved_count": 0
+      }
+    },
+    "legacy_indeterminate_list": {
+      "source": "list",
+      "lifecycle_state": "scheduled",
+      "next_action": "Assign or accept the work",
+      "proof": {
+        "required": true,
+        "read_status": "ok",
+        "state": "legacy_indeterminate",
+        "satisfied": null,
+        "legacy_evidence": {
+          "column_photo_present": false,
+          "column_note_present": false
+        },
+        "not_preserved_count": 0
+      }
+    },
+    "missing_evaluation_defect_detail": {
+      "source": "detail",
+      "lifecycle_state": "scheduled",
+      "next_action": "Assign or accept the work",
+      "proof": {
+        "required": true,
+        "read_status": "ok",
+        "state": "missing_evaluation_defect",
+        "satisfied": null,
+        "legacy_evidence": {
+          "column_photo_present": false,
+          "column_note_present": false
+        },
+        "preserved_count": 0,
+        "not_preserved_count": 0
+      }
+    },
+    "missing_evaluation_defect_list": {
+      "source": "list",
+      "lifecycle_state": "scheduled",
+      "next_action": "Assign or accept the work",
+      "proof": {
+        "required": true,
+        "read_status": "ok",
+        "state": "missing_evaluation_defect",
+        "satisfied": null,
+        "legacy_evidence": {
+          "column_photo_present": false,
+          "column_note_present": false
+        },
+        "not_preserved_count": 0
+      }
+    },
+    "not_satisfied_detail": {
+      "source": "detail",
+      "lifecycle_state": "scheduled",
+      "next_action": "Assign or accept the work",
+      "proof": {
+        "required": true,
+        "read_status": "ok",
+        "state": "not_satisfied",
+        "satisfied": false,
+        "legacy_evidence": {
+          "column_photo_present": false,
+          "column_note_present": false
+        },
+        "preserved_count": 0,
+        "not_preserved_count": 0
+      }
+    },
+    "not_satisfied_list": {
+      "source": "list",
+      "lifecycle_state": "scheduled",
+      "next_action": "Assign or accept the work",
+      "proof": {
+        "required": true,
+        "read_status": "ok",
+        "state": "not_satisfied",
+        "satisfied": false,
+        "legacy_evidence": {
+          "column_photo_present": false,
+          "column_note_present": false
+        },
+        "not_preserved_count": 0
+      }
+    },
+    "satisfied_detail": {
+      "source": "detail",
+      "lifecycle_state": "scheduled",
+      "next_action": "Assign or accept the work",
+      "proof": {
+        "required": true,
+        "read_status": "ok",
+        "state": "satisfied",
+        "satisfied": true,
+        "legacy_evidence": {
+          "column_photo_present": false,
+          "column_note_present": false
+        },
+        "preserved_count": 0,
+        "not_preserved_count": 0
+      }
+    },
+    "satisfied_list": {
+      "source": "list",
+      "lifecycle_state": "scheduled",
+      "next_action": "Assign or accept the work",
+      "proof": {
+        "required": true,
+        "read_status": "ok",
+        "state": "satisfied",
+        "satisfied": true,
+        "legacy_evidence": {
+          "column_photo_present": false,
+          "column_note_present": false
+        },
+        "not_preserved_count": 0
+      }
+    },
+    "unavailable_detail": {
+      "source": "detail",
+      "lifecycle_state": "scheduled",
+      "next_action": "Assign or accept the work",
+      "proof": {
+        "required": true,
+        "read_status": "unavailable",
+        "reason_code": "activation_absent",
+        "legacy_evidence": {
+          "column_photo_present": false,
+          "column_note_present": false
+        },
+        "preserved_count": 0,
+        "not_preserved_count": 0
+      }
+    },
+    "unavailable_list": {
+      "source": "list",
+      "lifecycle_state": "completion_claimed",
+      "next_action": "Proof state unavailable — retry",
+      "proof": {
+        "required": true,
+        "read_status": "unavailable",
+        "reason_code": "activation_absent",
+        "legacy_evidence": {
+          "column_photo_present": false,
+          "column_note_present": false
+        },
+        "not_preserved_count": 0
+      }
+    }
+  }
+}

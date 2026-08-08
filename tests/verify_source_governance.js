@@ -60,6 +60,12 @@ const GATES = [
     what: "migration 137 DDL is the proven scale payload, unchanged" },
   { file: "gate_completion_writers.js",
     what: "exactly the expected work-order completion writers; no third writer" },
+  //  §3.4's `satisfied` is published FOR CONSUMERS. When this API reads it
+  //  back, the two halves of the four-state contract can disagree — and
+  //  they did: next_action was derived from it and answered "obtain a
+  //  repair photo" on a read that never completed.
+  { file: "gate_proof_compatibility_field.js",
+    what: "`satisfied` is published, never read here; next_action derives from state" },
   //  The conversational seams. DB-free, so they belong on the standard path:
   //  they check that the extracted logic has ONE implementation, that resident
   //  wording did not drift, and that an operating receipt and a delivery

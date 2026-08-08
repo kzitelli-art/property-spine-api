@@ -40,6 +40,11 @@
    ════════════════════════════════════════════════════════════════════ */
 "use strict";
 
+//  The four-state proof derivation (§3.2). One canonical predicate, shared
+//  with the §4.2 defect sweep — see that module's header for why it is not
+//  inlined here.
+const proofState = require("../release0/proof_state.js");
+
 /*  The lifecycle state an operator needs, derived — never stored. Ordered
  *  most-specific first: a work order that is complete IS complete, whatever
  *  happened before it. */
@@ -81,13 +86,38 @@ function nextActionFor({ state, proof, coordination = null }) {
     case "no_access":           return COORDINATION_NEXT[(coordination && coordination.state) || "none"]
                                        || COORDINATION_NEXT.none;
     case "blocked":             return "Resolve what the work is waiting on";
-    case "completion_claimed":  return proof.satisfied ? "Close out the work order" : "Obtain repair photo before completion";
+    /*  ── A FAILED READ IS NOT AN INSTRUCTION (§5, §3.2.1) ──────────
+     *
+     *  This line read `proof.satisfied` and was correct until Step 8,
+     *  which introduced a proof block where `satisfied` is ABSENT because
+     *  the read did not complete. `undefined` is falsy, so the surface
+     *  answered "Obtain repair photo before completion" — telling an
+     *  operator to go do fieldwork on the strength of a read that failed,
+     *  on the same screen that says the proof state is unavailable.
+     *
+     *  That is a confident wrong, and it was introduced by the very step
+     *  that exists to remove them. It is asserted over HTTP now.
+     *
+     *  It switches on `read_status` and `state` rather than on
+     *  `satisfied` for a second reason: `satisfied` is the frozen §3.4
+     *  COMPATIBILITY field, kept for consumers that have not moved yet.
+     *  Nothing inside this API reads it any more.  */
+    case "completion_claimed":
+      if (!proof || proof.read_status !== "ok") return "Proof state unavailable — retry";
+      return proof.state === "satisfied"
+        ? "Close out the work order"
+        : "Obtain repair photo before completion";
     case "completed":           return null;
     default:                    return null;
   }
 }
 
-const PROOF_REQUIRED_CLASSIFICATIONS = ["repair_photo", "condition", "unclassified"];
+/*  §3.1 — the corrected array. `unclassified` was removed: an unclassified
+ *  photo is not proof of a repair. Production impact is zero rows (audit
+ *  B2 = 0), and the Step 3 evidence gate already enforced this array — so
+ *  until now the READER and the WRITER disagreed about what counts as
+ *  proof, which is the drift §3.1 exists to end. */
+const PROOF_REQUIRED_CLASSIFICATIONS = ["repair_photo", "condition"];
 
 /*  readWorkOrderStatus — one work order, fully described.
  *
@@ -95,7 +125,7 @@ const PROOF_REQUIRED_CLASSIFICATIONS = ["repair_photo", "condition", "unclassifi
  *  is passed into every query rather than checked afterwards, so a work
  *  order at another property returns null instead of leaking a row.
  */
-async function readWorkOrderStatus(db, { propertyId, workOrderId }) {
+async function readWorkOrderStatus(db, { propertyId, workOrderId, activationAuthority: activationAuthority_ = null }) {
   if (!propertyId || !workOrderId) return null;
 
   const workOrder = (await db.query(
@@ -137,9 +167,43 @@ async function readWorkOrderStatus(db, { propertyId, workOrderId }) {
 
   const preserved = attachments.filter(
     (a) => a.storage_state === "stored" && PROOF_REQUIRED_CLASSIFICATIONS.includes(a.proof_classification));
+
+  /*  ── STEP 8: THE FOUR-STATE PROOF READ (§3.2) ────────────────────
+   *
+   *  `satisfied` USED TO MEAN "preserved evidence exists". It now means
+   *  what the frozen compatibility mapping says (§3.4), derived from the
+   *  evaluation head, the inventory, and nothing else:
+   *
+   *    satisfied                 → true
+   *    not_satisfied             → false
+   *    legacy_indeterminate      → null
+   *    missing_evaluation_defect → null
+   *
+   *  `null` is deliberate. Legacy history and a writer defect may NOT be
+   *  collapsed into "proof failed" — that collapse is what made a closed
+   *  work order with nothing behind it indistinguishable from a real one.
+   *
+   *  The derivation lives in release0/proof_state.js because §3.2.0
+   *  requires the §4.2 defect sweep to use the SAME predicate. It is
+   *  called from here and nowhere else.
+   *
+   *  `authority` may be supplied by a list read that resolved it once; a
+   *  detail read resolves its own.  */
+  const auth = activationAuthority_ || await proofState.activationAuthority(db);
+  const derived = await proofState.deriveProofState(db, {
+    workOrder, authority: auth, hasEligibleEvidence: preserved.length > 0,
+  });
+
   const proof = {
     required: true,
-    satisfied: preserved.length > 0,
+    //  read_status first: when it is "unavailable", `state` and `satisfied`
+    //  are ABSENT rather than null (§3.2.1). Spreading a conditional object
+    //  is what makes the key genuinely absent instead of undefined-valued,
+    //  which JSON.stringify would drop but an in-process consumer would not.
+    ...derived,
+    //  §19c Ruling C — presence booleans only. The legacy columns hold a
+    //  stub:// string and free text; neither is proof and neither travels.
+    legacy_evidence: proofState.legacyEvidenceOf(workOrder),
     preserved_count: preserved.length,
     //  A photo that arrived and could not be kept is NOT proof, and is
     //  reported separately so an operator can see the difference between
@@ -328,13 +392,32 @@ async function readPropertyWorkOrderStatuses(db, { propertyId, limit = 100 }) {
     `select id from work_orders where property_id = $1
       order by (status <> 'complete') desc, created_at desc limit $2`, [propertyId, limit])).rows;
   const out = [];
+  /*  §3.3 / §19 Ruling 2 — THE LIST CARRIES `state` TOO. The board renders
+   *  from this subset, so if only the detail carried it the two surfaces
+   *  would disagree on precisely the states the ruling exists to
+   *  distinguish: a legacy closed row and a writer defect both show
+   *  `satisfied: null`, and only `state` tells them apart.
+   *
+   *  The activation authority is resolved ONCE for the whole list rather
+   *  than per row — a board of fifty work orders would otherwise ask the
+   *  same question fifty times, and could in principle see it change
+   *  mid-list and render two different verdicts on one screen. */
+  const listAuthority = await proofState.activationAuthority(db);
   for (const row of ids) {
     // eslint-disable-next-line no-await-in-loop
-    const s = await readWorkOrderStatus(db, { propertyId, workOrderId: row.id });
+    const s = await readWorkOrderStatus(db, {
+      propertyId, workOrderId: row.id, activationAuthority: listAuthority });
     if (s) {
       out.push({
         work_order: s.work_order, current: s.current, next_action: s.next_action,
-        proof: { required: s.proof.required, satisfied: s.proof.satisfied,
+        proof: { required: s.proof.required,
+                 //  read_status, and state/satisfied ONLY when the read
+                 //  completed — absent, not null, when it did not (§3.2.1).
+                 read_status: s.proof.read_status,
+                 ...(s.proof.read_status === "ok"
+                   ? { state: s.proof.state, satisfied: s.proof.satisfied }
+                   : { reason_code: s.proof.reason_code }),
+                 legacy_evidence: s.proof.legacy_evidence,
                  not_preserved_count: s.proof.not_preserved_count },
         resident_update_count: s.resident_update.length,
         //  The LIST must be able to band on an unresolved resident update.
