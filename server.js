@@ -52,6 +52,7 @@ const plaidModule = require('./src/money/plaid'); // Plaid: second feed into ban
 const compareModule = require("./src/money/compare");   // report comparison layer (the hook)
 const explainModule = require("./src/money/explain");
 const tenantLinkModule = require("./src/comms/tenantlink"); // tenant text line Phase 1: connection (invite link → verify → session)
+const legalRoutesModule = require("./src/identity/legal_routes_block"); // A2P 10DLC public legal pages (privacy + SMS terms) — carrier-reachable
 const teamAccessModule = require("./src/identity/teamaccess");
 const superAdminModule = require("./src/identity/super_admin");
 const orgAdminModule   = require("./src/identity/org_admin");
@@ -3151,6 +3152,13 @@ app.post("/sms-proof", async (req, res) => {
   }
 });
 app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService, getAgentService: () => agentApp._service }));
+//  A2P 10DLC legal pages — /legal/privacy and /legal/sms-terms, plus .txt
+//  fallbacks. Public and unauthenticated by requirement: a carrier reviewer
+//  must be able to fetch them during campaign vetting with no session.
+//  These are the two URLs the campaign form asks for, and the two the tenant
+//  consent checkbox links to. The module existed since June and was mounted
+//  NOWHERE, so both returned 404 while the file sat in the repo looking done.
+app.use("/", legalRoutesModule());
 app.use("/", teamAccessModule({ pool, sms, commBoundary }));
 app.use("/", superAdminModule({ pool }));
 app.use("/", orgAdminModule({ pool }));

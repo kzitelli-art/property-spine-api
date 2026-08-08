@@ -1706,6 +1706,13 @@ input:focus,textarea:focus{border-color:var(--accent)}
 .btn{background:var(--accent);color:#1a1407;border:none;padding:12px 16px;border-radius:8px;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer}
 .btn:disabled{opacity:.5}.btn.full{width:100%;margin-top:14px}
 .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--ink-dim)}
+/*  A2P 10DLC consent. Carriers require the opt-in to be VISIBLE at the moment
+    of collection, active (never pre-ticked), and unbundled from the action. */
+.consent{display:flex;gap:10px;align-items:flex-start;margin:18px 0 4px;padding:14px;
+background:var(--panel2);border:1px solid var(--line);border-radius:10px;cursor:pointer}
+.consent input{margin-top:2px;width:18px;height:18px;flex:0 0 auto;accent-color:var(--accent);cursor:pointer}
+.consent span{font-size:12.5px;line-height:1.5;color:var(--ink-dim)}
+.consent a{color:var(--accent)}
 .receipt{margin-top:12px;font-size:14px;padding:11px 13px;border-radius:8px;border:1px solid var(--line);display:none}
 .receipt.ok{display:block;color:var(--confirmed);border-color:#2c4536;background:#1a2a20}
 .receipt.bad{display:block;color:var(--danger);border-color:#4a2e29;background:#241a18}
@@ -1733,19 +1740,36 @@ input:focus,textarea:focus{border-color:var(--accent)}
   <h1 id="su-title" class="serif">Connect</h1>
   <div class="sub" id="su-msg"></div>
 
+  <!--  THE OPT-IN. It sits ABOVE both verify modes so one checkbox governs
+        whichever path renders, and the language is STATIC HTML rather than
+        JS-injected: a carrier reviewer reading the served source must find
+        the disclosure even if scripting never runs. Only the property name
+        is filled in at render, and it defaults to a truthful generic.
+        Unticked by default and never auto-ticked — consent is an act. -->
+  <label class="consent" for="su-consent">
+    <input type="checkbox" id="su-consent"/>
+    <span>I agree to receive text messages from <b id="su-consent-prop">my property</b>,
+    operated by Virtus Management LLC, about my tenancy — maintenance updates,
+    account questions and building notices —
+    at the mobile number I verify here. Message frequency varies.
+    Message &amp; data rates may apply. Reply STOP to opt out, HELP for help.
+    See the <a href="/legal/sms-terms" target="_blank" rel="noopener">SMS Terms</a>
+    and <a href="/legal/privacy" target="_blank" rel="noopener">Privacy Policy</a>.</span>
+  </label>
+
   <div id="mode-phone" class="hidden">
     <label class="lbl">Your mobile number</label>
     <input id="su-phone" type="tel" inputmode="tel" placeholder="215-555-1212" autocomplete="tel"/>
-    <button class="btn full" id="su-go">Connect</button>
+    <button class="btn full" id="su-go" disabled>Connect</button>
   </div>
 
   <div id="mode-otp" class="hidden">
-    <button class="btn full" id="otp-send">Text me a code</button>
+    <button class="btn full" id="otp-send" disabled>Text me a code</button>
     <div id="otp-entry" class="hidden">
       <label class="lbl">6-digit code</label>
       <input id="su-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456"/>
-      <button class="btn full" id="otp-go">Connect</button>
-      <button class="btn full ghost" id="otp-resend" style="margin-top:8px">Resend code</button>
+      <button class="btn full" id="otp-go" disabled>Connect</button>
+      <button class="btn full ghost" id="otp-resend" style="margin-top:8px" disabled>Resend code</button>
     </div>
   </div>
 
@@ -1822,15 +1846,32 @@ async function init(){
     if(d.status==="valid"||d.status==="already_verified"){
       $("su-title").textContent = "Hi "+(d.tenant&&d.tenant.first_name||"there")+" 👋";
       $("su-msg").textContent = d.message;
+      //  Name the property in the disclosure. The endpoint already returns it
+      //  (see /tenant/setup/:token → property.name); if it is ever absent the
+      //  static generic stands rather than an empty phrase.
+      const pn = d.property && (d.property.name || d.property.address);
+      if (pn) $("su-consent-prop").textContent = pn;
       if (d.verify_mode === "otp") {
         $("mode-otp").classList.remove("hidden");
         if (d.masked_phone) $("otp-send").textContent = "Text a code to "+d.masked_phone;
       } else {
         $("mode-phone").classList.remove("hidden");
       }
+      $("su-consent").onchange = syncConsentGate;
+      syncConsentGate();
       show("setup");
     } else { $("dead-msg").textContent = d.message||"Ask your manager for a fresh link."; show("dead"); }
   }catch(e){ $("dead-msg").textContent="Could not load this link. Check your connection."; show("dead"); }
+}
+
+//  THE GATE. Nothing that verifies a number or sends a message is reachable
+//  until the box is ticked. Buttons also ship disabled in the markup, so the
+//  gate is closed before this ever runs — fail-closed, not fail-open.
+function syncConsentGate(){
+  const c = $("su-consent"), on = !!(c && c.checked);
+  ["su-go","otp-send","otp-go","otp-resend"].forEach(function(id){
+    const b = $(id); if (b) b.disabled = !on;
+  });
 }
 
 async function finishConnect(d){
@@ -1849,7 +1890,7 @@ $("su-go").onclick = async ()=>{
     if(r.ok && d.session) await finishConnect(d);
     else receipt("su-receipt", d.receipt||"That didn't work.", false);
   }catch(e){ receipt("su-receipt","Connection problem — try again.",false); }
-  btn.disabled=false; btn.textContent="Connect";
+  btn.textContent="Connect"; syncConsentGate();   // re-open only if consent still stands
 };
 
 // ── OTP path ──
@@ -1862,7 +1903,7 @@ async function sendCode(btn){
     if(r.ok){ $("otp-entry").classList.remove("hidden"); $("su-code").focus(); receipt("su-receipt", d.receipt, true); }
     else receipt("su-receipt", d.receipt||"Could not send a code.", false);
   }catch(e){ receipt("su-receipt","Connection problem — try again.",false); }
-  btn.disabled=false; btn.textContent=orig;
+  btn.textContent=orig; syncConsentGate();   // re-open only if consent still stands
 }
 $("otp-send").onclick = ()=>sendCode($("otp-send"));
 $("otp-resend").onclick = ()=>sendCode($("otp-resend"));
@@ -1875,7 +1916,7 @@ $("otp-go").onclick = async ()=>{
     if(r.ok && d.session) await finishConnect(d);
     else receipt("su-receipt", d.receipt||"That didn't work.", false);
   }catch(e){ receipt("su-receipt","Connection problem — try again.",false); }
-  btn.disabled=false; btn.textContent="Connect";
+  btn.textContent="Connect"; syncConsentGate();   // re-open only if consent still stands
 };
 
 function enterHome(me){
@@ -1904,7 +1945,19 @@ async function reportIssue(){
       if(d.urgency==="needs_confirmation" && d.work_order_id){
         $("wo-result").innerHTML = escapeHtml(d.receipt||"") +
           '<div style="margin-top:8px"><textarea id="wo-ans" placeholder="Your answer"></textarea>'+
-          '<button class="btn" onclick="answerIssue(\''+d.work_order_id+'\')">Send answer</button></div>';
+          //  THIS LINE KILLED THE WHOLE PAGE. It lives inside the template
+          //  literal that builds this document, so a single-backslash quote
+          //  escape is consumed by the template and the browser received
+          //  answerIssue(''+id+'') — a syntax error that failed the ENTIRE
+          //  inline script, not just this branch. Nothing ran: the page sat
+          //  on "Loading..." forever and no tenant could connect. A doubled
+          //  backslash emits a real one, so the served script is valid.
+          //  Note: no backticks in this comment. A backtick here would close
+          //  the template literal and break the module itself — which is how
+          //  the first attempt at this fix failed.
+          //  Covered by tenant_setup_page_parses.test.js, which parses the
+          //  SERVED script rather than reading the source.
+          '<button class="btn" onclick="answerIssue(\\''+d.work_order_id+'\\')">Send answer</button></div>';
       } else {
         $("wo-result").textContent = d.receipt || "Request received.";
       }

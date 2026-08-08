@@ -11,11 +11,31 @@
 //    Terms & Conditions URL → {APP_BASE_URL}/legal/sms-terms
 //  i.e. https://property-spine-api.onrender.com/legal/privacy
 //       https://property-spine-api.onrender.com/legal/sms-terms
+//
+//  ⚠ THIS FILE WAS DEAD CODE UNTIL 2026-08-08. It was written as a block to
+//  paste into server.js — bare `app.get(...)`, no express, no export — and
+//  nobody ever pasted it. The file existed, the routes did not, so BOTH
+//  campaign-required URLs returned 404 in production while the repository
+//  looked complete. A carrier reviewer clicking either link would have
+//  failed the A2P campaign for a reason no source review could surface.
+//
+//  The lesson generalises one this codebase already carries: repo absence is
+//  not deployed absence, and now — FILE PRESENCE IS NOT ROUTE MOUNTING. The
+//  only proof that a route exists is a request that returns it.
+//
+//  It is now an ordinary router module, mounted in server.js beside the
+//  other route modules, and covered by tests/tenant_setup_page_parses.test.js
+//  — which fetches all four pages, and fetches a never-existing /legal path
+//  that must still 404, so the 200s prove routing rather than a catch-all.
 // ════════════════════════════════════════════════════════════════════
+const express = require("express");
+
 const LEGAL_BRAND = "Virtus Management LLC (DBA OneFive Capital)";
 const LEGAL_PROGRAM = "OneFive Capital Tenant Line";
 const LEGAL_CONTACT = "kameron@onefivecap.com";
 const LEGAL_UPDATED = "June 14, 2026";
+
+const router = express.Router();
 
 function legalPage(title, bodyHtml) {
   return `<!DOCTYPE html><html lang="en"><head>
@@ -78,9 +98,9 @@ const SMS_TERMS_HTML = `
 <p>Your privacy is important to us. See our <a href="/legal/privacy">Privacy Policy</a> for how we handle your information. We do not share your mobile information with third parties or affiliates for marketing or promotional purposes.</p>
 `;
 
-app.get("/legal/sms-terms", (_req, res) =>
+router.get("/legal/sms-terms", (_req, res) =>
   res.set("Content-Type", "text/html").send(legalPage("SMS Terms &amp; Conditions", SMS_TERMS_HTML)));
-app.get("/legal/sms-terms.txt", (_req, res) =>
+router.get("/legal/sms-terms.txt", (_req, res) =>
   res.set("Content-Type", "text/plain").send(
 `${LEGAL_PROGRAM} — SMS Terms & Conditions (updated ${LEGAL_UPDATED})
 
@@ -136,9 +156,9 @@ const PRIVACY_HTML = `
 <p>We may update this policy; the "last updated" date above reflects the current version.</p>
 `;
 
-app.get("/legal/privacy", (_req, res) =>
+router.get("/legal/privacy", (_req, res) =>
   res.set("Content-Type", "text/html").send(legalPage("Privacy Policy", PRIVACY_HTML)));
-app.get("/legal/privacy.txt", (_req, res) =>
+router.get("/legal/privacy.txt", (_req, res) =>
   res.set("Content-Type", "text/plain").send(
 `${LEGAL_BRAND} — Privacy Policy (updated ${LEGAL_UPDATED})
 
@@ -155,3 +175,8 @@ Retention: kept while you are a resident and as needed for records/compliance, t
 Your choices: reply STOP to opt out anytime; email ${LEGAL_CONTACT} for access/correction requests.
 
 Security: reasonable safeguards; one-time passcodes are never stored in readable form.`));
+
+//  Factory, matching the mount style of every other route module in
+//  server.js. Public and unauthenticated on purpose: carriers must be able
+//  to fetch these during campaign vetting without a session.
+module.exports = function legalRoutes() { return router; };

@@ -118,31 +118,82 @@ const ORG = ID("org"), PROP = ID("prop"), TECH = ID("tech");
     console.log("          instance keeps serving; nothing is migrated.");
   }
 
-  // ══ A — THE DELIBERATE RELEASE ═════════════════════════════════════
-  sec("A · THE MIGRATION AS A DELIBERATE, SEPARATE ACT");
+  // ══ A — THE RELEASE, AS THE DEPLOY ITSELF ══════════════════════════
+  sec("A · APPLYING IT AS PART OF THE DEPLOY — no window at all");
   {
+    /*  ── THIS IS THE RUNBOOK, AND IT SUPERSEDES AN EARLIER ONE ───────
+     *
+     *  The first version of the Step 2 runbook said: merge, let the deploy
+     *  fail, apply from an external checkout, then redeploy. That works,
+     *  but it opens the W window below — the ledger moves while the live
+     *  build has no file for it.
+     *
+     *  migrate.js already supports the better path, and the support is
+     *  deliberate: APPLY is chosen from the ENVIRONMENT
+     *  (`MIGRATION_RELEASE=1`), and when `RENDER_GIT_COMMIT` is present it
+     *  additionally demands `EXPECTED_SHA` — a branch exists solely to pin
+     *  a release to one deployed build. So `prestart` CAN apply, but only
+     *  for a named commit, authorised by someone who read the ledger.
+     *
+     *  Setting those three variables makes ONE deploy apply the migration
+     *  and then boot. There is no interval where the ledger is ahead of
+     *  the running build, so W never opens.
+     *
+     *  The cost is that the auto-apply behaviour is armed while they are
+     *  set, which is the 121/126 failure mode. A3–A5 measure what the
+     *  guards actually do about that. */
+    const RENDER = { MIGRATION_RELEASE: "1", EXPECTED_LEDGER_CEILING: "136",
+                     EXPECTED_SHA: "abc123def456", RENDER_GIT_COMMIT: "abc123def4567890" };
     const t0 = Date.now();
-    const rel = runMigrate(["--apply"], { MIGRATION_RELEASE: "1", EXPECTED_LEDGER_CEILING: "136" });
+    //  No --apply flag: this is `prestart` verbatim, with the env set.
+    const rel = runMigrate([], RENDER);
     const ms = Date.now() - t0;
-    ok("A1  the explicit release applies 137", rel.status === 0,
+    ok("A1  prestart WITH the release env applies 137 and exits 0", rel.status === 0,
        (rel.stdout + rel.stderr).split("\n").filter(Boolean).slice(-5).join(" | "));
     const v = (await c.query(`select max(version) v from schema_migrations`)).rows[0].v;
-    ok("A2  the ledger advances to 137", v === "137", String(v));
+    ok("A2  the ledger advances to 137 inside that same deploy", v === "137", String(v));
     console.log("        applied in " + ms + " ms (process wall time, empty tables)");
+    console.log("        → the deploy that applies is the deploy that boots. No window.");
 
-    //  A release run by someone who has not read the ledger is refused.
-    //  Re-asserted here because it is the control that makes the recorded
-    //  ceiling in the runbook meaningful rather than decorative.
-    const stale = runMigrate(["--apply"], { MIGRATION_RELEASE: "1", EXPECTED_LEDGER_CEILING: "136" });
-    ok("A3  a re-run with a now-stale expected ceiling is REFUSED",
-       stale.status !== 0 && /not in the expected state/i.test(stale.stdout + stale.stderr),
-       "exit " + stale.status);
+    //  ── WHAT HAPPENS IF THE VARIABLES ARE LEFT BEHIND ───────────────
+    //  This is the question that decides whether the path is safe, and
+    //  the answer is NOT "nothing". Left set, the NEXT deploy refuses and
+    //  the service does not boot. Loud, not silent — but it must be
+    //  cleaned up, and "remove them afterwards" is a step, not advice.
+    const leftover = runMigrate([], RENDER);
+    ok("A3  LEFT BEHIND, the next deploy REFUSES on the stale ceiling",
+       leftover.status !== 0 && /not in the expected state/i.test(leftover.stdout + leftover.stderr),
+       "exit " + leftover.status + " — it booted, so a stale release env is silent. " +
+       "That would be the 121/126 failure mode re-armed.");
+    console.log("        → so REMOVING them is a step. Forgetting fails the next");
+    console.log("          deploy loudly rather than migrating something silently.");
+
+    const wrongSha = runMigrate([], { ...RENDER, EXPECTED_LEDGER_CEILING: "137",
+                                      EXPECTED_SHA: "deadbeef" });
+    ok("A4  a release pinned to a DIFFERENT build is REFUSED",
+       wrongSha.status !== 0 && /not the build you authorised/i.test(wrongSha.stdout + wrongSha.stderr),
+       "exit " + wrongSha.status);
+
+    const noSha = runMigrate([], { MIGRATION_RELEASE: "1", EXPECTED_LEDGER_CEILING: "137",
+                                   RENDER_GIT_COMMIT: "abc123def4567890" });
+    ok("A5  on a Render deploy, EXPECTED_SHA is REQUIRED — omitting it refuses",
+       noSha.status !== 0 && /EXPECTED_SHA is required/i.test(noSha.stdout + noSha.stderr),
+       "exit " + noSha.status + " — then the release is not pinned to a build");
+
+    const noCeiling = runMigrate([], { MIGRATION_RELEASE: "1", EXPECTED_SHA: "abc123def456",
+                                       RENDER_GIT_COMMIT: "abc123def4567890" });
+    ok("A6  …and so is EXPECTED_LEDGER_CEILING — a release cannot be run unlooked",
+       noCeiling.status !== 0 && /EXPECTED_LEDGER_CEILING is required/i.test(noCeiling.stdout + noCeiling.stderr),
+       "exit " + noCeiling.status);
   }
 
   // ══ V — THE DEPLOY WILL NOW BOOT ═══════════════════════════════════
-  sec("V · AFTER THE RELEASE, VERIFY MODE PASSES — the deploy boots");
+  sec("V · WITH THE RELEASE ENV REMOVED, VERIFY MODE PASSES");
   {
-    const boot = runMigrate();
+    //  Removing the variables on Render triggers a redeploy, which is
+    //  convenient rather than annoying: it proves the ordinary boot path
+    //  works, immediately, instead of leaving it to be discovered later.
+    const boot = runMigrate([], { RENDER_GIT_COMMIT: "abc123def4567890" });
     ok("V1  verify mode EXITS 0 with 137 applied and present",
        boot.status === 0, "exit " + boot.status + " — the deploy would not boot");
     ok("V2  …and says so in both directions",
@@ -150,12 +201,16 @@ const ORG = ID("org"), PROP = ID("prop"), TECH = ID("tech");
        boot.stdout.split("\n").filter(Boolean).slice(-4).join(" | "));
   }
 
-  // ══ W — THE WINDOW, MEASURED ═══════════════════════════════════════
-  sec("W · THE WINDOW — ledger ahead of the build refuses to boot");
+  // ══ W — THE WINDOW THE RUNBOOK AVOIDS ══════════════════════════════
+  sec("W · WHY NOT TO APPLY OUT-OF-BAND — the window this would open");
   {
-    /*  This is the hazard that fixes the ordering. Between "137 applied"
-     *  and "the build containing 137 is live", the RUNNING build has no
-     *  file for a ledger version. A restart in that window refuses.
+    /*  Kept, and still proven, because it is the REASON section A is the
+     *  runbook. Applying from an external checkout moves the ledger while
+     *  the live build has no file for it, and a restart in that interval
+     *  refuses to boot. The deploy-time path in A never creates it.
+     *
+     *  Between "137 applied" and "the build containing 137 is live", the
+     *  RUNNING build has no file for a ledger version.
      *
      *  Held by MOVING the file, restored in `finally` and verified by
      *  digest — the same discipline baseline_136.sh uses, because a proof
