@@ -60,6 +60,12 @@ const GATES = [
     what: "migration 137 DDL is the proven scale payload, unchanged" },
   { file: "gate_completion_writers.js",
     what: "exactly the expected work-order completion writers; no third writer" },
+  //  Three things now decide what "terminal" means — the reader, the sweep,
+  //  and the database guard (migration 140). Drift between them is either a
+  //  hole the sweep bills to a human, or an outage. Neither is discoverable
+  //  at runtime.
+  { file: "gate_completion_guard_terminal_set.js",
+    what: "the guard, the reader and the sweep agree on the terminal set; no bypass" },
   //  The conversational seams. DB-free, so they belong on the standard path:
   //  they check that the extracted logic has ONE implementation, that resident
   //  wording did not drift, and that an operating receipt and a delivery
