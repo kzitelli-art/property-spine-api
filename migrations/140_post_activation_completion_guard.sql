@@ -1,148 +1,184 @@
 -- ════════════════════════════════════════════════════════════════════
---  140 — POST-ACTIVATION COMPLETION GUARD
+--  140 — THE FORBIDDEN COMMITTED STATE
 --
---  After the cutover, a work order may not become terminal unless a proof
---  evaluation justifies it. Enforced by the DATABASE, so it holds for
---  every writer: application code, a utility script, a psql session, a
---  future route nobody has written yet.
+--  After the cutover, NO NON-INVENTORIED WORK ORDER MAY COMMIT IN A
+--  TERMINAL STATE THAT THE CANONICAL READER WOULD CLASSIFY AS
+--  `missing_evaluation_defect`.
 --
---  ── WHY THIS EXISTS ─────────────────────────────────────────────────
+--  That state, and only that state, manufactures a false accountability
+--  obligation: the §4.2 sweep raises `proof_evaluation_missing` against a
+--  named role for something the SYSTEM did. The activation is not
+--  reversible — the inventory tables are append-only — so the window
+--  opens the instant the activation commits and never closes.
 --
---  Step 6 closes the one legacy done-path we know about. It cannot close
---  the ones we do not: this repository still carries 87 scripts that
---  build a connection from DATABASE_URL with no guard, 67 of them
---  write-capable (tests/gate_harness_isolation.js).
+--  ── IT PROTECTS THE STATE, NOT THE CALLER ───────────────────────────
 --
---  Before activation a stray `closed` row is untidy. AFTER activation it
---  is terminal, absent from the immutable inventory, and therefore
---  `missing_evaluation_defect` — an obligation raised against a named
---  role for something the SYSTEM did. And the activation is not
---  reversible: the inventory tables are append-only.
+--  This is deliberately NOT "only claimCompletion may write a
+--  completion". Caller identity is unenforceable at the database and
+--  worthless against hand-run SQL. What is enforceable is the shape of
+--  the committed row, and that is the thing that actually causes harm.
 --
---  A repo-wide cleanup of 67 scripts cannot produce a guarantee, because
---  it says nothing about the 68th. One boundary the writes must pass
---  through can.
+--  Consequences of choosing the state:
+--    · any writer may complete work, PROVIDED it leaves a legal state
+--    · a future caller nobody has written yet is already covered
+--    · no application flag, no session variable, no service role — none
+--      of which survives a second process sharing DATABASE_URL
 --
---  ── IT IS INERT UNTIL ACTIVATION, ON PURPOSE ────────────────────────
+--  ── DEFERRED: ONLY THE COMMITTED STATE IS JUDGED ────────────────────
 --
---  With no activation row this trigger returns immediately. That is not
---  a weakness — before the cutover, legacy terminal rows are exactly
---  what the inventory exists to record, and blocking them would break
---  the census this release depends on.
+--  A CONSTRAINT TRIGGER, DEFERRABLE INITIALLY DEFERRED. It fires at
+--  COMMIT, not per statement, so a transaction may write its facts in
+--  any order it likes:
 --
---  It means this migration is SAFE TO APPLY AT ANY TIME. It changes no
---  behaviour until Step 7 runs, and then it arms itself. It does not
---  need its own deployment window, and it must not be sequenced after
---  activation — the window it protects opens the instant the activation
+--      begin;
+--        update work_orders set status='complete' ...;   -- terminal first
+--        insert into work_order_proof_evaluations ...;   -- evidence after
+--      commit;                                           -- LEGAL
+--
+--  An immediate trigger would refuse that, and would therefore couple
+--  this guard to the canonical writer's current statement order. §4
+--  happens to write the evaluation first — but pinning a database
+--  invariant to a code ordering means an innocuous refactor breaks
+--  production. Deferring removes the coupling entirely.
+--
+--  It also means a transaction may pass THROUGH the forbidden state and
+--  still commit, provided it does not END there.
+--
+--  ── IT RE-READS. IT DOES NOT TRUST `NEW`. ───────────────────────────
+--
+--  `NEW` is a snapshot of the row as it was when the event was queued.
+--  By commit time the row may have moved again, so the function reads
+--  the CURRENT row and uses `NEW` only for identity. Judging `NEW.status`
+--  would judge an intermediate state — exactly what deferring exists to
+--  avoid.
+--
+--  ── ONE FORBIDDEN STATE, NOT A SECOND READER ────────────────────────
+--
+--  release0/proof_state.js derives four states. This enforces the
+--  negation of exactly ONE of them and knows nothing about the other
+--  three:
+--
+--      an evaluation head exists            → satisfied / not_satisfied
+--      not terminal                         → not yet due
+--      terminal + inventoried               → legacy_indeterminate
+--      terminal + NOT inventoried + no head → *** FORBIDDEN ***
+--
+--  Note it accepts ANY head, including `not_satisfied`. A work order
+--  that was evaluated and FAILED is not a defect — it is a judgement
+--  that was made. Requiring `satisfied` would enforce more than the
+--  forbidden state and would block a legitimate outcome.
+--
+--  Interpretation still belongs to the reader and the sweep. The
+--  database only refuses the one state that cannot be allowed to exist.
+--
+--  ── ACTIVATION-AWARE: INERT UNTIL THE CUTOVER ───────────────────────
+--
+--  With no activation row the reader reports `unavailable`, not
+--  `missing_evaluation_defect` — so before the cutover there is no
+--  forbidden state and this returns immediately. Pre-cutover terminal
+--  rows are exactly what the census inventories; blocking them would
+--  break the inventory the release depends on.
+--
+--  SO IT IS SAFE TO APPLY AT ANY TIME, and it MUST NOT be applied after
+--  the activation: the window it protects opens when that transaction
 --  commits.
 --
---  ── WHY THE CANONICAL WRITER PASSES WITHOUT CHANGES ─────────────────
+--  ── WHAT CAN STILL DEFEAT IT (measured, not assumed) ────────────────
 --
---  `claimCompletion` writes the proof evaluation BEFORE it sets the
---  status, deliberately (§4, "written first and the rest is contingent
---  on it"). So by the time this trigger runs, in the same transaction,
---  the evaluation head already exists. The guard required no change to
---  the writer, which is the strongest evidence it is drawn at the right
---  boundary.
+--    DROP TRIGGER                     by the table owner. Deliberate,
+--                                     auditable DDL. No flag, by design.
+--    session_replication_role=replica DISABLES constraint triggers —
+--                                     but setting it is SUPERUSER-ONLY.
+--                                     A non-superuser role is refused
+--                                     with "permission denied to set
+--                                     parameter". Everything holding
+--                                     DATABASE_URL is therefore covered.
 --
---  ── ITS TERMINAL SET IS THE READER'S ────────────────────────────────
---
---  'complete' and 'closed' — the same two statuses as
---  release0/proof_state.js TERMINAL_STATUSES and the same as the §4.2
---  sweep. Two predicates that can drift is the defect this release
---  exists to end, so a source gate asserts they still agree
---  (tests/gate_completion_guard_terminal_set.js).
---
---  ── NO BYPASS ───────────────────────────────────────────────────────
---
---  There is deliberately no session flag, no GUC and no service-role
---  exemption. A bypass that a utility script can set is not a guarantee;
---  it is a comment. Removing this guard requires DROP TRIGGER — a
---  deliberate, auditable DDL act by someone holding the privilege.
---
---  ── WHAT IT DOES NOT DO ─────────────────────────────────────────────
---
---  It does not police a work order that is ALREADY terminal: an update
---  that touches a completed row's columns is not a new completion.
---  It does not constrain the status vocabulary — `status` has no CHECK
---  constraint on this table, so a writer could still invent a value like
---  'Complete' that neither this guard nor the reader treats as terminal.
---  That row would be invisible rather than a manufactured defect; it is
---  a different (and smaller) problem, and it is recorded rather than
---  quietly folded in here.
+--  `SET CONSTRAINTS ALL IMMEDIATE` does NOT defeat it: that moves the
+--  check earlier, it does not skip it. Proven, not assumed.
 -- ════════════════════════════════════════════════════════════════════
 
-create or replace function public.release_0_guard_terminal_completion()
+create or replace function public.release_0_assert_no_manufactured_defect()
 returns trigger as $$
 declare
-  v_activated    boolean;
-  v_inventoried  boolean;
-  v_evaluated    boolean;
+  v_status    text;
+  v_property  uuid;
 begin
-  --  1. Only a transition INTO a terminal status is a completion.
-  if new.status is null or new.status not in ('complete', 'closed') then
-    return new;
+  --  THE CURRENT ROW, not NEW. See the header: NEW is the queued
+  --  snapshot; only the committed state is judged.
+  select status, property_id into v_status, v_property
+    from public.work_orders where id = new.id;
+
+  --  Deleted later in the same transaction. Nothing can be a defect.
+  if not found then
+    return null;
   end if;
 
-  --  An already-terminal row being touched is not a new completion.
-  if tg_op = 'UPDATE' and old.status is not null
-     and old.status in ('complete', 'closed') then
-    return new;
+  --  Not terminal at commit — including a row that passed through a
+  --  terminal status and was moved back.
+  if v_status is null or v_status not in ('complete', 'closed') then
+    return null;
   end if;
 
-  --  2. INERT BEFORE THE CUTOVER. Legacy terminal rows are what the
-  --     inventory is for; blocking them would break the census.
-  select exists (select 1 from public.release_0_activation_current)
-    into v_activated;
-  if not v_activated then
-    return new;
+  --  Before the cutover the reader says `unavailable`, never `defect`.
+  if not exists (select 1 from public.release_0_activation_current) then
+    return null;
   end if;
 
-  --  3. A row the cutover inventoried is legitimate legacy history.
-  select exists (
+  --  Legitimate legacy history, frozen by the cutover census.
+  if exists (
     select 1 from public.release_0_legacy_cutover_inventory
-     where work_order_id = new.id and property_id = new.property_id
-  ) into v_inventoried;
-  if v_inventoried then
-    return new;
+     where work_order_id = new.id and property_id = v_property
+  ) then
+    return null;
   end if;
 
-  --  4. A governed completion has an evaluation. The canonical writer
-  --     has already written it, in this transaction, by now.
-  select exists (
+  --  ANY evaluation head, satisfied or not. A judgement that was made is
+  --  not a missing judgement.
+  if exists (
     select 1 from public.work_order_proof_evaluation_head
-     where work_order_id = new.id and property_id = new.property_id
-  ) into v_evaluated;
-  if v_evaluated then
-    return new;
+     where work_order_id = new.id and property_id = v_property
+  ) then
+    return null;
   end if;
 
-  --  5. EXPLICIT REFUSAL. Never a silent rewrite to a different status,
-  --     and never a swallowed no-op: the caller's transaction fails and
-  --     it is told exactly what is missing and what to use instead.
+  --  THE FORBIDDEN STATE. Explicit, never a silent rewrite to some other
+  --  status: the caller's transaction fails and nothing is committed.
   raise exception
-    'work order % cannot become ''%'' : the cutover is active and this work order has no proof evaluation',
-    new.id, new.status
+    'work order % would commit as ''%'' with no proof evaluation and no cutover inventory row',
+    new.id, v_status
     using errcode = 'R0001',
-          detail  = 'Post-activation, a terminal status requires a row in '
-                 || 'work_order_proof_evaluations (or membership in '
-                 || 'release_0_legacy_cutover_inventory for pre-cutover history).',
-          hint    = 'Complete work through the canonical writer '
-                 || '(technician.lifecycle_service.claimCompletion), which records the '
-                 || 'evaluation and the status in ONE transaction. If you are running a '
-                 || 'repair or utility script, it must not close maintenance work.';
+          detail  = 'This is the committed state the canonical reader classifies as '
+                 || 'missing_evaluation_defect. Post-activation it would raise a '
+                 || 'proof_evaluation_missing obligation against a named role for '
+                 || 'something no human did wrong.',
+          hint    = 'Either record a proof evaluation for this work order in the same '
+                 || 'transaction (the canonical writer, '
+                 || 'technician.lifecycle_service.claimCompletion, does this), or do not '
+                 || 'leave it in a terminal status. Statement order does not matter — '
+                 || 'only the state at COMMIT is judged.';
 end;
 $$ language plpgsql;
 
-alter function public.release_0_guard_terminal_completion()
+alter function public.release_0_assert_no_manufactured_defect()
   set search_path = public, pg_temp;
 
 drop trigger if exists guard_terminal_completion on public.work_orders;
-create trigger guard_terminal_completion
-  before insert or update on public.work_orders
-  for each row execute function public.release_0_guard_terminal_completion();
+drop trigger if exists assert_no_manufactured_defect on public.work_orders;
 
-comment on function public.release_0_guard_terminal_completion() is
-  'Release 0: after the cutover activation, refuses any transition of a work order '
-  'into complete/closed without a proof evaluation or a cutover inventory row. '
-  'Inert before activation. No bypass by design — removal is DROP TRIGGER.';
+--  WHEN (new.status in (...)) keeps ordinary work-order writes free of any
+--  cost: a non-terminal write queues no event at all. It cannot create a
+--  hole — a row whose COMMITTED status is terminal must have had some
+--  statement set it terminal, and that statement queues the event.
+create constraint trigger assert_no_manufactured_defect
+  after insert or update on public.work_orders
+  deferrable initially deferred
+  for each row
+  when (new.status in ('complete', 'closed'))
+  execute function public.release_0_assert_no_manufactured_defect();
+
+comment on function public.release_0_assert_no_manufactured_defect() is
+  'Release 0: refuses to COMMIT a work order in the one state the canonical reader '
+  'classifies as missing_evaluation_defect (terminal, post-activation, not inventoried, '
+  'no evaluation head). Deferred, so statement order is irrelevant. Inert before '
+  'activation. No bypass flag by design; removal is DROP TRIGGER.';

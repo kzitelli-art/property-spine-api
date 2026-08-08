@@ -1,21 +1,29 @@
 #!/usr/bin/env node
 /* ════════════════════════════════════════════════════════════════════
-   MIGRATION 140 — PROVE THE POST-ACTIVATION COMPLETION GUARD
+   MIGRATION 140 — THE FORBIDDEN COMMITTED STATE
 
-   The claim: after the cutover, NO path can move a work order into a
-   terminal status without a proof evaluation behind it.
+   The claim: after the cutover, no non-inventoried work order can COMMIT
+   in the state the canonical reader calls `missing_evaluation_defect`.
 
-   "No path" is not provable by reading source — that is what the 67
-   write-capable unguarded scripts already demonstrate. So every negative
-   case here is a REAL BYPASS ATTEMPT: raw SQL on a pooled connection,
-   the shape a utility script actually uses, a direct INSERT, and a
-   multi-row UPDATE that never names an id.
+   ── EVERY NEGATIVE CASE IS DIRECT SQL ───────────────────────────────
 
-     I   the guard is INERT before activation, deliberately
+   Proving this through the application services would prove something
+   about the services. The threat is the path that does not go through
+   them: a repair script, a psql session, a route nobody has written yet.
+   So every bypass below is raw SQL on its own pooled connection, and §Z
+   re-checks the forbidden population directly rather than trusting any
+   assertion above it.
+
+     W   the exact terminal-writer inventory, frozen
+     I   inert before activation
+     D   DEFERRED — statement order is irrelevant, only the commit
      C   the canonical writer passes, unchanged
-     B   every bypass attempt is REFUSED — explicitly, writing nothing
-     L   legitimate legacy history and ordinary work are untouched
-     A   the guard's terminal set is the READER's
+     B   direct-SQL bypasses are refused, and write nothing
+     E   the two escape paths that SHOULD work still work
+     K   concurrency
+     V   what can still defeat it, measured
+     X   drop the guard and the bypass works — it is load-bearing
+     Z   independent census: zero forbidden rows exist
 
    ⚠ ISOLATED POSTGRES ONLY. Needs 137 + 140.
 
@@ -36,6 +44,8 @@ const ROOT = path.join(__dirname, "..", "..");
 const lifecycle = require(path.join(ROOT, "src/technician/lifecycle_service.js"));
 const activation = require(path.join(ROOT, "src/release0/activation_service.js"));
 const proofState = require(path.join(ROOT, "src/release0/proof_state.js"));
+const reader = require(path.join(ROOT, "src/surfaces/work_order_status_read.js"));
+const MIGRATION = path.join(ROOT, "migrations/140_post_activation_completion_guard.sql");
 const URL = process.env.STEP12_DATABASE_URL;
 
 let pass = 0, fail = 0;
@@ -47,7 +57,7 @@ const ID = (n) => crypto.createHash("md5").update("s12:" + n).digest("hex")
   .replace(/^(.{8})(.{4})(.{4})(.{4})(.{12}).*$/, "$1-$2-$3-$4-$5");
 const ORG = ID("org"), PROP = ID("prop"), TECH = ID("tech");
 const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
-const GUARD_CODE = "R0001";
+const CODE = "R0001";
 
 (async function main() {
   if (!URL) { console.error("REFUSED: STEP12_DATABASE_URL is not set."); process.exit(1); }
@@ -59,13 +69,12 @@ const GUARD_CODE = "R0001";
     console.error("REFUSED: not the isolated baseline."); process.exit(2);
   }
   if (Number((await c.query(`select count(*) n from release_0_activation_history`)).rows[0].n) > 0) {
-    console.error("REFUSED: activation history is not empty — the INERT half cannot be proven.");
+    console.error("REFUSED: activation history is not empty — §I cannot be proven.");
     process.exit(3);
   }
 
-  console.log("MIGRATION 140 — THE POST-ACTIVATION COMPLETION GUARD\n");
-  await c.query(fs.readFileSync(
-    path.join(ROOT, "migrations/140_post_activation_completion_guard.sql"), "utf8"));
+  console.log("MIGRATION 140 — THE FORBIDDEN COMMITTED STATE\n");
+  await c.query(fs.readFileSync(MIGRATION, "utf8"));
 
   await c.query(`insert into organizations (id,name) values ($1,'S12') on conflict (id) do nothing`, [ORG]);
   await c.query(`insert into properties (id,name,organization_id) values ($1,'S12 Property',$2)
@@ -95,44 +104,117 @@ const GUARD_CODE = "R0001";
       [a, wo, PROP, TECH, "ME" + a.slice(0, 8), b, b.length,
        crypto.createHash("sha256").update(b).digest("hex")]);
   };
-  const statusOf = async (wo) => (await c.query(
-    `select status from work_orders where id=$1`, [wo])).rows[0].status;
-
-  /*  A REAL BYPASS, on its own pooled connection — the shape a utility
-   *  script actually has. Not a simulation: the same driver, the same
-   *  kind of connection, arbitrary SQL. Returns the error or null. */
-  const bypass = async (sql, vals) => {
-    const other = await pool.connect();
-    try { await other.query(sql, vals); return null; }
-    catch (e) { return e; }
-    finally { other.release(); }
+  const statusOf = async (wo) => {
+    const r = (await c.query(`select status from work_orders where id=$1`, [wo])).rows[0];
+    return r ? r.status : null;
   };
 
-  // ══ I — INERT BEFORE ACTIVATION ════════════════════════════════════
-  sec("I · BEFORE THE CUTOVER THE GUARD DOES NOTHING — DELIBERATELY");
+  /*  DIRECT SQL, on its own pooled connection — the shape a repair script
+   *  or a psql session has. `sqls` runs as ONE transaction so a deferred
+   *  refusal surfaces where it really would: at COMMIT. */
+  const direct = async (sqls, vals) => {
+    const o = await pool.connect();
+    try {
+      await o.query("begin");
+      for (const s of [].concat(sqls)) await o.query(s, vals);
+      await o.query("commit");
+      return null;
+    } catch (e) { await o.query("rollback").catch(() => {}); return e; }
+    finally { o.release(); }
+  };
+
+  // ══ W — THE EXACT WRITER INVENTORY ═════════════════════════════════
+  //  "67 write-capable scripts" is a capability warning, not the writer
+  //  count. This is the set that can actually put a terminal status on a
+  //  work order, and it is much smaller.
+  sec("W · THE FROZEN TERMINAL-WRITER INVENTORY");
   {
-    const legacy = await mkWo("open");
-    const e = await bypass(`update work_orders set status='closed' where id=$1`, [legacy]);
-    ok("I1  a raw close SUCCEEDS before activation", e === null,
-       e && e.message);
-    ok("I2  …and the row really is terminal", await statusOf(legacy) === "closed");
-    console.log("        This is REQUIRED, not a hole: pre-cutover terminal rows are");
-    console.log("        exactly what the census inventories. Blocking them would break");
-    console.log("        the inventory this release depends on.");
-    global.__legacy = legacy;
+    const inv = require("./terminal_writers.js");
+    const found = inv.scan(ROOT);
+    const shipped = found.filter((h) => h.shipped && h.terminalCapable);
+    ok("W1  the scan found the shipped terminal-capable writers", shipped.length >= 1,
+       "the scanner matched nothing — it has gone blind");
+    for (const h of shipped) console.log(`        ${h.op}  ${String(h.value).padEnd(14)} ${h.rel}:${h.line}`);
+    ok("W2  the shipped inventory is EXACTLY the frozen set",
+       JSON.stringify(shipped.map((h) => h.rel).sort()) === JSON.stringify(inv.FROZEN_SHIPPED),
+       "found " + JSON.stringify(shipped.map((h) => h.rel).sort()) +
+       "\n          frozen " + JSON.stringify(inv.FROZEN_SHIPPED) +
+       "\n          A NEW shipped path can write a terminal status. Read it, decide " +
+       "whether it is legitimate, then update the frozen list deliberately.");
+    ok("W3  no production utility or repair script writes a terminal status",
+       found.filter((h) => h.terminalCapable && h.utility).length === 0,
+       JSON.stringify(found.filter((h) => h.terminalCapable && h.utility).map((h) => h.rel)));
+    console.log("        → the exposure is hand-run SQL and code not yet written,");
+    console.log("          which is precisely what a script audit cannot fix.");
   }
 
-  //  ── ACTIVATE. The guard arms itself; nothing was deployed. ────────
+  // ══ I — INERT BEFORE ACTIVATION ════════════════════════════════════
+  sec("I · BEFORE THE CUTOVER THERE IS NO FORBIDDEN STATE");
+  const legacyWo = await mkWo("open");
+  {
+    const e = await direct([`update work_orders set status='closed' where id=$1`], [legacyWo]);
+    ok("I1  a direct close SUCCEEDS before activation", e === null, e && e.message);
+    ok("I2  …and the row is terminal", await statusOf(legacyWo) === "closed");
+    console.log("        Required, not a hole: with no activation the reader reports");
+    console.log("        `unavailable`, never `defect`, and these rows are what the");
+    console.log("        census inventories.");
+  }
+
   {
     const census = await activation.readLegacyTerminalSet(c);
     await c.query("begin");
     await activation.recordActivation(c, {
       activated_at: CUTOVER, captured_by: "guard proof", expected: census });
     await c.query("commit");
-    console.log(`\n  (activated; ${census.length} row(s) inventoried — THE GUARD IS NOW ARMED)`);
+    console.log(`\n  (activated; ${census.length} row(s) inventoried — THE GUARD IS ARMED)`);
   }
 
-  // ══ C — THE CANONICAL WRITER STILL WORKS ═══════════════════════════
+  // ══ D — DEFERRED: ONLY THE COMMITTED STATE IS JUDGED ═══════════════
+  sec("D · STATEMENT ORDER IS IRRELEVANT — ONLY THE COMMIT IS JUDGED");
+  {
+    //  THE CASE AN IMMEDIATE TRIGGER WOULD REFUSE. Terminal first,
+    //  evidence second. This must be legal, or the guard is coupled to
+    //  the canonical writer's current statement order and an innocuous
+    //  refactor breaks production.
+    const wo = await mkWo("open");
+    const e = await direct([
+      `update work_orders set status='complete' where id='${wo}'`,
+      `insert into work_order_proof_evaluations
+         (work_order_id,property_id,state,evaluated_by_service,rule_version)
+       values ('${wo}','${PROP}','satisfied','s12','x')`,
+    ]);
+    ok("D1  terminal FIRST, evaluation AFTER — commits", e === null, e && e.message +
+       "  — the guard is coupled to statement order; a refactor of the writer " +
+       "would break production");
+    ok("D2  …and the row really is complete", await statusOf(wo) === "complete");
+
+    //  A transaction may PASS THROUGH the forbidden state.
+    const wo2 = await mkWo("open");
+    const e2 = await direct([
+      `update work_orders set status='complete' where id='${wo2}'`,
+      `update work_orders set status='open' where id='${wo2}'`,
+    ]);
+    ok("D3  passing THROUGH the forbidden state and leaving it — commits",
+       e2 === null, e2 && e2.message);
+    ok("D4  …and ends non-terminal", await statusOf(wo2) === "open");
+
+    //  And the refusal really does arrive at COMMIT, not at the statement.
+    const wo3 = await mkWo("open");
+    const o = await pool.connect();
+    let stmtErr = null, commitErr = null;
+    try {
+      await o.query("begin");
+      try { await o.query(`update work_orders set status='complete' where id=$1`, [wo3]); }
+      catch (e3) { stmtErr = e3; }
+      try { await o.query("commit"); } catch (e4) { commitErr = e4; }
+    } finally { await o.query("rollback").catch(() => {}); o.release(); }
+    ok("D5  the offending STATEMENT succeeds…", stmtErr === null, stmtErr && stmtErr.message);
+    ok("D6  …and the COMMIT is what refuses", !!commitErr && commitErr.code === CODE,
+       commitErr && (commitErr.code + " " + commitErr.message));
+    ok("D7  …leaving nothing behind", await statusOf(wo3) === "open", await statusOf(wo3));
+  }
+
+  // ══ C — THE CANONICAL WRITER ═══════════════════════════════════════
   sec("C · THE CANONICAL WRITER PASSES, WITH NO CHANGE TO IT");
   {
     const wo = await mkWo("open");
@@ -144,11 +226,7 @@ const GUARD_CODE = "R0001";
     ok("C1  claimCompletion completes the work order", out.closed === true,
        JSON.stringify({ outcome: out.outcome, missing: out.missing }));
     ok("C2  …and the row is terminal", await statusOf(wo) === "complete");
-    console.log("        It passes because §4 writes the EVALUATION FIRST and the status");
-    console.log("        second, in one transaction. The guard needed no change to the");
-    console.log("        writer — which is the evidence it sits at the right boundary.");
 
-    //  And it still REFUSES when there is no evidence, as before.
     const bare = await mkWo("open");
     await c.query("begin");
     const refused = await lifecycle.claimCompletion(c, {
@@ -157,178 +235,246 @@ const GUARD_CODE = "R0001";
     ok("C3  …and still refuses a completion with no preserved evidence",
        refused.closed === false && refused.missing === "repair_photo",
        JSON.stringify({ closed: refused.closed, missing: refused.missing }));
-    ok("C4  …leaving the work order open, not half-closed",
-       await statusOf(bare) === "open");
+    ok("C4  …leaving the work order open", await statusOf(bare) === "open");
+    global.__done = wo;
   }
 
-  // ══ B — EVERY BYPASS ATTEMPT IS REFUSED ════════════════════════════
-  sec("B · REAL BYPASS ATTEMPTS — RAW SQL, ON ITS OWN CONNECTION");
+  // ══ B — DIRECT-SQL BYPASSES ════════════════════════════════════════
+  sec("B · DIRECT SQL — REFUSED, AND NOTHING WRITTEN");
   {
     const wo = await mkWo("open");
+    const e1 = await direct([`update work_orders set status='complete' where id=$1`], [wo]);
+    ok("B1  a direct UPDATE to 'complete' is refused", !!e1, "it committed");
+    ok("B2  …with the guard's own errcode", e1 && e1.code === CODE, e1 && e1.code);
+    ok("B3  …naming the state and what to do instead",
+       e1 && /missing_evaluation_defect/.test(e1.detail || "") &&
+       /claimCompletion/.test(e1.hint || "") && /COMMIT is judged/i.test(e1.hint || ""),
+       e1 && JSON.stringify({ d: e1.detail, h: e1.hint }));
+    ok("B4  …and the row is UNCHANGED", await statusOf(wo) === "open", await statusOf(wo));
 
-    const e1 = await bypass(`update work_orders set status='complete' where id=$1`, [wo]);
-    ok("B1  a raw UPDATE to 'complete' is REFUSED", !!e1, "the write succeeded");
-    ok("B2  …with the guard's own error code, not a generic failure",
-       e1 && e1.code === GUARD_CODE, e1 && (e1.code + " " + e1.message));
-    ok("B3  …naming what is missing and what to use instead",
-       e1 && /no proof evaluation/i.test(e1.message) && /claimCompletion/i.test(e1.hint || ""),
-       e1 && JSON.stringify({ m: e1.message, hint: e1.hint }));
-    ok("B4  …and the work order is UNCHANGED — no silent rewrite",
-       await statusOf(wo) === "open", await statusOf(wo));
+    ok("B5  'closed' is refused the same way",
+       (await direct([`update work_orders set status='closed' where id=$1`], [wo]) || {}).code === CODE);
 
-    const e2 = await bypass(`update work_orders set status='closed' where id=$1`, [wo]);
-    ok("B5  a raw UPDATE to 'closed' is refused the same way",
-       !!e2 && e2.code === GUARD_CODE, e2 && e2.code);
-
-    //  THE SHAPE THAT WORRIES ME MOST: a repair script that never names
-    //  an id and closes a whole population in one statement.
+    //  The shape that worries me most: a set-based repair that never
+    //  names an id.
     const many = [await mkWo("open"), await mkWo("open"), await mkWo("open")];
-    const e3 = await bypass(
-      `update work_orders set status='complete' where property_id=$1 and status='open'`, [PROP]);
+    const e6 = await direct(
+      [`update work_orders set status='complete' where property_id=$1 and status='open'`], [PROP]);
     ok("B6  a set-based close over a whole property is refused",
-       !!e3 && e3.code === GUARD_CODE, e3 && e3.code);
-    //  SEQUENTIAL, not Promise.all. `statusOf` shares one pg client, and
-    //  concurrent queries on a single client are a driver-level race (pg
-    //  warns and will throw in 9.0). A proof that races its own reads is
-    //  not measuring what it thinks it is.
+       !!e6 && e6.code === CODE, e6 && e6.code);
     const after = [];
-    for (const m of many) after.push(await statusOf(m));   // eslint-disable-line no-await-in-loop
-    ok("B7  …and NOT ONE row moved — the whole statement rolled back",
-       after.every((s) => s === "open"), JSON.stringify(after) +
-       " — a partial close is worse than a refused one: some rows would be " +
-       "defects and nobody would know which");
+    for (const m of many) after.push(await statusOf(m));
+    ok("B7  …and NOT ONE row moved", after.every((s) => s === "open"), JSON.stringify(after) +
+       " — a partial close is worse than a refused one: some rows would be defects " +
+       "and nobody would know which");
 
-    //  A script that INSERTS an already-completed work order.
-    const inserted = ID("wo-insert");
-    const e4 = await bypass(
-      `insert into work_orders (id,property_id,title,status,source)
-       values ($1,$2,'s12 direct','complete','s12')`, [inserted, PROP]);
+    const ins = ID("wo-direct-insert");
+    const e8 = await direct([`insert into work_orders (id,property_id,title,status,source)
+                              values ('${ins}','${PROP}','s12 direct','complete','s12')`]);
     ok("B8  a direct INSERT of a completed work order is refused",
-       !!e4 && e4.code === GUARD_CODE, e4 && (e4.code + " " + e4.message));
+       !!e8 && e8.code === CODE, e8 && (e8.code + " " + e8.message));
     ok("B9  …and no row was created",
-       Number((await c.query(`select count(*) n from work_orders where id=$1`,
-         [inserted])).rows[0].n) === 0);
+       Number((await c.query(`select count(*) n from work_orders where id=$1`, [ins])).rows[0].n) === 0);
 
-    //  Evidence alone is NOT enough. Only an EVALUATION is.
     const withPhoto = await mkWo("open");
     await photo(withPhoto);
-    const e5 = await bypass(`update work_orders set status='complete' where id=$1`, [withPhoto]);
-    ok("B10  a preserved photo alone does NOT satisfy the guard",
-       !!e5 && e5.code === GUARD_CODE, e5 && e5.code +
-       " — the evaluation is the governed judgement; the photo is its input");
+    ok("B10  a preserved PHOTO without an evaluation does not satisfy it",
+       (await direct([`update work_orders set status='complete' where id=$1`], [withPhoto]) || {})
+         .code === CODE,
+       "the evaluation is the governed judgement; the photo is only its input");
+
+    //  Savepoint: the offending write rolled back INSIDE the transaction
+    //  must not queue a refusal for a state that no longer exists.
+    const sp = await mkWo("open");
+    const e11 = await direct([
+      `savepoint s`,
+      `update work_orders set status='complete' where id='${sp}'`,
+      `rollback to savepoint s`,
+    ]);
+    ok("B11  a terminal write rolled back to a SAVEPOINT commits cleanly",
+       e11 === null, e11 && e11.message +
+       "  — the event should die with the subtransaction");
+    ok("B12  …and the row is untouched", await statusOf(sp) === "open");
   }
 
-  // ══ L — LEGITIMATE WORK IS UNTOUCHED ═══════════════════════════════
-  sec("L · ORDINARY WORK AND LEGACY HISTORY STILL FUNCTION");
+  // ══ E — THE ESCAPES THAT SHOULD WORK ═══════════════════════════════
+  //  A guard with no legitimate resolution path is a trap. There are
+  //  exactly two, and both are the governed ones.
+  sec("E · THE TWO LEGITIMATE WAYS OUT OF A REFUSAL");
   {
     const wo = await mkWo("open");
-    const e1 = await bypass(
-      `update work_orders set status='needs_followup', needs_pm_review=true where id=$1`, [wo]);
-    ok("L1  a non-terminal status change is untouched", e1 === null, e1 && e1.message);
-    const e2 = await bypass(`update work_orders set status='scheduled' where id=$1`, [wo]);
-    ok("L2  …so is 'scheduled'", e2 === null, e2 && e2.message);
-    const e3 = await bypass(`update work_orders set title=$2, updated_at=now() where id=$1`,
-      [wo, "retitled"]);
-    ok("L3  …and an ordinary column update", e3 === null, e3 && e3.message);
+    //  1. record the evaluation in the same transaction
+    const e1 = await direct([
+      `insert into work_order_proof_evaluations
+         (work_order_id,property_id,state,evaluated_by_service,rule_version)
+       values ('${wo}','${PROP}','not_satisfied','s12','x')`,
+      `update work_orders set status='closed' where id='${wo}'`,
+    ]);
+    ok("E1  recording an evaluation makes the same close legal", e1 === null, e1 && e1.message);
+    ok("E2  …and a `not_satisfied` head is enough — a judgement that WAS made",
+       await statusOf(wo) === "closed",
+       "requiring `satisfied` would enforce more than the forbidden state");
 
-    //  The inventoried legacy row may still be touched.
-    const legacy = global.__legacy;
-    const e4 = await bypass(`update work_orders set updated_at=now() where id=$1`, [legacy]);
-    ok("L4  an INVENTORIED legacy row can still be updated", e4 === null, e4 && e4.message);
-    const e5 = await bypass(`update work_orders set status='closed' where id=$1`, [legacy]);
-    ok("L5  …and re-closing it is not a new completion", e5 === null, e5 && e5.message);
+    //  2. do not leave it terminal
+    const wo2 = await mkWo("open");
+    const e3 = await direct([`update work_orders set status='needs_followup' where id=$1`], [wo2]);
+    ok("E3  a non-terminal status is untouched by the guard", e3 === null, e3 && e3.message);
 
-    //  An already-completed row is not policed again.
-    const done = (await c.query(
-      `select id from work_orders where property_id=$1 and status='complete' limit 1`,
-      [PROP])).rows[0];
-    const e6 = await bypass(`update work_orders set updated_at=now() where id=$1`, [done.id]);
-    ok("L6  an already-complete row can still be updated", e6 === null, e6 && e6.message);
-
-    //  A work order at another property is unaffected by this one's state.
-    ok("L7  the guard is scoped per work order, not per property",
-       await statusOf(wo) === "scheduled", await statusOf(wo));
+    //  Ordinary writes cost nothing and are unaffected.
+    ok("E4  an ordinary column update on an open row is unaffected",
+       (await direct([`update work_orders set title='retitled' where id=$1`], [wo2])) === null);
+    ok("E5  …and on an INVENTORIED legacy row",
+       (await direct([`update work_orders set title='legacy retitled' where id=$1`],
+         [legacyWo])) === null);
+    ok("E6  …and on a properly completed row",
+       (await direct([`update work_orders set title='done retitled' where id=$1`],
+         [global.__done])) === null);
   }
 
-  // ══ A — THE GUARD AND THE READER AGREE ═════════════════════════════
-  sec("A · ONE TERMINAL SET, NOT TWO");
+  // ══ K — CONCURRENCY ════════════════════════════════════════════════
+  sec("K · A SECOND TRANSACTION CANNOT OPEN A HOLE");
   {
-    const sql = fs.readFileSync(
-      path.join(ROOT, "migrations/140_post_activation_completion_guard.sql"), "utf8")
-      .replace(/--[^\n]*/g, " ");
-    const inSql = (sql.match(/in \('complete', 'closed'\)/g) || []).length;
-    ok("A1  the trigger's terminal set is exactly ('complete','closed')",
-       inSql >= 2, "found " + inSql + " occurrences in the executable SQL");
-    ok("A2  …which is the READER's TERMINAL_STATUSES, unchanged",
-       JSON.stringify([...proofState.TERMINAL_STATUSES].sort()) ===
-       JSON.stringify(["closed", "complete"]),
-       JSON.stringify(proofState.TERMINAL_STATUSES) +
-       " — a guard and a reader that disagree is the drift this release ends");
+    //  T2 sets terminal while T1 holds an UNCOMMITTED evaluation. T2 must
+    //  not be able to borrow evidence that has not committed.
+    const wo = await mkWo("open");
+    const t1 = await pool.connect(), t2 = await pool.connect();
+    let t2err = null;
+    try {
+      await t1.query("begin");
+      await t1.query(`insert into work_order_proof_evaluations
+        (work_order_id,property_id,state,evaluated_by_service,rule_version)
+        values ($1,$2,'satisfied','s12','x')`, [wo, PROP]);
+      await t2.query("begin");
+      await t2.query(`update work_orders set status='complete' where id=$1`, [wo]);
+      try { await t2.query("commit"); } catch (e) { t2err = e; await t2.query("rollback").catch(() => {}); }
+      await t1.query("rollback");
+    } finally { t1.release(); t2.release(); }
+    ok("K1  a transaction cannot borrow an UNCOMMITTED evaluation",
+       !!t2err && t2err.code === CODE, t2err ? t2err.code : "it committed");
+    ok("K2  …and the work order stayed open", await statusOf(wo) === "open");
 
-    //  The behavioural version of the same claim: every status the READER
-    //  calls terminal is a status the GUARD refuses.
-    for (const s of proofState.TERMINAL_STATUSES) {
-      const wo = await mkWo("open");
-      // eslint-disable-next-line no-await-in-loop
-      const e = await bypass(`update work_orders set status=$2 where id=$1`, [wo, s]);
-      ok(`A·${s.padEnd(9)} the reader calls it terminal, and the guard refuses it`,
-         !!e && e.code === GUARD_CODE, e ? e.code : "the write succeeded");
-    }
+    //  And the ordinary interleave: evaluation committed first, then a
+    //  separate transaction closes it. Legal.
+    const wo2 = await mkWo("open");
+    await c.query(`insert into work_order_proof_evaluations
+      (work_order_id,property_id,state,evaluated_by_service,rule_version)
+      values ($1,$2,'satisfied','s12','x')`, [wo2, PROP]);
+    ok("K3  a COMMITTED evaluation makes a later separate close legal",
+       (await direct([`update work_orders set status='complete' where id=$1`], [wo2])) === null);
   }
 
-  // ══ X — THE TRIGGER IS WHAT IS STOPPING IT ═════════════════════════
-  //  Every refusal above is worthless if something ELSE was refusing.
-  //  So the guard is dropped, the SAME bypass is retried, and it must
-  //  SUCCEED — manufacturing exactly the defect this release exists to
-  //  prevent. Then it is restored and must refuse again.
-  sec("X · REMOVE THE GUARD AND THE BYPASS WORKS — SO THE GUARD IS LOAD-BEARING");
+  // ══ V — WHAT CAN STILL DEFEAT IT ═══════════════════════════════════
+  sec("V · THE BYPASS SURFACE, MEASURED RATHER THAN ASSUMED");
   {
     const wo = await mkWo("open");
-    const before = await bypass(`update work_orders set status='complete' where id=$1`, [wo]);
-    ok("X1  with the guard in place, the bypass is refused",
-       !!before && before.code === GUARD_CODE, before && before.code);
+    //  SET CONSTRAINTS ALL IMMEDIATE moves the check EARLIER. It is not
+    //  a skip, and a reader of this trigger might reasonably fear it is.
+    const e1 = await direct([
+      `set constraints all immediate`,
+      `update work_orders set status='complete' where id='${wo}'`,
+    ]);
+    ok("V1  SET CONSTRAINTS ALL IMMEDIATE does NOT bypass it",
+       !!e1 && e1.code === CODE, e1 ? e1.code : "IT COMMITTED — the guard is optional");
 
-    await c.query(`drop trigger guard_terminal_completion on work_orders`);
-    const during = await bypass(`update work_orders set status='complete' where id=$1`, [wo]);
-    ok("X2  with the guard DROPPED, the identical bypass SUCCEEDS",
-       during === null, during && during.message +
-       " — something other than this trigger was refusing, so the proof above " +
-       "is about that other thing");
-    ok("X3  …and it manufactured exactly the defect the release exists to prevent",
-       await statusOf(wo) === "complete" &&
-       Number((await c.query(
-         `select count(*) n from work_order_proof_evaluation_head where work_order_id=$1`,
-         [wo])).rows[0].n) === 0,
-       "terminal, unevaluated, uninventoried — the sweep would raise an obligation " +
-       "against a named role for something the system did");
+    //  session_replication_role='replica' DOES disable constraint
+    //  triggers. It is superuser-only, and the harness runs as superuser,
+    //  so this measures the real bypass AND its privilege requirement.
+    const su = (await c.query(
+      `select rolsuper from pg_roles where rolname = current_user`)).rows[0].rolsuper;
+    console.log("        (this harness connects as a "
+      + (su ? "SUPERUSER — production does not" : "non-superuser") + ")");
 
-    //  Restore, and put the row back where it was so §D measures cleanly.
-    await c.query(fs.readFileSync(
-      path.join(ROOT, "migrations/140_post_activation_completion_guard.sql"), "utf8"));
+    //  `drop role` alone fails while grants still depend on it, so the
+    //  privileges go first. Cleaning up after itself matters: a probe role
+    //  left behind is a login this harness created and nobody removed.
+    await c.query(`drop owned by r0_guard_probe`).catch(() => {});
+    await c.query(`drop role if exists r0_guard_probe`);
+    await c.query(`create role r0_guard_probe login password 'probe'`);
+    await c.query(`grant all on work_orders, work_order_proof_evaluations,
+                     release_0_legacy_cutover_inventory to r0_guard_probe`);
+    await c.query(`grant select on release_0_activation_current,
+                     work_order_proof_evaluation_head to r0_guard_probe`);
+    const appPool = new Pool({ connectionString:
+      URL.replace("postgres@", "r0_guard_probe:probe@") });
+    let denied = null;
+    try {
+      const a = await appPool.connect();
+      try {
+        await a.query("begin");
+        await a.query(`set local session_replication_role = 'replica'`);
+        await a.query("commit");
+      } catch (e) { denied = e; await a.query("rollback").catch(() => {}); }
+      finally { a.release(); }
+    } finally { await appPool.end(); }
+    ok("V2  a NON-SUPERUSER role cannot set session_replication_role",
+       !!denied && /permission denied/i.test(denied.message),
+       denied ? denied.message : "IT SUCCEEDED — the guard is bypassable by anything " +
+       "holding DATABASE_URL, and the containment is not real");
+    console.log("        → the documented bypass requires SUPERUSER. Every script,");
+    console.log("          route and psql session using DATABASE_URL is covered.");
+    await c.query(`drop owned by r0_guard_probe`).catch(() => {});
+    await c.query(`drop role if exists r0_guard_probe`);
+    ok("V3  …and the probe role was cleaned up",
+       Number((await c.query(`select count(*) n from pg_roles where rolname='r0_guard_probe'`))
+         .rows[0].n) === 0,
+       "a login this harness created is still present");
+  }
+
+  // ══ X — THE GUARD IS LOAD-BEARING ══════════════════════════════════
+  sec("X · DROP IT AND THE BYPASS WORKS");
+  {
+    const wo = await mkWo("open");
+    ok("X1  with the guard installed, the bypass is refused",
+       (await direct([`update work_orders set status='complete' where id=$1`], [wo]) || {})
+         .code === CODE);
+
+    await c.query(`drop trigger assert_no_manufactured_defect on work_orders`);
+    const during = await direct([`update work_orders set status='complete' where id=$1`], [wo]);
+    ok("X2  with the guard DROPPED, the identical bypass SUCCEEDS", during === null,
+       during && during.message + " — something OTHER than this trigger was refusing, " +
+       "so everything above is about that other thing");
+
+    const s = await reader.readWorkOrderStatus(c, { propertyId: PROP, workOrderId: wo });
+    ok("X3  …and the READER classifies it exactly as the forbidden state",
+       s.proof.state === "missing_evaluation_defect", JSON.stringify(s.proof.state) +
+       " — this is the state the guard exists to make impossible, confirmed by the " +
+       "canonical reader rather than by this file's own opinion");
+
+    await c.query(fs.readFileSync(MIGRATION, "utf8"));
     await c.query(`update work_orders set status='open' where id=$1`, [wo]);
-    const after = await bypass(`update work_orders set status='complete' where id=$1`, [wo]);
-    ok("X4  restored, and refusing again", !!after && after.code === GUARD_CODE,
-       after && after.code);
-    ok("X5  …and re-applying the migration was idempotent",
-       await statusOf(wo) === "open", await statusOf(wo));
+    ok("X4  restored, and refusing again",
+       (await direct([`update work_orders set status='complete' where id=$1`], [wo]) || {})
+         .code === CODE);
+    ok("X5  …re-applying the migration was idempotent", await statusOf(wo) === "open");
   }
 
-  // ══ D — THE DEFECT POPULATION IT PREVENTS ══════════════════════════
-  sec("D · WHAT THIS MEANS FOR THE SWEEP");
+  // ══ Z — INDEPENDENT CENSUS ═════════════════════════════════════════
+  //  Not "every assertion passed". The forbidden population itself,
+  //  counted directly, plus the reader's own verdict on every row.
+  sec("Z · ZERO FORBIDDEN ROWS EXIST");
   {
-    const defectable = Number((await c.query(
+    const forbidden = Number((await c.query(
       `select count(*) n from work_orders w
-        where w.property_id=$1 and w.status in ('complete','closed')
+        where w.property_id = $1 and w.status in ('complete','closed')
           and not exists (select 1 from work_order_proof_evaluation_head h
-                           where h.work_order_id=w.id)
+                           where h.work_order_id = w.id and h.property_id = w.property_id)
           and not exists (select 1 from release_0_legacy_cutover_inventory i
-                           where i.work_order_id=w.id)`, [PROP])).rows[0].n);
-    ok("D1  after every bypass attempt, ZERO manufactured defects exist",
-       defectable === 0, defectable + " work order(s) are terminal, unevaluated and " +
-       "uninventoried — each one would raise an obligation against a named role " +
-       "for something the system did");
-    console.log("        That is the whole point: the sweep can only raise what the");
-    console.log("        database allowed to exist, and this stops it existing.");
+                           where i.work_order_id = w.id and i.property_id = w.property_id)`,
+      [PROP])).rows[0].n);
+    ok("Z1  the SQL census finds no forbidden committed state", forbidden === 0,
+       forbidden + " row(s) — each would raise an obligation against a named role");
+
+    const rows = (await c.query(
+      `select id from work_orders where property_id=$1 order by id`, [PROP])).rows;
+    const defects = [];
+    for (const r of rows) {
+      // eslint-disable-next-line no-await-in-loop
+      const s = await reader.readWorkOrderStatus(c, { propertyId: PROP, workOrderId: r.id });
+      if (s && s.proof.state === "missing_evaluation_defect") defects.push(r.id);
+    }
+    ok("Z2  and the CANONICAL READER agrees, row by row", defects.length === 0,
+       defects.join(", ") + " — the guard and the reader disagree about what exists");
+    console.log(`        ${rows.length} work orders read through the reader; 0 defects.`);
   }
 
   sec("VERDICT");

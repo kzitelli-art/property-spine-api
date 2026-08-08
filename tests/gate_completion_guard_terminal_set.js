@@ -97,6 +97,31 @@ ok("G8  the guard has no session-variable escape hatch",
    !/current_setting\s*\(/i.test(sql),
    "a bypass a caller can set turns the guarantee into a comment");
 
+/*  ── THE DEFERRED PROPERTIES ────────────────────────────────────────
+ *  The guard judges the COMMITTED state, not each statement. Two things
+ *  make that true, and both are easy to lose in an edit that looks
+ *  harmless. */
+ok("G9  it is a DEFERRABLE INITIALLY DEFERRED constraint trigger",
+   /create\s+constraint\s+trigger/i.test(sql) &&
+   /deferrable\s+initially\s+deferred/i.test(sql),
+   "made immediate, it would judge each statement — and would then refuse a " +
+   "transaction that writes the status before the evaluation, coupling a database " +
+   "invariant to the canonical writer's statement order");
+
+ok("G10 …and it RE-READS the row rather than judging `NEW`",
+   /from\s+public\.work_orders\s+where\s+id\s*=\s*new\.id/i.test(sql),
+   "NEW is the queued snapshot; by commit time the row may have moved again. " +
+   "Judging NEW.status judges an intermediate state, which is exactly what " +
+   "deferring exists to avoid");
+
+/*  It must enforce the ONE forbidden state and not re-implement the
+ *  reader. Requiring `satisfied` would refuse a work order that was
+ *  evaluated and failed — a judgement that WAS made. */
+ok("G11 it accepts ANY evaluation head, not only `satisfied`",
+   !/head[\s\S]{0,200}?state\s*=\s*'satisfied'/i.test(sql),
+   "requiring `satisfied` enforces more than the forbidden state and blocks a " +
+   "legitimate not_satisfied outcome");
+
 console.log(`\n  passed ${pass}   failed ${fail}`);
 console.log(fail === 0
   ? "\n  ✓ PASS — one terminal set, enforced in three places that cannot drift.\n"
