@@ -156,10 +156,17 @@ it would leave the leasing pipeline referencing a retired identity.
 |---|---|
 | **Recorded** | 2026-08-08, by the Release 0 collision-free tester search |
 | **Kind** | duplicate identity, **reachable** |
-| **Who** | staff user `e0a7659f-ee1a-4bde-9e0c-02c6632ff066` (phone ****3053) |
+| **Who** | the staff user whose phone ends ****3053 — **identifier deliberately not transcribed here** (see note) |
 | **Reachable today** | **YES — open prospect identity at property `a50fbdd0-3642-431e-b532-0dcd6ab8a4fe`** |
 | **Current operating consequence** | an inbound SMS from that number to the property-facing line can resolve to a prospect rather than to the staff member |
 | **Removal** | close the opportunity through the governed leasing path if it is not a real one; otherwise this is a genuine dual identity and needs a product answer, not a cleanup |
+
+> **Correction, same day.** This entry first named a user id read off a
+> screenshot, and it was the wrong one — that id belongs to a different staff
+> member entirely. The identifier is now omitted rather than restated: the
+> phone suffix and the tool that found it are enough to re-derive the row, and
+> a UUID copied by eye is exactly the failure this project has now hit three
+> times. Re-derive identifiers; never transcribe them.
 
 Found the same way H-1 was: by running the production reachability tiers,
 not by inventorying foreign keys. It was not looked for — the tester search
