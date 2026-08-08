@@ -171,10 +171,11 @@ anything wrong.** That is why the guarantee has to be the database's.
 
 ```text
 NOT proven   production. Nothing was run against it; no obligation exists.
-NOT proven   the scheduled rail. §4.2 puts this on the followups cadence
+NOT proven   the runner. §4.2 puts this on the followups cadence
              (run_followups.js). WIRING IT IN IS NOT DONE — the sweep is a
              function nothing calls yet.
-BUILT LATER   the rail — see "The scheduled rail" at the end of this document.
+BUILT LATER   the runner — see "The governed manual runner" at the end of this
+             document.
              Same treatment as caller (a) below: the line is kept rather than
              rewritten so the order of work stays legible.
 BUILT LATER   caller (a) and the closure path — see "The rest of the
@@ -310,7 +311,7 @@ E1–E6   raise → real completion → the obligation CLOSES IN THE SAME
 ### Still NOT built
 
 ```text
-BUILT NEXT   the scheduled rail wiring — the section below. This line was true
+BUILT NEXT   the governed manual runner — the section below. This line was true
              when written and is kept for the same reason as the others.
 NOT built    any un-terminal path. 'no_longer_applicable' is provable and has
              NO production caller — nothing in the codebase moves a work order
@@ -327,9 +328,26 @@ should take `140`.
 
 ---
 
-# The scheduled rail
+# The governed manual runner
 
 The sweep was a function nothing called. This is the thing an operator types.
+
+## ⚠ THERE IS NO RECURRING EXECUTION. NAME IT PRECISELY.
+
+An earlier draft of this section called it "the scheduled rail," and **that
+wording is wrong and has been corrected here.** Nothing in Release 0 runs the
+sweep on a cadence. What exists is a **governed manual runner**: a human types a
+command, and the service decides everything.
+
+The distinction is not pedantic. "Scheduled" would mean the defect population is
+*continuously* converged, which would in turn mean an operator could rely on the
+obligation appearing without anyone doing anything. **It will not.** Until
+somebody runs it, a post-cutover defect is visible in the reader and has no
+obligation against it.
+
+That is an acceptable Release 0 posture — the reader is honest either way, and
+the sweep only ever creates. It is not acceptable to *believe* recurring
+execution exists when it does not, which is how a gap goes unnoticed for a month.
 
 ## It follows the rail that exists — it does not invent one
 
@@ -403,8 +421,11 @@ every terminal work order in the property.
 
 ```text
 NOT proven   production. Nothing was run against it; no obligation exists.
-NOT built    an actual scheduler. This is a manual trigger on the same footing
-             as run_followups.js, and it is named as one.
+NOT built    an actual scheduler, and nothing here runs on a cadence. This is
+             a governed MANUAL runner on the same footing as run_followups.js.
+             Until a human runs it, a post-cutover defect has no obligation
+             against it — the reader is honest either way, but recurring
+             execution does not exist.
 NOT built    an operator-facing preview surface. The dry run prints to a
              terminal; it is not in the app.
 NOT proven   HTTP or a browser.
