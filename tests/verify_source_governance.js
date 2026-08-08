@@ -60,6 +60,12 @@ const GATES = [
     what: "migration 137 DDL is the proven scale payload, unchanged" },
   { file: "gate_completion_writers.js",
     what: "exactly the expected work-order completion writers; no third writer" },
+  //  Three things now decide what "terminal" means — the reader, the
+  //  sweep, and the database guard. Drift between them is either a hole
+  //  the sweep bills to a human, or an outage. Neither is discoverable
+  //  at runtime.
+  { file: "gate_completion_guard_terminal_set.js",
+    what: "the guard, the reader and the sweep agree on the terminal set; no bypass" },
   //  §3.4's `satisfied` is published FOR CONSUMERS. When this API reads it
   //  back, the two halves of the four-state contract can disagree — and
   //  they did: next_action was derived from it and answered "obtain a

@@ -48,6 +48,7 @@ branch. Merging it without the migration release brings the API down.
 | 5 | Step 4 · handset completion | `claude/step-4-production-proof` | **GATE, not a deploy** |
 | 6 | Step 5 · app control removed | app **#37** | deploy + browser verify |
 | 7 | Step 6 · legacy done-path closed | API **#57** | deploy + **capture the instant** |
+| 7b | **migration 140 · completion guard** | `claude/completion-guard` | **apply BEFORE activation** |
 | 8 | Step 7 · census + activation | API **#59** | **RUN ONCE** |
 | 9 | Step 8 · four-state reader | API **#60** | deploy **after** activation |
 | 10 | migrations 138 + 139 · §4.2 sweep | API **#61** | **migration release** + deploy |
@@ -166,6 +167,40 @@ Record the instant. It is `$1` in the activation transaction and is **never**
 
 **Reversible** — yes, by revert. The captured instant is just a value until
 boundary 8 persists it.
+
+---
+
+## Boundary 7b — migration 140, the completion guard · **BEFORE ACTIVATION**
+
+**This is the containment boundary, and its ordering is the whole point.**
+
+After the cutover, any writer that makes a work order terminal without an
+evaluation manufactures a `missing_evaluation_defect` — an obligation against a
+named role for something the system did. Step 6 closes the one legacy path we know
+about; it cannot close the 67 write-capable unguarded scripts, a `psql` session, or
+a route nobody has written yet. Migration 140 refuses all of them at the database.
+
+**It is INERT until an activation exists**, so it is safe to apply at any time and
+changes nothing today. That is exactly why it must go **before** boundary 8: the
+window it protects opens the instant the activation commits.
+
+```bash
+MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=<what the ledger says now> \
+  EXPECTED_SHA=<the sha actually deploying> node migrations/migrate.js --apply
+```
+
+**Verify** — `where_are_we.js` reports `migration 140 · completion guard` as
+installed, and treats *activation without the guard* as a stop condition.
+
+**Stop** — do not proceed to boundary 8 until it reads installed.
+
+**Reversible** — yes, by `DROP TRIGGER`, which is deliberate and auditable. There
+is no session flag or bypass: a bypass a utility script can set is not a guarantee.
+
+**Consequence worth knowing:** with the guard live at activation, the §4.2 defect
+population is empty by construction. **The sweep becomes an audit that the guard
+held, not routine cleanup** — so a non-empty result is a signal to investigate, not
+a queue to work through.
 
 ---
 

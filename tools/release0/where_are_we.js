@@ -66,6 +66,14 @@ const srcHas = (file, needle) => {
                    .some((r) => /no_longer_applicable/.test(r.d));
   const activation = has137
     ? ((await q(`select id, activated_at from release_0_activation_current`))[0] || null) : null;
+  //  The guard is a TRIGGER, and a trigger can be dropped by anyone holding
+  //  the privilege — deliberately, since the alternative is a control nobody
+  //  can remove when it is wrong. That makes it auditable rather than
+  //  absolute, so its presence has to be READ, never assumed.
+  const guard = (await q(
+    `select 1 from pg_trigger t join pg_class c on c.oid = t.tgrelid
+      where c.relname = 'work_orders' and t.tgname = 'guard_terminal_completion'
+        and not t.tgisinternal`)).length > 0;
   const inventory = has137
     ? Number((await q(`select count(*) n from release_0_legacy_cutover_inventory`))[0].n) : 0;
   const evaluations = has137
@@ -106,6 +114,9 @@ const srcHas = (file, needle) => {
       d: readerFourState ? (nextActionFixed ? "four-state, next_action fixed"
                                             : "⚠ four-state WITHOUT the next_action fix")
                          : "the old boolean reader is running" },
+    { k: "gd", n: "migration 140 · completion guard", done: guard,
+      d: guard ? (activation ? "installed and ARMED" : "installed, inert until activation")
+               : "NOT INSTALLED — any writer can make a work order terminal" },
     { k: "b9", n: "migrations 138 + 139", done: has138 && has139,
       d: `138 ${has138 ? "applied" : "absent"} · 139 ${has139 ? "applied" : "absent"}` },
     { k: "b10", n: "§4.2 defect sweep available", done: sweepPresent,
@@ -145,6 +156,20 @@ const srcHas = (file, needle) => {
     "The defect obligation can be raised but cannot close as 'no_longer_applicable'. " +
     "They are one boundary; apply both.");
 
+  stop(!!activation && !guard,
+    "THE CUTOVER IS ACTIVE AND THE COMPLETION GUARD IS NOT INSTALLED",
+    "Any of the 67 write-capable unguarded scripts, or a psql session, can now " +
+    "make a work order terminal with no evaluation. Every such row becomes a " +
+    "missing_evaluation_defect — an obligation against a named role for something " +
+    "the system did. Apply migration 140.");
+
+  stop(guard && defects > 0,
+    "THE GUARD IS INSTALLED AND DEFECT OBLIGATIONS EXIST",
+    "With the guard armed the defect population should be empty by construction: " +
+    "the census inventoried every pre-cutover terminal row, and nothing can add " +
+    "one after. A non-empty result means the guard was dropped, was deployed late, " +
+    "or has a gap. INVESTIGATE — do not just resolve them.");
+
   stop(defects > 0 && !activation,
     "DEFECT OBLIGATIONS EXIST WITH NO ACTIVATION",
     "Without an inventory nothing separates legacy history from a real defect. " +
@@ -167,6 +192,7 @@ const srcHas = (file, needle) => {
     !legacyClosed ? ["Step 6", "deploy the legacy-done-path refusal, then CAPTURE THE ACTIVATION INSTANT"] :
     !activation ? ["Step 7", "fresh authorized census, then the activation transaction — RUN ONCE"] :
     !readerFourState ? ["Step 8", "deploy the four-state reader WITH the next_action fix"] :
+    !guard ? ["140", "apply the completion guard — it is inert until activation, so it is safe NOW and must not wait until after Step 7"] :
     !(has138 && has139) ? ["138+139", "merge the sweep branch WITH the migration release variables set"] :
     ["§4.2 sweep", "dry run first; --raise only after reading what it would do"];
   console.log(`  ${next[0]} — ${next[1]}`);
