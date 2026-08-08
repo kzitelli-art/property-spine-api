@@ -194,10 +194,17 @@ MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=<what the ledger says now> \
 installed, and treats *activation without the guard* as a stop condition.
 
 **Stop — and this one is enforced, not advisory.** `recordActivation` calls
-`assertContainmentGuardPresent` and **refuses to activate** unless the function
-body still carries every clause the invariant needs and all three constraint
-triggers are still `DEFERRABLE INITIALLY DEFERRED` (`GUARD_ABSENT` / `GUARD_STALE`).
-Detecting a missing guard after an irreversible act is useless.
+`assertContainmentGuardPresent` and **refuses to activate** unless: the function
+body carries every clause the invariant needs (including the epoch's `for share`
+read); all **four** constraint triggers exist, are `DEFERRABLE INITIALLY DEFERRED`
+**and are ENABLED**; the singleton epoch row exists; and the trigger that stamps
+it is present and enabled. `GUARD_ABSENT` / `GUARD_STALE`. All eleven ways of
+being wrong are measured in `falsify_activation_refusals.js`.
+
+`ALTER TABLE … DISABLE TRIGGER` is the one to know about: it leaves the trigger in
+`pg_trigger` with the right name, timing and definition, and it simply does not
+fire. A presence check passes. `where_are_we` reports **PRESENT BUT NOT
+PROTECTING** for exactly this case rather than "installed".
 
 **Reversible** — yes, by `DROP TRIGGER`. Measured rather than assumed: a
 **non-superuser that owns `work_orders` CAN drop these triggers**. The honest claim
@@ -247,7 +254,7 @@ an **exact-set comparison in both directions** inside it. Proven in isolation:
 `prove_step7_activation.js` 37/37, `prove_step7_concurrency.js` 11/11, three
 falsification variants.
 
-**It takes `SHARE ROW EXCLUSIVE` on `work_orders` first**, with a 5s `lock_timeout`.
+**It takes `SHARE ROW EXCLUSIVE … NOWAIT` on `work_orders` first.**
 This is not tidiness. A transaction that **began before** the activation and commits
 after it reads through its own frozen snapshot, never sees the activation row, and so
 slips past the guard entirely — proven at `REPEATABLE READ` (`A4`). No `SELECT`
@@ -263,7 +270,17 @@ by refusing to open the window underneath an in-flight writer.
 - `GUARD_ABSENT` / `GUARD_STALE` → boundary 7b is not really in place. Do not
   re-run until it is.
 - `WRITERS_IN_FLIGHT` → a transaction is holding `work_orders`. **Retry**; do not
-  reduce the lock. This refusal is the straddling-transaction hole being closed.
+  reduce the lock. `NOWAIT` is deliberate and was measured: with a 5s timeout the
+  statement waited the full five seconds, and a merely *queued* lock request puts
+  every NEW work-order writer behind it — an ordinary write timed out at 1s while
+  the activation held nothing. That is the migration 137 lesson. NOWAIT fails in
+  ~1ms and stalls nobody.
+- `POPULATION_NOT_EXPLAINABLE` → terminal work orders already violate the
+  invariant and are **invisible to the census**, which only sees UNEVALUATED
+  terminal rows. The error names each one. Resolve them — record a grounded
+  `satisfied` evaluation, or take them out of the terminal state — then re-run
+  the census and re-authorize. Do not activate past this: it would make those
+  rows permanent and unexplainable.
 
 **Reversible — NO. This is the irreversible boundary.** `release_0_activation_history`
 and `release_0_legacy_cutover_inventory` are append-only with `forbid_mutation`

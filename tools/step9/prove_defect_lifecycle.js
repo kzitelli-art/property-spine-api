@@ -42,6 +42,7 @@ const reader = require(path.join(ROOT, "src/surfaces/work_order_status_read.js")
 //  harness that activates must install it. States the guard forbids are
 //  then built inside an explicit withGuardOff() window.
 const guardWindow = require("../step12/guard_window.js");
+const grounded = require("../step12/grounded_evaluation.js");
 const URL = process.env.STEP9_DATABASE_URL;
 
 let pass = 0, fail = 0;
@@ -123,9 +124,15 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
   // ══ R — THE RESOLUTION VOCABULARY ══════════════════════════════════
   sec("R · MIGRATION 139 — THE CODE §4.2 NEEDS THAT 084 DID NOT ALLOW");
   {
+    /*  `complete`, not `closed`. Both are post-cutover defects, but a
+     *  `closed` row cannot be repaired by recording proof — R0003 refuses
+     *  post-cutover `closed` outright, so its only resolution is to leave
+     *  that status. Section C's story is "the evaluation arrives and the
+     *  obligation closes as satisfied", which needs a row where that is
+     *  actually the repair. */
     const wo = await forbidden(
       "R/C need a real defect to raise and then resolve; the guard forbids creating one",
-      () => mkWo("closed"));
+      () => mkWo("complete"));
     await c.query("begin");
     await defect.raiseProofEvaluationDefect(c, { work_order_id: wo, property_id: PROP });
     await c.query("commit");
@@ -171,9 +178,9 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
     console.log("        → " + refused.detail);
 
     //  2. THE EVALUATION ARRIVES → 'satisfied'.
-    await c.query(`insert into work_order_proof_evaluations
-      (work_order_id,property_id,state,evaluated_by_service,rule_version)
-      values ($1,$2,'satisfied','s9lifeproof','x')`, [persistWo, PROP]);
+    await grounded.groundedSatisfied(c, {
+      work_order_id: persistWo, property_id: PROP, uploaded_by_user_id: TECH,
+      evaluated_by_service: "s9lifeproof" });
     await c.query("begin");
     const sat = await defect.resolveProofEvaluationDefect(c, {
       work_order_id: persistWo, property_id: PROP });

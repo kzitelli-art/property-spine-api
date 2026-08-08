@@ -40,6 +40,7 @@ const reader = require(path.join(ROOT, "src/surfaces/work_order_status_read.js")
 //  harness that activates must install it. States the guard forbids are
 //  then built inside an explicit withGuardOff() window.
 const guardWindow = require("../step12/guard_window.js");
+const grounded = require("../step12/grounded_evaluation.js");
 const URL = process.env.STEP9_DATABASE_URL;
 
 let pass = 0, fail = 0;
@@ -266,9 +267,9 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
     const evaluated = await mkWo({ status: "open" });
     await c.query("begin");
     await c.query(`update work_orders set status='complete' where id=$1`, [evaluated]);
-    await c.query(`insert into work_order_proof_evaluations
-      (work_order_id,property_id,state,evaluated_by_service,rule_version)
-      values ($1,$2,'satisfied','step9proof','x')`, [evaluated, PROP]);
+    await grounded.groundedSatisfied(c, {
+      work_order_id: evaluated, property_id: PROP, uploaded_by_user_id: TECH,
+      evaluated_by_service: "step9proof" });
     await c.query("commit");
 
     const scoped = await sweep.runProofDefectSweep(pool, { propertyId: PROP, dryRun: false });

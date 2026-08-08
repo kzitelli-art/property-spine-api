@@ -2,14 +2,148 @@
 
 **⛔ BUILD-AHEAD. Not applied to production.**
 
-**REVISION 2.** Revision 1 enforced a weaker invariant and **four adversarial cases
-broke it** (§4). The invariant was wrong, not the callers. What it enforces now:
+**REVISION 3.** Every revision was broken by measurement, not opinion.
 
-> **After activation, a work order may be terminal only with a current `satisfied`
-> proof evaluation, or as inventoried pre-cutover legacy with no evaluation at all —
-> and inventoried legacy may not leave the terminal state.**
+| | enforced | broken by |
+|---|---|---|
+| rev 1 | "not the `missing_evaluation_defect` state" | 4 attacks (`falsify_containment.js`) |
+| rev 2 | a current `satisfied` head | 3 more (`falsify_activation_boundary.js`, `falsify_proof_trust.js`) |
+| rev 3 | below | — so far |
+
+> **After the cutover a work order is legal only if it is not terminal, or it is
+> `complete` with a current `satisfied` evaluation that CITES qualifying preserved
+> evidence — and an inventoried legacy row's status is frozen at exactly what the
+> census recorded. `closed` is historical vocabulary and is refused outright.**
 
 Enforced by the database, at commit time.
+
+---
+
+## 0 · What revision 2 got wrong
+
+### B1 · the activation boundary was answerable from a stale snapshot
+
+A4 closed the case of a writer already holding a `work_orders` lock across the
+activation. **That is not the hard case.** A transaction that opens at
+`REPEATABLE READ`, fixes its snapshot on *anything unrelated*, waits for the
+activation to commit, and touches `work_orders` only afterwards never contends
+for that lock at all. At its commit the deferred guard asked *"is there an
+activation?"* through its own pre-activation snapshot, got **no**, and returned.
+
+**Measured, on all three shapes** — terminal UPDATE, terminal INSERT, and a
+superseding evaluation on an already-terminal row. The first ran before the fix
+and committed `status=complete`, which the canonical reader then classified
+`missing_evaluation_defect`.
+
+No `SELECT` escapes its own snapshot, so no different query could fix this. A
+**row-locking** read can: in `REPEATABLE READ`, `FOR SHARE` against a row whose
+latest version committed after your snapshot raises `40001` instead of quietly
+answering from the past. The stale writer is **refused**, not exempted.
+
+Which is why the epoch is a **pre-existing singleton row that the activation
+UPDATEs**, created by this migration and stamped by a trigger on
+`release_0_activation_history` — not by the service, so hand-run SQL cannot
+activate without moving it. Had it been *inserted*, an old snapshot would simply
+not see it and there would be nothing to serialize against.
+
+`FOR SHARE`, not `FOR UPDATE`: many completions commit concurrently and must not
+serialize against each other. Shared locks coexist; the only conflict is with the
+one transaction that moves the epoch.
+
+### C1 · `satisfied` was just a word
+
+Nothing in the schema ties an evaluation to evidence — no NOT NULL, no FK, no
+check. Raw SQL could insert a row whose `state` column reads `'satisfied'` with
+**zero** links and then terminalize the work order. That does not defeat the guard
+so much as **move the status bypass one table over**.
+
+We spent this release learning not to trust `work_orders.status`. A column in a
+different table that happens to read `satisfied` has earned no more trust than
+that one had.
+
+So a satisfied head must **cite** at least one attachment qualifying under the
+canonical writer's own evidence gate — facts about the stored bytes, not a
+carrier's claim. The writer links exactly the rows that gate returned, so a
+genuine completion always passes; only a manufactured one does not.
+
+Five forgeries, and which layer refused each:
+
+```text
+zero attachment links                        migration 140  (R0004)
+linked to 'unclassified'                     migration 140  (R0004)
+linked to evidence never STORED              migration 140  (R0004)
+linked to a disallowed MIME                  SCHEMA — not even representable
+linked to another work order's photo         SCHEMA — composite foreign key
+── control ────────────────────────────────────────────────────────────
+the same hand-written shape, real evidence   COMMITS
+```
+
+That last line matters: **140 does not require the caller to be
+`claimCompletion`. It requires the state to be true.** Raw SQL that establishes
+real evidence and cites it is not an attack.
+
+### C2 · the evidence could rot underneath
+
+Once evidence is part of the invariant, the attachment row is part of the
+invariant — and it can be changed without touching `work_orders` **or** the
+evaluation:
+
+```sql
+update work_order_proof_attachments set proof_classification='unclassified' …
+update work_order_proof_attachments set storage_state='not_preserved', content=null …
+```
+
+**Both succeeded**, and the reader went on reporting `satisfied`, because it reads
+the evaluation head and not the bytes. Same lesson as A2, one table further out.
+The guard now fires on `work_order_proof_attachments` UPDATE too.
+
+Every mutation that could invalidate a live completion, and what stops it:
+
+```text
+re-classify the cited attachment      migration 140   (R0004)
+un-store it (all four fields)         migration 140   (R0004)
+delete the cited attachment           SCHEMA — FK ON DELETE RESTRICT
+delete the evaluation→attachment link SCHEMA — append-only trigger
+re-point the link                     SCHEMA — append-only trigger
+edit the evaluation state in place    SCHEMA — append-only trigger
+delete the evaluation                 SCHEMA — append-only trigger
+supersede with ungrounded not_satisfied  migration 140 (R0001)
+```
+
+### D1 · `closed` was still available as a completion vocabulary
+
+Revision 2 asked only *"is the proof good?"*, so a post-cutover `open → closed`
+**with** a satisfied evaluation was legal — a second, permanently valid way to
+complete work, contradicting the frozen Step 6 ruling that future completion
+writes `complete`. Now refused outright (`R0003`), proof or no proof.
+
+And an inventoried legacy row only had to stay *some* terminal value, so
+`closed → complete` with no evaluation relabelled history as a governed
+completion. Its status is now pinned to `status_at_cutover`. Grandfathering
+preserves historical truth; it is not a standing exemption.
+
+---
+
+## 0a · Correcting completed work is a REOPEN, never a silence
+
+The guard refuses a superseding `not_satisfied` evaluation on a work order that
+stays terminal. Read carelessly that is *a database invariant keeping `satisfied`
+true by denying the system permission to record that it was wrong* — which would
+be the worst possible outcome for a product whose north star is recording truth.
+
+It is not that. What is refused is **ending the transaction terminal without
+proof**. A correction that also reopens the work, in the same transaction, is
+legal and is proven (`falsify_proof_trust` P9).
+
+**The Release 0 rule:** changing the proof state of completed work is a reopen.
+The evidence is always recordable; what is refused is claiming completion while
+saying the proof failed.
+
+The inventory that makes this safe to state: **exactly one shipped caller writes
+evaluations** — `technician/lifecycle_service.claimCompletion` — and it only ever
+writes `satisfied`. No shipped path supersedes an evaluation on an already-terminal
+work order, so this rule breaks nothing that exists. A future governed correction
+path must be built against this shape.
 
 ---
 
@@ -181,56 +315,63 @@ Proving this through the application services would prove something about the
 services. The threat is the path that avoids them.
 
 ```text
-tools/step12/prove_completion_guard.js   47 / 47   exit 0
-tools/step12/falsify_containment.js      18 / 18   exit 0
+tools/step12/prove_completion_guard.js        47 / 47
+tools/step12/falsify_containment.js           18 / 18   rev-1 attacks
+tools/step12/falsify_activation_boundary.js   12 / 12   × 3 shapes — B1
+tools/step12/falsify_proof_trust.js           26 / 26   C1 · C2 · D1 · the boundary
+tools/step12/falsify_activation_refusals.js    4 / 4    × 11 variants
 ```
+
+Each adversarial file records its **prediction before its result**, so a wrong
+model shows up as a wrong prediction rather than being edited away afterwards.
 
 ```text
-W1–W3   the frozen writer inventory: 3 shipped, 0 production utilities
-I1–I2   before activation, a direct close SUCCEEDS — required, not a hole
-D1–D2   terminal FIRST, evaluation AFTER → commits
-D3–D4   passing THROUGH an illegal state and leaving it → commits
-D5–D7   the offending STATEMENT succeeds; the COMMIT refuses; nothing remains
-C1–C4   claimCompletion passes unchanged, and still refuses with no evidence
-B1–B5   direct UPDATE to complete/closed refused, errcode R0001, row unchanged
-B6–B7   a SET-BASED close over a whole property refused, NOT ONE row moved
-B8–B9   a direct INSERT of a completed work order refused; no row created
-B10     a preserved photo without an evaluation does not satisfy it
-B11–B12 a terminal write rolled back to a SAVEPOINT commits cleanly
-E1–E6   the two legitimate ways out, and every ordinary write, still work
-K1–K3   a transaction cannot borrow an UNCOMMITTED evaluation
-V1–V3   the bypass surface, measured
-X1–X5   drop the guard and the identical bypass SUCCEEDS
-Z1–Z2   independent census: zero forbidden rows, confirmed by the READER
+A1  terminal + not_satisfied              REFUSED   R0001
+A2  head flipped after completion         REFUSED   R0001, from the eval table
+A3  legacy laundering                     REFUSED   R0002
+A4  in-flight writer straddles activation the ACTIVATION refuses  WRITERS_IN_FLIGHT
+B1  STALE SNAPSHOT, three shapes          REFUSED   40001, by the epoch's locking read
+C1  forged `satisfied`, five shapes       REFUSED   R0004 / schema
+C2  evidence invalidated afterwards       REFUSED   R0004 / schema
+D1  post-cutover `closed`, WITH proof     REFUSED   R0003
+D2  inventoried `closed → complete`       REFUSED   R0002
+P9  correction that REOPENS               ALLOWED — the line that must not be crossed
 ```
 
-`falsify_containment.js` records its **prediction before its result** for each attack,
-so a wrong model is visible as a wrong prediction rather than edited away afterwards:
+### The activation's own refusals, all eleven measured
 
 ```text
-A1  terminal + not_satisfied              REFUSED   (R0001)
-A2  head flipped after completion         REFUSED   (R0001, from the eval table)
-A3  legacy laundering closed→open→closed  REFUSED   (R0002)
-A4  straddling transaction                the ACTIVATION refuses: WRITERS_IN_FLIGHT
-A5  who can actually drop the guard       measured, not assumed — see §7
-A6  an unknown status                     not refused; where the work goes — see §9
-A7  activation without the guard          REFUSED   (GUARD_ABSENT / GUARD_STALE)
-Z1  every row through the canonical reader — none completed without satisfied proof
+guard-absent · trigger-dropped · epoch-missing · epoch-not-stamped   GUARD_ABSENT
+trigger-disabled · not-deferred · permissive-body                    GUARD_STALE
+population-not-satisfied · population-ungrounded
+population-closed-evaluated                          POPULATION_NOT_EXPLAINABLE
+population-clean                                     ACTIVATES  ← the control
 ```
+
+`trigger-disabled` is the one worth naming: `ALTER TABLE … DISABLE TRIGGER` leaves
+the row in `pg_trigger` with the right name, the right timing and the right
+definition, and it simply does not fire. A presence check passes.
+
+`population-*` exists because **the census only sees terminal rows with NO
+evaluation.** A terminal row with a `not_satisfied` head, or a `satisfied` head
+citing nothing, is invisible to it — so it would exist on day one, permanently,
+legal purely because no trigger fired at the instant the cutover was recorded.
+The activation now scans for that **inside its own transaction** and refuses.
 
 ### The three that carry the most weight
 
-**`X2`** — every refusal above is worthless if something *else* was refusing. So the
-guard is dropped, the identical bypass is retried, and it **succeeds**. `X3` then
-has the **canonical reader** classify the result as `missing_evaluation_defect` —
-confirming the forbidden state by the reader's own verdict, not this file's opinion.
+**`X2`** — every refusal above is worthless if something *else* was refusing. So
+the guard is dropped, the identical bypass is retried, and it **succeeds**. `X3`
+then has the **canonical reader** classify the result as
+`missing_evaluation_defect`.
 
-**`B7`** — a set-based close moves *nothing*. A partial close is worse than a
-refused one: some rows would be defects and nobody would know which.
+**`C6`** — the control that keeps C1–C5 from passing vacuously: the same
+hand-written shape with real evidence **commits**. A guard that refuses everything
+proves nothing about evidence.
 
-**`Z1`/`Z2`** — the verdict is not "47 assertions passed". It counts the forbidden
-population in SQL, then reads **every** work order through the canonical reader and
-requires zero rows that read as completed without a `satisfied` proof.
+**`Z1`/`Z2`** — the verdict is not an assertion count. It counts the forbidden
+population in SQL, then reads **every** work order through the canonical reader
+and requires zero that read as completed without a satisfied proof.
 
 ---
 
@@ -248,9 +389,14 @@ session_replication_role=replica  DOES disable constraint triggers —
                                   non-superuser role is refused with
                                   "permission denied to set parameter" (V2).
 
-DROP TRIGGER by the TABLE OWNER   *** POSSIBLE ***  measured in A5: a
-                                  NON-SUPERUSER that owns work_orders CAN
-                                  drop these triggers.
+DROP / DISABLE TRIGGER            *** POSSIBLE ***  measured in A5: a
+  by the TABLE OWNER              NON-SUPERUSER that owns work_orders CAN
+                                  drop them — and DISABLE is worse, because
+                                  the trigger stays in pg_trigger looking
+                                  correct. Both fail the activation's
+                                  precondition, and `where_are_we` reports
+                                  PRESENT BUT NOT PROTECTING rather than
+                                  "installed".
 ```
 
 **The honest claim, and the only one this file makes:**
@@ -330,8 +476,33 @@ nobody was completing. *A gate that fails the fix is worse than no gate.* Readin
 live vocabulary is a production step, named in the activation runbook; the `CHECK`
 becomes the right move after that, not before it.
 
-**Scope is `work_orders` and `work_order_proof_evaluations`.** Nothing about other
-tables, and nothing about deletes.
+### ⚠ WHAT MIGRATION 140 DOES *NOT* GUARANTEE — say it exactly
+
+> **Migration 140 prevents terminal-state/proof divergence. The canonical service
+> still owns the full eight-fact completion transaction.**
+
+A deliberate SQL writer that establishes **real** evidence and cites it can commit
+a work order that is proof-true and structurally hollow: no `completion_claimed`
+progress row, no distinct `completed` row, the owning obligation still open, no
+action receipt. Measured (`falsify_proof_trust` H1–H4): it commits, the reader
+correctly calls its proof `satisfied`, and the **Step 4 fact set** refuses it —
+`F1 · F6 · F7 · F8` go red, the proof facts stay green.
+
+That is an acceptable Release 0 threat boundary, and it is stated rather than
+allowed to drift into a bigger claim. **No release receipt may say the trigger
+makes arbitrary SQL equivalent to `claimCompletion`.**
+
+The two controls are complementary and neither is redundant: the guard stops the
+state from diverging even when the fact set is not run; the fact set catches
+structural hollowness even when the guard has been dropped (§7). Step 4's
+falsification variants therefore run **with the guard deliberately off** — the
+case where that fact set matters most is precisely the one where the guard is
+absent.
+
+**Scope is `work_orders`, `work_order_proof_evaluations` and
+`work_order_proof_attachments`.** Nothing about other tables, and nothing about
+deletes — those are covered by `ON DELETE RESTRICT` and the append-only triggers,
+which is a different mechanism and is enumerated in §0 C2.
 
 ---
 

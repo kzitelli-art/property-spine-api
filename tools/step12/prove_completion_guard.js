@@ -45,6 +45,7 @@ const lifecycle = require(path.join(ROOT, "src/technician/lifecycle_service.js")
 const activation = require(path.join(ROOT, "src/release0/activation_service.js"));
 const proofState = require(path.join(ROOT, "src/release0/proof_state.js"));
 const reader = require(path.join(ROOT, "src/surfaces/work_order_status_read.js"));
+const grounded = require("./grounded_evaluation.js");
 const MIGRATION = path.join(ROOT, "migrations/140_post_activation_completion_guard.sql");
 const URL = process.env.STEP12_DATABASE_URL;
 
@@ -103,10 +104,30 @@ const CODE = "R0001";
       values ($1,$2,$3,$4,'twilio',$5,'image/jpeg','stored','repair_photo',$6,$7,$8,now())`,
       [a, wo, PROP, TECH, "ME" + a.slice(0, 8), b, b.length,
        crypto.createHash("sha256").update(b).digest("hex")]);
+    return a;
   };
   const statusOf = async (wo) => {
     const r = (await c.query(`select status from work_orders where id=$1`, [wo])).rows[0];
     return r ? r.status : null;
+  };
+
+  /*  REVISION 3 — `satisfied` IS NO LONGER A WORD YOU CAN JUST WRITE.
+   *  The guard requires the head to CITE qualifying preserved evidence
+   *  (R0004), so every "record a satisfied evaluation" step below has to
+   *  produce the evidence AND the link. Returned as SQL strings because
+   *  these sections deliberately go through raw `direct()` transactions
+   *  rather than any service. */
+  const groundedSql = async (wo) => {
+    const att = await photo(wo);
+    const ev = ID("ev-" + wo.slice(0, 8));
+    return [
+      `insert into work_order_proof_evaluations
+         (id,work_order_id,property_id,state,evaluated_by_service,rule_version)
+       values ('${ev}','${wo}','${PROP}','satisfied','s12','x')`,
+      `insert into work_order_proof_evaluation_attachments
+         (evaluation_id,attachment_id,work_order_id,property_id)
+       values ('${ev}','${att}','${wo}','${PROP}')`,
+    ];
   };
 
   /*  DIRECT SQL, on its own pooled connection — the shape a repair script
@@ -179,9 +200,7 @@ const CODE = "R0001";
     const wo = await mkWo("open");
     const e = await direct([
       `update work_orders set status='complete' where id='${wo}'`,
-      `insert into work_order_proof_evaluations
-         (work_order_id,property_id,state,evaluated_by_service,rule_version)
-       values ('${wo}','${PROP}','satisfied','s12','x')`,
+      ...(await groundedSql(wo)),
     ]);
     ok("D1  terminal FIRST, evaluation AFTER — commits", e === null, e && e.message +
        "  — the guard is coupled to statement order; a refactor of the writer " +
@@ -252,8 +271,16 @@ const CODE = "R0001";
        e1 && JSON.stringify({ d: e1.detail, h: e1.hint }));
     ok("B4  …and the row is UNCHANGED", await statusOf(wo) === "open", await statusOf(wo));
 
-    ok("B5  'closed' is refused the same way",
-       (await direct([`update work_orders set status='closed' where id=$1`], [wo]) || {}).code === CODE);
+    /*  REVISION 3 — `closed` is refused for a DIFFERENT and stronger
+     *  reason now, so asserting the same errcode would hide the change.
+     *  R0001 means "terminal without proof"; R0003 means "`closed` is
+     *  historical vocabulary and this is after the cutover" — which
+     *  applies even WITH perfect proof (falsify_proof_trust D1). */
+    const b5 = await direct([`update work_orders set status='closed' where id=$1`], [wo]);
+    ok("B5  'closed' is refused too — and as HISTORICAL VOCABULARY, not for want of proof",
+       !!b5 && b5.code === "R0003",
+       (b5 ? b5.code + " " + b5.message : "it committed") +
+       " — R0003 is the frozen Step 6 ruling: future completion writes `complete`");
 
     //  The shape that worries me most: a set-based repair that never
     //  names an id.
@@ -304,13 +331,13 @@ const CODE = "R0001";
   {
     const wo = await mkWo("open");
     //  1. record the evaluation in the same transaction
+    //  `complete`, not `closed`: post-cutover `closed` is refused outright
+    //  now (R0003), so the legitimate way out is the canonical vocabulary.
     const e1 = await direct([
-      `insert into work_order_proof_evaluations
-         (work_order_id,property_id,state,evaluated_by_service,rule_version)
-       values ('${wo}','${PROP}','satisfied','s12','x')`,
-      `update work_orders set status='closed' where id='${wo}'`,
+      ...(await groundedSql(wo)),
+      `update work_orders set status='complete' where id='${wo}'`,
     ]);
-    ok("E1  recording a SATISFIED evaluation makes the same close legal",
+    ok("E1  recording a GROUNDED SATISFIED evaluation makes the completion legal",
        e1 === null, e1 && e1.message);
     /*  REVISION 2. This asserted the opposite — that a `not_satisfied`
      *  head was enough, "a judgement that WAS made". True, and beside the
@@ -323,7 +350,7 @@ const CODE = "R0001";
       `insert into work_order_proof_evaluations
          (work_order_id,property_id,state,evaluated_by_service,rule_version)
        values ('${woFail}','${PROP}','not_satisfied','s12','x')`,
-      `update work_orders set status='closed' where id='${woFail}'`,
+      `update work_orders set status='complete' where id='${woFail}'`,
     ]);
     ok("E2  …and a `not_satisfied` head is NOT enough",
        !!e2 && e2.code === CODE,
@@ -370,10 +397,10 @@ const CODE = "R0001";
     //  And the ordinary interleave: evaluation committed first, then a
     //  separate transaction closes it. Legal.
     const wo2 = await mkWo("open");
-    await c.query(`insert into work_order_proof_evaluations
-      (work_order_id,property_id,state,evaluated_by_service,rule_version)
-      values ($1,$2,'satisfied','s12','x')`, [wo2, PROP]);
-    ok("K3  a COMMITTED evaluation makes a later separate close legal",
+    await grounded.groundedSatisfied(c, {
+      work_order_id: wo2, property_id: PROP, uploaded_by_user_id: TECH,
+      evaluated_by_service: "s12" });
+    ok("K3  a COMMITTED grounded evaluation makes a later separate close legal",
        (await direct([`update work_orders set status='complete' where id=$1`], [wo2])) === null);
   }
 

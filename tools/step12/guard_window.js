@@ -36,6 +36,7 @@ const TRIGGERS = [
   ["assert_completion_truth_ins", "work_orders"],
   ["assert_completion_truth_upd", "work_orders"],
   ["assert_completion_truth_eval", "work_order_proof_evaluations"],
+  ["assert_completion_truth_attach", "work_order_proof_attachments"],
 ];
 
 /** Apply migration 140. Idempotent — it drops and recreates. */

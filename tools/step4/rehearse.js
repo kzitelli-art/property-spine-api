@@ -222,8 +222,25 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
          before.facts.filter((f) => !f.held).map((f) => f.id).join(","));
       continue;
     }
+    /*  ── THE MUTATION RUNS WITH THE GUARD OFF, DELIBERATELY ────────
+     *
+     *  Migration 140 now refuses some of these outright — F2 un-stores the
+     *  very evidence a satisfied evaluation cites, and the database says
+     *  no (R0004). That is the guard working, and it would be easy to
+     *  quietly drop the variant.
+     *
+     *  Dropping it would be wrong. Section V's whole purpose is that EVERY
+     *  named fact has a mutation that kills it — "a check that cannot fail
+     *  is decoration". And Step 4's fact set is the SECOND line of
+     *  defence: the case where it matters most is precisely the one where
+     *  the guard is absent or was dropped (§7's auditable DDL escape). So
+     *  it must be provable that these checks still catch a hollow
+     *  completion WITHOUT the guard's help. */
     // eslint-disable-next-line no-await-in-loop
-    await v.run(x);
+    await guardWindow.withGuardOff(c,
+      `V·${v.id} must exhibit a broken completion the guard would refuse — the ` +
+      "Step 4 fact set has to catch it unaided, since that is the case where it matters",
+      () => v.run(x));
     // eslint-disable-next-line no-await-in-loop
     const after = await F.checkCompletionFacts(c, bind(x));
     const broke = after.facts.filter((f) => !f.held).map((f) => f.id);

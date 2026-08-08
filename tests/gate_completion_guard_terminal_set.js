@@ -79,12 +79,31 @@ ok("G4  …and it equals the reader's as well",
    sweepSets.every((s) => JSON.stringify(s) === JSON.stringify(reader)),
    "reader " + JSON.stringify(reader) + " vs sweep " + JSON.stringify(sweepSets));
 
-//  The guard must stay INERT before activation, or it breaks the census
-//  that the whole cutover depends on.
+/*  The guard must stay INERT before activation, or it breaks the census
+ *  that the whole cutover depends on — AND it must read that boundary in
+ *  a way a stale snapshot cannot answer.
+ *
+ *  ⚠ G5 USED TO CHECK FOR `release_0_activation_current`, an ordinary
+ *  SELECT. That was the bypass: a REPEATABLE READ transaction which fixed
+ *  its snapshot before the activation, waited, and then wrote a terminal
+ *  work order answered the question through its own pre-activation
+ *  snapshot and committed unjudged (falsify_activation_boundary S3). The
+ *  gate now pins the fix rather than the shape that was broken. */
 ok("G5  the guard is still gated on an activation existing",
-   /release_0_activation_current/.test(sql),
+   /release_0_activation_epoch/.test(sql),
    "the trigger no longer checks for an activation — it would now block the " +
    "pre-cutover terminal rows the census exists to inventory");
+ok("G5a …and reads that boundary under a ROW LOCK, so a stale snapshot fails",
+   /release_0_activation_epoch[\s\S]{0,400}?for\s+share/i.test(sql),
+   "the boundary is read with a plain SELECT again. A transaction that started " +
+   "before the activation would be EXEMPTED rather than refused — measured, and " +
+   "it is the whole reason the epoch exists");
+ok("G5b …against a row the MIGRATION creates, not one the activation inserts",
+   /create\s+table\s+if\s+not\s+exists\s+public\.release_0_activation_epoch/i.test(sql) &&
+   /insert\s+into\s+public\.release_0_activation_epoch/i.test(sql) &&
+   /update\s+public\.release_0_activation_epoch/i.test(sql),
+   "an INSERTED epoch row is invisible to an older snapshot and there is nothing to " +
+   "serialize against; it must PRE-EXIST and be UPDATED");
 ok("G6  …and still exempts the cutover inventory",
    /release_0_legacy_cutover_inventory/.test(sql),
    "legitimate legacy history would be refused on any later update");
@@ -145,6 +164,58 @@ ok("G13 …and inventoried legacy may not leave the terminal state",
    /R0002/.test(sql),
    "an inventoried row can be reopened and re-closed, laundering a NEW completion " +
    "into `legacy_indeterminate` with no evaluation");
+
+/*  ── C1 · THE TRUST ROOT'S PREDICATE MUST NOT DRIFT ──────────────────
+ *
+ *  The guard now requires a `satisfied` head to CITE evidence qualifying
+ *  under the canonical writer's gate. That is a THIRD copy of the
+ *  predicate (evidence_service.js, the activation's own population check,
+ *  and this SQL). Copies drift; this pins the two arrays against the
+ *  service's exported constants. */
+const { COMPLETION_EVIDENCE_CLASSIFICATIONS, COMPLETION_EVIDENCE_MIME } =
+  require("../src/technician/evidence_service.js");
+
+ok("C1  the guard requires a satisfied head to cite qualifying evidence",
+   /work_order_proof_evaluation_attachments/.test(sql) && /R0004/.test(sql),
+   "`satisfied` is trusted as a word again — raw SQL can insert it with nothing " +
+   "behind it and terminalize the work order");
+for (const cls of COMPLETION_EVIDENCE_CLASSIFICATIONS) {
+  ok(`C1·${cls.padEnd(14)} is in the guard's classification list`,
+     new RegExp("'" + cls + "'").test(sql),
+     "the guard is STRICTER than the writer: a completion the canonical service " +
+     "produces would be refused by the database");
+}
+for (const mime of COMPLETION_EVIDENCE_MIME) {
+  ok(`C1·${mime.padEnd(14)} is in the guard's MIME list`,
+     new RegExp("'" + mime + "'").test(sql), "same drift, other direction");
+}
+const guardClasses = (sql.match(/proof_classification\s*=\s*any\s*\(array\[([^\]]*)\]/i) || [])[1] || "";
+ok("C1x …and the guard is not LOOSER than the writer either",
+   guardClasses.split(",").map((x) => x.trim().replace(/^'|'::text$|'$/g, "")).filter(Boolean)
+     .every((cl) => COMPLETION_EVIDENCE_CLASSIFICATIONS.includes(cl)),
+   guardClasses + " vs " + JSON.stringify(COMPLETION_EVIDENCE_CLASSIFICATIONS) +
+   " — the guard accepts evidence the writer would refuse, so a completion could " +
+   "pass the database and fail the service");
+
+/*  C2 — once evidence is part of the invariant, the attachment table can
+ *  invalidate it without touching work_orders OR the evaluation. Measured:
+ *  re-classifying and un-storing both SUCCEEDED (falsify_proof_trust
+ *  P1/P2) while the reader went on reporting `satisfied`. */
+ok("C2  …and the evidence table is guarded too, or the invariant is one UPDATE from false",
+   /on\s+public\.work_order_proof_attachments/i.test(sql),
+   "nothing watches the attachments: `update work_order_proof_attachments set " +
+   "proof_classification='unclassified'` silently hollows out a completed work order");
+
+/*  D1 — `closed` is historical vocabulary. Without R0003 a post-cutover
+ *  `open → closed` WITH proof is legal, which is a second permanently
+ *  valid completion vocabulary contradicting the frozen Step 6 ruling. */
+ok("D1  post-cutover `closed` is refused as VOCABULARY, not merely for want of proof",
+   /R0003/.test(sql),
+   "`closed` is available again as a completion status after the cutover");
+ok("D2  …and an inventoried legacy row's status is pinned to what the census recorded",
+   /status_at_cutover/.test(sql),
+   "an inventoried row need only stay SOME terminal value, so `closed → complete` " +
+   "with no evaluation relabels history as a governed completion");
 
 /*  ── G14 · EVERY ACTIVATING HARNESS CARRIES THE GUARD ────────────────
  *

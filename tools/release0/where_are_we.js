@@ -70,11 +70,56 @@ const srcHas = (file, needle) => {
   //  the privilege — deliberately, since the alternative is a control nobody
   //  can remove when it is wrong. That makes it auditable rather than
   //  absolute, so its presence has to be READ, never assumed.
-  const guard = (await q(
-    `select 1 from pg_trigger t join pg_class c on c.oid = t.tgrelid
+  /*  PRESENT is not the same as WORKING. Each of these looks correct in a
+   *  trigger listing and protects nothing:
+   *    · DISABLED    (tgenabled='D') — exists, never fires
+   *    · IMMEDIATE   — judges each statement, not the committed state
+   *    · a permissive FUNCTION BODY behind the right name
+   *    · the EPOCH gone, so the boundary is answerable from a stale snapshot
+   *  So the instrument reads all four, the same way the activation does. */
+  const trg = await q(
+    `select t.tgname, t.tgenabled, t.tgdeferrable, t.tginitdeferred
+       from pg_trigger t join pg_class c on c.oid = t.tgrelid
       where not t.tgisinternal
         and t.tgname in ('assert_completion_truth_ins','assert_completion_truth_upd',
-                         'assert_completion_truth_eval')`)).length === 3;
+                         'assert_completion_truth_eval','assert_completion_truth_attach')`);
+  /*  ALL overloads, not the first row. A second function with the same
+   *  name and a different signature does not replace the first — it sits
+   *  beside it, and reading `[0]` could report the safe one while a
+   *  trigger calls the permissive one. Every definition carrying this
+   *  name must enforce the invariant. */
+  const bodies = await q(
+    `select p.prosrc from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname='public' and p.proname='release_0_assert_completion_truth'`);
+  const epochRows = (await q(
+    `select count(*)::int n from public.release_0_activation_epoch`).catch(() => []));
+  const stamper = (await q(
+    `select 1 from pg_trigger t join pg_class c on c.oid = t.tgrelid
+      where not t.tgisinternal and t.tgname='stamp_activation_epoch'
+        and t.tgenabled <> 'D'`));
+
+  const guardFaults = [];
+  if (trg.length !== 4) guardFaults.push(`${trg.length}/4 triggers present`);
+  if (trg.some((t) => t.tgenabled === "D")) guardFaults.push("a trigger is DISABLED");
+  if (trg.some((t) => !t.tgdeferrable || !t.tginitdeferred))
+    guardFaults.push("a trigger is not DEFERRABLE INITIALLY DEFERRED");
+  if (!bodies.length) guardFaults.push("the predicate function is missing");
+  else {
+    if (bodies.length > 1) {
+      guardFaults.push(`${bodies.length} functions named release_0_assert_completion_truth — ` +
+        "an overload does not replace the original, and a trigger may call either");
+    }
+    for (const b of bodies) {
+      for (const cl of ["release_0_activation_epoch", "for share", "status_at_cutover",
+                        "'satisfied'", "R0002", "R0003", "R0004"]) {
+        if (!b.prosrc.includes(cl)) guardFaults.push(`a predicate does not enforce ${cl}`);
+      }
+    }
+  }
+  if (!epochRows.length || epochRows[0].n !== 1)
+    guardFaults.push("the activation epoch row is missing — a stale snapshot has nothing to fail on");
+  if (!stamper.length) guardFaults.push("nothing stamps the epoch on activation");
+  const guard = guardFaults.length === 0;
   const inventory = has137
     ? Number((await q(`select count(*) n from release_0_legacy_cutover_inventory`))[0].n) : 0;
   const evaluations = has137
@@ -117,7 +162,11 @@ const srcHas = (file, needle) => {
                          : "the old boolean reader is running" },
     { k: "gd", n: "migration 140 · completion guard", done: guard,
       d: guard ? (activation ? "installed and ARMED" : "installed, inert until activation")
-               : "NOT INSTALLED — a work order can commit terminal with no satisfied proof" },
+        //  "not installed" would be a lie for a trigger that exists and is
+        //  disabled, which is the more dangerous case: it reads as present.
+        : guardFaults.length && !guardFaults[0].startsWith("0/4")
+          ? "PRESENT BUT NOT PROTECTING — " + guardFaults.join(" · ")
+          : "NOT INSTALLED — a work order can commit terminal with no satisfied proof" },
     { k: "b9", n: "migrations 138 + 139", done: has138 && has139,
       d: `138 ${has138 ? "applied" : "absent"} · 139 ${has139 ? "applied" : "absent"}` },
     { k: "b10", n: "§4.2 defect sweep available", done: sweepPresent,
@@ -156,6 +205,12 @@ const srcHas = (file, needle) => {
     "138 IS APPLIED AND 139 IS NOT",
     "The defect obligation can be raised but cannot close as 'no_longer_applicable'. " +
     "They are one boundary; apply both.");
+
+  stop(guard === false && guardFaults.length > 0 && !!activation,
+    "THE GUARD IS PRESENT IN NAME ONLY",
+    "Each of these looks correct in a trigger listing and protects nothing: " +
+    guardFaults.join(" · ") + ". Re-apply migration 140 and confirm before " +
+    "trusting any completion written since.");
 
   stop(!!activation && !guard,
     "THE CUTOVER IS ACTIVE AND THE COMPLETION GUARD IS NOT INSTALLED",

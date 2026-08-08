@@ -106,13 +106,17 @@ async function activationSchemaPresent(client) {
  *  for the activation to be safe, each tied to an attack that broke an
  *  earlier revision (tools/step12/falsify_containment.js):
  *
- *    release_0_activation_current       inert before the cutover
+ *    release_0_activation_epoch + `for share`
+ *                                       B1 — the boundary read must FAIL on
+ *                                       a stale snapshot, not answer from it
  *    release_0_legacy_cutover_inventory legacy history is exempt
+ *    status_at_cutover                  A3 — and its status is FROZEN
  *    work_order_proof_evaluation_head   a governed completion is admitted
  *    = 'satisfied'                      A1/A2 — a FAILED evaluation is not
  *                                       a completion
- *    R0002                              A3 — inventoried legacy may not
- *                                       leave the terminal state
+ *    R0002                              A3 — inventoried legacy is frozen
+ *    R0003                              D1 — `closed` is historical only
+ *    R0004                              C1 — `satisfied` must cite evidence
  *
  *  Checking substance rather than a digest is deliberate: a digest would
  *  make every comment edit in migration 140 a production incident, and
@@ -120,16 +124,34 @@ async function activationSchemaPresent(client) {
  */
 const GUARD_FUNCTION = "release_0_assert_completion_truth";
 const GUARD_CLAUSES = [
-  "release_0_activation_current",
+  //  B1 — the epoch, and the LOCKING read of it. Without `for share` the
+  //  boundary is answerable from a stale REPEATABLE READ snapshot, and a
+  //  transaction that simply started earlier walks through the guard. A
+  //  guard that reads the epoch WITHOUT the lock looks correct and is not,
+  //  so the clause checked is the lock, not the table name.
+  "release_0_activation_epoch",
+  "for share",
   "release_0_legacy_cutover_inventory",
+  "status_at_cutover",
   "work_order_proof_evaluation_head",
   "'satisfied'",
   "R0002",
+  "R0003",
+  "R0004",
+];
+/*  The epoch only tells the truth if something moves it. It is stamped by
+ *  a trigger on the history table rather than by this service, so that
+ *  hand-run SQL cannot activate without moving it — and that trigger is
+ *  therefore part of what must exist before the irreversible act. */
+const GUARD_SUPPORT = [
+  { kind: "table", name: "release_0_activation_epoch" },
+  { kind: "trigger", name: "stamp_activation_epoch", table: "release_0_activation_history" },
 ];
 const GUARD_TRIGGERS = [
   { name: "assert_completion_truth_ins", table: "work_orders" },
   { name: "assert_completion_truth_upd", table: "work_orders" },
   { name: "assert_completion_truth_eval", table: "work_order_proof_evaluations" },
+  { name: "assert_completion_truth_attach", table: "work_order_proof_attachments" },
 ];
 
 async function assertContainmentGuardPresent(client) {
@@ -151,7 +173,7 @@ async function assertContainmentGuardPresent(client) {
   }
 
   const live = (await client.query(
-    `select t.tgname, k.relname, t.tgdeferrable, t.tginitdeferred, t.tgconstraint
+    `select t.tgname, k.relname, t.tgdeferrable, t.tginitdeferred, t.tgconstraint, t.tgenabled
        from pg_trigger t join pg_class k on k.oid = t.tgrelid
       where not t.tgisinternal and t.tgname = any($1::text[])`,
     [GUARD_TRIGGERS.map((g) => g.name)])).rows;
@@ -167,6 +189,49 @@ async function assertContainmentGuardPresent(client) {
         `${want.name} is not DEFERRABLE INITIALLY DEFERRED. Made immediate it judges ` +
         "each statement instead of the committed state, and would refuse the canonical " +
         "writer depending on its statement order.");
+    }
+    /*  `ALTER TABLE … DISABLE TRIGGER` leaves the row in pg_trigger with
+     *  the right name, the right timing and the right definition, and it
+     *  simply does not fire. Checking existence would pass. */
+    if (got.tgenabled === "D") {
+      throw activationError("GUARD_STALE",
+        `${want.name} exists but is DISABLED (ALTER TABLE … DISABLE TRIGGER). It will ` +
+        "not fire, so the guard is present in every way except the one that matters.");
+    }
+  }
+
+  //  The epoch and the trigger that moves it.
+  for (const s of GUARD_SUPPORT) {
+    if (s.kind === "table") {
+      const t = (await client.query(`select to_regclass('public.' || $1) r`, [s.name])).rows[0];
+      if (!t || !t.r) {
+        throw activationError("GUARD_ABSENT",
+          `public.${s.name} does not exist. The guard reads the activation boundary from ` +
+          "it, and without the row there is no boundary a stale snapshot can fail on.");
+      }
+      const n = Number((await client.query(
+        `select count(*) n from public.${s.name}`)).rows[0].n);
+      if (n !== 1) {
+        throw activationError("GUARD_STALE",
+          `public.${s.name} holds ${n} row(s); the guard needs exactly the one singleton ` +
+          "that predates the activation. With no row, its locking read finds nothing to " +
+          "conflict with and every stale snapshot is exempt.");
+      }
+    } else {
+      const t = (await client.query(
+        `select t.tgenabled from pg_trigger t join pg_class k on k.oid = t.tgrelid
+          where not t.tgisinternal and t.tgname = $1 and k.relname = $2`,
+        [s.name, s.table])).rows[0];
+      if (!t) {
+        throw activationError("GUARD_ABSENT",
+          `the trigger ${s.name} is missing from ${s.table}. Nothing would move the ` +
+          "activation epoch, so the guard would stay inert forever after this activation.");
+      }
+      if (t.tgenabled === "D") {
+        throw activationError("GUARD_STALE",
+          `${s.name} on ${s.table} is DISABLED. The epoch would never move and the guard ` +
+          "would stay inert forever after this activation.");
+      }
     }
   }
 }
@@ -214,18 +279,36 @@ async function recordActivation(client, {
    *  which is the correct refusal — or it rolls back. There is no third
    *  outcome, and no window between the census and this lock.
    *
-   *  lock_timeout is set LOCAL and low: a cutover that hangs behind a
-   *  long-running transaction must fail loudly and be retried, never
-   *  block production writes indefinitely while somebody waits.  */
-  await client.query("set local lock_timeout = '5s'");
+   *  ⚠ THIS COVERS ONLY A WRITER THAT ALREADY CONFLICTS. A transaction
+   *  that fixes a REPEATABLE READ snapshot on something unrelated, waits
+   *  the activation out, and touches work_orders only afterwards never
+   *  contends for this lock at all. That case is closed inside the guard,
+   *  by the activation-epoch row and its locking read — see migration 140.
+   *  Neither mechanism is sufficient alone.
+   *
+   *  ── NOWAIT, NOT A TIMEOUT ──────────────────────────────────────────
+   *
+   *  This was `lock_timeout = 5s` and it was measured
+   *  (falsify_activation_boundary.js L2/L3): the statement waited the full
+   *  5 seconds, and — the part that matters — a merely QUEUED lock request
+   *  puts every NEW work_orders writer behind it. An ordinary write timed
+   *  out at 1s while the activation held NOTHING and simply waited. That
+   *  is the migration 137 lesson: a lock you wait for is a lock everyone
+   *  behind you waits for.
+   *
+   *  NOWAIT fails in microseconds and stalls nobody. A cutover blocked by
+   *  an in-flight writer should be retried by a human who then re-runs the
+   *  census, not queued in front of production.  */
   try {
-    await client.query("lock table public.work_orders in share row exclusive mode");
+    await client.query("lock table public.work_orders in share row exclusive mode nowait");
   } catch (e) {
     throw activationError("WRITERS_IN_FLIGHT",
-      "could not serialize against work_orders writers within 5s: " + (e.code || e.message) +
-      ". A transaction is holding a write lock. Activating past it would leave a " +
-      "window in which its terminal rows escape the containment guard. Wait for it " +
-      "to finish and re-run the census.");
+      "could not serialize against work_orders writers: " + (e.code || e.message) +
+      ". A transaction is holding a write lock right now. Activating past it would " +
+      "leave a window in which its terminal rows escape the containment guard. This " +
+      "refusal is immediate by design — waiting for the lock would queue every new " +
+      "work-order write behind the cutover. Wait for that transaction to finish, " +
+      "re-run the census, and try again.");
   }
 
   //  ── THE INSTANT ────────────────────────────────────────────────────
@@ -294,6 +377,81 @@ async function recordActivation(client, {
       `${unexpected.length} unexpected, ${missing.length} missing`,
       { unexpected, missing,
         note: "re-run the census and re-authorize. Do NOT widen the comparison." });
+  }
+
+  /*  ── THE POPULATION MUST ALREADY BE EXPLAINABLE ────────────────────
+   *
+   *  The census only sees terminal work orders with NO evaluation. A
+   *  terminal row with a `not_satisfied` head, or with a `satisfied` head
+   *  citing no qualifying evidence, is INVISIBLE to it: not in the census,
+   *  therefore never inventoried, and never judged by the guard — because
+   *  the guard only fires on a write and nothing writes to it again.
+   *
+   *  So it would simply EXIST on day one. Illegal under the invariant, and
+   *  permanent, purely because no trigger happened to fire at the moment
+   *  the activation was created. The activation is the one irreversible
+   *  act in the release; it must not be the thing that grandfathers in a
+   *  population it would refuse a second later.
+   *
+   *  Checked INSIDE this transaction, against the SAME predicate the guard
+   *  uses, so the answer cannot drift between the check and the commit.
+   *
+   *  Every terminal row must be one of exactly two things:
+   *    · in the census (unevaluated) → about to be inventoried as legacy
+   *    · `complete` with a GROUNDED satisfied head → a real completion
+   *  Anything else is unexplainable, and this refuses rather than
+   *  inheriting it.  */
+  const unexplainable = (await client.query(
+    `select w.id as work_order_id, w.property_id, w.status,
+            h.state as head_state,
+            (h.id is null) as no_evaluation,
+            exists (
+              select 1
+                from work_order_proof_evaluation_attachments l
+                join work_order_proof_attachments a
+                  on  a.id = l.attachment_id
+                  and a.work_order_id = l.work_order_id
+                  and a.property_id   = l.property_id
+               where l.evaluation_id = h.id
+                 and a.storage_state = 'stored'
+                 and a.content is not null and a.byte_size is not null
+                 and a.sha256  is not null and a.stored_at is not null
+                 and a.mime_type = any (array['image/jpeg','image/png','image/webp'])
+                 and a.proof_classification = any (array['repair_photo','condition'])
+            ) as grounded
+       from work_orders w
+       left join work_order_proof_evaluation_head h
+              on h.work_order_id = w.id and h.property_id = w.property_id
+      where w.status in ('complete','closed')
+        and h.id is not null
+        and not (w.status = 'complete' and h.state = 'satisfied' and exists (
+              select 1
+                from work_order_proof_evaluation_attachments l
+                join work_order_proof_attachments a
+                  on  a.id = l.attachment_id
+                  and a.work_order_id = l.work_order_id
+                  and a.property_id   = l.property_id
+               where l.evaluation_id = h.id
+                 and a.storage_state = 'stored'
+                 and a.content is not null and a.byte_size is not null
+                 and a.sha256  is not null and a.stored_at is not null
+                 and a.mime_type = any (array['image/jpeg','image/png','image/webp'])
+                 and a.proof_classification = any (array['repair_photo','condition'])
+            ))
+      order by w.property_id, w.id`)).rows;
+
+  if (unexplainable.length) {
+    throw activationError("POPULATION_NOT_EXPLAINABLE",
+      `${unexplainable.length} terminal work order(s) already violate the post-activation ` +
+      "invariant and are invisible to the census, which only sees UNEVALUATED terminal " +
+      "rows. Activating would make them permanent and unexplainable — legal only because " +
+      "no trigger fired at the instant the cutover was recorded.",
+      { unexplainable,
+        note: "Each row is terminal with an evaluation that does not justify it: a " +
+              "`not_satisfied` head, a `satisfied` head citing no qualifying preserved " +
+              "evidence, or `closed` with an evaluation at all. Resolve each one — record " +
+              "a grounded satisfied evaluation, or take it out of the terminal state — " +
+              "then re-run the census and re-authorize." });
   }
 
   //  ── FACT 1 ─────────────────────────────────────────────────────────

@@ -133,12 +133,23 @@ const open = async () => {
     //  in time. Neither pre-checks for an existing genesis — the point is
     //  that the DATABASE decides, because a read-then-write check is a race
     //  and uq_r0ah_genesis is not.
-    const pa = svc.recordActivation(a, {
-      activated_at: STEP6_INSTANT, captured_by: "racer A", expected: set });
-    const pb = svc.recordActivation(b, {
-      activated_at: STEP6_INSTANT, captured_by: "racer B", expected: set });
-    const ra = await pa.then((out) => ({ out })).catch((err) => ({ err }));
-    const rb = await pb.then((out) => ({ out })).catch((err) => ({ err }));
+    /*  ⚠ THE HANDLERS ARE ATTACHED AT CREATION, NOT AFTER THE FIRST AWAIT.
+     *
+     *  This used to create both promises bare and attach `.catch()` on the
+     *  await lines. With `lock_timeout = 5s` the loser took five seconds to
+     *  fail, so the first await always finished first and the handler was
+     *  in place by then. NOWAIT made the loser reject in microseconds — an
+     *  UNHANDLED REJECTION, which Node treats as fatal, and the harness
+     *  died mid-section instead of asserting anything.
+     *
+     *  A latent bug the whole time; a faster refusal only revealed it. */
+    const settle = (pr) => pr.then((out) => ({ out }), (err) => ({ err }));
+    const pa = settle(svc.recordActivation(a, {
+      activated_at: STEP6_INSTANT, captured_by: "racer A", expected: set }));
+    const pb = settle(svc.recordActivation(b, {
+      activated_at: STEP6_INSTANT, captured_by: "racer B", expected: set }));
+    const ra = await pa;
+    const rb = await pb;
 
     //  Commit both; one will fail. Which one is not determined and does not
     //  matter — that exactly one survives is the contract.
@@ -156,8 +167,30 @@ const open = async () => {
     ok("R3  …and the loser left NO inventory behind", n.inventory === set.length,
        `${n.inventory} inventory rows for a set of ${set.length} — a partial second ` +
        `write would show as a larger count`);
-    console.log("        the loser was refused by uq_r0ah_genesis / r0ah_chain_guard,");
-    console.log("        not by a pre-check in the service");
+
+    /*  ── WHICH REFUSAL FIRED IS NOW TIMING-DEPENDENT, AND THAT IS FINE ──
+     *
+     *  This used to print, flatly, "the loser was refused by uq_r0ah_genesis
+     *  / r0ah_chain_guard". Since the activation takes SHARE ROW EXCLUSIVE
+     *  … NOWAIT — which conflicts with ITSELF — the loser is now refused by
+     *  the LOCK whenever the two genuinely overlap, and by the unique index
+     *  only when it arrives after the winner has committed. Both happen;
+     *  the file was intermittently red for asserting one of them.
+     *
+     *  The contract is unchanged and is what R1–R3 assert: exactly one
+     *  survives. What matters for THIS line is that the loser was refused
+     *  by the DATABASE — a lock it could not take or an index it could not
+     *  violate — and never by a read-then-check in the service, which
+     *  would itself be a race. */
+    const loser = ra.err || rb.err;
+    ok("R4  …and the loser was refused by the DATABASE, not by a pre-check",
+       !!loser && (loser.code === "WRITERS_IN_FLIGHT" ||
+                   /uq_r0ah_genesis|r0ah_chain_guard|duplicate key/i.test(loser.message || "")),
+       loser ? loser.code + " " + (loser.message || "").slice(0, 160)
+             : "neither call failed — one of them must have been refused");
+    console.log("        loser refused by: " + (loser && loser.code === "WRITERS_IN_FLIGHT"
+      ? "the NOWAIT table lock (they genuinely overlapped)"
+      : "uq_r0ah_genesis / r0ah_chain_guard (it arrived after the winner committed)"));
     await a.end(); await b.end();
   }
 

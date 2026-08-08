@@ -40,6 +40,7 @@ const activation = require(path.join(ROOT, "src/release0/activation_service.js")
 //  harness that activates must install it. States the guard forbids are
 //  then built inside an explicit withGuardOff() window.
 const guardWindow = require("../step12/guard_window.js");
+const grounded = require("../step12/grounded_evaluation.js");
 const URL = process.env.STEP8_DATABASE_URL;
 
 let pass = 0, fail = 0;
@@ -96,7 +97,17 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
                    values ($1,$2,'work_order','maintenance','work_order_routing','r','open')`, [PROP, wo]);
     return wo;
   };
+  /*  A `satisfied` evaluation must now CITE qualifying evidence — the
+   *  guard stopped trusting the word (R0004). `not_satisfied` needs no
+   *  evidence: it is a refusal, and a refusal that required proof of the
+   *  thing it is refusing would be nonsense. */
   const evaluate = async (wo, state) => {
+    if (state === "satisfied") {
+      await grounded.groundedSatisfied(c, {
+        work_order_id: wo, property_id: PROP, uploaded_by_user_id: TECH,
+        evaluated_by_service: "step8proof" });
+      return;
+    }
     await c.query(`insert into work_order_proof_evaluations
       (work_order_id,property_id,state,evaluated_by_service,rule_version)
       values ($1,$2,$3,'step8proof','x')`, [wo, PROP, state]);
@@ -198,10 +209,19 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
 
     //  The head wins even on a row that is ALSO inventoried — an evaluation
     //  is a stronger fact than membership of a historical set.
-    const both = await completeGoverned("closed");
+    /*  `complete`, not `closed`: post-cutover `closed` is refused outright
+     *  (R0003) now that it is historical vocabulary only. E5 is about an
+     *  evaluation head outranking inventory membership, and that question
+     *  is unchanged by which terminal word the row carries.
+     *
+     *  `status_at_cutover` matches the row's actual status — the guard
+     *  pins an inventoried row to what the census recorded, so a fixture
+     *  claiming 'closed' for a `complete` row would be asserting on a
+     *  state the census could never have produced. */
+    const both = await completeGoverned("complete");
     await c.query(`insert into release_0_legacy_cutover_inventory
       (work_order_id,property_id,status_at_cutover,had_column_photo,had_column_note,activation_id)
-      values ($1,$2,'closed',false,false,(select id from release_0_activation_current))
+      values ($1,$2,'complete',false,false,(select id from release_0_activation_current))
       on conflict do nothing`, [both, PROP]);
     const bs = await read(both);
     ok("E5  an evaluation head OUTRANKS inventory membership",

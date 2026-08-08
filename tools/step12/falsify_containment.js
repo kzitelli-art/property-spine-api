@@ -117,6 +117,33 @@ const CODE = "R0001";
        (work_order_id,property_id,state,evaluated_by_service,rule_version,supersedes_id)
      values ('${wo}','${PROP}','${state}','s12f','x',${supersedes ? `'${supersedes}'` : "null"})`;
 
+  /*  REVISION 3 — a `satisfied` head must CITE qualifying evidence
+   *  (R0004), so the CONTROL for a cross-table attack has to be a real
+   *  completion, not a written word. `not_satisfied` still needs none: it
+   *  is a refusal, and requiring proof of the thing being refused would
+   *  be nonsense. Returns SQL because these attacks deliberately go
+   *  through raw transactions rather than any service. */
+  const groundedEvalSql = async (wo) => {
+    const att = ID("att-" + wo.slice(0, 8));
+    const b = Buffer.from([6, 6, 6, 6]);
+    await c.query(`insert into work_order_proof_attachments
+      (id,work_order_id,property_id,uploaded_by_user_id,provider,provider_media_id,mime_type,
+       storage_state,proof_classification,content,byte_size,sha256,stored_at)
+      values ($1,$2,$3,$4,'twilio',$5,'image/jpeg','stored','repair_photo',$6,$7,$8,now())
+      on conflict (id) do nothing`,
+      [att, wo, PROP, TECH, "ME" + att.slice(0, 8), b, b.length,
+       crypto.createHash("sha256").update(b).digest("hex")]);
+    const ev = ID("ev-" + wo.slice(0, 8));
+    return [
+      `insert into work_order_proof_evaluations
+         (id,work_order_id,property_id,state,evaluated_by_service,rule_version)
+       values ('${ev}','${wo}','${PROP}','satisfied','s12f','x')`,
+      `insert into work_order_proof_evaluation_attachments
+         (evaluation_id,attachment_id,work_order_id,property_id)
+       values ('${ev}','${att}','${wo}','${PROP}')`,
+    ];
+  };
+
   //  A pre-activation legacy row for A3, and the census population.
   const legacyWo = await mkWo("closed");
 
@@ -251,7 +278,7 @@ const CODE = "R0001";
         + "             work-order trigger alone cannot hold it.");
   {
     const wo = await mkWo("open");
-    const setup = await direct([evalSql(wo, "satisfied"),
+    const setup = await direct([...(await groundedEvalSql(wo)),
                                 `update work_orders set status='complete' where id='${wo}'`]);
     ok("A2.0  the control starts legal: complete, satisfied", setup === null &&
        (await readState(wo)).proof === "satisfied", setup && setup.message);
