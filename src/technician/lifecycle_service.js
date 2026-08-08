@@ -92,7 +92,13 @@ async function appendProgress(client, { wo, kind, user_id, note, source_comm_eve
    *
    *  The savepoint is what makes the failure recoverable. Same discipline
    *  as the read-only audit probes: a probe must not poison the
-   *  transaction it is probing.  */
+   *  transaction it is probing.
+   *
+   *  Every caller of this service already runs inside an explicit
+   *  transaction — `assertActorMayOperate` takes `for update`, which
+   *  outside one would lock nothing. A SAVEPOINT outside a transaction
+   *  block raises rather than silently doing nothing, which is the
+   *  behaviour we want if that ever stops being true.  */
   await client.query("savepoint append_progress");
   try {
     const row = (await client.query(
