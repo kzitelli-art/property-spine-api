@@ -138,11 +138,12 @@ const check = (k, okv, v, note) => {
     `select t.tgname, t.tgenabled, t.tgdeferrable, t.tginitdeferred, k.relname
        from pg_trigger t join pg_class k on k.oid = t.tgrelid
       where not t.tgisinternal and t.tgname like any (array[
-        'assert_completion_truth_%','freeze_cited_evidence_%','stamp_activation_epoch'])`);
+        'assert_completion_truth_%','freeze_cited_evidence_%','stamp_activation_epoch',
+        'freeze_activation_epoch'])`);
   const want = ["assert_completion_truth_ins", "assert_completion_truth_upd",
                 "assert_completion_truth_eval", "assert_completion_truth_attach",
                 "freeze_cited_evidence_upd", "freeze_cited_evidence_del",
-                "stamp_activation_epoch"];
+                "stamp_activation_epoch", "freeze_activation_epoch"];
   const missing = want.filter((n) => !trg.some((t) => t.tgname === n));
   const disabled = trg.filter((t) => t.tgenabled === "D").map((t) => t.tgname);
   const notDeferred = trg.filter((t) => t.tgname.startsWith("assert_completion_truth") &&
@@ -167,6 +168,7 @@ const check = (k, okv, v, note) => {
       ["storage_state", "sha256", "stored_at", "proof_classification", "mime_type"],
     release_0_freeze_cited_evidence:
       ["work_order_proof_evaluation_attachments", "R0005"],
+    release_0_freeze_activation_epoch: ["activation_id", "R0006"],
   };
   const fnFaults = [];
   for (const [name, cls] of Object.entries(CLAUSES)) {

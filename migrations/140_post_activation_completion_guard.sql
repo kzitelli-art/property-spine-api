@@ -1,7 +1,7 @@
 -- ════════════════════════════════════════════════════════════════════
 --  140 — COMPLETION TRUTH, ENFORCED AT COMMIT
 --
---  ⚠ REVISION 3. Each revision was broken by measurement, not opinion.
+--  ⚠ REVISION 5. Each revision was broken by measurement, not opinion.
 --
 --    rev 1  enforced only "not the missing_evaluation_defect state".
 --           FOUR attacks walked past it (falsify_containment.js).
@@ -10,6 +10,22 @@
 --           the activation boundary was answerable from a stale snapshot,
 --           `satisfied` was a word anyone could write, and the evidence
 --           under a completion could be invalidated afterwards.
+--    rev 3  recomputed the completion when evidence changed. That catches
+--           mutations which BREAK a completion, not ones that REPLACE the
+--           evidence under it.
+--    rev 4  froze cited evidence and unified the definition. Then the
+--           RELEASE REHEARSAL found E1 — see below.
+--
+--  E1  THE EPOCH COULD BE RESET BY HAND, and the consequence was the worst
+--      shape available: `update release_0_activation_epoch set
+--      activation_id = null` silently disarmed the guard while
+--      release_0_activation_current still reported an activation. The
+--      surface classified every terminal row; the database judged none of
+--      them. TWO MEANINGS OF TRUTH, from one UPDATE. Demonstrated end to
+--      end (prove_boundary_reversibility B8).
+--        → the epoch carries the same append-only discipline the history
+--          and inventory already had. It was derived from them and is read
+--          INSTEAD of them, so it needed their protection from the start.
 --
 --  WHAT IT ENFORCES NOW, after the cutover:
 --
@@ -176,6 +192,97 @@ create trigger stamp_activation_epoch
   after insert on public.release_0_activation_history
   for each row
   execute function public.release_0_stamp_activation_epoch();
+
+--  ── THE EPOCH IS TRUTH, SO IT IS APPEND-ONLY LIKE THE REST ──────────
+--
+--  MEASURED (prove_boundary_reversibility B8): `update
+--  release_0_activation_epoch set activation_id = null` SUCCEEDED, and the
+--  consequence is worse than a gap in irreversibility —
+--
+--      the guard reads the EPOCH and goes inert
+--      the reader reads release_0_activation_current and stays activated
+--
+--  …so the surface classifies every terminal row while the database stops
+--  judging any of them. TWO MEANINGS OF TRUTH, produced by one UPDATE, and
+--  the row that then commits is exactly the manufactured defect this whole
+--  migration exists to prevent. Demonstrated end to end: with the epoch
+--  stamped the write is refused; with it nulled the identical write
+--  commits and the reader calls the result missing_evaluation_defect.
+--
+--  release_0_activation_history and release_0_legacy_cutover_inventory
+--  already carry this discipline. The epoch was added later and did not,
+--  which is the whole defect: it is derived from them and is read INSTEAD
+--  of them, so it needed their protection from the start.
+--
+--  The one legal transition is null → set, performed by the stamp trigger
+--  in the activation's own transaction. Once set it is frozen: not
+--  cleared, not repointed at a different activation.
+create or replace function public.release_0_freeze_activation_epoch()
+returns trigger as $q$
+begin
+  if tg_op = 'DELETE' then
+    raise exception 'the activation epoch may not be deleted'
+      using errcode = 'R0006',
+            detail  = 'The guard reads this row to decide whether the cutover has '
+                   || 'happened. Removing it makes the containment guard inert while '
+                   || 'the reader goes on classifying every terminal work order.',
+            hint    = 'There is no supported way to un-activate. See '
+                   || 'docs/RELEASE_0_ACTIVATION_RUNBOOK.md — boundary 8 is the line.';
+  end if;
+
+  --  CLEARING IT IS NEVER LEGAL. This is the E1 hole: a null epoch
+  --  disarms the guard while release_0_activation_current still reports an
+  --  activation, so the surface classifies every terminal row and the
+  --  database judges none.
+  if old.activation_id is not null and new.activation_id is null then
+    raise exception 'the activation epoch may not be cleared (it is %)', old.activation_id
+      using errcode = 'R0006',
+            detail  = 'Clearing it silently disarms the completion guard while '
+                   || 'release_0_activation_current still reports an activation — the '
+                   || 'database stops judging completions the surface still classifies. '
+                   || 'That is two meanings of truth from one UPDATE.',
+            hint    = 'There is no supported way to un-activate. Boundary 8 is the line.';
+  end if;
+
+  --  ⚠ MOVING IT IS LEGAL ONLY ALONG THE GOVERNED CHAIN.
+  --
+  --  A first version froze the epoch outright the moment it was set, and
+  --  that BROKE THE CORRECTION PATH: Step 7 supports superseding an
+  --  activation with a reason, the stamp trigger then moves the epoch to
+  --  the new head, and the freeze refused it. Two proofs went red
+  --  (prove_step7_activation O4, prove_step7_concurrency R4/R6) — the same
+  --  mistake the evidence freeze was warned about, one table over.
+  --
+  --  A correction is new truth, so it may move the epoch. An arbitrary
+  --  repoint is not, so it may not. The discriminator is the chain itself:
+  --  the incoming activation must SUPERSEDE the one the epoch names.
+  if old.activation_id is not null
+     and new.activation_id is distinct from old.activation_id
+     and not exists (
+       select 1 from public.release_0_activation_history h
+        where h.id = new.activation_id
+          and h.supersedes_id = old.activation_id) then
+    raise exception
+      'the activation epoch may only move along the supersession chain: % does not supersede %',
+      new.activation_id, old.activation_id
+      using errcode = 'R0006',
+            detail  = 'A governed CORRECTION supersedes the current activation and may '
+                   || 'carry the epoch with it. An arbitrary repoint would point the '
+                   || 'guard at a boundary the history does not record.',
+            hint    = 'Record the correction through release0.activation_service with '
+                   || 'supersedes_id and a reason; the stamp trigger moves the epoch in '
+                   || 'that same transaction.';
+  end if;
+  return new;
+end;
+$q$ language plpgsql;
+alter function public.release_0_freeze_activation_epoch() set search_path = public, pg_temp;
+
+drop trigger if exists freeze_activation_epoch on public.release_0_activation_epoch;
+create trigger freeze_activation_epoch
+  before update or delete on public.release_0_activation_epoch
+  for each row
+  execute function public.release_0_freeze_activation_epoch();
 
 --  Backfill, so applying this to an ALREADY-ACTIVATED database is correct
 --  rather than silently inert. (Not the intended order — the runbook puts

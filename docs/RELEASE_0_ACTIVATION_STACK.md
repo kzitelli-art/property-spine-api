@@ -1,17 +1,20 @@
 # Release 0 — from proven candidates to one release sequence
 
-Migration 140 is **frozen at revision 4**. The work from here is not function
+Migration 140 is **frozen at revision 5**. The work from here is not function
 correctness; it is **release composition**. The failures that remain are the ones
 between boundaries, where every component behaves exactly as specified and the
 sequence still goes wrong.
 
 This tracks that conversion. It is a working document, not a claim of completion.
 
+**Status: the train is build-complete and rehearsed end to end.** What is left is
+proof debt that no database read can discharge — named in §7.
+
 ---
 
-## ⛔ THE FINDING THAT BLOCKS THE TRAIN REHEARSAL
+## ✅ THE FINDING THAT BLOCKED THE TRAIN REHEARSAL — resolved
 
-**Steps 5/6 have never been in the composed branch.**
+**Steps 5/6 had never been in the composed branch.**
 
 ```text
 claude/step-5-6-containment  (PR #57)   NOT IN claude/release0-composed
@@ -23,31 +26,25 @@ claude/cleanup-candidate                IN
 ```
 
 Both #57 and #59 were cut from `main` in parallel; the API stack
-`#59 → #60 → #61 → #62 → #63` stacks on #59 and never picked up #57. So:
+`#59 → #60 → #61 → #62 → #63` stacks on #59 and never picked up #57. In
+production the ORDER is fine — merging #57 first, then the stack, gives `main`
+both — but **the composed end-to-end proof had never run with the legacy writer
+closed.**
 
-- **In production the ORDER is fine.** Merging #57 to `main` first, then the
-  stack, gives `main` both. The runbook already sequences boundary 7 before
-  boundary 8.
-- **But the composed end-to-end proof has never run with the legacy writer
-  closed.** `prove_release0_composed.js` composes #59–#63 against a checkout where
-  `maintenance.js` still writes `status='closed'`.
+#57 is now merged into `claude/release0-composed` (four files, none of them
+frozen). It is composed into the rehearsal tree only; it is **not** merged to
+production and **not** activated. The train rehearsal refuses to run without it:
 
-That is exactly the gap item 3 exists to close, and it cannot be closed by
-asserting it — the train rehearsal has to run against a tree that contains #57.
+```text
+Step 6 (#57) present in the tree — rehearsing the real sequence.
+```
 
-**Recommended:** merge #57 into the composed branch (or rebase the stack onto a
-`main` that has it) *before* building the train rehearsal, so the rehearsal
-composes what production will actually run. Doing it the other way round would
-rehearse a sequence that is missing a boundary.
-
-This was found by the new preflight, which reported `Step 6 · legacy done-path
-STILL OPEN` against this checkout — and it is worth noting that the **first**
-version of that detector was wrong in the other direction: Step 6 does not delete
-the legacy `UPDATE … status='closed'`, it puts an unconditional 409 in front of it
-(§1.1.2 — containment, not a permanent ruling). A presence test reported STILL OPEN
-against the branch where the path is closed. The detector now tests the **order** —
-the `legacy_completion_retired` refusal must precede the write — and is verified
-against both branch versions.
+Worth preserving: the **first** version of that detector was wrong in both
+directions. Step 6 does not delete the legacy `UPDATE … status='closed'`; it puts
+an unconditional 409 in front of it (§1.1.2 — containment, not a permanent ruling).
+A presence test reported STILL OPEN against the branch where the path *is* closed.
+The detector now tests the **order** — the `legacy_completion_retired` refusal must
+precede the write — and is verified against both branch versions.
 
 ---
 
@@ -55,7 +52,7 @@ against both branch versions.
 
 `docs/release0/FROZEN_ARTIFACTS.json` pins sha256 digests for migrations 138/139/140
 and the five source modules that carry the invariant, plus the canonical DB function
-names and the R0001–R0005 error vocabulary.
+names and the R0001–R0006 error vocabulary.
 
 `tests/gate_release0_frozen.js` (runs **second** on `npm run verify`, right after the
 conflict-marker gate) recomputes and compares. Falsified: touching the migration
@@ -64,7 +61,9 @@ turns F1 red and prints the exact package to re-run.
 The freeze is not ceremony. `tools/step12/*` is evidence **about these bytes**;
 a changed predicate makes every later green run evidence about something else,
 silently. Updating the digest is easy and meant to be — updating it *without*
-re-running the package is the thing that is now hard to do by accident.
+re-running the package is the thing that is now hard to do by accident. It has
+already worked twice: the gate went red on its own after the E1 fix and again
+after the correction-chain fix, and both digests moved only behind a re-run.
 
 **Deliberately not** a digest in `assertContainmentGuardPresent`: that checks
 substance, because a digest at the irreversible boundary would make a comment edit
@@ -99,21 +98,82 @@ assumed.
 
 ---
 
-## 3 · Rehearse the release train — **BLOCKED, see above**
+## 3 · Rehearse the release train — **DONE**
 
-Not built. It should run the production sequence in deploy order on one clean
-isolated database, with no shortcuts between branches. It is blocked on the #57
-composition gap: rehearsing without Step 6 would rehearse a different release.
+```bash
+TRAIN_DATABASE_URL='…' node tools/step13/rehearse_release_train.js     # 53/53
+```
+
+The production sequence, in deploy order, on one clean isolated database, with no
+shortcut between branches: **B3 → B5 → B6 → B7 → B7b → B8 → B9 → B10 → B11 → B12 → B13**.
+It refuses to start if Step 6 is not in the tree.
+
+| | boundary | what actually runs |
+|---|---|---|
+| **B3** | Step 3 — the canonical writer | `claimCompletion` records the evaluation and the status change in one transaction |
+| **B5** | Step 4 — the eight completion facts | asserted over a governed completion, not a fixture |
+| **B6** | Step 5 — the app cannot complete | the app's own `no_operator_completion_proof.test.js`, 17/17 |
+| **B7** | Step 6 — the legacy done-path fails closed | over a real socket, not a source grep |
+| **B7b** | migration 140 | applied **before** the activation, deliberately: T1 says an inert guard is the safe ordering |
+| **B8** | Step 7 — census, inventory, activation | ⚠ **IRREVERSIBLE** |
+| **B9** | Step 8 — the four-state reader | over the post-cutover population |
+| **B10** | migrations 138 + 139 | the §4.2 defect rail |
+| **B11** | the contract as a consumer receives it | over the socket B7 opened |
+| **B12** | the app's normalizer | over a body this run produced |
+| **B13** | cleanup | `satisfied` has left the wire; `state` is the field of record |
+
+**The composition check is the point, not the boundary count.** After *every*
+boundary the train runs `oneTruth(label)`, which compares three independent
+answers to the same question — the DB invariant audit view, the canonical reader,
+and the terminal status of the row — and fails if any two disagree. That is the
+check the owner asked for: *whether we ever create two meanings of truth*, not
+whether each service is individually green.
+
+**It found one.** See §E1 below.
+
+---
+
+## 3b · E1 — the composition failure the rehearsal found
+
+`update release_0_activation_epoch set activation_id = null` **succeeded**, and it
+was the worst-shaped defect available:
+
+- the guard read the epoch, found `null`, and returned early — **inert**;
+- `release_0_activation_current` still reported an activation — **activated**;
+- so the surface classified every terminal row against the invariant and the
+  database judged none of them.
+
+Demonstrated end to end, not argued: the guard refuses a bad write while the epoch
+is stamped; the *identical* write commits once the epoch is nulled; the reader then
+calls the result `missing_evaluation_defect`. **Two meanings of truth from one
+UPDATE**, and no error anywhere.
+
+Migration 140 revision 5 gives the epoch the append-only discipline the other two
+truth tables already had (R0006).
+
+The first freeze written for it was **too blunt** — it also refused Step 7's
+governed supersession, so a legitimate correction could no longer move the epoch to
+the new head (`prove_step7_activation` O4, `prove_step7_concurrency` R4/R6 went red
+and were right to). That is the same mistake the evidence freeze was explicitly
+warned about, one table over: *a gate that fails the fix is worse than no gate.*
+The shipped rule refuses any **clear** and any **repoint**, but permits movement to
+an activation that actually supersedes the incumbent:
+
+```sql
+and not exists (select 1 from release_0_activation_history h
+                 where h.id = new.activation_id
+                   and h.supersedes_id = old.activation_id)
+```
 
 ---
 
 ## 4 · Attack the transitions — **DONE**
 
 ```bash
-TRANSITION_DATABASE_URL='…' node tools/step13/falsify_release_transitions.js
+TRANSITION_DATABASE_URL='…' node tools/step13/falsify_release_transitions.js   # 26/26
 ```
 
-26/26, nine transitions characterised. Each reports **OBSERVED · STATE · RECOVERY**,
+Nine transitions characterised. Each reports **OBSERVED · STATE · RECOVERY**,
 and the recovery is the point — "roll back" is not an answer when the boundary is
 irreversible.
 
@@ -129,8 +189,33 @@ irreversible.
 | **T8** | guard armed, pre-Step-6 instance still serving | **contained** — the old instance's write gets `R0003`; nothing written, no defect manufactured | finish the rollout; redo the work through the canonical path |
 | **T9** | rollback | **140 is reversible. The activation is not.** Dropping the guard works (measured); the audit view keeps reporting violations because it derives from a function, not the triggers | re-apply 140 to restore; resolve named rows by hand |
 
-The single most important line: **everything upstream of boundary 8 is revertible;
-nothing downstream of it is.**
+---
+
+## 4b · Reversibility, measured per boundary — **DONE**
+
+```bash
+REVERSIBILITY_DATABASE_URL='…' node tools/step13/prove_boundary_reversibility.js   # 20/20
+```
+
+The runbook's claim was *"everything before boundary 8 is revertible."* That
+sentence is **true about code and false about meaning**, and the difference is the
+whole risk. Each boundary now answers four questions from measurement:
+
+| | CHANGED | ROLLBACK | IN FLIGHT | SEMANTICS |
+|---|---|---|---|---|
+| **B3** | code **+ rows**, no DDL | the **code** yes; the **rows** no | nothing — a redeploy does not touch open transactions | ⚠ **code only.** Evaluations already written are append-only. "Revert Step 3" returns the writer, never the data |
+| **B7** | code only (one 409 ahead of the legacy write) | fully | nothing — the route refuses before opening a transaction | restored **before** the activation. **After** it, reverting restores the ROUTE but not its EFFECT: 140 refuses post-cutover `closed` with R0003 whichever build serves. **Reversible in isolation, not in sequence** |
+| **B7b** | DDL only — 1 table (1 row), 9 functions, 7 guard triggers + the stamp trigger, 1 view; **no existing row modified** | fully, measured **both ways**: drop the triggers → disarmed; re-apply → restored | a concurrent writer is unaffected; deferred checks apply only to transactions committing after | restored completely while inert. Dropping the triggers does **not** silence the audit view — it derives from a function |
+| **B8** | **rows** in two append-only tables + the epoch stamped in the same transaction. No DDL | ❌ **not possible** — 8 undo mechanisms attempted, **all refused** | the activation refuses to run while a writer holds `work_orders` (NOWAIT); once committed, older in-flight transactions are refused at *their* commit (40001) | ❌ **irreversible in both senses.** No old code to return to and no old meaning to restore |
+| **B9–B13** | code only; 138/139 add additive DDL and write no rows | fully | nothing — read paths and a manually-run rail | restored, with one honest caveat: reverting the **reader** after the activation shows pre-Release-0 surfaces over post-cutover truth. That is T4 — roll **forward** |
+
+The eight refusals at B8, each with the message that stopped it: DELETE the
+activation · UPDATE the activation instant · DELETE the inventory · UPDATE the
+inventoried status · INSERT a second genesis · reset the epoch (E1) · repoint the
+epoch · DELETE the epoch row.
+
+> **B8 is the line.** Above it, a redeploy undoes the boundary but never the rows
+> it wrote. Below it, nothing undoes anything.
 
 ---
 
@@ -139,16 +224,49 @@ nothing downstream of it is.**
 `docs/RELEASE_0_STEP_4_PACKAGE.md` and `tools/step4/*` already give
 `preflight → handset action → DB assertions → eight facts → HTTP read → receipt`,
 rehearsed 48/48 in isolation with every fact falsified. Twilio remains an external
-gate. Nothing about the test design should need debugging in production.
+gate. **Nothing about the test design should need debugging in production** — when
+the transport clears, this is a mechanical run, not a build.
 
 ---
 
-## 6 · The acceptance receipt — not built
+## 6 · The acceptance receipt — **DONE**
 
-One artifact answering: what was activated · at what instant · what population was
-grandfathered · what writer is canonical · what old writers are impossible · what
-DB invariant protects completion · what evidence is immutable · what the reader
-says · what the operator sees · what remains intentionally outside Release 0.
+```bash
+node tools/release0/acceptance_receipt.js            # human
+node tools/release0/acceptance_receipt.js --json     # durable
+```
 
-Most of its inputs already exist as the preflight's read set; it is the same facts
-rendered as a durable receipt rather than a go/no-go sheet.
+Read-only by the same construction as the preflight. Every field is either a fact
+this run observed or the word `UNKNOWN` **with the reason** — there is no field
+that defaults to a hopeful value, and it refuses to report the local checkout's SHA
+as production's.
+
+It states, from evidence: what was activated · at what instant · what population
+was grandfathered · what writer is canonical · what old writers are impossible ·
+what DB invariant protects completion · what evidence is immutable · what the
+reader says · what remains intentionally outside Release 0.
+
+**It also detects contradictions inside itself and exits 1** — the three that
+matter: 140's DDL present but the ledger not recording it (applied by hand; the
+next deploy will refuse to boot), an activation recorded against an unstamped epoch
+(the E1 shape), and a non-empty invariant audit.
+
+Its own first version had exactly the defect it now catches: it used `to_regclass`
+to look for the canonical **function**, and `to_regclass` finds relations. It
+printed "the validator is not installed" one line above "guard ARMED."
+
+---
+
+## 7 · What Release 0 does **not** yet have
+
+Precise remaining proof debt. None of it is dischargeable from a database read,
+which is why the receipt names it rather than omitting it:
+
+1. **Step 4 over the real handset** — blocked on Twilio, packaged and rehearsed.
+2. **Browser verification of the four-state block** against a post-cutover
+   population (§33 requires it for operator workflows).
+3. **The production run itself.** Everything above is rehearsal on isolated
+   Postgres clones. The activation has never been executed against production and
+   must not be until the owner runs it.
+4. **Retention / privacy / storage lifecycle** for evidence frozen by R0005 —
+   parked deliberately (`RELEASE_0_COMPLETION_GUARD.md` §11), not solved.

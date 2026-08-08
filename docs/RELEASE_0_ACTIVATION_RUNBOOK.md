@@ -79,7 +79,12 @@ node tools/release0/where_are_we.js      # "Step 3 · canonical writer  LANDED"
 `lifecycle_service.js`, the deploy did not carry the merge. Re-deploy before
 anything else; every boundary below assumes the writer is live.
 
-**Reversible** — yes. No production row changed.
+**Reversible** — the *verification* changes nothing. **The boundary itself is code-only
+in one direction:** redeploying the previous build stops `claimCompletion` recording
+evaluations, but every evaluation it already wrote is permanent — append-only by
+trigger, refused on DELETE (measured, `prove_boundary_reversibility` B3.1/B3.2). That
+is correct and is the point of the release; it means *"revert Step 3"* returns the
+**writer**, never the **data**. Work completed while it was live stays proven.
 
 ---
 
@@ -165,8 +170,12 @@ system caused itself.**
 Record the instant. It is `$1` in the activation transaction and is **never**
 `now()` (§6.1).
 
-**Reversible** — yes, by revert. The captured instant is just a value until
-boundary 8 persists it.
+**Reversible** — yes, by revert, and the captured instant is just a value until
+boundary 8 persists it. **In isolation only**, and the distinction matters: after
+the activation, reverting this deploy restores the *route* but not its *effect* —
+migration 140 refuses post-cutover `closed` with `R0003` whichever build is serving
+(measured, `prove_boundary_reversibility` B7). Reversible in isolation, **not
+reversible in sequence**, which is exactly what the word "reversible" hides.
 
 ---
 
@@ -442,18 +451,54 @@ capture between them.
 
 ## Rollback, honestly
 
+An earlier version of this section said *"everything before boundary 8 is
+revertible."* That sentence is **true about code and false about meaning**, and the
+gap between those is the actual risk. `tools/step13/prove_boundary_reversibility.js`
+(20/20) now measures it per boundary rather than asserting it — four questions each:
+**what changed · can it actually be rolled back · what happens to writes during
+rollback · does rollback restore the old SEMANTICS or only the old CODE.**
+
 ```text
-BOUNDARIES 3, 6, 7, 9, 11, 12   revert the deploy. Nothing persistent changed.
-BOUNDARY 5                      the PROOF is read-only; the completion it proves
-                                is a real, permanent completion of a real work order.
-BOUNDARY 8                      NOT REVERSIBLE. Append-only, enforced by triggers.
-BOUNDARY 10                     migrations are forward-only; a raised obligation is
-                                an accountability fact and the sweep cannot close it.
+BOUNDARY 3     CODE, yes — redeploy and claimCompletion stops recording.
+               ROWS, NO. Every evaluation already written is append-only and
+               refused on DELETE. "Revert Step 3" returns the WRITER, never
+               the DATA. Work completed while it was live stays proven.
+
+BOUNDARIES     revert the deploy. Nothing persistent changed by the boundary
+6, 9, 11, 12   itself. Read paths and route changes only.
+
+BOUNDARY 7     reversible IN ISOLATION, not IN SEQUENCE. After the activation,
+               reverting restores the route but not its effect — R0003 refuses
+               post-cutover `closed` whichever build is serving.
+
+BOUNDARY 7b    FULLY, measured both ways: dropping the guard triggers disarms
+               it, re-applying the migration restores it exactly. Note the
+               asymmetry — a dropped guard does NOT silence the invariant audit
+               view, which derives from a function, so a bypass stays visible.
+
+BOUNDARY 5     the PROOF is read-only; the completion it proves is a real,
+               permanent completion of a real work order.
+
+BOUNDARY 8     ❌ NOT REVERSIBLE, and not by assertion: eight undo mechanisms
+               were attempted and all eight refused — DELETE/UPDATE the
+               activation, DELETE/UPDATE the inventory, a second genesis, and
+               clearing, repointing or deleting the epoch (R0006).
+               IN FLIGHT: the activation refuses to run while a writer holds
+               work_orders (NOWAIT); once it commits, older in-flight
+               transactions are refused at THEIR commit with 40001.
+
+BOUNDARY 10    migrations are forward-only; a raised obligation is an
+               accountability fact and the sweep cannot close it.
+
+BOUNDARIES     code reverts cleanly, with one honest caveat: reverting the
+9–13 after 8   READER after the activation shows pre-Release-0 surfaces over
+               post-cutover truth. That is the T4 state — degraded, not
+               damaged, and the recovery is to roll FORWARD, not back.
 ```
 
-**One boundary is irreversible and one writes accountability facts about people.**
-Everything else in this release is a deploy you can take back. Treat 8 and 10
-accordingly: they are the two where "run it and see" is not available.
+**One boundary is irreversible, one writes accountability facts about people, and
+one (boundary 3) is quietly one-way in the direction that matters.** Treat 8 and 10
+as the two where "run it and see" is not available.
 
 ---
 

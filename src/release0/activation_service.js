@@ -147,6 +147,13 @@ const GUARD_FUNCTIONS = [
     name: "release_0_freeze_cited_evidence",
     clauses: ["work_order_proof_evaluation_attachments", "R0005"],
   },
+  {
+    //  E1 — the epoch is truth, so it is append-only. Nulling it disarmed
+    //  the guard while the reader stayed activated: two meanings of truth
+    //  from one UPDATE.
+    name: "release_0_freeze_activation_epoch",
+    clauses: ["activation_id", "R0006"],
+  },
 ];
 /*  The epoch only tells the truth if something moves it. It is stamped by
  *  a trigger on the history table rather than by this service, so that
@@ -161,6 +168,8 @@ const GUARD_SUPPORT = [
     table: "work_order_proof_attachments" },
   { kind: "trigger", name: "freeze_cited_evidence_del",
     table: "work_order_proof_attachments" },
+  { kind: "trigger", name: "freeze_activation_epoch",
+    table: "release_0_activation_epoch" },
 ];
 const GUARD_TRIGGERS = [
   { name: "assert_completion_truth_ins", table: "work_orders" },
