@@ -174,6 +174,9 @@ NOT proven   production. Nothing was run against it; no obligation exists.
 NOT proven   the scheduled rail. §4.2 puts this on the followups cadence
              (run_followups.js). WIRING IT IN IS NOT DONE — the sweep is a
              function nothing calls yet.
+BUILT LATER   the rail — see "The scheduled rail" at the end of this document.
+             Same treatment as caller (a) below: the line is kept rather than
+             rewritten so the order of work stays legible.
 BUILT LATER   caller (a) and the closure path — see "The rest of the
              lifecycle" at the end of this document. They were not built when
              this section was written; this line is kept rather than rewritten
@@ -307,8 +310,8 @@ E1–E6   raise → real completion → the obligation CLOSES IN THE SAME
 ### Still NOT built
 
 ```text
-NOT built    the scheduled rail wiring. §4.2 puts the sweep on the followups
-             cadence; it is still a function nothing calls.
+BUILT NEXT   the scheduled rail wiring — the section below. This line was true
+             when written and is kept for the same reason as the others.
 NOT built    any un-terminal path. 'no_longer_applicable' is provable and has
              NO production caller — nothing in the codebase moves a work order
              out of a terminal status today, and lifecycle_service says
@@ -321,3 +324,90 @@ NOT proven   HTTP, browser, production.
 
 `138` and now `139` are **both allocated to Release 0**. The text-line silo
 should take `140`.
+
+---
+
+# The scheduled rail
+
+The sweep was a function nothing called. This is the thing an operator types.
+
+## It follows the rail that exists — it does not invent one
+
+§4.2 puts the sweep "on the followups cadence." That cadence is
+`tools/run_followups.js`, and reading it first mattered: **there is no scheduler
+in this codebase.** The rail is a manual trigger — dry run by default, `--send`
+must be typed — carrying the removal condition *"delete when a scheduled runner
+with an operator-facing preview replaces the manual trigger."*
+
+So `tools/run_proof_defect_sweep.js` mirrors that shape exactly, down to the
+removal condition, and the two should be replaced together. Building a cron here
+would have been new architecture smuggled in under a wiring task, and it would
+have been the *first* scheduled writer in the system — a much larger decision
+than this step is allowed to make.
+
+```text
+node tools/run_proof_defect_sweep.js                  DRY RUN, writes nothing
+node tools/run_proof_defect_sweep.js --raise          raises obligations
+node tools/run_proof_defect_sweep.js --property <id>  scope to one property
+node tools/run_proof_defect_sweep.js --limit 200      bound one pass
+```
+
+## The runner decides nothing
+
+Every rule stays in the service: the four-state predicate, both refusals, the
+idempotency. The runner parses arguments, opens a pool, and prints what came
+back. `T1`/`T2` assert it statically — **no `work_orders` query of its own and
+no `obligations` insert of its own** — because a runner that grows either one
+has re-created the second predicate §3.2.0 exists to prevent.
+
+`--property` defaults to `null`, not to an id. `T3` asserts that literally. A
+hardcoded default that silently matched nothing has already cost this release
+once, and "every property" is a decision the operator makes by omission rather
+than one this file makes for them.
+
+## Proven as a process, not as source
+
+The service proof calls functions. This one **spawns the runner as a real child
+process and reads real exit codes** — because the failure that cost time was not
+a wrong function, it was a correct-looking file that behaved differently when
+actually run.
+
+```text
+tools/step9/prove_sweep_runner.js       23 / 23   exit 0   twice, clean baselines
+tools/step9/prove_defect_sweep.js       35 / 35   exit 0   (regression)
+tools/step9/prove_defect_lifecycle.js   25 / 25   exit 0   (regression)
+npm run verify (10 gates)               PASS      exit 0
+```
+
+```text
+G1–G4   with no migration 138 it exits 2 and says so IN WORDS, not a stack
+        trace; with no activation it exits 2 and names Step 7; wrote nothing
+R1–R6   a bare invocation is a DRY RUN that reports WOULD RAISE and writes
+        NOTHING, and tells the operator how to actually run it; --raise raises
+I1–I2   a second --raise adds nothing and reports ALREADY OPEN — not a failure,
+        because the cadence depends on re-running being boring
+S1–S4   --property scopes the pass and says which scope it used; an unscoped
+        pass reaches the other property and says so
+B1–B3   --limit banana and --limit 0 are refused rather than coerced; a missing
+        DATABASE_URL is refused
+T0–T3   the runner holds no predicate and no write of its own (T0 proves the
+        comment-stripper left real code, so T1–T3 are not vacuous)
+```
+
+**The refusals are the load-bearing assertions again.** A rail that runs is worth
+less than a rail that refuses correctly, because the rail's whole risk is that
+somebody schedules it before the cutover and it raises an obligation against
+every terminal work order in the property.
+
+### What this does NOT establish
+
+```text
+NOT proven   production. Nothing was run against it; no obligation exists.
+NOT built    an actual scheduler. This is a manual trigger on the same footing
+             as run_followups.js, and it is named as one.
+NOT built    an operator-facing preview surface. The dry run prints to a
+             terminal; it is not in the app.
+NOT proven   HTTP or a browser.
+proven       the runner as a PROCESS against real PostgreSQL at 137 + 138 —
+             real argv, real exit codes, real refusals.
+```
