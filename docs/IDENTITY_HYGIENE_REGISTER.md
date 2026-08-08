@@ -172,10 +172,23 @@ prevents one number from carrying an identity in each. H-1 came from a
 boardroom demo; this one's origin is not yet established and should not be
 guessed at.
 
-The register does not assume this is demo residue. If the opportunity is
-real, closing it as "lost" would be recording a falsehood to make an
-unrelated proof convenient — the exact move the H-1 entry exists to warn
-against. Establish what the lead is first.
+The register did not assume this was demo residue. The owner has since
+stated that the environment carries no real counterparties yet — every
+resident, prospect and opportunity in it is dummy data — which settles the
+origin question that this entry deliberately left open.
+
+That determination changes what closing the opportunity would *mean*, and
+nothing else. Marking a fabricated lead "lost" records something true. It
+does not make phone-keyed dual identity a non-problem: the moment real
+counterparties exist, a staff mobile that also carries a prospect identity
+is a live ambiguity on the resident rail, and nothing in the schema
+prevents it. H-1 and H-3 are two instances found in one afternoon without
+looking for either.
+
+**The removal condition is therefore unchanged**, and it is not "close the
+lead". It is a product answer to phone-keyed identity collision between the
+staff directory and the leasing pipeline. Cleaning these two rows would
+remove today's symptoms and leave the mechanism intact.
 
 ### What the same search also surfaced
 
