@@ -1,6 +1,6 @@
 # Property Spine — Thread Handoff
 
-**Current as of API `main` @ `a9f51da`+ · APP `main` @ `6220ca5` · 2026-08-05 (late).**
+**Current as of API `main` @ `b4e3104` (ledger 137, Step 3 merged) · APP `main` @ `6220ca5` · 2026-08-08.**
 
 > **The API SHA above is ALWAYS one commit stale, by construction.** Editing
 > this file changes API `main`, so the number it records is the commit
@@ -19,7 +19,254 @@ current truth. Re-date it whenever `main` moves materially.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
-##  ⛔ THE DEPLOYED APP IS BROKEN. 2026-08-06 (latest).
+##  ▶ RELEASE 0 — STEP 3 MERGED. STEPS 5/6 BUILT AHEAD. 2026-08-08 (latest).
+## ══════════════════════════════════════════════════════════════════
+
+### Step 3 — the canonical completion writer — MERGED
+
+`b4e3104`. Code only, no migration, so the deploy gate was already satisfied in
+both directions and no restart window opened.
+
+Production risk was **measured before merging**, not estimated —
+`verify_step3_preconditions.js`, run in the Render shell:
+
+```text
+attachments the OLD gate accepts: 1
+A1–A4  all four narrowing axes clean
+R1     NO open work order loses its ability to complete
+```
+
+The single stored attachment in production (the Gate 8 evidence) satisfies the
+strict gate too.
+
+### ⚠ OWED — the running source was NOT verified
+
+The agent sandbox's egress proxy **denies CONNECT to
+`property-spine-api.onrender.com`** (403, policy). This session therefore could
+not reach `/health` and **has no evidence about whether the Step 3 deploy came
+up.** That is a fact about the sandbox, not about production — do not read it as
+either a healthy or an unhealthy signal.
+
+```text
+OWED  · confirm the Step 3 deploy reached live (Render Events)
+      · ledger still 137, nothing applied by that deploy
+      · work_order_proof_evaluations still EMPTY — no completion has happened,
+        so an evaluation at this point would be a fabrication
+```
+
+Still no way to read the deployed API SHA or the applied ceiling over HTTP.
+A `/version` returning `RENDER_GIT_COMMIT` and the ceiling is ~10 lines and
+would retire this permanently. **Parked** — outside Release 0.
+
+### Steps 5 & 6 — BUILT, PROVEN, NOT MERGED
+
+```text
+API   PR #57   claude/step-5-6-containment                 19/19 via real HTTP
+APP   PR #37   claude/step-5-remove-operator-completion    17/17
+```
+
+**⛔ Both gated on STEP 4** — the real-handset completion proof, blocked on SMS
+transport. §5.5: *unreachable code is recoverable; retired code is not.*
+Production has no usable completion path right now, so retiring the dead operator
+control before the SMS rail is proven turns "temporarily unreachable" into
+"permanently gone".
+
+**Deploy order when the gate opens: APP FIRST, then API.** If the API refuses
+first, the app still shows a completion control that now fails — an
+operator-visible dead end.
+
+Write-up: `RELEASE_0_STEPS_5_6_CONTAINMENT.md`.
+
+### ⚠ TRAP — a merged PR cannot carry later commits
+
+This section and the two below it were written on `claude/step-3-preconditions`
+and pushed **after** PR #56 had already merged at `ff00b91`. GitHub kept the PR
+merged and simply held the newer commits unmerged, so `PARALLEL_BUILD_SILOS.md`
+(same PR, earlier commit) reached `main` while the handoff sections silently did
+not. Nothing failed; the record was just quietly incomplete.
+
+Found by re-reading `main` before editing rather than trusting that a pushed
+commit had landed. **Check `git merge-base --is-ancestor <sha> origin/main`, not
+that the PR says "merged".**
+
+### Parked, not pursued
+
+```text
+· the same stub:// fabrication exists in the INSPECTION surface
+  (inspAttachPhoto, seeded findings). Same class of defect, own slice.
+· property-spine-app has ~20 root *.test.js files and NO runner registering
+  them. A gate nobody invokes is documentation.
+· tests/tenant_setup_page_parses.test.js is not in verify_source_governance.js.
+· a boot seed has a broken require path ([slots] boot seed skipped: Cannot
+  find module '../staff_identity_resolver.js'). QA/demo, not the truth path.
+· /version route (above).
+```
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  ✅ RELEASE 0 STEP 2 IS DONE IN PRODUCTION. 2026-08-08.
+## ══════════════════════════════════════════════════════════════════
+
+**Migration 137 is applied to production and inert.** Ledger ceiling 137.
+Nothing reads or writes the new objects yet — that is Step 3, still a draft.
+
+```text
+verified   node tools/steps23/verify_137_applied.js   7/7, read-only proven,
+           run in the Render shell against production
+           L1 ledger 137 · L2 four tables · L3 two views · L4 ten triggers
+           L5 four race indexes · L6 the migration wrote ZERO rows
+           L7 no activation row
+deployed   e8d6143 — carried migration 137 AND the text-line silo's tenant
+           setup page fix, legal routes mount and consent gate
+```
+
+**Completion still means exactly what it meant before.** The capacity to record
+proof exists; nothing records it.
+
+### How it was applied, and why that matters next time
+
+`prestart` runs `migrate.js` **verify-only** and refuses to boot on a mismatch in
+either direction — so a deploy cannot migrate production by accident. Migrations
+121 and 126 got in exactly that way, and this is the control that stopped it.
+
+The release was therefore an explicit, pinned act **inside the deploy**:
+
+```text
+MIGRATION_RELEASE=1  EXPECTED_LEDGER_CEILING=136  EXPECTED_SHA=e8d6143
+set on Render → one deploy applied 137 and then booted → all three DELETED
+```
+
+Applying in-deploy is the point: it leaves **no window** where the ledger is
+ahead of the running build. The out-of-band alternative opens one, and a restart
+inside it refuses to boot (`W1`/`W2` in `prove_step2_boundary.js`). Full
+sequence: `RELEASE_0_STEP_2_DEPLOYMENT.md`.
+
+### ⚠ TRAP — the release env must be DELETED, not just ignored
+
+Left set, the next deploy REFUSES on the now-stale ceiling and **the service does
+not boot** (`A3`). Every failure mode is loud rather than silent, which is the
+right shape — but it is still an outage on the next push. The three variables
+were deleted on 2026-08-08.
+
+`EXPECTED_SHA` also earned its keep in production: the first attempt named
+`ec4cbc1` while Render was deploying `e8d6143`, and the release refused and
+printed both values. It cost a retry instead of migrating an unauthorised build.
+
+### Next, in order
+
+```text
+1  run  node tools/steps23/verify_step3_preconditions.js  in the Render shell
+   → is there an OPEN work order that could complete today and could NOT
+     after Step 3? That set is Step 3's entire production risk.
+2  merge PR #54 — the canonical completion writer. Code only, no migration,
+   so the deploy gate is already satisfied and there is no window.
+3  the real handset completion proof — BLOCKED on the text line (below).
+```
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  ⏸ OPEN DEBT — SMS VERIFICATION OWED. 2026-08-08.
+## ══════════════════════════════════════════════════════════════════
+
+**One deployed fix is PROVEN but NOT SMS-verified. Close this the next time
+the text line is confirmed alive. Do not let it become "done" by age.**
+
+### What is deployed
+
+`524cf90` — the `appendProgress` savepoint fix (PR #51). One function,
+`src/technician/lifecycle_service.js`. No migration; the ledger did not move.
+
+It repairs a **live** failure: `appendProgress` caught PostgreSQL `23505` — a
+duplicate idempotency key, which is what a carrier redelivery looks like — and
+then issued a recovery `SELECT`. PostgreSQL aborts the whole transaction on a
+failed statement, so with no savepoint between them that `SELECT` raised
+`25P02`, *current transaction is aborted*. **The handler written to make a
+redelivery harmless was itself the thing that threw.**
+
+It was silent rather than loud because `tenantlink`'s inbound wrapper
+special-cases `23505` as an already-answered duplicate. The pre-fix error was
+`25P02`, so it fell to the generic branch: log, send no reply. The technician
+got nothing back.
+
+Full write-up: `docs/PROGRESS_REPLAY_SAVEPOINT_FIX.md`.
+
+### Proof state — PROVEN, not done (§33)
+
+```text
+proven      tools/savepoint/prove_progress_replay.js — 22/22, twice from clean
+            baselines, against real PostgreSQL at ledger 136. The falsification
+            recompiles the PRE-FIX source in memory and reproduces the abort,
+            the 25P02 code, and the turn recording nothing.
+NOT proven  live SMS. No HTTP path, no Twilio, no production population.
+```
+
+### ⚠ TRAP — the verification I first wrote was impossible, twice over
+
+Recorded because the reasoning is the useful part:
+
+**1. Its success signal was a reply arriving at the handset.** But
+`RELEASE_0_EVIDENCE_INGRESS_RECEIPT.md` — written the same day — records
+`handset delivery NOT CLAIMED — no delivery receipt`. The check was built on
+the one thing that receipt says cannot be confirmed. *Read your own receipts
+before designing a check against them.*
+
+**2. Two "done" texts cannot exercise this fix at all.** They are two provider
+messages with two different `MessageSid`s, therefore two different idempotency
+keys, therefore no `23505` and no savepoint branch. A true carrier redelivery
+happens only when the webhook times out or 5xx's — **it cannot be summoned, and
+must not be induced in production.**
+
+**3. It would also have closed work order 1006.** Gate 8 stored a durable photo
+on it, and `main`'s `preservedEvidenceFor` accepts any `storage_state='stored'`
+attachment. A "done" text there satisfies the gate and completes the work order
+through the LEGACY writer, with no proof evaluation, since 137 has not run.
+
+### The check that is actually owed
+
+When the text line is confirmed alive, from the technician handset (a `users`
+row, role maintenance, active `property_team_assignments` at the property owning
+WO 1006 — the same phone used for Gate 8):
+
+```text
+text        a plain field fact — "on my way"
+expect      the normal reply, ONE new work_order_progress row, ONE new event
+proves      the savepoint and release statements run on EVERY progress write,
+            happy path included. If they broke the transaction assumptions,
+            this is what breaks — over real HTTP, real Twilio, real Neon.
+stop        silence → revert 524cf90. One function, no schema to undo.
+```
+
+Do **not** substitute a "done" text. See trap 3.
+
+### ⚠ POSSIBLY UNRELATED AND MORE URGENT — is the text line even up?
+
+Real-handset evidence ingress **passed** on 2026-08-08 (Gate 8). The Twilio auth
+token was then rotated, because it had been exposed in a screenshot. **If
+Render's `TWILIO_AUTH_TOKEN` never received the new value, inbound signature
+validation fails and the text line is down** — nothing to do with the savepoint.
+
+Not measured. Stated as the first thing to check, not as a finding.
+
+### Boundary — this did NOT advance Release 0
+
+```text
+migration 137            still PR #50, not applied
+the canonical writer     still PR #50, not deployed
+proof evaluations        none written; the table does not exist in production
+the four-state reader    untouched
+the legacy closeout      untouched
+```
+
+PR #50 (Steps 2–3) stays frozen. It rebases onto `main` — which now carries the
+savepoint commit — before Step 2 proceeds under the quiet-write + `lock_timeout`
+discipline recorded there.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  ⛔ THE DEPLOYED APP IS BROKEN. 2026-08-06.
 ## ══════════════════════════════════════════════════════════════════
 
 **This supersedes the APP SHA in the header above and every deployment claim
