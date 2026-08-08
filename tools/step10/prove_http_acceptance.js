@@ -18,7 +18,7 @@
      L   the list and the detail CANNOT disagree
      U   a failed read is `unavailable` — never a fabricated state
      A   authority is server-derived, over HTTP
-     D   the defect lifecycle through the governed rail and the canonical
+     D   the defect lifecycle through the governed manual runner and the canonical
          service, observed through the routes
 
    ── WHY U IS THE LOAD-BEARING SECTION ───────────────────────────────
@@ -521,7 +521,7 @@ function request(port, method, urlPath, { session, body } = {}) {
   }
 
   // ══ D — THE DEFECT LIFECYCLE, THROUGH THE RAIL AND THE ROUTES ══════
-  sec("D · RAISE THROUGH THE GOVERNED RAIL, OBSERVE THROUGH THE ROUTES");
+  sec("D · RAISE THROUGH THE GOVERNED MANUAL RUNNER, OBSERVE THROUGH THE ROUTES");
   {
     //  `?status=open` is the OUTSTANDING queue. The unfiltered read returns
     //  completed obligations too, and that is correct — a resolved
@@ -538,7 +538,7 @@ function request(port, method, urlPath, { session, body } = {}) {
        before.status === 200 && before.items.length === 0,
        JSON.stringify(before.items));
 
-    //  THE GOVERNED RAIL — a real child process, real argv, real exit code.
+    //  THE GOVERNED MANUAL RUNNER — a real child process, real argv, real exit code.
     //  Calling runProofDefectSweep() here would prove the function, and the
     //  function is already proven; this proves the thing that runs.
     const dry = spawnSync(process.execPath, [RUNNER],

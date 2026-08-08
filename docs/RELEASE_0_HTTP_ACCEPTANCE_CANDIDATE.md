@@ -102,7 +102,7 @@ L1–L5   the list carries `state` (§3.3); every work order reports the same
 A1–A7   no session → 401 (not an empty 200); a forged token → 401; a
         client-supplied property_id → 403 naming the property actually being
         acted on; another property's work order → 404, never a leaked row
-D1–D15  the defect lifecycle end to end through the GOVERNED RAIL and the
+D1–D15  the defect lifecycle end to end through the GOVERNED MANUAL RUNNER and the
         CANONICAL SERVICE, observed through the routes
 W1–W2   replaying every read route wrote nothing
 ```
