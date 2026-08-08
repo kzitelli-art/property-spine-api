@@ -19,24 +19,45 @@ set -euo pipefail
 API_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$API_DIR"
 
-M137="migrations/137_release_0_completion_proof.sql"
-HELD="/var/tmp/held_137.sql"
+#  Hold back EVERY migration above 136, not just 137 by name.
+#
+#  This script named 137 explicitly and broke the moment migration 138 was
+#  authored: 138 applied on top of 136, the ledger reached 138 instead of
+#  136, the ceiling check failed, and the harness sentinel was never
+#  installed — so every proof downstream reported "not the isolated
+#  baseline" and looked like a database problem rather than a held-back
+#  file problem. A baseline that has to be edited each time a migration is
+#  added is a baseline that will be wrong at least once.
+HELD_DIR="/var/tmp/r0_held_above_136"
+rm -rf "$HELD_DIR"; mkdir -p "$HELD_DIR"
 
 restore() {
-  if [ -f "$HELD" ]; then
-    mv "$HELD" "$M137"
-    echo "  migration 137 restored to migrations/"
+  if [ -d "$HELD_DIR" ]; then
+    for f in "$HELD_DIR"/*.sql; do
+      [ -e "$f" ] || continue
+      mv "$f" "migrations/$(basename "$f")"
+    done
+    rmdir "$HELD_DIR" 2>/dev/null || true
+    echo "  migrations above 136 restored to migrations/"
   fi
 }
 trap restore EXIT
 
-if [ ! -f "$M137" ]; then
-  echo "REFUSED: $M137 not found. Author it before proving it."
+held=0
+for f in migrations/*.sql; do
+  n="$(basename "$f" | cut -c1-3)"
+  case "$n" in
+    ''|*[!0-9]*) continue ;;                 # not a numbered migration
+  esac
+  if [ "$n" -gt 136 ] 2>/dev/null; then
+    mv "$f" "$HELD_DIR/"; held=$((held+1))
+  fi
+done
+if [ "$held" -eq 0 ]; then
+  echo "REFUSED: no migration above 136 found. Author one before proving it."
   exit 1
 fi
-
-mv "$M137" "$HELD"
-echo "  migration 137 held back — baseline builds to 136"
+echo "  $held migration(s) above 136 held back — baseline builds to 136"
 
 bash tools/scale/setup_baseline.sh
 
