@@ -49,6 +49,11 @@ const GATES = [
     what: "closure boundary" },
   { file: "gate_no_raw_bridge_joins.js",
     what: "no raw bridge joins" },
+  //  A field-name typo is silent where a function-name typo is loud.
+  //  `req.operator.user_id` did not exist and made every governed
+  //  maintenance action anonymous for as long as it was there.
+  { file: "gate_operator_session_fields.js",
+    what: "no req.operator read of a field the staff session does not define" },
   //  The conversational seams. DB-free, so they belong on the standard path:
   //  they check that the extracted logic has ONE implementation, that resident
   //  wording did not drift, and that an operating receipt and a delivery
