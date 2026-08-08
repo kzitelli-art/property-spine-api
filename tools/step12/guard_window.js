@@ -37,6 +37,14 @@ const TRIGGERS = [
   ["assert_completion_truth_upd", "work_orders"],
   ["assert_completion_truth_eval", "work_order_proof_evaluations"],
   ["assert_completion_truth_attach", "work_order_proof_attachments"],
+  /*  The C2 freeze is part of migration 140 too, so a window that claims
+   *  to turn 140 off must turn this off as well. Leaving it on made
+   *  `withGuardOff` a half-truth: a harness deliberately constructing a
+   *  broken completion — Step 4's fact-set variants, which must be
+   *  provable WITHOUT the guard — was refused by the one piece of 140 the
+   *  window had not named. */
+  ["freeze_cited_evidence_upd", "work_order_proof_attachments"],
+  ["freeze_cited_evidence_del", "work_order_proof_attachments"],
 ];
 
 /** Apply migration 140. Idempotent — it drops and recreates. */

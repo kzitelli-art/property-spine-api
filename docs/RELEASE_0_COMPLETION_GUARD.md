@@ -2,13 +2,14 @@
 
 **⛔ BUILD-AHEAD. Not applied to production.**
 
-**REVISION 3.** Every revision was broken by measurement, not opinion.
+**REVISION 4.** Every revision was broken by measurement, not opinion.
 
 | | enforced | broken by |
 |---|---|---|
 | rev 1 | "not the `missing_evaluation_defect` state" | 4 attacks (`falsify_containment.js`) |
 | rev 2 | a current `satisfied` head | 3 more (`falsify_activation_boundary.js`, `falsify_proof_trust.js`) |
-| rev 3 | below | — so far |
+| rev 3 | a *grounded* satisfied head, re-checked on every write | evidence could still be **replaced** rather than invalidated |
+| rev 4 | below | — so far |
 
 > **After the cutover a work order is legal only if it is not terminal, or it is
 > `complete` with a current `satisfied` evaluation that CITES qualifying preserved
@@ -19,7 +20,7 @@ Enforced by the database, at commit time.
 
 ---
 
-## 0 · What revision 2 got wrong
+## 0 · What revisions 2 and 3 got wrong
 
 ### B1 · the activation boundary was answerable from a stale snapshot
 
@@ -82,7 +83,7 @@ That last line matters: **140 does not require the caller to be
 `claimCompletion`. It requires the state to be true.** Raw SQL that establishes
 real evidence and cites it is not an attack.
 
-### C2 · the evidence could rot underneath
+### C2 · the evidence could rot underneath — and revision 3's fix was not enough
 
 Once evidence is part of the invariant, the attachment row is part of the
 invariant — and it can be changed without touching `work_orders` **or** the
@@ -93,22 +94,94 @@ update work_order_proof_attachments set proof_classification='unclassified' …
 update work_order_proof_attachments set storage_state='not_preserved', content=null …
 ```
 
-**Both succeeded**, and the reader went on reporting `satisfied`, because it reads
-the evaluation head and not the bytes. Same lesson as A2, one table further out.
-The guard now fires on `work_order_proof_attachments` UPDATE too.
+**Both succeeded**, and the reader went on reporting `satisfied`. Revision 3
+closed that by **recomputing**: an attachment UPDATE fired the deferred guard,
+which re-checked whether the completion still stood.
 
-Every mutation that could invalidate a live completion, and what stops it:
+**A recompute only catches mutations that BREAK the completion.** Two do not:
+
+| | attack | why a recompute is blind to it |
+|---|---|---|
+| **R1** | swap `content` + `sha256` together for another qualifying photo | still computes as grounded — but the 10:00 completion now rests on a 14:00 photo. Nothing was invalidated; the evidence was **replaced** |
+| **R2** | reopen → rewrite the evidence → complete again | every intermediate state is legal; there is no completion to invalidate at the moment of the rewrite |
+
+So revision 4 stops recomputing and makes the doctrine structural:
+
+> **Proof used to justify a completion becomes historical evidence. Correct it by
+> adding new truth — a superseding evaluation, a reopen — never by rewriting the
+> evidence that justified the old decision.**
+
+Truth is not protected merely because the decision was valid when it was made.
+The evidence that justified it has to remain intact, or the decision's basis is
+whatever somebody last edited.
+
+**The whole row, not a column list** — an enumerated list is what goes stale the
+day a column is added. Once an attachment is **cited** by any evaluation it is
+frozen entirely (`R0005`, immediate, on UPDATE and DELETE).
+
+**The freeze begins at citation, not creation.** Every shipped mutation of that
+table is the ingress pipeline (`referenced → stored / fetch_failed`), which runs
+strictly before any evaluation can cite the row — inventoried and re-derived every
+run by `tests/gate_evidence_immutability.js`, so a new writer cannot arrive
+silently and start failing with `R0005` in production.
+
+Every mutation that could touch a live completion, and what stops it:
 
 ```text
-re-classify the cited attachment      migration 140   (R0004)
-un-store it (all four fields)         migration 140   (R0004)
-delete the cited attachment           SCHEMA — FK ON DELETE RESTRICT
-delete the evaluation→attachment link SCHEMA — append-only trigger
-re-point the link                     SCHEMA — append-only trigger
-edit the evaluation state in place    SCHEMA — append-only trigger
-delete the evaluation                 SCHEMA — append-only trigger
-supersede with ungrounded not_satisfied  migration 140 (R0001)
+re-classify the cited attachment       migration 140   R0005  frozen
+un-store it (all four fields)          migration 140   R0005  frozen
+SWAP the bytes for another good photo  migration 140   R0005  frozen  ← rev 4
+rewrite it while NOT terminal          migration 140   R0005  frozen  ← rev 4
+delete the cited attachment            migration 140   R0005  (FK also RESTRICTs)
+delete the evaluation→attachment link  SCHEMA — append-only trigger
+re-point the link                      SCHEMA — append-only trigger
+edit the evaluation state in place     SCHEMA — append-only trigger
+delete the evaluation                  SCHEMA — append-only trigger
+supersede with ungrounded not_satisfied  migration 140 R0001
+── and the control ────────────────────────────────────────────────────
+mutate an UNCITED attachment           ALLOWED — ingress must work
 ```
+
+### C3 · three implementations of one definition
+
+Revision 3 left the evidence rule in three places: the JS evidence gate, the
+activation's population check, and the guard. A source gate comparing the
+classification and MIME arrays is **not enough** — the conditions can drift while
+the arrays stay identical. Three implementations of a load-bearing definition of
+truth is where divergence eventually becomes a production incident.
+
+The database now answers one question in one place:
+
+```text
+release_0_evidence_qualifies(attachment)      → is this photo proof?
+release_0_completion_proof_status(wo, prop)   → grounded | ungrounded
+                                                 | not_satisfied | none
+```
+
+**Three callers, one definition:** the deferred guard, the activation's population
+validation, and `release_0_completion_invariant_violations`. None of them restates
+the evidence columns; the equivalence proof asserts that, not just that they agree
+today.
+
+`evidence_service.js` keeps the **different** job it actually performs — SELECTING
+which attachments a completion may be built on, before the writer creates the
+evaluation. **JS selects, DB validates.** Their equivalence is proven over every
+row shape the schema permits — a 60-shape cross product generated from the
+schema's own CHECK constraints, not a hand-picked list — in
+`tools/step12/prove_evidence_equivalence.js`. Falsified by drifting the JS array:
+E1 goes red.
+
+Disagreement is a defect in both directions, and they are not symmetric:
+
+- **JS yes / DB no** — the canonical writer builds a completion the database then
+  refuses. An outage in the completion path.
+- **DB yes / JS no** — work that cannot be completed through the product, only by
+  hand.
+
+One finding worth recording: **MIME does not discriminate.** The CHECK constraint
+already narrows `mime_type` to exactly the three qualifying values, so the guard's
+MIME list is defence in depth over a column that cannot hold anything else. Stated
+rather than quietly carried.
 
 ### D1 · `closed` was still available as a completion vocabulary
 
@@ -316,9 +389,10 @@ services. The threat is the path that avoids them.
 
 ```text
 tools/step12/prove_completion_guard.js        47 / 47
+tools/step12/prove_evidence_equivalence.js    22 / 22   JS selects ≡ DB validates
 tools/step12/falsify_containment.js           18 / 18   rev-1 attacks
 tools/step12/falsify_activation_boundary.js   12 / 12   × 3 shapes — B1
-tools/step12/falsify_proof_trust.js           26 / 26   C1 · C2 · D1 · the boundary
+tools/step12/falsify_proof_trust.js           29 / 29   C1 · C2 · R1 · R2 · D1
 tools/step12/falsify_activation_refusals.js    4 / 4    × 11 variants
 ```
 
@@ -335,6 +409,9 @@ C1  forged `satisfied`, five shapes       REFUSED   R0004 / schema
 C2  evidence invalidated afterwards       REFUSED   R0004 / schema
 D1  post-cutover `closed`, WITH proof     REFUSED   R0003
 D2  inventoried `closed → complete`       REFUSED   R0002
+R1  SWAP the bytes for another good photo REFUSED   R0005 — a recompute is blind to it
+R2  rewrite cited evidence while NOT terminal  REFUSED  R0005
+R3  mutate an UNCITED attachment          ALLOWED — ingress must keep working
 P9  correction that REOPENS               ALLOWED — the line that must not be crossed
 ```
 
@@ -416,6 +493,36 @@ altered guard **fails the one irreversible act**. `where_are_we.js` reads whethe
 trigger is installed rather than assuming it.
 
 **This is a control that is auditable, not absolute.**
+
+---
+
+## 7a · One audit query, from the same definition
+
+```sql
+select * from release_0_completion_invariant_violations;
+```
+
+> Show me every post-cutover work order whose **committed** terminal state
+> violates the completion invariant.
+
+Derived from `release_0_completion_proof_status` — the same function the deferred
+guard and the activation call. Not a fourth handwritten interpretation that agrees
+today and drifts next month. `where_are_we` reads it as a **stop condition**, and
+the composed proof asserts it holds exactly the one violation that harness
+deliberately manufactures, cross-checked against the canonical reader by **set**,
+not by count.
+
+**Empty is the expected answer.** A row means the guard was dropped, deployed
+late, or bypassed by privileged DDL.
+
+⚠ **Open question for the owner, surfaced rather than decided.** The §4.2 sweep
+raises `proof_evaluation_missing` obligations for one violation class —
+terminal-and-unevaluated. This view reports four: that one, plus
+`terminal_on_failed_evaluation`, `terminal_on_ungrounded_evaluation` and
+`closed_after_cutover`. Pointing the sweep at the view would make it raise
+obligations **against named humans** for three new categories, which is a change
+to §4.2's frozen semantics and a product decision, not an engineering one. The
+view and the sweep are therefore cross-checked, not merged.
 
 ---
 

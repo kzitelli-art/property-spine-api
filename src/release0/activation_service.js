@@ -102,42 +102,51 @@ async function activationSchemaPresent(client) {
  */
 /*  ── THE EXPECTED CONTAINMENT BOUNDARY ──────────────────────────────
  *
- *  Not a trigger name. These are the clauses the predicate MUST contain
- *  for the activation to be safe, each tied to an attack that broke an
- *  earlier revision (tools/step12/falsify_containment.js):
- *
- *    release_0_activation_epoch + `for share`
- *                                       B1 — the boundary read must FAIL on
- *                                       a stale snapshot, not answer from it
- *    release_0_legacy_cutover_inventory legacy history is exempt
- *    status_at_cutover                  A3 — and its status is FROZEN
- *    work_order_proof_evaluation_head   a governed completion is admitted
- *    = 'satisfied'                      A1/A2 — a FAILED evaluation is not
- *                                       a completion
- *    R0002                              A3 — inventoried legacy is frozen
- *    R0003                              D1 — `closed` is historical only
- *    R0004                              C1 — `satisfied` must cite evidence
+ *  Not a trigger name. These are the clauses each function MUST contain
+ *  for the activation to be safe, every one tied to an attack that broke
+ *  an earlier revision.
  *
  *  Checking substance rather than a digest is deliberate: a digest would
  *  make every comment edit in migration 140 a production incident, and
  *  this is a safety precondition, not a change-control mechanism.
  */
-const GUARD_FUNCTION = "release_0_assert_completion_truth";
-const GUARD_CLAUSES = [
-  //  B1 — the epoch, and the LOCKING read of it. Without `for share` the
-  //  boundary is answerable from a stale REPEATABLE READ snapshot, and a
-  //  transaction that simply started earlier walks through the guard. A
-  //  guard that reads the epoch WITHOUT the lock looks correct and is not,
-  //  so the clause checked is the lock, not the table name.
-  "release_0_activation_epoch",
-  "for share",
-  "release_0_legacy_cutover_inventory",
-  "status_at_cutover",
-  "work_order_proof_evaluation_head",
-  "'satisfied'",
-  "R0002",
-  "R0003",
-  "R0004",
+const GUARD_FUNCTIONS = [
+  {
+    name: "release_0_assert_completion_truth",
+    clauses: [
+      //  B1 — the epoch, and the LOCKING read of it. Without `for share`
+      //  the boundary is answerable from a stale REPEATABLE READ snapshot
+      //  and a transaction that simply started earlier walks through. A
+      //  guard reading the epoch WITHOUT the lock looks correct and is
+      //  not, so the clause checked is the lock, not the table name.
+      "release_0_activation_epoch",
+      "for share",
+      "release_0_legacy_cutover_inventory",
+      "status_at_cutover",          // A3 — legacy status is FROZEN
+      //  C1 — and it asks the ONE canonical validator rather than
+      //  carrying its own copy of the evidence rule.
+      "release_0_completion_proof_status",
+      "R0002", "R0003", "R0004",
+    ],
+  },
+  {
+    //  THE definition of what evidence is. If this drifts, the guard, the
+    //  activation and the audit view all drift together and in silence —
+    //  which is exactly why there is only one of it.
+    name: "release_0_completion_proof_status",
+    clauses: ["work_order_proof_evaluation_head", "'satisfied'",
+              "release_0_evidence_qualifies", "grounded"],
+  },
+  {
+    name: "release_0_evidence_qualifies",
+    clauses: ["storage_state", "sha256", "stored_at", "byte_size",
+              "proof_classification", "mime_type"],
+  },
+  {
+    //  C2 — evidence that justified a completion is historical.
+    name: "release_0_freeze_cited_evidence",
+    clauses: ["work_order_proof_evaluation_attachments", "R0005"],
+  },
 ];
 /*  The epoch only tells the truth if something moves it. It is stamped by
  *  a trigger on the history table rather than by this service, so that
@@ -146,6 +155,12 @@ const GUARD_CLAUSES = [
 const GUARD_SUPPORT = [
   { kind: "table", name: "release_0_activation_epoch" },
   { kind: "trigger", name: "stamp_activation_epoch", table: "release_0_activation_history" },
+  //  C2 — the immutability of cited evidence is part of the guarantee,
+  //  not an optional extra, so it is a precondition of the irreversible act.
+  { kind: "trigger", name: "freeze_cited_evidence_upd",
+    table: "work_order_proof_attachments" },
+  { kind: "trigger", name: "freeze_cited_evidence_del",
+    table: "work_order_proof_attachments" },
 ];
 const GUARD_TRIGGERS = [
   { name: "assert_completion_truth_ins", table: "work_orders" },
@@ -155,21 +170,28 @@ const GUARD_TRIGGERS = [
 ];
 
 async function assertContainmentGuardPresent(client) {
-  const fn = (await client.query(
-    `select p.prosrc from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-      where n.nspname = 'public' and p.proname = $1`, [GUARD_FUNCTION])).rows[0];
-  if (!fn) {
-    throw activationError("GUARD_ABSENT",
-      `migration 140 is not applied: public.${GUARD_FUNCTION}() does not exist. ` +
-      "Without it, any writer can commit a terminal work order with no proof the " +
-      "moment this activation lands, and the activation cannot be undone.");
-  }
-  const missing = GUARD_CLAUSES.filter((cl) => !fn.prosrc.includes(cl));
-  if (missing.length) {
-    throw activationError("GUARD_STALE",
-      `public.${GUARD_FUNCTION}() exists but does not enforce: ${missing.join(", ")}. ` +
-      "A guard with the right NAME and the wrong body is worse than none, because it " +
-      "reads as protection. Re-apply migration 140.");
+  for (const want of GUARD_FUNCTIONS) {
+    // eslint-disable-next-line no-await-in-loop
+    const rows = (await client.query(
+      `select p.prosrc from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public' and p.proname = $1`, [want.name])).rows;
+    if (!rows.length) {
+      throw activationError("GUARD_ABSENT",
+        `migration 140 is not applied: public.${want.name}() does not exist. ` +
+        "Without it, the completion invariant is unenforced the moment this activation " +
+        "lands, and the activation cannot be undone.");
+    }
+    //  EVERY definition carrying the name, not the first row: an overload
+    //  sits beside the original rather than replacing it.
+    for (const r of rows) {
+      const missing = want.clauses.filter((cl) => !r.prosrc.includes(cl));
+      if (missing.length) {
+        throw activationError("GUARD_STALE",
+          `public.${want.name}() exists but does not enforce: ${missing.join(", ")}. ` +
+          "A guard with the right NAME and the wrong body is worse than none, because " +
+          "it reads as protection. Re-apply migration 140.");
+      }
+    }
   }
 
   const live = (await client.query(
@@ -393,8 +415,13 @@ async function recordActivation(client, {
    *  act in the release; it must not be the thing that grandfathers in a
    *  population it would refuse a second later.
    *
-   *  Checked INSIDE this transaction, against the SAME predicate the guard
-   *  uses, so the answer cannot drift between the check and the commit.
+   *  Checked INSIDE this transaction, and — since revision 4 — through the
+   *  SAME SQL FUNCTION the deferred guard calls,
+   *  `release_0_completion_proof_status`. It was a hand-written copy of
+   *  that predicate, which meant the activation and the guard could come
+   *  to different answers about the same row for a reason that was not a
+   *  product decision. One definition, three callers: this, the guard, and
+   *  release_0_completion_invariant_violations.
    *
    *  Every terminal row must be one of exactly two things:
    *    · in the census (unevaluated) → about to be inventoried as legacy
@@ -403,41 +430,12 @@ async function recordActivation(client, {
    *  inheriting it.  */
   const unexplainable = (await client.query(
     `select w.id as work_order_id, w.property_id, w.status,
-            h.state as head_state,
-            (h.id is null) as no_evaluation,
-            exists (
-              select 1
-                from work_order_proof_evaluation_attachments l
-                join work_order_proof_attachments a
-                  on  a.id = l.attachment_id
-                  and a.work_order_id = l.work_order_id
-                  and a.property_id   = l.property_id
-               where l.evaluation_id = h.id
-                 and a.storage_state = 'stored'
-                 and a.content is not null and a.byte_size is not null
-                 and a.sha256  is not null and a.stored_at is not null
-                 and a.mime_type = any (array['image/jpeg','image/png','image/webp'])
-                 and a.proof_classification = any (array['repair_photo','condition'])
-            ) as grounded
+            public.release_0_completion_proof_status(w.id, w.property_id) as proof_status
        from work_orders w
-       left join work_order_proof_evaluation_head h
-              on h.work_order_id = w.id and h.property_id = w.property_id
       where w.status in ('complete','closed')
-        and h.id is not null
-        and not (w.status = 'complete' and h.state = 'satisfied' and exists (
-              select 1
-                from work_order_proof_evaluation_attachments l
-                join work_order_proof_attachments a
-                  on  a.id = l.attachment_id
-                  and a.work_order_id = l.work_order_id
-                  and a.property_id   = l.property_id
-               where l.evaluation_id = h.id
-                 and a.storage_state = 'stored'
-                 and a.content is not null and a.byte_size is not null
-                 and a.sha256  is not null and a.stored_at is not null
-                 and a.mime_type = any (array['image/jpeg','image/png','image/webp'])
-                 and a.proof_classification = any (array['repair_photo','condition'])
-            ))
+        and public.release_0_completion_proof_status(w.id, w.property_id) <> 'none'
+        and not (w.status = 'complete'
+                 and public.release_0_completion_proof_status(w.id, w.property_id) = 'grounded')
       order by w.property_id, w.id`)).rows;
 
   if (unexplainable.length) {

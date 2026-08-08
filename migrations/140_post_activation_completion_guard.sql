@@ -187,6 +187,107 @@ update public.release_0_activation_epoch e
          order by recorded_at desc limit 1) h
  where e.id and e.activation_id is null;
 
+--  ════════════════════════════════════════════════════════════════════
+--  THE ONE DEFINITION THE DATABASE ANSWERS FROM
+--
+--  Revision 3 left the evidence-qualification rule in THREE places: the
+--  JS evidence gate, the activation's population check, and this guard. A
+--  source gate comparing the classification/MIME arrays is not enough —
+--  the CONDITIONS can drift while the arrays stay identical. Three
+--  implementations of a load-bearing definition of truth is where
+--  divergence eventually becomes a production incident.
+--
+--  So the database now has exactly ONE answer to one question, and every
+--  database caller asks it here:
+--
+--    release_0_evidence_qualifies(attachment)  → is this photo proof?
+--    release_0_completion_proof_status(wo, prop)
+--         → 'grounded' | 'ungrounded' | 'not_satisfied' | 'none'
+--
+--  The deferred guard, the activation's population validation and the
+--  audit view all call the second. There is no fourth interpretation.
+--
+--  ── WHAT STAYS IN JAVASCRIPT, AND WHY THAT IS NOT DUPLICATION ───────
+--
+--  `technician/evidence_service.completionEligibleEvidenceFor` does a
+--  DIFFERENT job: it SELECTS which attachments a completion may be built
+--  on, before the writer creates the evaluation. This VALIDATES what was
+--  actually recorded. Two deliberate responsibilities — JS SELECTS, DB
+--  VALIDATES — and their equivalence over the full matrix is proven in
+--  tools/step12/prove_evidence_equivalence.js, not assumed from two
+--  arrays looking alike.
+--  ════════════════════════════════════════════════════════════════════
+
+create or replace function public.release_0_evidence_qualifies(p_attachment uuid)
+returns boolean as $q$
+  --  Every clause is a fact ABOUT THE STORED BYTES, not a carrier's claim.
+  --  THE single definition; nothing else in the database restates it.
+  --  `unclassified` is deliberately absent (§3.1): an unclassified photo
+  --  is not proof of a repair.
+  select exists (
+    select 1 from public.work_order_proof_attachments a
+     where a.id = p_attachment
+       and a.storage_state = 'stored'
+       and a.content    is not null
+       and a.byte_size  is not null
+       and a.sha256     is not null
+       and a.stored_at  is not null
+       and a.mime_type            = any (array['image/jpeg', 'image/png', 'image/webp'])
+       and a.proof_classification = any (array['repair_photo', 'condition'])
+  );
+$q$ language sql stable;
+alter function public.release_0_evidence_qualifies(uuid) set search_path = public, pg_temp;
+
+comment on function public.release_0_evidence_qualifies(uuid) is
+  'Release 0: THE definition of evidence a completion may rest on. One copy, in the '
+  'database. Mirrors technician/evidence_service.completionEligibleEvidenceFor, whose job '
+  'is to SELECT rather than validate; equivalence is proven, not assumed.';
+
+create or replace function public.release_0_completion_proof_status(
+  p_work_order uuid, p_property uuid)
+returns text as $q$
+declare
+  v_head_id    uuid;
+  v_head_state text;
+begin
+  select id, state into v_head_id, v_head_state
+    from public.work_order_proof_evaluation_head
+   where work_order_id = p_work_order and property_id = p_property;
+
+  if v_head_id is null then
+    return 'none';
+  end if;
+  if v_head_state is distinct from 'satisfied' then
+    return 'not_satisfied';
+  end if;
+
+  --  GROUNDED: the head cites at least one qualifying attachment, in this
+  --  work order's own scope. The composite FK already makes a cross-scope
+  --  link unrepresentable; the scope predicate says so out loud rather
+  --  than resting on that alone.
+  if exists (
+    select 1
+      from public.work_order_proof_evaluation_attachments l
+     where l.evaluation_id = v_head_id
+       and l.work_order_id = p_work_order
+       and l.property_id   = p_property
+       and public.release_0_evidence_qualifies(l.attachment_id)
+  ) then
+    return 'grounded';
+  end if;
+
+  return 'ungrounded';
+end;
+$q$ language plpgsql stable;
+alter function public.release_0_completion_proof_status(uuid, uuid)
+  set search_path = public, pg_temp;
+
+comment on function public.release_0_completion_proof_status(uuid, uuid) is
+  'Release 0: is this work order''s CURRENT proof evaluation a grounded `satisfied` one? '
+  'grounded | ungrounded | not_satisfied | none. The deferred completion guard, the '
+  'activation''s population validation and release_0_completion_invariant_violations all '
+  'call this — one definition, not four interpretations.';
+
 create or replace function public.release_0_assert_completion_truth(p_work_order uuid)
 returns void as $$
 declare
@@ -194,8 +295,7 @@ declare
   v_property     uuid;
   v_inventoried  boolean;
   v_at_cutover   text;
-  v_head_id      uuid;
-  v_head_state   text;
+  v_proof        text;
   v_activation   uuid;
 begin
   select status, property_id into v_status, v_property
@@ -291,71 +391,38 @@ begin
                    || '`complete` and records the proof evaluation in one transaction.';
   end if;
 
-  select id, state into v_head_id, v_head_state
-    from public.work_order_proof_evaluation_head
-   where work_order_id = p_work_order and property_id = v_property;
+  --  ONE call, one definition. The mapping from status to error code is
+  --  the only thing that lives here.
+  v_proof := public.release_0_completion_proof_status(p_work_order, v_property);
+
+  if v_proof = 'grounded' then
+    return;                       -- a completion we are entitled to believe
+  end if;
 
   --  ══ C1 — THE TRUST ROOT: `satisfied` MUST BE GROUNDED ══════════════
-  --
-  --  Revision 2 trusted the word. Nothing stopped raw SQL from inserting
-  --  an evaluation whose `state` column says 'satisfied' with NO linked
-  --  evidence at all, and then terminalizing the work order — which does
-  --  not defeat the guard so much as move it one table over. We spent this
-  --  release learning not to trust `work_orders.status`; a column in a
-  --  different table that happens to read 'satisfied' has earned no more
-  --  trust than that one had.
-  --
-  --  So a satisfied head must CITE at least one attachment that qualifies
-  --  under the SAME predicate the canonical writer's evidence gate uses —
-  --  facts about the stored bytes, not a carrier's claim. The writer links
-  --  exactly the rows that gate returned
-  --  (technician/evidence_service.completionEligibleEvidenceFor), so a
-  --  genuine completion always passes; only a manufactured one does not.
-  --
-  --  ⚠ THIS IS A THIRD COPY OF THAT PREDICATE, and copies drift. The
-  --  classification and MIME arrays are pinned against the service's
-  --  exported constants by tests/gate_completion_guard_terminal_set.js.
-  if v_head_state = 'satisfied' then
-    if exists (
-      select 1
-        from public.work_order_proof_evaluation_attachments l
-        join public.work_order_proof_attachments a
-          on  a.id            = l.attachment_id
-          and a.work_order_id = l.work_order_id
-          and a.property_id   = l.property_id
-       where l.evaluation_id = v_head_id
-         and l.work_order_id = p_work_order
-         and l.property_id   = v_property
-         and a.storage_state = 'stored'
-         and a.content    is not null
-         and a.byte_size  is not null
-         and a.sha256     is not null
-         and a.stored_at  is not null
-         and a.mime_type            = any (array['image/jpeg', 'image/png', 'image/webp'])
-         and a.proof_classification = any (array['repair_photo', 'condition'])
-    ) then
-      return;                     -- a completion we are entitled to believe
-    end if;
-
+  --  Revision 2 trusted the word. Raw SQL could insert an evaluation whose
+  --  `state` column reads 'satisfied' with NO linked evidence and then
+  --  terminalize the work order — which does not defeat the guard so much
+  --  as move it one table over.
+  if v_proof = 'ungrounded' then
     raise exception
       'work order % is terminal on a `satisfied` evaluation that cites no qualifying preserved evidence',
       p_work_order
       using errcode = 'R0004',
-            detail  = 'The evaluation says `satisfied`, but no attachment it links to is '
-                   || 'stored with content, byte_size, sha256 and stored_at present, an '
-                   || 'allowed image MIME, and a repair_photo/condition classification. '
-                   || '`satisfied` is a claim about evidence; without the evidence it is '
-                   || 'just a word in a column.',
+            detail  = 'The evaluation says `satisfied`, but no attachment it links to '
+                   || 'qualifies under release_0_evidence_qualifies(): stored, with '
+                   || 'content, byte_size, sha256 and stored_at present, an allowed image '
+                   || 'MIME, and a repair_photo/condition classification. `satisfied` is a '
+                   || 'claim about evidence; without it, a word in a column.',
             hint    = 'Complete through technician.lifecycle_service.claimCompletion, which '
-                   || 'evaluates the stored bytes and links exactly what it evaluated. This '
-                   || 'refusal means the proof was asserted rather than established.';
+                   || 'evaluates the stored bytes and links exactly what it evaluated.';
   end if;
 
   --  A1 / A2 — evaluated and FAILED. Valid data; not a completion.
-  if v_head_state is not null then
+  if v_proof = 'not_satisfied' then
     raise exception
-      'work order % cannot be terminal: its current proof evaluation is ''%''',
-      p_work_order, v_head_state
+      'work order % cannot be terminal: its current proof evaluation is not satisfied',
+      p_work_order
       using errcode = 'R0001',
             detail  = 'Release 0 governs COMPLETION, not whether somebody made a '
                    || 'judgement. A failed proof evaluation is valid data and does not '
@@ -473,6 +540,136 @@ create constraint trigger assert_completion_truth_attach
   deferrable initially deferred
   for each row
   execute function public.release_0_guard_attachment();
+
+--  ════════════════════════════════════════════════════════════════════
+--  C2 (REVISION 4) — EVIDENCE THAT JUSTIFIED A COMPLETION IS HISTORY
+--
+--  Revision 3 closed the rot by RECOMPUTING: an attachment UPDATE fired
+--  the deferred guard, which re-checked whether the completion still
+--  stood. That refuses the mutations which BREAK a live completion, and
+--  it is not enough. Two things slip past a recompute:
+--
+--    · SWAP THE BYTES. Replace `content` and `sha256` together with
+--      another qualifying photo. The predicate still says grounded — but
+--      the 10:00 completion now rests on a photo taken at 14:00. Nothing
+--      was invalidated; the evidence was REPLACED.
+--    · MUTATE WHILE NOT TERMINAL. Reopen, rewrite the evidence, complete
+--      again. Every intermediate state is legal.
+--
+--  So the doctrine is stronger than "the completion must still compute":
+--
+--      PROOF USED TO JUSTIFY A COMPLETION BECOMES HISTORICAL EVIDENCE.
+--      Correct it by adding new truth — a superseding evaluation, a
+--      reopen — never by rewriting the evidence that justified the old
+--      decision.
+--
+--  Truth is not protected merely because the decision was valid when it
+--  was made. The evidence that justified it must remain intact, or the
+--  decision's basis is whatever somebody last edited.
+--
+--  ── THE WHOLE ROW, NOT A COLUMN LIST ────────────────────────────────
+--
+--  An enumerated column list is what goes stale the day a column is added
+--  — the same argument that kept a WHEN clause off the deferred trigger.
+--  Once an attachment is CITED by any evaluation it is frozen entirely.
+--
+--  ── AND IT BREAKS NOTHING ───────────────────────────────────────────
+--
+--  Every shipped mutation of this table is the INGRESS pipeline
+--  (technician/evidence_service.js: referenced → stored / fetch_failed),
+--  which runs strictly BEFORE any evaluation can cite the row. Inventoried
+--  and re-derived every run by tests/gate_evidence_immutability.js.
+--
+--  IMMEDIATE, not deferred: this is "you cannot rewrite this", a statement
+--  refusal, and the error should name the row the caller just touched.
+--  ════════════════════════════════════════════════════════════════════
+
+create or replace function public.release_0_freeze_cited_evidence()
+returns trigger as $q$
+declare
+  v_id uuid := coalesce(new.id, old.id);
+  v_ev uuid;
+begin
+  select l.evaluation_id into v_ev
+    from public.work_order_proof_evaluation_attachments l
+   where l.attachment_id = v_id
+   limit 1;
+
+  if v_ev is null then
+    return coalesce(new, old);    -- not yet evidence for anything
+  end if;
+
+  raise exception
+    'proof attachment % is cited by evaluation % and may not be %d',
+    v_id, v_ev, lower(tg_op)
+    using errcode = 'R0005',
+          detail  = 'Evidence that justified a proof evaluation is historical: the '
+                 || 'evaluation was a judgement ABOUT THESE BYTES, with these storage '
+                 || 'facts and this classification. Changing them now would silently give '
+                 || 'a past decision a different evidentiary basis.',
+          hint    = 'Add new truth instead: preserve a NEW attachment and record a '
+                 || 'superseding evaluation, reopening the work order in the same '
+                 || 'transaction if it is terminal. Nothing here prevents recording that '
+                 || 'a completion was wrong — only rewriting why it was right.';
+end;
+$q$ language plpgsql;
+alter function public.release_0_freeze_cited_evidence() set search_path = public, pg_temp;
+
+drop trigger if exists freeze_cited_evidence_upd on public.work_order_proof_attachments;
+drop trigger if exists freeze_cited_evidence_del on public.work_order_proof_attachments;
+
+create trigger freeze_cited_evidence_upd
+  before update on public.work_order_proof_attachments
+  for each row
+  execute function public.release_0_freeze_cited_evidence();
+
+--  DELETE is already refused by fk_wopea_attach_scope ON DELETE RESTRICT.
+--  This fires FIRST and says why in the product's own words rather than
+--  surfacing as a foreign-key violation an operator has to decode.
+create trigger freeze_cited_evidence_del
+  before delete on public.work_order_proof_attachments
+  for each row
+  execute function public.release_0_freeze_cited_evidence();
+
+--  ════════════════════════════════════════════════════════════════════
+--  THE AUDIT, FROM THE SAME DEFINITION
+--
+--  "Show me every post-cutover work order whose committed terminal state
+--  violates the completion invariant." The release instrumentation and
+--  the proof harnesses read THIS — not a fourth handwritten
+--  interpretation that agrees today and drifts next month.
+--
+--  Empty is the expected answer. A row means the guard was dropped,
+--  deployed late, or bypassed by privileged DDL.
+--  ════════════════════════════════════════════════════════════════════
+create or replace view public.release_0_completion_invariant_violations as
+select w.id          as work_order_id,
+       w.property_id,
+       w.status,
+       public.release_0_completion_proof_status(w.id, w.property_id) as proof_status,
+       case
+         when w.status = 'closed' then 'closed_after_cutover'
+         when public.release_0_completion_proof_status(w.id, w.property_id) = 'none'
+           then 'terminal_without_evaluation'
+         when public.release_0_completion_proof_status(w.id, w.property_id) = 'not_satisfied'
+           then 'terminal_on_failed_evaluation'
+         else 'terminal_on_ungrounded_evaluation'
+       end          as violation
+  from public.work_orders w
+ where exists (select 1 from public.release_0_activation_epoch e
+                where e.activation_id is not null)
+   and w.status in ('complete', 'closed')
+   and not exists (
+         select 1 from public.release_0_legacy_cutover_inventory i
+          where i.work_order_id = w.id and i.property_id = w.property_id
+            and i.status_at_cutover = w.status)
+   and not (w.status = 'complete'
+            and public.release_0_completion_proof_status(w.id, w.property_id) = 'grounded');
+
+comment on view public.release_0_completion_invariant_violations is
+  'Release 0: every post-cutover work order whose COMMITTED terminal state violates the '
+  'completion invariant, derived from release_0_completion_proof_status — the same '
+  'function the deferred guard and the activation use. Expected to be empty.';
 
 comment on function public.release_0_assert_completion_truth(uuid) is
   'Release 0: at COMMIT, a work order may be terminal only with a current `satisfied` '

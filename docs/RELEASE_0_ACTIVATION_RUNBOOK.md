@@ -191,7 +191,16 @@ MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=<what the ledger says now> \
 ```
 
 **Verify** — `where_are_we.js` reports `migration 140 · completion guard` as
-installed, and treats *activation without the guard* as a stop condition.
+installed, and treats *activation without the guard* as a stop condition. After
+activation it also runs the release's single audit query:
+
+```sql
+select * from release_0_completion_invariant_violations;
+```
+
+**Empty is the expected answer**, and it is derived from the same SQL function
+the guard and the activation use rather than a separate interpretation. A row is
+a stop condition: the guard was dropped, deployed late, or bypassed by DDL.
 
 **Stop — and this one is enforced, not advisory.** `recordActivation` calls
 `assertContainmentGuardPresent` and **refuses to activate** unless: the function
@@ -200,6 +209,13 @@ read); all **four** constraint triggers exist, are `DEFERRABLE INITIALLY DEFERRE
 **and are ENABLED**; the singleton epoch row exists; and the trigger that stamps
 it is present and enabled. `GUARD_ABSENT` / `GUARD_STALE`. All eleven ways of
 being wrong are measured in `falsify_activation_refusals.js`.
+
+Revision 4 adds two more preconditions: the four canonical SQL functions
+(`release_0_assert_completion_truth`, `release_0_completion_proof_status`,
+`release_0_evidence_qualifies`, `release_0_freeze_cited_evidence`) must each
+contain the clauses their job requires, and the two `freeze_cited_evidence`
+triggers must exist. Evidence immutability is part of the guarantee, not an
+optional extra.
 
 `ALTER TABLE … DISABLE TRIGGER` is the one to know about: it leaves the trigger in
 `pg_trigger` with the right name, timing and definition, and it simply does not

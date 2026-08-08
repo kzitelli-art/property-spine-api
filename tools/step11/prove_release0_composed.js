@@ -63,6 +63,7 @@ const RUNNER = path.join(ROOT, "tools/run_proof_defect_sweep.js");
 const lifecycle = require(path.join(ROOT, "src/technician/lifecycle_service.js"));
 const activation = require(path.join(ROOT, "src/release0/activation_service.js"));
 const proofState = require(path.join(ROOT, "src/release0/proof_state.js"));
+const reader = require(path.join(ROOT, "src/surfaces/work_order_status_read.js"));
 const staffSessions = require(path.join(ROOT, "src/identity/staff_session_service.js"));
 const FACTS = require("../step4/completion_facts.js");
 //  migration 140 REFUSES to let recordActivation run without it, so a
@@ -394,7 +395,52 @@ const get = (port, p, session) => new Promise((res, rej) => {
        afterReads.events - beforeReads.events === 1,
        `${beforeReads.events} → ${afterReads.events} — the sweep raises one obligation ` +
        "and records WHY; anything else moved that should not have");
-  }
+
+
+    /*  ── P10 · THE AUDIT, FROM THE DATABASE'S OWN DEFINITION ────────
+     *
+     *  P2–P5 are hand-written invariant queries in this file. They are
+     *  useful and they are ALSO a fourth interpretation of the rule — the
+     *  exact thing revision 4 set out to end. So the last word belongs to
+     *  the view the deferred guard and the activation both derive from,
+     *  and P11 checks the two agree rather than assuming it. */
+    const violations = (await c.query(
+      `select * from release_0_completion_invariant_violations order by work_order_id`)).rows;
+
+    /*  NOT "empty". This harness DELIBERATELY manufactures one violation —
+     *  `woDefect`, built in a guard-off window — because §S needs a real
+     *  defect for the sweep to find. Asserting emptiness here would have
+     *  been asserting that the harness failed to set itself up.
+     *
+     *  The honest claim is EXACTNESS: the view contains that row and
+     *  nothing else. An "empty" assertion would also have passed if the
+     *  view were broken and returned nothing at all. */
+    ok("P10 the database's own violation view holds EXACTLY the deliberate defect",
+       violations.length === 1 && violations[0].work_order_id === woDefect,
+       JSON.stringify(violations) + ` · expected exactly ${woDefect}` +
+       " — every other work order in this run was completed through the canonical " +
+       "writer and must be invisible to the audit");
+
+    const readerDefects = [];
+    for (const r of (await c.query(
+      `select id, property_id from work_orders where source='s11'`)).rows) {
+      // eslint-disable-next-line no-await-in-loop
+      const st = await reader.readWorkOrderStatus(c,
+        { propertyId: r.property_id, workOrderId: r.id });
+      if (st.proof.state === "missing_evaluation_defect") readerDefects.push(r.id);
+    }
+    /*  THE SET, not the count. Two different wrong rows would produce
+     *  matching counts, which is the same mistake the activation's
+     *  both-direction set comparison exists to avoid. */
+    ok("P11 …and the canonical READER names the same work orders the view does",
+       JSON.stringify(readerDefects.sort()) ===
+       JSON.stringify(violations.map((v) => v.work_order_id).sort()),
+       `reader ${JSON.stringify(readerDefects)} vs view ` +
+       JSON.stringify(violations.map((v) => v.work_order_id)) +
+       " — the audit query and the four-state reader disagree about which rows are " +
+       "wrong, which means one of them is a fourth interpretation after all");
+    console.log("        the audit view and the reader agree: " +
+      violations.length + " violation(s)");  }
 
   sec("VERDICT");
   console.log(`  passed ${pass}   failed ${fail}`);

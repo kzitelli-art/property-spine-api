@@ -83,6 +83,13 @@ const GATES = [
   //  problem. Silent in both directions, so it is checked in source.
   { file: "gate_work_order_status_vocabulary.js",
     what: "no shipped writer sets a work_orders.status outside the frozen, classified set" },
+  //  Migration 140 rev 4 freezes a proof attachment the moment an
+  //  evaluation cites it. That is only safe because every shipped mutation
+  //  runs BEFORE citation — the ingress pipeline. A new writer that touched
+  //  evidence after a completion would fail with R0005 in production, and
+  //  it would read as a database problem rather than the doctrine it broke.
+  { file: "gate_evidence_immutability.js",
+    what: "no shipped writer mutates proof evidence outside the frozen ingress inventory" },
   //  §3.4's `satisfied` is published FOR CONSUMERS. When this API reads it
   //  back, the two halves of the four-state contract can disagree — and
   //  they did: next_action was derived from it and answered "obtain a

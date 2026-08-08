@@ -219,6 +219,23 @@ const srcHas = (file, needle) => {
     "missing_evaluation_defect — an obligation against a named role for something " +
     "the system did. Apply migration 140.");
 
+  /*  THE AUDIT, FROM THE DATABASE'S OWN DEFINITION. Not a fourth
+   *  handwritten interpretation of the invariant — the same
+   *  release_0_completion_proof_status the deferred guard and the
+   *  activation call. If this instrument disagreed with the guard about
+   *  what a violation is, the disagreement would be invisible. */
+  const violations = await q(
+    `select work_order_id, status, proof_status, violation
+       from public.release_0_completion_invariant_violations limit 50`).catch(() => null);
+
+  stop(Array.isArray(violations) && violations.length > 0,
+    "COMMITTED WORK ORDERS VIOLATE THE COMPLETION INVARIANT",
+    `${violations && violations.length} post-cutover work order(s) are terminal in a state ` +
+    "the database's own completion invariant refuses: " +
+    (violations || []).slice(0, 5).map((v) => `${v.work_order_id} ${v.violation}`).join(" · ") +
+    ". This population should be EMPTY. A row means the guard was dropped, deployed " +
+    "late, or bypassed by privileged DDL. INVESTIGATE before completing anything else.");
+
   stop(guard && defects > 0,
     "THE GUARD IS INSTALLED AND DEFECT OBLIGATIONS EXIST",
     "With the guard armed, ordinary DML cannot add to this population: the census " +

@@ -306,6 +306,70 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
       console.log(`        refused by: ${layer}`);
     }
 
+    /*  ── R · THE TWO A RECOMPUTE CANNOT CATCH ───────────────────────
+     *
+     *  P1–P8 all BREAK the completion, so a guard that merely re-checks
+     *  "does this still compute?" refuses them. These two do not break it,
+     *  and revision 3 allowed both:
+     *
+     *    R1  SWAP THE BYTES — replace content and sha256 together with
+     *        another qualifying photo. Still grounded. But the 10:00
+     *        completion now rests on a 14:00 photo. Nothing was
+     *        invalidated; the evidence was REPLACED.
+     *    R2  MUTATE WHILE NOT TERMINAL — reopen, rewrite the evidence,
+     *        complete again. Every intermediate state is legal.
+     *
+     *  Which is why revision 4 stopped recomputing and made cited evidence
+     *  IMMUTABLE. Truth is not protected merely because the decision was
+     *  valid when it was made; the evidence that justified it has to stay
+     *  intact, or the basis is whatever somebody last edited. */
+    const swapped = Buffer.from([1, 1, 1, 1, 1, 1, 1]);
+    const r1 = await tx(() => c.query(
+      `update work_order_proof_attachments
+          set content=$2, byte_size=$3, sha256=$4, stored_at=now()
+        where work_order_id=$1`,
+      [COMPLETED, swapped, swapped.length,
+       crypto.createHash("sha256").update(swapped).digest("hex")]));
+    ok("R1  swapping the BYTES for another qualifying photo → REFUSED",
+       !!r1 && r1.code === "R0005" && await stateOf(COMPLETED) === "satisfied",
+       (r1 ? r1.code + " " + r1.message : "IT SUCCEEDED") +
+       "\n          → the completion would still COMPUTE as grounded, which is exactly " +
+       "why a recompute cannot catch this. The decision's evidentiary basis changed " +
+       "underneath it and nothing anywhere would say so.");
+
+    //  R2 — the same mutation attempted while the work order is NOT
+    //  terminal. A guard that only asks "is this completion still valid?"
+    //  has nothing to object to here: there is no completion right now.
+    const r2 = await tx(async () => {
+      await c.query(`update work_orders set status='open' where id=$1`, [COMPLETED]);
+      await c.query(`update work_order_proof_attachments
+                        set proof_classification='unclassified' where work_order_id=$1`,
+                    [COMPLETED]);
+    });
+    ok("R2  rewriting cited evidence while the row is NOT terminal → REFUSED",
+       !!r2 && r2.code === "R0005" && await statusOf(COMPLETED) === "complete",
+       (r2 ? r2.code + " " + r2.message : "IT SUCCEEDED") +
+       "\n          → reopen, rewrite, re-complete: every intermediate state is legal " +
+       "to a recompute, and the history is quietly different at the end.");
+
+    //  …and the freeze applies to an attachment that is NOT yet cited only
+    //  once it becomes evidence. Before that, ingress must be free to work.
+    const loose = await mkWo("open");
+    const looseAtt = await mkAtt(loose, { storage_state: "referenced", content: null,
+      byte_size: null, sha256: null, stored_at: null });
+    const ingress = await tx(() => c.query(
+      `update work_order_proof_attachments
+          set storage_state='stored', content=$2, byte_size=$3, sha256=$4, stored_at=now()
+        where id=$1`,
+      [looseAtt, swapped, swapped.length,
+       crypto.createHash("sha256").update(swapped).digest("hex")]));
+    ok("R3  an UNCITED attachment is still freely mutable — ingress must work",
+       ingress === null,
+       (ingress ? ingress.code + " " + ingress.message : "") +
+       " — the ingress pipeline flips referenced → stored, and freezing that would " +
+       "break every inbound photo before it could ever become evidence");
+    console.log("        → the freeze begins at CITATION, not at creation.");
+
     /*  ── AND THE LINE THAT MUST NOT BE CROSSED ──────────────────────
      *
      *  P8 refuses a superseding `not_satisfied` on a completed work
