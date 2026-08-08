@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /* ════════════════════════════════════════════════════════════════════
-   §4.2 — PROVE THE SCHEDULED-RAIL RUNNER
+   §4.2 — PROVE THE GOVERNED MANUAL RUNNER
 
    The service is proven. This proves the THING AN OPERATOR ACTUALLY
    TYPES: a real process, real argv, real exit codes.
