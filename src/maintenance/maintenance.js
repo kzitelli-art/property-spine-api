@@ -54,7 +54,19 @@ module.exports = function maintenance(deps) {
     let out;
     try {
       await client.query("begin");
-      out = await fn(client, { propertyId: req.operator.property_id, operatorUserId: req.operator.user_id });
+      //  `.id`, NOT `.user_id`. The resolved staff session has no `user_id`
+      //  field — staff_session_service returns the user id as `id`, and says
+      //  so: "user id (kept as `id` for drop-in compatibility with
+      //  req.operator)". This line read `.user_id` and therefore passed
+      //  undefined to EVERY governed maintenance action: assignWork,
+      //  askForPhoto, coordinateEntry and prepareRetry each recorded no human
+      //  author. JSON.stringify drops undefined keys outright, so the
+      //  assignment receipt did not even carry a null — the field was simply
+      //  absent, which reads as "never captured" rather than "unknown".
+      //  Found by the Release 0 Gate 4 read-back, which asserts the governed
+      //  assignment names its assigning actor. gate_operator_session_fields.js
+      //  now fails on any read of a field the session does not define.
+      out = await fn(client, { propertyId: req.operator.property_id, operatorUserId: req.operator.id });
       await client.query("commit");
     } catch (e) {
       await client.query("rollback").catch(() => {});
