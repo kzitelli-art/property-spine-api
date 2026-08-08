@@ -257,24 +257,51 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
     const defectWo = await mkWo({ status: "closed" });
     rows.defect = (await read(defectWo)).proof;
 
-    ok("C1  satisfied → satisfied = true", rows.satisfied.satisfied === true);
-    ok("C2  not_satisfied → satisfied = false", rows.not_satisfied.satisfied === false);
-    ok("C3  legacy_indeterminate → satisfied = null", rows.legacy.satisfied === null,
-       JSON.stringify(rows.legacy.satisfied));
-    ok("C4  missing_evaluation_defect → satisfied = null", rows.defect.satisfied === null,
+    /*  ── THE COMPATIBILITY FIELD IS RETIRED ────────────────────────
+     *  C1–C4 asserted the §3.4 booleans on the wire. The cleanup release
+     *  removes `satisfied` from the response entirely, so they now assert
+     *  its ABSENCE and check the mapping where it still lives — the
+     *  exported constant consumers derive from.
+     *
+     *  The mapping is not gone. It is the definition; only its
+     *  duplication on every response is.  */
+    for (const [label, row] of [["satisfied", rows.satisfied],
+                                ["not_satisfied", rows.not_satisfied],
+                                ["legacy_indeterminate", rows.legacy],
+                                ["missing_evaluation_defect", rows.defect]]) {
+      ok(`C·${label.padEnd(26)} carries NO \`satisfied\` on the wire`,
+         !("satisfied" in row), JSON.stringify(row.satisfied) +
+         " — the compatibility field was retired; a consumer derives it from state");
+      ok(`C·${label.padEnd(26)} still carries \`state\``, row.state === label,
+         JSON.stringify(row.state));
+    }
+    //  The frozen mapping is still the definition, and still frozen.
+    ok("C4a the §3.4 mapping is still exported, unchanged",
+       proofState.SATISFIED_FOR.satisfied === true &&
+       proofState.SATISFIED_FOR.not_satisfied === false &&
+       proofState.SATISFIED_FOR.legacy_indeterminate === null &&
+       proofState.SATISFIED_FOR.missing_evaluation_defect === null,
+       JSON.stringify(proofState.SATISFIED_FOR) +
+       " — retiring the FIELD must not change the MEANING");
+    ok("C4b …and null still means null, never false",
+       proofState.SATISFIED_FOR.legacy_indeterminate === null &&
+       proofState.SATISFIED_FOR.missing_evaluation_defect === null,
        JSON.stringify(rows.defect.satisfied));
     /*  The one that matters. Both are `null`, so `satisfied` alone CANNOT
      *  distinguish them — which is exactly why §3.3 requires `state` on
      *  both shapes. If a consumer had only the boolean it would render
      *  legitimate history and a writer defect identically. */
-    ok("C5  legacy and defect are indistinguishable by `satisfied` alone…",
-       rows.legacy.satisfied === rows.defect.satisfied);
+    ok("C5  legacy and defect are indistinguishable by the MAPPING alone…",
+       proofState.SATISFIED_FOR[rows.legacy.state] ===
+       proofState.SATISFIED_FOR[rows.defect.state]);
     ok("C6  …and ARE distinguished by `state`",
        rows.legacy.state !== rows.defect.state,
        "legacy history and a writer defect have collapsed into one rendering");
-    ok("C7  `satisfied` no longer means 'evidence exists'",
-       rows.defect.preserved_count === 0 && rows.defect.satisfied === null,
-       "a defect row with no evidence must not read satisfied=false, which an " +
+    ok("C7  a defect row with no evidence is NOT reported as 'proof failed'",
+       rows.defect.preserved_count === 0 &&
+       rows.defect.state === "missing_evaluation_defect" &&
+       proofState.SATISFIED_FOR[rows.defect.state] === null,
+       "a defect row with no evidence must not read not_satisfied, which an " +
        "evidence-presence boolean would have produced");
   }
 
@@ -372,9 +399,13 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
     ok("X2  never `state` absent while read_status is 'ok'",
        absentState.length === 0, JSON.stringify(absentState));
 
-    const mismatch = every.filter(
-      (p) => p.read_status === "ok" && p.satisfied !== proofState.SATISFIED_FOR[p.state]);
-    ok("X3  never a state/satisfied mismatch", mismatch.length === 0, JSON.stringify(mismatch));
+    /*  A state/satisfied MISMATCH is unrepresentable once the field is
+     *  gone — there is nothing to disagree with. So the assertion becomes
+     *  the stronger one the removal makes available: the field never
+     *  appears at all, on any shape, in any state. */
+    const stillEmitting = every.filter((p) => "satisfied" in p);
+    ok("X3  `satisfied` never appears on any shape — a mismatch is now unrepresentable",
+       stillEmitting.length === 0, JSON.stringify(stillEmitting));
 
     const leaky = every.filter(
       (p) => p.read_status === "unavailable" && (("state" in p) || ("satisfied" in p)));
