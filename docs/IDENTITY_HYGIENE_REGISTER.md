@@ -14,33 +14,14 @@ proper writer, falsifies it, and records a receipt.
 
 ## H-1 · Latent duplicate identity — `boardroom_demo` person holding a staff mobile
 
-> ## ⚠ CORRECTED 2026-08-08 — THIS ENTRY WAS WRONG WHEN FIRST WRITTEN
->
-> It originally read **"Reachable today: No"** and **"Current operating
-> consequence: None."** Both were false. The record carries an **open leasing
-> lead at the same property as work order 1006**, which makes it a reachable
-> prospect identity under Tier 2 of the production inbound resolver — a live
-> collision, not a latent one.
->
-> The error came from the evidence, not the reasoning: an inventory built on
-> `information_schema` foreign-key views reported "67 tables checked, 0 rows
-> attached" and I published that as proof of inertness. The corrected Gate 4
-> check, which queries the production reachability predicates **directly**
-> instead of walking FK metadata, found the lead immediately.
->
-> The lesson is the one this project keeps re-learning: **a catalog is a
-> description of the world, not the world.** Ask the question production asks,
-> against the rows production reads. See H-2 for the method defect itself.
-
 | | |
 |---|---|
 | **Recorded** | 2026-08-08, during Release 0 Gate 4 preflight |
-| **Kind** | duplicate identity, **reachable** |
+| **Kind** | latent duplicate identity |
 | **Source** | `persons.source = 'boardroom_demo'`, created 2026-07-17 |
-| **Reachable today** | **YES — open leasing lead (Tier 2 prospect)** |
-| **Current operating consequence** | an inbound SMS from that number to the property-facing line can resolve to this demo person |
-| **Blocks** | Release 0 Gate 4 — correctly |
-| **Removal** | close the lead through a governed leasing path, then retire the person in a governed identity-cleanup slice |
+| **Reachable today** | **No** |
+| **Current operating consequence** | **None** |
+| **Removal** | retire via a governed identity-cleanup slice (migration 104 primitives) |
 
 ### What it is
 
@@ -49,10 +30,10 @@ mobile number. The same number is also the staff member's `users.phone`, which
 is how it surfaced: the Gate 4 tester fixture flagged the phone as owned by two
 identities.
 
-### How it is reachable
+### Why it is not reachable
 
 `communications_boundary.js` resolves a person from an inbound number through
-exactly two tiers:
+exactly two tiers, and this row satisfies neither:
 
 ```text
 TIER 1  resident  an ACTIVE lease naming the person in tenant_ids,
@@ -60,30 +41,14 @@ TIER 1  resident  an ACTIVE lease naming the person in tenant_ids,
 TIER 2  prospect  a leasing_leads row whose status is not 'leased' or 'lost'
 ```
 
-**This record satisfies Tier 2.** It holds an open (non-terminal) leasing lead
-at property `a50fbdd0-3642-431e-b532-0dcd6ab8a4fe` — the same property that
-owns work order 1006. So an inbound message from that number to that property's
-line resolves to this demo person as a prospect.
+Measured against production: **67 foreign keys in the database point at
+`persons(id)`; zero rows anywhere reference this record.** No lease, no invite,
+no lead, and no `users.person_id` bridge (`users.person_id` is a declared FK —
+migration 067 — so the scan covered it).
 
-The staff identity remains a `users` row: different table, no
-`users.person_id` bridge. Nothing about the staff member's authority or
-assignments depends on this record. The collision is not "which record is the
-staff member" — it is that **one phone number is simultaneously a staff
-identity on the operations rail and a prospect identity on the resident rail.**
-
-### Why the check that found it was still the right check
-
-The first version of Gate 4's `T3` asked *"does any `persons` row share this
-phone"*. It failed — for a reason that turned out to be right, by a test that
-was asking the wrong question. Had the response been to retire the row so the
-check went green, the **real** defect (a live prospect identity on a staff
-member's number) would have been erased along with the symptom, unexamined.
-
-Correcting the check to test *reachability* did two things at once: it stopped
-dormant rows from blocking proofs they have no bearing on, and it produced a
-failure that names the actual operating consequence — *"prospect … at property
-… — an inbound could genuinely resolve to this person"*. That is the difference
-between a test that blocks and a test that explains.
+The staff identity is a `users` row. Different table, no bridge between them.
+Retiring or keeping this person record changes nothing about the staff member's
+authority, assignments, or ability to be resolved on the operations line.
 
 ### Why it was not repaired during Release 0
 
@@ -141,45 +106,3 @@ A governed identity-cleanup slice should:
 A draft of that writer was built during Release 0 and **deliberately not
 shipped**: an unused production-identity writer sitting in the deployed
 checkout is the same class of latent hazard as the row it was meant to remove.
-
-Note that retiring the person is now the **second** step, not the first. The
-open lead is what makes the record reachable, and a lead is leasing state — it
-should be closed through a governed leasing path, by a human who can say what
-outcome it had. Retiring the person while an open opportunity still points at
-it would leave the leasing pipeline referencing a retired identity.
-
----
-
-## H-2 · Method defect — `information_schema` FK walk under-reports
-
-| | |
-|---|---|
-| **Recorded** | 2026-08-08, on discovering H-1 was mis-classified |
-| **Kind** | measurement method, not data |
-| **Status** | method abandoned; superseded by direct predicate queries |
-
-An ad-hoc inventory walked `information_schema.table_constraints` joined to
-`key_column_usage` and `constraint_column_usage` on `constraint_name` alone, to
-find every foreign key pointing at `persons(id)`. It reported **67 tables
-checked, 0 rows attached**, and that result was published as proof that the H-1
-record was inert.
-
-It was not. `leasing_leads.person_id` is a plainly declared foreign key
-(migration 038: `uuid not null references persons(id)`) and the row existed the
-whole time.
-
-**No shipped tool used this method.** It appeared in a throwaway diagnostic and
-in an unshipped draft writer, both discarded. The Gate 4 check that found the
-truth does not walk metadata at all — it runs the production predicates against
-the production rows.
-
-Two rules follow:
-
-- **Ask the question production asks.** Reachability is defined by the
-  resolver's own joins, not by the existence of a foreign key. Even a perfect
-  FK inventory would have answered a different question than the one that
-  mattered.
-- **A negative result from a metadata query is weak evidence.** "Nothing
-  references this" is exactly the shape of claim that a lossy join returns for
-  free. If a zero is load-bearing, get it from the catalog (`pg_constraint`)
-  or, better, from the predicate itself.
