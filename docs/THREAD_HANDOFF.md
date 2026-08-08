@@ -19,7 +19,106 @@ current truth. Re-date it whenever `main` moves materially.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
-##  ⛔ THE DEPLOYED APP IS BROKEN. 2026-08-06 (latest).
+##  ⏸ OPEN DEBT — SMS VERIFICATION OWED. 2026-08-08 (latest).
+## ══════════════════════════════════════════════════════════════════
+
+**One deployed fix is PROVEN but NOT SMS-verified. Close this the next time
+the text line is confirmed alive. Do not let it become "done" by age.**
+
+### What is deployed
+
+`524cf90` — the `appendProgress` savepoint fix (PR #51). One function,
+`src/technician/lifecycle_service.js`. No migration; the ledger did not move.
+
+It repairs a **live** failure: `appendProgress` caught PostgreSQL `23505` — a
+duplicate idempotency key, which is what a carrier redelivery looks like — and
+then issued a recovery `SELECT`. PostgreSQL aborts the whole transaction on a
+failed statement, so with no savepoint between them that `SELECT` raised
+`25P02`, *current transaction is aborted*. **The handler written to make a
+redelivery harmless was itself the thing that threw.**
+
+It was silent rather than loud because `tenantlink`'s inbound wrapper
+special-cases `23505` as an already-answered duplicate. The pre-fix error was
+`25P02`, so it fell to the generic branch: log, send no reply. The technician
+got nothing back.
+
+Full write-up: `docs/PROGRESS_REPLAY_SAVEPOINT_FIX.md`.
+
+### Proof state — PROVEN, not done (§33)
+
+```text
+proven      tools/savepoint/prove_progress_replay.js — 22/22, twice from clean
+            baselines, against real PostgreSQL at ledger 136. The falsification
+            recompiles the PRE-FIX source in memory and reproduces the abort,
+            the 25P02 code, and the turn recording nothing.
+NOT proven  live SMS. No HTTP path, no Twilio, no production population.
+```
+
+### ⚠ TRAP — the verification I first wrote was impossible, twice over
+
+Recorded because the reasoning is the useful part:
+
+**1. Its success signal was a reply arriving at the handset.** But
+`RELEASE_0_EVIDENCE_INGRESS_RECEIPT.md` — written the same day — records
+`handset delivery NOT CLAIMED — no delivery receipt`. The check was built on
+the one thing that receipt says cannot be confirmed. *Read your own receipts
+before designing a check against them.*
+
+**2. Two "done" texts cannot exercise this fix at all.** They are two provider
+messages with two different `MessageSid`s, therefore two different idempotency
+keys, therefore no `23505` and no savepoint branch. A true carrier redelivery
+happens only when the webhook times out or 5xx's — **it cannot be summoned, and
+must not be induced in production.**
+
+**3. It would also have closed work order 1006.** Gate 8 stored a durable photo
+on it, and `main`'s `preservedEvidenceFor` accepts any `storage_state='stored'`
+attachment. A "done" text there satisfies the gate and completes the work order
+through the LEGACY writer, with no proof evaluation, since 137 has not run.
+
+### The check that is actually owed
+
+When the text line is confirmed alive, from the technician handset (a `users`
+row, role maintenance, active `property_team_assignments` at the property owning
+WO 1006 — the same phone used for Gate 8):
+
+```text
+text        a plain field fact — "on my way"
+expect      the normal reply, ONE new work_order_progress row, ONE new event
+proves      the savepoint and release statements run on EVERY progress write,
+            happy path included. If they broke the transaction assumptions,
+            this is what breaks — over real HTTP, real Twilio, real Neon.
+stop        silence → revert 524cf90. One function, no schema to undo.
+```
+
+Do **not** substitute a "done" text. See trap 3.
+
+### ⚠ POSSIBLY UNRELATED AND MORE URGENT — is the text line even up?
+
+Real-handset evidence ingress **passed** on 2026-08-08 (Gate 8). The Twilio auth
+token was then rotated, because it had been exposed in a screenshot. **If
+Render's `TWILIO_AUTH_TOKEN` never received the new value, inbound signature
+validation fails and the text line is down** — nothing to do with the savepoint.
+
+Not measured. Stated as the first thing to check, not as a finding.
+
+### Boundary — this did NOT advance Release 0
+
+```text
+migration 137            still PR #50, not applied
+the canonical writer     still PR #50, not deployed
+proof evaluations        none written; the table does not exist in production
+the four-state reader    untouched
+the legacy closeout      untouched
+```
+
+PR #50 (Steps 2–3) stays frozen. It rebases onto `main` — which now carries the
+savepoint commit — before Step 2 proceeds under the quiet-write + `lock_timeout`
+discipline recorded there.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  ⛔ THE DEPLOYED APP IS BROKEN. 2026-08-06.
 ## ══════════════════════════════════════════════════════════════════
 
 **This supersedes the APP SHA in the header above and every deployment claim
