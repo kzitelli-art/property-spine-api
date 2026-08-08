@@ -101,6 +101,21 @@ app.use("/", require("../src/identity/legal_routes_block")());
   ok("a never-existing /legal path still 404s (the 200s are real routes)",
     ctrl.status === 404, "got " + ctrl.status);
 
+  // ── 5. MOUNTED IS NOT REACHABLE ───────────────────────────────────
+  //  The four 200s above are served by a BARE express app, which has no
+  //  global operator gate. Production has one, it runs BEFORE every mount,
+  //  and it allowlists by path prefix — so on 2026-08-08 these routes were
+  //  correctly mounted and still answered 401 "Missing or wrong
+  //  x-operator-key" to the carrier reviewer they exist for.
+  //
+  //  This reads server.js's OWN allowlist rather than restating it. If the
+  //  prefix is ever dropped, the pages stop being reachable without a key
+  //  and the campaign fails on a link nobody thought to re-check.
+  const serverSrc = require("fs").readFileSync(require("path").join(__dirname, "..", "server.js"), "utf8");
+  const prefixLine = (serverSrc.match(/const PUBLIC_PREFIXES\s*=\s*\[[^\]]*\]/) || [""])[0];
+  ok("server.js allowlists /legal/ as public (no operator key, no session)",
+    /["']\/legal\/["']/.test(prefixLine), prefixLine.slice(0, 160) || "PUBLIC_PREFIXES not found");
+
   srv.close();
   console.log("\nassertions passed: " + pass);
   console.log("assertions failed: " + fail);
