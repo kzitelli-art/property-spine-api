@@ -53,7 +53,11 @@ branch. Merging it without the migration release brings the API down.
 | 10 | migrations 138 + 139 · §4.2 sweep | API **#61** | **migration release** + deploy |
 | 11 | HTTP acceptance + `next_action` fix | API **#62** | deploy |
 | 12 | App consumer release | app **#38** | deploy |
-| 13 | Cleanup — retire `proof.satisfied` | API **#63** | **blocked, see its own doc** |
+| 13a | app: consumers move to `state` | app **#39** | deploy **first** |
+| 13b | app: the post-removal contract | app **#40** | deploy (stacked on #39) |
+| 13c | api: `satisfied` leaves the wire | API **#63** | deploy **last of the three** |
+| — | Step 4 package + this runbook | API **#64** | tooling, no product change |
+| — | the composed end-to-end proof | API **#65** | tooling, no product change |
 
 The API stack is linear: `#59 → #60 → #61 → #62 → #63`. Each merges into the one
 below it, so they land in order or not at all.
@@ -280,14 +284,51 @@ what the API emits, so cross-repo drift is caught in CI, not in production.
 
 ---
 
-## Boundary 13 — cleanup, retiring `proof.satisfied` (API #63)
+## Boundary 13 — cleanup, retiring `proof.satisfied` (app #39 → app #40 → API #63)
 
-**Blocked, and not on a code question.** See
-`docs/RELEASE_0_CLEANUP_CANDIDATE.md`. The normalizer's old-contract branch may not
-be removed while any deployed API can still emit the old shape. **Do not remove the
-compatibility field early**: a consumer built against §3.4 that suddenly receives no
-`satisfied` gets `undefined`, and `undefined` is falsy — the same shape as the defect
-boundary 9 introduced, in every consumer at once.
+**Three deploys, and the order is not a preference.** Merge the API removal first
+and the board renders `UNAVAILABLE` for **every work order** the moment the first
+response arrives without `satisfied` — the app's normalizer treated its absence as a
+contract failure until #39 changed that.
+
+```text
+13a  app #39   the door reads `state`; the normalizer TOLERATES an absent
+               `satisfied` and still cross-checks a present one
+13b  app #40   the post-removal capture           (stacked on #39)
+13c  API #63   `satisfied` leaves the wire        (the field, never the MEANING —
+               SATISFIED_FOR stays exported, because it is the definition
+               consumers derive from)
+```
+
+**Verify after each** — the app suite is green at every step, and
+`gate_proof_compatibility_field.js` on the API side asserts `state` is still emitted
+and the mapping is still exported (`G8`/`G9`). Falsified in both directions:
+putting the field back, and deleting the mapping. **The second is the dangerous
+one** — the wire still carries `state`, so the API looks completely fine while
+nothing can derive the boolean any more.
+
+**Still blocked, and not on a code question.** The normalizer's OLD-CONTRACT branch
+may not be removed while any deployed API can still emit the boolean-only shape.
+That is a later release than these three. See `docs/RELEASE_0_CLEANUP_CANDIDATE.md`.
+
+---
+
+## After every boundary — the composed proof (API #65)
+
+```bash
+bash tools/steps23/baseline_136.sh
+PROVE_DATABASE_URL='...' node tools/steps23/apply_137.js
+STEP11_DATABASE_URL='...' node tools/step11/prove_release0_composed.js
+```
+
+Runs the whole path in one process — writer → the eight facts → census and
+activation → the four-state reader over real HTTP → the sweep through the governed
+manual runner → **the app's own normalizer over those live bodies** → the
+production-state invariants. It is the only place the two repos meet without a
+capture between them.
+
+**It is an isolated-Postgres proof, not a production check.** Use
+`tools/release0/where_are_we.js` for production.
 
 ---
 
