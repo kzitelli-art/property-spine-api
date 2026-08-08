@@ -136,3 +136,41 @@ receipt refusals, including: deployed SHA removed · positive control omitted ·
 unsigned-only · rollback drill absent · binding window absent · assignment
 event deleted from the database under a perfect input · status flipped to
 complete · completion event injected.
+
+---
+
+## Correction — Gate 4's collision check tested the wrong thing
+
+Gate 4 `--pre` failed against the real production fixture on `T3`. The cause was
+not the fixture: `T3` asked *"does any `persons` row share this phone"*, which
+is not the question the production inbound resolvers ask. It failed on a dormant
+`boardroom_demo` record that `communications_boundary.js` can never resolve —
+that path requires an active lease with a used invite, or an open leasing lead,
+and the record has neither. Measured: 67 foreign keys point at `persons(id)`,
+zero rows reference it, and `users.person_id` (a declared FK, migration 067) is
+not among them.
+
+**The model was corrected, not the data.** `T3` now tests whether a *competing
+operating identity* exists — replicating both production reachability tiers
+verbatim in their essentials, retired rows excluded, deliberately not
+property-scoped because a person reachable at any property is a real identity on
+that property's line. Dormant same-phone rows are **reported on every run** as a
+hygiene item rather than blocking or being hidden.
+
+A person-retirement writer was built and **deliberately not shipped**. Writing
+production identity data to turn a checker green inverts the order of trust, and
+an unused identity writer in the deployed checkout is the same class of latent
+hazard as the row it would remove. The record is logged as **H-1** in
+`docs/IDENTITY_HYGIENE_REGISTER.md` for a governed cleanup slice.
+
+**Falsification: 58/58, two identical clean runs.** Seven new Gate 4 controls pin
+both ends of the distinction — dormant passes, open lead refuses, closed lead
+passes again, lease-without-invite passes, lease-plus-used-invite refuses.
+
+One of those controls was itself a fake at first. The resident-path seed chained
+`psql … || psql …`; `spaces` requires a `unit_id` and `units` was empty, so both
+arms inserted nothing and the chain reported success. `G4-3e` then passed while
+describing a lease that did not exist, and only `G4-3f`'s failure exposed it.
+`G4-3e0` now asserts the seed actually landed before the controls that depend on
+it run — a seed that silently does nothing turns every control built on it into
+decoration.
