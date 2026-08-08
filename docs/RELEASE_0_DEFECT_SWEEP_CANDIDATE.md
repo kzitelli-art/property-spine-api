@@ -174,10 +174,12 @@ NOT proven   production. Nothing was run against it; no obligation exists.
 NOT proven   the scheduled rail. §4.2 puts this on the followups cadence
              (run_followups.js). WIRING IT IN IS NOT DONE — the sweep is a
              function nothing calls yet.
-NOT proven   caller (a) — claimCompletion raising the defect when it observes
-             a terminal row it did not evaluate. NOT BUILT. Only the sweep.
-NOT proven   closure. §4.2 defines when the obligation closes; the sweep
-             NEVER closes anything, and the closure path is not built.
+BUILT LATER   caller (a) and the closure path — see "The rest of the
+             lifecycle" at the end of this document. They were not built when
+             this section was written; this line is kept rather than rewritten
+             so the order of work stays legible.
+still true   the SWEEP never closes anything. Closure is the canonical
+             services' job, never the sweep's.
 NOT proven   HTTP or a browser.
 proven       the service and sweep contract against real PostgreSQL at
              schema 137 + 138, including real concurrency.
