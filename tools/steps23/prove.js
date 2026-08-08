@@ -319,6 +319,36 @@ async function chainOk(c, wo) {
     ok("J13 chain still valid after replay", (await chainOk(c0, wo)).valid);
   }
 
+  {
+    //  THE REPAIR PATH, which nothing tested before this critical pass:
+    //  a claim lands with no usable evidence (blocked, work order stays
+    //  open), the technician then sends a real photo, and the SAME
+    //  provider key is redelivered. The claim replays; the completion
+    //  must now succeed and write a GENESIS evaluation — not a spurious
+    //  supersession of an evaluation that was never written, and not a
+    //  refusal because the claim row already exists.
+    const wo = await makeWorkOrder(c0);
+    const k = "k-blocked-then-evidence";
+    const blocked = await claimInTx(c0, { work_order_id: wo, user_id: TECH, organization_id: ORG, idempotency_key: k });
+    const x0 = await census(c0, wo);
+    ok("J14 a claim with no evidence is RECORDED but does not close",
+       blocked.closed === false && x0.claimed === 1 && x0.status === "open", JSON.stringify(x0));
+    ok("J15 …and writes NO evaluation (not terminal — proof is not yet due)",
+       x0.evals === 0, String(x0.evals));
+
+    await makeAttachment(c0, { work_order_id: wo });
+    const retry = await claimInTx(c0, { work_order_id: wo, user_id: TECH, organization_id: ORG, idempotency_key: k });
+    const x1 = await census(c0, wo);
+    const ch = await chainOk(c0, wo);
+    ok("J16 evidence arrives, the same key is retried → it COMPLETES",
+       retry.closed === true && x1.status === "complete", JSON.stringify(x1));
+    ok("J17 …with exactly one evaluation, and it is a GENESIS not a supersession",
+       x1.evals === 1 && !retry.supersededEvaluationId, JSON.stringify({ evals: x1.evals, sup: retry.supersededEvaluationId }));
+    ok("J18 …one completed event, and the claim was not duplicated",
+       x1.completed === 1 && x1.claimed === 1, JSON.stringify(x1));
+    ok("J19 …chain valid", ch.valid, JSON.stringify(ch));
+  }
+
   // ══ N — NEGATIVE MATRIX ═════════════════════════════════════════════
   sec("N · NEGATIVE MATRIX — every refusal, and what it left behind");
   const negatives = [

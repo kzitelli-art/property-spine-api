@@ -33,6 +33,24 @@ const path = require("path");
 const { Client } = require("pg");
 const { classifyLedger } = require("./ledger_verdict");
 
+/*  How long a migration may WAIT to acquire a lock before giving up.
+ *  Raise it deliberately for a planned maintenance window
+ *  (MIGRATION_LOCK_TIMEOUT='60s'); never raise it to make a hanging
+ *  deploy "work". A migration that cannot get its lock in ten seconds is
+ *  competing with live traffic, and that is a scheduling decision, not a
+ *  timeout to widen. */
+//  Validated, not merely sanitised. A stripped-to-empty or malformed value
+//  would produce `set local lock_timeout = ''`, which errors mid-migration
+//  and would read as a broken migration rather than a bad setting.
+const LOCK_TIMEOUT = (() => {
+  const raw = (process.env.MIGRATION_LOCK_TIMEOUT || "").trim();
+  if (!raw) return "10s";
+  if (/^\d+(ms|s|min)?$/i.test(raw)) return raw.toLowerCase();
+  console.error(`\n  ✗ MIGRATION_LOCK_TIMEOUT is malformed: ${JSON.stringify(raw)}`);
+  console.error("    Use a PostgreSQL interval like '10s', '500ms' or '2min'.\n");
+  process.exit(1);
+})();
+
 const MIGRATIONS_DIR = __dirname;
 
 async function main() {
@@ -357,6 +375,27 @@ async function main() {
     console.log(`  → ${file}  — applying...`);
     try {
       await client.query("begin");
+      //  ── FAIL FAST ON LOCK CONTENTION ────────────────────────────────
+      //  This runs from `prestart`, which on Render means EVERY DEPLOY —
+      //  while the OLD instance is still serving live write traffic. A
+      //  migration that takes a lock the live traffic holds would, with no
+      //  timeout, wait forever: the deploy hangs, and because PostgreSQL
+      //  queues lock waiters, every writer that arrives behind it stalls
+      //  too. One slow migration becomes an outage.
+      //
+      //  Measured, not hypothetical: migration 137 creates foreign keys
+      //  referencing work_orders, which needs SHARE ROW EXCLUSIVE and
+      //  conflicts with an ordinary INSERT.
+      //
+      //  lock_timeout bounds only ACQUISITION, never execution — a long
+      //  migration that already holds its locks is unaffected. Timing out
+      //  fails THIS DEPLOY and leaves the previous instance serving, which
+      //  is the correct failure: a refused deploy, not a stalled database.
+      //
+      //  Deliberately NOT retried. Retrying into active write traffic is
+      //  how a fail-fast guard becomes a slow-motion outage; the operator
+      //  re-runs it in a quiet window, on purpose.
+      await client.query(`set local lock_timeout = '${LOCK_TIMEOUT}'`);
       await client.query(sql);
       await client.query(
         "insert into schema_migrations (version, name) values ($1, $2)",

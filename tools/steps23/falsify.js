@@ -52,12 +52,17 @@ function loadVariant(targetPath, mutations) {
     if (compiled.has(p)) return compiled.get(p).exports;
     let src = fs.readFileSync(p, "utf8");
     if (mutations[p]) {
-      const { from, to } = mutations[p];
-      if (!src.includes(from)) {
-        throw new Error("FALSIFICATION TARGET NOT FOUND in " + path.basename(p) +
-                        " — the mutation matched nothing, so this proves nothing: " + from.slice(0, 70));
+      //  One edit or several. Removing a guard that is spelled across
+      //  non-adjacent lines — a savepoint and its matching rollback —
+      //  needs more than one substitution to reproduce the real defect
+      //  rather than a different, easier failure.
+      for (const { from, to } of [].concat(mutations[p])) {
+        if (!src.includes(from)) {
+          throw new Error("FALSIFICATION TARGET NOT FOUND in " + path.basename(p) +
+                          " — the mutation matched nothing, so this proves nothing: " + from.slice(0, 70));
+        }
+        src = src.split(from).join(to);
       }
-      src = src.split(from).join(to);
     }
     const m = new Module(p, null);
     m.filename = p;
@@ -357,6 +362,72 @@ async function runClaim(c, mod, args) {
     ok("F10 a THIRD completion writer turns the writer gate RED", r.status !== 0,
        "the gate passed with a rogue writer present");
     ok("F10b and conversation.js is restored", digestOf(CONV) === crypto.createHash("sha256").update(orig).digest("hex"));
+  }
+
+  // ── F11 · REMOVE THE SAVEPOINT AROUND THE PROGRESS INSERT ───────────
+  {
+    //  This one is not hypothetical. Until this critical pass the real
+    //  source had no savepoint, and the duplicate-key handler below it —
+    //  written to make a carrier redelivery harmless — issued a SELECT on
+    //  a transaction PostgreSQL had already aborted. The handler that
+    //  existed to absorb the failure was the thing that threw.
+    //
+    //  The path that exposes it is the ordinary repair sequence: a claim
+    //  arrives with no usable photo (recorded, work order stays open), the
+    //  technician sends the photo, and the carrier redelivers the same
+    //  message. Nothing exotic — a phone with one bar does this.
+    const mk = async (n) => {
+      const wo = ID("f11wo" + n);
+      await c.query(`insert into work_orders (id,property_id,title,status,source)
+                     values ($1,$2,'falsify','open','fals23')`, [wo, PROP]);
+      await c.query(`insert into obligations (property_id,related_id,related_type,module,type,label,status)
+                     values ($1,$2,'work_order','maintenance','work_order_routing','r','open')`, [PROP, wo]);
+      return wo;
+    };
+    const addPhoto = async (wo) => {
+      const att = ID("f11att" + wo.slice(0, 8));
+      const bytes = Buffer.from([7, 7, 7, 7]);
+      await c.query(`insert into work_order_proof_attachments
+        (id,work_order_id,property_id,uploaded_by_user_id,provider,provider_media_id,mime_type,
+         storage_state,proof_classification,content,byte_size,sha256,stored_at)
+        values ($1,$2,$3,$4,'twilio',$5,'image/jpeg','stored','repair_photo',$6,$7,$8,now())`,
+        [att, wo, PROP, TECH, "ME" + att.slice(0, 8), bytes, bytes.length,
+         crypto.createHash("sha256").update(bytes).digest("hex")]);
+    };
+
+    //  Restore the code EXACTLY as it stood before the fix: no savepoint,
+    //  no rollback, and the duplicate-key SELECT left to run on whatever
+    //  transaction state the failed INSERT produced.
+    const v = loadVariant(LIFECYCLE, { [LIFECYCLE]: [
+      { from: 'await client.query("savepoint append_progress");',
+        to:   'await Promise.resolve(); /* falsification: no savepoint */' },
+      { from: 'await client.query("rollback to savepoint append_progress");',
+        to:   'await Promise.resolve(); /* falsification: no rollback */' },
+      { from: 'await client.query("release savepoint append_progress");',
+        to:   'await Promise.resolve(); /* falsification: no release */' },
+    ] });
+
+    const woV = await mk("v");
+    await runClaim(c, v, { work_order_id: woV, user_id: TECH, organization_id: ORG, idempotency_key: "f11" });
+    await addPhoto(woV);
+    const rv = await runClaim(c, v, { work_order_id: woV, user_id: TECH, organization_id: ORG, idempotency_key: "f11" });
+    const xv = await counts(c, woV);
+    ok("F11 without the savepoint, a redelivered claim ABORTS the whole operations turn",
+       !!rv.err && /current transaction is aborted/i.test(rv.err.message),
+       "the variant did not abort — then the savepoint is not what makes the retry survivable: " +
+       (rv.err ? rv.err.message : "no error, closed=" + (rv.out && rv.out.closed)));
+    ok("F11b …and the work order is left OPEN with the evidence already in hand",
+       xv.status === "open" && xv.completed === 0 && xv.evals === 0, JSON.stringify(xv));
+
+    const woR = await mk("r");
+    await runClaim(c, real, { work_order_id: woR, user_id: TECH, organization_id: ORG, idempotency_key: "f11r" });
+    await addPhoto(woR);
+    const rr = await runClaim(c, real, { work_order_id: woR, user_id: TECH, organization_id: ORG, idempotency_key: "f11r" });
+    const xr = await counts(c, woR);
+    ok("F11c the REAL writer completes that same sequence",
+       !rr.err && rr.out && rr.out.closed === true && xr.status === "complete" &&
+       xr.completed === 1 && xr.evals === 1,
+       (rr.err && rr.err.message) || JSON.stringify(xr));
   }
 
   // ── SOURCES UNTOUCHED ───────────────────────────────────────────────

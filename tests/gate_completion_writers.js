@@ -151,6 +151,52 @@ ok("S4  the authorized writer records a proof evaluation",
 const legacy = fs.readFileSync(path.join(ROOT, "src/maintenance/maintenance.js"), "utf8");
 ok("S5  the legacy writer records NO proof evaluation (it is not canonical)",
    !/recordEvaluation\(/.test(legacy));
+/*  ── THE NAME `claimCompletion` IS NOT UNIQUE IN THIS CODEBASE ───────
+ *
+ *  maintenance/work_acceptance_service.js exports a function with the
+ *  SAME NAME, reached from the staff agent and the work-acceptance route.
+ *  It is a different domain entirely — unit-turn work items — and it
+ *  never touches `work_orders`: it writes work_completion_claims,
+ *  obligations, events and unit_triage_required_work.
+ *
+ *  It is therefore NOT a third work-order completion writer. But the
+ *  collision is a real hazard: "the canonical completion writer is
+ *  claimCompletion" is ambiguous prose, and a future caller could import
+ *  the wrong one and satisfy a code review by name alone.
+ *
+ *  This asserts the distinction rather than trusting it: if the unit-turn
+ *  function ever starts writing work_orders, S2 above fails; if the
+ *  canonical one gains an unexpected caller, C2 below fails. */
+const CANONICAL_CALLERS = ["src/technician/conversation.js"];
+const UNIT_TURN_OWNER = "src/maintenance/work_acceptance_service.js";
+
+{
+  const unitTurn = fs.readFileSync(path.join(ROOT, UNIT_TURN_OWNER), "utf8");
+  ok("C1  the same-named unit-turn claimCompletion never writes work_orders",
+     !/update\s+work_orders/i.test(unitTurn),
+     "it now writes work_orders — that IS a third completion writer. STOP.");
+
+  //  Callers of the CANONICAL one, found by the module they import from.
+  const callers = [];
+  for (const file of walk(SRC)) {
+    const text = fs.readFileSync(file, "utf8");
+    const rel = path.relative(ROOT, file);
+    if (rel === "src/technician/lifecycle_service.js") continue;
+    if (!/claimCompletion\s*\(/.test(text)) continue;
+    //  Distinguish by what the file imports, not by the bare verb.
+    const usesLifecycle = /require\(["'][^"']*lifecycle_service["']?[^"']*\)/.test(text)
+                       || /lifecycle\.claimCompletion/.test(text);
+    if (usesLifecycle) callers.push(rel);
+  }
+  const unexpected = callers.filter((c) => !CANONICAL_CALLERS.includes(c));
+  ok("C2  the canonical claimCompletion has exactly the expected callers",
+     unexpected.length === 0 && callers.length === CANONICAL_CALLERS.length,
+     "found: " + JSON.stringify(callers) + " expected: " + JSON.stringify(CANONICAL_CALLERS) +
+     "\n        → a new caller must also persist the action receipt (fact 7), which the " +
+     "\n          SERVICE does not enforce — conversation.js writes it, not claimCompletion.");
+  console.log("        canonical callers: " + JSON.stringify(callers));
+}
+
 ok("S6  no module outside the evaluation service inserts evaluations directly",
    walk(SRC).filter((p) => !p.endsWith("proof_evaluation_service.js"))
      .every((p) => !/insert\s+into\s+work_order_proof_evaluations/i.test(fs.readFileSync(p, "utf8"))),
