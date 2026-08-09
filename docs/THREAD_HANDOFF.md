@@ -87,8 +87,8 @@ What is true of *this* stack: `main` has not moved for it, none of migrations
 run anywhere but an isolated clone.**
 
 ```text
-claude/release-0-rc         ← THE RELEASE CANDIDATE. See
-                            docs/release0/RELEASE_CANDIDATE.md for the SHA.
+claude/release-0-rc         ← THE RELEASE CANDIDATE @ f6873d7
+                            docs/release0/RELEASE_CANDIDATE.md is its one page.
 claude/release0-composed    the rehearsal tree the RC was cut from
 claude/completion-guard     migration 140 alone, for review of that PR
 claude/next-build-…         read-only intelligence for what comes AFTER
