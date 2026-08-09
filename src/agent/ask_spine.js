@@ -77,5 +77,106 @@ module.exports = function askSpine(deps) {
     }
   });
 
+  // ── BUILD 1 · a governed intent, over canonical work-order truth ──
+  //
+  //  Same door, same gate, no shared product semantics with `attention`
+  //  above — that capability is `maintenance.attention`, deliberately
+  //  unfrozen, and nothing here reads it or its obligations query.
+  //
+  //  GET because this changes nothing about the property. The receipt it
+  //  writes is audit history, not an operational consequence.
+  //
+  //  There is NO composer, NO card, NO conversational state and NO
+  //  action here. Build 1 answers a resolved intent; Build 2 makes that
+  //  conversational.
+  const intentExecutor = require("../askspine/intent_executor");
+  const renderer = require("../askspine/renderer");
+  const receipts = require("../askspine/receipt_service");
+
+  const INTENT = "maintenance.completion_without_valid_proof";
+
+  router.get("/operator/ask-spine/completion-proof-gaps", ...gate, async (req, res) => {
+    let execution;
+    try {
+      execution = await intentExecutor.execute(pool, {
+        intent_slug: INTENT,
+        property_id: req.operator.property_id,
+        allowed_modules: req.operator.allowed_modules,
+      });
+    } catch (e) {
+      //  A failure is a failure. It must never reach the browser shaped
+      //  like an empty result.
+      console.error("ask-spine/completion-proof-gaps execute error", e);
+      return res.status(500).json({ error: "Could not complete the governed check." });
+    }
+
+    let rendered;
+    try {
+      rendered = renderer.render(execution);
+    } catch (e) {
+      //  The renderer refused an unknown conclusion code rather than
+      //  improvising. That is a defect in this build, not in the data,
+      //  and it must not become a sentence.
+      console.error("ask-spine/completion-proof-gaps render refused", e);
+      return res.status(500).json({ error: "Could not complete the governed check." });
+    }
+
+    //  RULING 17 — a decision-grade answer whose required receipt did not
+    //  persist is not a decision-grade answer.
+    let receipt = null;
+    if (receipts.receiptRequired(execution)) {
+      try {
+        receipt = await receipts.writeReceipt(pool, {
+          execution, rendered,
+          property_id: req.operator.property_id,
+          //  `.id` IS the user id. `req.operator.user_id` does not exist and
+          //  is undefined at runtime, silently — it once made every governed
+          //  maintenance action anonymous, which is why there is a gate.
+          actor: { user_id: req.operator.id, session_id: req.operator.session_id },
+        });
+      } catch (e) {
+        console.error("ask-spine/completion-proof-gaps receipt persistence failed", e);
+        const degraded = { ...execution,
+          coverage_state: intentExecutor.COVERAGE_STATES.UNAVAILABLE,
+          conclusion_code: "unavailable_source_cannot_answer",
+          //  The internal reason distinguishes this from a source read
+          //  failure; the operator-facing sentence deliberately does not.
+          internal_reason: "receipt_persistence_failure",
+          supporting_records: [], totals: null };
+        return res.json({
+          property_id: req.operator.property_id,
+          intent_slug: INTENT,
+          asked_at: new Date().toISOString(),
+          coverage_state: degraded.coverage_state,
+          conclusion_code: degraded.conclusion_code,
+          answer: renderer.render(degraded).answer,
+          boundedness_note: null,
+          supporting_records: [],
+          totals: null,
+          source_outcomes: execution.source_outcomes,
+          contract: execution.contract,
+          receipt_id: null,
+        });
+      }
+    }
+
+    return res.json({
+      //  Echoed from the SESSION, not the request.
+      property_id: req.operator.property_id,
+      intent_slug: INTENT,
+      asked_at: new Date().toISOString(),
+      coverage_state: execution.coverage_state,
+      conclusion_code: execution.conclusion_code,
+      answer: rendered.answer,
+      boundedness_note: rendered.boundedness_note,
+      supporting_records: execution.supporting_records,
+      totals: execution.totals,
+      source_outcomes: execution.source_outcomes,
+      evidence: execution.evidence,
+      contract: execution.contract,
+      receipt_id: receipt ? receipt.id : null,
+    });
+  });
+
   return router;
 };

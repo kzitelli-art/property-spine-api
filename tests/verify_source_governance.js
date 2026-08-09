@@ -60,6 +60,13 @@ const GATES = [
   //  meant to be; updating the digest WITHOUT re-running is what this stops.
   { file: "gate_release0_frozen.js",
     what: "the frozen Release 0 artifacts still match their pinned digests" },
+  //  THIRD, and the same mechanism one layer up. A Build 1 intent contract
+  //  IS the definition a durable receipt names; if its bytes can move
+  //  without its version moving, every receipt that cites that version
+  //  describes something that no longer exists. Separate manifest, same
+  //  runner — one project, one answer to "what contract produced this".
+  { file: "gate_ask_spine_contract_frozen.js",
+    what: "the frozen Ask Spine intent contracts still match their pinned digests" },
   { file: "gate_harness_isolation.js",
     what: "no new unguarded DATABASE_URL consumer; debt register accurate" },
   { file: "gate_closure_boundary.js",

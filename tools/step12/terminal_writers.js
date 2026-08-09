@@ -64,8 +64,14 @@ const SHIPPED = (rel) => rel.startsWith("src/") || rel === "server.js";
 //  write terminal statuses — that is what they are proving. They are NOT
 //  production utilities, and conflating the two is how the 67 number got
 //  used for a question it does not answer.
+//  NAMED DIRECTORIES, never a blanket `tools/*`. The whole value of W3 is
+//  that a NEW directory under tools/ is flagged until someone decides what
+//  it is — which is exactly what happened when tools/build1/ appeared, and
+//  the decision was that its two files are proof harnesses of the same kind
+//  as tools/step12/'s. Widening this to all of tools/ would remove the
+//  question rather than answer it.
 const HARNESS = (rel) =>
-  /^tools\/(step\d+|steps23|scale|savepoint|activation)\//.test(rel) ||
+  /^tools\/(step\d+|steps23|scale|savepoint|activation|build1)\//.test(rel) ||
   rel.startsWith("tests/");
 const UTILITY = (rel) => rel.startsWith("tools/") && !HARNESS(rel);
 

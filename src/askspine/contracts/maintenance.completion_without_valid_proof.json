@@ -1,0 +1,119 @@
+{
+  "_": "FROZEN INTENT CONTRACT. Digest pinned in docs/build1/FROZEN_INTENTS.json and enforced by tests/gate_ask_spine_contract_frozen.js. Editing any field here without moving the digest in the same commit turns that gate red. The executor reads this file; it contains no business truth of its own.",
+
+  "intent_slug": "maintenance.completion_without_valid_proof",
+  "version": "1.1.0",
+
+  "question": "Which completed maintenance work does not have valid proof?",
+
+  "scope": {
+    "domain": "canonical work-order truth",
+    "not": "canonical maintenance truth — this intent knows about work orders and nothing else",
+    "record_type": "work_order",
+    "property": "server-derived from the authenticated operator session; never client-supplied",
+    "module_entitlement_required": "maintenance"
+  },
+
+  "consequence_class": "read-only operating conclusion",
+  "consequence_class_means": "no maintenance domain mutation of any kind. A durable Ask Spine read receipt is required audit history, not an operational consequence.",
+
+  "candidate_predicate": {
+    "version": "1.0.0",
+    "principle": "SQL narrows the population; the canonical Release 0 derivation classifies it. No proof predicate is re-implemented here.",
+    "lane_a": {
+      "name": "current governed completion integrity",
+      "source": "public.release_0_completion_invariant_violations",
+      "scoped_by": "property_id",
+      "note": "This canonical view IS the predicate. It derives from release_0_completion_proof_status — the same SQL function the deferred guard and the activation use. Build 1 adds a property filter and nothing else."
+    },
+    "lane_b": {
+      "name": "pre-cutover unverified history",
+      "source": "public.release_0_legacy_cutover_inventory",
+      "scoped_by": "property_id",
+      "note": "The cutover inventory is the canonical record of what predates the activation. Membership is the discriminator, exactly as proof_state.deriveProofState uses it."
+    },
+    "population": "every work order in the authenticated property that can truthfully match. NOT a recent-N sample.",
+    "ordering": "deterministic: status, then work_order_ref, then id",
+    "lanes_must_not_merge": true
+  },
+
+  "required_sources": [
+    {
+      "id": "release_0_activation_authority",
+      "reader": "src/release0/proof_state.js :: activationAuthority",
+      "why": "answerability. Without an activation the canonical proof derivation cannot run, and the honest answer is that the source cannot answer — never zero."
+    },
+    {
+      "id": "canonical_work_order_proof_state",
+      "reader": "src/release0/proof_state.js :: deriveProofState",
+      "why": "the four-state verdict for each supporting record. This intent consumes it and never recomputes it."
+    },
+    {
+      "id": "release_0_invariant_audit",
+      "reader": "public.release_0_completion_invariant_violations",
+      "why": "lane A membership and total_matching, from the canonical DB validator."
+    }
+  ],
+
+  "optional_sources": [],
+  "optional_sources_note": "None. No data source is invented merely to make the PARTIAL coverage state reachable in this intent's first version.",
+
+  "evidence_time_rules": {
+    "field": "evidence_as_of",
+    "principle": "read time is not fact time. executed_at is when the query ran; evidence_as_of is when the world was observed.",
+    "basis_order": [
+      "latest work_order_proof_evaluations.evaluated_at among the supporting records",
+      "latest work_order_progress.occurred_at among the supporting records",
+      "none — reported honestly as null with a basis of no_evidence_timestamp"
+    ],
+    "forbidden": "substituting now() for a missing evidence timestamp"
+  },
+
+  "result_cap": 20,
+  "result_cap_note": "This intent's cap, frozen here. PER LANE: current integrity and pre-cutover history are separately bounded lists, so a large history cannot crowd current failures off the page. It is NOT shared with any other intent — a shared constant would let one intent's cap change another's without either digest moving. Enforced in SQL and re-enforced in the service.",
+
+  "supported_conclusions": [
+    "current_none_legacy_none",
+    "current_none_legacy_present",
+    "current_present_legacy_none",
+    "current_present_legacy_present",
+    "unavailable_source_cannot_answer"
+  ],
+
+  "withheld_conclusions": [
+    "who caused it",
+    "who is accountable",
+    "who should be disciplined",
+    "who has authority to reopen it",
+    "whether a technician lied",
+    "whether the repair itself failed",
+    "whether a resident should be contacted",
+    "what priority this deserves",
+    "what financial consequence follows",
+    "whether this is getting better or worse over time"
+  ],
+  "withheld_conclusions_note": "An actor on record is not a person at fault; an assigned technician is not the ultimate accountable human. Attributed context may render; blame may not.",
+
+  "renderer_contract": {
+    "principle": "the executor emits a conclusion code; the renderer turns codes and counts into operator language. No model output reaches operating truth.",
+    "model_required": false,
+    "model_required_note": "An explicitly resolved intent executes and renders deterministically even if every model endpoint is unavailable. Operating truth does not depend on model availability.",
+    "supporting_record_fields": [
+      "work_order_id",
+      "work_order_ref",
+      "unit_label",
+      "status",
+      "canonical_proof_state",
+      "canonical_db_proof_status",
+      "lane",
+      "violation",
+      "evidence_as_of"
+    ],
+    "forbidden_in_output": [
+      "free text authored by a model",
+      "HTML or operating markup",
+      "any claim not derivable from the fields above",
+      "the internal state name legacy_indeterminate in outward-facing language"
+    ]
+  }
+}
