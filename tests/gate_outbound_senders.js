@@ -238,14 +238,39 @@ ok("S6  only operations-line writers set comm_events.communication_line_id",
    "setting it, the trigger begins to fire on resident messages and " +
    "docs/OUTBOUND_TRIGGER_AUDIT.md must be re-read, not patched.");
 
-// ── S7 · the resident `from` does not come from communication_lines ─
+// ── S7 · what the resident `from` actually is ──────────────────────
+//  A first version of this gate asserted only the first half and let the
+//  audit conclude "the resident path never reads communication_lines at
+//  all." That was wrong in the way that matters: propertyLine does not
+//  read it AT SEND TIME, but properties.sms_number is a READ-ONLY
+//  PROJECTION of that table, maintained by a trigger. The proof harness
+//  found it by being refused on a direct write.
+//
+//  Both halves are asserted now, because the useful facts live in the
+//  gap between them: provider_config and outbound_policy are NOT in the
+//  projection (so configuring a provider does not arm sending), while
+//  status IS (so retiring the line NULLs the number and sendPropertySms
+//  refuses with no_property_line — a second, independent kill switch).
 const boundary = strip(read(BOUNDARY));
 const propertyLineFn = (boundary.match(/async function propertyLine[\s\S]{0,400}?\n  \}/) || [""])[0];
-ok("S7  the resident line resolves from properties.sms_number, not communication_lines",
+ok("S7a the resident line resolves from properties.sms_number at send time",
    /from\s+properties\b/i.test(propertyLineFn) && !/communication_lines/i.test(propertyLineFn),
-   "propertyLine():\n" + propertyLineFn.split("\n").map((l) => "        " + l).join("\n") +
-   "\n        If this starts reading communication_lines, then that table's policy " +
-   "and provider_config DO gate resident sending and the audit's conclusion inverts.");
+   "propertyLine():\n" + propertyLineFn.split("\n").map((l) => "        " + l).join("\n"));
+
+const m130 = fs.readFileSync(path.join(ROOT, "migrations/130_communication_lines.sql"), "utf8");
+const projection = (m130.match(/function project_property_line_from_canonical[\s\S]*?\$\$;/) || [""])[0];
+const selects = (projection.match(/select\s+cl\.(\w+)/) || [])[1];
+ok("S7b …and that column projects the ACTIVE property_facing line's e164 — nothing else",
+   selects === "e164" &&
+   /line_type\s*=\s*'property_facing'/.test(projection) &&
+   /status\s*=\s*'active'/.test(projection) &&
+   !/provider_config/.test(projection) &&
+   !/outbound_policy/.test(projection),
+   "projection selects: " + (selects || "?") +
+   "\n        If provider_config or outbound_policy enters this projection, then " +
+   "configuring a provider or changing the policy DOES arm resident sending, and " +
+   "docs/OUTBOUND_TRIGGER_AUDIT.md inverts. If `status` leaves it, retiring the " +
+   "line stops being a kill switch.");
 
 // ── S8 · the master switch fails closed ────────────────────────────
 ok("S8  SMS_SEND_MODE defaults to disabled and an unknown value fails closed",

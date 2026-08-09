@@ -129,6 +129,43 @@ property-facing provider configured   NO   — provider_config is null on the on
 Nothing routes in or out today, in either direction. That is the safe state and it
 is a complete block on any real-handset test.
 
+### ⚠ THE ORDER WITHIN STEP 2 IS ITSELF A RULING
+
+**Verify the posture BEFORE credentials are introduced, not after.** Twilio
+credentials are global — one account behind both lanes — so the instant they
+exist, the resident path's only remaining gate is `SMS_SEND_MODE`.
+
+```text
+1  read production SMS_SEND_MODE                    ← §1 preflight scores this
+2  read whether properties.sms_number is populated  ← §1 preflight reports this
+3  if the mode is anything but disabled/unset, CHANGE IT FIRST
+4  only then add Twilio credentials
+5  provision ONLY the operations line the technician path needs
+6  leave property_facing.provider_config NULL unless something
+     independently requires it — do not configure it to make the line
+     "look" configured
+7  node tests/gate_outbound_senders.js
+8  then the handset proof
+```
+
+**The invariant being preserved:**
+
+```text
+Twilio credentials live + SMS_SEND_MODE disabled
+  → technician operations replies CAN work
+  → resident outbound sends remain structurally refused
+```
+
+Source-proved (`tests/gate_outbound_senders.js` S9, `docs/OUTBOUND_TRIGGER_AUDIT.md`):
+with the mode disabled, current code cannot originate a resident SMS while
+technician replies remain available. **Production must still prove that the
+deployed environment actually holds that configuration** — which is what the §1
+preflight's `SMS posture` line reads, and why it reports UNKNOWN and goes red
+when run anywhere other than the deployed instance.
+
+**Do not rely on `outbound_policy='reply_only'` as protection.** It is not on
+that path — measured, not assumed.
+
 ### The activation packet — the actual work items
 
 Ordinary data, created through governed paths. **Not a migration, not a script

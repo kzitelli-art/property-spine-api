@@ -58,6 +58,26 @@ production. What has not is the activation. Say *"no build-ahead activation work
 in this stack has been run against production"* — not *"production is
 untouched."*
 
+**⚠ THE SMS SAFETY CONTROL IS `SMS_SEND_MODE`, NOT `outbound_policy`.** Twilio
+credentials are global — one account behind both lanes — so wiring transport for
+the operations line arms the resident path in the same instant. The invariant to
+preserve through Step 4:
+
+```text
+Twilio credentials live + SMS_SEND_MODE disabled
+  → technician operations replies work
+  → resident outbound sends structurally refused
+```
+
+Source-proved by `tests/gate_outbound_senders.js` (S9: `sendOperationsReply`
+does not consult the mode) and `docs/OUTBOUND_TRIGGER_AUDIT.md`. **Verify the
+deployed mode BEFORE adding credentials, not after** — the §1 preflight scores
+it and the acceptance receipt records it. Do not treat
+`property_facing.outbound_policy = 'reply_only'` as protection: the policy
+trigger never fires on a resident event. A second, independent kill switch does
+exist — retiring the active `property_facing` line NULLs `properties.sms_number`
+(it is a projection) and `sendPropertySms` then refuses with `no_property_line`.
+
 **Build 1/2 is parked, not merged.** API `claude/build-1-2-rc` @ `d68cc1d`,
 APP `claude/build-2-ask-spine-rc` @ `e867dd8`. One open integrity gap logged at
 `docs/build1/INTEGRITY_GAPS.md` (an orphaned `obligations.related_id` splits

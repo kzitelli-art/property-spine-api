@@ -46,7 +46,9 @@ restrain*, which is a different thing and reads the same in a column.
 refuse nothing and would create a false belief that a control exists.** That is
 worse than leaving it alone. Asserted by S6.
 
-### 2. The resident line does not come from `communication_lines` at all
+### 2. The resident line is a *projection* of `communication_lines` — and only of two fields
+
+At send time the `from` number is `properties.sms_number`:
 
 ```js
   async function propertyLine(q, propertyId) {
@@ -55,12 +57,43 @@ worse than leaving it alone. Asserted by S6.
   }
 ```
 
-The resident `from` number is `properties.sms_number`. The resident send path
-**never reads `communication_lines`** — not its `provider_config`, not its
-`status`, not its `outbound_enabled`, not its policy.
+**A first version of this audit stopped there and concluded that the resident
+path never reads `communication_lines` at all. That was wrong in the way that
+matters.** `properties.sms_number` is a **read-only projection** maintained by a
+trigger (migration 130), and direct writes to it are refused by the database —
+which is how the mistake was caught: the proof harness tried to seed the column
+and was told no.
 
-**Consequence: populating `provider_config` on the `property_facing` row does
-not, by itself, enable resident sending.** Asserted by S7.
+```sql
+  update properties p set sms_number = (
+    select cl.e164 from communication_lines cl
+     where cl.property_id = target
+       and cl.line_type = 'property_facing'
+       and cl.status    = 'active'
+     limit 1)
+```
+
+So the line row **is** upstream of resident sending. What matters is exactly
+which fields are in that projection, and the answer is two: `e164`, filtered on
+`line_type` and `status`. Measured, not read off the SQL:
+
+| change to the `property_facing` line | `properties.sms_number` |
+|---|---|
+| insert it `active` | becomes its `e164` |
+| set `provider_config` | **unchanged** |
+| set `status = 'retired'` | **becomes NULL** |
+
+**Consequence, and it survives the correction: populating `provider_config` on
+the `property_facing` row does not, by itself, enable resident sending.**
+`provider_config` and `outbound_policy` are not in the projection. Asserted by
+S7a/S7b in the gate and measured by X1–X3 in the preflight proof.
+
+**Second consequence, which the correction added: retiring or suspending the
+`property_facing` line NULLs the number, and `sendPropertySms` then refuses with
+`no_property_line` — never a Messaging Service fallback.** That is a real kill
+switch for resident sending at the data layer, independent of the send mode, and
+it does not require a deploy. `uq_cl_one_active_property_line` keeps the
+projection's `limit 1` deterministic, so there is exactly one row to retire.
 
 ---
 
@@ -81,8 +114,16 @@ Three conditions, all of which must hold. None of them is the line row.
      line makes it true for the resident path in the same instant.
 
 3  properties.sms_number populated   no number → no send, and never a
-                                     Messaging Service default fallback
+                                     Messaging Service default fallback.
+                                     Projected from the ACTIVE property_facing
+                                     line; retire that line and this goes NULL.
 ```
+
+**Two independent ways to keep resident sending off, then.** `SMS_SEND_MODE` is
+the env-layer switch and the one Step 4 should rely on, because it is read fresh
+per send and needs no data change. Retiring the `property_facing` line is the
+data-layer switch, and it is the one to reach for if resident messaging must
+stop at a single property rather than everywhere.
 
 **Condition 2 is the one that couples Step 4 to resident messaging**, and it is
 the real version of the concern that prompted this audit. It is not the policy

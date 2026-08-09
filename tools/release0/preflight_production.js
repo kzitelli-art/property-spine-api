@@ -273,6 +273,104 @@ const check = (k, okv, v, note) => {
     "predates the cutover — that is the B1 shape, and it is refused at ITS commit " +
     "(40001) rather than silently exempted. Wait, then re-run the census.");
 
+  // ── 11 · THE SMS TRANSPORT POSTURE ────────────────────────────────
+  //  Owner ruling: record the deployed SMS_SEND_MODE posture BEFORE
+  //  transport goes live. Step 4 needs Twilio credentials, and those
+  //  credentials are GLOBAL — one account behind both lanes — so the
+  //  moment they exist the resident path's only remaining gate is the
+  //  send mode. The invariant this scores:
+  //
+  //      Twilio credentials live + SMS_SEND_MODE disabled
+  //        → technician operations replies work
+  //        → resident outbound sends are structurally refused
+  //
+  //  Proven in source by tests/gate_outbound_senders.js (S9:
+  //  sendOperationsReply does not consult the mode) and measured in
+  //  docs/OUTBOUND_TRIGGER_AUDIT.md. What is NOT proven in source is
+  //  that the DEPLOYED environment actually holds that configuration.
+  //  This is where that gets read.
+  //
+  //  ⚠ outbound_policy IS NOT THE CONTROL. Do not read a `reply_only`
+  //  on property_facing as protection: the policy trigger returns early
+  //  on every resident event (no resident writer sets
+  //  communication_line_id), and the resident line resolves from
+  //  properties.sms_number, not from communication_lines at all.
+  //
+  //  ── PRESENCE ONLY, COMPUTED IN JS ─────────────────────────────────
+  //  Never a shell expansion, never a selected column. `${VAR:-no}` once
+  //  put a live auth token in a screenshot, and provider_config carries
+  //  the same class of secret. Booleans leave this function; values do
+  //  not.
+  const twilioLive = !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN);
+  const rawMode = (process.env.SMS_SEND_MODE || "").trim();
+  const modeShown = rawMode === "" ? "unset" : rawMode;
+  //  The boundary's own vocabulary: unset and any unrecognised value both
+  //  resolve to `disabled`. A retired mode string is therefore SAFE, and
+  //  scoring it as dangerous would be a false alarm about a fail-closed
+  //  default. Only the two live modes can send.
+  const LIVE_MODES = ["proof_only", "customer_care"];
+  const modeSends = LIVE_MODES.includes(rawMode);
+
+  if (!sha) {
+    //  Off-instance, this process's env is NOT production's. Reporting
+    //  "unset" here would be the same lie as reporting the local
+    //  checkout's SHA as the running one.
+    check("SMS posture", false, "UNKNOWN",
+      "not running on the deployed instance (no RENDER_GIT_COMMIT/GIT_SHA), so " +
+      "SMS_SEND_MODE and the Twilio credentials read here are this shell's, not " +
+      "production's. Re-run ON the instance. This must be recorded BEFORE transport " +
+      "goes live, not after.");
+  } else {
+    check("SMS posture", !(twilioLive && modeSends),
+      `SMS_SEND_MODE=${modeShown} · twilio credentials ${twilioLive ? "PRESENT" : "absent"}`,
+      "UNSAFE COMBINATION: the shared Twilio account is live AND the send mode can " +
+      `send (${modeShown}). Every operator door and every inbound reply can reach a ` +
+      "real resident phone right now. Set SMS_SEND_MODE to disabled (or unset it) " +
+      "BEFORE Step 4, and do not treat outbound_policy as protection — it is not on " +
+      "that path. See docs/OUTBOUND_TRIGGER_AUDIT.md.");
+    if (twilioLive && !modeSends) {
+      say("  → resident sends", "structurally refused at send_mode_disabled");
+      say("  → technician replies", "available (sendOperationsReply ignores the mode)");
+    }
+    if (!twilioLive) {
+      say("  → note", "credentials absent. Verify this mode again immediately BEFORE " +
+        "adding them — that is the moment the resident path arms.");
+    }
+  }
+
+  //  Would a resident send have a number to originate from? The resident
+  //  `from` is properties.sms_number — NOT the communication_lines row.
+  const numbered = await one(
+    `select count(*)::int total,
+            count(*) filter (where sms_number is not null and sms_number <> '')::int numbered
+       from properties`);
+  say("properties.sms_number", `${numbered.numbered} of ${numbered.total} propert(ies) numbered`,
+    null);
+
+  //  The Step 4 blocker itself, read from production rather than from
+  //  the 2026-08-06 note. Presence booleans only — no e164, no
+  //  provider_config contents.
+  if (await exists("public.communication_lines")) {
+    const lines = await q(
+      `select line_type, status, outbound_policy,
+              (provider_config is not null) as provider_configured, count(*)::int n
+         from communication_lines group by 1,2,3,4 order by 1,2`);
+    if (!lines.length) say("communication lines", "none");
+    for (const l of lines) {
+      say(`  ${l.line_type}`,
+        `${l.n} · ${l.status} · outbound_policy=${l.outbound_policy} · ` +
+        `provider ${l.provider_configured ? "CONFIGURED" : "not configured"}`);
+    }
+    const opsReady = lines.some((l) => l.line_type === "operations" &&
+      l.status === "active" && l.provider_configured);
+    say("Step 4 transport", opsReady
+      ? "an active operations line with a provider is present"
+      : "BLOCKED — no active, provider-configured operations line. This is the " +
+        "Step 4 blocker, and it is provisioning, not code.");
+  } else {
+    say("communication lines", "table absent — pre-130 database");
+  }
+
   await c.query("rollback");
   await c.end();
 

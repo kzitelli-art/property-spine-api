@@ -185,6 +185,52 @@ const unknown = (field, why) => { R.unknowns.push({ field, why }); return { UNKN
     "any scheduler: the §4.2 sweep is a governed MANUAL runner",
   ];
 
+  /*  10b · THE SMS TRANSPORT POSTURE AT THE MOMENT OF THE RECEIPT
+   *
+   *  Owner ruling: the deployed SMS_SEND_MODE posture is recorded before
+   *  transport goes live. It belongs in the receipt as well as the
+   *  preflight, because the receipt is the artifact someone reads a year
+   *  later to answer "what was true when Release 0 landed" — and
+   *  "resident messaging was structurally off during the handset proof"
+   *  is exactly that kind of fact.
+   *
+   *  The invariant:
+   *      Twilio credentials live + SMS_SEND_MODE disabled
+   *        → technician operations replies work
+   *        → resident outbound sends structurally refused
+   *
+   *  PRESENCE ONLY. Booleans and a mode name; never a credential, never
+   *  provider_config, never an e164. */
+  const twilioLive = !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN);
+  const rawMode = (process.env.SMS_SEND_MODE || "").trim();
+  //  Unset and unrecognised both resolve to `disabled` in the boundary,
+  //  so only the two live modes can send. A retired mode string is safe.
+  const modeSends = ["proof_only", "customer_care"].includes(rawMode);
+  R.sms_posture = sha ? {
+    send_mode: rawMode === "" ? "unset" : rawMode,
+    mode_can_send: modeSends,
+    twilio_credentials_present: twilioLive,
+    resident_sends: modeSends ? "POSSIBLE" : "structurally refused at send_mode_disabled",
+    technician_replies: twilioLive ? "available (sendOperationsReply ignores the mode)"
+                                   : "transport absent",
+    read_from: "the deployed process environment",
+  } : unknown("sms_posture",
+    "not running on the deployed instance — this process's environment is not " +
+    "production's, and reporting it as the deployed posture would be the same " +
+    "error as reporting the local checkout's SHA as the running one");
+
+  //  Whether a resident send would even have a number to originate from.
+  //  properties.sms_number is a READ-ONLY PROJECTION of the active
+  //  property_facing communication line; retiring that line NULLs it and
+  //  sendPropertySms refuses with no_property_line.
+  const numbered = await one(
+    `select count(*)::int total,
+            count(*) filter (where sms_number is not null and sms_number <> '')::int numbered
+       from properties`);
+  R.resident_lines_numbered = numbered
+    ? `${numbered.numbered} of ${numbered.total}`
+    : unknown("resident_lines_numbered", "properties unreadable");
+
   // 11 · THE DEBT THIS RECEIPT CANNOT DISCHARGE
   R.remaining_proof_debt = [
     { item: "Step 4 · the handset completion", status: "BLOCKED on Twilio transport",
@@ -274,6 +320,28 @@ const unknown = (field, why) => { R.unknowns.push({ field, why }); return { UNKN
     for (const r of R.reader) console.log(`      ${r.status}/${r.proof} = ${r.n}`);
     if (!R.reader.length) console.log("      (no terminal work orders)");
   } else console.log("      unavailable");
+
+  /*  The posture is REPORTED, not scored. The preflight is where the
+   *  stop condition lives, because it runs BEFORE a boundary; a receipt
+   *  that exited 1 on a live send mode would keep failing forever once
+   *  customer_care is legitimately on, which is a gate that fails the
+   *  fix. This records what was true, loudly, and decides nothing. */
+  console.log("\n  ── SMS TRANSPORT POSTURE ────────────────────────────────────────");
+  if (typeof R.sms_posture === "object" && R.sms_posture.send_mode) {
+    const unsafe = R.sms_posture.mode_can_send && R.sms_posture.twilio_credentials_present;
+    P("  SMS_SEND_MODE", R.sms_posture.send_mode + (unsafe ? "   ⛔ CAN SEND" : ""));
+    P("  twilio credentials", R.sms_posture.twilio_credentials_present ? "PRESENT" : "absent");
+    P("  resident sends", R.sms_posture.resident_sends);
+    P("  technician replies", R.sms_posture.technician_replies);
+    P("  resident lines numbered", R.resident_lines_numbered);
+    if (unsafe) {
+      console.log("      → the shared Twilio account is live AND the send mode can send.");
+      console.log("        outbound_policy is NOT protection on that path — see");
+      console.log("        docs/OUTBOUND_TRIGGER_AUDIT.md.");
+    }
+  } else {
+    P("  SMS posture", "UNKNOWN — not read on the deployed instance");
+  }
 
   console.log("\n  ── REMAINING PROOF DEBT ─────────────────────────────────────────");
   for (const d of R.remaining_proof_debt) console.log(`    ${d.status.padEnd(24)} ${d.item}`);
