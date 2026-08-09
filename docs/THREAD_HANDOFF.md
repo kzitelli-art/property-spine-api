@@ -19,6 +19,70 @@ current truth. Re-date it whenever `main` moves materially.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
+##  ⭐ THE FIRST GOVERNED COMPLETION EXISTS. 2026-08-09 18:59:06Z.
+## ══════════════════════════════════════════════════════════════════
+
+**Work order 1008, at Property Spine Demo Building, is the first work order
+ever completed in production through the canonical writer with real evidence
+behind it.** A real handset, a real MMS, real preserved bytes.
+
+```text
+work order    1008 · complete · 2026-08-09T18:59:06.121Z
+evidence      2 x image/jpeg · storage_state stored
+              467,634 and 419,573 bytes · sha256 on both
+              proof_classification repair_photo · source_comm_event_id set
+evaluation    1 row · satisfied
+progress      completion_claimed AND completed — two distinct rows, both
+              tracing to the inbound message
+obligation    complete · resolution_code satisfied · completed_at set
+```
+
+**Why this is the release's thesis and not just a green test.** The retired app
+path wrote `status='closed'` with `stub://closeout-photo/<id>/<ts>` in a column
+— a string with no bytes, no digest, no evaluation, no attributable actor, and
+no way to convert it into proof afterwards. 1008 has 887KB of real JPEG with
+digests, an evaluation that derived `satisfied` FROM that evidence, and a claim
+recorded separately from the completion. The status is `complete` because the
+proof justified it, not because someone pressed a button.
+
+**Transport is proven end to end.** Twilio → webhook → operations line →
+staff-sender resolution → technician turn → claimCompletion → governed reply.
+The operations line is `+1 541 305 8509`, A2P verified August 2026.
+
+### What it took, recorded because the traps are the value
+
+- **`provider_config` gates nothing.** It is read NOWHERE in `src/`. The
+  preflight said Step 4 was BLOCKED on it — that criterion was invented from a
+  note, not from the code path. Same class of error as believing
+  `outbound_policy` protected the resident path.
+- **`assigned_to` on a work order is NOT the obligation's `assigned_user_id`.**
+  `POST /work-orders` sets the column; completion eligibility reads the
+  obligation. A work order can look assigned and refuse the completion with
+  `not_assigned_to_actor`.
+- **There is no operator UI to create a work order, and none to assign one.**
+  Work orders originate from residents. `POST /operator/work-orders/:id/assign`
+  exists in the API and no app surface calls it.
+- **1006 is excluded by evidence, not by the note** — it carries 1 preserved
+  attachment, so a bare "done" would close it without exercising MMS ingress.
+
+### Still owed before Boundary 5 formally closes
+
+Five facts were verified by hand. **The Step 4 package checks twelve** — the
+eight §4 facts plus the four no-parallel-writer checks — and emits a receipt
+only if every one holds. `tools/step4/` is NOT deployed, so that receipt does
+not exist yet. `prove_completion.js` is read-only and works after the fact
+(`--wo 1008`), so nothing is lost by running it later.
+
+**Do not call Boundary 5 passed, and do not unblock Boundary 6, until that
+receipt exists.**
+
+§7.4's surface clause cannot be discharged before the activation, so the proof
+will report `surface_clause_discharged: false`. Expected; re-running it after
+Boundary 8 is the owner's decision.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
 ##  PRODUCTION HAS SPOKEN. 2026-08-09, read from the deployed instance.
 ## ══════════════════════════════════════════════════════════════════
 
