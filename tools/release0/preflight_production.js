@@ -51,6 +51,13 @@ const check = (k, okv, v, note) => {
   if (!okv) red++;
   return okv;
 };
+/*  SAFE AND CORRECTLY CONFIGURED ARE DIFFERENT FACTS. A warning does not
+ *  block a boundary — it says the deployed configuration is not what the
+ *  operator thinks it is, which is worth reading even when the effect is
+ *  harmless. Scoring it red would be a false alarm; scoring it green
+ *  would hide the drift. */
+let warned = 0;
+const warn = (k, v, note) => { rows.push({ k, v, note, level: "warn" }); warned++; };
 
 (async function main() {
   if (!URL) {
@@ -309,7 +316,14 @@ const check = (k, okv, v, note) => {
   //  scoring it as dangerous would be a false alarm about a fail-closed
   //  default. Only the two live modes can send.
   const LIVE_MODES = ["proof_only", "customer_care"];
+  const VALID_MODES = ["disabled", "proof_only", "customer_care"];
   const modeSends = LIVE_MODES.includes(rawMode);
+  //  Three states, not two. Unset is the code default and is not drift.
+  //  A non-empty value the boundary does not recognise IS drift: it fails
+  //  closed, so it is SAFE, but the deployed configuration is not what
+  //  whoever set it believes. `internal_qa_autonomous` is the known one —
+  //  it was retired, and any deploy still carrying it sends nothing.
+  const modeRecognized = rawMode === "" || VALID_MODES.includes(rawMode);
 
   if (!sha) {
     //  Off-instance, this process's env is NOT production's. Reporting
@@ -335,6 +349,15 @@ const check = (k, okv, v, note) => {
     if (!twilioLive) {
       say("  → note", "credentials absent. Verify this mode again immediately BEFORE " +
         "adding them — that is the moment the resident path arms.");
+    }
+    if (!modeRecognized) {
+      warn("  → config", `SAFE / CONFIG UNKNOWN — '${modeShown}' is not a mode this ` +
+        "build recognises",
+        "It fails closed to `disabled`, so nothing can send and this is NOT a " +
+        "contradiction. But the deployed configuration is not what whoever set it " +
+        "believes: SMS is silently off. `internal_qa_autonomous` is the retired value " +
+        "that produces exactly this, and 'the deploy went quiet' is how it presents. " +
+        "Set it to `disabled` to say so on purpose, or to a live mode deliberately.");
     }
   }
 
@@ -377,9 +400,10 @@ const check = (k, okv, v, note) => {
   // ── the sheet ─────────────────────────────────────────────────────
   console.log("");
   for (const r of rows) {
-    const mark = r.level === "red" ? "  ⛔" : r.level === "ok" ? "  ok" : "    ";
+    const mark = r.level === "red" ? "  ⛔" : r.level === "warn" ? "  ⚠ " :
+                 r.level === "ok" ? "  ok" : "    ";
     console.log(`${mark}  ${r.k.padEnd(30)} ${r.v}`);
-    if (r.level === "red" && r.note) {
+    if ((r.level === "red" || r.level === "warn") && r.note) {
       console.log("        → " + r.note.replace(/\n/g, "\n          "));
     }
   }
@@ -388,11 +412,28 @@ const check = (k, okv, v, note) => {
   if (red === 0) {
     console.log("  ✓ NO CONTRADICTIONS. This says what is true right now — it does not");
     console.log("    authorize a boundary. The runbook decides which one is next.");
-    console.log(bar + "\n");
-    process.exit(0);
+  } else {
+    console.log(`  ⛔ ${red} CONTRADICTION(S). DO NOT PROCEED.`);
+    console.log("    Each one above names what it means and what to do. Re-run after fixing.");
   }
-  console.log(`  ⛔ ${red} CONTRADICTION(S). DO NOT PROCEED.`);
-  console.log("    Each one above names what it means and what to do. Re-run after fixing.");
+
+  /*  PRINTED IN BOTH BRANCHES, and that is the point.
+   *
+   *  A first version put this inside the green branch only, so a warning
+   *  vanished the moment anything else went red — which is precisely when
+   *  someone is reading the sheet most carefully. Caught by
+   *  prove_preflight_sms_posture.js P5c against a database that has
+   *  ordinary reds; a summary nobody sees is the same as no summary.
+   *
+   *  It never changes the exit code. A warning that blocked a boundary
+   *  would make operators route around the tool, and this class of
+   *  warning is configuration hygiene, not safety — the safety score has
+   *  already been taken above. */
+  if (warned) {
+    console.log(`\n  ⚠ ${warned} WARNING(S) above — these do not block anything.`);
+    console.log("    Each one means the deployed configuration is not what someone");
+    console.log("    thinks it is. Safe and correctly configured are different facts.");
+  }
   console.log(bar + "\n");
-  process.exit(1);
+  process.exit(red === 0 ? 0 : 1);
 })().catch((e) => { console.error("\nPREFLIGHT ERROR:\n" + (e && e.stack || e)); process.exit(2); });

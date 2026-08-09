@@ -206,9 +206,16 @@ const unknown = (field, why) => { R.unknowns.push({ field, why }); return { UNKN
   //  Unset and unrecognised both resolve to `disabled` in the boundary,
   //  so only the two live modes can send. A retired mode string is safe.
   const modeSends = ["proof_only", "customer_care"].includes(rawMode);
+  //  Safe and correctly configured are different facts. A value the build
+  //  does not recognise fails closed — safe — but means the deployed
+  //  configuration is not what whoever set it believes.
+  const modeRecognized = rawMode === "" ||
+    ["disabled", "proof_only", "customer_care"].includes(rawMode);
   R.sms_posture = sha ? {
     send_mode: rawMode === "" ? "unset" : rawMode,
     mode_can_send: modeSends,
+    mode_recognized: modeRecognized,
+    config_state: modeRecognized ? "configured" : "CONFIG UNKNOWN — value not recognised by this build",
     twilio_credentials_present: twilioLive,
     resident_sends: modeSends ? "POSSIBLE" : "structurally refused at send_mode_disabled",
     technician_replies: twilioLive ? "available (sendOperationsReply ignores the mode)"
@@ -329,7 +336,13 @@ const unknown = (field, why) => { R.unknowns.push({ field, why }); return { UNKN
   console.log("\n  ── SMS TRANSPORT POSTURE ────────────────────────────────────────");
   if (typeof R.sms_posture === "object" && R.sms_posture.send_mode) {
     const unsafe = R.sms_posture.mode_can_send && R.sms_posture.twilio_credentials_present;
-    P("  SMS_SEND_MODE", R.sms_posture.send_mode + (unsafe ? "   ⛔ CAN SEND" : ""));
+    P("  SMS_SEND_MODE", R.sms_posture.send_mode +
+      (unsafe ? "   ⛔ CAN SEND"
+              : R.sms_posture.mode_recognized ? "" : "   ⚠ SAFE / CONFIG UNKNOWN"));
+    if (!R.sms_posture.mode_recognized) {
+      console.log("      → not a mode this build recognises. It fails closed to");
+      console.log("        `disabled`, so SMS is silently off rather than unsafe.");
+    }
     P("  twilio credentials", R.sms_posture.twilio_credentials_present ? "PRESENT" : "absent");
     P("  resident sends", R.sms_posture.resident_sends);
     P("  technician replies", R.sms_posture.technician_replies);

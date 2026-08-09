@@ -88,12 +88,36 @@ the `property_facing` row does not, by itself, enable resident sending.**
 `provider_config` and `outbound_policy` are not in the projection. Asserted by
 S7a/S7b in the gate and measured by X1–X3 in the preflight proof.
 
-**Second consequence, which the correction added: retiring or suspending the
-`property_facing` line NULLs the number, and `sendPropertySms` then refuses with
-`no_property_line` — never a Messaging Service fallback.** That is a real kill
-switch for resident sending at the data layer, independent of the send mode, and
-it does not require a deploy. `uq_cl_one_active_property_line` keeps the
+**Second consequence: retiring or suspending the `property_facing` line NULLs
+the number, and `sendPropertySms` then refuses with `no_property_line` — never a
+Messaging Service fallback.** `uq_cl_one_active_property_line` keeps the
 projection's `limit 1` deterministic, so there is exactly one row to retire.
+
+### ⚠ That lever is NOT an outbound kill switch — it takes the line down both ways
+
+It was tempting to name it one. Proven before accepting the name
+(`tools/release0/prove_line_retirement_consequence.js`, 12/12, a real inbound
+message driven through the real resolver against real PostgreSQL):
+
+| with the line `retired` | result |
+|---|---|
+| outbound `sendPropertySms` | refuses `no_property_line`, before consent is consulted |
+| **inbound resident SMS** | **resolves to `inactiveLine`, property `null`, ZERO rows written** |
+| the resident's message | **lost** — no `comm_event`, no conversation, no work order, no reply |
+| what the sender experiences | silence; the route answers Twilio with empty TwiML |
+| reactivating the line | restores the number and inbound resolution — but **nothing queued arrives late** |
+
+It is reported as `inactiveLine`, deliberately distinct from `unknownLine`, so a
+real operator action is not rendered as *"we have never heard of this number."*
+That distinction is what tells an operator they did this to themselves.
+
+**So it is an EMERGENCY LINE-RETIREMENT control, not an outbound-only control.**
+It takes a property's resident phone line offline in both directions and drops
+whatever arrives during the window. Document and use it as such.
+
+**For stopping outbound only, `SMS_SEND_MODE` is the control** — it is read fresh
+per send, needs no data change, and leaves inbound capture working so residents
+are still heard even while nothing is sent back.
 
 ---
 
@@ -119,11 +143,25 @@ Three conditions, all of which must hold. None of them is the line row.
                                      line; retire that line and this goes NULL.
 ```
 
-**Two independent ways to keep resident sending off, then.** `SMS_SEND_MODE` is
-the env-layer switch and the one Step 4 should rely on, because it is read fresh
-per send and needs no data change. Retiring the `property_facing` line is the
-data-layer switch, and it is the one to reach for if resident messaging must
-stop at a single property rather than everywhere.
+**Two levers, and they are not interchangeable.**
+
+```text
+SMS_SEND_MODE=disabled        OUTBOUND ONLY. Read fresh per send, no data
+                              change, no deploy. Inbound keeps working, so
+                              residents are still HEARD while nothing is sent
+                              back. This is the Step 4 control.
+
+retire the property_facing    BOTH DIRECTIONS, one property. Outbound refuses
+line                          AND inbound resolves to nothing, with whatever
+                              arrives during the window LOST rather than
+                              queued. An emergency line-retirement control —
+                              reach for it when the number itself must go
+                              dark, never to "just stop outbound".
+```
+
+Reaching for the second when you meant the first silently stops hearing your
+residents. That is the whole reason the consequence was proven before the lever
+was named.
 
 **Condition 2 is the one that couples Step 4 to resident messaging**, and it is
 the real version of the concern that prompted this audit. It is not the policy

@@ -22,19 +22,27 @@
        about the call graph, so it is checked against the call graph.
    S6  the outbound-policy trigger cannot fire on a resident send,
        because no resident-path writer sets communication_line_id.
-   S7  the resident `from` number comes from properties.sms_number, NOT
-       from communication_lines — so that table's policy column does not
-       gate resident sending, whatever it says.
+   S7  what the resident `from` number actually is — read at send time
+       from properties.sms_number, which is a READ-ONLY PROJECTION of the
+       active property_facing line carrying e164 and NOTHING else.
    S9  the operations reply path does not consult SMS_SEND_MODE, so
        SMS_SEND_MODE=disabled darkens resident messaging while leaving
        the technician reply path working. Release 0 Step 4 depends on
        that isolation being structural rather than remembered.
 
-   S6 and S7 are the ones to read twice. Together they say the
-   `property_facing` line row is DESCRIPTIVE, not load-bearing: setting
-   its policy to `reply_only` would refuse nothing and would create a
-   false belief that a control exists. If either flips, the audit's
-   central claim has changed and the doc must be re-read, not patched.
+   S6 and S7 are the ones to read twice, and S7 is split in two because
+   the first version of this gate asserted only its first half and let a
+   false conclusion stand behind it ("the resident path never reads
+   communication_lines at all"). It does — through the projection. What
+   matters is WHICH FIELDS are in it: provider_config and outbound_policy
+   are not, so configuring a provider or changing the policy arms
+   nothing; `status` is, so retiring the line NULLs the number.
+
+   Together they say the `property_facing` row's POLICY is descriptive
+   and its STATUS is load-bearing. Setting the policy to `reply_only`
+   would refuse nothing while creating a false belief that a control
+   exists. If either assertion flips, the audit's central claim has
+   changed and the doc must be re-read, not patched.
 
    run:  node tests/gate_outbound_senders.js
    see:  docs/OUTBOUND_TRIGGER_AUDIT.md
@@ -250,7 +258,8 @@ ok("S6  only operations-line writers set comm_events.communication_line_id",
 //  gap between them: provider_config and outbound_policy are NOT in the
 //  projection (so configuring a provider does not arm sending), while
 //  status IS (so retiring the line NULLs the number and sendPropertySms
-//  refuses with no_property_line — a second, independent kill switch).
+//  refuses with no_property_line — an emergency line-retirement control
+//  that takes INBOUND down with it, so never named an outbound switch).
 const boundary = strip(read(BOUNDARY));
 const propertyLineFn = (boundary.match(/async function propertyLine[\s\S]{0,400}?\n  \}/) || [""])[0];
 ok("S7a the resident line resolves from properties.sms_number at send time",
@@ -270,7 +279,7 @@ ok("S7b …and that column projects the ACTIVE property_facing line's e164 — n
    "\n        If provider_config or outbound_policy enters this projection, then " +
    "configuring a provider or changing the policy DOES arm resident sending, and " +
    "docs/OUTBOUND_TRIGGER_AUDIT.md inverts. If `status` leaves it, retiring the " +
-   "line stops being a kill switch.");
+   "line stops being a line-retirement control.");
 
 // ── S8 · the master switch fails closed ────────────────────────────
 ok("S8  SMS_SEND_MODE defaults to disabled and an unknown value fails closed",

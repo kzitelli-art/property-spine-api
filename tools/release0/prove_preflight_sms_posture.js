@@ -26,11 +26,15 @@
    through a shell expansion, and provider_config carries the same class
    of secret. Presence is a boolean; the value never leaves the process.
 
-   ── THE FALSE-ALARM CASE ────────────────────────────────────────────
+   ── THE FALSE-ALARM CASE, AND THE FACT IT MUST NOT SWALLOW ──────────
 
-   P5 is the one people get wrong. An unrecognised SMS_SEND_MODE resolves
-   to `disabled` in the boundary, so a retired mode string is SAFE. A
-   check that flagged it would train operators to ignore this section.
+   P5 is the one people get wrong in both directions. An unrecognised
+   SMS_SEND_MODE resolves to `disabled` in the boundary, so a retired
+   mode string is SAFE — scoring it red would train operators to ignore
+   this section. But safe and correctly configured are different facts,
+   and reporting it as plain green would hide that SMS is silently off
+   while someone believes otherwise. It is scored SAFE / CONFIG UNKNOWN:
+   a warning that never blocks a boundary.
 
        tools/build1/run_isolated.sh PREFLIGHT_DATABASE_URL \
          node tools/release0/prove_preflight_sms_posture.js
@@ -133,12 +137,13 @@ const CREDS = { TWILIO_ACCOUNT_SID: FAKE_SID, TWILIO_AUTH_TOKEN: FAKE_TOKEN };
      "the whole audit turns on, and it is measured here rather than reasoned.");
 
   await db.query(`update communication_lines set status = 'retired' where e164 = '+15550000000'`);
-  ok("X3  RETIRING that line NULLs the projection — a second, independent kill switch",
+  ok("X3  RETIRING that line NULLs the projection (a BOTH-DIRECTIONS lever)",
      (await db.query(`select sms_number from properties where id = $1`,
        [prop.id])).rows[0].sms_number === null,
      "sendPropertySms refuses with no_property_line when there is no number, and " +
-     "never falls back to a Messaging Service default. So resident sending can be " +
-     "stopped at the DATA layer too, not only by SMS_SEND_MODE.");
+     "never falls back to a Messaging Service default. NOT an outbound kill switch " +
+     "though — it takes inbound down too, measured in " +
+     "tools/release0/prove_line_retirement_consequence.js.");
   await db.query(`update communication_lines set status = 'active' where e164 = '+15550000000'`);
 
   // ── the dangerous combinations ────────────────────────────────────
@@ -164,12 +169,28 @@ const CREDS = { TWILIO_ACCOUNT_SID: FAKE_SID, TWILIO_AUTH_TOKEN: FAKE_TOKEN };
   ok("P4  credentials live + mode UNSET     → green", p4.green && /unset/.test(p4.line),
      p4.line.trim() || "(no line)");
 
+  /*  SAFE AND CORRECTLY CONFIGURED ARE DIFFERENT FACTS, and this is the
+   *  case that separates them. A retired mode string fails closed, so
+   *  the SAFETY score must stay green — scoring it red would be a false
+   *  alarm and would train operators to skip this section. But it must
+   *  not read as equivalent to an intentional `disabled` either: SMS is
+   *  silently off and someone believes otherwise. */
   const p5 = run(Object.assign({}, ONINST, CREDS, { SMS_SEND_MODE: "internal_qa_autonomous" }));
-  ok("P5  credentials live + a RETIRED mode → green (fails closed, not a false alarm)",
-     p5.green,
-     "an unrecognised mode resolves to `disabled` in the boundary. Flagging it would " +
-     "train operators to ignore this section, which is how a real red gets missed.\n" +
-     "        " + (p5.line.trim() || "(no line)"));
+  ok("P5a credentials live + a RETIRED mode → NOT red (it fails closed)", !p5.red,
+     "an unrecognised mode resolves to `disabled` in the boundary\n        " +
+     (p5.line.trim() || "(no line)"));
+  ok("P5b …and it is flagged SAFE / CONFIG UNKNOWN, not silently green",
+     /SAFE \/ CONFIG UNKNOWN/.test(p5.all) && /⚠/.test(p5.all),
+     "safe is not the same fact as correctly configured. This value means the " +
+     "deployed configuration is not what whoever set it believes.");
+  ok("P5c …and the warning does not block the run", /WARNING\(S\) above/.test(p5.all) &&
+     !/DO NOT PROCEED[\s\S]*CONFIG UNKNOWN/.test(p5.all),
+     "a warning that blocked would make operators route around the tool");
+
+  const p5d = run(Object.assign({}, ONINST, CREDS, { SMS_SEND_MODE: "disabled" }));
+  ok("P5d an INTENTIONAL `disabled` carries no config warning",
+     !/SAFE \/ CONFIG UNKNOWN/.test(p5d.all),
+     "otherwise the distinction is decoration — the warning must fire on drift only");
 
   const p6 = run(Object.assign({}, ONINST, { SMS_SEND_MODE: "customer_care" }));
   ok("P6  NO credentials + customer_care    → green, with the warning", p6.green &&

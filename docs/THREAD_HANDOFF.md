@@ -74,9 +74,13 @@ does not consult the mode) and `docs/OUTBOUND_TRIGGER_AUDIT.md`. **Verify the
 deployed mode BEFORE adding credentials, not after** — the §1 preflight scores
 it and the acceptance receipt records it. Do not treat
 `property_facing.outbound_policy = 'reply_only'` as protection: the policy
-trigger never fires on a resident event. A second, independent kill switch does
-exist — retiring the active `property_facing` line NULLs `properties.sms_number`
-(it is a projection) and `sendPropertySms` then refuses with `no_property_line`.
+trigger never fires on a resident event. A second lever exists and is NOT
+interchangeable: retiring the active `property_facing` line NULLs
+`properties.sms_number` (it is a projection) so `sendPropertySms` refuses — but
+it also kills INBOUND, which resolves to `inactiveLine` with zero rows written
+and the resident's message lost rather than queued. Proven 12/12 in
+`tools/release0/prove_line_retirement_consequence.js`. It is an emergency
+line-retirement control, both directions; for outbound only, use the send mode.
 
 **Build 1/2 is parked, not merged.** API `claude/build-1-2-rc` @ `d68cc1d`,
 APP `claude/build-2-ask-spine-rc` @ `e867dd8`. One open integrity gap logged at
