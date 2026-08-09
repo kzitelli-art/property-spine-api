@@ -45,10 +45,27 @@ Release 0 regression, unchanged on this branch          48 runs · 0 non-zero ·
 historical row the first version selected 21 against a cap of 20 and would have
 violated its own receipt constraint. The fix was a ruling, not a patch — a shared
 budget lets a large pre-cutover history crowd current integrity failures off the
-page, and the current lane is the urgent one. Contract moved to **1.1.0**; the
-receipt's `selected_count <= result_cap` check was removed as a rule the product
-does not have, and `selected_count <= total_matching` kept as the one that would be
-a lie if violated.
+page, and the current lane is the urgent one.
+
+**And then made structural rather than explained (contract 1.2.0).** Prose is not
+a contract. A field called `result_cap: 20` sitting beside `selected_count: 37`
+only makes sense if you find the comment, and a receipt read in six months has no
+comment. So:
+
+| | before | now |
+|---|---|---|
+| contract | `result_cap: 20` | `result_cap_per_lane: 20` · `result_cap_scope: "per_lane"` · `lanes: [...]` naming both |
+| response | `lane_a_total` / `lane_b_total` (which lane is A?) | `lanes: [{lane, total_matching, selected_count, result_cap}]`, named |
+| receipt | `result_cap` | `result_cap_per_lane` · `result_cap_scope` · `lane_breakdown` jsonb |
+| renderer | took `lane_a_total` positionally | looks lanes up **by name** — the executor and renderer no longer have to agree about ordering, an agreement nothing enforced |
+
+A stored receipt now reads: `result_cap_per_lane 20`, `scope per_lane`,
+`lane_breakdown [{current …}, {pre_cutover_history …}]`. Nothing to rediscover.
+
+Gate A4b asserts no bare `result_cap` field survives, so the ambiguous name cannot
+come back. The receipt's `selected_count <= result_cap` check stays removed — it
+encodes a rule the product does not have — and `selected_count <= total_matching`
+is kept as the one that would be a lie if violated.
 
 **This corrects my own earlier advice.** `BUILD_1_FIRST_CAPABILITY.md` T4 said
 *"reuse the existing `MAX_ITEMS`"*. Wrong: `result_cap` is a contract field, so a

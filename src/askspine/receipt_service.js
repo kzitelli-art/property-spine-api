@@ -54,10 +54,10 @@ async function writeReceipt(db, { execution, rendered, property_id, actor }) {
        candidate_predicate_version,
        property_id, actor_user_id, staff_session_id,
        evidence_as_of, evidence_as_of_basis,
-       total_matching, selected_count, result_cap,
-       coverage_state, conclusion_code,
+       total_matching, selected_count, result_cap_per_lane, result_cap_scope,
+       lane_breakdown, coverage_state, conclusion_code,
        source_outcomes, supporting_records, rendered_answer)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
      returning id, executed_at`,
     [
       execution.intent_slug,
@@ -71,7 +71,9 @@ async function writeReceipt(db, { execution, rendered, property_id, actor }) {
       ev.basis,
       Number(t.total_matching || 0),
       Number(t.selected_count || 0),
-      Number(c.result_cap || t.result_cap || 1),
+      Number(c.result_cap_per_lane || t.result_cap_per_lane || 1),
+      t.result_cap_scope || "per_lane",
+      JSON.stringify(t.lanes || []),
       execution.coverage_state,
       execution.conclusion_code,
       JSON.stringify(execution.source_outcomes || []),

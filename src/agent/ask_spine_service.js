@@ -7,12 +7,21 @@
 //  confirm, or write anything. There is no client here, only a query.
 //
 //  WHY IT DOES NOT REUSE `GET /obligations` (server.js):
-//  that route is unauthenticated and takes property_id from the query
-//  string, so omitting it returns obligations across every property. Its
-//  QUERY LOGIC is sound and is re-expressed here — the read-time overdue
-//  clock, the unassigned predicate, the due-date ordering. Its ROUTE is
-//  not used and is not modified. See docs/ASK_SPINE_SOURCE_AUDIT.md;
-//  remediating that route is a separate security lane.
+//  that route WAS protected only by the portfolio-wide shared OPERATOR_KEY
+//  while taking property scope from the request, so any key holder could
+//  read across every property. Its QUERY LOGIC is sound and is re-expressed
+//  here — the read-time overdue clock, the unassigned predicate, the
+//  due-date ordering.
+//
+//  ⚠ THAT ROUTE IS NOW RETIRED. This comment used to say the route "is"
+//  unauthenticated, in the present tense, and it outlived the fix — a
+//  stale security claim in a governing comment, which is its own hazard:
+//  it sends the next reader hunting for an exposure that is closed, and it
+//  would make a real one easier to dismiss as "the known one". The
+//  separate security lane completed. `/obligations` is registered nowhere;
+//  the replacement is the session-scoped `GET /operator/obligations`, and
+//  `tests/smoke_release3.deployed.js` B1–B5 assert the legacy doors 404 on
+//  every deployed smoke run. See docs/SECURITY_OBLIGATIONS_ROUTE.md.
 //
 //  RANKING — recorded facts only, no score (audit §4):
 //    1  overdue AND unassigned    due_at < now() AND assigned_user_id IS NULL

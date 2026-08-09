@@ -70,8 +70,16 @@ for (const slug of executor.listContracts()) {
      missing.length === 0, missing.join(", "));
 
   /* ── A4 · the cap belongs to the contract ───────────────────────── */
-  ok(`A4  ${slug}: declares its own result_cap`,
-     Number.isInteger(c.result_cap) && c.result_cap > 0, String(c.result_cap));
+  //  The NAME carries the semantics. A field called plain `result_cap`
+  //  beside a larger `selected_count` needs a comment to make sense, and a
+  //  receipt read in six months has no comment.
+  ok(`A4  ${slug}: declares its own cap, and names its scope`,
+     Number.isInteger(c.result_cap_per_lane) && c.result_cap_per_lane > 0 &&
+     c.result_cap_scope === 'per_lane' && Array.isArray(c.lanes) && c.lanes.length >= 1,
+     JSON.stringify({ cap: c.result_cap_per_lane, scope: c.result_cap_scope, lanes: c.lanes }));
+  ok(`A4b ${slug}: no bare \`result_cap\` field survives`,
+     !('result_cap' in c),
+     'the ambiguous name is what this change removed; leaving it would restore the ambiguity');
 
   /* ── A5 · read time and fact time stay separate ─────────────────── */
   ok(`A5  ${slug}: forbids substituting now() for a missing evidence time`,

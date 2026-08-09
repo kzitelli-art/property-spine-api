@@ -2,7 +2,7 @@
   "_": "FROZEN INTENT CONTRACT. Digest pinned in docs/build1/FROZEN_INTENTS.json and enforced by tests/gate_ask_spine_contract_frozen.js. Editing any field here without moving the digest in the same commit turns that gate red. The executor reads this file; it contains no business truth of its own.",
 
   "intent_slug": "maintenance.completion_without_valid_proof",
-  "version": "1.1.0",
+  "version": "1.2.0",
 
   "question": "Which completed maintenance work does not have valid proof?",
 
@@ -69,8 +69,10 @@
     "forbidden": "substituting now() for a missing evidence timestamp"
   },
 
-  "result_cap": 20,
-  "result_cap_note": "This intent's cap, frozen here. PER LANE: current integrity and pre-cutover history are separately bounded lists, so a large history cannot crowd current failures off the page. It is NOT shared with any other intent — a shared constant would let one intent's cap change another's without either digest moving. Enforced in SQL and re-enforced in the service.",
+  "result_cap_per_lane": 20,
+  "result_cap_scope": "per_lane",
+  "lanes": ["current", "pre_cutover_history"],
+  "result_cap_note": "The cap applies INDEPENDENTLY TO EACH NAMED LANE above, so a two-lane answer may select up to 40 records. The field is named result_cap_per_lane rather than result_cap precisely so that a future receipt reading `result_cap_per_lane=20, selected_count=37` needs no comment to make sense. WHY per lane: current integrity and pre-cutover history are separately bounded lists, and a shared budget would let a large history crowd current integrity failures off the page — the current lane is the urgent one. It is NOT shared with any other intent: a shared constant would let one intent's cap change another's without either digest moving. Enforced in SQL and re-enforced in the service.",
 
   "supported_conclusions": [
     "current_none_legacy_none",

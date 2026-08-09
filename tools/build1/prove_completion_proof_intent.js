@@ -43,6 +43,12 @@ const grounded = require(path.join(ROOT, "tools/step12/grounded_evaluation.js"))
 const URL = process.env.BUILD1_DATABASE_URL;
 const SLUG = "maintenance.completion_without_valid_proof";
 
+const laneOf = (e, name) =>
+  ((e.totals && e.totals.lanes) || []).find((l) => l.lane === name) ||
+  { total_matching: 0, selected_count: 0 };
+const laneTotal = (e, name) => laneOf(e, name).total_matching;
+const laneSel = (e, name) => laneOf(e, name).selected_count;
+
 let pass = 0, fail = 0;
 const ok = (l, c, d) => { if (c) { pass++; console.log("  ok    " + l); }
   else { fail++; console.log("  FAIL  " + l + (d ? "\n          → " + d : "")); } return c; };
@@ -137,12 +143,12 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
 
     const e = await executor.execute(pool, {
       intent_slug: SLUG, property_id: PROP, allowed_modules: ["maintenance"] });
-    ok("B1  lane A (current integrity) is empty", e.totals.lane_a_total === 0,
+    ok("B1  lane A (current integrity) is empty", laneTotal(e, "current") === 0,
        JSON.stringify(e.totals));
     ok("B2  a properly proven completion is NOT reported as a gap",
        !e.supporting_records.some((r) => r.work_order_id === wo && r.lane === "current"),
        JSON.stringify(e.supporting_records.map((r) => [r.work_order_id, r.lane])));
-    ok("B3  lane B carries the one pre-cutover row", e.totals.lane_b_total === 1,
+    ok("B3  lane B carries the one pre-cutover row", laneTotal(e, "pre_cutover_history") === 1,
        JSON.stringify(e.totals));
     ok("B4  so the conclusion is current-none / legacy-present",
        e.conclusion_code === "current_none_legacy_present", e.conclusion_code);
@@ -184,7 +190,7 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
     ok("C4  …and its canonical state is legacy_indeterminate",
        hist.find((r) => r.work_order_id === legacyWo).canonical_proof_state === "legacy_indeterminate");
     ok("C5  the totals are counted separately, never summed into one failure",
-       e.totals.lane_a_total === 1 && e.totals.lane_b_total === 1, JSON.stringify(e.totals));
+       laneTotal(e, "current") === 1 && laneTotal(e, "pre_cutover_history") === 1, JSON.stringify(e.totals));
 
     const r = renderer.render(e);
     ok("C6  the sentence says one current and one historical",
@@ -192,7 +198,7 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
        /1 older pre-cutover completion remains unverified/.test(r.answer), r.answer);
     ok("C7  and it NEVER says `14 work orders failed proof`",
        !new RegExp(`${e.totals.total_matching} (work orders|completed)`).test(r.answer) ||
-       e.totals.lane_a_total === e.totals.total_matching,
+       laneTotal(e, "current") === e.totals.total_matching,
        r.answer + " — summing the lanes would rewrite history");
     ok("C8  the internal state name does not travel outward",
        !/legacy_indeterminate/.test(r.answer), r.answer);
@@ -206,7 +212,7 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
   /* ═══ D · BOUNDEDNESS ═══════════════════════════════════════════ */
   sec("D · the whole population, a real total, a disclosed cap");
   {
-    const cap = executor.loadContract(SLUG).result_cap;
+    const cap = executor.loadContract(SLUG).result_cap_per_lane;
     //  MORE than the cap, and more than 100 — the Work Orders UI's
     //  historical "latest 100" behaviour would miss the tail entirely,
     //  and the tail is where a real answer hides.
@@ -226,10 +232,10 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
     const e = await executor.execute(pool, {
       intent_slug: SLUG, property_id: PROP, allowed_modules: ["maintenance"] });
     ok("D1  total_matching counts the FULL population, not the page",
-       e.totals.lane_a_total === N, `${e.totals.lane_a_total} vs ${N}`);
+       laneTotal(e, "current") === N, `${laneTotal(e, "current")} vs ${N}`);
     ok("D2  selected_count is capped", e.totals.selected_count <= cap + 1,
        JSON.stringify(e.totals));
-    ok("D3  the cap came from the contract", e.totals.result_cap === cap, String(e.totals.result_cap));
+    ok("D3  the cap came from the contract", e.totals.result_cap_per_lane === cap, String(e.totals.result_cap_per_lane));
 
     //  THE ONE THAT MATTERS: a matching row past position 100 is still
     //  counted. Deterministic ordering means it may not be on the page —
@@ -238,15 +244,15 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
       `select count(*)::int n from release_0_completion_invariant_violations
         where property_id=$1 and work_order_id=$2`, [PROP, beyond100])).rows[0].n);
     ok("D4  a matching work order beyond position 100 is still found",
-       found === 1 && e.totals.lane_a_total >= 130,
-       `view sees it: ${found}, total: ${e.totals.lane_a_total}`);
+       found === 1 && laneTotal(e, "current") >= 130,
+       `view sees it: ${found}, total: ${laneTotal(e, "current")}`);
 
     const r = renderer.render(e);
     ok("D5  the answer DISCLOSES that it is showing a subset, PER LANE",
        /Showing \d+ of \d+ current/.test(r.boundedness_note || ""),
        String(r.boundedness_note));
     ok("D5b …and each lane respects the cap independently",
-       e.totals.lane_a_selected <= cap && e.totals.lane_b_selected <= cap,
+       laneSel(e, "current") <= cap && laneSel(e, "pre_cutover_history") <= cap,
        JSON.stringify(e.totals) +
        " — a shared budget would let a large pre-cutover history crowd current " +
        "integrity failures off the page, and the current lane is the urgent one");
@@ -289,7 +295,7 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
     ok("E5  …and the candidate predicate version",
        got.candidate_predicate_version === "1.0.0", got.candidate_predicate_version);
     ok("E6  …the bounded counts", Number(got.total_matching) === e.totals.total_matching &&
-       Number(got.result_cap) === e.totals.result_cap);
+       Number(got.result_cap_per_lane) === e.totals.result_cap_per_lane);
     ok("E7  …and the sentence actually shown", got.rendered_answer === r.answer);
 
     //  READ TIME IS NOT FACT TIME.
@@ -396,7 +402,7 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
     ok("G1  the other property's row is not in the records",
        !e.supporting_records.some((r) => r.work_order_id === foreign));
     ok("G2  …and not in the total either",
-       !JSON.stringify(e.totals).includes("null") && e.totals.lane_a_total === 0,
+       !JSON.stringify(e.totals).includes("null") && laneTotal(e, "current") === 0,
        JSON.stringify(e.totals) + " — a leak in the COUNT is still a leak");
     const e2 = await executor.execute(pool, {
       intent_slug: SLUG, property_id: OTHER, allowed_modules: ["maintenance"] });

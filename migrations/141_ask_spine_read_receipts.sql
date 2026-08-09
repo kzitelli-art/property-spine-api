@@ -61,10 +61,19 @@ create table if not exists public.ask_spine_read_receipts (
   evidence_as_of              timestamptz     null,
   evidence_as_of_basis        text        not null,
 
-  --  BOUNDEDNESS, DISCLOSED
+  --  BOUNDEDNESS, DISCLOSED — AND THE CAP NAMES ITS OWN SCOPE.
+  --
+  --  A receipt read years later shows `result_cap_per_lane = 20` beside
+  --  `selected_count = 37` and needs no comment to make sense, because the
+  --  column name states the rule and `lane_breakdown` shows the arithmetic:
+  --  one row per named lane, each with its own total, selected count and
+  --  cap. An earlier column called plain `result_cap` made that pair look
+  --  like a bug.
   total_matching              integer     not null,
   selected_count              integer     not null,
-  result_cap                  integer     not null,
+  result_cap_per_lane         integer     not null,
+  result_cap_scope            text        not null default 'per_lane',
+  lane_breakdown              jsonb       not null,
 
   --  THE ANSWER
   coverage_state              text        not null,
@@ -75,19 +84,23 @@ create table if not exists public.ask_spine_read_receipts (
 
   created_at                  timestamptz not null default now(),
 
-  --  `selected_count <= result_cap` is NOT asserted, and the omission is
-  --  deliberate. The cap is applied PER LANE — current integrity and
-  --  pre-cutover history are separate bounded lists, so a large history
-  --  cannot crowd current failures off the page. A two-lane answer can
-  --  therefore select up to 2 x result_cap rows, and a constraint that
-  --  said otherwise would encode a rule the product does not have. What
-  --  IS asserted is the part that would be a lie if violated: you cannot
-  --  have selected more rows than matched.
+  --  `selected_count <= result_cap_per_lane` is NOT asserted, and the
+  --  omission is deliberate rather than an oversight: the cap binds EACH
+  --  LANE, so a two-lane answer may legitimately select up to twice it. A
+  --  constraint saying otherwise would encode a rule the product does not
+  --  have. What IS asserted is the part that would be a lie if violated —
+  --  you cannot have selected more rows than matched.
   constraint ck_asrr_counts_sane
-    check (total_matching >= 0
-       and selected_count >= 0
-       and result_cap     >  0
-       and selected_count <= total_matching),
+    check (total_matching      >= 0
+       and selected_count      >= 0
+       and result_cap_per_lane >  0
+       and selected_count      <= total_matching),
+
+  --  The breakdown is the thing that makes the overall numbers readable,
+  --  so it may not be an empty array on a receipt that reports matches.
+  constraint ck_asrr_lane_breakdown
+    check (jsonb_typeof(lane_breakdown) = 'array'
+       and (total_matching = 0 or jsonb_array_length(lane_breakdown) > 0)),
 
   --  The five completed-answer outcomes. `clarification_required` is
   --  deliberately absent: it is a PRE-ANSWER interpretation state, and a

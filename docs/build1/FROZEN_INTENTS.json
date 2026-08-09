@@ -2,10 +2,10 @@
   "_": "FROZEN ASK SPINE INTENT CONTRACTS \u2014 see tests/gate_ask_spine_contract_frozen.js",
   "why": "An intent contract IS the definition that produced an answer. A durable read receipt names its version and digest so an old answer stays readable after the contract changes; if the bytes can move without the version moving, that promise is empty. Same mechanism as docs/release0/FROZEN_ARTIFACTS.json, and deliberately not a second framework.",
   "digests": {
-    "src/askspine/contracts/maintenance.completion_without_valid_proof.json": "5db2dfeff0a27652ce31145afbc8db0ac2ff2b4fd9fccd670045c9a38b660e7d"
+    "src/askspine/contracts/maintenance.completion_without_valid_proof.json": "2b68ce1bd1c403637b6292a412ea2e578c79b8cc1c376071675c432e09510f12"
   },
   "versions": {
-    "maintenance.completion_without_valid_proof": "1.1.0"
+    "maintenance.completion_without_valid_proof": "1.2.0"
   },
   "changing_a_contract": [
     "bump version in the contract file",

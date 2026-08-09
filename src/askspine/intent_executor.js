@@ -106,7 +106,7 @@ const POPULATION_READERS = Object.create(null);
 
 POPULATION_READERS["maintenance.completion_without_valid_proof"] =
   async function readPopulation(db, { contract, property_id }) {
-    const cap = contract.result_cap;
+    const cap = contract.result_cap_per_lane;
 
     /*  LANE A — current governed completion integrity.
      *
@@ -227,7 +227,7 @@ async function execute(db, { intent_slug, property_id, allowed_modules }) {
       version: contract.version,
       digest: contract.digest,
       candidate_predicate_version: contract.candidate_predicate.version,
-      result_cap: contract.result_cap,
+      result_cap_per_lane: contract.result_cap_per_lane,
     },
   };
 
@@ -298,7 +298,7 @@ async function execute(db, { intent_slug, property_id, allowed_modules }) {
   //  The authority is resolved once and passed in, so a page of twenty
   //  rows cannot see it change mid-list and render two verdicts on one
   //  screen.
-  const cap = contract.result_cap;
+  const cap = contract.result_cap_per_lane;
   const supporting_records = [];
   const shape = async (row, lane) => {
     const wo = (await db.query(
@@ -368,18 +368,30 @@ async function execute(db, { intent_slug, property_id, allowed_modules }) {
     conclusion_code,
     source_outcomes,
     supporting_records,
+    /*  BOUNDEDNESS, STATED LITERALLY.
+     *
+     *  Every lane names itself and carries its own total, its own selected
+     *  count and the cap that applied to it. The earlier shape had
+     *  `lane_a_*` (which lane is A?) and a single `result_cap` sitting
+     *  beside a larger `selected_count` — a pair that only made sense if
+     *  you found the comment explaining the cap was per lane. A receipt
+     *  read in six months has no comment. */
     totals: {
-      lane_a_total: a,
-      lane_b_total: b,
-      //  Selected PER LANE. The cap is per lane on purpose (see the
-      //  renderer): a large pre-cutover history must not crowd current
-      //  integrity failures off the page, and a single combined count
-      //  would mix two populations this intent exists to keep apart.
-      lane_a_selected: supporting_records.filter((r) => r.lane === "current").length,
-      lane_b_selected: supporting_records.filter((r) => r.lane === "pre_cutover_history").length,
+      result_cap_scope: "per_lane",
+      result_cap_per_lane: cap,
+      lanes: [
+        { lane: "current", total_matching: a,
+          selected_count: supporting_records.filter((r) => r.lane === "current").length,
+          result_cap: cap },
+        { lane: "pre_cutover_history", total_matching: b,
+          selected_count: supporting_records.filter((r) => r.lane === "pre_cutover_history").length,
+          result_cap: cap },
+      ],
+      //  Overall figures, unambiguous now that the breakdown travels with
+      //  them. selected_count MAY exceed result_cap_per_lane — that is the
+      //  per-lane rule, not a defect.
       total_matching: a + b,
       selected_count: supporting_records.length,
-      result_cap: cap,
     },
     evidence,
   };

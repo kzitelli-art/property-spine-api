@@ -39,6 +39,12 @@ const URL = process.env.FALSIFYB1_DATABASE_URL;
 const SLUG = "maintenance.completion_without_valid_proof";
 const CONTRACT = path.join(ROOT, "src/askspine/contracts", `${SLUG}.json`);
 
+const laneOf = (e, name) =>
+  ((e.totals && e.totals.lanes) || []).find((l) => l.lane === name) ||
+  { total_matching: 0, selected_count: 0 };
+const laneTotal = (e, name) => laneOf(e, name).total_matching;
+const laneSel = (e, name) => laneOf(e, name).selected_count;
+
 let pass = 0, fail = 0;
 const ok = (l, c, d) => { if (c) { pass++; console.log("  ok    " + l); }
   else { fail++; console.log("  FAIL  " + l + (d ? "\n          → " + d : "")); } return c; };
@@ -187,7 +193,7 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
     ok("L7  …and NEVER in the current lane",
        !e.supporting_records.some((r) => r.work_order_id === legacy && r.lane === "current"));
     ok("L8  the two lanes are counted separately",
-       e.totals.lane_a_total >= 1 && e.totals.lane_b_total === 1, JSON.stringify(e.totals));
+       laneTotal(e, "current") >= 1 && laneTotal(e, "pre_cutover_history") === 1, JSON.stringify(e.totals));
     const sentence = renderer.render(e).answer;
     ok("L9  and the sentence never sums them into one failure",
        !new RegExp(`^${e.totals.total_matching} completed work orders do not`).test(sentence),
@@ -241,7 +247,14 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
       ["evidence-time rule", (s) => s.replace(
         '"forbidden": "substituting now() for a missing evidence timestamp"',
         '"forbidden": "nothing"')],
-      ["result cap", (s) => s.replace('"result_cap": 20,', '"result_cap": 5000,')],
+      //  Derived from the loaded contract, never a literal. A hard-coded
+      //  '"result_cap": 20' anchor silently stopped matching the moment the
+      //  field was renamed — and the harness reported "the mutation applied"
+      //  as FAILED rather than passing on a mutation it never made, which is
+      //  the only reason this was caught.
+      ["result cap", (s) => s.replace(
+        `"result_cap_per_lane": ${executor.loadContract(SLUG).result_cap_per_lane},`,
+        '"result_cap_per_lane": 5000,')],
     ];
     for (const [what, mutate] of MUTATIONS) {
       const drifted = mutate(original);
@@ -320,8 +333,8 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
       execution: t2e, rendered: t2r, property_id: PROP,
       actor: { user_id: TECH, session_id: null } });
 
-    ok("Q1  the CURRENT answer changed", t1e.totals.lane_a_total !== t2e.totals.lane_a_total,
-       `${t1e.totals.lane_a_total} → ${t2e.totals.lane_a_total}`);
+    ok("Q1  the CURRENT answer changed", laneTotal(t1e, "current") !== laneTotal(t2e, "current"),
+       `${laneTotal(t1e, "current")} → ${laneTotal(t2e, "current")}`);
 
     const r1 = (await c.query(`select * from ask_spine_read_receipts where id=$1`, [t1.id])).rows[0];
     const r2 = (await c.query(`select * from ask_spine_read_receipts where id=$1`, [t2.id])).rows[0];
@@ -339,14 +352,16 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
     //  NOW MOVE THE CONTRACT. The old receipt must still say which
     //  definition produced the old answer.
     const original = fs.readFileSync(CONTRACT, "utf8");
+    const liveVersion = executor.loadContract(SLUG).version;
     try {
-      fs.writeFileSync(CONTRACT, original.replace('"version": "1.1.0"', '"version": "2.0.0"'));
+      fs.writeFileSync(CONTRACT, original.replace(
+        `"version": "${liveVersion}"`, '"version": "2.0.0"'));
       const bytes = fs.readFileSync(CONTRACT);
       const newDigest = crypto.createHash("sha256").update(bytes).digest("hex");
       const r1After = (await c.query(
         `select * from ask_spine_read_receipts where id=$1`, [t1.id])).rows[0];
-      ok("Q7  after the contract moves to 2.0.0, the OLD receipt still says 1.1.0",
-         r1After.intent_contract_version === "1.1.0", r1After.intent_contract_version);
+      ok(`Q7  after the contract moves to 2.0.0, the OLD receipt still says ${liveVersion}`,
+         r1After.intent_contract_version === liveVersion, r1After.intent_contract_version);
       ok("Q8  …and still carries the OLD digest, not the new one",
          r1After.intent_contract_digest !== newDigest,
          "otherwise 'what did Spine say in March' silently becomes 'what would it " +

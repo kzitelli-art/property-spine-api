@@ -37,6 +37,15 @@
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
+/*  Lanes are read BY NAME. The sentences used to take `lane_a_total` /
+ *  `lane_b_total`, which meant the renderer and the executor had to agree
+ *  about which lane was "A" — an agreement nothing enforced. */
+const laneOf = (totals, name) =>
+  ((totals && totals.lanes) || []).find((l) => l.lane === name) ||
+  { total_matching: 0, selected_count: 0 };
+const currentTotal = (t) => laneOf(t, "current").total_matching;
+const historyTotal = (t) => laneOf(t, "pre_cutover_history").total_matching;
+
 /*  Every supported conclusion, and nothing else. The keys are the
  *  executor's conclusion codes; the contract's `supported_conclusions`
  *  must agree with this table, and a gate asserts that it does. */
@@ -44,16 +53,16 @@ const SENTENCES = Object.freeze({
   current_none_legacy_none: () =>
     "No completed work orders lack valid proof.",
 
-  current_none_legacy_present: ({ lane_b_total }) =>
+  current_none_legacy_present: (t) =>
     "No current completions lack valid proof. " +
-    `${plural(lane_b_total, "pre-cutover completion remains", "pre-cutover completions remain")} unverified.`,
+    `${plural(historyTotal(t), "pre-cutover completion remains", "pre-cutover completions remain")} unverified.`,
 
-  current_present_legacy_none: ({ lane_a_total }) =>
-    `${plural(lane_a_total, "completed work order does", "completed work orders do")} not have valid proof.`,
+  current_present_legacy_none: (t) =>
+    `${plural(currentTotal(t), "completed work order does", "completed work orders do")} not have valid proof.`,
 
-  current_present_legacy_present: ({ lane_a_total, lane_b_total }) =>
-    `${plural(lane_a_total, "completed work order does", "completed work orders do")} not have valid proof. ` +
-    `${plural(lane_b_total, "older pre-cutover completion remains", "older pre-cutover completions remain")} unverified.`,
+  current_present_legacy_present: (t) =>
+    `${plural(currentTotal(t), "completed work order does", "completed work orders do")} not have valid proof. ` +
+    `${plural(historyTotal(t), "older pre-cutover completion remains", "older pre-cutover completions remain")} unverified.`,
 
   unavailable_source_cannot_answer: () =>
     "I can't determine completion proof right now.",
@@ -76,17 +85,16 @@ const SENTENCES = Object.freeze({
  *  history hide new problems. A combined "showing 21 of 131" also
  *  silently mixes two populations that the whole intent exists to keep
  *  apart. */
+const LANE_WORD = { current: "current", pre_cutover_history: "pre-cutover" };
+
 function boundednessNote(totals) {
-  if (!totals) return null;
-  const parts = [];
-  if (totals.lane_a_total > totals.lane_a_selected) {
-    parts.push(`${totals.lane_a_selected} of ${totals.lane_a_total} current`);
-  }
-  if (totals.lane_b_total > totals.lane_b_selected) {
-    parts.push(`${totals.lane_b_selected} of ${totals.lane_b_total} pre-cutover`);
-  }
+  if (!totals || !Array.isArray(totals.lanes)) return null;
+  const parts = totals.lanes
+    .filter((l) => l.total_matching > l.selected_count)
+    .map((l) => `${l.selected_count} of ${l.total_matching} ${LANE_WORD[l.lane] || l.lane}`);
   if (!parts.length) return null;
-  return `Showing ${parts.join(", ")} (result cap ${totals.result_cap} per group).`;
+  return `Showing ${parts.join(", ")} ` +
+         `(result cap ${totals.result_cap_per_lane} per group).`;
 }
 
 /**
@@ -105,7 +113,7 @@ function render(execution) {
       `${JSON.stringify(execution.conclusion_code)} — the renderer refuses to ` +
       `improvise operator language for an unknown conclusion`);
   }
-  const totals = execution.totals || { lane_a_total: 0, lane_b_total: 0 };
+  const totals = execution.totals || { lanes: [] };
   return {
     answer: make(totals),
     boundedness_note: boundednessNote(execution.totals),
