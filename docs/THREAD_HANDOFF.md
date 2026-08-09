@@ -58,6 +58,20 @@ production. What has not is the activation. Say *"no build-ahead activation work
 in this stack has been run against production"* — not *"production is
 untouched."*
 
+**THE SMS RAIL IS FROZEN.** Do not do more SMS architecture unless the
+production preflight contradicts the proof. The governing distinction:
+
+```text
+SMS_SEND_MODE=disabled          resident INBOUND stays live
+                                resident OUTBOUND refused
+                                → this is the Step 4 posture
+
+property_facing.status=retired  resident line down BOTH directions, one property
+                                inbound during retirement is LOST, not queued
+                                → emergency line shutdown only, NOT an
+                                  outbound control
+```
+
 **⚠ THE SMS SAFETY CONTROL IS `SMS_SEND_MODE`, NOT `outbound_policy`.** Twilio
 credentials are global — one account behind both lanes — so wiring transport for
 the operations line arms the resident path in the same instant. The invariant to

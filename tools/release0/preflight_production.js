@@ -67,7 +67,38 @@ const warn = (k, v, note) => { rows.push({ k, v, note, level: "warn" }); warned+
   }
   const c = new Client({ connectionString: URL });
   try { await c.connect(); }
-  catch (e) { console.error("REFUSED: could not connect — " + e.message); process.exit(2); }
+  catch (e) {
+    /*  THE WHOLE SHEET IS MEANT TO BE SHAREABLE.
+     *
+     *  Every reported fact is a boolean, a count or a name — the leak
+     *  canaries in prove_preflight_sms_posture.js hold that for
+     *  credentials, provider_config and e164. This one path was the
+     *  exception: a connection error carries `host:port` (and, on an
+     *  auth failure, the database user), which is infrastructure detail
+     *  an operator does not need to paste anywhere to act on it. pg does
+     *  not put the password in the message — measured, not assumed — but
+     *  "no password" is not the same as "safe to forward".
+     *
+     *  So the operator sees the class of failure and reads the rest in
+     *  their own terminal.
+     *
+     *  Quoted identifiers are elided WHOLESALE rather than by phrase.
+     *  A first version matched only `for user "…"` and let
+     *  `role "produser" does not exist` through — Postgres has several
+     *  phrasings for the same class of fact (role, database, schema),
+     *  and enumerating them is a losing game. In a CONNECTION error
+     *  every quoted identifier is infrastructure naming, so all of them
+     *  go. */
+    const safe = String(e.message || "")
+      .replace(/"[^"]*"/g, '"<elided>"')
+      .replace(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g, "<host>")
+      .replace(/\b[a-z0-9.-]+\.(?:com|net|org|io|dev|tech|cloud|app)\b/gi, "<host>")
+      .replace(/:\d{2,5}\b/g, ":<port>");
+    console.error("REFUSED: could not connect — " + safe);
+    console.error("  (host and user elided so this line is safe to forward. The full " +
+                  "error is in your own terminal's exit status and your client's logs.)");
+    process.exit(2);
+  }
 
   /*  THE SERVER ENFORCES IT. `default_transaction_read_only` set locally
    *  would be advisory over a session this file controls; a READ ONLY

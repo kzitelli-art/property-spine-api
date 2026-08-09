@@ -97,6 +97,44 @@ It answers all eleven questions this step owes, from the runtime:
 | 10 | invariant audit set | `release_0_completion_invariant_violations` |
 | 11 | legacy done-path · status vocabulary · activation window | Step 6 route state · `select status, count(*)` · in-flight writers and idle-in-transaction |
 
+### What to bring back — these nine, and nothing else
+
+The sheet is the artifact. Classify each of these from it; do not summarise,
+interpret, or fix anything before reporting.
+
+```text
+1  running SHA                        or UNKNOWN, if not run on the instance
+2  migration state                    ledger ceiling + 138/139/140 applied?
+3  activation state                   absent / present, and the epoch agrees?
+4  invariant violations               the audit set — empty is the expected answer
+5  terminal / cutover population      terminal count + inventory rows
+6  SMS_SEND_MODE                      and whether it reads SAFE / CONFIG UNKNOWN
+7  operations line                    exists? active? provider configured?
+8  Twilio transport                   credentials present?
+9  any stop condition                 the ⛔ lines, verbatim
+```
+
+**If production is clean, proceed through §3.** **If production contradicts the
+rehearsal, bring back the contradiction and nothing else** — no diagnosis
+attached, no adjacent fix, no build-ahead while it is decided.
+
+### The sheet is safe to forward. The connection is not.
+
+Every fact it prints is a boolean, a count, or a name. No credential, no
+`provider_config`, no `e164` — held by the leak canaries in
+`tools/release0/prove_preflight_sms_posture.js` (L1–L3), and the refusal paths
+elide host, port, role and database name too, so even a failed run is safe to
+paste:
+
+```text
+REFUSED: could not connect — connect ECONNREFUSED <host>:<port>
+REFUSED: could not connect — role "<elided>" does not exist
+```
+
+**Send the output. Never send the connection string.** A `DATABASE_URL` must not
+be pasted into a conversation, an issue, or a commit — it is the one thing on
+this page that grants access rather than describing it.
+
 **Stop on any contradiction — this is the instruction, not a preference.** In
 particular:
 
