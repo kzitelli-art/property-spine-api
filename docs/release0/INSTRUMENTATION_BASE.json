@@ -1,34 +1,47 @@
 {
-  "_": "READ BY tools/release0/preflight_production.js AND acceptance_receipt.js. Its presence is what tells those tools that this container is an INSTRUMENTATION deploy — tools and docs over a product base it does not contain — so they report the container SHA and the product base as two separate facts instead of one. Delete this file in the deploy that lands Release 0 product source, or set release_0_product_source_deployed to true, whichever the boundary actually does.",
-
-  "product_base_sha": "b4e3104",
-  "product_base_is": "Merge pull request #54 — Step 3, the canonical completion writer. Boundary 3 of 13.",
-
+  "_": "READ BY tools/release0/preflight_production.js AND acceptance_receipt.js. Its presence is what tells those tools that this container is an INSTRUMENTATION deploy \u2014 tools and docs over a product base it does not contain \u2014 so they report the container SHA and the product base as two separate facts instead of one. Delete this file in the deploy that lands Release 0 product source, or set release_0_product_source_deployed to true, whichever the boundary actually does.",
+  "product_base_sha": "5662200",
+  "product_base_is": "Merge of Tom's technician list_work intent fix onto b4e3104. b4e3104 was Step 3, the canonical completion writer (boundary 3 of 13). Re-stamped 2026-08-09 after the base lock caught the stamp claiming b4e3104 while production had moved.",
   "release_0_product_source_deployed": false,
   "what_this_container_adds": "tools/release0/{preflight_production,where_are_we,acceptance_receipt}.js, tools/step4/_ro.js, and docs/. Nothing else.",
-
-  "why_the_distinction_exists": "A container SHA newer than the product base reads like 'Release 0 product source is running.' It is not. This deploy carries no src/, no migrations, and no package change — it exists so the production preflight can be run from the deployed instance, which is the one fact nothing else can supply.",
-
+  "why_the_distinction_exists": "A container SHA newer than the product base reads like 'Release 0 product source is running.' It is not. This deploy carries no src/, no migrations, and no package change \u2014 it exists so the production preflight can be run from the deployed instance, which is the one fact nothing else can supply.",
   "what_is_NOT_running_because_of_this_deploy": [
-    "src/release0/ — activation service and proof state",
-    "migrations 138, 139, 140 — the defect obligation, the resolution vocabulary, the completion guard",
-    "boundary 6 · the app's completion control removal",
-    "boundary 7 · the legacy done-path failing closed",
-    "boundaries 8-13 · census, activation, four-state reader, sweep, HTTP acceptance, cleanup"
+    "src/release0/ \u2014 activation service and proof state",
+    "migrations 138, 139, 140 \u2014 the defect obligation, the resolution vocabulary, the completion guard",
+    "boundary 6 \u00b7 the app's completion control removal",
+    "boundary 7 \u00b7 the legacy done-path failing closed",
+    "boundaries 8-13 \u00b7 census, activation, four-state reader, sweep, HTTP acceptance, cleanup"
   ],
-
   "expected_first_preflight_findings": {
     "_": "KNOWN PRE-ACTIVATION STATE, not surprise contradictions. Owner ruling. Anything NOT on this list that contradicts the rehearsal comes back before anything writes.",
-    "frozen artifacts": "6 DRIFTED — migrations 138/139/140, src/release0/activation_service.js, src/release0/proof_state.js, src/technician/lifecycle_service.js. MEASURED against this exact tree, not predicted: it is 6 and not 8 because two pinned files (src/technician/evidence_service.js, src/maintenance/proof_evaluation_service.js) already match on the base. lifecycle_service.js drifts even though Step 3 landed, because later boundaries edited it again.",
+    "frozen artifacts": "6 DRIFTED \u2014 migrations 138/139/140, src/release0/activation_service.js, src/release0/proof_state.js, src/technician/lifecycle_service.js. MEASURED against this exact tree, not predicted: it is 6 and not 8 because two pinned files (src/technician/evidence_service.js, src/maintenance/proof_evaluation_service.js) already match on the base. lifecycle_service.js drifts even though Step 3 landed, because later boundaries edited it again.",
     "migrations 138/139/140": "not applied",
     "activation": "absent",
-    "activation epoch": "MISSING — migration 140 has not been applied",
-    "guard triggers": "0/8 present — migration 140 has not been applied",
-    "guard predicates": "5 FAULT(S), all MISSING — same reason",
-    "invariant audit": "unavailable — the validator is not installed",
-    "terminal population": "NOT SCORED — the validator is not installed",
-    "Step 6 · legacy done-path": "STILL OPEN — boundary 7 has not been deployed"
+    "activation epoch": "MISSING \u2014 migration 140 has not been applied",
+    "guard triggers": "0/8 present \u2014 migration 140 has not been applied",
+    "guard predicates": "5 FAULT(S), all MISSING \u2014 same reason",
+    "invariant audit": "unavailable \u2014 the validator is not installed",
+    "terminal population": "NOT SCORED \u2014 the validator is not installed",
+    "Step 6 \u00b7 legacy done-path": "STILL OPEN \u2014 boundary 7 has not been deployed",
+    "status vocabulary": "open=5 closed=1 needs_followup=1 scheduled=1 COMPLETE=1 \u2014 the complete row is WO 1008",
+    "SMS posture": "green: SMS_SEND_MODE=disabled with credentials present \u2014 resident sends structurally refused, technician replies available"
   },
-
-  "removal_condition": "This file is deleted, or release_0_product_source_deployed set true, by the deploy that first lands Release 0 product source on main. Leaving it stale would make the tools understate what is running, which is the opposite of the error it exists to prevent — and the more dangerous direction once the guard is real."
+  "removal_condition": "This file is deleted, or release_0_product_source_deployed set true, by the deploy that first lands Release 0 product source on main. Leaving it stale would make the tools understate what is running, which is the opposite of the error it exists to prevent \u2014 and the more dangerous direction once the guard is real.",
+  "product_delta_since_b4e3104": {
+    "_": "The ONLY product source that has landed since the original stamp. Authorized, and unrelated to Release 0: it widens the list_work intent regexes so 'what work do I have' resolves to the technician queue instead of asking which work order is meant.",
+    "files": [
+      ".gitignore",
+      "src/conversation/technician_intent.js",
+      "tests/technician_language.test.js"
+    ],
+    "does_not_touch": [
+      "the `complete` intent",
+      "claimCompletion",
+      "evidence_service (the evidence gate)",
+      "proof_evaluation_service",
+      "work_reference (the work-order reference parser)"
+    ],
+    "merged_at": "2026-08-09T19:15:43Z"
+  },
+  "wo_1008_predates_this": "WO 1008 completed 2026-08-09T18:59:06.121Z, 16m37s BEFORE 5662200 existed. Its writer proof is a receipt of the pre-5662200 parser, and the changed code is not on the completion path. Do not reinterpret that receipt because of this commit."
 }
