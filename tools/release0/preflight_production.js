@@ -114,11 +114,39 @@ const warn = (k, v, note) => { rows.push({ k, v, note, level: "warn" }); warned+
 
   // ── 1 · WHAT IS ACTUALLY RUNNING ──────────────────────────────────
   const sha = process.env.RENDER_GIT_COMMIT || process.env.GIT_SHA || null;
-  if (sha) say("running SHA", sha.slice(0, 12));
+
+  /*  ── TWO IDENTITIES, NEVER COLLAPSED ──────────────────────────────
+   *
+   *  Instrumentation can be deployed WITHOUT the product source it
+   *  instruments — tools and docs only, no src, no migrations. That is a
+   *  legitimate deploy and it is how this preflight first reaches a
+   *  production shell. The hazard is what someone concludes afterwards:
+   *  a container SHA that is newer than b4e3104 reads like "Release 0
+   *  product source is running", and it is not.
+   *
+   *  So an instrumentation deploy STAMPS the product base it was cut
+   *  from, and this reports both. Absent file = an ordinary deploy,
+   *  where the container SHA is the product SHA and there is nothing to
+   *  distinguish. */
+  let instrumentation = null;
+  try {
+    instrumentation = JSON.parse(fs.readFileSync(
+      path.join(ROOT, "docs/release0/INSTRUMENTATION_BASE.json"), "utf8"));
+  } catch (_) { /* ordinary deploy */ }
+  if (sha) say("running SHA", sha.slice(0, 12) +
+    (instrumentation ? "   (container — instrumentation)" : ""));
   else check("running SHA", false, "UNKNOWN",
     "RENDER_GIT_COMMIT / GIT_SHA is not set in THIS process. Run this on the " +
     "deployed instance, or read the SHA from the platform — never assume the local " +
     "checkout is what production is running.");
+
+  if (instrumentation) {
+    say("product base SHA", String(instrumentation.product_base_sha || "?").slice(0, 12) +
+      "   ← the product source this container actually carries");
+    say("Release 0 product source", instrumentation.release_0_product_source_deployed
+      ? "DEPLOYED"
+      : "NOT DEPLOYED — this container is tools and docs over the base above");
+  }
 
   //  The frozen artifacts, as they exist in THIS checkout.
   const drifted = Object.entries(FROZEN.digests).filter(([rel, want]) => {

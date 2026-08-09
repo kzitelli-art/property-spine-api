@@ -62,6 +62,14 @@ const unknown = (field, why) => { R.unknowns.push({ field, why }); return { UNKN
 
   // 1 · WHAT IS RUNNING
   const sha = process.env.RENDER_GIT_COMMIT || process.env.GIT_SHA;
+  /*  An instrumentation deploy carries tools and docs over a product
+   *  base it does NOT contain. Both identities travel, or a container
+   *  SHA newer than the base reads as "the product source is running". */
+  try {
+    R.instrumentation_base = JSON.parse(fs.readFileSync(
+      path.join(ROOT, "docs/release0/INSTRUMENTATION_BASE.json"), "utf8"));
+  } catch (_) { R.instrumentation_base = null; }
+
   R.running_sha = sha || unknown("running_sha",
     "RENDER_GIT_COMMIT/GIT_SHA absent from this process — run the receipt ON the " +
     "deployed instance; the local checkout is not evidence of what production runs");
@@ -290,7 +298,13 @@ const unknown = (field, why) => { R.unknowns.push({ field, why }); return { UNKN
   console.log("\n" + bar);
   console.log("  RELEASE 0 — ACCEPTANCE RECEIPT   (read-only)");
   console.log(bar + "\n");
-  P("running SHA", typeof R.running_sha === "string" ? R.running_sha.slice(0, 12) : "UNKNOWN");
+  P("running SHA", (typeof R.running_sha === "string" ? R.running_sha.slice(0, 12) : "UNKNOWN") +
+    (R.instrumentation_base ? "   (container — instrumentation)" : ""));
+  if (R.instrumentation_base) {
+    P("product base SHA", String(R.instrumentation_base.product_base_sha || "?").slice(0, 12));
+    P("R0 product source", R.instrumentation_base.release_0_product_source_deployed
+      ? "DEPLOYED" : "NOT DEPLOYED — tools and docs over the base above");
+  }
   P("frozen artifacts", R.frozen_artifacts.drifted.length
     ? "DRIFTED: " + R.frozen_artifacts.drifted.join(", ")
     : `revision ${R.frozen_artifacts.revision} · all match`);
