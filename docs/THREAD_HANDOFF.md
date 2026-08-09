@@ -37,6 +37,38 @@ progress      completion_claimed AND completed — two distinct rows, both
 obligation    complete · resolution_code satisfied · completed_at set
 ```
 
+### THE OFFICIAL RECEIPT — 1008, run 2026-08-09 against aac806b
+
+```text
+completion_writer_proof    PASS      persisted production facts only (B, F, N)
+evidence_vocabulary_source deployed writer
+                           (evidence_service.COMPLETION_EVIDENCE_CLASSIFICATIONS)
+reader_source_alignment    DEFERRED  reader accepts `unclassified`, writer refuses
+surface_clause_discharged  false     no activation yet (Boundary 8)
+step4_package_revision     2         proof-scoping fix
+generated_against_ledger   137
+atomicity.all_facts_one_commit  INDETERMINATE — track_commit_timestamp is off on
+                           this server, so commit times are not recorded
+```
+
+**"Every named fact held."** The tool emits a receipt only if all of them do.
+
+**LABEL IT PRECISELY:**
+
+```text
+PASS  = production writer / transport / evidence proof
+        assignment was MANUALLY STAGED (direct SQL, assisting session)
+        reader alignment DEFERRED to Boundary 9
+        DOES NOT unlock Boundary 6
+```
+
+Two things the receipt got right by refusing to overclaim. `all_facts_one_commit`
+is INDETERMINATE with its reason named rather than a convenient `true` — the
+server does not record commit times, so the tool cannot see it. And
+`reader_source_alignment` is DEFERRED beside a PASS verdict instead of vetoing
+it, which is the revision-2 correction working: the verdict was judged by the
+gate `claimCompletion` actually used, not by a Boundary 9 file.
+
 ### ⚠ HOW 1008 BECAME ELIGIBLE — read this before using it to justify Boundary 6
 
 **Its obligation was assigned by DIRECT SQL, issued in the assisting session.**
