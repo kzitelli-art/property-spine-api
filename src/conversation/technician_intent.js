@@ -95,7 +95,10 @@ const PATTERNS = [
   ["list_work", [
     /\b(?:what'?s|whats|anything)\s*(?:else\s*)?(?:open|left|assigned|on\s*my|i\s*have|for\s*me)/i,
     /\bmy\s*(?:work|jobs|list|queue|tickets)\b/i,
-    /\bwhat\s*(?:do\s*i|am\s*i)\s*(?:have|working)/i,
+    //  Optional object between "what" and "do i" — "what WORK do i have",
+    //  "what JOBS am i working" read as list_work, not a work reference.
+    /\bwhat\s*(?:work|job|jobs)?\s*(?:do\s*i|am\s*i)\s*(?:have|working|assigned|need\s*to\s*do)/i,
+    /\bwhat\s*(?:work|job|jobs)\s*(?:is\s*)?(?:assigned|open|left)\s*(?:to\s*me|for\s*me)?/i,
     //  "anything else" on its own is the whole question, and needs no object.
     /\banything\s*else\b/i,
     /\bany(?:thing)?\s*(?:else\s*)?(?:here|open)\b/i,

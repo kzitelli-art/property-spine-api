@@ -38,7 +38,13 @@ const CORPUS = [
   ["complete", ["All done.", "all done", "finished", "it's complete", "wrapped it up",
                 "all set", "good to go", "finished up"]],
   ["list_work", ["anything else open here?", "what's open for me", "my jobs",
-                 "what do i have", "anything else"]],
+                 "what do i have", "anything else",
+                 //  Natural phrasings with the object "work"/"jobs" in the
+                 //  middle — a technician texted "What work do I have" and the
+                 //  line asked "which work order?" instead of listing. 2026-08-06.
+                 "what work do i have", "What work do I have",
+                 "what jobs am i working", "what work is assigned to me",
+                 "what work do i need to do"]],
   ["finding",  ["the leak is stopped but it needs a valve",
                 "shutoff valve is corroded and needs replacing",
                 "the breaker keeps tripping on that outlet",
