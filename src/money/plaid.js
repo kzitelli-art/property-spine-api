@@ -123,12 +123,97 @@ function normalizePlaidTxn(pt) {
   };
 }
 
+/* ════════════════════════════════════════════════════════════════════
+   INGESTION IS NOT READY, AND CREDENTIALS ARE NOT THE ONLY GATE.
+
+   Today the ONLY thing stopping this module from writing to
+   bank_transactions is the absence of PLAID_CLIENT_ID / PLAID_SECRET.
+   Set those two variables and ingestion is live — which makes switching
+   it on a configuration act rather than a decision. These are the
+   findings that must be closed first, verified against this file:
+
+   1. PLAID'S TRANSACTION ID IS DISCARDED. normalizePlaidTxn keeps date,
+      amount, description, type, check number and account — not
+      pt.transaction_id. Nothing staged can be matched back to the
+      transaction it came from.
+
+   2. ONLY `added` IS CONSUMED. The sync loop reads d.added and ignores
+      d.modified and d.removed entirely (both appear zero times in this
+      file). A correction never arrives; a retraction never arrives.
+
+   3. PENDING IS INVISIBLE. pt.pending, pt.pending_transaction_id and
+      pt.authorized_date are never read (also zero occurrences), so a
+      pending authorisation stages as though it had posted.
+
+   ── WHY THESE ARE ONE DEFECT, NOT THREE ─────────────────────────────
+
+   Dedupe rests on uq_bank_txn_natural — (bank_account_id, txn_date,
+   description, amount) — and AMOUNT IS PART OF THE KEY. So:
+
+     · a pending row that posts at a different amount does not collide,
+       it INSERTS AGAIN. Two rows, one transaction, neither marked, and
+       `modified` (which carried the correction) was dropped.
+     · two genuinely distinct transactions that share account, date,
+       description and amount DO collide, and the second is silently
+       discarded into `skipped_duplicates` — a counter that reads like
+       hygiene while it drops real money. This one is live TODAY for
+       every ingestion source, not just Plaid: bankintake.js:286 carries
+       the identical conflict clause.
+
+   Storing pt.transaction_id fixes all of it: it is the stable key
+   `modified`/`removed` need AND the correct dedupe identity. Finding 1
+   is why 2 and 3 cannot simply be "added later" — there is no key to
+   apply a correction to.
+
+   ── SO THIS REFUSES, AND SAYS WHY ───────────────────────────────────
+
+   Every path that can WRITE is gated behind an explicit acknowledgement
+   variable. Read-only paths (status, items) stay open, because being
+   able to see what is configured is how someone discovers this. The
+   variable is deliberately awkward to set by accident and names the
+   thing being accepted.
+
+       PLAID_INGESTION_ACKNOWLEDGED_UNSAFE=1
+
+   Removal condition: delete this guard in the change that stores
+   pt.transaction_id, consumes modified/removed, and carries pending
+   through — at which point the acknowledgement is meaningless and
+   leaving it would be theatre.
+   ════════════════════════════════════════════════════════════════════ */
+const INGESTION_FINDINGS = Object.freeze([
+  "plaid transaction_id is discarded at normalize time — nothing staged can be matched back",
+  "only `added` is consumed; `modified` and `removed` are dropped",
+  "pending / pending_transaction_id / authorized_date are never read",
+  "dedupe keys on amount, so a corrected amount inserts a SECOND row and two " +
+    "genuinely distinct same-amount transactions silently collide",
+]);
+const ingestionAcknowledged = () =>
+  process.env.PLAID_INGESTION_ACKNOWLEDGED_UNSAFE === "1";
+
 module.exports = function plaidModule({ pool }) {
   const router = express.Router();
 
   // small helper: stable JSON 503 when Plaid isn't wired up
   function notConfigured(res, msg) {
     return res.status(503).json({ configured: false, receipt: msg });
+  }
+
+  /*  The ingestion refusal. 503 like notConfigured — this IS a "not
+   *  ready" answer, not a permission error — but it names the reason,
+   *  because an operator who has just set two credentials and got a 503
+   *  will otherwise conclude the credentials are wrong. */
+  function ingestionNotReady(res) {
+    return res.status(503).json({
+      configured: true,
+      ingestion_ready: false,
+      receipt: "Plaid ingestion is not ready to write. Credentials are present, " +
+               "but the ingestion contract is incomplete and would stage " +
+               "transactions that cannot be corrected, retracted or reliably " +
+               "deduplicated.",
+      findings: INGESTION_FINDINGS,
+      to_override: "set PLAID_INGESTION_ACKNOWLEDGED_UNSAFE=1 — do this only " +
+                   "deliberately, and expect the defects above",
+    });
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -144,7 +229,15 @@ module.exports = function plaidModule({ pool }) {
       client_id_set: Boolean(process.env.PLAID_CLIENT_ID),
       secret_set: Boolean(process.env.PLAID_SECRET),
       configured: !c.error,
-      receipt: c.error || "Plaid is configured and ready.",
+      //  HONEST READINESS. This probe previously answered "configured and
+      //  ready" on credentials alone, which is the sentence someone reads
+      //  right before switching ingestion on.
+      ingestion_ready: ingestionAcknowledged(),
+      ingestion_findings: ingestionAcknowledged() ? [] : INGESTION_FINDINGS,
+      receipt: c.error
+        || (ingestionAcknowledged()
+            ? "Plaid is configured. Ingestion is ACKNOWLEDGED-UNSAFE and will write."
+            : "Plaid is configured, but ingestion is not ready to write — see ingestion_findings."),
     });
   });
 
@@ -189,6 +282,8 @@ module.exports = function plaidModule({ pool }) {
   router.post("/plaid/exchange", async (req, res) => {
     const c = plaidClient();
     if (c.error) return notConfigured(res, c.error);
+    //  Linking an item is the act that makes ingestion possible.
+    if (!ingestionAcknowledged()) return ingestionNotReady(res);
     const { property_id, public_token, institution } = req.body || {};
     if (!property_id || !public_token) return res.status(400).json({ error: "property_id and public_token required" });
     try {
@@ -307,6 +402,8 @@ module.exports = function plaidModule({ pool }) {
   router.post("/plaid/items/:id/sync", async (req, res) => {
     const c = plaidClient();
     if (c.error) return notConfigured(res, c.error);
+    //  The write path itself.
+    if (!ingestionAcknowledged()) return ingestionNotReady(res);
     const plaidItemPk = req.params.id;
     try {
       const itRow = (await pool.query(
@@ -383,6 +480,9 @@ module.exports = function plaidModule({ pool }) {
   // Plaid calls it; it performs no money mutation, only a status note.
   // ──────────────────────────────────────────────────────────────────
   router.post("/plaid/webhook", async (req, res) => {
+    //  Plaid calls this unattended, so it is the path most likely to write
+    //  without anyone watching. Refused first, before any body is read.
+    if (!ingestionAcknowledged()) return ingestionNotReady(res);
     const { webhook_type, webhook_code, item_id } = req.body || {};
     try {
       if (item_id && webhook_code === "ITEM_LOGIN_REQUIRED") {
