@@ -70,7 +70,71 @@ Proven, not predicted — §9.10.2.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
-##  RELEASE 0 — DESIGN FROZEN, NOT IMPLEMENTED. 2026-08-06.
+##  RELEASE 0 — BUILD-COMPLETE ON BRANCHES. NOT DEPLOYED. 2026-08-08.
+## ══════════════════════════════════════════════════════════════════
+
+**This supersedes the "DESIGN FROZEN, NOT IMPLEMENTED" section below it.**
+It does **not** change any deployment claim: `main` has not moved, no migration
+has been applied to production, and **the activation has never been run.**
+
+```text
+claude/release0-composed    the rehearsal tree — #57 + #59…#63 composed
+claude/completion-guard     migration 140, FROZEN at revision 5
+claude/next-build-…         read-only intelligence for what comes AFTER
+production                  UNTOUCHED. No deploy, no migration, no activation.
+```
+
+**Read `docs/RELEASE_0_ACTIVATION_STACK.md` first** — it is the current state of
+the release: what is proven, what each boundary costs, and §7 names the exact
+remaining proof debt. `RELEASE_0_ACTIVATION_RUNBOOK.md` is the production order.
+
+Evidence as of this section: 48 harness runs / 0 non-zero / 757 assertions ·
+16/16 source-governance gates · train rehearsal 53/53 · boundary reversibility
+20/20 · release transitions 26/26 · migration sequencing 15/15 · app 107 + 17.
+
+### The three things a new session most needs to know
+
+1. **`migration 140` is frozen at revision 5 and the freeze bites.**
+   `docs/release0/FROZEN_ARTIFACTS.json` pins sha256 digests;
+   `tests/gate_release0_frozen.js` turns red the moment any pinned byte moves.
+   Changing one requires re-running the falsification package **and** updating
+   the digest **in the same commit**. Do not update the digest alone — that is
+   the single thing the gate exists to prevent, and it has already caught two
+   real changes.
+
+2. **Boundary 8 (the activation) is irreversible, and it is the only one.**
+   Measured, not inherited: `prove_boundary_reversibility.js` attempts eight
+   undo mechanisms and all eight are refused. Boundary 3 is also one-way in the
+   direction that matters — reverting Step 3 returns the *writer*, never the
+   *data*. "Everything before 8 is revertible" is true about code and false
+   about meaning; the runbook now says so per boundary.
+
+3. **`closed` is historical vocabulary.** After the cutover, `open → closed` is
+   refused outright with `R0003`, proof or no proof. Future completion writes
+   `complete`. A harness or script that writes `closed` will be refused by the
+   database, and that is the design, not a bug.
+
+### Traps that cost real time this round
+
+- **A proof against a re-implementation is a proof about the re-implementation.**
+  The Step 7 concurrency proof measured a *simulation* of the lock and passed
+  after a lock was added that it never looked at. It now reads the lock
+  statement out of the shipped service. The same class of error appeared twice
+  more as hard-coded counts in prose ("four functions, five triggers", "all five
+  guard triggers") that had drifted three revisions out of date. Counts are now
+  read from the database.
+- **A gate that fails the fix is worse than no gate.** The first epoch freeze
+  (R0006) also refused Step 7's *governed supersession*, breaking a legitimate
+  correction path. Two Step 7 harnesses went red and were right to.
+- **Harnesses re-apply migration 140**, so drifting the SQL file to falsify
+  something gets silently overwritten. Drift the JS side instead.
+- **`ALTER TABLE … DISABLE TRIGGER`** leaves the row in `pg_trigger` looking
+  perfect and simply never fires. A presence check passes. Check `tgenabled`.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  RELEASE 0 — DESIGN FROZEN, NOT IMPLEMENTED. 2026-08-06. (superseded)
 ## ══════════════════════════════════════════════════════════════════
 
 **Nothing below this section's deployment claims has changed.** No product
