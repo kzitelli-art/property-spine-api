@@ -4,15 +4,26 @@
 
 ```text
 branch   claude/release-0-rc
-tag      release-0-rc1              (annotated, immutable — a branch tip moves)
+SHA      recorded in the commit immediately after this text — a commit
+         cannot contain its own hash. `git log -2 claude/release-0-rc`
 ```
 
+**The SHA is the RC, not the branch.** A branch tip moves; a commit does not. If
+this branch ever advances, the tree that was proven is still `65baf29` and the new
+tip is a different candidate that has to earn the name again.
+
+An annotated tag would normally carry that, and one was written — but this
+environment's git proxy refuses tag refs (four attempts, identical failure, while
+branch pushes succeed). Rather than leave a tag that exists in one clone and
+nowhere else, there is no tag. The SHA above is immutable by construction and
+needs no help from one.
+
 The PR stack stays open for review and history. **This tree is what runs.** If a
-question about Release 0's content cannot be answered by reading this branch, the
+question about Release 0's content cannot be answered by reading this commit, the
 question is about something other than Release 0.
 
 This is a naming and proving act, not a new layer. There is no RC tooling, no RC
-build step, no RC abstraction — a branch, a tag, and this page.
+build step, no RC abstraction — a branch, a SHA, and this page.
 
 ---
 
