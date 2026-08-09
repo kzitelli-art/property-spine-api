@@ -19,6 +19,64 @@ current truth. Re-date it whenever `main` moves materially.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
+##  PRODUCTION HAS SPOKEN. 2026-08-09, read from the deployed instance.
+## ══════════════════════════════════════════════════════════════════
+
+**This supersedes every estimate below it.** The instrumentation deploy
+landed (`main` = `fd02b73`, product base still `b4e3104`) and
+`tools/release0/preflight_production.js` was run in the Render shell. These
+are measured production facts, not rehearsal:
+
+```text
+work_orders TOTAL           8      open=5 · closed=1 · needs_followup=1 · scheduled=1
+properties                  39     1 with an sms_number
+TERMINAL population         1      work order 1000, closed, created 2026-06-07
+  its evaluations           0      in census scope AND in any scope
+  its completion_photo      an https:// URL — a string, not a preserved
+                                   attachment with bytes, digest and MIME
+ledger ceiling              137    138/139/140 not applied
+activation                  absent · epoch missing · guard 0/8 · predicates 5 missing
+status vocabulary           CLEAN — every value inside the frozen set
+activation window           0 writers · 0 idle-in-transaction
+```
+
+**Boundary 8's census population is ONE ROW, and it is explainable.** The
+census selects terminal rows with no evaluation at all; WO 1000 has none, so
+it lands in the legacy cutover inventory. `POPULATION_NOT_EXPLAINABLE` is
+**0 as of this read** — the highest-variance item in the release, and it is a
+single grandfathered row.
+
+⚠ **That number is a point-in-time read, not a promise.** The legacy
+done-path is STILL OPEN in production (boundary 7 is not deployed), so any
+of the 7 non-terminal work orders can still be closed by it. Each such close
+adds an unevaluated terminal row — harmless while it happens BEFORE the
+captured instant, and the §5.4 defect if it happens after. The census at
+boundary 8 must be fresh and re-authorized regardless.
+
+**The Yardi export is not in Spine.** 99 source-system "Work Completed"
+claims; production holds 8 work orders. Do not use source-system counts as
+Spine expectations.
+
+### Two contradictions against the rehearsed assumptions
+
+**1. SMS_SEND_MODE=customer_care with Twilio credentials PRESENT.** Resident
+outbound is armed in production today. Almost certainly deliberate — it is
+how leasing texts prospects — but it is incompatible with the Step 4 posture,
+which requires resident outbound structurally dark during the handset proof.
+The run card's "verify the mode before adding credentials" is now moot: the
+credentials are already there. The remaining decision is whether to darken
+resident SMS for the Step 4 window. **Gates Step 4 only — not boundaries 6,
+7, 7b or 8.**
+
+**2. The operations line EXISTS.** `RELEASE_0_SMS_PREREQUISITE.md`
+(2026-08-06) recorded "there is no `operations` row at all." Production shows
+`operations · 1 · active · outbound_policy=reply_only · provider not
+configured`. One of the two Step 4 transport blockers is already gone; only
+`provider_config` remains.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
 ##  RELEASE 0 IS READY TO RUN AND CANNOT BE RUN FROM HERE. 2026-08-09.
 ## ══════════════════════════════════════════════════════════════════
 
