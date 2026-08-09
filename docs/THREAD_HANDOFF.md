@@ -37,6 +37,36 @@ progress      completion_claimed AND completed — two distinct rows, both
 obligation    complete · resolution_code satisfied · completed_at set
 ```
 
+### ⚠ HOW 1008 BECAME ELIGIBLE — read this before using it to justify Boundary 6
+
+**Its obligation was assigned by DIRECT SQL, issued in the assisting session.**
+Not by a governed path. That was an unnecessary shortcut, and it means this run
+proves the LAST MILE (handset -> completion with proof), not the whole
+replacement rail.
+
+**The governed path does exist and IS deployed** — verified in source on `main`:
+
+```text
+resident -> work order + obligation, assigned_user_id NULL
+operator/tech signs in, opens the work order, presses "Claim"
+   index.html canClaim = !o.assigned_user_id && userId()
+   -> POST /operator/obligations/:id/claim   (mounted on main)
+   -> sets assigned_user_id; actor is SERVER-DERIVED
+technician texts photo + "done" -> claimCompletion -> proof -> complete
+```
+
+Note what acceptance is NOT: `ineligibilityOf` returns `not_assigned_to_actor`
+when the obligation is not already the actor's, so SMS acceptance confirms an
+assignment rather than creating one. The claim button is the step that creates
+it, and `POST /operator/work-orders/:id/assign` — the other writer — has NO
+deployed caller in the app at all.
+
+**So the rail is reachable in SOURCE but UNEXERCISED.** Boundary 6's precondition
+is that the replacement rail is REAL, not that claimCompletion can work. Settle
+it by running one more completion where the claim happens through the button:
+resident-path work order -> Claim in the app -> handset completion. Until that
+exists, Boundary 6 stays held.
+
 **Why this is the release's thesis and not just a green test.** The retired app
 path wrote `status='closed'` with `stub://closeout-photo/<id>/<ts>` in a column
 — a string with no bytes, no digest, no evaluation, no attributable actor, and
@@ -45,16 +75,22 @@ digests, an evaluation that derived `satisfied` FROM that evidence, and a claim
 recorded separately from the completion. The status is `complete` because the
 proof justified it, not because someone pressed a button.
 
+**Scope of the claim.** Production now contains a governed completion FACT that
+the canonical Release 0 reader will be able to consume once the rest of the
+train lands. The four-state reader and the activation are NOT deployed, so
+reporting does not yet read this instead of reconstructing it.
+
 **Transport is proven end to end.** Twilio → webhook → operations line →
 staff-sender resolution → technician turn → claimCompletion → governed reply.
 The operations line is `+1 541 305 8509`, A2P verified August 2026.
 
 ### What it took, recorded because the traps are the value
 
-- **`provider_config` gates nothing.** It is read NOWHERE in `src/`. The
-  preflight said Step 4 was BLOCKED on it — that criterion was invented from a
-  note, not from the code path. Same class of error as believing
-  `outbound_policy` protected the resident path.
+- **The currently deployed technician/resident transport path does not consult
+  the DB `provider_config` field.** Measured on this tree, not a timeless claim
+  — future code could read it. The preflight said Step 4 was BLOCKED on it, a
+  criterion invented from a note rather than the code path. Same class of error
+  as believing `outbound_policy` protected the resident path.
 - **`assigned_to` on a work order is NOT the obligation's `assigned_user_id`.**
   `POST /work-orders` sets the column; completion eligibility reads the
   obligation. A work order can look assigned and refuse the completion with
