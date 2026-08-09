@@ -110,6 +110,13 @@ const GATES = [
   //  repair photo" on a read that never completed.
   { file: "gate_proof_compatibility_field.js",
     what: "`satisfied` is published, never read here; next_action derives from state" },
+  //  Asked before wiring a carrier: what event can put a text on a real
+  //  phone? The answer is only worth having if it survives the next commit,
+  //  and two of its load-bearing facts are non-obvious — the outbound-policy
+  //  trigger never sees a resident send, and the resident line comes from
+  //  properties.sms_number rather than communication_lines.
+  { file: "gate_outbound_senders.js",
+    what: "exactly the expected outbound senders, their doors, and what arms them" },
   //  The conversational seams. DB-free, so they belong on the standard path:
   //  they check that the extracted logic has ONE implementation, that resident
   //  wording did not drift, and that an operating receipt and a delivery

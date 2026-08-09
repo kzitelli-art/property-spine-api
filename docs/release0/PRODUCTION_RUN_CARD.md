@@ -148,10 +148,32 @@ LINE ROW      line_type          'operations'
 CARRIER       a provisioned inbound number for the operations line
               provider_config populated on that row
               A2P 10DLC registration for the sending brand/campaign
-              ⚠ BEFORE configuring property_facing: it carries
-                outbound_policy = 'proactive'. The moment a provider is wired,
-                that line MAY PROACTIVELY TEXT RESIDENTS. Confirm that is
-                intended before, not after.
+              LEAVE property_facing.provider_config NULL
+
+              ⚠ THE CONTROL IS NOT THE POLICY COLUMN. Measured in
+                docs/OUTBOUND_TRIGGER_AUDIT.md and held by
+                tests/gate_outbound_senders.js: the resident send path
+                resolves its number from properties.sms_number and never
+                reads communication_lines, and the outbound-policy trigger
+                returns early on every resident event because no
+                resident-path writer sets communication_line_id. So
+                property_facing.outbound_policy = 'proactive' restrains
+                nothing, and changing it to 'reply_only' would refuse
+                nothing while creating a false belief that it had.
+
+                What actually arms resident messaging is SMS_SEND_MODE
+                (default and unknown-value both → disabled) plus GLOBAL
+                Twilio credentials plus properties.sms_number. Credentials
+                are global: wiring Twilio for the operations line makes
+                smsReady() true for the resident path in the same instant.
+
+SEND MODE     ⚠ LEAVE SMS_SEND_MODE UNSET (or explicitly `disabled`)
+                THROUGH STEP 4. sendOperationsReply does not consult the
+                mode, so the technician reply path works while every
+                resident send refuses at send_mode_disabled before it
+                reads a consent row. That isolation is structural and is
+                asserted by gate S9. Setting the mode is a separate,
+                deliberate act — not part of configuring transport.
 
 WEBHOOK       POST /communications/inbound-sms reachable from the carrier
               signature validation configured — the route rejects unsigned calls
