@@ -12,8 +12,14 @@ decisions this session had already started acting on.
 
 ## The one-line state
 
-**The campaign is approved. One number is not provisioned at the carrier.
-That is the only thing blocking the SMS loop.**
+**RESOLVED 2026-08-09 — the SMS loop is LIVE.** The campaign is approved
+and `+15413058509` now delivers. Outbound from the operations line was
+confirmed `Delivered` twice in the Twilio message log (14:45 and 14:59
+EDT), including a reply to an inbound MMS carrying media.
+
+The carrier provisioning that blocked it (error 30024) cleared without a
+support email — do not wait on ticket correspondence to confirm a fix
+like this; read the message log.
 
 ```text
 Brand      BN8b2e8b9ced62fad99229b3b2ef3cd3b8   Virtus Management LLC   APPROVED
@@ -98,7 +104,7 @@ text someone it cannot identify.
 
 ```text
 +12154452021   property-facing, Demo Building   delivering
-+15413058509   operations line                  BLOCKED — 30024, ticket #28079259 reopened
++15413058509   operations line                  DELIVERING as of 2026-08-09
 +17243098434   test recipient                   carrier-registered manually 2026-07-12
 ```
 
@@ -113,9 +119,12 @@ intent classified → reply generated and accepted by Twilio. PM
 assignment through the canonical operator action. Inbound to the
 operations line received and answered within two seconds.
 
-**Not proven:** anything past the carrier on the operations line. No
-technician has received a reply. Real-phone acceptance cannot complete
-until 30024 clears.
+**Proven 2026-08-09:** the operations line delivers. A real handset sent
+an MMS with media and received a reply, both confirmed on the wire.
+
+**Not proven:** the full lifecycle acceptance script end to end. The
+transport works; the nine-step sequence in
+`ACTIVATION_SMS_WORK_ORDER_HANDOFF.md` Part B has not been run.
 
 ---
 
@@ -155,16 +164,16 @@ approved campaign does not depend on it.
 
 ## Open
 
-1. **`+15413058509` carrier provisioning** — ticket #28079259, reopened
-   2026-08-08. Everything else waits on this.
-2. **`fix/technician-list-work-intent` (`797c1f9`) is UNMERGED.** The
+1. **`fix/technician-list-work-intent` (`797c1f9`) is UNMERGED — and now
+   urgent.** The line is live, so this is the FIRST thing acceptance
+   will hit. The
    technician `list_work` regex does not match "what **work** do I
    have" — the natural phrasing, and the first thing anyone will text.
    It answers *"Which work order is this about?"* instead of listing the
    queue. **Merge before the acceptance run, not after.**
-3. **The consent screen has never been loaded in production.** The page
+2. **The consent screen has never been loaded in production.** The page
    is confirmed to run (it rendered its error card for a bad token), but
    nobody has opened a real setup link and seen the checkbox.
-4. **App `build-info.js` still stamps `9422d45`** (2026-07-30) while app
+3. **App `build-info.js` still stamps `9422d45`** (2026-07-30) while app
    `main` is `5f7ecf7`. A stamp branch was made on 08-06 and never
    pushed.
