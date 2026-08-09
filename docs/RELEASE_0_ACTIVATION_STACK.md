@@ -338,7 +338,11 @@ which is why the receipt names it rather than omitting it:
 2. **Browser verification of the four-state block** against a post-cutover
    population (§33 requires it for operator workflows).
 3. **The production run itself.** Everything above is rehearsal on isolated
-   Postgres clones. The activation has never been executed against production and
-   must not be until the owner runs it.
+   Postgres clones. **No build-ahead activation work in this stack has been run
+   against production** — no deploy, none of 138/139/140 applied, no activation —
+   and it must not be until the owner runs it. Stated that way on purpose:
+   earlier Release 0 work (the read-only production audit under Open Ruling 4,
+   the Gate 4/8/9 tools deploy) *did* reach production, and "Release 0 has not
+   touched production" would be false.
 4. **Retention / privacy / storage lifecycle** for evidence frozen by R0005 —
    parked deliberately (`RELEASE_0_COMPLETION_GUARD.md` §11), not solved.

@@ -74,14 +74,26 @@ Proven, not predicted — §9.10.2.
 ## ══════════════════════════════════════════════════════════════════
 
 **This supersedes the "DESIGN FROZEN, NOT IMPLEMENTED" section below it.**
-It does **not** change any deployment claim: `main` has not moved, no migration
-has been applied to production, and **the activation has never been run.**
+It does **not** change any deployment claim.
+
+**Say this precisely, and do not shorten it:** *no build-ahead activation work in
+this stack has been run against production.* Earlier Release 0 work — the
+read-only production audit under Open Ruling 4, the Gate 4/8/9 tools deploy —
+**did** reach production, and the record below is the account of it. "Release 0
+has not touched production" is false and would corrupt the historical record.
+
+What is true of *this* stack: `main` has not moved for it, none of migrations
+138/139/140 has been applied to production, and **the activation has never been
+run anywhere but an isolated clone.**
 
 ```text
-claude/release0-composed    the rehearsal tree — #57 + #59…#63 composed
-claude/completion-guard     migration 140, FROZEN at revision 5
+claude/release-0-rc         ← THE RELEASE CANDIDATE. One tree, one SHA.
+claude/release0-composed    the rehearsal tree the RC was cut from
+claude/completion-guard     migration 140 alone, for review of that PR
 claude/next-build-…         read-only intelligence for what comes AFTER
-production                  UNTOUCHED. No deploy, no migration, no activation.
+production                  no build-ahead activation work from this stack has
+                            been run against it: no deploy, no 138/139/140,
+                            no activation.
 ```
 
 **Read `docs/RELEASE_0_ACTIVATION_STACK.md` first** — it is the current state of
