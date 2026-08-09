@@ -108,7 +108,12 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
        e.conclusion_code === "unavailable_source_cannot_answer", e.conclusion_code);
     ok("A4  no totals are asserted", e.totals === null, JSON.stringify(e.totals));
     const r = renderer.render(e);
-    ok("A5  the sentence admits it", /can't determine/.test(r.answer), r.answer);
+    //  INTENT-NEUTRAL wording. The conclusion code is shared by every
+    //  intent, so its sentence may not name one of them — the browser
+    //  proof caught it saying "can't determine completion PROOF" in
+    //  answer to a question about assignment.
+    ok("A5  the sentence admits it",
+       /can't answer that from governed truth/.test(r.answer), r.answer);
     ok("A6  the authority source is marked FAILED with its reason",
        e.source_outcomes.some((o) => o.status === "failed" && o.detail === "activation_absent"),
        JSON.stringify(e.source_outcomes));

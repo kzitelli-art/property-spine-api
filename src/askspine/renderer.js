@@ -98,8 +98,14 @@ const SENTENCES = Object.freeze({
     return `${laneTotal(t)} current maintenance obligations: ${parts.join(", ")}.`;
   },
 
+  /*  INTENT-NEUTRAL, and the browser is what caught it: asked "who is
+   *  assigned?" with the obligations source broken, this sentence said
+   *  "I can't determine completion PROOF right now" — naming a different
+   *  question than the one asked. The conclusion code is shared by every
+   *  intent, so its words must not belong to one of them. Phase 12
+   *  freezes the contract, not the English. */
   unavailable_source_cannot_answer: () =>
-    "I can't determine completion proof right now.",
+    "I can't answer that from governed truth right now.",
 
   unauthorized_module: () =>
     "You do not have maintenance access for this property.",

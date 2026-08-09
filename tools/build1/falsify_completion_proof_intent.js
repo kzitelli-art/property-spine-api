@@ -427,7 +427,7 @@ const CUTOVER = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
        " — reporting counts alongside `I could not complete the check` would be " +
        "two answers in one response");
     ok("R6  the operator sentence does not leak the internal reason",
-       /can't determine completion proof/.test(broken.json.answer) &&
+       /can't answer that from governed truth/.test(broken.json.answer) &&
        !/receipt/i.test(broken.json.answer), broken.json.answer);
 
     const after = await get();
