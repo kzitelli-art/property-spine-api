@@ -4,13 +4,18 @@
 
 ```text
 branch   claude/release-0-rc
-SHA      recorded in the commit immediately after this text — a commit
-         cannot contain its own hash. `git log -2 claude/release-0-rc`
+SHA      f6873d7b3dd21a63d82dbca0d96da8840a774e14
 ```
 
 **The SHA is the RC, not the branch.** A branch tip moves; a commit does not. If
-this branch ever advances, the tree that was proven is still `65baf29` and the new
+this branch ever advances, the tree that was proven is still `f6873d7` and the new
 tip is a different candidate that has to earn the name again.
+
+Two commits carry the same source tree and are **not** the RC: `65baf29`, which
+composed it, and `82ab42c`, which records this SHA — a commit cannot contain its
+own hash. Both differ from `f6873d7` in `docs/` only (`git diff --stat` on either
+pair shows `docs/THREAD_HANDOFF.md` and this file, nothing else). **`f6873d7` is
+the answer to the question at the top of this page.**
 
 An annotated tag would normally carry that, and one was written — but this
 environment's git proxy refuses tag refs (four attempts, identical failure, while

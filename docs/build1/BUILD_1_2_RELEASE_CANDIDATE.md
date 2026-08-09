@@ -63,8 +63,11 @@ history — a read receipt and an interpretation. The claim-path fix is foundati
 work on the obligations rail, exercised separately; it is **not** an Ask Spine
 action, and Ask Spine has no authority to assign anything.
 
-**No production activation.** Release 0 has still never run in production, and
-Capability 1 is honestly `unavailable` until it does.
+**No production activation.** Earlier Release 0 work already reached production;
+what has not is the activation. **No build-ahead activation work in this stack has
+been run against production**, so Capability 1 is honestly `unavailable` until the
+activation exists there. The sequence that would change that is
+`docs/release0/PRODUCTION_RUN_CARD.md`.
 
 ## Known unsupported, deliberately
 
@@ -75,3 +78,11 @@ Capability 1 is honestly `unavailable` until it does.
 - **Accountability** — assignment and acceptance are not accountability. The
   resolver refuses, and that is the product behaviour, not a gap in it.
 - **Natural-language breadth** — bounded deterministic resolution, by decision.
+
+## Known defects, deliberately not fixed
+
+`docs/build1/INTEGRITY_GAPS.md` — one open gap. An obligation whose polymorphic
+`related_id` names no work order splits Capability 2's answer into two populations:
+the record lane joins `work_orders`, the facet counts do not. Reachable, real, and
+**not** a Release 0 blocker. The fix is a product decision about how to disclose
+the divergence, not a patch, and the cardinality has never been measured.

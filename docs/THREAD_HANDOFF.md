@@ -19,6 +19,55 @@ current truth. Re-date it whenever `main` moves materially.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
+##  RELEASE 0 IS READY TO RUN AND CANNOT BE RUN FROM HERE. 2026-08-09.
+## ══════════════════════════════════════════════════════════════════
+
+**The frozen RC is `claude/release-0-rc` @ `f6873d7`.** The production
+activation sequence was called for and **was not executed**, for one reason:
+**this session holds no production credentials.**
+
+```text
+DATABASE_URL · RENDER_GIT_COMMIT · GIT_SHA · TWILIO_*      all ABSENT
+```
+
+Probed by name, expanding nothing. `tools/release0/preflight_production.js`
+exits 2 — *"REFUSED: DATABASE_URL is not set. This reads the real database and
+will not invent an answer."* That refusal is the tool working, and the
+credential is **not** to be requested: *"Do not send, paste or request a
+production connection."*
+
+**Nothing was simulated, and no step is marked done.** The rehearsal evidence
+(`rehearse_release_train` 53/53, `prove_boundary_reversibility` 20/20,
+`falsify_release_transitions` 26/26, `prove_migration_sequencing` 15/15) is
+isolated-Postgres evidence about the *sequence*, not about production.
+
+**The run card is `docs/release0/PRODUCTION_RUN_CARD.md`** — the ordered
+commands, every environment variable named and never valued, and the stop
+condition on each step. It reorders nothing; the sequence is still the runbook's
+§5.1.
+
+**The long pole is not engineering.** Step 4 is blocked on transport, and
+transport is **two** independent blockers recorded read-only on 2026-08-06
+(`docs/RELEASE_0_SMS_PREREQUISITE.md`): there is no `operations` line row at
+all, and `provider_config` is null on the only line that exists. Add A2P 10DLC
+carrier review on top. **Start that first — §1 of the run card can run in
+parallel with it; §3 cannot finish without it.**
+
+**Wording that must stay correct:** earlier Release 0 work already reached
+production. What has not is the activation. Say *"no build-ahead activation work
+in this stack has been run against production"* — not *"production is
+untouched."*
+
+**Build 1/2 is parked, not merged.** API `claude/build-1-2-rc` @ `d68cc1d`,
+APP `claude/build-2-ask-spine-rc` @ `e867dd8`. One open integrity gap logged at
+`docs/build1/INTEGRITY_GAPS.md` (an orphaned `obligations.related_id` splits
+Capability 2's answer into two populations). **Not a Release 0 blocker** —
+Release 0 never reads that column. Migration 142 / claim-accept likewise stays
+out of the activation decision; the train does not depend on it.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
 ##  ⛔ THE DEPLOYED APP IS BROKEN. 2026-08-06 (latest).
 ## ══════════════════════════════════════════════════════════════════
 
