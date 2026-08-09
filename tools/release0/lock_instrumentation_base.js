@@ -75,19 +75,41 @@ try {
   git("fetch", "origin", "main", "--quiet");
   mainSha = git("rev-parse", "origin/main");
 } catch (e) { /* reported by L2 */ }
-ok("L2  origin/main is STILL the stamped base (fetched just now)",
-   !!mainSha && !!claimedFull && mainSha === claimedFull,
-   `origin/main  ${mainSha ? mainSha.slice(0, 12) : "UNREADABLE"}\n` +
-   `        stamped     ${claimedFull ? claimedFull.slice(0, 12) : "?"}\n` +
-   "        MAIN HAS ADVANCED. Do not merge and call the base " + claimed + ". " +
-   "Re-cut the instrumentation from the new main, re-run the fence and the boot " +
-   "comparison, and re-stamp. The equation that makes this candidate valid no " +
-   "longer holds.");
+/*  GENERALISED ON SECOND USE. The first version asserted
+ *  origin/main === product_base_sha, which is true only for the FIRST
+ *  tooling deploy. After it merges, main is base + tools and every later
+ *  tooling candidate would red on a lock that is working correctly —
+ *  a gate that fails the fix.
+ *
+ *  The invariant that actually holds for ANY tooling deploy: main may
+ *  have moved, but only in tools/ and docs/. The moment product source
+ *  lands, the stamp is stale and must be re-cut before anything else is
+ *  layered on top of it. */
+let productDrift = [];
+try {
+  productDrift = git("diff", "--name-only", claimed, "origin/main")
+    .split("\n").filter(Boolean)
+    .filter((f) => !f.startsWith("tools/") && !f.startsWith("docs/"));
+} catch (_) { productDrift = ["<could not diff>"]; }
+
+ok("L2  origin/main still differs from the stamped base ONLY in tools/ and docs/",
+   !!mainSha && !!claimedFull && productDrift.length === 0,
+   "PRODUCT SOURCE HAS LANDED since the stamp was written:\n        " +
+   productDrift.join(", ") +
+   "\n        The stamp still says product_base_sha=" + claimed + " and " +
+   "release_0_product_source_deployed=false. Both are now wrong. Re-stamp " +
+   "against the real base before layering anything else on top.");
+if (mainSha === claimedFull) {
+  console.log("        (main is exactly the base — first tooling deploy)");
+} else {
+  console.log(`        (main is ${mainSha.slice(0,12)}: base + tooling only)`);
+}
 
 // ── L3 · and nothing was rebased underneath it ────────────────────
 let mb = null;
 try { mb = git("merge-base", "HEAD", "origin/main"); } catch (_) {}
-ok("L3  this branch's merge-base with main IS that commit", !!mb && mb === mainSha,
+ok("L3  this branch descends from CURRENT main, nothing rebased underneath",
+   !!mb && mb === mainSha,
    `merge-base ${mb ? mb.slice(0, 12) : "?"} ≠ origin/main ${mainSha ? mainSha.slice(0, 12) : "?"} — ` +
    "the branch is not simply main plus instrumentation");
 
