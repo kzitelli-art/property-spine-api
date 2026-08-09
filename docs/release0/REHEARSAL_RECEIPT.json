@@ -1,0 +1,103 @@
+{
+  "_": "RELEASE 0 \u2014 REHEARSAL ACCEPTANCE RECEIPT. This is NOT production. It is the receipt tools/release0/acceptance_receipt.js produced against an isolated Postgres clone that tools/step13/rehearse_release_train.js had driven through the entire release sequence B3..B13. It is preserved so the shape of the production receipt is known before the production run, and so any difference between the two is visible rather than argued.",
+  "not_production": true,
+  "produced_by": [
+    "tools/step13/rehearse_release_train.js  (53/53)",
+    "tools/release0/acceptance_receipt.js --json  (exit 0, no contradictions)"
+  ],
+  "receipt": {
+    "generated_from": "database read",
+    "unknowns": [
+      {
+        "field": "running_sha",
+        "why": "RENDER_GIT_COMMIT/GIT_SHA absent from this process \u2014 run the receipt ON the deployed instance; the local checkout is not evidence of what production runs"
+      }
+    ],
+    "running_sha": {
+      "UNKNOWN": "RENDER_GIT_COMMIT/GIT_SHA absent from this process \u2014 run the receipt ON the deployed instance; the local checkout is not evidence of what production runs"
+    },
+    "frozen_artifacts": {
+      "revision": 5,
+      "drifted": []
+    },
+    "ledger_ceiling": "140",
+    "release_0_migrations": {
+      "138": true,
+      "139": true,
+      "140": true
+    },
+    "canonical_writer": "technician/lifecycle_service.claimCompletion \u2014 records the proof evaluation and the status change in one transaction",
+    "old_writers_impossible": {
+      "legacy_operator_done_path": "refused (409 legacy_completion_retired) before any transaction opens",
+      "post_cutover_closed": "refused by migration 140 (R0003) regardless of which build serves"
+    },
+    "activation": {
+      "id": "e9fa54ce-771f-46de-90c1-c69c9a4d7fde",
+      "instant": "2026-08-08T09:15:00.000Z",
+      "captured_by": "release train",
+      "captured_at_step": "step_6"
+    },
+    "grandfathered_population": [
+      {
+        "status_at_cutover": "closed",
+        "n": 1
+      }
+    ],
+    "containment_guard": {
+      "triggers_installed": 8,
+      "triggers_expected": 8,
+      "disabled": [],
+      "not_deferred": [],
+      "epoch": {
+        "activation_id": "e9fa54ce-771f-46de-90c1-c69c9a4d7fde",
+        "activated_at": "2026-08-08T09:15:00.000Z"
+      },
+      "armed": true
+    },
+    "invariant_audit": [],
+    "invariant_audit_note": "EMPTY IS THE EXPECTED ANSWER. A row is a SYSTEM-INTEGRITY event \u2014 guard dropped, deployed late, or bypassed by privileged DDL. It is NOT a new obligation against a person: \u00a74.2 keeps its narrow semantics and raises for one class only.",
+    "evidence_immutability": "cited proof attachments are frozen entirely (R0005, immediate, UPDATE and DELETE). Proof that justified a completion is historical: correct it by adding new truth, never by rewriting the old evidence.",
+    "reader": [
+      {
+        "status": "closed",
+        "proof": "none",
+        "n": 1
+      },
+      {
+        "status": "complete",
+        "proof": "grounded",
+        "n": 3
+      }
+    ],
+    "operator_contract": {
+      "field_of_record": "proof.state \u2014 one of satisfied \u00b7 not_satisfied \u00b7 legacy_indeterminate \u00b7 missing_evaluation_defect",
+      "read_failure": "read_status='unavailable' with state and satisfied ABSENT, never null",
+      "retired": "proof.satisfied has left the wire; the \u00a73.4 mapping is exported so a consumer can still derive it"
+    },
+    "outside_release_0": [
+      "the full eight-fact completion transaction is the canonical service's, not the database's \u2014 140 prevents terminal/proof divergence and protects the evidence behind that proof, and no more",
+      "a governed operator/manager completion surface (\u00a71.1.2 \u2014 containment, not a permanent ruling)",
+      "reopening pre-cutover work \u2014 inventoried legacy status is frozen",
+      "retention / privacy / storage lifecycle for cited evidence \u2014 PARKED, and when taken up, redaction must be new truth rather than a rewrite",
+      "any scheduler: the \u00a74.2 sweep is a governed MANUAL runner"
+    ],
+    "remaining_proof_debt": [
+      {
+        "item": "Step 4 \u00b7 the handset completion",
+        "status": "BLOCKED on Twilio transport",
+        "why": "a real MMS from a real phone through the operations line. Packaged and rehearsed 48/48 in isolation; nothing about the test design should need debugging in production."
+      },
+      {
+        "item": "browser verification of the operator surface",
+        "status": "OWED",
+        "why": "\u00a733 makes browser verification part of done for operator workflows. A database read cannot discharge it."
+      },
+      {
+        "item": "production deploy verification of Step 3",
+        "status": "OWED",
+        "why": "the running SHA must be read from the deployed instance, not assumed."
+      }
+    ],
+    "contradictions": []
+  }
+}

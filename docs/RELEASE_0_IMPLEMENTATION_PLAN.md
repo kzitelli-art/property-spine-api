@@ -74,6 +74,70 @@ owner's evidence-source ruling and five final corrections:
 | 12 | Scale and concurrency proof before migration 137 | §7.6 |
 | 13 | Verification binding rules — every proof binds artifact, input and environment | §7.7 |
 
+**Revision 5** applies the owner ruling issued after the step 1 production
+acceptance, which established a production baseline fact the earlier revisions
+assumed the opposite of:
+
+| # | Correction | Closed in |
+|---|---|---|
+| 14 | **The legacy operator completion path was ALREADY unreachable before Release 0.** Step 5 was sequenced to prevent a future state that is already the present one. | §1.1, §5.5 |
+| 15 | Step 5 redefined: it retires unreachable code and fails the API path closed. It does **not** protect an operator who is already stranded. | §5.1, §5.5 |
+| 16 | **New production gate** — no Release 0 production schema or API mutation may begin until SMS transport is configured and real-handset evidence ingress is proven. | §5.6 |
+| 17 | Step 1 acceptance contract corrected: the two visibility checks were invalid requirements, not failed behaviour. | app packet §9.15 |
+
+---
+
+## 1.1 ⛔ PRODUCTION BASELINE — THERE IS NO USABLE COMPLETION PATH TODAY
+
+Established by the step 1 production acceptance, 2026-08-06. Recorded plainly
+because two later steps were designed around its opposite.
+
+```text
+legacy operator completion   ALREADY UNREACHABLE, and unreachable at the
+                             step 1 BASE — not caused by Release 0
+SMS technician rail          NO CONFIGURED TRANSPORT — no operations line,
+                             provider_config null on the only line that exists
+                             ─────────────────────────────────────────────
+result                       PRODUCTION HAS NO USABLE COMPLETION PATH
+```
+
+**The operator is already stranded.** That is the baseline, not a risk to be
+managed.
+
+Evidence: `property-spine-app` `docs/RELEASE_0_STEP_1_PACKET.md` §9.14 — the
+handlers, `openMaintenanceModule` and the call-site inventory are each
+byte-identical to base `6220ca5`, and every route into the legacy closeout is
+circular. Transport: `docs/RELEASE_0_SMS_PREREQUISITE.md`.
+
+### 1.1.1 Why the old control is NOT being reconnected
+
+Restoring it would deliberately reconnect a known-invalid writer that:
+
+```text
+writes status = closed
+does NOT write the canonical completion event
+accepts fabricated stub:// evidence
+disagrees with the canonical reader
+```
+
+**We do not reintroduce a defective completion rail to make an earlier
+sequencing assumption appear true.** The containment decision stands: the
+technician SMS lane is the canonical evidence and completion source; the
+operator app reads and reviews; the operator app does not declare repair
+completion.
+
+### 1.1.2 What is NOT ruled here
+
+This is a **Release 0 containment decision, not a permanent product doctrine.**
+It does not declare operator completion authority abolished. A future governed
+operator or manager acceptance surface may be right for vendor work, SMS
+outages, supervisory inspection or higher-risk clearance — distinguishing who
+may report completion, who may provide evidence, who may accept the work, who
+remains accountable, and who grants final clearance.
+
+**That is a later product ruling. Do not invent that surface inside Release 0.**
+Complete the one canonical technician rail first.
+
 ---
 
 ## 1. What the production facts change
@@ -900,10 +964,17 @@ STEP 4   ⚠ PHONE-VERIFY the technician SMS completion and evidence rail
            are binding
          GATE. Step 5 does not begin until this passes.
 
-STEP 5   APP — remove the legacy completion control
+STEP 5   APP+API — retire the UNREACHABLE legacy completion path
+         ⚠ REDEFINED IN REVISION 5. This step no longer protects an operator
+           from becoming stranded — see §1.1. It removes dead code and closes
+           a writer that is already unreachable from the UI.
          · "Mark done — close" removed
          · attachStubPhoto and woStubPhotos removed
+         · the legacy API done-path fails closed
          · closeoutNotDone REMAINS, unchanged and still working
+         STILL GATED ON STEP 4. Unreachable code and API paths must not be
+         retired until the replacement rail is REAL — unreachable is not the
+         same as absent, and an un-retired path is recoverable.
          DEPLOY. BROWSER-VERIFY that no app path completes a work order and
          that the not-done path still does.
 
@@ -998,6 +1069,66 @@ Only then capture the instant.
 `closed` row now renders `missing_evaluation_defect` and raises an obligation
 rather than vanishing — but a release that relies on its own error handling to
 cover a sequencing gap has not closed the gap.
+
+### 5.5 Step 5's justification changed; its gate did not
+
+```text
+WAS   legacy operator completion remains available
+      → SMS rail becomes proven
+      → legacy control removed at step 5, so nobody is stranded
+
+IS    legacy operator completion ALREADY unreachable
+      + SMS rail has no configured transport
+      = production has no usable completion path RIGHT NOW
+```
+
+Step 5 is therefore **cleanup of an already-dead path**, not the removal of a
+live one. It still waits on step 4, for a different and still-good reason:
+**unreachable code is recoverable; retired code is not.** Until a real
+replacement rail exists, keep the option.
+
+### 5.6 ⛔ NEW PRODUCTION GATE — transport before any production mutation
+
+**No Release 0 production schema or API mutation may begin until SMS transport
+is configured and real-handset evidence ingress is proven.**
+
+```text
+MAY PROCEED NOW
+  isolated scale and concurrency proof (§7.6)
+  documentation and runbook preparation
+  the SMS activation packet itself
+
+BLOCKED
+  production migration 137
+  canonical writer production deploy
+  legacy-path retirement
+  activation
+```
+
+#### 5.6.1 The narrower transport proof, owed BEFORE migration 137
+
+The formal completion phone test (§7.4, step 4) still belongs **after** the
+canonical writer is deployed, because it must prove the eight atomic completion
+facts. This is a **different, narrower** proof, owed earlier, and it proves only
+that evidence can arrive:
+
+```text
+operations line exists
+provider configured
+inbound webhook authenticated
+technician fixture valid
+real handset image received
+correct EXISTING work order resolved
+attachment durably stored
+MIME type present
+byte size present
+digest present
+NO completion command sent
+```
+
+The last line is load-bearing. This proof establishes **ingress**, not
+completion. Sending a completion command here would prove the wrong thing and
+write a real operating fact.
 
 ### 5.2 SHA pair requirements
 
@@ -1369,6 +1500,25 @@ NO use of the August 6 audit as the deployment-time expected set
 NO Ask Spine work — Build 1 does not start
 NO /version endpoint, NO connectionTimeoutMillis   (out of scope by instruction)
 ```
+
+---
+
+## 9.1 PARKED — a separate read-surface defect, not Release 0
+
+Observed during the step 1 acceptance and recorded so it is not discovered
+twice.
+
+```text
+Maintenance desk, WORK ORDERS tile   "Work-order status unavailable."
+the Work Orders door beside it       renders the record successfully
+```
+
+**Not a §5 truth violation.** It says *unavailable*, not "0" — an honest blank
+rather than a false zero, which is the behaviour the doctrine asks for when a
+read fails.
+
+It is a separate desk-summary read defect. **Do not pull it into Release 0**
+unless it blocks a named Release 0 acceptance step.
 
 ---
 

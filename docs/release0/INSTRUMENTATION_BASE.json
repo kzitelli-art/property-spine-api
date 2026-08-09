@@ -1,0 +1,34 @@
+{
+  "_": "READ BY tools/release0/preflight_production.js AND acceptance_receipt.js. Its presence is what tells those tools that this container is an INSTRUMENTATION deploy — tools and docs over a product base it does not contain — so they report the container SHA and the product base as two separate facts instead of one. Delete this file in the deploy that lands Release 0 product source, or set release_0_product_source_deployed to true, whichever the boundary actually does.",
+
+  "product_base_sha": "b4e3104",
+  "product_base_is": "Merge pull request #54 — Step 3, the canonical completion writer. Boundary 3 of 13.",
+
+  "release_0_product_source_deployed": false,
+  "what_this_container_adds": "tools/release0/{preflight_production,where_are_we,acceptance_receipt}.js, tools/step4/_ro.js, and docs/. Nothing else.",
+
+  "why_the_distinction_exists": "A container SHA newer than the product base reads like 'Release 0 product source is running.' It is not. This deploy carries no src/, no migrations, and no package change — it exists so the production preflight can be run from the deployed instance, which is the one fact nothing else can supply.",
+
+  "what_is_NOT_running_because_of_this_deploy": [
+    "src/release0/ — activation service and proof state",
+    "migrations 138, 139, 140 — the defect obligation, the resolution vocabulary, the completion guard",
+    "boundary 6 · the app's completion control removal",
+    "boundary 7 · the legacy done-path failing closed",
+    "boundaries 8-13 · census, activation, four-state reader, sweep, HTTP acceptance, cleanup"
+  ],
+
+  "expected_first_preflight_findings": {
+    "_": "KNOWN PRE-ACTIVATION STATE, not surprise contradictions. Owner ruling. Anything NOT on this list that contradicts the rehearsal comes back before anything writes.",
+    "frozen artifacts": "6 DRIFTED — migrations 138/139/140, src/release0/activation_service.js, src/release0/proof_state.js, src/technician/lifecycle_service.js. MEASURED against this exact tree, not predicted: it is 6 and not 8 because two pinned files (src/technician/evidence_service.js, src/maintenance/proof_evaluation_service.js) already match on the base. lifecycle_service.js drifts even though Step 3 landed, because later boundaries edited it again.",
+    "migrations 138/139/140": "not applied",
+    "activation": "absent",
+    "activation epoch": "MISSING — migration 140 has not been applied",
+    "guard triggers": "0/8 present — migration 140 has not been applied",
+    "guard predicates": "5 FAULT(S), all MISSING — same reason",
+    "invariant audit": "unavailable — the validator is not installed",
+    "terminal population": "NOT SCORED — the validator is not installed",
+    "Step 6 · legacy done-path": "STILL OPEN — boundary 7 has not been deployed"
+  },
+
+  "removal_condition": "This file is deleted, or release_0_product_source_deployed set true, by the deploy that first lands Release 0 product source on main. Leaving it stale would make the tools understate what is running, which is the opposite of the error it exists to prevent — and the more dangerous direction once the guard is real."
+}
