@@ -3,13 +3,28 @@
 **One API tree, one app tree.** Not merged to production.
 
 ```text
-API   claude/build-1-2-rc
-APP   claude/build-2-ask-spine-rc
+API   claude/build-1-2-rc              d68cc1ddbe79ffbc754913e9e0e83dd6793e6eec
+APP   claude/build-2-ask-spine-rc      e867dd8c27f8a1bb4e75040bf277ef03d85fc130
 ```
 
-The SHAs are recorded in the commit that follows this text — a commit cannot
-contain its own hash, the same two-step used for `FROZEN_ARTIFACTS.json` and the
-Release 0 RC.
+Recorded in the commit that follows the one they name — a commit cannot contain
+its own hash, the same two-step used for `FROZEN_ARTIFACTS.json` and the Release
+0 RC. Both are docs-only commits on top; the SOURCE is what the SHAs identify.
+
+## Proven against these exact tips
+
+```text
+gates                                  17/17
+prove_completion_proof_intent          59/59   Capability 1, unchanged in meaning
+falsify_completion_proof_intent        53/53   Capability 1, unchanged
+attack_obligation_ownership_rail       32/32   the rail Capability 2 consumes
+prove_ownership_intent                 47/47   Capability 2, no Release 0 gate
+prove_self_claim_acceptance            40/40   claim ruling, composed with 142
+prove_ask_spine_turn                   49/49   conversation, read-only boundary
+ask_spine_turn.browser                 20/20   browser, both capabilities
+ask_spine_entry_to_answer.browser      27/27   REAL sign-in to answer
+leaked database clones                     0
+```
 
 ## What is in it
 
