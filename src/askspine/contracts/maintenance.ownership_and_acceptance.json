@@ -1,0 +1,132 @@
+{
+  "_": "FROZEN INTENT CONTRACT. Digest pinned in docs/build1/FROZEN_INTENTS.json and enforced by tests/gate_ask_spine_contract_frozen.js. The executor reads this file; it contains no business truth of its own.",
+
+  "intent_slug": "maintenance.ownership_and_acceptance",
+  "version": "1.0.0",
+
+  "question": "For the current maintenance obligations associated with work orders in this property, what is the current assignment and acceptance state?",
+
+  "scope": {
+    "domain": "the obligations rail",
+    "governing_object": "obligation",
+    "record_type": "obligation",
+    "related_context": "work_order",
+    "not": "work_orders.assigned_to is free text with no governed writer and is NEVER read by this intent. The work order is the related operating context; the obligation is the thing somebody currently has to do.",
+    "property": "server-derived from the authenticated operator session; never client-supplied",
+    "module_entitlement_required": "maintenance"
+  },
+
+  "consequence_class": "read-only operating conclusion",
+  "consequence_class_means": "no maintenance or obligation domain mutation of any kind. Ask Spine knowing an obligation is unassigned does not give it authority to assign it. A durable read receipt is required audit history, not an operational consequence.",
+
+  "candidate_predicate": {
+    "version": "1.0.0",
+    "principle": "one complete population of current maintenance obligations that relate to a work order, in this property. No recent-N sample, no exclusion for tidiness.",
+    "source": "public.obligations",
+    "filter": "property_id = <session property> AND related_type = 'work_order' AND module = 'maintenance' AND status IN ('open','in_progress')",
+    "why_module_filter": "a leasing obligation that happens to carry a work-order-shaped reference is not maintenance ownership. Proven: attack_obligation_ownership_rail P5.1.",
+    "why_status_filter": "this is a CURRENT-state question. A completed or cancelled obligation is not something somebody currently has to do.",
+    "cardinality": "MANY obligations per work order. No unique index constrains it (attack_obligation_ownership_rail P3.2), so the answer entity is the OBLIGATION and every record keeps its own type, status, assignee and acceptance. Grouping under a work order is presentation, never aggregation.",
+    "types_preserved": true,
+    "ordering": "deterministic: work_order_ref, then obligation type, then obligation id"
+  },
+
+  "ownership_states": {
+    "derivation": "mechanical, from durable fields only. Never inferred from activity, age, notes or model judgement.",
+    "unassigned": "assigned_user_id IS NULL",
+    "assigned_not_accepted": "assigned_user_id IS NOT NULL AND accepted_by_user_id IS NULL",
+    "assigned_accepted": "assigned_user_id IS NOT NULL AND accepted_by_user_id = assigned_user_id",
+    "impossible": "accepted_by_user_id <> assigned_user_id — refused by ck_oblig_accepter_is_owner; and accepted with no assignee — refused by ck_oblig_acceptance_has_owner (migration 142)",
+    "absence_of_acceptance_means_not_accepted": "never 'accepted by implication', never 'probably accepted because work started'"
+  },
+
+  "required_sources": [
+    {
+      "id": "maintenance_obligations",
+      "reader": "public.obligations, property-scoped",
+      "why": "the governing object. Assignment and acceptance are its durable fields."
+    }
+  ],
+
+  "optional_sources": [
+    {
+      "id": "assignee_team_standing",
+      "reader": "public.property_team_assignments where active",
+      "why": "an assignee's CURRENT standing on this property's team is genuinely separable from the assignment fact: a person can be deactivated while obligations still name them. Not manufactured to exercise PARTIAL — the assignment fact stands either way.",
+      "degradation": "a failed read degrades coverage to PARTIAL. A row whose assignee has no active standing is reported as assigned with standing unavailable. IT NEVER BECOMES UNASSIGNED — that would corrupt the operating fact."
+    }
+  ],
+
+  "facets": [
+    {
+      "id": "ownership_state",
+      "over": "the FULL candidate population, never the capped page",
+      "values": ["unassigned", "assigned_not_accepted", "assigned_accepted"]
+    }
+  ],
+
+  "evidence_time_rules": {
+    "field": "evidence_as_of",
+    "principle": "read time is not fact time. There is no governed reassignment history, so this intent is a CURRENT-STATE question and may not claim durations or prior owners.",
+    "basis_order": [
+      "latest obligations.accepted_at among the supporting records",
+      "latest obligations.updated_at among the supporting records",
+      "none — reported honestly as null with a basis of no_evidence_timestamp"
+    ],
+    "forbidden": "substituting now() for a missing evidence timestamp; claiming how long an assignment has been held"
+  },
+
+  "lanes": ["current_maintenance_obligations"],
+  "result_cap_per_lane": 20,
+  "result_cap_scope": "per_lane",
+  "result_cap_note": "This intent has ONE lane, so per-lane and overall are the same rule; the field keeps the executor's single vocabulary rather than inventing a second. Facet counts come from the FULL population and are unaffected by the cap — the whole point of separating them.",
+
+  "supported_conclusions": [
+    "ownership_none_current",
+    "ownership_all_accepted",
+    "ownership_mixed",
+    "unavailable_source_cannot_answer"
+  ],
+
+  "withheld_conclusions": [
+    "who is accountable for maintenance",
+    "who has managerial authority",
+    "who caused the problem",
+    "who should be blamed",
+    "who previously owned it",
+    "when ownership changed",
+    "how long the current owner has held it",
+    "who approved it",
+    "whether an assigned person is eligible under a future authority resolver",
+    "whether the work itself is complete",
+    "whether the current owner should be changed",
+    "what should happen next"
+  ],
+  "withheld_conclusions_note": "assignment is not acceptance is not accountability. An assigned user is the current obligation assignee; an accepted_by is that assignee confirming they took it on. Neither is institutional accountability, and the organization/accountability resolver does not exist yet. Do not pre-empt it with loose wording.",
+
+  "renderer_contract": {
+    "principle": "the executor emits a conclusion code and counts; the renderer turns them into operator language. No model output reaches operating truth.",
+    "model_required": false,
+    "prefer_words": ["assigned", "accepted", "not yet accepted", "unassigned"],
+    "forbidden_words": ["owns", "accountable", "responsible for", "at fault", "needs to", "should"],
+    "supporting_record_fields": [
+      "obligation_id",
+      "obligation_type",
+      "obligation_status",
+      "ownership_state",
+      "assigned_user_id",
+      "assignee_display",
+      "assignee_team_standing",
+      "accepted_at",
+      "work_order_id",
+      "work_order_ref",
+      "unit_label"
+    ],
+    "forbidden_in_output": [
+      "free text authored by a model",
+      "HTML or operating markup",
+      "any claim not derivable from the fields above",
+      "a single owner per work order — the cardinality is many and flattening destroys information"
+    ]
+  }
+}

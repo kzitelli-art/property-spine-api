@@ -157,5 +157,41 @@ ok("A12 no rendered sentence contains the internal state name",
 ok("A13 …and no sentence emits markup",
    !/[<>]/.test(sentences), sentences);
 
+/* ── A14 · THE GENERICITY GATE ─────────────────────────────────────
+ *
+ *  The second intent is the test of whether the abstraction is real. It
+ *  is only real if the executor never asks WHICH intent it is running.
+ *  Dispatch through a registry is fine — that is a contract naming its
+ *  adapter. A comparison against a slug is not. */
+const branchy = codeOnly.match(/intent_slug\s*===\s*["'`]/g) || [];
+ok("A14 the executor contains NO `intent_slug === …` truth branch",
+   branchy.length === 0, JSON.stringify(branchy) +
+   " — two intents answered by one executor is only evidence if the executor " +
+   "cannot tell them apart");
+
+ok("A15 …and dispatches through registries instead",
+   ["POPULATION_READERS", "RECORD_SHAPERS", "CONCLUSION_MAPPERS", "EVIDENCE_READERS"]
+     .every((r) => new RegExp(`${r}\\[intent_slug\\]`).test(codeOnly)),
+   "the adapters must be looked up, not chosen");
+
+/*  Answerability is keyed by SOURCE, not intent — which is what lets one
+ *  capability be unavailable while another is decisive in the same
+ *  database. A precheck registry keyed by slug would silently reintroduce
+ *  the Release-0-shaped gate. */
+ok("A16 prechecks are keyed by source id, never by intent slug",
+   /PRECHECKS\["release_0_activation_authority"\]/.test(codeOnly) &&
+   !/PRECHECKS\[intent_slug\]/.test(codeOnly));
+
+/*  And no intent may import Release 0 semantics it did not declare. */
+for (const slug of executor.listContracts()) {
+  const c2 = executor.loadContract(slug);
+  const declares = (c2.required_sources || []).some((x) => /release_0/.test(x.id));
+  const isC1 = slug === "maintenance.completion_without_valid_proof";
+  ok(`A17 ${slug}: Release 0 dependency is declared, not inherited`,
+     declares === isC1,
+     `declares=${declares} expected=${isC1} — an undeclared activation gate would ` +
+     "make an unrelated intent unavailable for a reason its contract never states");
+}
+
 console.log(`\n${"═".repeat(66)}\n  passed ${pass}   failed ${fail}\n${"═".repeat(66)}\n`);
 process.exit(fail ? 1 : 0);

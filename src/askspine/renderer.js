@@ -46,6 +46,13 @@ const laneOf = (totals, name) =>
 const currentTotal = (t) => laneOf(t, "current").total_matching;
 const historyTotal = (t) => laneOf(t, "pre_cutover_history").total_matching;
 
+/*  Facet counts, read by name. They describe the FULL population, which
+ *  is why a sentence may say "51 assigned and accepted" while the record
+ *  list shows 20 — and why the two never have to agree. */
+const firstLane = (t) => ((t && t.lanes) || [])[0] || { total_matching: 0 };
+const laneTotal = (t) => firstLane(t).total_matching;
+const ownState = (t, k) => (((firstLane(t).facets || {}).ownership_state || {})[k] || 0);
+
 /*  Every supported conclusion, and nothing else. The keys are the
  *  executor's conclusion codes; the contract's `supported_conclusions`
  *  must agree with this table, and a gate asserts that it does. */
@@ -63,6 +70,33 @@ const SENTENCES = Object.freeze({
   current_present_legacy_present: (t) =>
     `${plural(currentTotal(t), "completed work order does", "completed work orders do")} not have valid proof. ` +
     `${plural(historyTotal(t), "older pre-cutover completion remains", "older pre-cutover completions remain")} unverified.`,
+
+  /*  ── maintenance.ownership_and_acceptance ────────────────────────
+   *
+   *  ASSIGNED and ACCEPTED, never OWNS or ACCOUNTABLE. "Alice owns WO
+   *  1042" and "Bob is accountable for maintenance" are stronger claims
+   *  than the source supports — the organization/accountability resolver
+   *  does not exist yet, and loose wording here would pre-empt it.
+   *
+   *  Counts come from the facet over the FULL population, so they stay
+   *  true when the record list is capped. */
+  ownership_none_current: () =>
+    "There are no current maintenance obligations on work orders here.",
+
+  ownership_all_accepted: (t) =>
+    `All ${plural(ownState(t, "assigned_accepted"), "current maintenance obligation is",
+                  "current maintenance obligations are")} assigned and accepted.`,
+
+  ownership_mixed: (t) => {
+    const parts = [];
+    const un = ownState(t, "unassigned");
+    const na = ownState(t, "assigned_not_accepted");
+    const ac = ownState(t, "assigned_accepted");
+    if (un) parts.push(`${un} unassigned`);
+    if (na) parts.push(`${na} assigned but not yet accepted`);
+    if (ac) parts.push(`${ac} assigned and accepted`);
+    return `${laneTotal(t)} current maintenance obligations: ${parts.join(", ")}.`;
+  },
 
   unavailable_source_cannot_answer: () =>
     "I can't determine completion proof right now.",
