@@ -70,24 +70,59 @@ ok(`L1  the stamped base ${claimed} resolves to a commit`, !!claimedFull,
    "the stamp names a commit this repository does not have");
 
 // ── L2 · fetched fresh. A stale remote ref is the whole hazard. ────
-let mainSha = null;
+/*  A FETCH FAILURE IS NOT A DRIFT FAILURE. Measured: a 503 from the
+ *  remote left mainSha null, and L2 then reported "product source has
+ *  landed" — naming the wrong cause for a network blip and sending the
+ *  reader to look for a file that does not exist. Separated so the
+ *  message matches reality. */
+let mainSha = null, fetchError = null;
 try {
   git("fetch", "origin", "main", "--quiet");
   mainSha = git("rev-parse", "origin/main");
-} catch (e) { /* reported by L2 */ }
-ok("L2  origin/main is STILL the stamped base (fetched just now)",
-   !!mainSha && !!claimedFull && mainSha === claimedFull,
-   `origin/main  ${mainSha ? mainSha.slice(0, 12) : "UNREADABLE"}\n` +
-   `        stamped     ${claimedFull ? claimedFull.slice(0, 12) : "?"}\n` +
-   "        MAIN HAS ADVANCED. Do not merge and call the base " + claimed + ". " +
-   "Re-cut the instrumentation from the new main, re-run the fence and the boot " +
-   "comparison, and re-stamp. The equation that makes this candidate valid no " +
-   "longer holds.");
+} catch (e) { fetchError = String(e.message || e).split("\n")[0]; }
+
+if (fetchError) {
+  ok("L2  origin/main could not be READ — no verdict is possible", false,
+     "fetch/rev-parse failed: " + fetchError +
+     "\n        This is NOT a drift finding. The lock cannot confirm the base " +
+     "against a remote it cannot reach, and a lock that guesses is worse than " +
+     "no lock. Retry; if the remote stays down, do not merge.");
+}
+/*  GENERALISED ON SECOND USE. The first version asserted
+ *  origin/main === product_base_sha, which is true only for the FIRST
+ *  tooling deploy. After it merges, main is base + tools and every later
+ *  tooling candidate would red on a lock that is working correctly —
+ *  a gate that fails the fix.
+ *
+ *  The invariant that actually holds for ANY tooling deploy: main may
+ *  have moved, but only in tools/ and docs/. The moment product source
+ *  lands, the stamp is stale and must be re-cut before anything else is
+ *  layered on top of it. */
+let productDrift = [];
+try {
+  productDrift = git("diff", "--name-only", claimed, "origin/main")
+    .split("\n").filter(Boolean)
+    .filter((f) => !f.startsWith("tools/") && !f.startsWith("docs/"));
+} catch (_) { productDrift = ["<could not diff>"]; }
+
+if (!fetchError) ok("L2  origin/main still differs from the stamped base ONLY in tools/ and docs/",
+   !!mainSha && !!claimedFull && productDrift.length === 0,
+   "PRODUCT SOURCE HAS LANDED since the stamp was written:\n        " +
+   productDrift.join(", ") +
+   "\n        The stamp still says product_base_sha=" + claimed + " and " +
+   "release_0_product_source_deployed=false. Both are now wrong. Re-stamp " +
+   "against the real base before layering anything else on top.");
+if (mainSha === claimedFull) {
+  console.log("        (main is exactly the base — first tooling deploy)");
+} else {
+  console.log(`        (main is ${mainSha.slice(0,12)}: base + tooling only)`);
+}
 
 // ── L3 · and nothing was rebased underneath it ────────────────────
 let mb = null;
 try { mb = git("merge-base", "HEAD", "origin/main"); } catch (_) {}
-ok("L3  this branch's merge-base with main IS that commit", !!mb && mb === mainSha,
+ok("L3  this branch descends from CURRENT main, nothing rebased underneath",
+   !!mb && mb === mainSha,
    `merge-base ${mb ? mb.slice(0, 12) : "?"} ≠ origin/main ${mainSha ? mainSha.slice(0, 12) : "?"} — ` +
    "the branch is not simply main plus instrumentation");
 
