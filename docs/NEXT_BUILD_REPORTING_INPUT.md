@@ -1,9 +1,13 @@
-# After Release 0 — design input, not a plan
+# After Release 0 — reporting research, not the roadmap
 
-**Status: read-only intelligence. Nothing here is decided, and nothing here is
-built.** Release 0 is build-complete and rehearsed; this is the groundwork for
-choosing what comes next, gathered before any design argument so the argument
-starts from measurement.
+> **This spike does not choose the next build.** The official next direction is the
+> governed read/intelligence layer over canonical operating truth — **Build 1**, see
+> `docs/BUILD_1_FIRST_CAPABILITY.md`. What follows is useful input to that build and
+> a record of what reporting will eventually need. Nothing here is scheduled.
+
+**Status: read-only intelligence.** Nothing here is built. Release 0 is
+build-complete and rehearsed; this is groundwork gathered before any design
+argument, so the argument starts from measurement.
 
 ```bash
 DATABASE_URL='…' node tools/next/reporting_readiness_intelligence.js
@@ -88,23 +92,49 @@ re-argument.
 
 ---
 
-## Product rulings this needs — the owner's, not engineering's
+## Rulings — SETTLED 2026-08-08
 
-Deliberately not decided here:
+These were open when this document was written. They are now decided. They are
+recorded here as constraints on any future build, not as opinions.
 
-1. **Does the maintenance section ship before M5 is closed?** A section that proves
-   completion and shows cost blank is honest and useful; it is also a section a
-   lender may read as incomplete. That is a product call about what an honest blank
-   costs in that audience, and it is not engineering's to make.
-2. **What is the reporting period keyed to** — the completion instant, the evaluation
-   instant, or the month the work was reported? All three are recorded; they
-   disagree at month boundaries.
-3. **Does `legacy_indeterminate` appear in the package at all**, or only in the
-   operator surface? Showing it is more honest; hiding it makes the first months
-   after cutover look cleaner than they were.
-4. **Is the spend↔work-order link the next build**, or does something else outrank
-   it? This document argues it is the highest-value rung for *reporting*; that is not
-   the same as the highest-value rung for the *product*.
+### R1 · Maintenance may report governed operational completion before cost is linked
+
+**But it must not imply financially complete maintenance reporting.** The section
+reports *operational* completion — work happened, here is the evidence. It may not
+be headed, labelled or summarised in a way that a reader would take as maintenance
+*spend*. M5 stays blank with its reason, and the section's own framing has to carry
+the distinction, not a footnote.
+
+### R2 · Three timings, all preserved, never collapsed
+
+```text
+operating period    = COMPLETION OCCURRENCE    ← what period the work belongs to
+proof timing        = evaluation / recorded instant
+package timing      = report month (output)
+```
+
+They disagree at month boundaries and that is the point. Work completed on the 31st
+and evaluated on the 1st belongs to the earlier operating period, carries the later
+proof instant, and may appear in either package month. **Collapsing any two of them
+into one column is forbidden** — that is how a reporting system starts
+reconstructing instead of reading.
+
+### R3 · `legacy_indeterminate` is an operator/internal truth state
+
+It may appear on operator surfaces. It may **never** be silently counted as proven
+in anything external. If pre-cutover history materially matters to an external
+package, it is described as **pre-cutover / unverified history** — the external
+document does not carry our internal state name. Exposing the enum outward would
+leak an implementation vocabulary into a lender's hands and invite them to interpret
+it; describing it plainly does not.
+
+### R4 · M5 is parked as the bridge into the money layer
+
+Real and important, and **not** the next build. This document is research input, not
+a roadmap decision — a reporting spike does not get to choose what gets built. The
+official next direction is the **governed read/intelligence layer over canonical
+operating truth** (Build 1). M5 is where that layer will eventually meet money, and
+it waits there.
 
 ---
 
