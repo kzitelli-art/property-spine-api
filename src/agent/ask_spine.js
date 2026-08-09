@@ -173,5 +173,58 @@ module.exports = function askSpine(deps) {
 
   governedIntentRoute("/operator/ask-spine/completion-proof-gaps", INTENT);
 
+  // ── BUILD 2 · the composer turn ───────────────────────────────────
+  //
+  //  POST, because a turn records what Spine understood — an
+  //  interpretation row, and a read receipt when the reading resolved.
+  //  It still mutates NO operating state: no work order, obligation,
+  //  assignment, evaluation or evidence is touched. Ask Spine reads and
+  //  explains; it does not act.
+  const askService = require("../askspine/ask_service");
+  const resolver = require("../askspine/intent_resolver");
+
+  router.post("/operator/ask-spine/ask", ...gate, async (req, res) => {
+    const body = req.body || {};
+    try {
+      const out = await askService.ask(pool, {
+        question: body.question,
+        //  A client may PICK from the clarification it was offered. The
+        //  resolver honours it only if it is a supported slug, so naming
+        //  an intent cannot introduce one.
+        preferred_intent: body.preferred_intent || null,
+        corrects_interpretation_id: body.corrects_interpretation_id || null,
+        property_id: req.operator.property_id,
+        allowed_modules: req.operator.allowed_modules,
+        actor: { user_id: req.operator.id, session_id: req.operator.session_id },
+      });
+      return res.json({ property_id: req.operator.property_id,
+                        asked_at: new Date().toISOString(), ...out });
+    } catch (e) {
+      console.error("ask-spine/ask error", e);
+      return res.status(500).json({ error: "Could not complete the governed check." });
+    }
+  });
+
+  //  What this surface can and cannot answer, so the UI can be honest
+  //  about the frontier without hard-coding it.
+  router.get("/operator/ask-spine/capabilities", ...gate, (req, res) => res.json({
+    supported: resolver.SUPPORTED_INTENTS,
+    not_supported: resolver.UNSUPPORTED_TOPICS,
+  }));
+
+  //  A completed answer, rebuilt from its DURABLE RECEIPT. Reload must
+  //  not depend on a transcript.
+  router.get("/operator/ask-spine/receipt/:id", ...gate, async (req, res) => {
+    try {
+      const out = await askService.replayReceipt(pool, {
+        receipt_id: req.params.id, property_id: req.operator.property_id });
+      if (!out) return res.status(404).json({ error: "no such receipt in this property" });
+      return res.json(out);
+    } catch (e) {
+      console.error("ask-spine/receipt error", e);
+      return res.status(500).json({ error: "Could not read the receipt." });
+    }
+  });
+
   return router;
 };
