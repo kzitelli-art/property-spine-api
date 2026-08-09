@@ -19,6 +19,93 @@ current truth. Re-date it whenever `main` moves materially.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
+##  RELEASE 0 IS READY TO RUN AND CANNOT BE RUN FROM HERE. 2026-08-09.
+## ══════════════════════════════════════════════════════════════════
+
+**The frozen RC is `claude/release-0-rc` @ `f6873d7`.** The production
+activation sequence was called for and **was not executed**, for one reason:
+**this session holds no production credentials.**
+
+```text
+DATABASE_URL · RENDER_GIT_COMMIT · GIT_SHA · TWILIO_*      all ABSENT
+```
+
+Probed by name, expanding nothing. `tools/release0/preflight_production.js`
+exits 2 — *"REFUSED: DATABASE_URL is not set. This reads the real database and
+will not invent an answer."* That refusal is the tool working, and the
+credential is **not** to be requested: *"Do not send, paste or request a
+production connection."*
+
+**Nothing was simulated, and no step is marked done.** The rehearsal evidence
+(`rehearse_release_train` 53/53, `prove_boundary_reversibility` 20/20,
+`falsify_release_transitions` 26/26, `prove_migration_sequencing` 15/15) is
+isolated-Postgres evidence about the *sequence*, not about production.
+
+**The run card is `docs/release0/PRODUCTION_RUN_CARD.md`** — the ordered
+commands, every environment variable named and never valued, and the stop
+condition on each step. It reorders nothing; the sequence is still the runbook's
+§5.1.
+
+**The long pole is not engineering.** Step 4 is blocked on transport, and
+transport is **two** independent blockers recorded read-only on 2026-08-06
+(`docs/RELEASE_0_SMS_PREREQUISITE.md`): there is no `operations` line row at
+all, and `provider_config` is null on the only line that exists. Add A2P 10DLC
+carrier review on top. **Start that first — §1 of the run card can run in
+parallel with it; §3 cannot finish without it.**
+
+**Wording that must stay correct:** earlier Release 0 work already reached
+production. What has not is the activation. Say *"no build-ahead activation work
+in this stack has been run against production"* — not *"production is
+untouched."*
+
+**THE SMS RAIL IS FROZEN.** Do not do more SMS architecture unless the
+production preflight contradicts the proof. The governing distinction:
+
+```text
+SMS_SEND_MODE=disabled          resident INBOUND stays live
+                                resident OUTBOUND refused
+                                → this is the Step 4 posture
+
+property_facing.status=retired  resident line down BOTH directions, one property
+                                inbound during retirement is LOST, not queued
+                                → emergency line shutdown only, NOT an
+                                  outbound control
+```
+
+**⚠ THE SMS SAFETY CONTROL IS `SMS_SEND_MODE`, NOT `outbound_policy`.** Twilio
+credentials are global — one account behind both lanes — so wiring transport for
+the operations line arms the resident path in the same instant. The invariant to
+preserve through Step 4:
+
+```text
+Twilio credentials live + SMS_SEND_MODE disabled
+  → technician operations replies work
+  → resident outbound sends structurally refused
+```
+
+Source-proved by `tests/gate_outbound_senders.js` (S9: `sendOperationsReply`
+does not consult the mode) and `docs/OUTBOUND_TRIGGER_AUDIT.md`. **Verify the
+deployed mode BEFORE adding credentials, not after** — the §1 preflight scores
+it and the acceptance receipt records it. Do not treat
+`property_facing.outbound_policy = 'reply_only'` as protection: the policy
+trigger never fires on a resident event. A second lever exists and is NOT
+interchangeable: retiring the active `property_facing` line NULLs
+`properties.sms_number` (it is a projection) so `sendPropertySms` refuses — but
+it also kills INBOUND, which resolves to `inactiveLine` with zero rows written
+and the resident's message lost rather than queued. Proven 12/12 in
+`tools/release0/prove_line_retirement_consequence.js`. It is an emergency
+line-retirement control, both directions; for outbound only, use the send mode.
+
+**Build 1/2 is parked, not merged.** API `claude/build-1-2-rc` @ `d68cc1d`,
+APP `claude/build-2-ask-spine-rc` @ `e867dd8`. One open integrity gap logged at
+`docs/build1/INTEGRITY_GAPS.md` (an orphaned `obligations.related_id` splits
+Capability 2's answer into two populations). **Not a Release 0 blocker** —
+Release 0 never reads that column. Migration 142 / claim-accept likewise stays
+out of the activation decision; the train does not depend on it.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
 ##  ⛔ THE DEPLOYED APP IS BROKEN. 2026-08-06 (latest).
 ## ══════════════════════════════════════════════════════════════════
 
@@ -70,7 +157,84 @@ Proven, not predicted — §9.10.2.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
-##  RELEASE 0 — DESIGN FROZEN, NOT IMPLEMENTED. 2026-08-06.
+##  RELEASE 0 — BUILD-COMPLETE ON BRANCHES. NOT DEPLOYED. 2026-08-08.
+## ══════════════════════════════════════════════════════════════════
+
+**This supersedes the "DESIGN FROZEN, NOT IMPLEMENTED" section below it.**
+It does **not** change any deployment claim.
+
+**Say this precisely, and do not shorten it:** *no build-ahead activation work in
+this stack has been run against production.* Earlier Release 0 work — the
+read-only production audit under Open Ruling 4, the Gate 4/8/9 tools deploy —
+**did** reach production, and the record below is the account of it. "Release 0
+has not touched production" is false and would corrupt the historical record.
+
+What is true of *this* stack: `main` has not moved for it, none of migrations
+138/139/140 has been applied to production, and **the activation has never been
+run anywhere but an isolated clone.**
+
+```text
+claude/release-0-rc         ← THE RELEASE CANDIDATE. See
+                            docs/release0/RELEASE_CANDIDATE.md for the SHA.
+claude/release0-composed    the rehearsal tree the RC was cut from
+claude/completion-guard     migration 140 alone, for review of that PR
+claude/next-build-…         read-only intelligence for what comes AFTER
+production                  no build-ahead activation work from this stack has
+                            been run against it: no deploy, no 138/139/140,
+                            no activation.
+```
+
+**Read `docs/RELEASE_0_ACTIVATION_STACK.md` first** — it is the current state of
+the release: what is proven, what each boundary costs, and §7 names the exact
+remaining proof debt. `RELEASE_0_ACTIVATION_RUNBOOK.md` is the production order.
+
+Evidence as of this section: 48 harness runs / 0 non-zero / 757 assertions ·
+16/16 source-governance gates · train rehearsal 53/53 · boundary reversibility
+20/20 · release transitions 26/26 · migration sequencing 15/15 · app 107 + 17.
+
+### The three things a new session most needs to know
+
+1. **`migration 140` is frozen at revision 5 and the freeze bites.**
+   `docs/release0/FROZEN_ARTIFACTS.json` pins sha256 digests;
+   `tests/gate_release0_frozen.js` turns red the moment any pinned byte moves.
+   Changing one requires re-running the falsification package **and** updating
+   the digest **in the same commit**. Do not update the digest alone — that is
+   the single thing the gate exists to prevent, and it has already caught two
+   real changes.
+
+2. **Boundary 8 (the activation) is irreversible, and it is the only one.**
+   Measured, not inherited: `prove_boundary_reversibility.js` attempts eight
+   undo mechanisms and all eight are refused. Boundary 3 is also one-way in the
+   direction that matters — reverting Step 3 returns the *writer*, never the
+   *data*. "Everything before 8 is revertible" is true about code and false
+   about meaning; the runbook now says so per boundary.
+
+3. **`closed` is historical vocabulary.** After the cutover, `open → closed` is
+   refused outright with `R0003`, proof or no proof. Future completion writes
+   `complete`. A harness or script that writes `closed` will be refused by the
+   database, and that is the design, not a bug.
+
+### Traps that cost real time this round
+
+- **A proof against a re-implementation is a proof about the re-implementation.**
+  The Step 7 concurrency proof measured a *simulation* of the lock and passed
+  after a lock was added that it never looked at. It now reads the lock
+  statement out of the shipped service. The same class of error appeared twice
+  more as hard-coded counts in prose ("four functions, five triggers", "all five
+  guard triggers") that had drifted three revisions out of date. Counts are now
+  read from the database.
+- **A gate that fails the fix is worse than no gate.** The first epoch freeze
+  (R0006) also refused Step 7's *governed supersession*, breaking a legitimate
+  correction path. Two Step 7 harnesses went red and were right to.
+- **Harnesses re-apply migration 140**, so drifting the SQL file to falsify
+  something gets silently overwritten. Drift the JS side instead.
+- **`ALTER TABLE … DISABLE TRIGGER`** leaves the row in `pg_trigger` looking
+  perfect and simply never fires. A presence check passes. Check `tgenabled`.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  RELEASE 0 — DESIGN FROZEN, NOT IMPLEMENTED. 2026-08-06. (superseded)
 ## ══════════════════════════════════════════════════════════════════
 
 **Nothing below this section's deployment claims has changed.** No product
