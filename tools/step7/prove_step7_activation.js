@@ -39,6 +39,13 @@ const URL = process.env.STEP7_DATABASE_URL;
 const SERVICE_DIGEST = crypto.createHash("sha256").update(fs.readFileSync(SERVICE)).digest("hex");
 
 const svc = require(SERVICE);
+/*  Migration 140 REFUSES to let recordActivation run without it: a
+ *  guard detected missing AFTER an irreversible act is useless. So a
+ *  harness that activates must install it first. It is inert until the
+ *  activation lands, so it changes nothing about what is proven here. */
+const guardWindow = require("../step12/guard_window.js");
+const grounded = require("../step12/grounded_evaluation.js");
+
 
 let pass = 0, fail = 0;
 const ok = (l, c, d) => { if (c) { pass++; console.log("  ok    " + l); }
@@ -88,6 +95,8 @@ const ORG = ID("org"), PROP = ID("prop"), PROP_B = ID("propB"), TECH = ID("tech"
 
   console.log("STEP 7 — CUTOVER ACTIVATION PROOF — isolated postgres\n");
 
+  await guardWindow.installGuard(c);
+
   await c.query(`insert into organizations (id,name) values ($1,'Step7 Org') on conflict (id) do nothing`, [ORG]);
   for (const [p, n] of [[PROP, "Step7 Property"], [PROP_B, "Step7 Property B"]]) {
     await c.query(`insert into properties (id,name,organization_id) values ($1,$2,$3)
@@ -120,10 +129,15 @@ const ORG = ID("org"), PROP = ID("prop"), PROP_B = ID("propB"), TECH = ID("tech"
   //  Noise that must NOT be in the set: an open work order, and a terminal
   //  one that DOES carry an evaluation.
   await mkWo({ status: "open" });
+  /*  A GROUNDED evaluation, not a bare one. Migration 140 now requires a
+   *  `satisfied` head to cite qualifying preserved evidence, and the
+   *  activation refuses a population that already violates that — so a
+   *  fixture with a hollow `satisfied` row would make A1 fail with
+   *  POPULATION_NOT_EXPLAINABLE, which is the check working, not a bug. */
   const evaluated = await mkWo({ status: "complete" });
-  await c.query(`insert into work_order_proof_evaluations
-    (work_order_id,property_id,state,evaluated_by_service,rule_version)
-    values ($1,$2,'satisfied','step7proof','x')`, [evaluated, PROP]);
+  await grounded.groundedSatisfied(c, {
+    work_order_id: evaluated, property_id: PROP, uploaded_by_user_id: TECH,
+    evaluated_by_service: "step7proof" });
 
   // ══ S — THE SET IS THE RIGHT SET ═══════════════════════════════════
   sec("S · THE CENSUS SET IS THE LEGACY POPULATION, AND ONLY THAT");

@@ -43,6 +43,23 @@ const path = require("path");
 const fs = require("fs");
 
 const GATES = [
+  /*  FIRST, deliberately. On 2026-08-08 a merge staged conflict markers
+   *  into migrations/140 and this suite stayed GREEN — every gate then on
+   *  the path reads specific files for specific properties, and none of
+   *  them looks for merge debris. A migration carrying `<<<<<<< HEAD`
+   *  does not parse, and prestart REFUSES TO BOOT on an unapplied
+   *  migration, so it would have taken the service down at the next
+   *  deploy. It runs first because nothing below it is meaningful if the
+   *  tree still contains an unresolved merge. */
+  { file: "gate_no_conflict_markers.js",
+    what: "no unresolved merge markers in any tracked file" },
+  //  SECOND. tools/step12/* is evidence ABOUT SPECIFIC BYTES — seven
+  //  measured attacks broke revisions 1-3 of migration 140. A changed
+  //  predicate makes every later green run evidence about something else,
+  //  silently. Re-running the package and updating the digest is easy and
+  //  meant to be; updating the digest WITHOUT re-running is what this stops.
+  { file: "gate_release0_frozen.js",
+    what: "the frozen Release 0 artifacts still match their pinned digests" },
   { file: "gate_harness_isolation.js",
     what: "no new unguarded DATABASE_URL consumer; debt register accurate" },
   { file: "gate_closure_boundary.js",
@@ -60,6 +77,32 @@ const GATES = [
     what: "migration 137 DDL is the proven scale payload, unchanged" },
   { file: "gate_completion_writers.js",
     what: "exactly the expected work-order completion writers; no third writer" },
+  //  Three things now decide what "terminal" means — the reader, the sweep,
+  //  and the database guard (migration 140). Drift between them is either a
+  //  hole the sweep bills to a human, or an outage. Neither is discoverable
+  //  at runtime.
+  { file: "gate_completion_guard_terminal_set.js",
+    what: "the guard, the reader and the sweep agree on the terminal set; no bypass" },
+  //  …and the set they agree on is the whole vocabulary. Three files
+  //  agreeing that "terminal" means complete-or-closed is worth nothing if
+  //  a fourth writer starts setting `signed_off`: the guard would not fire,
+  //  the reader would not call it terminal, and nothing would report a
+  //  problem. Silent in both directions, so it is checked in source.
+  { file: "gate_work_order_status_vocabulary.js",
+    what: "no shipped writer sets a work_orders.status outside the frozen, classified set" },
+  //  Migration 140 rev 4 freezes a proof attachment the moment an
+  //  evaluation cites it. That is only safe because every shipped mutation
+  //  runs BEFORE citation — the ingress pipeline. A new writer that touched
+  //  evidence after a completion would fail with R0005 in production, and
+  //  it would read as a database problem rather than the doctrine it broke.
+  { file: "gate_evidence_immutability.js",
+    what: "no shipped writer mutates proof evidence outside the frozen ingress inventory" },
+  //  §3.4's `satisfied` is published FOR CONSUMERS. When this API reads it
+  //  back, the two halves of the four-state contract can disagree — and
+  //  they did: next_action was derived from it and answered "obtain a
+  //  repair photo" on a read that never completed.
+  { file: "gate_proof_compatibility_field.js",
+    what: "`satisfied` is published, never read here; next_action derives from state" },
   //  The conversational seams. DB-free, so they belong on the standard path:
   //  they check that the extracted logic has ONE implementation, that resident
   //  wording did not drift, and that an operating receipt and a delivery

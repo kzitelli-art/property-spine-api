@@ -86,7 +86,27 @@ function nextActionFor({ state, proof, coordination = null }) {
     case "no_access":           return COORDINATION_NEXT[(coordination && coordination.state) || "none"]
                                        || COORDINATION_NEXT.none;
     case "blocked":             return "Resolve what the work is waiting on";
-    case "completion_claimed":  return proof.satisfied ? "Close out the work order" : "Obtain repair photo before completion";
+    /*  ── A FAILED READ IS NOT AN INSTRUCTION (§5, §3.2.1) ──────────
+     *
+     *  This line read `proof.satisfied` and was correct until Step 8,
+     *  which introduced a proof block where `satisfied` is ABSENT because
+     *  the read did not complete. `undefined` is falsy, so the surface
+     *  answered "Obtain repair photo before completion" — telling an
+     *  operator to go do fieldwork on the strength of a read that failed,
+     *  on the same screen that says the proof state is unavailable.
+     *
+     *  That is a confident wrong, and it was introduced by the very step
+     *  that exists to remove them. It is asserted over HTTP now.
+     *
+     *  It switches on `read_status` and `state` rather than on
+     *  `satisfied` for a second reason: `satisfied` is the frozen §3.4
+     *  COMPATIBILITY field, kept for consumers that have not moved yet.
+     *  Nothing inside this API reads it any more.  */
+    case "completion_claimed":
+      if (!proof || proof.read_status !== "ok") return "Proof state unavailable — retry";
+      return proof.state === "satisfied"
+        ? "Close out the work order"
+        : "Obtain repair photo before completion";
     case "completed":           return null;
     default:                    return null;
   }
@@ -395,7 +415,7 @@ async function readPropertyWorkOrderStatuses(db, { propertyId, limit = 100 }) {
                  //  completed — absent, not null, when it did not (§3.2.1).
                  read_status: s.proof.read_status,
                  ...(s.proof.read_status === "ok"
-                   ? { state: s.proof.state, satisfied: s.proof.satisfied }
+                   ? { state: s.proof.state }
                    : { reason_code: s.proof.reason_code }),
                  legacy_evidence: s.proof.legacy_evidence,
                  not_preserved_count: s.proof.not_preserved_count },

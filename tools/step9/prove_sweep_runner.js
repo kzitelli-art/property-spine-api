@@ -34,6 +34,10 @@ const { Client } = require("pg");
 const ROOT = path.join(__dirname, "..", "..");
 const RUNNER = path.join(ROOT, "tools/run_proof_defect_sweep.js");
 const activation = require(path.join(ROOT, "src/release0/activation_service.js"));
+//  migration 140 REFUSES to let recordActivation run without it, so a
+//  harness that activates must install it. States the guard forbids are
+//  then built inside an explicit withGuardOff() window.
+const guardWindow = require("../step12/guard_window.js");
 const URL = process.env.STEP9_DATABASE_URL;
 
 let pass = 0, fail = 0;
@@ -62,6 +66,11 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
     console.error("REFUSED: activation history is not empty — rebuild the baseline.");
     process.exit(3);
   }
+
+  /*  Inert until the activation below, and then the reason every defect
+   *  population in this file has to be built in a named window. */
+  await guardWindow.installGuard(c);
+  const forbidden = (why, fn) => guardWindow.withGuardOff(c, why, fn);
 
   console.log("§4.2 — SWEEP RUNNER (the thing an operator types)\n");
 
@@ -113,7 +122,10 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
   // ══ R — DRY RUN IS THE DEFAULT ═════════════════════════════════════
   sec("R · DRY RUN BY DEFAULT — --raise MUST BE TYPED");
   {
-    const post = await mkWo("closed");   // after activation → a real defect
+    //  After activation → a real defect, and a state the guard refuses.
+    const post = await forbidden(
+      "R needs one real defect for the runner to report",
+      () => mkWo("closed"));
     const dry = run();
     ok("R1  a bare invocation is a DRY RUN", dry.status === 0 &&
        /DRY RUN, nothing written/.test(dry.stdout),
@@ -146,7 +158,9 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
   // ══ S — SCOPE ══════════════════════════════════════════════════════
   sec("S · --property SCOPES THE PASS");
   {
-    const other = await mkWo("closed", PROP_B);
+    const other = await forbidden(
+      "S needs a defect in a SECOND property to prove --property scopes",
+      () => mkWo("closed", PROP_B));
     const scoped = run(["--raise", "--property", PROP]);
     const inOther = Number((await c.query(
       `select count(*) n from obligations where type='proof_evaluation_missing' and related_id=$1`,

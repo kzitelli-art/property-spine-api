@@ -36,6 +36,11 @@ const ROOT = path.join(__dirname, "..", "..");
 const reader = require(path.join(ROOT, "src/surfaces/work_order_status_read.js"));
 const proofState = require(path.join(ROOT, "src/release0/proof_state.js"));
 const activation = require(path.join(ROOT, "src/release0/activation_service.js"));
+//  migration 140 REFUSES to let recordActivation run without it, so a
+//  harness that activates must install it. States the guard forbids are
+//  then built inside an explicit withGuardOff() window.
+const guardWindow = require("../step12/guard_window.js");
+const grounded = require("../step12/grounded_evaluation.js");
 const URL = process.env.STEP8_DATABASE_URL;
 
 let pass = 0, fail = 0;
@@ -68,6 +73,13 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
   await c.query("set lock_timeout = '8s'");
   await c.query("set statement_timeout = '60s'");
 
+  /*  Installed BEFORE any row exists, and deliberately before the
+   *  activation: migration 140 is inert until an activation row is
+   *  present, and everything section U builds below is built with the
+   *  guard already in place. Section U passing is that inertness. */
+  await guardWindow.installGuard(c);
+  const forbidden = (why, fn) => guardWindow.withGuardOff(c, why, fn);
+
   console.log("STEP 8 — FOUR-STATE PROOF READER — isolated postgres\n");
 
   await c.query(`insert into organizations (id,name) values ($1,'S8 Org') on conflict (id) do nothing`, [ORG]);
@@ -85,10 +97,34 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
                    values ($1,$2,'work_order','maintenance','work_order_routing','r','open')`, [PROP, wo]);
     return wo;
   };
+  /*  A `satisfied` evaluation must now CITE qualifying evidence — the
+   *  guard stopped trusting the word (R0004). `not_satisfied` needs no
+   *  evidence: it is a refusal, and a refusal that required proof of the
+   *  thing it is refusing would be nonsense. */
   const evaluate = async (wo, state) => {
+    if (state === "satisfied") {
+      await grounded.groundedSatisfied(c, {
+        work_order_id: wo, property_id: PROP, uploaded_by_user_id: TECH,
+        evaluated_by_service: "step8proof" });
+      return;
+    }
     await c.query(`insert into work_order_proof_evaluations
       (work_order_id,property_id,state,evaluated_by_service,rule_version)
       values ($1,$2,$3,'step8proof','x')`, [wo, PROP, state]);
+  };
+  /*  A GOVERNED COMPLETION NEEDS NO WINDOW — status and evaluation land in
+   *  ONE transaction. Either statement alone would commit a terminal row
+   *  with no proof, but migration 140's checks are DEFERRED and judge only
+   *  the state at COMMIT. This exercises that property instead of merely
+   *  asserting it, and it is the same shape the canonical writer uses. */
+  const completeGoverned = async (status) => {
+    await c.query("begin");
+    try {
+      const wo = await mkWo({ status });
+      await evaluate(wo, "satisfied");
+      await c.query("commit");
+      return wo;
+    } catch (e) { await c.query("rollback").catch(() => {}); throw e; }
   };
   const photo = async (wo) => {
     const att = ID("att" + wo.slice(0, 8)), bytes = Buffer.from([8, 8, 8, 8]);
@@ -143,30 +179,49 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
        JSON.stringify({ rs: s.proof.read_status, st: s.proof.state }));
 
     //  Created AFTER activation, so it is terminal and NOT inventoried.
-    const afterCutover = await mkWo({ status: "closed" });
+    //  That is precisely the row migration 140 refuses to let commit, so
+    //  the reader can only be shown it with the guard explicitly off.
+    const afterCutover = await forbidden(
+      "E2 must EXHIBIT missing_evaluation_defect; the guard forbids creating it",
+      () => mkWo({ status: "closed" }));
     const d = await read(afterCutover);
     ok("E2  terminal + no evaluation + NOT inventoried → missing_evaluation_defect",
        d.proof.state === "missing_evaluation_defect", JSON.stringify(d.proof.state));
 
-    const done = await mkWo({ status: "complete" });
-    await evaluate(done, "satisfied");
+    const done = await completeGoverned("complete");
     const ds = await read(done);
     ok("E3  an evaluation head of `satisfied` → satisfied", ds.proof.state === "satisfied",
        JSON.stringify(ds.proof.state));
 
-    const refused = await mkWo({ status: "complete" });
-    await evaluate(refused, "not_satisfied");
+    //  Terminal with a FAILED evaluation. Adversarial case A1: the guard
+    //  refuses this because Release 0 governs completion, not whether
+    //  somebody made a judgement.
+    const refused = await forbidden(
+      "E4 must EXHIBIT terminal + not_satisfied; the guard forbids it (A1)",
+      async () => {
+        const wo = await mkWo({ status: "complete" });
+        await evaluate(wo, "not_satisfied");
+        return wo;
+      });
     const rs = await read(refused);
     ok("E4  an evaluation head of `not_satisfied` → not_satisfied",
        rs.proof.state === "not_satisfied", JSON.stringify(rs.proof.state));
 
     //  The head wins even on a row that is ALSO inventoried — an evaluation
     //  is a stronger fact than membership of a historical set.
-    const both = await mkWo({ status: "closed" });
-    await evaluate(both, "satisfied");
+    /*  `complete`, not `closed`: post-cutover `closed` is refused outright
+     *  (R0003) now that it is historical vocabulary only. E5 is about an
+     *  evaluation head outranking inventory membership, and that question
+     *  is unchanged by which terminal word the row carries.
+     *
+     *  `status_at_cutover` matches the row's actual status — the guard
+     *  pins an inventoried row to what the census recorded, so a fixture
+     *  claiming 'closed' for a `complete` row would be asserting on a
+     *  state the census could never have produced. */
+    const both = await completeGoverned("complete");
     await c.query(`insert into release_0_legacy_cutover_inventory
       (work_order_id,property_id,status_at_cutover,had_column_photo,had_column_note,activation_id)
-      values ($1,$2,'closed',false,false,(select id from release_0_activation_current))
+      values ($1,$2,'complete',false,false,(select id from release_0_activation_current))
       on conflict do nothing`, [both, PROP]);
     const bs = await read(both);
     ok("E5  an evaluation head OUTRANKS inventory membership",
@@ -217,7 +272,9 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
      *  unevaluated row was not terminal, escaped the defect state, and
      *  rendered as if the work were merely unstarted — precisely the row a
      *  surviving legacy writer creates after activation. */
-    const escapee = await mkWo({ status: "closed" });
+    const escapee = await forbidden(
+      "H must EXHIBIT the surviving-legacy-writer row the guard now refuses",
+      () => mkWo({ status: "closed" }));
     const s = await read(escapee);
     ok("H1  a closed, uninventoried, unevaluated row IS terminal to the reader",
        proofState.isTerminal({ status: "closed" }));
@@ -248,33 +305,68 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
   sec("C · §3.4 — AND LEGACY IS NOT COLLAPSED INTO DEFECT");
   {
     const rows = {};
-    for (const [label, st] of [["satisfied", "satisfied"], ["not_satisfied", "not_satisfied"]]) {
-      const wo = await mkWo({ status: "complete" });
-      await evaluate(wo, st);
-      rows[label] = (await read(wo)).proof;
-    }
+    //  `satisfied` is a governed completion and needs no window. The other
+    //  three of the four states are, post-activation, states the guard
+    //  refuses to let a transaction commit — which is why building this
+    //  table takes a guard-off window at all.
+    rows.satisfied = (await read(await completeGoverned("complete"))).proof;
+    const [refusedWo, defectWo] = await forbidden(
+      "C tabulates all four states side by side; two of them are forbidden states",
+      async () => {
+        const r = await mkWo({ status: "complete" });
+        await evaluate(r, "not_satisfied");
+        const d = await mkWo({ status: "closed" });
+        return [r, d];
+      });
+    rows.not_satisfied = (await read(refusedWo)).proof;
     rows.legacy = (await read(preTerminal)).proof;
-    const defectWo = await mkWo({ status: "closed" });
     rows.defect = (await read(defectWo)).proof;
 
-    ok("C1  satisfied → satisfied = true", rows.satisfied.satisfied === true);
-    ok("C2  not_satisfied → satisfied = false", rows.not_satisfied.satisfied === false);
-    ok("C3  legacy_indeterminate → satisfied = null", rows.legacy.satisfied === null,
-       JSON.stringify(rows.legacy.satisfied));
-    ok("C4  missing_evaluation_defect → satisfied = null", rows.defect.satisfied === null,
+    /*  ── THE COMPATIBILITY FIELD IS RETIRED ────────────────────────
+     *  C1–C4 asserted the §3.4 booleans on the wire. The cleanup release
+     *  removes `satisfied` from the response entirely, so they now assert
+     *  its ABSENCE and check the mapping where it still lives — the
+     *  exported constant consumers derive from.
+     *
+     *  The mapping is not gone. It is the definition; only its
+     *  duplication on every response is.  */
+    for (const [label, row] of [["satisfied", rows.satisfied],
+                                ["not_satisfied", rows.not_satisfied],
+                                ["legacy_indeterminate", rows.legacy],
+                                ["missing_evaluation_defect", rows.defect]]) {
+      ok(`C·${label.padEnd(26)} carries NO \`satisfied\` on the wire`,
+         !("satisfied" in row), JSON.stringify(row.satisfied) +
+         " — the compatibility field was retired; a consumer derives it from state");
+      ok(`C·${label.padEnd(26)} still carries \`state\``, row.state === label,
+         JSON.stringify(row.state));
+    }
+    //  The frozen mapping is still the definition, and still frozen.
+    ok("C4a the §3.4 mapping is still exported, unchanged",
+       proofState.SATISFIED_FOR.satisfied === true &&
+       proofState.SATISFIED_FOR.not_satisfied === false &&
+       proofState.SATISFIED_FOR.legacy_indeterminate === null &&
+       proofState.SATISFIED_FOR.missing_evaluation_defect === null,
+       JSON.stringify(proofState.SATISFIED_FOR) +
+       " — retiring the FIELD must not change the MEANING");
+    ok("C4b …and null still means null, never false",
+       proofState.SATISFIED_FOR.legacy_indeterminate === null &&
+       proofState.SATISFIED_FOR.missing_evaluation_defect === null,
        JSON.stringify(rows.defect.satisfied));
     /*  The one that matters. Both are `null`, so `satisfied` alone CANNOT
      *  distinguish them — which is exactly why §3.3 requires `state` on
      *  both shapes. If a consumer had only the boolean it would render
      *  legitimate history and a writer defect identically. */
-    ok("C5  legacy and defect are indistinguishable by `satisfied` alone…",
-       rows.legacy.satisfied === rows.defect.satisfied);
+    ok("C5  legacy and defect are indistinguishable by the MAPPING alone…",
+       proofState.SATISFIED_FOR[rows.legacy.state] ===
+       proofState.SATISFIED_FOR[rows.defect.state]);
     ok("C6  …and ARE distinguished by `state`",
        rows.legacy.state !== rows.defect.state,
        "legacy history and a writer defect have collapsed into one rendering");
-    ok("C7  `satisfied` no longer means 'evidence exists'",
-       rows.defect.preserved_count === 0 && rows.defect.satisfied === null,
-       "a defect row with no evidence must not read satisfied=false, which an " +
+    ok("C7  a defect row with no evidence is NOT reported as 'proof failed'",
+       rows.defect.preserved_count === 0 &&
+       rows.defect.state === "missing_evaluation_defect" &&
+       proofState.SATISFIED_FOR[rows.defect.state] === null,
+       "a defect row with no evidence must not read not_satisfied, which an " +
        "evidence-presence boolean would have produced");
   }
 
@@ -372,9 +464,13 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
     ok("X2  never `state` absent while read_status is 'ok'",
        absentState.length === 0, JSON.stringify(absentState));
 
-    const mismatch = every.filter(
-      (p) => p.read_status === "ok" && p.satisfied !== proofState.SATISFIED_FOR[p.state]);
-    ok("X3  never a state/satisfied mismatch", mismatch.length === 0, JSON.stringify(mismatch));
+    /*  A state/satisfied MISMATCH is unrepresentable once the field is
+     *  gone — there is nothing to disagree with. So the assertion becomes
+     *  the stronger one the removal makes available: the field never
+     *  appears at all, on any shape, in any state. */
+    const stillEmitting = every.filter((p) => "satisfied" in p);
+    ok("X3  `satisfied` never appears on any shape — a mismatch is now unrepresentable",
+       stillEmitting.length === 0, JSON.stringify(stillEmitting));
 
     const leaky = every.filter(
       (p) => p.read_status === "unavailable" && (("state" in p) || ("satisfied" in p)));
