@@ -35,6 +35,12 @@ const { Client } = require("pg");
 const ROOT = path.join(__dirname, "..", "..");
 const PS = path.join(ROOT, "src/release0/proof_state.js");
 const activation = require(path.join(ROOT, "src/release0/activation_service.js"));
+/*  Migration 140 REFUSES to let recordActivation run without it: a
+ *  guard detected missing AFTER an irreversible act is useless. So a
+ *  harness that activates must install it first. It is inert until the
+ *  activation lands, so it changes nothing about what is proven here. */
+const guardWindow = require("../step12/guard_window.js");
+
 const URL = process.env.FALSIFY8_DATABASE_URL;
 const PS_DIGEST = crypto.createHash("sha256").update(fs.readFileSync(PS)).digest("hex");
 
@@ -46,7 +52,7 @@ const VARIANTS = {
   //  collapsed into 'proof failed'." This collapses them.
   "collapse-legacy": {
     what: "legacy_indeterminate maps to satisfied:false, not null",
-    breaks: "C3/C5/C6 — legacy is not 'proof failed'",
+    breaks: "C4a/C5/C6 — legacy is not 'proof failed'",
     edits: [{ from: "  legacy_indeterminate: null,", to: "  legacy_indeterminate: false," }],
   },
   //  §3.2.1: "It must not fall back to missing_evaluation_defect. That
@@ -121,6 +127,12 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
 
   const V = VARIANTS[VARIANT];
   console.log(`STEP 8 FALSIFICATION — variant "${VARIANT}"\n`);
+
+  /*  The guard the ACTIVATION now requires. Without it every activation
+   *  in this file refuses with GUARD_ABSENT, and a falsification harness
+   *  whose variant is stopped by the WRONG thing proves nothing about
+   *  the variant. It is inert until an activation exists. */
+  await guardWindow.installGuard(c);
   console.log("  breaks:  " + V.what);
   console.log("  targets: " + V.breaks + "\n");
 
@@ -164,7 +176,11 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
     await activation.recordActivation(c, {
       activated_at: STEP6_INSTANT, captured_by: "falsify8", expected: census });
     await c.query("commit");
-    const defectWo = await mkWo("closed");   // after activation → not inventoried
+    //  After activation → not inventoried, i.e. the state migration 140
+    //  refuses. This variant exists to SHOW the broken reader mislabelling it.
+    const defectWo = await guardWindow.withGuardOff(c,
+      "the collapse-legacy variant must be shown a real defect row to mislabel",
+      () => mkWo("closed"));
 
     const workOrder = (await c.query(`select * from work_orders where id=$1`, [legacyWo])).rows[0];
     const defectRow = (await c.query(`select * from work_orders where id=$1`, [defectWo])).rows[0];
@@ -172,17 +188,40 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
 
     const bl = await broken.deriveProofState(c, { workOrder, authority: auth });
     const bd = await broken.deriveProofState(c, { workOrder: defectRow, authority: auth });
-    ok("F1  with the collapse, legacy history reads satisfied:false",
-       bl.satisfied === false, JSON.stringify(bl) + " — then C3 is not what stops this");
-    ok("F2  …i.e. 'proof failed', which is what the release exists to stop saying",
-       bl.satisfied === false && bd.satisfied === null,
-       "legacy and defect now differ in a way that reads as a verdict on the work");
+    /*  ⚠ THIS VARIANT WAS STALE and had to be re-pointed. It asserted
+     *  `bl.satisfied === false` on the RESPONSE. The cleanup release
+     *  retired `satisfied` from the wire, so that read became `undefined`,
+     *  the variant reported the collapse as UNCAUGHT, and nothing noticed
+     *  — a falsification harness failing for a reason with nothing to do
+     *  with its own mutation is the same defect it exists to find.
+     *
+     *  Retiring the FIELD did not retire the MEANING. §3.4's mapping is
+     *  still exported and is still what a consumer derives from, so the
+     *  collapse is asserted where it now lives.  */
+    ok("F0  both states still derive correctly — the mutation is in the MAPPING",
+       bl.state === "legacy_indeterminate" && bd.state === "missing_evaluation_defect",
+       JSON.stringify({ legacy: bl.state, defect: bd.state }) +
+       " — the edit moved the reader too, so F1 would not isolate the collapse");
+    ok("F1  with the collapse, legacy history maps to satisfied:false",
+       broken.SATISFIED_FOR.legacy_indeterminate === false,
+       JSON.stringify(broken.SATISFIED_FOR) + " — then C4a is not what stops this");
+    ok("F2  …i.e. 'proof failed' — legacy is now separated from defect by a VERDICT",
+       broken.SATISFIED_FOR[bl.state] === false &&
+       broken.SATISFIED_FOR[bd.state] === null,
+       "legacy and defect no longer differ in a way that reads as a judgement, so " +
+       "the mutation did not reproduce the collapse");
     console.log("        → an operator sees a legitimate historical close reported as a");
     console.log("          failed proof, and cannot tell it from work done badly.");
 
     const rl = await real.deriveProofState(c, { workOrder, authority: auth });
-    ok("F3  the REAL reader keeps legacy at satisfied:null",
-       rl.satisfied === null && rl.state === "legacy_indeterminate", JSON.stringify(rl));
+    ok("F3  the REAL mapping keeps legacy at null, and the field is off the wire",
+       real.SATISFIED_FOR.legacy_indeterminate === null &&
+       rl.state === "legacy_indeterminate" && !("satisfied" in rl),
+       JSON.stringify({ map: real.SATISFIED_FOR.legacy_indeterminate, read: rl }));
+    ok("F4  …so legacy and defect are indistinguishable by the mapping alone — `state` decides",
+       real.SATISFIED_FOR.legacy_indeterminate ===
+         real.SATISFIED_FOR.missing_evaluation_defect && bl.state !== bd.state,
+       "the mapping alone now separates them — the collapse arriving by another route");
   }
 
   if (VARIANT === "inventoried-terminal") {
@@ -192,8 +231,11 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
       activated_at: STEP6_INSTANT, captured_by: "falsify8", expected: census });
     await c.query("commit");
 
-    //  The escapee: closed AFTER activation, so not inventoried.
-    const escapee = await mkWo("closed");
+    //  The escapee: closed AFTER activation, so not inventoried — and
+    //  therefore a state the guard refuses to let commit.
+    const escapee = await guardWindow.withGuardOff(c,
+      "the inventoried-terminal variant must be shown the row it lets escape",
+      () => mkWo("closed"));
     const workOrder = (await c.query(`select * from work_orders where id=$1`, [escapee])).rows[0];
     const auth = await real.activationAuthority(c);
 

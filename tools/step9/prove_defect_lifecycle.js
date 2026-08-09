@@ -38,6 +38,11 @@ const defect = require(path.join(ROOT, "src/maintenance/proof_defect_service.js"
 const lifecycle = require(path.join(ROOT, "src/technician/lifecycle_service.js"));
 const activation = require(path.join(ROOT, "src/release0/activation_service.js"));
 const reader = require(path.join(ROOT, "src/surfaces/work_order_status_read.js"));
+//  migration 140 REFUSES to let recordActivation run without it, so a
+//  harness that activates must install it. States the guard forbids are
+//  then built inside an explicit withGuardOff() window.
+const guardWindow = require("../step12/guard_window.js");
+const grounded = require("../step12/grounded_evaluation.js");
 const URL = process.env.STEP9_DATABASE_URL;
 
 let pass = 0, fail = 0;
@@ -68,6 +73,12 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
                    "139_no_longer_applicable_resolution.sql"]) {
     await c.query(fs.readFileSync(path.join(ROOT, "migrations", m), "utf8"));
   }
+  /*  Every defect this file raises and then resolves starts from a state
+   *  migration 140 refuses to let commit. Installed before the activation
+   *  below (it is inert until then) so each of those starting states has
+   *  to be built in a named window. */
+  await guardWindow.installGuard(c);
+  const forbidden = (why, fn) => guardWindow.withGuardOff(c, why, fn);
 
   await c.query(`insert into organizations (id,name) values ($1,'L9 Org') on conflict (id) do nothing`, [ORG]);
   await c.query(`insert into properties (id,name,organization_id) values ($1,'L9 Property',$2)
@@ -113,7 +124,15 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
   // ══ R — THE RESOLUTION VOCABULARY ══════════════════════════════════
   sec("R · MIGRATION 139 — THE CODE §4.2 NEEDS THAT 084 DID NOT ALLOW");
   {
-    const wo = await mkWo("closed");
+    /*  `complete`, not `closed`. Both are post-cutover defects, but a
+     *  `closed` row cannot be repaired by recording proof — R0003 refuses
+     *  post-cutover `closed` outright, so its only resolution is to leave
+     *  that status. Section C's story is "the evaluation arrives and the
+     *  obligation closes as satisfied", which needs a row where that is
+     *  actually the repair. */
+    const wo = await forbidden(
+      "R/C need a real defect to raise and then resolve; the guard forbids creating one",
+      () => mkWo("complete"));
     await c.query("begin");
     await defect.raiseProofEvaluationDefect(c, { work_order_id: wo, property_id: PROP });
     await c.query("commit");
@@ -159,9 +178,9 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
     console.log("        → " + refused.detail);
 
     //  2. THE EVALUATION ARRIVES → 'satisfied'.
-    await c.query(`insert into work_order_proof_evaluations
-      (work_order_id,property_id,state,evaluated_by_service,rule_version)
-      values ($1,$2,'satisfied','s9lifeproof','x')`, [persistWo, PROP]);
+    await grounded.groundedSatisfied(c, {
+      work_order_id: persistWo, property_id: PROP, uploaded_by_user_id: TECH,
+      evaluated_by_service: "s9lifeproof" });
     await c.query("begin");
     const sat = await defect.resolveProofEvaluationDefect(c, {
       work_order_id: persistWo, property_id: PROP });
@@ -174,7 +193,9 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
        JSON.stringify(row));
 
     //  3. NO LONGER TERMINAL → 'no_longer_applicable'.
-    const reopened = await mkWo("closed");
+    const reopened = await forbidden(
+      "C5 needs a defect that later leaves the terminal state",
+      () => mkWo("closed"));
     await c.query("begin");
     await defect.raiseProofEvaluationDefect(c, { work_order_id: reopened, property_id: PROP });
     await c.query("commit");
@@ -230,7 +251,11 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
   // ══ A — CALLER (a) ═════════════════════════════════════════════════
   sec("A · THE CANONICAL WRITER NOTICES A TERMINAL ROW IT DID NOT EVALUATE");
   {
-    const rogue = await mkWo("complete");     // terminal, no evaluation, post-cutover
+    //  Terminal, no evaluation, post-cutover — the row this whole section
+    //  is about, and the row migration 140 refuses to let commit.
+    const rogue = await forbidden(
+      "A needs the terminal row the canonical writer did not evaluate",
+      () => mkWo("complete"));
     const s = await reader.readWorkOrderStatus(c, { propertyId: PROP, workOrderId: rogue });
     ok("A1  the reader calls it missing_evaluation_defect",
        s.proof.state === "missing_evaluation_defect", JSON.stringify(s.proof.state));
@@ -273,7 +298,9 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
      *  a real governed completion, ends with the obligation CLOSED by the
      *  same transaction that resolved it — never left open against work
      *  that is now proven. */
-    const wo = await mkWo("closed");
+    const wo = await forbidden(
+      "E starts from a wrongly-terminal row and drives it to a governed completion",
+      () => mkWo("closed"));
     await c.query("begin");
     await defect.raiseProofEvaluationDefect(c, { work_order_id: wo, property_id: PROP });
     await c.query("commit");

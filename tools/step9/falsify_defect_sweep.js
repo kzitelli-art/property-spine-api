@@ -36,6 +36,12 @@ const ROOT = path.join(__dirname, "..", "..");
 const SWEEP = path.join(ROOT, "src/maintenance/proof_defect_sweep.js");
 const activation = require(path.join(ROOT, "src/release0/activation_service.js"));
 const reader = require(path.join(ROOT, "src/surfaces/work_order_status_read.js"));
+/*  Migration 140 REFUSES to let recordActivation run without it: a
+ *  guard detected missing AFTER an irreversible act is useless. So a
+ *  harness that activates must install it first. It is inert until the
+ *  activation lands, so it changes nothing about what is proven here. */
+const guardWindow = require("../step12/guard_window.js");
+
 const URL = process.env.FALSIFY9_DATABASE_URL;
 const SWEEP_DIGEST = crypto.createHash("sha256").update(fs.readFileSync(SWEEP)).digest("hex");
 
@@ -121,6 +127,12 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
 
   const V = VARIANTS[VARIANT];
   console.log(`§4.2 FALSIFICATION — variant "${VARIANT}"\n`);
+
+  /*  The guard the ACTIVATION now requires. Without it every activation
+   *  in this file refuses with GUARD_ABSENT, and a falsification harness
+   *  whose variant is stopped by the WRONG thing proves nothing about
+   *  the variant. It is inert until an activation exists. */
+  await guardWindow.installGuard(c);
   console.log("  breaks:  " + V.what);
   console.log("  targets: " + V.breaks + "\n");
 
@@ -182,7 +194,11 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
       activated_at: STEP6_INSTANT, captured_by: "falsify9", expected: census });
     await c.query("commit");
     //  NOTE: migration 138 is deliberately NOT applied for this variant.
-    const defectWo = await mkWo("closed");
+    //  Post-activation and unevaluated is the state migration 140 refuses;
+    //  the defect population this variant mishandles has to be built for it.
+    const defectWo = await guardWindow.withGuardOff(c,
+      "the no-index variant needs a real defect to raise twice",
+      () => mkWo("closed"));
 
     //  Sequentially, the check-then-insert looks perfectly correct.
     await broken.runProofDefectSweep(pool, { dryRun: false });
@@ -202,7 +218,9 @@ const STEP6_INSTANT = new Date(Date.parse("2026-08-08T09:15:00.000Z"));
      *  So the interleave is written out explicitly, which is what a race
      *  IS — two transactions that both read before either writes. This
      *  cannot flake in either direction. */
-    const w2 = await mkWo("closed");
+    const w2 = await guardWindow.withGuardOff(c,
+      "…and a second one for the deterministic interleave",
+      () => mkWo("closed"));
     const a = await pool.connect(), b = await pool.connect();
     const CHECK = `select 1 from obligations where property_id=$1 and related_id=$2
                      and related_type='work_order' and type='proof_evaluation_missing'

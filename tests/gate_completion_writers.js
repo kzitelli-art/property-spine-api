@@ -48,12 +48,18 @@ const AUTHORIZED = [
          "obligation closure, receipt and actor attribution, all in one transaction",
     until: "never — this is the intended end state" },
   { file: "src/maintenance/maintenance.js",
-    role: "TEMPORARILY LEGACY",
-    why: "the app closeout route: status='closed' with completion_photo/completion_note. " +
-         "It writes NO proof evaluation and its photo column holds a stub:// string with " +
-         "no bytes, so it can never be converted into proof (§4.1)",
-    until: "Step 6 retires the done-path of this route. The route itself survives — " +
-           "closeoutNotDone shares it and is not a completion" },
+    role: "RETIRED — UNREACHABLE DEAD CODE",
+    why: "the app closeout route's done-path. It wrote status='closed' with NO proof " +
+         "evaluation, and its photo column holds a stub:// string with no bytes, so it " +
+         "could never be converted into proof (§4.1). STEP 6 retired it: the route now " +
+         "returns 409 before pool.connect(), so no transaction is opened and no row is " +
+         "locked. The statement below the guard is unreachable, and D1/D2 assert that " +
+         "the guard is still in front of it",
+    until: "Step 9's separate cleanup release deletes the dead branch. It is left in " +
+           "place until then deliberately — unreachable code is recoverable, deleted " +
+           "code is not, and Release 0 keeps the option until the replacement rail is " +
+           "PROVEN in production, not merely deployed (§5.5). The route itself survives " +
+           "permanently — closeoutNotDone shares it and is not a completion" },
 ];
 
 const TERMINAL = ["complete", "closed"];
@@ -195,6 +201,51 @@ const UNIT_TURN_OWNER = "src/maintenance/work_acceptance_service.js";
      "\n        → a new caller must also persist the action receipt (fact 7), which the " +
      "\n          SERVICE does not enforce — conversation.js writes it, not claimCompletion.");
   console.log("        canonical callers: " + JSON.stringify(callers));
+}
+
+/*  ── STEP 6 — THE RETIRED PATH MUST STAY RETIRED ────────────────────
+ *
+ *  `legacy.role` above is prose. Prose does not stop a writer. The dead
+ *  `update work_orders set status='closed'` is still in the file by
+ *  design (Step 9 deletes it), so the ONLY thing standing between it and
+ *  production is the guard — and a guard that a refactor could quietly
+ *  move below `pool.connect()` would still read as present while a
+ *  transaction opened in front of it.
+ *
+ *  So POSITION is asserted, not just presence. */
+{
+  //  Scoped to THIS route. The first version searched the whole file and
+  //  compared the guard against some other route's pool.connect(), which
+  //  made a correctly-placed guard look misplaced. Same defect as an
+  //  information_schema walk that answered a question nobody asked: the
+  //  search has to be over the region the claim is about.
+  const routeAt = legacy.search(/router\.patch\(["']\/work-orders\/:id\/closeout["']/);
+  const region = routeAt > -1 ? legacy.slice(routeAt) : "";
+  ok("D0  the closeout route is still findable by the gate", routeAt > -1,
+     "the route was renamed or moved — every assertion below is vacuous until this " +
+     "is fixed, so it is checked first rather than reported as four passes");
+
+  const doneGuard = /if \(done !== false\) \{[\s\S]{0,900}?legacy_completion_retired/;
+  ok("D1  the legacy done-path refuses with legacy_completion_retired",
+     doneGuard.test(region),
+     "the retired done-path can write a terminal status again. STOP.");
+
+  const guardAt = region.search(/if \(done !== false\) \{/);
+  const connectAt = region.search(/const client = await pool\.connect\(\)/);
+  ok("D2  …and it refuses BEFORE any connection is opened",
+     guardAt > -1 && connectAt > -1 && guardAt < connectAt,
+     "the guard sits after pool.connect(), so 'writes nothing' is a claim about " +
+     "ordering rather than a property of the path. Move it back in front.");
+
+  //  The paired control. A 409 from a route that no longer works at all
+  //  proves nothing; the not-done path is what makes the refusal legible
+  //  as a governed refusal of ONE verb.
+  ok("D3  the NOT-done path is untouched and still writes its follow-up",
+     /if \(done === false\) \{/.test(region) &&
+     /status='needs_followup'/.test(region) &&
+     /spawnObligationFromEvent\(/.test(region),
+     "closeoutNotDone is not a completion and must keep working — without it the " +
+     "409 is indistinguishable from a dead route");
 }
 
 ok("S6  no module outside the evaluation service inserts evaluations directly",

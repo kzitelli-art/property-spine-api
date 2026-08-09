@@ -39,6 +39,12 @@ const http = require("http");
 const Module = require("module");
 const express = require("express");
 const { Pool } = require("pg");
+/*  Migration 140 REFUSES to let recordActivation run without it: a
+ *  guard detected missing AFTER an irreversible act is useless. So a
+ *  harness that activates must install it first. It is inert until the
+ *  activation lands, so it changes nothing about what is proven here. */
+const guardWindow = require("../step12/guard_window.js");
+
 
 const ROOT = path.join(__dirname, "..", "..");
 const MAINT = path.join(ROOT, "src/maintenance/maintenance.js");
@@ -234,6 +240,11 @@ function request(port, method, urlPath, session) {
   //  Installed BEFORE anything requires the real module.
   installVariant(V.file, V.edits);
 
+  /*  The guard the ACTIVATION now requires. Without it the activation
+   *  below refuses with GUARD_ABSENT, and a variant stopped by the WRONG
+   *  thing proves nothing about the variant. Inert until activation. */
+  await guardWindow.installGuard(c);
+
   // ── population ────────────────────────────────────────────────────
   await c.query(`insert into organizations (id,name) values ($1,'F10 Org') on conflict (id) do nothing`, [ORG]);
   for (const [p, n] of [[PROP, "F10 Property"], [OTHER, "F10 Other"]]) {
@@ -283,7 +294,12 @@ function request(port, method, urlPath, session) {
     await activation.recordActivation(c, {
       activated_at: CUTOVER, captured_by: "falsify http", expected: census });
     await c.query("commit");
-    WO_DEFECT = await mkWo("closed");   // post-cutover → a real defect
+    //  Post-cutover → a real defect, and the state migration 140 refuses.
+    //  Every variant here exists to show a mutation MIShandling this row,
+    //  so it has to be built with the guard explicitly off.
+    WO_DEFECT = await guardWindow.withGuardOff(c,
+      "each HTTP variant must be shown a real defect row to mishandle",
+      () => mkWo("closed"));
   }
 
   // ── the real dependency graph, with the mutation inside it ────────
