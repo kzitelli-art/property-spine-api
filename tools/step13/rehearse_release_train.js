@@ -157,6 +157,24 @@ const req = (port, method, p, { session, body } = {}) => new Promise((res, rej) 
                    values ($1,$2,'work_order','maintenance','work_order_routing','r','open')`, [PROP, wo]);
     return wo;
   };
+  /*  ── THE LEDGER IS PART OF THE BOUNDARY ───────────────────────────
+   *
+   *  The train applies migration DDL directly rather than through
+   *  `migrate.js`, because the runner applies every pending file in the
+   *  tree and this rehearsal deliberately splits 140 (before the
+   *  activation) from 138/139 (after it). But a production migration
+   *  release also WRITES THE LEDGER, and leaving that out produced a
+   *  rehearsed database that the acceptance receipt correctly called a
+   *  contradiction: DDL present, ledger silent — which in production means
+   *  someone applied schema by hand and the next deploy will refuse to
+   *  boot. The rehearsal has to leave behind the state production leaves
+   *  behind, or the receipt is describing a database that will never exist.
+   *
+   *  `prove_migration_sequencing.js` covers what the runner itself does. */
+  const recordLedger = (version, name) => c.query(
+    `insert into schema_migrations (version, name) values ($1, $2)
+     on conflict (version) do nothing`, [version, name]);
+
   const completeGoverned = async (wo, key) => {
     await grounded.preserveQualifyingEvidence(c,
       { work_order_id: wo, property_id: PROP, uploaded_by_user_id: TECH, seed: key });
@@ -323,7 +341,12 @@ const req = (port, method, p, { session, body } = {}) => new Promise((res, rej) 
   sec("B7b · MIGRATION 140 — the containment guard, applied BEFORE the activation");
   {
     await guardWindow.installGuard(c);
-    ok("B7b.1 all five guard triggers are installed", await guardWindow.guardInstalled(c));
+    await recordLedger("140", "140_post_activation_completion_guard.sql");
+    //  The count comes from the list the window actually drops, not from
+    //  a number typed into a label. The old text said "five" three
+    //  revisions after the migration had grown to seven.
+    ok(`B7b.1 all ${guardWindow.TRIGGERS.length} guard triggers are installed`,
+       await guardWindow.guardInstalled(c));
     const wo = await mkWo("open");
     const out = await completeGoverned(wo, "b7b");
     ok("B7b.2 …and it is INERT: the canonical writer is unaffected",
@@ -393,6 +416,8 @@ const req = (port, method, p, { session, body } = {}) => new Promise((res, rej) 
                      "139_no_longer_applicable_resolution.sql"]) {
       // eslint-disable-next-line no-await-in-loop
       await c.query(fs.readFileSync(path.join(ROOT, "migrations", m), "utf8"));
+      // eslint-disable-next-line no-await-in-loop
+      await recordLedger(m.slice(0, 3), m);
     }
     const sweep = require(path.join(ROOT, "src/maintenance/proof_defect_sweep.js"));
     const clean = await sweep.runProofDefectSweep(pool, { dryRun: true });

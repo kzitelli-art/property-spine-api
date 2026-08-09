@@ -348,9 +348,27 @@ Merging without the migration release **brings the API down** — see the top of
 document.
 
 ```bash
-MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=137 \
+MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=<what the ledger says now> \
   EXPECTED_SHA=<the sha actually deploying> node migrations/migrate.js --apply
 ```
+
+> **⚠ It is 140 here, not 137, if boundary 7b has landed.** This command used to
+> hardcode `137`, which is the ceiling *before the release starts*. Boundary 7b
+> applies 140 and moves the ceiling to 140, so the old text was **refused
+> verbatim** by the release gate — measured, `prove_migration_sequencing.js` S5:
+> *"You expected ceiling 137; the database says 140."* The gate is right and the
+> document was wrong. Read the ledger, then state what you read.
+
+**Which release applies what is decided by the MERGE ORDER, not by these boundary
+numbers.** `migrate.js` applies every migration file present in the build that is
+missing from the ledger — it does not know what a boundary is. So the two-release
+split (140 at 7b, 138+139 here) happens only if 140 reaches `main` in a build where
+138 and 139 do not yet exist. If they merge together, **one** release applies all
+three, and boundary 10's schema work has already happened by the time you get here.
+That is safe — 138 is an index and 139 widens a check constraint; neither writes a
+row, and the sweep is manual — but it means `where_are_we.js`, not this list, is the
+authority on where you actually are. (Measured on the composed tree:
+`prove_migration_sequencing.js` S2 finds all three pending in one deploy.)
 
 **138 and 139 are one boundary.** 138 alone lets the defect obligation be raised
 but not closed as `no_longer_applicable`; `where_are_we.js` stops on that split.

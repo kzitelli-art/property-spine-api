@@ -129,7 +129,67 @@ and the terminal status of the row — and fails if any two disagree. That is th
 check the owner asked for: *whether we ever create two meanings of truth*, not
 whether each service is individually green.
 
-**It found one.** See §E1 below.
+**It found one.** See §3b below.
+
+### …and the composition check is itself falsified
+
+```bash
+FALSIFYTRAIN_DATABASE_URL='…' node tools/step13/falsify_train_composition.js --variant <v>
+```
+
+Fifty-three green assertions do not establish that `oneTruth` can go red, and this
+release has already been bitten by exactly that — the Step 7 concurrency proof
+measured a simulation and passed after a lock was added that it never looked at. So
+a divergence is manufactured on purpose and the **shipped, byte-identical** train is
+required to notice. The fault is injected into the train's dependencies by
+`_train_fault.js` via `--require`, not by a flag inside the train.
+
+| variant | injected | must go red |
+|---|---|---|
+| `honest-control` | nothing | **nothing** — exit 0, no FAIL lines |
+| `guard-dropped` | a real hollow completion, both witnesses honest | **Z1** only. They *agree* it is wrong, so the agreement assertion stays silent — which is what proves the two checks are complementary, not redundant |
+| `reader-blind` | the same row; the reader calls it `satisfied` | the **agreement** assertion |
+| `audit-blind` | the same row; the audit view emptied | the **agreement** assertion, from the other direction |
+
+Each variant also asserts it failed for the *right* reason. What the train prints:
+
+```text
+FAIL  §T  after B8 — the guard is now ARMED: the DB audit and the canonical
+          reader name the same rows
+      → audit ["2774…d94a"] vs reader [] — TWO MEANINGS OF TRUTH. The database
+        and the surface disagree about which work orders are wrong, which is
+        worse than either being wrong alone.
+```
+
+It fires at the boundary where the divergence appears, not at the end.
+
+---
+
+## 3c · The migration sequence, run through the real runner
+
+```bash
+SEQUENCE_DATABASE_URL='…' node tools/step13/prove_migration_sequencing.js   # 15/15
+```
+
+The runbook orders schema by **boundary**; `migrations/migrate.js` orders it by
+**file present in the build**. Those are not the same rule, and the difference is
+only visible from a real ledger. Two findings, both measured by spawning the shipped
+runner:
+
+1. **Boundary 10's documented command was refused verbatim.** It hardcoded
+   `EXPECTED_LEDGER_CEILING=137` — the ceiling *before the release starts*. Boundary
+   7b applies 140 and moves the ceiling to 140, so the runner answered
+   *"You expected ceiling 137; the database says 140."* The gate was right; the
+   document was wrong. Fixed, and boundary 7b already had it right.
+2. **The two-release split is a property of the merge order, not of the boundary
+   numbering.** On the composed tree all three migrations are pending in one deploy,
+   so a single release applies 138, 139 and 140 together. That is safe — 138 is an
+   index, 139 widens a check constraint, neither writes a row, and the sweep is
+   manual — but it means `where_are_we.js`, not the boundary list, is the authority
+   on where you actually are. Now stated in the runbook.
+
+Neither is an invariant failure. Both are the kind of thing that only shows up when
+you run the real thing in the real order, which is what the rehearsal is for.
 
 ---
 
@@ -254,6 +314,18 @@ next deploy will refuse to boot), an activation recorded against an unstamped ep
 Its own first version had exactly the defect it now catches: it used `to_regclass`
 to look for the canonical **function**, and `to_regclass` finds relations. It
 printed "the validator is not installed" one line above "guard ARMED."
+
+**And it caught a real one on its first honest run.** Against a fully rehearsed
+database it reported *"migration 140's DDL is PRESENT but the ledger does not record
+it as applied"* — because the train applied migration SQL directly and never wrote
+the ledger. In production that pair means schema applied by hand, and the next deploy
+refuses to boot. The train now records the ledger the way a migration release does,
+so the rehearsal leaves behind the state production leaves behind.
+
+`docs/release0/REHEARSAL_RECEIPT.json` is that receipt, preserved. **It is not
+production** — it is the shape the production receipt will take, captured now so any
+difference is visible rather than argued. Zero contradictions; one honest `UNKNOWN`
+(the running SHA, which only the deployed instance can answer).
 
 ---
 
