@@ -67,6 +67,11 @@ module.exports = function operatorObligationActions(deps) {
 
   const gate = [requireOperator, refuseClientActor];
 
+  //  THE canonical acceptance write. A self-claim records acceptance
+  //  through the same primitive an SMS acceptance uses — one definition
+  //  of what acceptance means, two entry paths with their own authority.
+  const acceptance = require("../technician/acceptance_service");
+
   // ── SELF-CLAIM ────────────────────────────────────────────────────
   //  POST, not PATCH: the app's live write seam (WRITE_ACTIONS) is a set of
   //  named, hardwired POST verbs. Matching that convention keeps the browser
@@ -81,8 +86,7 @@ module.exports = function operatorObligationActions(deps) {
       //  session's property or module set is NOT FOUND, not FORBIDDEN —
       //  a scoped caller must not be able to probe for existence.
       const o = (await client.query(
-        `select id, property_id, module, status, assigned_user_id
-           from obligations
+        `select * from obligations
           where id = $1 and property_id = $2 and module = any($3::text[])
           for update`,
         [req.params.id, req.operator.property_id, req.operator.allowed_modules || []]
@@ -103,20 +107,79 @@ module.exports = function operatorObligationActions(deps) {
         });
       }
 
-      const updated = (await client.query(
-        `update obligations
-            set assigned_user_id = $1,
-                status = case when status = 'open' then 'in_progress' else status end,
-                updated_at = now()
-          where id = $2
-        returning id, property_id, module, type, label, status, due_at,
-                  assigned_user_id, assigned_role, person_id, unit_id,
-                  related_type, related_id, created_at, updated_at`,
-        [req.operator.id, o.id]          // the SESSION user, never the request
-      )).rows[0];
+      /*  ── A SELF-CLAIM IS AFFIRMATIVE ACCEPTANCE ──────────────────
+       *
+       *  Ruled, and it resolves a real contradiction. Being ASSIGNED by a
+       *  manager or the system is not acceptance — the person has not
+       *  said anything yet. CLAIMING is: they said "I am taking this".
+       *
+       *  The old writer set only `assigned_user_id` and moved the row to
+       *  `in_progress`, which then made acceptance UNREACHABLE — the
+       *  acceptance path requires `status='open'`. So a claimed
+       *  obligation read as assigned-but-never-accepted forever, which
+       *  recorded LESS truth than the human action expressed.
+       *
+       *  Assignment and acceptance are now recorded ATOMICALLY through
+       *  the canonical acceptance write, so there is exactly one
+       *  definition of what acceptance is. The eligibility rules above
+       *  are this door's own — they always were.
+       *
+       *  `ownership_origin: 'self_claimed'` keeps the two human acts
+       *  distinguishable in history; the acceptance FIELDS are identical
+       *  because the fact is identical.
+       */
+      //  Replay-safe on the same terms as an SMS acceptance: one key per
+      //  (obligation, claimer), unique across the table, so a double-tap
+      //  or a retried request lands as `replayed` rather than a second
+      //  acceptance.
+      const claimKey = `self_claim:${o.id}:${req.operator.id}`;
 
+      //  THE SAME CLAIM ARRIVING TWICE. A double-tap or a retried request
+      //  finds the world already matching what it asked for: nothing to
+      //  do, and nothing wrong. This lives here rather than inside the
+      //  acceptance write for the same reason `acceptWork` keeps its own
+      //  copy — a replay is a fact about THIS entry path's request, and
+      //  the write itself should stay a write.
+      if (o.acceptance_key === claimKey && String(o.accepted_by_user_id) === String(req.operator.id)) {
+        await client.query("commit");
+        return res.json({
+          obligation: o, claimed_by: req.operator.id,
+          accepted_by: o.accepted_by_user_id, accepted_at: o.accepted_at,
+          replayed: true, receipt: "Already claimed by you.",
+        });
+      }
+
+      const orgRow = (await client.query(
+        `select organization_id from properties where id = $1`, [o.property_id])).rows[0];
+
+      const accepted = await acceptance.recordAcceptance(client, {
+        ob: o,
+        user_id: req.operator.id,           // the SESSION user, never the request
+        organization_id: orgRow && orgRow.organization_id,
+        acceptance_key: claimKey,
+        channel: "operator_self_claim",
+        ownership_origin: "self_claimed",
+      });
+
+      if (accepted.outcome === "refused") {
+        await client.query("rollback");
+        return res.status(409).json({ error: "could not claim that work",
+                                      reason: accepted.refusal });
+      }
+
+      const updated = accepted.obligation;
       await client.query("commit");
-      return res.json({ obligation: updated, claimed_by: req.operator.id, receipt: "Claimed." });
+      return res.json({
+        obligation: updated,
+        claimed_by: req.operator.id,
+        //  The receipt says what actually happened. "Claimed." alone
+        //  understated it once acceptance became part of the same act.
+        accepted_by: updated.accepted_by_user_id,
+        accepted_at: updated.accepted_at,
+        replayed: accepted.outcome === "replayed",
+        receipt: accepted.outcome === "replayed"
+          ? "Already claimed by you." : "Claimed and accepted.",
+      });
     } catch (e) {
       try { await client.query("rollback"); } catch (_) {}
       console.error("operator/obligations/claim error", e);

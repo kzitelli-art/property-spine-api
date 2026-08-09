@@ -112,6 +112,33 @@ async function acceptWork(client, { obligation_id, user_id, organization_id, acc
   if (verdict.isNoop) return { outcome: "replayed", obligation: ob, event: null, refusal: verdict.verdict };
   if (!verdict.eligible) return { outcome: "refused", obligation: null, event: null, refusal: verdict.verdict };
 
+  return recordAcceptance(client, { ob, user_id, organization_id, acceptance_key, channel,
+                                    ownership_origin: "accepted_by_owner" });
+}
+
+/*  ── recordAcceptance — THE acceptance write, and the only one ────────
+ *
+ *  Factored out because a SECOND entry path now records acceptance: an
+ *  operator claiming an obligation for themselves. A self-claim IS
+ *  affirmative acceptance — the person said "I am taking this" — and
+ *  requiring them to afterwards "accept" work they had already claimed
+ *  described a state the product could never traverse and recorded LESS
+ *  truth than the human action expressed.
+ *
+ *  What differs between the two entry paths is ELIGIBILITY, which has
+ *  always differed: `acceptWork` applies technician work-selection rules
+ *  (work-order related, assigned to the actor, actionable), while the
+ *  operator claim route applies its own scope/module/not-already-owned
+ *  rules. What must NOT differ is what acceptance MEANS, so the fields,
+ *  the guard on the UPDATE and the `work_accepted` event live here once.
+ *
+ *  The caller owns the transaction and has already locked the row.
+ */
+async function recordAcceptance(client, {
+  ob, user_id, organization_id, acceptance_key = null, channel = null,
+  ownership_origin = "accepted_by_owner",
+} = {}) {
+  const obligation_id = ob.id;
   let updated;
   try {
     updated = (await client.query(
@@ -121,11 +148,11 @@ async function acceptWork(client, { obligation_id, user_id, organization_id, acc
               accepted_by_user_id  = $2,
               accepted_at          = now(),
               acceptance_key       = $3,
-              ownership_origin     = 'accepted_by_owner',
+              ownership_origin     = $4,
               updated_at           = now()
         where id = $1 and status = 'open' and accepted_at is null
       returning *`,
-      [obligation_id, user_id, acceptance_key])).rows[0];
+      [obligation_id, user_id, acceptance_key, ownership_origin])).rows[0];
   } catch (e) {
     //  A concurrent redelivery got there first. The database refused the
     //  duplicate key; the honest report is that this message changed nothing.
@@ -154,10 +181,16 @@ async function acceptWork(client, { obligation_id, user_id, organization_id, acc
        organization_id,
        channel: channel || null,
        acceptance_key: acceptance_key || null,
+       //  How ownership arose. `self_claimed` and `accepted_by_owner`
+       //  are different human acts and history must not blur them.
+       ownership_origin,
        from_status: "open", to_status: "in_progress",
      })])).rows[0];
 
   return { outcome: "accepted", obligation: updated, event, refusal: null };
 }
 
-module.exports = { ACCEPTANCE_OUTCOMES, acceptWork, acceptanceError, WorkSelectionError };
+module.exports = {
+  ACCEPTANCE_OUTCOMES, acceptWork, recordAcceptance, actorScopeFor,
+  acceptanceError, WorkSelectionError,
+};
