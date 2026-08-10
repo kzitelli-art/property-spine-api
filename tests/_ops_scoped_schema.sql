@@ -112,6 +112,16 @@
     required_inputs text[] not null default '{}',
     priority text not null default 'normal', severity text not null default 'normal',
     ownership_origin text,
+    --  001_baseline. Present in production and previously omitted here
+    --  because nothing this fixture served had read it. The work-order
+    --  status read now describes a routed follow-up from the IMMUTABLE
+    --  event that created it — `work_orders.not_done_reason` holds only the
+    --  latest key — so the join is load-bearing, and without the column the
+    --  whole live read 503s and the door honestly renders UNAVAILABLE.
+    source_event_id uuid references events(id) on delete set null,
+    module text not null default 'leasing',
+    assigned_role role_name,
+    escalates_to_role role_name,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now());
 
