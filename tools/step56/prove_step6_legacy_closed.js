@@ -128,11 +128,34 @@ function request(port, method, urlPath, body) {
   ).catch(() => ({ rows: [{ n: 0 }] }))).rows[0].n);
   if (sentinel !== 1) { console.error("REFUSED: not the isolated baseline."); process.exit(2); }
 
-  const ledger = (await c.query(`select max(version) v from schema_migrations`)).rows[0].v;
-  if (ledger !== "137") {
-    console.error(`REFUSED: ledger is ${ledger}, expected 137. Apply the migration first.`);
+  /*  137 MUST BE APPLIED. IT NEED NOT BE THE CEILING.
+   *
+   *  This required the ceiling to be exactly "137", which was the same
+   *  thing when 137 was the newest migration. It stopped being the same
+   *  thing when 150/151/152 landed, and the consequence is backwards: a
+   *  proof whose job is to stand in for production could no longer run
+   *  against a database shaped like production. It refused the ONE
+   *  baseline that matches the real ledger.
+   *
+   *  What this file actually needs is the 137 schema — the proof
+   *  evaluation tables the canonical writer uses as its control. That is
+   *  a question of whether 137 was APPLIED, and anything above it is a
+   *  database that resembles production more closely, not less.
+   *
+   *  Still refused: a database WITHOUT 137, where the control path could
+   *  not run and every refusal below would be unfalsifiable.  */
+  const led = await c.query(
+    `select max(version) ceiling,
+            count(*) filter (where version = '137') has137
+       from schema_migrations`);
+  const ledger = led.rows[0].ceiling, has137 = Number(led.rows[0].has137);
+  if (has137 !== 1) {
+    console.error(`REFUSED: migration 137 is not applied (ledger ceiling ${ledger}). ` +
+      "The canonical writer's control cannot run without it, so every refusal this " +
+      "file asserts would be unfalsifiable.");
     process.exit(2);
   }
+  console.log(`  baseline ledger ceiling ${ledger}, migration 137 applied.`);
 
   console.log("STEP 6 — LEGACY DONE-PATH CLOSED, PROVEN THROUGH REAL HTTP\n");
 
