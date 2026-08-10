@@ -19,6 +19,109 @@ current truth. Re-date it whenever `main` moves materially.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
+##  RELEASE 0 IS BLOCKED ON ONE PRODUCTION COMMAND. 2026-08-10.
+## ══════════════════════════════════════════════════════════════════
+
+**Everything below this section about Release 0 sequencing is superseded.**
+The base moved underneath the campaign, and that changed the order of work.
+
+### The one thing that has to happen next
+
+On the running production instance:
+
+```bash
+node tools/release0/gate1_production_census.js
+```
+
+Read-only, applies nothing, prints nothing containing the connection string.
+Bring back the **entire** output. It decides everything else.
+
+Nothing moves until then: Boundary 7 held, no migration applied, no Release 0
+branch deployed.
+
+### Why it is needed, and it is not what it looks like
+
+`prestart` **verifies** rather than applies. Main is now `90ab03d`, which
+carries migrations **150/151/152**. So a build refuses to start when its
+migration files are not all in the target ledger — and refuses **equally**
+when the ledger holds a version the build has no file for. Boundary 7 is
+code-only and can still fail to boot for reasons that have nothing to do
+with Release 0. Both directions are unmeasured.
+
+### What is held
+
+| | |
+|---|---|
+| API | `claude/boundary-7-step-6` @ `1dffe72`, rebased on `90ab03d`, `npm run verify` 11/11 |
+| APP | `claude/release-0-audit-plan-55r5kd` @ `6993913`, suite 22/22 |
+| deployed | nothing |
+| migrated | nothing |
+
+### Facts established, so nobody re-derives them
+
+- **140 is independent of 138/139.** 138 creates one index, 139 widens one
+  check constraint, and 140 references neither. Its references resolve to
+  001 / 134 / 137, all in main. `prove_140_dependencies.js` 8/8. All six
+  branches carrying 138/139/140 hold byte-identical definitions, so *the
+  intended 140* is unambiguous (`0d34c0f10799`).
+- **The 137 → 150 gap is not a finding.** Migration numbers need not be
+  contiguous. Whether 138/139 matter is now purely a ledger question.
+- **A release applies EVERY pending file.** There is no per-file selection
+  in `migrate.js`. From a ledger below 150, releasing 140 also releases the
+  property-creation schema. `prove_out_of_order_release.js` 19/19.
+- **Out-of-order IS permitted**, and **applying 140 does not move the
+  ceiling** — it stays 152, because the ceiling is the ledger max. Someone
+  who reasons "I just released 140, so the ceiling is 140" gets refused and
+  will assume the database drifted. Both measured against the real migrator,
+  copied and sha256-compared before running.
+- **`/health/migrations` is documented and does not exist.** No route defines
+  it. `docs/deployment.md` corrected.
+
+### The hard gate for 7b
+
+Not migration numbers. Immediately before the deliberate 140 release, and
+**not** on the first census:
+
+```bash
+EXPECTED_PENDING=140_post_activation_completion_guard.sql \
+  node tools/release0/gate1_production_census.js
+```
+
+`fileMissingFromLedger` must be exactly that file and nothing else.
+
+### Sequence (owner-set)
+
+1. neutral census · 2. classify A/B/C/other · 3. re-freeze Boundary 7 on the
+verified base · 4. deploy + prove 7 · 5. merge the exact 140 · 6. census with
+`EXPECTED_PENDING` · 7. explicit schema release only if 140 is sole pending ·
+8. verify clean · 9. fresh Release 0 census · 10. **stop for Boundary 8
+authorization.**
+
+**Case B** (150/151/152 not applied): finish that release under its own
+closeout first. Do **not** let Release 0 become its release vehicle. Cutting
+from a stale production SHA is an emergency escape hatch, not the sequence.
+**Case C** (ledger holds 138/139/140, main has no files): hard stop. Find
+which commit applied them and restore the exact definitions. Do **not**
+document them away to turn verify green.
+
+### Closed, do not reopen
+
+Boundary 6 is closed on source + reachability evidence. The closeout drawer is
+**stranded legacy** — `renderDetail` → `workOrderPanel` is unreachable from any
+live route; the work-order door (`work-lifecycle-door.js`) never had that
+control. Browser acceptance belongs on the live door, not on a resurrected
+drawer. `closeout_surface_reachability.test.js` 19/19, falsified 11/11 (APP).
+The who-line fix (`KZ · ACCEPTED` / `KZ · NOT ACCEPTED` / `UNASSIGNED`) is
+display-only and approved; `who_line_agreement.test.js` 23/23.
+
+### Parked, under existing ownership
+
+The chain cannot rebuild from empty — `012_bank_intake` fails on `yardi_code`.
+Known and owned (UNBLOCK_2 §1, Appendix H). Not part of this release decision.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
 ##  RELEASE 0 IS READY TO RUN AND CANNOT BE RUN FROM HERE. 2026-08-09.
 ## ══════════════════════════════════════════════════════════════════
 

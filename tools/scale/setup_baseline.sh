@@ -91,8 +91,29 @@ for _ in $(seq 1 40); do
   fi
 done
 
+#  THE EXPECTED CEILING IS DERIVED, NOT REMEMBERED.
+#
+#  This was hardcoded to 136 — correct when it was written, and wrong the
+#  moment main moved. Migrations 150/151/152 landed and a baseline that
+#  built PERFECTLY then exited 1 saying "expected 136", which reads as a
+#  broken harness rather than a stale number. The next person debugs the
+#  database instead of the assertion.
+#
+#  The real invariant is that the ledger reached the highest migration
+#  this checkout carries. That is true at 136, at 152, and at whatever
+#  comes next, and it still fails loudly if the chain stopped early —
+#  which is the only thing this check was ever for.
+#
+#  Callers that need a SPECIFIC ceiling (baseline_136.sh holds 137 back
+#  to build at 136) get it for free: they change which files are present,
+#  so the derived expectation moves with them.
+EXPECTED_CEIL="$(ls "$API_DIR/migrations" \
+  | grep -E '^[0-9]{3}_.*\.sql$' | grep -v '^000_' | sort | tail -1 | cut -c1-3)"
 CEIL="$(ceiling)"
-[ "$CEIL" = "136" ] || { echo "ledger ceiling is $CEIL, expected 136"; exit 1; }
+[ "$CEIL" = "$EXPECTED_CEIL" ] || {
+  echo "ledger ceiling is $CEIL, expected $EXPECTED_CEIL (highest migration file present)"
+  exit 1
+}
 say "ledger ceiling $CEIL"
 
 # ── 3. THE HARNESS SENTINEL ─────────────────────────────────────────

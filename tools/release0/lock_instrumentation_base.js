@@ -55,10 +55,28 @@ console.log("\n" + bar);
 console.log("  INSTRUMENTATION BASE LOCK");
 console.log(bar + "\n");
 
+/*  NO STAMP = NOT AN INSTRUMENTATION CANDIDATE, and after Boundary 7 that
+ *  is the normal case rather than a mistake. The stamp was deleted by the
+ *  deploy that landed Release 0 product source, exactly as its own
+ *  removal_condition required.
+ *
+ *  The old message here said "Run this on the instrumentation branch",
+ *  which reads as "you are lost" and sends someone hunting for a file that
+ *  was removed on purpose. This lock governs tools-and-docs deploys; a
+ *  product deploy is governed by npm run verify and its own proof, and
+ *  saying so is the difference between a refusal and a wrong accusation. */
 let stamp = null;
 try { stamp = JSON.parse(fs.readFileSync(STAMP, "utf8")); } catch (e) {
-  console.error("  REFUSED: cannot read the stamp — " + e.message);
-  console.error("  Run this on the instrumentation branch.\n");
+  const missing = e && e.code === "ENOENT";
+  console.error(missing
+    ? "  NOT APPLICABLE: there is no instrumentation stamp on this branch.\n" +
+      "  That is expected for a PRODUCT deploy — the stamp is deleted by the\n" +
+      "  deploy that lands Release 0 product source. This lock only governs\n" +
+      "  tools-and-docs candidates, which carry a stamp naming their base.\n" +
+      "  For a product deploy the gate is: npm run verify, plus the boundary's\n" +
+      "  own proof.\n"
+    : "  REFUSED: the stamp exists but could not be read — " + e.message + "\n" +
+      "  A malformed stamp is a real failure, not an inapplicable lock.\n");
   process.exit(1);
 }
 const claimed = String(stamp.product_base_sha || "");
