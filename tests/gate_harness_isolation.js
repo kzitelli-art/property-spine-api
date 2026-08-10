@@ -116,6 +116,16 @@ const PRODUCTION_APPROVED = [
    *  audit as the expected set, because production moves.
    *  Registered with the tool, not after the gate caught it. (It did
    *  catch it, which is the gate working.)  */
+  /*  The cutover runner. The ONLY thing in this repository that can
+   *  perform the activation against production — deliberately, because
+   *  the alternative is a hand-run one-liner, which is the exact shape of
+   *  failure this release exists to make impossible. Its default does
+   *  nothing: writing requires --activate AND an authorization naming who
+   *  permitted it, and the dry run runs inside a proven read-only
+   *  transaction. */
+  { file: "tools/step7/activate.js",
+    reason: "Release 0 Boundary 8b cutover runner — WRITE-CAPABLE BY DESIGN and production-targeted by design: recordActivation had no caller that could run outside an isolated baseline, so the cutover had no command at all. --dry-run opens a PROVEN read-only transaction, reports POPULATION_NOT_EXPLAINABLE, the legacy set and digest, guard state and census freshness, and stops. Writing requires BOTH --activate and R0_ACTIVATION_AUTHORIZATION naming who authorized it; it refuses a stale census, a census whose digest does not match its own set, any drift from the live population, an unexplainable population, and an already-active guard. Every refusal is ALSO enforced inside recordActivation in the same transaction as the write — these exist so the owner reads a sentence rather than a stack trace. Proven 27/0 by tools/step7/prove_activate_runner.js",
+  },
   { file: "tools/step7/census.js",
     reason: "Release 0 Step 7 cutover census — must read the PRODUCTION terminal-without-evaluation set, because that exact set (not a count, and not a months-old audit) is what the activation transaction is asked to match; §6.2 requires it taken fresh minutes before activation. Proven read-only via activation/_readonly.js before its first read, and it additionally REFUSES without R0_CENSUS_AUTHORIZATION naming who authorized the run, which it prints into the receipt — a tool that authorizes itself by existing is what that rule forbids. Prints work-order and property identifiers and status only: never a phone, media URL, attachment bytes, or note content" },
   /*  ── GATE 1, 2026-08-10 ────────────────────────────────────────────
