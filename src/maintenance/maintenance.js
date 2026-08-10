@@ -458,6 +458,54 @@ module.exports = function maintenance(deps) {
   // ════════════════════════════════════════════════════════════════
   router.patch("/work-orders/:id/closeout", async (req, res) => {
     const { completion_photo, completion_note, done = true, not_done_reason } = req.body || {};
+
+    /*  ══ STEP 6 — THE LEGACY DONE-PATH IS RETIRED ═══════════════════
+     *
+     *  This route could put a work order into a terminal state while
+     *  writing NO proof evaluation, NO completion progress event and NO
+     *  attributable actor — and its `completion_photo` column holds a
+     *  `stub://` string with no bytes behind it, so it can never be
+     *  converted into proof after the fact (§4.1).
+     *
+     *  Release 0 establishes ONE governed meaning of completion, written
+     *  by ONE canonical transaction. A second writer that can reach the
+     *  same terminal state is not a redundancy, it is a contradiction:
+     *  a `closed` row with nothing behind it is indistinguishable, later,
+     *  from a completion that was never proven.
+     *
+     *  ── WHY THE REFUSAL IS HERE, BEFORE THE CONNECTION ──────────────
+     *  "Writes nothing" is a claim. Refusing before `pool.connect()`
+     *  makes it a property of the code path: no transaction is opened, no
+     *  row is locked, and there is no ordering in which a write could
+     *  precede the refusal. A guard placed after the lock would have to
+     *  be trusted; this one cannot be wrong.
+     *
+     *  ── WHAT IS NOT RETIRED ─────────────────────────────────────────
+     *  The NOT-DONE path below is untouched and still works. That is the
+     *  paired control: it is what proves this 409 is a governed refusal
+     *  of one verb rather than a dead route or a broken service.
+     *
+     *  §1.1.2 — this is a CONTAINMENT decision, not a permanent ruling
+     *  that operator completion authority is abolished. A governed
+     *  operator/manager acceptance surface may well be right later, for
+     *  vendor work, SMS outages or supervisory clearance. It is not
+     *  invented inside Release 0.  */
+    if (done !== false) {
+      return res.status(409).json({
+        error: "legacy_completion_retired",
+        message:
+          "This path can no longer complete a work order. Completion is recorded " +
+          "by the technician in the field, through the operations text line, which " +
+          "writes the proof evaluation and the completion event in one transaction.",
+        canonical_path: "technician/lifecycle_service.claimCompletion",
+        //  Named so an operator reading a failed request learns what DOES
+        //  work here, rather than only what does not.
+        still_available: "PATCH /work-orders/:id/closeout with done=false — log a " +
+                         "reason and route the follow-up. That path is unchanged.",
+        wrote: null,
+      });
+    }
+
     const client = await pool.connect();
     try {
       await client.query("begin");
