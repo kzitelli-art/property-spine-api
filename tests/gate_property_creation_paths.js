@@ -42,6 +42,17 @@ const path = require("path");
 const ROOT = path.join(__dirname, "..");
 const SRC = path.join(ROOT, "src");
 
+/*  ── THE SCOPE IS PART OF THE CLAIM ──────────────────────────────────
+ *  This gate scanned `src/` only, and therefore asserted "no product code
+ *  outside the canonical service inserts a property" while `POST /properties`
+ *  sat in server.js — 3,000+ lines at the repo ROOT, defining routes. Build 0
+ *  reported four creation doors; there were five, and this gate laundered the
+ *  gap into evidence.
+ *
+ *  A gate must scan the same scope as the claim it makes. Product code is
+ *  `src/` PLUS the root route file. */
+const ROOT_ROUTE_FILES = ["server.js"];
+
 const WRITER = "src/identity/property_creation_service.js";
 
 /*  The four doors. Every one is now a CALLER: it resolves an actor and
@@ -93,6 +104,33 @@ const NON_ROUTE_CREATORS = [
   },
 ];
 
+/*  ── UNGOVERNED, REGISTERED, DECISION OWED ───────────────────────────
+ *  A door the collapse did NOT close, because Build 0 never saw it: the
+ *  audit searched `src/` and this lives at the repo root. It is the same
+ *  defect class as the four that were collapsed — shared key, no actor, no
+ *  organization, no address identity, no creation record.
+ *
+ *  Registered rather than silently tolerated, and printed LOUDLY on every
+ *  run. It is not "authorized"; it is measured, named, and awaiting a
+ *  decision. If it is still here in six months, that is a choice someone
+ *  made, not a thing nobody noticed. */
+const UNGOVERNED = [
+  {
+    file: "server.js",
+    route: "POST /properties",
+    //  Pinned by COUNT, not just by file. Registering the whole file would
+    //  tolerate a SECOND ungoverned writer appearing beside this one — the
+    //  same laundering this gate exists to stop.
+    sites: 1,
+    why: "pre-dates the collapse and was missed by a src/-only audit. No known " +
+         "caller: the app only GETs /properties, and no test or tool posts to it",
+    risk: "creates a property with no authenticated human, no client, and no " +
+          "address identity — reachable by anyone holding the shared operator key",
+    until: "collapse it into property_creation_service.js like the other four, or " +
+           "retire it. Either is a decision; leaving it is also a decision.",
+  },
+];
+
 const ORGANIZATION_CREATORS = [
   {
     file: "src/identity/super_admin.js",
@@ -126,28 +164,37 @@ function walk(dir, out = []) {
   return out;
 }
 
-/*  Comments are stripped before scanning. THREAD_HANDOFF's own lesson,
- *  learned on the isolation gate: "a mention is not a guard" — a gate
- *  that counts prose can be satisfied, or alarmed, by a sentence. Only
- *  code counts as a writer. (Line numbers are still reported against the
- *  ORIGINAL text, so a finding points at the real line.) */
-function stripComments(text) {
-  //  Blank out block and line comments, preserving newlines so line
-  //  numbers survive. Not a JS parser: string literals containing "//"
-  //  are rare in SQL-bearing code here, and a false NEGATIVE is the
-  //  dangerous direction — so anything ambiguous stays visible.
-  return text
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/(^|[^:'"\\])\/\/[^\n]*/g, (m, p1) => p1 + " ".repeat(m.length - p1.length));
+/*  ── WHY THIS IS LINE-LOCAL AND NOT A COMMENT STRIPPER ──────────────
+ *  The first version blanked `/* … *\/` spans before scanning. Against
+ *  server.js that ATE REAL CODE: an unbalanced `/*` inside a string or
+ *  regex earlier in the file made the stripper swallow everything up to
+ *  the next `*\/`, including the `insert into properties` on line 273 —
+ *  so the gate reported the file as clean. A false NEGATIVE, which is the
+ *  dangerous direction, produced by the very function whose comment said
+ *  false negatives were the dangerous direction.
+ *
+ *  So: scan the RAW text, and decide per MATCH whether it is prose by
+ *  looking only at its own line. A comment line cannot hide code on a
+ *  different line, and nothing can be silently erased. "A mention is not
+ *  a guard" still holds for the case that actually occurs — a sentence in
+ *  a header mentioning the statement. */
+function isProse(text, index) {
+  const lineStart = text.lastIndexOf("\n", index) + 1;
+  const line = text.slice(lineStart, index).trimStart();
+  //  The match sits after `//`, or on a `*`/`/*` continuation line.
+  return line.startsWith("//") || line.startsWith("*") || line.startsWith("/*");
 }
 
 function scanInserts(table) {
   const STMT = new RegExp("insert\\s+into\\s+(?:public\\.)?" + table + "\\b[\\s\\S]{0,600}?`", "gi");
   const found = [];
-  for (const file of walk(SRC)) {
-    const text = stripComments(fs.readFileSync(file, "utf8"));
+  const files = [...walk(SRC),
+                 ...ROOT_ROUTE_FILES.map((f) => path.join(ROOT, f)).filter(fs.existsSync)];
+  for (const file of files) {
+    const text = fs.readFileSync(file, "utf8");
     const rel = path.relative(ROOT, file);
     for (const m of text.matchAll(STMT)) {
+      if (isProse(text, m.index)) continue;          // a header sentence, not a writer
       found.push({ rel, line: text.slice(0, m.index).split("\n").length, stmt: m[0] });
     }
   }
@@ -156,9 +203,14 @@ function scanInserts(table) {
 
 const propInserts = scanInserts("properties");
 const orgInserts = scanInserts("organizations");
-//  Comment-stripped for the same reason the scan is: B1-B5 must be
-//  satisfied by behaviour, not by a sentence describing it.
-const writerSrc = stripComments(fs.readFileSync(path.join(ROOT, WRITER), "utf8"));
+//  B1-B5 must be satisfied by behaviour, not by a sentence describing it,
+//  so prose lines are dropped — line-by-line, never by span, for the reason
+//  in isProse above.
+const writerSrc = fs.readFileSync(path.join(ROOT, WRITER), "utf8")
+  .split("\n").filter((l) => {
+    const t = l.trimStart();
+    return !(t.startsWith("//") || t.startsWith("*") || t.startsWith("/*"));
+  }).join("\n");
 
 // ── W1  the scan is not broken ──────────────────────────────────────
 ok("W1  the scan found property-insert sites at all", propInserts.length > 0,
@@ -167,17 +219,20 @@ console.log("        " + propInserts.length + " property insert site(s), " +
             orgInserts.length + " organization insert site(s)\n");
 
 // ── W2  exactly one product writer ──────────────────────────────────
-const allowed = new Set([WRITER, ...NON_ROUTE_CREATORS.map((c) => c.file)]);
+const allowed = new Set([WRITER, ...NON_ROUTE_CREATORS.map((c) => c.file),
+                         ...UNGOVERNED.map((c) => c.file)]);
 const unregistered = propInserts.filter((f) => !allowed.has(f.rel))
   .map((f) => f.rel + ":" + f.line);
 
 for (const f of propInserts) {
   if (f.rel === WRITER) console.log("  ok    " + f.rel + ":" + f.line + "  THE WRITER");
+  else if (UNGOVERNED.some((c) => c.file === f.rel))
+    console.log("  ⚠     " + f.rel + ":" + f.line + "  UNGOVERNED — decision owed");
   else if (allowed.has(f.rel)) console.log("  ok    " + f.rel + ":" + f.line + "  registered non-route harness");
 }
 if (propInserts.some((f) => f.rel === WRITER)) pass++;
 
-ok("W2  NO product code outside the canonical service inserts a property",
+ok("W2  NO UNREGISTERED property writer exists (see the UNGOVERNED list below)",
    unregistered.length === 0,
    unregistered.join("\n        ") +
    "\n        → a second writer means a property can exist with no authenticated actor," +
@@ -187,6 +242,16 @@ ok("W2  NO product code outside the canonical service inserts a property",
 // ── W3  the writer is still there ───────────────────────────────────
 ok("W3  the canonical writer still writes", propInserts.some((f) => f.rel === WRITER),
    WRITER + " no longer inserts a property — the collapse has been undone");
+
+// ── W3b  a registered ungoverned file may not GROW ──────────────────
+for (const c of UNGOVERNED) {
+  const n = propInserts.filter((f) => f.rel === c.file).length;
+  ok("W3b " + c.file + " still has exactly " + c.sites + " ungoverned writer, not more",
+     n === c.sites,
+     "measured " + n + ", registered " + c.sites +
+     "\n        → a NEW ungoverned writer appeared beside a known one. Registering a" +
+     "\n          file must never become a licence to add to it. STOP.");
+}
 
 // ── W4  the non-route creator stays confined to its own prefix ──────
 for (const c of NON_ROUTE_CREATORS) {
@@ -298,6 +363,17 @@ for (const c of NON_ROUTE_CREATORS) {
 for (const c of ORGANIZATION_CREATORS) {
   console.log("    ORGANIZATION  " + c.route + "   " + c.file);
 }
+if (UNGOVERNED.length) {
+  console.log("\n  ══ UNGOVERNED · DECISION OWED ══════════════════════════════");
+  for (const c of UNGOVERNED) {
+    console.log("    ⚠  " + c.route + "   [" + c.file + "]");
+    console.log("       why:   " + c.why);
+    console.log("       risk:  " + c.risk);
+    console.log("       until: " + c.until);
+  }
+  console.log("  ═══════════════════════════════════════════════════════════");
+}
+
 console.log("\n  Audit:   docs/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md");
 console.log("  Receipt: docs/BUILD_1A1_PROPERTY_CREATION_COLLAPSE.md");
 
