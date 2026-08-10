@@ -60,6 +60,13 @@ const GATES = [
     what: "migration 137 DDL is the proven scale payload, unchanged" },
   { file: "gate_completion_writers.js",
     what: "exactly the expected work-order completion writers; no third writer" },
+  //  Build 0 (client registration & property activation). Creating a property
+  //  is the highest-authority write in the product and was the least governed:
+  //  four routes do it, they disagree on identity/hierarchy/authority, and none
+  //  is exercised anywhere. This pins that measured state so Build 1 has to
+  //  change it deliberately. See docs/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md.
+  { file: "gate_property_creation_paths.js",
+    what: "exactly the known client/property creation paths; no fifth door" },
   //  The conversational seams. DB-free, so they belong on the standard path:
   //  they check that the extracted logic has ONE implementation, that resident
   //  wording did not drift, and that an operating receipt and a delivery

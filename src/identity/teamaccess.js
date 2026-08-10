@@ -92,13 +92,95 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
   }
 
   // ── POST /properties/:id/team-invites — add staff by phone ───────────
+  //  ── BUILD 1A-2: THE GRANTING ACTOR IS DERIVED, NEVER SUPPLIED ─────
+  //  This route grants module-level access to a property. It used to sit
+  //  behind the shared OPERATOR_KEY alone, take the property from the URL
+  //  with nothing but an existence check, and record the granting actor
+  //  from `req.body.invited_by_user_id` — defaulting to NULL. So the
+  //  record of WHO conferred access was written by the caller, and could
+  //  be nobody. That is §21 exactly inverted: the browser was deciding.
+  //
+  //  Now: the session is the actor, and the session's holder must hold
+  //  authority AT THIS PROPERTY. Three ways to hold it, all server-read:
+  //    · super_admin                                    (spans all orgs)
+  //    · org_admin of the organization owning it        (their client)
+  //    · an active assignment here with can_manage_roles
+  //
+  //  ── A BODY ACTOR FIELD IS REJECTED, NOT IGNORED ──────────────────
+  //  This route first shipped ignoring `invited_by_user_id`, on the
+  //  reasoning that a caller sending the right value should not be
+  //  punished. That contradicts the house rule already frozen by the
+  //  write-authority hardening packet (PR #38,
+  //  docs/WRITE_AUTHORITY_HARDENING_INVENTORY.md §6):
+  //
+  //    "Body actor fields will be REJECTED, not ignored: a caller sending
+  //     approved_by is either a stale client or an attempt, and both
+  //     deserve a 400 rather than silent substitution. Silent ignoring
+  //     would let a stale app keep sending a field it believes is
+  //     honoured."
+  //
+  //  That reason is better than the original one: silently ignoring means
+  //  the broken client never finds out, and the next person reading it
+  //  believes the field still matters. Nothing in the app sends this
+  //  field, so rejecting costs no live caller.
   router.post("/properties/:id/team-invites", async (req, res) => {
     const propertyId = req.params.id;
     try {
-      const prop = (await pool.query("select id, name, sms_number from properties where id=$1", [propertyId])).rows[0];
+      const session = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
+      if (!session) {
+        return res.status(401).json({
+          error: "A staff session is required to invite someone to a property.",
+          reason: "no_authenticated_actor",
+          receipt: "Send x-staff-session. The operator key authenticates the caller, not the " +
+                   "human — and an access grant records who granted it.",
+        });
+      }
+
+      const prop = (await pool.query(
+        "select id, name, sms_number, organization_id from properties where id=$1", [propertyId])).rows[0];
       if (!prop) return res.status(404).json({ error: "property not found" });
 
+      const actor = (await pool.query(
+        `select platform_role, organization_id from users where id = $1`, [session.id])).rows[0];
+      const here = (await pool.query(
+        `select can_manage_roles from property_team_assignments
+          where property_id = $1 and user_id = $2 and active = true`,
+        [propertyId, session.id])).rows[0];
+
+      const basis =
+        actor && actor.platform_role === "super_admin" ? "platform_role:super_admin"
+        : actor && actor.platform_role === "org_admin" && actor.organization_id
+            && prop.organization_id
+            && String(actor.organization_id) === String(prop.organization_id)
+          ? "platform_role:org_admin"
+        : here && here.can_manage_roles === true ? "assignment:can_manage_roles"
+        : null;
+
+      if (!basis) {
+        //  Named plainly rather than opaquely: this is an operator surface,
+        //  and "you are signed in but not for this building" is the useful
+        //  answer. It reveals nothing the caller could not learn by asking
+        //  for their own access.
+        return res.status(403).json({
+          error: "You do not have authority to grant access at this property.",
+          reason: "insufficient_property_authority",
+          receipt: "Granting access needs super-admin, org-admin of this property's " +
+                   "organization, or an assignment here that can manage roles.",
+        });
+      }
+
       const b = req.body || {};
+
+      //  Rejected, not ignored — see the note above the route.
+      if (Object.prototype.hasOwnProperty.call(b, "invited_by_user_id")) {
+        return res.status(400).json({
+          error: "invited_by_user_id is not accepted. The granting actor is the signed-in operator.",
+          reason: "body_actor_field_rejected",
+          receipt: "Remove invited_by_user_id from the request. Who granted access is " +
+                   "derived from the session, so a body value could only ever disagree with it.",
+        });
+      }
+
       const phone = normalizePhone(b.phone_number || b.phone);
       if (!phone) return res.status(400).json({ receipt: "A valid US phone number is required (10 digits or +1 format). Email is optional." });
       if (!b.role_title || !String(b.role_title).trim())
@@ -126,7 +208,7 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
          returning id, expires_at`,
         [propertyId, phone, b.invited_name || b.name || null, String(b.role_title).trim(), scope,
          allowed, b.backup_user_id || null, b.escalates_to_user_id || null,
-         b.can_manage_roles === true, b.invited_by_user_id || null, token, String(INVITE_TTL_HOURS)])).rows[0];
+         b.can_manage_roles === true, session.id, token, String(INVITE_TTL_HOURS)])).rows[0];
 
       if (prior.length) {
         await pool.query(`update team_invites set status='superseded', superseded_by=$1 where id = any($2)`,
@@ -158,6 +240,9 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
         link,                                  // operator can copy when link-only
         sms_text: smsText,
         expires_at: inv.expires_at,
+        //  The grant's provenance, visible at the point it is made.
+        granted_by_user_id: session.id,
+        authority_basis: basis,
       });
     } catch (e) {
       console.error("team-invites error", e);
