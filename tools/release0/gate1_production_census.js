@@ -199,18 +199,72 @@ const say = (k, v) => console.log("  " + String(k).padEnd(34, " ") + v);
     console.log("     150/151/152 are applied. Boundary 7 carries no schema of its own,");
     console.log("     so it can be re-frozen against the deployed base and proven.");
   }
+  //  THE LEDGER DECIDES THIS, NOT THE REPO.
+  //
+  //  Owner correction: migration numbers do not have to be contiguous, and
+  //  the repo jumping 137 -> 150 is not itself a finding. 140 being absent
+  //  from main proves only that it has not merged to main — it says
+  //  nothing about whether some branch deploy applied a 140 here. So this
+  //  section reports what the LEDGER holds and does not infer from the
+  //  gap. (Separately proven in source: 140 references nothing created by
+  //  138 or 139; its dependencies stop at 137. See
+  //  tools/release0/prove_140_dependencies.js.)
+  const r0Orphans = r0Applied.filter((v) => !files.some((f) => f.startsWith(v + "_")));
   if (r0Applied.length) {
-    console.log(`     ALSO STOP. Release 0 migration(s) ${r0Applied.join("/")} are ALREADY in`);
-    console.log("     this ledger, and no file for them exists in main. A branch deploy");
-    console.log("     applied them — the same way 121 and 126 got there. Main cannot");
-    console.log("     start against this database until those files are merged.");
+    console.log(`     ALSO STOP. The ledger contains ${r0Applied.join("/")}.`);
+    if (r0Orphans.length) {
+      console.log(`     This build has no file for ${r0Orphans.join("/")}, so it cannot start`);
+      console.log("     against this database. Something applied them — a branch deploy is");
+      console.log("     how 121 and 126 got there. Identify WHICH commit applied them and");
+      console.log("     restore those exact definitions before anything else moves.");
+      console.log("     Do not add a documented exception merely to turn verify green.");
+    } else {
+      console.log("     Files for them exist in this build, so verify is satisfied on that");
+      console.log("     count. Confirm the applied definitions match the files.");
+    }
   } else {
-    console.log("     138/139/140 are absent from the ledger, so no earlier branch");
-    console.log("     deploy applied them. 140 is still a clean, unspent number.");
+    console.log("     The ledger contains none of 138/139/140, so nothing here has");
+    console.log("     applied them. 140 is an unspent number on THIS database.");
   }
   console.log("");
 
-  //  7 · AND THE THING THE OPERATOR MUST NOT ASSUME.
+  //  7 · THE PRE-RELEASE INVARIANT.
+  //
+  //  Owner ruling, and it is stronger than reasoning from migration
+  //  numbers: before releasing 140, `fileMissingFromLedger` must contain
+  //  exactly the intended file and nothing else. That is checkable, it
+  //  does not care what the numbers are, and it is the only formulation
+  //  that survives main moving again.
+  //
+  //      EXPECTED_PENDING=140_post_activation_completion_guard.sql \
+  //        node tools/release0/gate1_production_census.js
+  const expectPending = (process.env.EXPECTED_PENDING || "")
+    .split(",").map((s) => s.trim()).filter(Boolean);
+  let invariantHeld = null;
+  if (expectPending.length) {
+    const extra = pending.filter((f) => !expectPending.includes(f));
+    const absent = expectPending.filter((f) => !pending.includes(f));
+    invariantHeld = !extra.length && !absent.length;
+    console.log("  ── pre-release invariant ─────────────────────────────────────────");
+    console.log(`     stated intent : ${expectPending.join(", ")}`);
+    console.log(`     actually pending: ${pending.length ? pending.join(", ") : "(nothing)"}`);
+    if (invariantHeld) {
+      console.log("     ✓ HOLDS — a release now applies exactly what you named.");
+    } else {
+      console.log("     ⛔ DOES NOT HOLD. Do not release.");
+      if (extra.length) {
+        console.log(`       would ALSO apply: ${extra.join(", ")}`);
+        console.log("       migrate.js has no per-file selection. These ship with it.");
+      }
+      if (absent.length) {
+        console.log(`       named but NOT pending: ${absent.join(", ")}`);
+        console.log("       either already applied, or the file is not in this build.");
+      }
+    }
+    console.log("");
+  }
+
+  //  8 · AND THE THING THE OPERATOR MUST NOT ASSUME.
   if (pending.length > 1) {
     console.log("  ── a warning about --apply ───────────────────────────────────────");
     console.log("     A release applies EVERY pending file, not the one you have in");

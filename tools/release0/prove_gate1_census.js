@@ -95,9 +95,14 @@ function run(env) {
      "exit " + s1.code + "\n        " + s1.out.split("\n").slice(-16).join("\n        "));
   ok("S1b …and says Boundary 7 can be re-frozen",
      /150\/151\/152 are applied/.test(s1.out) && /can be re-frozen/.test(s1.out));
-  ok("S1c …and reports 138/139/140 absent, 140 still a clean number",
-     /138\/139\/140 are absent from the ledger/.test(s1.out) &&
-     /140 is still a clean, unspent number/.test(s1.out));
+  //  The wording is asserted because the wording is the ruling: this line
+  //  must speak about the LEDGER, never about the gap in the repo's
+  //  numbering. A census that said "138/139 are missing from main" would
+  //  be reporting a non-finding as a finding.
+  ok("S1c …and reports the absence as a fact about THE LEDGER, not the repo",
+     /The ledger contains none of 138\/139\/140/.test(s1.out) &&
+     /unspent number on THIS database/.test(s1.out),
+     s1.out.split("\n").filter((l) => /138|ledger contains/.test(l)).join("\n        "));
   ok("S1d …and reports the ceiling as 152", /ledger ceiling\s+152/.test(s1.out),
      s1.out.split("\n").filter((l) => /ceiling/.test(l)).join("\n        "));
 
@@ -132,11 +137,61 @@ function run(env) {
   ok("S3b …and names them as ledger versions with no file here",
      /ledger versions with no file here\s*:\s*3/.test(s3.out),
      s3.out.split("\n").filter((l) => /no file here/.test(l)).join("\n        "));
-  ok("S3c …and says main cannot start until those files are merged",
-     /ALSO STOP\./.test(s3.out) && /until those files are merged/.test(s3.out));
+  //  Case C is a hard stop, and the census must say the RIGHT hard stop:
+  //  find what applied them and restore the exact definitions. It must not
+  //  suggest the cheap way out — a documented exception that turns verify
+  //  green while source and production still describe different schemas.
+  ok("S3c …and says restore the definitions, naming the commit as the thing to find",
+     /ALSO STOP\./.test(s3.out) &&
+     /restore those exact definitions/.test(s3.out) &&
+     /Identify WHICH commit applied them/.test(s3.out));
+  ok("S3c′ …and explicitly refuses the documented-exception shortcut",
+     /Do not add a documented exception merely to turn verify green/.test(s3.out),
+     "the census leaves 'just document it away' on the table as an option");
   ok("S3d …and the ceiling is still 152, because 140 < 152",
      /ledger ceiling\s+152/.test(s3.out),
      "the ceiling moved when a lower number was added — the sequencing note is wrong");
+
+  // ── STATE 4 · the pre-release invariant ───────────────────────────
+  //  Owner ruling: before releasing 140, `fileMissingFromLedger` must
+  //  contain exactly the intended file and nothing else. That is stronger
+  //  than reasoning about migration numbers and it survives main moving
+  //  again, so it is checked rather than remembered.
+  //
+  //  Simulated with a file this build really has: everything applied
+  //  except 152, with 152 named as the intent.
+  const LAST = FILES[FILES.length - 1];
+  await seed([LAST.slice(0, 3)]);
+  const held = run({ EXPECTED_PENDING: LAST });
+  ok("S4a with exactly the intended file pending, the invariant HOLDS",
+     /✓ HOLDS/.test(held.out) && /a release now applies exactly what you named/.test(held.out),
+     held.out.split("\n").filter((l) => /invariant|HOLDS|pending/i.test(l)).join("\n        "));
+
+  //  And the case that matters: two pending, one intended.
+  await seed([LAST.slice(0, 3), FILES[FILES.length - 2].slice(0, 3)]);
+  const broken = run({ EXPECTED_PENDING: LAST });
+  ok("S4b with anything ELSE also pending, it DOES NOT HOLD",
+     /DOES NOT HOLD\. Do not release/.test(broken.out),
+     "the invariant passed while an unintended migration would have shipped with it");
+  ok("S4c …and it names what would ride along",
+     new RegExp("would ALSO apply: .*" + FILES[FILES.length - 2].replace(/\./g, "\\.")).test(broken.out),
+     broken.out.split("\n").filter((l) => /ALSO apply/.test(l)).join("\n        "));
+
+  //  Naming a file that is not pending is also a failure — it means the
+  //  operator's mental model and the database disagree, which is exactly
+  //  when a release should stop.
+  await seed([]);
+  const absent = run({ EXPECTED_PENDING: "140_post_activation_completion_guard.sql" });
+  ok("S4d naming a file that is NOT pending also fails, rather than passing vacuously",
+     /DOES NOT HOLD/.test(absent.out) && /named but NOT pending/.test(absent.out),
+     "an intent naming a file the build does not carry was treated as satisfied");
+
+  //  With no intent stated, the invariant block must stay silent rather
+  //  than inventing a verdict.
+  await seed([]);
+  ok("S4e with no EXPECTED_PENDING, no invariant verdict is printed",
+     !/pre-release invariant/.test(run().out),
+     "the census printed an invariant result nobody asked for");
 
   // ── SAFETY · the census never writes ──────────────────────────────
   await seed([]);
