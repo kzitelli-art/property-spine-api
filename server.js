@@ -54,6 +54,8 @@ const explainModule = require("./src/money/explain");
 const tenantLinkModule = require("./src/comms/tenantlink"); // tenant text line Phase 1: connection (invite link → verify → session)
 const legalRoutesModule = require("./src/identity/legal_routes_block"); // A2P 10DLC public legal pages (privacy + SMS terms) — carrier-reachable
 const teamAccessModule = require("./src/identity/teamaccess");
+const staffSessions = require("./src/identity/staff_session_service");        // the ONE session resolver
+const propertyCreation = require("./src/identity/property_creation_service"); // Build 1A-1: THE property write
 const superAdminModule = require("./src/identity/super_admin");
 const orgAdminModule   = require("./src/identity/org_admin");
 const smsTransport = require("./src/comms/sms"); // SMS transport (Twilio) — fail-soft when unconfigured
@@ -264,18 +266,45 @@ app.get("/health", async (_req, res) => {
   }
 });
 
-// ── create a property ──
+// ── create a property ──────────────────────────────────────────────
+//  THE FIFTH DOOR. Build 1A-1 collapsed four property-creation routes into
+//  one canonical service and asserted there were no others. There were:
+//  this one. The audit searched `src/`; this file is at the repo root, and
+//  the gate that was supposed to catch it inherited the same blind spot.
+//
+//  It is now a caller like the other four — session-resolved actor, an
+//  organization, address-anchored identity or a recorded reason it has
+//  none, and an immutable creation record.
+//
+//  COLLAPSED rather than retired: nothing in this repo calls it (the app
+//  only GETs /properties), but the shared operator key is held outside the
+//  repository and source cannot prove a consumer does not exist. Both
+//  choices break an unknown caller; this one breaks it with a 401 that
+//  names what is missing instead of a dead end.
 app.post("/properties", async (req, res) => {
-  const { name, address, city, state, zip, property_type } = req.body || {};
+  const { name, address, city, state, zip, property_type, organization_id } = req.body || {};
   if (!name) return res.status(400).json({ error: "name is required" });
   try {
-    const r = await pool.query(
-      `insert into properties (name, address, city, state, zip, property_type)
-       values ($1,$2,$3,$4,$5,$6) returning *`,
-      [name, address || null, city || null, state || null, zip || null, property_type || null]
-    );
-    res.status(201).json(r.rows[0]);
+    const session = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
+    if (!session) {
+      return res.status(401).json({
+        error: "A staff session is required to create a property.",
+        reason: "no_authenticated_actor",
+        receipt: "Send x-staff-session. The operator key authenticates the caller, not the " +
+                 "human — and creating a property records who did it.",
+      });
+    }
+    const out = await propertyCreation.createProperty(pool, {
+      actor: { user_id: session.id },
+      organization_id: organization_id || null,
+      name, address, city, state, zip, property_type,
+      source: "legacy_properties_route",
+    });
+    res.status(201).json(out.property);
   } catch (e) {
+    if (e.httpStatus) {
+      return res.status(e.httpStatus).json({ error: e.publicMessage, reason: e.refusalReason, ...e.detail });
+    }
     res.status(500).json({ error: e.message });
   }
 });

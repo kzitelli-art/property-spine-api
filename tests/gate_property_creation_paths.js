@@ -81,6 +81,16 @@ const CALLERS = [
     contributes: "the alias-hijack refusal, and address→canonical-key derivation",
   },
   {
+    file: "server.js",
+    route: "POST /properties",
+    source_tag: "legacy_properties_route",
+    actor: "x-staff-session (added when the door was finally found)",
+    contributes: "nothing — a legacy duplicate of the wizard. It is here because " +
+                 "Build 0 searched src/ and missed it, and this gate inherited the " +
+                 "same blind spot. Collapsed rather than retired: no caller in this " +
+                 "repo, but the shared key is held outside it.",
+  },
+  {
     file: "src/onboarding/dealintake.js",
     route: "POST /deal-intakes/:id/create-property",
     source_tag: "deal_intake",
@@ -114,22 +124,19 @@ const NON_ROUTE_CREATORS = [
  *  run. It is not "authorized"; it is measured, named, and awaiting a
  *  decision. If it is still here in six months, that is a choice someone
  *  made, not a thing nobody noticed. */
-const UNGOVERNED = [
-  {
-    file: "server.js",
-    route: "POST /properties",
-    //  Pinned by COUNT, not just by file. Registering the whole file would
-    //  tolerate a SECOND ungoverned writer appearing beside this one — the
-    //  same laundering this gate exists to stop.
-    sites: 1,
-    why: "pre-dates the collapse and was missed by a src/-only audit. No known " +
-         "caller: the app only GETs /properties, and no test or tool posts to it",
-    risk: "creates a property with no authenticated human, no client, and no " +
-          "address identity — reachable by anyone holding the shared operator key",
-    until: "collapse it into property_creation_service.js like the other four, or " +
-           "retire it. Either is a decision; leaving it is also a decision.",
-  },
-];
+//  EMPTY, and deliberately kept rather than deleted.
+//
+//  It held exactly one entry — server.js's POST /properties, the fifth door
+//  Build 0 never saw — for as long as it took to decide what to do with it.
+//  That door is now a CALLER above. The list stays because the next
+//  ungoverned writer someone finds should land here, named and printed
+//  loudly on every run, rather than being quietly tolerated or quietly
+//  fixed. An empty register is a statement; a missing one is not.
+//
+//  Entries are pinned by COUNT (`sites`), not just by file: registering a
+//  file would otherwise tolerate a SECOND ungoverned writer appearing
+//  beside a known one, which is the laundering this gate exists to stop.
+const UNGOVERNED = [];
 
 const ORGANIZATION_CREATORS = [
   {
@@ -294,8 +301,11 @@ for (const c of CALLERS) {
 //  The service's source tags and the callers' must be the same set, in
 //  both directions: an orphan tag in the service is a door nobody uses,
 //  and a tag no caller declares means the register has drifted.
-const tagsInService = (writerSrc.match(/"(super_admin_wizard|bank_intake|owner_upload|deal_intake)"/g) || [])
-  .map((s) => s.replace(/"/g, ""));
+//  Derived from the register, not hardcoded — a literal list here would
+//  drift silently the moment a caller was added, which is exactly what
+//  happened when the fifth door was collapsed.
+const tagRe = new RegExp('"(' + CALLERS.map((c) => c.source_tag).join("|") + ')"', "g");
+const tagsInService = (writerSrc.match(tagRe) || []).map((s) => s.replace(/"/g, ""));
 const declared = new Set(CALLERS.map((c) => c.source_tag));
 ok("C5  the service's creation-source list and the callers agree exactly",
    [...declared].every((t) => tagsInService.includes(t))
