@@ -35,15 +35,16 @@ const { spawn } = require("child_process");
 //  NO FALLBACK TO PRODUCTION. docs/DB_HARNESS_ISOLATION.md §4: a harness
 //  that can silently reach DATABASE_URL is how synthetic rows ended up in
 //  the production database in the first place.
-const URL = process.env.HARNESS_DATABASE_URL;
-if (!URL) {
-  console.error("HARNESS_DATABASE_URL is required. This harness never falls back to DATABASE_URL.");
-  process.exit(2);
-}
-if (process.env.DATABASE_URL && process.env.DATABASE_URL === URL) {
-  console.error("HARNESS_DATABASE_URL equals DATABASE_URL. Refusing to run.");
-  process.exit(2);
-}
+//
+//  THE CANONICAL HELPER, not a local check. This file first compared the two
+//  URLs as STRINGS, and gate_harness_isolation caught it with the right
+//  reason: "requiring the variable is not the same as refusing the wrong
+//  value." Two different strings can name one database — localhost against
+//  127.0.0.1, a trailing parameter, a different sslmode — and a string
+//  comparison waves every one of them through. harnessConnectionString()
+//  resolves host, port and database and refuses on the TARGET.
+const receipt = require("./_run_receipt.js");
+const URL = receipt.harnessConnectionString();
 
 const PORT = Number(process.env.HARNESS_PORT || 3998);
 const BASE = `http://127.0.0.1:${PORT}`;

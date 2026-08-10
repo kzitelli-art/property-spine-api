@@ -360,6 +360,24 @@ async function readWorkOrderStatus(db, {
       id: workOrder.id, reference: workOrder.work_order_ref,
       title: workOrder.title, unit_number: workOrder.unit_number,
       status: workOrder.status, urgency_status: workOrder.urgency_status || null,
+      //  ── TRUE EMERGENCY, DERIVED HERE AND NOWHERE ELSE ──────────────
+      //  The canonical vocabulary is emergency | regular | needs_confirmation
+      //  (078), and the canonical service already draws exactly this line:
+      //  work_order_service.js:252, `is_emergency = urgency_status ===
+      //  "emergency"`. Restating that comparison in a surface would be a
+      //  second definition of what counts as an emergency, and the first
+      //  time somebody decided `needs_confirmation` was close enough, an
+      //  unconfirmed report would be shouting on an operator's board.
+      //
+      //  ONE BOOLEAN, not a severity scale. There is no tier vocabulary here
+      //  on purpose: the product asked for the emergency distinction to be
+      //  preserved, not for the old severity system to be rebuilt.
+      //
+      //  URGENCY IS NOT ATTENTION. This says how consequential the physical
+      //  condition is; `current.attention` and the surface's banding say
+      //  whether a human must act now. An emergency somebody has accepted
+      //  and is driving to is urgent and NOT waiting on anyone.
+      is_emergency: workOrder.urgency_status === "emergency",
       opened_at: workOrder.created_at,
     },
     current: {
