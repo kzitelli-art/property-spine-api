@@ -137,6 +137,10 @@ additive, and 150's only data write is the backfill C1 measures.
 
 ### C3 · Deploy — app first, then API
 
+> **Note added after the fifth door was closed:** the API now carries migrations
+> 150, 151 **and 152**. Same deploy, nothing extra to run — `prestart` applies all
+> three in order.
+
 ```text
 1. APP   8345684   sends x-staff-session alongside the operator key.
                    Backward compatible: safe against TODAY'S API, on its own.
@@ -170,6 +174,20 @@ behaviour; this closes the deployed rung.
 ---
 
 ## 5. What is closed, and where this stops
+
+**The fifth door is closed.** `POST /properties` in `server.js` — the door Build 0
+never saw — is now a caller of the canonical service like the other four. Collapsed
+rather than retired: nothing in this repo calls it, but the shared operator key is
+held outside the repository and source cannot prove a consumer does not exist. Both
+choices break an unknown caller; this one breaks it with a 401 that names what is
+missing instead of a dead end. Migration 152 extends the creation-source CHECK, so
+source and schema moved together.
+
+Proven over real HTTP against the real `server.js`: the operator key alone is now
+refused, a super-admin session with no organization named is refused, a session
+plus an organization creates `1100 Vine Street` → `1100-VINE` with both actor
+identities and `legacy_properties_route` recorded — and neither refusal left a row
+behind.
 
 **Closed:** one canonical property-creation path; reparenting refused in service and
 database; adoption restricted to platform repair with a retirement condition; the

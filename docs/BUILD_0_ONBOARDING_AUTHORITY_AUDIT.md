@@ -32,6 +32,24 @@ has to change it deliberately rather than accidentally.
 > `deal_intake_files` and `activations.deal_id` are all present. See
 > `BUILD_1A_CLOSEOUT.md` §2 — including the one thing that is genuinely missing,
 > which is any durable statement that a deal *contains* a property.
+>
+> ## ⚠ COUNT CORRECTED — IT WAS FIVE DOORS, NOT FOUR
+>
+> **This audit searched `src/` and called the result complete.** `server.js` is
+> 3,000+ lines at the repo ROOT and defines routes; it holds a fifth
+> property-creation door, `POST /properties`, of exactly the same class as the
+> other three ungoverned ones — shared key, no actor, no organization, no
+> address identity.
+>
+> It was missed by the search, and then `gate_property_creation_paths.js`
+> encoded the same `src/`-only scope and asserted "no product code outside the
+> canonical service inserts a property" — **a false claim, laundered into
+> evidence.** The gate now scans the root route file, registers the door in a
+> loud UNGOVERNED block, and pins its count so a second one cannot appear beside
+> it. **The door itself is still open: a decision is owed.**
+>
+> The lesson is in `CLAUDE.md`: *a count is a claim about a search, not about
+> the code.*
 
 ## 1. The question, and the measured answer
 

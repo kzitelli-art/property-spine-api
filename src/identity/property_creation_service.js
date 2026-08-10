@@ -64,6 +64,10 @@
 //  database by migration 150, so source and schema have to move together.
 const CREATION_SOURCES = new Set([
   "super_admin_wizard", "bank_intake", "owner_upload", "deal_intake",
+  //  The fifth door, found after the collapse shipped: POST /properties in
+  //  server.js. Build 0 searched src/ and never saw it. Mirrored by the
+  //  CHECK in migration 152, so source and schema move together.
+  "legacy_properties_route",
 ]);
 
 //  Platform roles that may bring a property into existence. Creating a
