@@ -109,6 +109,15 @@ const PRODUCTION_APPROVED = [
     reason: "Release 0 tester search — must read PRODUCTION staff, leases and leads to find an alternate tester whose phone carries no reachable resident/prospect identity, since routing around an identity collision is what avoids mutating unrelated leasing data; uses the production predicates (eligibleTechnicians, resolveStaffSenderForOrganization, the two inbound reachability tiers) rather than an FK inventory; proves it cannot write before any read; phones appear only as ****last4" },
   { file: "tools/activation/release0_final_receipt.js",
     reason: "Release 0 Gate 10 — generates the final evidence-ingress receipt by RE-DERIVING every database fact live in PRODUCTION with the same bindings the gate tools use (pasted output is never trusted); proves it cannot write before any read; refuses unless every NAMED fact is present — no green-count verdicts; never prints phone, e164, media URL, image bytes, or credentials; falsified 15 refusal cases in gate_tools_falsify.sh" },
+  /*  ── BOUNDARY 8a, 2026-08-10 ───────────────────────────────────────
+   *  The cutover census. It must read PRODUCTION because the set it
+   *  produces IS the thing the activation transaction is asked to match,
+   *  taken minutes before activation — §6.2 forbids reusing an older
+   *  audit as the expected set, because production moves.
+   *  Registered with the tool, not after the gate caught it. (It did
+   *  catch it, which is the gate working.)  */
+  { file: "tools/step7/census.js",
+    reason: "Release 0 Step 7 cutover census — must read the PRODUCTION terminal-without-evaluation set, because that exact set (not a count, and not a months-old audit) is what the activation transaction is asked to match; §6.2 requires it taken fresh minutes before activation. Proven read-only via activation/_readonly.js before its first read, and it additionally REFUSES without R0_CENSUS_AUTHORIZATION naming who authorized the run, which it prints into the receipt — a tool that authorizes itself by existing is what that rule forbids. Prints work-order and property identifiers and status only: never a phone, media URL, attachment bytes, or note content" },
   /*  ── GATE 1, 2026-08-10 ────────────────────────────────────────────
    *  Main moved to 90ab03d and brought migrations 150/151/152 with it.
    *  Because prestart VERIFIES rather than applies, a code-only Release 0

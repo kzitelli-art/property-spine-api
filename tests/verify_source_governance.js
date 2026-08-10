@@ -60,6 +60,12 @@ const GATES = [
     what: "migration 137 DDL is the proven scale payload, unchanged" },
   { file: "gate_completion_writers.js",
     what: "exactly the expected work-order completion writers; no third writer" },
+  //  Boundary 8a lands the activation service and 8b turns the guard on.
+  //  Between them the code must be present and unreachable — an activation
+  //  wired to a route could fire without the census, without the frozen
+  //  legacy set, and without anyone reading POPULATION_NOT_EXPLAINABLE.
+  { file: "gate_activation_dormant.js",
+    what: "the activation service is present and reachable from nothing" },
   //  Build 0 (client registration & property activation). Creating a property
   //  is the highest-authority write in the product and was the least governed:
   //  four routes do it, they disagree on identity/hierarchy/authority, and none
