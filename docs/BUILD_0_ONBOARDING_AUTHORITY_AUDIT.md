@@ -12,6 +12,27 @@ has to change it deliberately rather than accidentally.
 
 ---
 
+> ## ⚠ FRAMING CORRECTED 2026-08-10 — read this first
+>
+> **Spine onboards a DEAL, not a property.** This audit asked *"what is the one
+> canonical path by which a client, entity and property become durable Spine
+> truth?"* — and that question named the wrong container.
+>
+> The **measurements below are unchanged and still correct**: four creation doors,
+> disagreeing on identity, hierarchy and authority. What changes is what layer they
+> describe. This is the **physical-asset layer**, not the top of the model.
+>
+> ```text
+> DEAL      the onboarding container (a deal may hold one property or several)
+> PROPERTY  the durable physical asset  ← everything in this audit
+> ADDRESS   the anchor that fixes the asset and its jurisdiction
+> ```
+>
+> The audit also under-read what already exists: `deal_intakes`, `deal_name`,
+> `deal_intake_files` and `activations.deal_id` are all present. See
+> `BUILD_1A_CLOSEOUT.md` §2 — including the one thing that is genuinely missing,
+> which is any durable statement that a deal *contains* a property.
+
 ## 1. The question, and the measured answer
 
 > **What is the one canonical path by which a client, entity and property become

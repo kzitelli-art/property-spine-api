@@ -1,9 +1,14 @@
 # Build 1A-2 — Authority mutation containment, and the browser rung
 
 **2026-08-10. API branch `claude/property-spine-registration-365eys`.**
-Follows `BUILD_1A1_PROPERTY_CREATION_COLLAPSE.md`. **No legal-entity schema** —
-that is 1A-3, and it now lands on a hierarchy where creation, reassignment and
-access grants each have one governed meaning.
+Follows `BUILD_1A1_PROPERTY_CREATION_COLLAPSE.md`. **No legal-entity schema.**
+
+> **Framing corrected 2026-08-10.** Spine onboards a **deal**, not a property. This
+> receipt governs the **physical-asset layer** — property identity, authority and
+> history — which is real and unchanged, but is not the top of the model. Legal
+> entities and capital structure move to a later onboarding stage that reads them
+> from org charts, loan documents and operating agreements. See
+> `BUILD_1A_CLOSEOUT.md`.
 
 ---
 

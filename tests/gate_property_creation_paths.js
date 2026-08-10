@@ -97,8 +97,9 @@ const ORGANIZATION_CREATORS = [
   {
     file: "src/identity/super_admin.js",
     route: "POST /admin/organizations",
-    class: "KEEP — already the single path. Build 1A-2 adds legal entities " +
-           "beneath it, not beside it.",
+    class: "KEEP — already the single path. Legal entities are NOT next: Spine " +
+           "onboards a DEAL, and the deal container comes before capital structure. " +
+           "See docs/BUILD_1A_CLOSEOUT.md.",
   },
 ];
 
