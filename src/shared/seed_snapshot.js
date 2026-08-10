@@ -30,6 +30,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 const { Pool } = require("pg");
+const { resolvePropertyForImport } = require("../identity/property_resolution_service.js");
 
 const DATASETS = {
   skyline: require("../../seeds/data_skyline.js"),
@@ -41,17 +42,17 @@ const NON_REVENUE = /^(vacant|model|down)$/i;
 function num(v){ if (v == null || v === "") return null; const n = Number(String(v).replace(/,/g,"").trim()); return Number.isFinite(n) ? n : null; }
 function dt(v){ if (!v) return null; const m = String(v).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if(!m) return null; const [_,mo,da,yr]=m; return `${yr}-${mo.padStart(2,"0")}-${da.padStart(2,"0")}`; }
 
+//  Build 1A-2: this was the SECOND copy of the fuzzy resolver, with the
+//  same `order by created_at limit 1` silent-first-match. Both now go
+//  through the one contained resolver. See
+//  src/identity/property_resolution_service.js for why a single text
+//  match is a proposal and not an answer.
 async function resolveProperty(client, cfg){
-  if (cfg.property_key){
-    const r = await client.query("select id from properties where canonical_key=$1",[cfg.property_key]);
-    if (r.rows.length) return r.rows[0].id;
-  }
-  for (const t of cfg.property_match){
-    const r = await client.query(
-      "select id from properties where lower(name) like '%'||$1||'%' or lower(coalesce(address,'')) like '%'||$1||'%' order by created_at limit 1",[t.toLowerCase()]);
-    if (r.rows.length) return r.rows[0].id;
-  }
-  return null;
+  const res = await resolvePropertyForImport(client, {
+    canonical_key: cfg.property_key || null,
+    match_tokens: cfg.property_match || [],
+  });
+  return res.status === "resolved" ? res.property_id : null;
 }
 
 // remove any prior snapshot batch for this property+source (idempotency/rollback)
@@ -78,8 +79,17 @@ async function seedOne(pool, key){
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const propertyId = await resolveProperty(client, cfg);
-    if (!propertyId){ await client.query("rollback"); return { error: "property_not_found", key }; }
+    const resolution = await resolvePropertyForImport(client, {
+      canonical_key: cfg.property_key || null, match_tokens: cfg.property_match || [] });
+    const propertyId = resolution.status === "resolved" ? resolution.property_id : null;
+    if (!propertyId){
+      await client.query("rollback");
+      //  Say WHY. "not found" and "matched three buildings" are different
+      //  facts, and only one of them is fixed by creating a property.
+      return { error: resolution.status === "unresolved" ? "property_not_found" : "property_not_resolved",
+               key, resolution_status: resolution.status,
+               receipt: resolution.receipt, candidates: resolution.candidates };
+    }
 
     const removed = await deleteExistingBatch(client, propertyId, cfg.source_file);
 
@@ -197,8 +207,15 @@ async function rollbackOne(pool, key){
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const propertyId = await resolveProperty(client, cfg);
-    if (!propertyId){ await client.query("rollback"); return { error:"property_not_found", key }; }
+    const resolution = await resolvePropertyForImport(client, {
+      canonical_key: cfg.property_key || null, match_tokens: cfg.property_match || [] });
+    const propertyId = resolution.status === "resolved" ? resolution.property_id : null;
+    if (!propertyId){
+      await client.query("rollback");
+      return { error: resolution.status === "unresolved" ? "property_not_found" : "property_not_resolved",
+               key, resolution_status: resolution.status,
+               receipt: resolution.receipt, candidates: resolution.candidates };
+    }
     const removed = await deleteExistingBatch(client, propertyId, cfg.source_file);
     await client.query("commit");
     return { ok:true, key, rolled_back_batches:removed };

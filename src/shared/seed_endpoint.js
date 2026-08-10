@@ -7,7 +7,22 @@
 // Repeated restarts are a no-op once the exact source/date batch exists.
 // Nothing writes to Yardi.
 //
-// Admin routes remain available behind the operator-key middleware:
+// ⚠ BUILD 1A-2 CORRECTION. The line below used to read "Admin routes
+// remain available behind the operator-key middleware." That was FALSE,
+// and had been since these routes were added. server.js's gate SKIPS
+// /admin/* — "enforces its own super-admin session auth" — because at the
+// time only super_admin.js mounted /admin/ routes and it does enforce its
+// own. These two inherited the skip and supplied no auth of their own, so
+// POST /admin/seed-snapshot was reachable by anyone and wrote durable
+// leases, persons, units and spaces to a property chosen by substring
+// match. Both are now behind a real super-admin session.
+//
+// This is THREAD_HANDOFF's "mounting is not reachability" trap in the
+// opposite direction: that incident was a route wrongly CLOSED by this
+// gate; this was a route wrongly OPEN by it. Same gate, same cause —
+// path allowlisting decided somewhere other than the route.
+//
+// Admin routes (now genuinely behind super-admin session auth):
 //   POST /admin/seed-snapshot            → Skyline + Solo QA baseline
 //   POST /admin/seed-snapshot/solo       → Solo QA baseline only
 //   POST /admin/seed-snapshot/skyline    → Skyline only
@@ -16,6 +31,9 @@
 
 const DEMO_PROP_NAME = "Property Spine Demo Building";
 const DEMO_MODE = String(process.env.DEMO_MODE || "").toLowerCase() === "true";
+
+const staffSessions = require("../identity/staff_session_service.js");
+const { resolvePropertyForImport } = require("../identity/property_resolution_service.js");
 
 module.exports = function seedEndpoint(deps){
   const express = require("express");
@@ -29,12 +47,30 @@ module.exports = function seedEndpoint(deps){
   const { seedOne, DATASETS } = legacy;
   const { loadSnapshot, CONFIGS } = snapshotLoader;
 
+  //  Build 1A-2: this took the OLDEST row named "Property Spine Demo
+  //  Building" and said nothing if there were several. Two demo buildings
+  //  is a real state (a QA reseed, a rename that half-applied), and the
+  //  silent pick would send a rent roll to whichever was created first.
+  //  Exact name, and more than one is a refusal rather than a choice.
   async function resolveDemoPropertyId(){
-    const r = await pool.query(
-      "select id from properties where name=$1 order by created_at asc limit 1",
-      [DEMO_PROP_NAME]
-    );
-    return r.rows[0]?.id || null;
+    const res = await resolvePropertyForImport(pool, { name_exact: DEMO_PROP_NAME });
+    return res.status === "resolved" ? res.property_id : null;
+  }
+
+  //  ── AUTH. See the header correction. ──────────────────────────────
+  //  These routes write durable operating records, so they take the same
+  //  authority the rest of /admin/ takes: a real super-admin session.
+  async function requireSuperAdmin(req, res, next) {
+    const token = req.get("x-staff-session");
+    if (!token) return res.status(401).json({ error: "Staff session required.", reason: "no_authenticated_actor" });
+    const session = await staffSessions.resolveStaffSession(pool, token);
+    if (!session) return res.status(401).json({ error: "Invalid or expired session.", reason: "no_authenticated_actor" });
+    const u = (await pool.query(`select platform_role from users where id = $1`, [session.id])).rows[0];
+    if (!u || u.platform_role !== "super_admin") {
+      return res.status(403).json({ error: "Super admin access required.", reason: "insufficient_platform_role" });
+    }
+    req.operator = session;
+    next();
   }
 
   async function removePriorSnapshotLeases(propertyId){
@@ -113,7 +149,7 @@ module.exports = function seedEndpoint(deps){
     });
   }
 
-  router.post("/admin/seed-snapshot/:key?", async (req, res) => {
+  router.post("/admin/seed-snapshot/:key?", requireSuperAdmin, async (req, res) => {
     try {
       const key = req.params.key;
       if (key && key !== "solo" && key !== "skyline")
@@ -131,7 +167,7 @@ module.exports = function seedEndpoint(deps){
     }
   });
 
-  router.get("/admin/seed-snapshot/status", async (_req, res) => {
+  router.get("/admin/seed-snapshot/status", requireSuperAdmin, async (_req, res) => {
     try {
       const r = await pool.query(
         `select b.id, b.property_id, b.source_file, b.source_as_of_date, b.leasing_model, b.confidence, b.loaded_at,

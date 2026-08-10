@@ -26,6 +26,7 @@
 const express = require("express");
 const staffSessions = require("./staff_session_service.js");
 const propertyCreation = require("./property_creation_service.js"); // Build 1A-1: THE property write
+const propertyHierarchy = require("./property_hierarchy_service.js");  // Build 1A-2: adoption yes, reparenting no
 
 function slugify(name) {
   return name
@@ -203,15 +204,25 @@ module.exports = function superAdminModule({ pool }) {
       const org = (await pool.query(`select id from organizations where id = $1`, [req.params.id])).rows[0];
       if (!org) return res.status(404).json({ error: "Organization not found." });
 
-      const prop = (await pool.query(`select id, name from properties where id = $1`, [property_id])).rows[0];
-      if (!prop) return res.status(404).json({ error: "Property not found." });
-
-      await pool.query(
-        `update properties set organization_id = $1, updated_at = now() where id = $2`,
-        [org.id, property_id]
-      );
-      res.json({ ok: true, property_id, organization_id: org.id });
+      //  Build 1A-2: this was a bare UPDATE. It did not check whether the
+      //  property already belonged to a different client, and it kept no
+      //  record that it moved — so a building could change hands silently.
+      //  The service allows ADOPTION (a property with no client) and
+      //  refuses reparenting outright; migration 151 carries the same
+      //  refusal in the database so it binds writers that never come
+      //  through here.
+      const out = await propertyHierarchy.assignPropertyToOrganization(pool, {
+        actor: { user_id: req.operator.id },
+        property_id,
+        organization_id: org.id,
+        reason: (req.body || {}).reason || null,
+      });
+      res.json({ ok: true, property_id: out.property_id, organization_id: out.organization_id,
+                 already: out.already, receipt: out.receipt });
     } catch (e) {
+      if (e.httpStatus) {
+        return res.status(e.httpStatus).json({ error: e.publicMessage, reason: e.refusalReason, ...e.detail });
+      }
       console.error("admin/org assign property error", e);
       res.status(500).json({ error: e.message });
     }

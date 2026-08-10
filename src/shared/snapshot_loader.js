@@ -17,6 +17,9 @@
 // ============================================================
 
 const staffSessions = require("../identity/staff_session_service.js");
+//  Build 1A-2: the ONE contained property resolver. Recognition proposes;
+//  ambiguity refuses and names its candidates.
+const { resolvePropertyForImport, resolutionError } = require("../identity/property_resolution_service.js");
 const { spacePosition } = require("../tenancy/space_position");
 
 const CONFIGS = {
@@ -197,19 +200,23 @@ function stableSpaceLabel(cfg, row) {
   return row.space_label || row.room || "(bed)";
 }
 
+//  ── BUILD 1A-2: RECOGNITION MAY PROPOSE. IT MAY NOT CHOOSE. ─────────
+//  This was a substring match on name OR address, `order by created_at
+//  limit 1` — the oldest row wins, silently. Whatever it returned then
+//  received an entire rent roll: units, spaces, leases, persons, dated
+//  ledger evidence. A roll landing on the wrong building looked exactly
+//  like a roll landing on the right one.
+//
+//  registry.js exists because that is not safe ("SOLO on Chestnut" means
+//  both 4125 and 4233). Resolution now goes through the one contained
+//  resolver, which resolves on identity and REFUSES on ambiguity, naming
+//  what it saw. Every live caller already passes an explicit
+//  targetPropertyId, so nothing that works today starts failing.
 async function resolveProperty(client, cfg) {
-  if (cfg.property_key) {
-    const r = await client.query("select id from properties where canonical_key = $1", [cfg.property_key]);
-    if (r.rows.length) return r.rows[0].id;
-  }
-  for (const token of cfg.property_match || []) {
-    const r = await client.query(
-      `select id from properties
-        where lower(name) like '%'||$1||'%' or lower(coalesce(address,'')) like '%'||$1||'%'
-        order by created_at limit 1`, [String(token).toLowerCase()]);
-    if (r.rows.length) return r.rows[0].id;
-  }
-  return null;
+  return resolvePropertyForImport(client, {
+    canonical_key: cfg.property_key || null,
+    match_tokens: cfg.property_match || [],
+  });
 }
 
 async function loadSnapshot(pool, cfg, inputRows, options = {}) {
@@ -219,8 +226,15 @@ async function loadSnapshot(pool, cfg, inputRows, options = {}) {
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const propertyId = options.targetPropertyId || await resolveProperty(client, cfg);
-    if (!propertyId) { await client.query("rollback"); return { error: "property_not_found", property: cfg.key }; }
+    let propertyId = options.targetPropertyId || null;
+    if (!propertyId) {
+      const res = await resolveProperty(client, cfg);
+      if (res.status !== "resolved") {
+        await client.query("rollback");
+        return { ...resolutionError(res), property: cfg.key };
+      }
+      propertyId = res.property_id;
+    }
 
     if (!options.force) {
       const prior = await client.query(
@@ -502,9 +516,20 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const propertyId = options.targetPropertyId ||
-      (options.propertyConfig ? await resolveProperty(client, options.propertyConfig) : null);
-    if (!propertyId) { await client.query("rollback"); return { error:"property_not_found", property:"session_scoped" }; }
+    let propertyId = options.targetPropertyId || null;
+    if (!propertyId) {
+      if (!options.propertyConfig) {
+        await client.query("rollback");
+        return { error: "property_not_found", property: "session_scoped",
+                 receipt: "No property was supplied and none could be derived from the session." };
+      }
+      const res = await resolveProperty(client, options.propertyConfig);
+      if (res.status !== "resolved") {
+        await client.query("rollback");
+        return { ...resolutionError(res), property: "session_scoped" };
+      }
+      propertyId = res.property_id;
+    }
     const sourceFile = options.sourceFile || "Rent roll ledger export";
     const sourceAsOfDate = dt(options.sourceAsOfDate);
     if (!sourceAsOfDate) { await client.query("rollback"); return { error:"valid_source_as_of_date_required" }; }
@@ -719,9 +744,20 @@ async function loadReconciliation(pool, document, options = {}) {
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const propertyId = options.targetPropertyId ||
-      (options.propertyConfig ? await resolveProperty(client, options.propertyConfig) : null);
-    if (!propertyId) { await client.query("rollback"); return { error:"property_not_found", property:"session_scoped" }; }
+    let propertyId = options.targetPropertyId || null;
+    if (!propertyId) {
+      if (!options.propertyConfig) {
+        await client.query("rollback");
+        return { error: "property_not_found", property: "session_scoped",
+                 receipt: "No property was supplied and none could be derived from the session." };
+      }
+      const res = await resolveProperty(client, options.propertyConfig);
+      if (res.status !== "resolved") {
+        await client.query("rollback");
+        return { ...resolutionError(res), property: "session_scoped" };
+      }
+      propertyId = res.property_id;
+    }
     const sourceFile = options.sourceFile || `Rent-roll truth reconciliation ${document.as_of}.json`;
     const sourceAsOfDate = dt(options.sourceAsOfDate || document.as_of);
     if (!sourceAsOfDate) { await client.query("rollback"); return { error:"valid_source_as_of_date_required" }; }

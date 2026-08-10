@@ -67,6 +67,12 @@ const PRODUCTION_APPROVED = [
     reason: "read-only whole-ledger reconciliation; proves it cannot write before any read" },
   { file: "tools/property_line_preflight.js",
     reason: "read-only property-line preflight; proves it cannot write before any read" },
+  { file: "tools/identity/count_keyless_properties.js",
+    reason: "Build 1A-2 pre-deploy read: migration 150 stamps every keyless property with an " +
+            "absence reason, and that population must be LOOKED AT before it is stamped. " +
+            "Production is the subject, so no harness target can answer it. Structurally " +
+            "read-only: it issues `set session characteristics as transaction read only` " +
+            "before any query, so the SERVER refuses a write regardless of this file's contents" },
   { file: "tests/smoke_release2.deployed.js",
     reason: "deployment smoke — targets the DEPLOYED service by design" },
   { file: "tests/smoke_release3.deployed.js",

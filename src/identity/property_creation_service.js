@@ -334,12 +334,26 @@ async function createProperty(pool, spec = {}) {
     } catch (e) {
       await client.query("rollback");
       if (e.code === "23505") {
-        //  Identity collision. Do NOT create a duplicate — hand the caller
-        //  the link-existing path, same as owner.js did.
+        //  Collision. Do NOT create a duplicate — hand the caller the
+        //  link-existing path, same as owner.js did.
+        //
+        //  ── THE WORDING IS PRODUCT, NOT PLUMBING ──────────────────────
+        //  This message reaches a first-time user in the super-admin
+        //  wizard. It used to say "A property with this identity may
+        //  already exist", which was found on screen by the browser proof:
+        //  "identity" is OUR word for OUR machinery, and someone who has
+        //  just typed an address has no idea what it means. The HTTP
+        //  harness could not catch that — it only ever saw the 409.
+        //
+        //  So the sentence depends on what the person actually gave us. A
+        //  human typed an address; a machine caller passed a key.
+        const humanCause = derivedKey
+          ? "There is already a property at that address."
+          : "A property with this identity already exists.";
         throw refusal(409, "property_identity_exists",
-          "A property with this identity may already exist.",
-          { canonical_key: key,
-            note: "Offer the link-to-existing path instead of creating a duplicate." });
+          humanCause + " Choose the existing one rather than adding it twice.",
+          { canonical_key: key, existing_identity: key,
+            next_step: "Offer the link-to-existing path instead of creating a duplicate." });
       }
       throw e;
     }
