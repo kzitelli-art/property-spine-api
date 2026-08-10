@@ -33,6 +33,9 @@ const DEMO_PROP_NAME = "Property Spine Demo Building";
 const DEMO_MODE = String(process.env.DEMO_MODE || "").toLowerCase() === "true";
 
 const staffSessions = require("../identity/staff_session_service.js");
+//  Build 1A-2 (ruling): authentication answers WHO may call this; the
+//  perimeter answers WHERE synthetic data may land.
+const { syntheticTargetAllowed, syntheticRefusal } = require("./synthetic_data_perimeter.js");
 const { resolvePropertyForImport } = require("../identity/property_resolution_service.js");
 
 module.exports = function seedEndpoint(deps){
@@ -54,6 +57,19 @@ module.exports = function seedEndpoint(deps){
   //  Exact name, and more than one is a refusal rather than a choice.
   async function resolveDemoPropertyId(){
     const res = await resolvePropertyForImport(pool, { name_exact: DEMO_PROP_NAME });
+    return res.status === "resolved" ? res.property_id : null;
+  }
+
+  //  The target a dataset key would resolve to, using the ONE contained
+  //  resolver. Returns null on anything that is not a clean resolve, which
+  //  the perimeter then refuses — recognition may propose, it may not pick.
+  async function resolveSeedTargetId(k){
+    const cfg = legacy.DATASETS[k];
+    if (!cfg) return null;
+    const res = await resolvePropertyForImport(pool, {
+      canonical_key: cfg.property_key || null,
+      match_tokens: cfg.property_match || [],
+    });
     return res.status === "resolved" ? res.property_id : null;
   }
 
@@ -155,6 +171,26 @@ module.exports = function seedEndpoint(deps){
       if (key && key !== "solo" && key !== "skyline")
         return res.status(404).json({ error:"unknown property", known:["solo","skyline"] });
       const keys = key ? [key] : ["skyline","solo"];
+
+      //  ── THE DATA-CONTEXT PERIMETER ────────────────────────────────
+      //  Resolve the target FIRST, then ask whether synthetic data may
+      //  land there. A super-admin session is not permission to write a
+      //  fixture rent roll onto an operating property, and resolving
+      //  before checking is what makes fuzzy matching incapable of
+      //  selecting one: whatever it resolves must still be an explicitly
+      //  configured demo/QA target.
+      const targets = [];
+      for (const k of keys) {
+        const target = k === "solo"
+          ? await resolveDemoPropertyId()
+          : await resolveSeedTargetId(k);
+        const check = syntheticTargetAllowed(target);
+        if (!check.allowed) {
+          return res.status(403).json({ ...syntheticRefusal(check), dataset: k });
+        }
+        targets.push({ k, target });
+      }
+
       const results = [];
       for (const k of keys) {
         results.push(k === "solo" ? await ensureSoloQaBaseline() : await seedOne(pool, k));

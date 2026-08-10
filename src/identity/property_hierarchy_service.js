@@ -41,13 +41,27 @@ function refusal(status, reason, receipt, extra = {}) {
 }
 
 /**
- * Place a property with a client.
+ * Place a property with a client. ADOPTION ONLY — see the header.
  *
- * Authority is the SAME rule as creation — deciding which client owns a
- * building is the same kind of act as deciding one exists. Reusing
- * resolveCreationScope rather than restating it is deliberate: two copies
- * of an authority rule drift, and the drift is invisible until the day
- * one of them is wrong.
+ * ── ADOPTION IS REPAIR, NOT PROPERTY MANAGEMENT (ruling) ─────────────
+ * This first reused resolveCreationScope, which lets an `org_admin` act
+ * within their own organization. For creation that is right. For adoption
+ * it is a hole: an ordinary org admin could CLAIM an orphaned property
+ * simply because it currently has no parent, and the 1A-1 audit found the
+ * orphan set was created by doors with no organization at all — so the
+ * orphans are exactly the properties whose real owner is unrecorded.
+ *
+ * Adoption is therefore restricted to `super_admin`: legacy repair run by
+ * platform infrastructure, not a management action any customer admin can
+ * take. The narrower rule is stated here rather than inherited, because
+ * this is a different question from "may you create a property".
+ *
+ * RETIREMENT CONDITION: this door exists to reconcile the production
+ * orphan set that predates 1A-1. Once that set is empty — measured, not
+ * assumed, by the same read that answers the keyless-property question —
+ * this function and its route should be removed, not left standing as a
+ * general-purpose reparenting tool with a friendly name. Until then every
+ * use is attributable.
  *
  * @param spec { actor:{user_id}, property_id, organization_id, reason? }
  * @returns { property_id, organization_id, kind:'adoption', already:boolean }
@@ -57,6 +71,8 @@ async function assignPropertyToOrganization(pool, spec = {}) {
 
   if (!property_id) throw refusal(400, "property_required", "property_id is required.");
 
+  //  Creation scope first — it establishes a live, active actor and that
+  //  the named organization exists, and it fails closed on every read.
   const scope = await resolveCreationScope(pool, {
     user_id: actor.user_id, requested_organization_id: organization_id,
   });
@@ -67,6 +83,15 @@ async function assignPropertyToOrganization(pool, spec = {}) {
       : scope.reason === "identity_read_failed" ? 503
       : 403;
     throw refusal(status, scope.reason, scope.receipt);
+  }
+
+  //  …then the NARROWER adoption rule on top of it.
+  if (scope.authority_basis !== "platform_role:super_admin") {
+    throw refusal(403, "adoption_requires_platform_repair_authority",
+      "Placing an unowned property with a client is a platform repair action, not a " +
+      "management one. An organization admin cannot claim a property that currently " +
+      "has no owner.",
+      { authority_held: scope.authority_basis });
   }
 
   const client = await pool.connect();

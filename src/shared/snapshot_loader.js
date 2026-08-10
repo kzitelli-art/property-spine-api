@@ -20,6 +20,11 @@ const staffSessions = require("../identity/staff_session_service.js");
 //  Build 1A-2: the ONE contained property resolver. Recognition proposes;
 //  ambiguity refuses and names its candidates.
 const { resolvePropertyForImport, resolutionError } = require("../identity/property_resolution_service.js");
+//  Build 1A-2 (ruling): the fixture doors below inject synthetic rent
+//  rolls from a CONFIG KEY. Authentication is not the question — where
+//  synthetic data may land is. The canonical signed-in importer
+//  (/operator/rent-roll/import) is deliberately NOT behind this.
+const { syntheticTargetAllowed, syntheticRefusal } = require("./synthetic_data_perimeter.js");
 const { spacePosition } = require("../tenancy/space_position");
 
 const CONFIGS = {
@@ -217,6 +222,17 @@ async function resolveProperty(client, cfg) {
     canonical_key: cfg.property_key || null,
     match_tokens: cfg.property_match || [],
   });
+}
+
+//  The property a fixture CONFIG would resolve to, or null if resolution
+//  was anything less than clean. Null is refused by the perimeter, so a
+//  proposal or an ambiguity can never become a write target.
+async function resolveConfiguredTarget(db, cfg) {
+  const res = await resolvePropertyForImport(db, {
+    canonical_key: cfg.property_key || null,
+    match_tokens: cfg.property_match || [],
+  });
+  return res.status === "resolved" ? res.property_id : null;
 }
 
 async function loadSnapshot(pool, cfg, inputRows, options = {}) {
@@ -1008,7 +1024,13 @@ module.exports = function snapshotLoader(deps) {
         if (!req.file?.buffer) return res.status(400).json({ receipt:"No file. Send the .xlsx as form field 'file'." });
         const parsed = parseXlsx(cfg, req.file.buffer);
         const dryRun = req.query.dryRun === "1" || req.query.dryRun === "true";
-        const out = await loadSnapshot(pool, cfg, parsed, { dryRun });
+        //  Resolve, then ask the perimeter, then pass the target EXPLICITLY
+        //  so the loader never re-resolves. A fixture may only land on a
+        //  configured demo/QA property.
+        const target = await resolveConfiguredTarget(pool, cfg);
+        const check = syntheticTargetAllowed(target);
+        if (!check.allowed) return res.status(403).json({ ...syntheticRefusal(check), dataset: cfg.key });
+        const out = await loadSnapshot(pool, cfg, parsed, { dryRun, targetPropertyId: target });
         if (out.error) return res.status(out.error === "property_not_found" ? 404 : 400).json(out);
         return res.status(dryRun ? 200 : 201).json({ parsed_rows:parsed.length, ...out });
       } catch (e) {
@@ -1023,7 +1045,10 @@ module.exports = function snapshotLoader(deps) {
     if (!cfg) return res.status(404).json({ error:"unknown_property", known:Object.keys(CONFIGS) });
     try {
       const { rows, dryRun } = req.body || {};
-      const out = await loadSnapshot(pool, cfg, rows, { dryRun:!!dryRun });
+      const target = await resolveConfiguredTarget(pool, cfg);
+      const check = syntheticTargetAllowed(target);
+      if (!check.allowed) return res.status(403).json({ ...syntheticRefusal(check), dataset: cfg.key });
+      const out = await loadSnapshot(pool, cfg, rows, { dryRun:!!dryRun, targetPropertyId: target });
       if (out.error) return res.status(out.error === "property_not_found" ? 404 : 400).json(out);
       return res.status(dryRun ? 200 : 201).json(out);
     } catch (e) {

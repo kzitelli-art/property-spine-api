@@ -14,7 +14,9 @@
       R5  orphaning (org → null) is refused by the database
       R6  an ordinary update to a property still works
       R7  the hierarchy event cannot be updated or deleted
-      R8  an org_admin cannot adopt a property into a sibling org
+      R8  an org_admin cannot adopt into a sibling org
+      R9  an org_admin cannot adopt an orphan AT ALL — adoption is
+          platform repair, not property management
 
    T  TEAM INVITES — the granting actor is derived, never supplied
       T1  no session is refused
@@ -23,6 +25,12 @@
           and the app's real body shape still works
       T4  each of the three authority bases works
       T5  the refusals wrote no invite
+
+   D  WHERE SYNTHETIC DATA MAY LAND — authentication is not the question
+      D1-D5  the perimeter fails closed on every limb
+      D3     a REAL operating property is refused as a synthetic target
+      D6-D7  both fixture doors refuse over real HTTP
+      D8     nothing reached the operating property
 
    S  FUZZY RESOLUTION — recognition proposes, ambiguity refuses
       S1  canonical key resolves
@@ -92,6 +100,7 @@ function buildApp() {
   });
   app.use("/", require("../src/identity/super_admin.js")({ pool }));
   app.use("/", require("../src/shared/seed_endpoint.js")({ pool }));
+  app.use("/", require("../src/shared/snapshot_loader.js")({ pool, upload: null }));
   app.use("/", require("../src/identity/teamaccess.js")({
     pool,
     sms: { enabled: () => false, async sendSms() { return { sent: false }; }, validateWebhook: () => true },
@@ -116,7 +125,7 @@ function request(port, method, path, { body, headers = {} } = {}) {
 }
 
 (async () => {
-  receipt.begin(__filename, { url: URL, expected: 27 });
+  receipt.begin(__filename, { url: URL, expected: 30 });
 
   const server = buildApp().listen(0);
   await new Promise((r) => server.once("listening", r));
@@ -216,9 +225,21 @@ function request(port, method, path, { body, headers = {} } = {}) {
   ok("R7  the hierarchy record cannot be updated or deleted", r7u && r7d);
 
   const p2 = await mkOrphan("2");
-  await refused("R8  an org_admin cannot adopt into a sibling organization", "organization_scope_violation",
+  await refused("R8  an org_admin cannot adopt into a SIBLING organization", "organization_scope_violation",
     () => hierarchy.assignPropertyToOrganization(pool, {
       actor: { user_id: adminA }, property_id: p2, organization_id: orgB }));
+
+  //  R9 — the ruling's condition. Adoption is legacy REPAIR, not property
+  //  management: an org admin must not be able to claim an orphan even
+  //  into their OWN organization, because the orphan set is precisely the
+  //  properties whose real owner was never recorded.
+  await refused("R9  an org_admin cannot adopt an orphan into their OWN organization either",
+    "adoption_requires_platform_repair_authority",
+    () => hierarchy.assignPropertyToOrganization(pool, {
+      actor: { user_id: adminA }, property_id: p2, organization_id: orgA }));
+
+  const p2row = (await pool.query(`select organization_id from properties where id=$1`, [p2])).rows[0];
+  ok("R9b the refused adoption left the property unowned", p2row.organization_id === null);
 
   // ══════════════════════════════════════════════════════════════════
   console.log("\n  ── T · THE GRANTING ACTOR IS DERIVED, NEVER SUPPLIED ──");
@@ -362,8 +383,73 @@ function request(port, method, path, { body, headers = {} } = {}) {
   ok("S8b and a non-super-admin session is refused (403)",
     s8b.status === 403 && s8b.body.reason === "insufficient_platform_role", JSON.stringify(s8b));
 
+  // ══════════════════════════════════════════════════════════════════
+  console.log("\n  ── D · WHERE SYNTHETIC DATA MAY LAND (the ruling's condition) ──");
+  // ══════════════════════════════════════════════════════════════════
+  //  Authentication answers WHO may call the fixture loaders. This answers
+  //  WHERE their output may land. The claim under test is the strong one:
+  //  a fully authenticated caller cannot put a fixture rent roll on an
+  //  operating property.
+  const perimeter = require("../src/shared/synthetic_data_perimeter.js");
+
+  const realProperty = (await creation.createProperty(pool, {
+    actor: { user_id: superAdmin }, organization_id: orgA,
+    name: TAG + " Operating Building", address: `${N + 77} Real Street`,
+    source: "super_admin_wizard" })).property;
+  const demoProperty = (await creation.createProperty(pool, {
+    actor: { user_id: superAdmin }, organization_id: orgA,
+    name: TAG + " Demo Building", address: `${N + 88} Demo Street`,
+    source: "super_admin_wizard" })).property;
+
+  //  1. disabled deployment: nothing lands anywhere, even a demo target.
+  delete process.env.DEMO_MODE; delete process.env.SYNTHETIC_SEED_ENABLED;
+  process.env.SYNTHETIC_SEED_PROPERTY_IDS = demoProperty.id;
+  ok("D1  with synthetic writes disabled, even a demo target is refused",
+    perimeter.syntheticTargetAllowed(demoProperty.id).reason === "synthetic_writes_disabled");
+
+  //  2. enabled but unconfigured: still nothing. Fail closed on each limb.
+  process.env.SYNTHETIC_SEED_ENABLED = "true";
+  delete process.env.SYNTHETIC_SEED_PROPERTY_IDS;
+  ok("D2  enabled but with no allowlist configured, nothing is seedable",
+    perimeter.syntheticTargetAllowed(demoProperty.id).reason === "no_synthetic_target_configured");
+
+  //  3. THE ONE THAT MATTERS. Fully enabled, allowlist configured, and a
+  //     real operating property is still refused.
+  process.env.SYNTHETIC_SEED_PROPERTY_IDS = demoProperty.id;
+  const onReal = perimeter.syntheticTargetAllowed(realProperty.id);
+  ok("D3  a REAL operating property is refused as a synthetic target",
+    onReal.allowed === false && onReal.reason === "target_not_a_demo_property",
+    JSON.stringify(onReal));
+  ok("D4  the configured demo property IS permitted",
+    perimeter.syntheticTargetAllowed(demoProperty.id).allowed === true);
+
+  //  5. an unresolved target cannot slip through as "no id, no check"
+  ok("D5  an unresolved target is refused, not waved through",
+    perimeter.syntheticTargetAllowed(null).reason === "target_not_resolved");
+
+  //  6. through REAL HTTP, on the fixture route, with a super-admin session.
+  //     The dataset resolves by substring; the perimeter is what stops it.
+  const d6 = await request(port, "POST", "/admin/seed-snapshot/skyline",
+    { headers: { "x-staff-session": sSuper } });
+  ok("D6  the seed route refuses over HTTP even for a super admin (403)",
+    d6.status === 403 && d6.body.reason && d6.body.reason.startsWith("target_not"),
+    JSON.stringify(d6).slice(0, 200));
+
+  //  7. and the config-keyed snapshot door is behind the same perimeter.
+  const d7 = await request(port, "POST", "/snapshot/skyline/load",
+    { headers: KEY, body: { rows: [{ unit_number: "1", tenant: "X", actual: 1 }] } });
+  ok("D7  the /snapshot/:property fixture door is behind the same perimeter (403)",
+    d7.status === 403 && typeof d7.body.reason === "string",
+    JSON.stringify(d7).slice(0, 200));
+
+  //  8. nothing landed on the real property from any of it.
+  const d8 = (await pool.query(
+    `select count(*)::int n from import_batches where property_id = $1`, [realProperty.id])).rows[0].n;
+  ok("D8  no import batch reached the operating property", d8 === 0, d8 + " batch(es)");
+  delete process.env.SYNTHETIC_SEED_ENABLED; delete process.env.SYNTHETIC_SEED_PROPERTY_IDS;
+
   console.log("");
-  const code = receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 27 });
+  const code = receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 30 });
   server.close();
   await pool.end();
   process.exit(code);

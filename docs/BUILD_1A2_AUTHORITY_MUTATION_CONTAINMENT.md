@@ -33,10 +33,24 @@ those parts wrong. So the answer is a refusal that says why, in words a human ca
 act on — in `property_hierarchy_service.js` *and* in migration 151's trigger, so
 it binds writers that never come through the service.
 
-**Adoption is not silent either.** The one legal transition writes
-`property_organization_events` — both actor identities, the authority exercised,
-immutable by trigger. Containment that leaves the surviving path unattributable
-has moved the problem, not solved it.
+**Adoption is REPAIR, not property management (ruling).** The surviving
+transition is restricted to `super_admin` — platform repair infrastructure, not
+an action any customer admin can take. This was corrected: it first reused the
+creation scope, which lets an `org_admin` act within their own organization, and
+that is a hole. The orphan set is precisely the properties whose real owner was
+never recorded, so an org admin must not be able to **claim** one simply because
+it currently has no parent. Proven both ways (R8, R9): refused into a sibling
+organization, and refused into their own.
+
+Every adoption writes `property_organization_events` — both actor identities, the
+authority exercised, immutable by trigger. Containment that leaves the surviving
+path unattributable has moved the problem, not solved it.
+
+**RETIREMENT CONDITION for the repair door:** it exists to reconcile the
+production orphan set that predates 1A-1. Once that set is empty — measured, by
+the same production read that answers the keyless-property question — the function
+and its route should be **removed**, not left standing as a general-purpose
+reparenting tool with a friendly name.
 
 **Removal condition** for the refusal: a governed property-transfer service. That
 migration is where consent, effective dating and the reporting boundary get
@@ -160,6 +174,28 @@ DEPLOY ORDER FOR THIS SLICE — NOT OPTIONAL
 Reversed, team invites 401 for the whole window between the two deploys.
 ```
 
+**⚠ THE COEXISTENCE IS A BRIDGE, NOT THE DESTINATION.** Stated plainly because
+"it works after the app-first deploy" is exactly how a bridge becomes permanent
+architecture:
+
+```text
+NOW          staff session determines actor and property authority.
+             The operator key still travels beside it, and still gates the path.
+TEMPORARY    that coexistence. The key authenticates a caller, not a human; it
+             belongs to no organization and produces no attributable actor.
+             The doctrine is explicit that operator identity and property
+             authority come from the staff session.
+REMOVAL      when this write joins the canonical session-only operator surface
+             (the /operator/* family, which the key gate already skips because
+             those routes carry their own session auth). At that point the route
+             moves, the key requirement disappears, and headers() stops sending
+             it for this call.
+```
+
+The authority is already the session's — the key is now only a path gate on a
+route that has not yet moved. Do not read the passing tests as a statement that
+sending both is correct; it is correct *for the window*.
+
 The containment harness now also exercises **the app's actual body shape**
 (T3c), not just a synthetic one — which is the check that would have caught this.
 
@@ -240,10 +276,10 @@ word *identity*. **The leak is the word, not the format**; the list now says so.
 
 ## 4. Proof
 
-Real Postgres 16.13, real HTTP, real Chromium. **90 assertions, 0 failures.**
+Real Postgres 16.13, real HTTP, real Chromium. **100 assertions, 0 failures.**
 
 ```
-tests/authority_mutation_containment.db.js     28 run · 28 passed · 0 failed
+tests/authority_mutation_containment.db.js     38 run · 38 passed · 0 failed
 tests/property_creation_canonical.db.js        25 run · 25 passed · 0 failed   (1A-1, re-run)
 tests/property_creation_http.db.js             17 run · 17 passed · 0 failed   (1A-1, re-run)
 property-spine-app/property_creation_experience.browser.js
@@ -272,6 +308,69 @@ single failure is still the same pre-existing Release 0 debt.
 - **The browser proof is not on the standard path** — it needs Playwright and
   Chromium, which the repo does not depend on. Same convention as the existing
   `*.browser.js` harnesses. Run it explicitly; the command is in its header.
+
+---
+
+## 3a. Classification: what is demo infrastructure, and what is an activation primitive
+
+**Ruling, applied.** Three different things were getting mixed together: fixing a
+security defect, preserving demo infrastructure, and building the future
+activation/rent-roll path. `snapshot_loader.js` contains **two of the three**, and
+they must not share a fate.
+
+| Component | Class | Why |
+|---|---|---|
+| `POST /operator/rent-roll/import` + `readLatestSnapshot` | **KEEP / ADAPT — likely activation primitive** | Property scope comes from the **staff session**; it accepts **no client property id**. It records dated ledger evidence and *"deliberately does not manufacture durable people or canonical leases from names in a report."* That is the activation philosophy already built. |
+| `POST /admin/seed-snapshot/:key?` | **Class 3 demo/QA infrastructure — heavily contained** | fixture rent roll from a config key |
+| `POST /snapshot/:property/{upload,load}` | **Class 3 demo/QA infrastructure — heavily contained** | same shape, same containment; found during this pass and previously unnamed |
+| fuzzy `LIKE … limit 1` resolution | **RETIRED** wherever authority or durable identity depends on it | replaced by the contained resolver |
+
+**The line that matters for what comes next:** when a new customer starts Property
+Spine, the rent roll may be the first substantial thing they give us — and the
+machinery to take a session-scoped sourced rent roll and produce one dated
+property projection **already exists**. The activation build must **adapt that
+route**, not invent a second upload/import path beside it. Inventing one would
+recreate precisely what Build 0 existed to prevent: a second authority path to the
+same durable truth.
+
+Encountering `snapshot_loader.js` while cleaning up authority is not a reason to
+treat it as suspect. The fuzzy resolver belonged to the legacy/config/seed paths
+inside it. The canonical importer is untouched by this slice — verified by
+inspection: both perimeter checks sit inside the two fixture doors (lines 1031,
+1049), and `/operator/rent-roll/import` (line 1057) has neither.
+
+### Authentication was not sufficient for the fixture doors
+
+> *"A shared key should not be enough to inject a synthetic rent-roll/lease
+> baseline into a real operating property… Authentication answers who may call the
+> tool; it does not answer where synthetic data may legally land."*
+
+`src/shared/synthetic_data_perimeter.js` answers the second question, fail-closed
+on every limb:
+
+```
+1. synthetic writes explicitly enabled for this deployment   (DEMO_MODE | SYNTHETIC_SEED_ENABLED)
+2. an allowlist of permitted targets configured              (SYNTHETIC_SEED_PROPERTY_IDS)
+3. the RESOLVED target is a member of it
+absent / empty / malformed  →  NOTHING is seedable
+```
+
+The order is load-bearing: **resolve first, then check membership**. That is what
+makes fuzzy matching *incapable* of selecting a production property rather than
+merely unlikely to — whatever it resolves must still appear on a server-pinned
+list, and no caller can add to that list. Every fixture door now passes the target
+**explicitly**, so the loader never re-resolves.
+
+Proven (D1–D8): disabled deployments refuse even a demo target; an enabled but
+unconfigured deployment seeds nothing; **a real operating property is refused
+while a configured demo property is permitted**; an unresolved target is refused
+rather than waved through; both fixture doors refuse over real HTTP even for a
+super admin; and no import batch reached the operating property.
+
+**Class-2 removal condition:** retire the perimeter *with* the fixture routes,
+once demo/QA data is provisioned by a governed activation run instead of a
+config-keyed fixture loader. Deleting the env vars is not removal — it is a silent
+shutdown, and the refusals say which limb failed.
 
 ---
 
@@ -304,7 +403,12 @@ failed to apply to team-invites, where a consumer **did** exist in the repo.
 
 Each of these is real, and each is deliberately outside this slice.
 
-**`gate_harness_isolation.js` detects far less than it reports.** Its `CONNECTS`
+**`gate_harness_isolation.js` detects far less than it reports — so stop citing
+the suite as comprehensive.** Recorded and bounded here deliberately: this is real,
+and chasing it would turn Property Activation into a harness-inventory project.
+The correct posture is to keep running the gates and to describe them accurately:
+*"every source-governance gate passes"* means those gates, not *"the tree is
+clean."* No claim in this receipt or 1A-1's rests on that gate's coverage. Its `CONNECTS`
 regex only matches `connectionString: process.env.DATABASE_URL` or the env var
 inside a `new Pool/Client({...})` literal. A file that assigns
 `const url = process.env.DATABASE_URL` first is invisible to it. **37 files
