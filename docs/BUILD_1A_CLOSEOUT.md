@@ -135,23 +135,76 @@ Expect 25 / 17 / 38. If no branch is available, the residual risk is that migrat
 and 151 add constraints to a table production has been mutating for months; both are
 additive, and 150's only data write is the backfill C1 measures.
 
-### C3 · Deploy — app first, then API
+### C3 · Deploy — app first, then API, and **release the schema deliberately**
 
-> **Note added after the fifth door was closed:** the API now carries migrations
-> 150, 151 **and 152**. Same deploy, nothing extra to run — `prestart` applies all
-> three in order.
+> **Correction, 2026-08-10, after the first attempt failed in production.** This
+> section originally said *"prestart applies migrations 150 then 151"* and, after the
+> fifth door, *"same deploy, nothing extra to run."* **Both were false**, and the
+> deploy failed exactly as the design intends. `prestart` runs `migrate.js` in
+> **verify-only** mode: it applies nothing, and it *refuses to start* while any
+> migration in the build is missing from the ledger. This is `docs/THREAD_HANDOFF.md`
+> §3 — *"A deploy no longer migrates production — do not undo this"* — which this
+> document contradicted by accident.
+>
+> The failure is quiet from the outside: Render keeps the previous instance live when
+> a deploy fails, so the API keeps answering on the **old code and old schema**. The
+> only visible symptom was `column "canonical_key_absent_reason" does not exist`.
 
 ```text
 1. APP   8345684   sends x-staff-session alongside the operator key.
                    Backward compatible: safe against TODAY'S API, on its own.
-2. API   3a66b60   begins requiring it. prestart applies migrations 150 then 151.
+2. API   merge to main.  The deploy will FAIL at prestart, naming 150, 151, 152
+                   as pending. That failure is the gate, not a bug.
+3.       RELEASE the schema (below), which applies them and lets the API boot.
 ```
 
-Reversed, "invite a teammate" returns 401 for the window between the two deploys.
+Reversed (API before app), "invite a teammate" returns 401 for the window between the
+two deploys. **The app commit can ship independently and immediately** — it is additive
+to a header builder and changes no behaviour against the current API.
 
-**The app commit can ship independently and immediately** — it is additive to a header
-builder and changes no behaviour against the current API. Shipping it now and the API
-later removes the coupling entirely, rather than relying on sequencing on the day.
+#### The release itself
+
+Read the ledger first — the gate exists so a release cannot be run by someone who has
+not looked:
+
+```sql
+with build as (
+  select lpad(g::text, 3, '0') as version from generate_series(1, 137) g where g <> 125
+  union all select unnest(array['150','151','152'])
+)
+select
+  (select max(version) from schema_migrations) as ledger_ceiling,
+  (select string_agg(b.version, ', ' order by b.version) from build b
+     where not exists (select 1 from schema_migrations m where m.version = b.version))
+    as pending,
+  (select string_agg(m.version, ', ' order by m.version) from schema_migrations m
+     where m.version <> '000'                    -- the ledger's own table; untracked
+       and not exists (select 1 from build b where b.version = m.version))
+    as in_ledger_but_not_in_build;
+```
+
+`pending` must read exactly `150, 151, 152`. **If it names anything else, stop** — a
+release applies *everything* pending, not just this build's three, and that is a
+different blast radius than this document has proven.
+
+Then release, asserting what you just read:
+
+```bash
+MIGRATION_RELEASE=1 \
+EXPECTED_LEDGER_CEILING=<the ledger_ceiling you just read> \
+EXPECTED_SHA=<the commit Render is deploying> \
+  node migrations/migrate.js --apply
+```
+
+`EXPECTED_SHA` is required whenever `RENDER_GIT_COMMIT` is set (i.e. on the instance)
+and refused if it disagrees. Off-instance it is not required, because there is no
+running build to pin.
+
+On Render the same three can be set as service environment variables for one deploy —
+`prestart` reads `MIGRATION_RELEASE` from the environment, so the deploy that would
+have refused instead performs the release and boots. **Remove `MIGRATION_RELEASE`
+immediately afterwards.** Left set, every future deploy silently migrates, which is
+the exact property the verify gate exists to prevent.
 
 ### C4 · Configure the demo/QA environment — with the API deploy
 

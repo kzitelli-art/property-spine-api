@@ -127,4 +127,18 @@ all of them turns a product build into a harness-inventory project.
 
 ## Repo orientation
 
-Node/Express API. `npm start` runs migrations (`prestart`) then `server.js` (port 3000). DB is Neon Postgres (`DATABASE_URL`). Deploys to Render on merge to `main`. See `README.md` for module layout and `docs/` for architecture, auth, data-model, domains, and deployment.
+Node/Express API. `npm start` runs `prestart` then `server.js` (port 3000). DB is Neon Postgres (`DATABASE_URL`). Deploys to Render on merge to `main`. See `README.md` for module layout and `docs/` for architecture, auth, data-model, domains, and deployment.
+
+**A deploy does NOT migrate.** `prestart` runs `migrations/migrate.js` in **verify-only**
+mode: every migration file must already be in the ledger, or the service **refuses to
+start** and names the pending file. Ship a migration and hit deploy and you get a *failed
+deploy* — Render keeps the previous instance live, so the API looks fine while the new
+schema is simply absent. Releasing schema is a separate, deliberate act:
+
+```
+MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=<what you just read from the ledger> \
+  EXPECTED_SHA=<deployed sha> node migrations/migrate.js --apply
+```
+
+`EXPECTED_LEDGER_CEILING` exists so a release cannot be run by someone who has not read
+the ledger. See `docs/THREAD_HANDOFF.md` §3 — this trap has now cost time twice.
