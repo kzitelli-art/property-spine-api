@@ -144,6 +144,33 @@ const FIELD_LABELS = {
   other:        "Something else",
 };
 
+/*  ── WHAT A PERSON IS TOLD AFTERWARDS ──────────────────────────────
+ *  A receipt is product copy, not a log line. "needs_followup event created"
+ *  tells somebody standing in a unit that our machinery did something; it
+ *  does not tell them the two things they actually want to know — that the
+ *  job is not lost, and that somebody else now owns the next move.
+ *
+ *  Written per reason because "we'll get the part ordered" and "we'll get a
+ *  vendor quoted" are different promises, and a generic sentence would make
+ *  both of them vaguer than the truth we already have.
+ */
+const FIELD_RECEIPTS = {
+  need_part:    "Got it. This stays open, and maintenance now owns getting the part.",
+  no_access:    "Got it. This stays open, and maintenance now owns arranging another visit.",
+  second_visit: "Got it. This stays open, and maintenance now owns the return visit.",
+  need_vendor:  "Got it. This stays open, and the property manager now owns getting a vendor.",
+  other:        "Got it. This stays open, and the property manager will review it.",
+};
+
+/*  §5 — a reason with no written receipt gets an honest generic one rather
+ *  than an invented specific promise. Reached only by the legacy vocabulary,
+ *  whose keys are not offered in the field. */
+function receiptFor(key, route) {
+  if (Object.prototype.hasOwnProperty.call(FIELD_RECEIPTS, key)) return FIELD_RECEIPTS[key];
+  const role = route && route.follow_role ? route.follow_role.replace(/_/g, " ") : "somebody";
+  return `Got it. This stays open, and ${role} now owns the next step.`;
+}
+
 /*  What the OPERATOR surface may show. Key + label only: the routing is
  *  Spine's decision and travels nowhere near the browser, so a client cannot
  *  select a consequence — only report a fact. */
@@ -189,6 +216,7 @@ function reasonForFollowType(type) {
 }
 
 module.exports = {
-  NOT_DONE_REASONS, FOLLOW_UP_TYPES, reasonChoices, fieldReasonChoices, routeFor, labelFor,
+  NOT_DONE_REASONS, FOLLOW_UP_TYPES, reasonChoices, fieldReasonChoices, receiptFor,
+  routeFor, labelFor,
   reasonForFollowType,
 };

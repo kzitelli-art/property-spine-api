@@ -255,7 +255,8 @@ module.exports = function maintenance(deps) {
   //  a board row, and it cannot see this closure. Exported rather than
   //  restated there, because a second copy of a routing table is how a
   //  reader and a writer come to disagree about where a stall went.
-  const { NOT_DONE_REASONS, reasonChoices, fieldReasonChoices, FOLLOW_UP_TYPES } = require("./not_done_reasons");
+  const { NOT_DONE_REASONS, reasonChoices, fieldReasonChoices, receiptFor,
+          FOLLOW_UP_TYPES } = require("./not_done_reasons");
   const { recordNotDone } = require("./not_done_service");
   const { acceptWork } = require("../technician/acceptance_service");
 
@@ -799,10 +800,9 @@ module.exports = function maintenance(deps) {
         not_done_reason: out.reasonKey,
         event_id: out.event.id,
         followup_obligation: out.followup,
-        receipt: {
-          text: `Logged: ${out.route.label}. The work order stays open, and `
-              + `${out.route.follow_role.replace(/_/g, " ")} now owns the next step.`,
-        },
+        //  §28 — what happened, and what happens next, in a sentence a person
+        //  standing in a unit can act on. Never the event name.
+        receipt: { text: receiptFor(out.reasonKey, out.route) },
       });
     } catch (e) {
       await client.query("rollback").catch(() => {});
