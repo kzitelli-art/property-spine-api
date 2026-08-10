@@ -216,13 +216,44 @@ SYNTHETIC_SEED_PROPERTY_IDS=<demo property uuid>[,<uuid>…]
 On the demo/QA deployment only. Fail-closed by design: until these are set, fixture
 seeding refuses and names which limb failed. **Production should have neither.**
 
-### Browser verification — after the API deploy
+### Browser verification — **CLOSED, 2026-08-10, on the deployed build**
 
-One pass through the super-admin property wizard on the deployed build: create a
-property from a **name alone**, then one with an address, and confirm the address
-produces the identity key without asking. Local browser proof
-(`property-spine-app/property_creation_experience.browser.js`, 20/20) covers the
-behaviour; this closes the deployed rung.
+One pass through the super-admin wizard at `property-spine-app.onrender.com`,
+signed in as a real super admin, against production. Not a harness — a person
+clicking the product.
+
+```text
+step 2 · PROPERTIES
+
+  "ZZ TEST 0810"    name only, every other field left blank   → accepted
+  "ZZ TEST 0810 B"  + 900 Market St, Philadelphia, PA 19107   → accepted
+```
+
+Both landed in the wizard's list without an error, and — the part that matters —
+**neither one asked about identity, keys, uniqueness or organizations.** The form
+requests a property name and offers an address. Nothing else surfaced.
+
+What the database recorded:
+
+| name | `canonical_key` | `canonical_key_absent_reason` |
+|---|---|---|
+| `ZZ TEST 0810` | *(null)* | `no_address_supplied_at_creation` |
+| `ZZ TEST 0810 B` | `900-MARKET` | *(null)* |
+
+That table is the acceptance criterion satisfied end to end. The user gave only
+what they naturally had; where an address was present Spine derived the identity
+itself and said nothing; where one was absent it **carried the absence forward as
+a stated fact** rather than blocking on schema or inventing a key. §5's honest
+blank, in the one place it is visible to a customer.
+
+Local browser proof (`property-spine-app/property_creation_experience.browser.js`,
+20/20) covers the same behaviour under Chromium. This closes the deployed rung —
+the top of the §33 ladder.
+
+**Test rows left in production**, named `ZZ TEST 0810*` under organization
+`ZZ TEST 0810`. Deleting the properties is safe; the matching
+`property_creation_events` rows are deliberately no-cascade and will survive, which
+is the point of an immutable creation record.
 
 ---
 
@@ -247,6 +278,23 @@ database; adoption restricted to platform repair with a retirement condition; th
 granting actor derived from the session; fuzzy resolution retired from authority paths;
 synthetic data confined to configured demo targets. 100 assertions, 0 failures, across
 real Postgres, real HTTP and real Chromium.
+
+**Live in production, 2026-08-10.** Migrations 150, 151, 152 released; ledger ceiling
+`137 → 152`; verify-only mode restored afterwards and confirmed by the next deploy
+(`✓ SCHEMA VERIFIED — 139 migrations, all applied`). The CHECK constraint
+`ck_properties_identity_or_reason` is present, which is its own proof that the backfill
+reached every row — Postgres will not add a constraint existing rows violate. Browser
+verified on the deployed build (above). **§33 rung: browser verified.**
+
+One standing query, worth keeping:
+
+```sql
+select count(*) from properties
+where canonical_key_absent_reason = 'identity_not_stated_at_insert';
+```
+
+It must always be `0`. That reason is stamped only by the database trigger, repairing a
+bare `INSERT` that went around the canonical service. Non-zero means a sixth door.
 
 **Not started, deliberately:** legal entities, capital structure, deal→property
 membership, any second import path.
