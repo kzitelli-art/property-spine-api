@@ -210,7 +210,10 @@ use `harnessConnectionString()` and do not appear in it.
 
 ## 7. Deploy notes
 
-Ordinary deploy. `prestart` runs `migrations/migrate.js`, which applies 150.
+**Correction (2026-08-10): a deploy does not apply this.** An earlier version of this
+line said `prestart` applies 150. It does not — `prestart` runs `migrate.js` in
+verify-only mode and *refuses to start* while 150 is pending. Schema release is a
+separate, deliberate act; the procedure is `docs/BUILD_1A_CLOSEOUT.md` §C3.
 
 - **Additive.** One new nullable column, one new table, two triggers, one CHECK.
 - **One data write:** the backfill explaining pre-existing NULL canonical keys.

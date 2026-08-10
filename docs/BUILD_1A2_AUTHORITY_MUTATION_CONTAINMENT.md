@@ -447,7 +447,13 @@ reason.
 before the API begins requiring it, or team invites 401 for the whole window
 between the two deploys. This is Open Ruling 2's shape, not a new rule.
 
-Migrations **150 and 151**, in that order. Both additive; `prestart` applies them.
+Migrations **150 and 151**, in that order. Both additive.
+
+**Correction (2026-08-10): `prestart` does NOT apply them.** This line originally said
+it did. `prestart` runs `migrate.js` in verify-only mode and *refuses to start* while a
+migration is pending, so shipping these and pressing deploy produces a failed deploy —
+Render keeps the previous instance live and the schema never arrives. Release is
+deliberate and separate; the procedure is `docs/BUILD_1A_CLOSEOUT.md` §C3.
 
 - **Read the keyless population first.** `tools/identity/count_keyless_properties.js`
   against production, before the deploy. It is structurally read-only — it issues
