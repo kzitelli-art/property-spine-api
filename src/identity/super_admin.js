@@ -25,6 +25,7 @@
 
 const express = require("express");
 const staffSessions = require("./staff_session_service.js");
+const propertyCreation = require("./property_creation_service.js"); // Build 1A-1: THE property write
 
 function slugify(name) {
   return name
@@ -234,34 +235,30 @@ module.exports = function superAdminModule({ pool }) {
       const org = (await pool.query(`select id from organizations where id = $1`, [req.params.id])).rows[0];
       if (!org) return res.status(404).json({ error: "Organization not found." });
 
-      // planned_unit_count is a planning figure only — accept a non-negative
-      // integer or leave it NULL. Never coerce garbage into a number.
-      let planned = null;
-      if (planned_unit_count !== undefined && planned_unit_count !== null && String(planned_unit_count).trim() !== "") {
-        const n = Number(planned_unit_count);
-        if (!Number.isInteger(n) || n < 0) {
-          return res.status(400).json({ error: "planned_unit_count must be a non-negative integer." });
-        }
-        planned = n;
-      }
+      //  Build 1A-1: the write itself belongs to the canonical service.
+      //  This route keeps its own 404-if-no-such-org above (a super admin
+      //  naming a missing org should hear that, not a generic refusal),
+      //  and hands the rest over: authority, identity, planning-figure
+      //  validation and the immutable creation record are the service's.
+      //  planned_unit_count is still a planning figure only — the service
+      //  accepts a non-negative integer or NULL and never coerces garbage.
+      const out = await propertyCreation.createProperty(pool, {
+        actor: { user_id: req.operator.id },
+        organization_id: org.id,
+        name, display_name, address, city, state, zip,
+        property_type, planned_unit_count,
+        source: "super_admin_wizard",
+      });
 
-      const prop = (await pool.query(
-        `insert into properties
-           (name, display_name, address, city, state, zip, property_type,
-            planned_unit_count, organization_id)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-         returning id, name, display_name, address, city, state, zip,
-                   property_type, planned_unit_count, organization_id, created_at`,
-        [
-          name.trim(),
-          display_name && String(display_name).trim() ? display_name.trim() : null,
-          address || null, city || null, state || null, zip || null,
-          property_type || null, planned, org.id,
-        ]
-      )).rows[0];
-
-      res.status(201).json(prop);
+      //  Response shape unchanged: the deployed wizard reads the property
+      //  object directly. canonical_key / canonical_key_absent_reason are
+      //  additive — the surface can start showing identity when it is
+      //  ready to, and ignores them until then.
+      res.status(201).json(out.property);
     } catch (e) {
+      if (e.httpStatus) {
+        return res.status(e.httpStatus).json({ error: e.publicMessage, reason: e.refusalReason, ...e.detail });
+      }
       console.error("admin/org create property error", e);
       res.status(500).json({ error: e.message });
     }

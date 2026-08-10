@@ -15,6 +15,8 @@
 
 module.exports = function owner(deps) {
   const express = require("express");
+  const staffSessions = require("../identity/staff_session_service.js");     // Build 1A-1: a key is not an actor
+  const propertyCreation = require("../identity/property_creation_service.js"); // Build 1A-1: THE property write
   const router = express.Router();
   const { pool } = deps;
   if (!pool) throw new Error("owner module requires a pool");
@@ -675,41 +677,27 @@ module.exports = function owner(deps) {
   //  front end can offer the owner the link-existing path instead.
   // ════════════════════════════════════════════════════════════════════
 
-  // Derive an address-anchored canonical key, ONLY when the address is
-  // unmistakably "<number> <street...>". Conservative on purpose: returns null
-  // rather than guess. Mirrors the real keys already in the system (4233-CHESTNUT).
-  function deriveCanonicalKey(address) {
-    if (!address) return null;
-    const a = String(address).trim();
-    // RULE 4: a unit-bearing string is NOT a property-level address. If it names
-    // a unit/apt/suite/ste or carries a "#", refuse to derive — a key built from
-    // one unit pollutes the property's identity anchor. Owner can set it explicitly.
-    if (/\b(unit|apt|apartment|suite|ste|fl|floor|rm|room)\b|#/i.test(a)) return null;
-    // must start with a street number and have at least one street word after it
-    const m = a.match(/^(\d{1,6})\s+(.+)$/);
-    if (!m) return null;
-    const number = m[1];
-    // street remainder: drop unit/suite tails and trailing city/state/zip noise by
-    // taking the words up to the first comma, then the street NAME word(s) only.
-    let street = m[2].split(",")[0].trim();
-    // strip common directionals at the very start (N, S, E, W, NE, ...) — keep the
-    // street NAME, which is the discriminating token (CHESTNUT, WALNUT, 15TH).
-    const tokens = street.split(/\s+/).filter(Boolean);
-    // drop a leading directional token if present
-    if (tokens.length > 1 && /^[NSEW]{1,2}\.?$/i.test(tokens[0])) tokens.shift();
-    // drop a trailing street-type token (Street/St/Ave/Avenue/Blvd/Rd/...) — the
-    // NAME is what anchors identity; the type is noise that varies by source.
-    const STYPE = /^(st|street|ave|avenue|blvd|boulevard|rd|road|dr|drive|ln|lane|ct|court|pl|place|ter|terrace|way|pkwy|parkway)\.?$/i;
-    while (tokens.length > 1 && STYPE.test(tokens[tokens.length - 1])) tokens.pop();
-    const nameCore = tokens.join("-");
-    if (!nameCore) return null;
-    // shape: NUMBER-STREETNAME, uppercased, only [A-Z0-9-]
-    const key = `${number}-${nameCore}`.toUpperCase().replace(/[^A-Z0-9-]/g, "");
-    return key.length >= 3 ? key : null;
-  }
+  //  Build 1A-1: deriveCanonicalKey lived here, and was the ONLY door
+  //  that derived a key from an address. It moved verbatim into
+  //  src/identity/property_creation_service.js so every door gets it —
+  //  and so the alias normalization beside it stops being a second copy
+  //  of the registry's norm(). One implementation, one behaviour.
 
+  //  Build 1A-1: the write is the canonical service's. This route keeps
+  //  its owner-facing CARD shape (the front end drops the result straight
+  //  into the grid) and its alias provenance ('rent_roll' by default),
+  //  and hands over authority, identity derivation, the alias-hijack
+  //  refusal and the immutable creation record.
+  //
+  //  ── WHY THIS ROUTE NOW NEEDS A SESSION ──────────────────────────
+  //  It sat behind the shared OPERATOR_KEY alone. See the note on
+  //  /bank/onboard-property and docs/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md
+  //  §2C. Nothing in the deployed app calls it, so no live surface loses
+  //  a capability. Its alias-hijack refusal — the best identity behaviour
+  //  of the four doors — moved into the service unchanged and now protects
+  //  every door, not just this one.
   router.post("/owner/properties/create-from-upload", async (req, res) => {
-    const { name, address, found_as, resolve_value, canonical_key, source } = req.body || {};
+    const { name, address, found_as, resolve_value, canonical_key, source, organization_id } = req.body || {};
     if (!name || !String(name).trim()) {
       return res.status(400).json({ error: "name is required" });
     }
@@ -717,84 +705,33 @@ module.exports = function owner(deps) {
     const aliasValue = (resolve_value && String(resolve_value).trim())
       || (found_as && String(found_as).trim())
       || null;
-    // explicit key wins; otherwise derive from address (conservative, may be null).
-    const key = (canonical_key && String(canonical_key).trim())
-      || deriveCanonicalKey(address);
 
-    const client = await pool.connect();
     try {
-      await client.query("begin");
-
-      // 1. create the property (canonical_key set inline if we have one)
-      let prop;
-      try {
-        prop = (await client.query(
-          `insert into properties (name, address, canonical_key)
-           values ($1, $2, $3) returning id, name, address, canonical_key`,
-          [String(name).trim(), address ? String(address).trim() : null, key || null]
-        )).rows[0];
-      } catch (e) {
-        await client.query("rollback");
-        if (e.code === "23505") {
-          // canonical_key collision — the property may already exist. Do NOT create
-          // a duplicate; hand the front end the link-existing path.
-          return res.status(409).json({
-            status: "exists_maybe",
-            error: "A property with this identity may already exist.",
-            canonical_key: key,
-            note: "Offer the owner the link-to-existing path instead of creating a duplicate.",
-          });
-        }
-        throw e;
+      const session = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
+      if (!session) {
+        return res.status(401).json({
+          error: "A staff session is required to create a property.",
+          reason: "no_authenticated_actor",
+          receipt: "Send x-staff-session. The operator key authenticates the caller, not the human — " +
+                   "and creating a property records who did it.",
+        });
       }
 
-      // 2. register the RESOLVED alias so the next upload of this string resolves
-      //    here. RULE 2: never HIJACK a string already resolved to a DIFFERENT
-      //    property — that would re-point another building's identity at this one.
-      //    Check first, inside the txn; on conflict, refuse the whole create and
-      //    surface it (the front end offers link-existing, not a silent steal).
-      let alias = null;
-      if (aliasValue) {
-        // NORMALIZATION NOTE (follow-up): this SQL `lower(btrim())` is the exact
-        // equivalent of the registry's norm() = String(s).trim().toLowerCase(),
-        // so create-from-upload and identify agree on "same string" TODAY. They
-        // are two copies, though — if norm() ever changes (e.g. strips punctuation)
-        // they drift. Proper fix: export norm() from registry and reuse it here.
-        // Not done now (owner module doesn't receive registryInstance); flagged.
-        const existing = (await client.query(
-          `select id, property_id from property_aliases
-            where lower(btrim(alias_value)) = lower(btrim($1))
-              and confidence = 'resolved'
-              and property_id is not null
-            limit 1`,
-          [aliasValue]
-        )).rows[0];
-        if (existing && existing.property_id !== prop.id) {
-          await client.query("rollback");
-          return res.status(409).json({
-            status: "alias_conflict",
-            error: "That file identity is already linked to a different property.",
-            existing_property_id: existing.property_id,
-            alias_value: aliasValue,
-            note: "Do not create a duplicate. Offer the owner the existing property, or a corrected identity.",
-          });
-        }
-        // safe: either unused, or already pointing here. Upsert to resolved.
-        alias = (await client.query(
-          `insert into property_aliases (property_id, source_system, alias_type, alias_value, confidence, note)
-           values ($1, $2, 'address_string', $3, 'resolved', 'created via owner create-from-upload')
-           on conflict (source_system, alias_value) do update
-             set property_id = excluded.property_id, confidence = 'resolved', updated_at = now()
-           returning id`,
-          [prop.id, source || "rent_roll", aliasValue]
-        )).rows[0];
-      }
+      const out = await propertyCreation.createProperty(pool, {
+        actor: { user_id: session.id },
+        organization_id: organization_id || null,
+        name, address, canonical_key,
+        aliases: aliasValue ? [aliasValue] : [],
+        alias_source_system: source || "rent_roll",
+        source: "owner_upload",
+      });
 
-      await client.query("commit");
+      const prop = out.property;
+      const alias = out.aliases && out.aliases[0] ? out.aliases[0] : null;
 
-      // 3. return the SAME owner-facing card shape /owner/properties uses, so the
-      //    front end can drop it straight into the grid. A brand-new property has
-      //    no units/runs yet; recognized = it has a resolved alias or canonical_key.
+      // return the SAME owner-facing card shape /owner/properties uses, so the
+      // front end can drop it straight into the grid. A brand-new property has
+      // no units/runs yet; recognized = it has a resolved alias or canonical_key.
       const recognized = !!alias || !!prop.canonical_key;
       res.status(201).json({
         status: "created",
@@ -810,19 +747,33 @@ module.exports = function owner(deps) {
           next_action: "Upload a rent roll to populate this property.",
           _details: {
             canonical_key: prop.canonical_key || null,
+            //  Why identity is absent, when it is. Previously a bare null
+            //  that the surface could not explain to the owner.
+            canonical_key_absent_reason: prop.canonical_key_absent_reason || null,
             recognized_by_alias: !!alias,
-            alias_id: alias ? alias.id : null,
+            alias_id: alias ? alias.alias_id : null,
             alias_value: aliasValue,
-            canonical_key_source: canonical_key ? "explicit" : (key ? "derived" : "none"),
+            canonical_key_source: out.canonical_key_source,
           },
         },
       });
     } catch (e) {
-      try { await client.query("rollback"); } catch {}
+      if (e.httpStatus) {
+        //  The two refusals this route always had, now raised by the
+        //  service and reported with the same statuses the front end
+        //  already branches on: 409 identity collision (offer
+        //  link-existing) and 409 alias conflict (do not steal a string).
+        const status = e.refusalReason === "property_identity_exists" ? 409
+          : e.refusalReason === "alias_conflict" ? 409
+          : e.httpStatus;
+        return res.status(status).json({
+          status: e.refusalReason === "property_identity_exists" ? "exists_maybe"
+            : e.refusalReason === "alias_conflict" ? "alias_conflict" : undefined,
+          error: e.publicMessage, reason: e.refusalReason, ...e.detail,
+        });
+      }
       console.error("create-from-upload error", e);
       res.status(500).json({ error: e.message });
-    } finally {
-      client.release();
     }
   });
 

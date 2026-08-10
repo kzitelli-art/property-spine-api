@@ -40,6 +40,8 @@
 // ============================================================
 
 const express = require("express");
+const staffSessions = require("../identity/staff_session_service.js");     // Build 1A-1: a key is not an actor
+const propertyCreation = require("../identity/property_creation_service.js"); // Build 1A-1: THE property write
 
 // ── normalization: ONE function, used for aliases and descriptions ────
 // upper-case, every run of non-alphanumerics collapses to a single space.
@@ -83,24 +85,52 @@ module.exports = function bankIntakeModule({ pool }) {
   // Entry door for a property that may not exist yet (Tower Place is not
   // one of the three production properties). Upserts by canonical_key —
   // address-anchored identity, same anchor the registry (011) enforces.
-  // Body: { name, canonical_key, address? }
+  // Body: { name, canonical_key, address?, organization_id? }
+  // Header: x-staff-session (REQUIRED as of Build 1A-1)
+  //
+  // ── WHY THIS ROUTE NOW NEEDS A SESSION ───────────────────────────
+  // It used to sit behind the shared OPERATOR_KEY alone, which meant a
+  // property — durable Spine truth every board and report reads — could
+  // be created with no attributable human and no organization. Build 0
+  // measured that (docs/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md §2B) and
+  // Build 1A-1 closes it: the write is now the canonical service's, and
+  // the service refuses without a session-resolved actor.
+  //
+  // The key gate above still applies; this is strictly narrower. Nothing
+  // in the deployed app called this route (measured across index.html and
+  // every app module), so no live surface loses a capability.
+  //
+  // The canonical-key IDEMPOTENCY this route pioneered is preserved
+  // exactly — same key means the same property, never a duplicate — and
+  // gains a cross-organization refusal it did not have.
   // ──────────────────────────────────────────────────────────────────
   router.post("/bank/onboard-property", async (req, res) => {
-    const { name, canonical_key, address } = req.body || {};
+    const { name, canonical_key, address, organization_id } = req.body || {};
     if (!name || !canonical_key) {
       return res.status(400).json({ error: "name and canonical_key required (canonical_key is address-anchored, e.g. 1400-BUTTONWOOD)" });
     }
     try {
-      const r = await pool.query(
-        `insert into properties (name, address, canonical_key)
-         values ($1, $2, $3)
-         on conflict (canonical_key)
-         do update set updated_at = now()
-         returning id, name, address, canonical_key`,
-        [String(name).trim(), address ? String(address).trim() : null, String(canonical_key).trim()]
-      );
-      return res.json({ property: r.rows[0] });
+      const session = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
+      if (!session) {
+        return res.status(401).json({
+          error: "A staff session is required to create a property.",
+          reason: "no_authenticated_actor",
+          receipt: "Send x-staff-session. The operator key authenticates the caller, not the human — " +
+                   "and creating a property records who did it.",
+        });
+      }
+      const out = await propertyCreation.createProperty(pool, {
+        actor: { user_id: session.id },
+        organization_id: organization_id || null,
+        name, address, canonical_key,
+        source: "bank_intake",
+        idempotent: true,          // the behaviour this door contributed
+      });
+      return res.json({ property: out.property, created: out.created, receipt: out.receipt });
     } catch (e) {
+      if (e.httpStatus) {
+        return res.status(e.httpStatus).json({ error: e.publicMessage, reason: e.refusalReason, ...e.detail });
+      }
       return res.status(500).json({ error: e.message, hint: "if this is a column error, the properties table shape differs from baseline — paste this error back" });
     }
   });

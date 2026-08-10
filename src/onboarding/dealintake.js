@@ -24,6 +24,9 @@
 //    app.use("/", dealIntakeModule({ pool, anthropic, INGEST_MODEL, registryInstance, fileToText, runIngestAuto, upload }));
 // ════════════════════════════════════════════════════════════════════
 
+const staffSessions = require("../identity/staff_session_service.js");     // Build 1A-1: a key is not an actor
+const propertyCreation = require("../identity/property_creation_service.js"); // Build 1A-1: THE property write
+
 module.exports = function dealIntake(deps) {
   const express = require("express");
   const router = express.Router();
@@ -522,45 +525,79 @@ module.exports = function dealIntake(deps) {
   //  files. Never automatic — the human clicked Create.
   // ══════════════════════════════════════════════════════════════════
   router.post("/deal-intakes/:id/create-property", async (req, res) => {
-    const { name, address, leasing_basis } = req.body || {};
-    const basis = ["unit","bed","unknown"].includes(leasing_basis) ? leasing_basis : "unknown";
+    const { name, address, leasing_basis, organization_id } = req.body || {};
     if (!name || !String(name).trim()) return res.status(400).json({ error: "name required" });
     if (!address || !String(address).trim()) return res.status(400).json({ error: "address required — address is identity; a property without one can't be resolved against" });
-    const client = await pool.connect();
+
     try {
-      await client.query("begin");
-      const intake = await client.query("select id from deal_intakes where id=$1", [req.params.id]);
-      if (intake.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "intake not found" }); }
-      const prop = await client.query(
-        "insert into properties (name, address, leasing_basis) values ($1,$2,$3) returning id, name, address, leasing_basis",
-        [String(name).trim(), String(address).trim(), basis]);
-      const pid = prop.rows[0].id;
-      // teach every observed identity label from this deal as a resolved alias
-      const labels = (await client.query(
-        "select distinct identity_label from deal_intake_files where intake_id=$1 and identity_label is not null",
-        [req.params.id])).rows;
-      for (const l of labels) {
-        await client.query(
-          `insert into property_aliases (property_id, source_system, alias_type, alias_value, confidence, note)
-           values ($1,'other','address_string',$2,'resolved','taught at property creation from deal intake')
-           on conflict (source_system, alias_value) do update
-             set property_id = excluded.property_id, confidence='resolved', updated_at=now()`,
-          [pid, String(l.identity_label).trim()]);
+      //  Build 1A-1: a staff session, not the shared operator key. See
+      //  docs/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md §2D. Nothing in the
+      //  deployed app calls this route.
+      const session = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
+      if (!session) {
+        return res.status(401).json({
+          error: "A staff session is required to create a property.",
+          reason: "no_authenticated_actor",
+          receipt: "Send x-staff-session. The operator key authenticates the caller, not the human — " +
+                   "and creating a property records who did it.",
+        });
       }
-      await client.query(
-        "update deal_intake_files set registry_status='resolved', registry_property_id=$1 where intake_id=$2 and identity_label is not null",
-        [pid, req.params.id]);
-      await client.query("commit");
+
+      const intake = await pool.query("select id from deal_intakes where id=$1", [req.params.id]);
+      if (intake.rows.length === 0) return res.status(404).json({ error: "intake not found" });
+
+      //  Every identity label observed in this deal's files. The service
+      //  teaches them as resolved aliases inside the creation transaction —
+      //  this door's contribution, now available to all four.
+      const labels = (await pool.query(
+        "select distinct identity_label from deal_intake_files where intake_id=$1 and identity_label is not null",
+        [req.params.id])).rows.map((l) => String(l.identity_label).trim()).filter(Boolean);
+
+      //  This door demanded an address BECAUSE address is identity, then
+      //  stored no key derived from it — the sharpest contradiction Build 0
+      //  found. The service derives one now.
+      const out = await propertyCreation.createProperty(pool, {
+        actor: { user_id: session.id },
+        organization_id: organization_id || null,
+        name, address,
+        leasing_basis: ["unit", "bed", "unknown"].includes(leasing_basis) ? leasing_basis : "unknown",
+        aliases: labels,
+        source: "deal_intake",
+      });
+      const pid = out.property.id;
+
+      //  Re-resolve this deal's files against the property that now exists.
+      //  Deliberately OUTSIDE the creation transaction: the property and its
+      //  taught aliases are committed truth at this point, and a failure here
+      //  must not roll back a real property. A failed re-resolve leaves the
+      //  files exactly as they were — re-runnable via /reresolve, which is
+      //  what that route is for.
+      let filesResolved = 0;
+      try {
+        filesResolved = (await pool.query(
+          "update deal_intake_files set registry_status='resolved', registry_property_id=$1 where intake_id=$2 and identity_label is not null",
+          [pid, req.params.id])).rowCount;
+      } catch (e) {
+        console.error("create-property: file re-resolve failed (property IS created)", e.message);
+      }
+
       res.status(201).json({
-        receipt: `property created: ${prop.rows[0].name} (${prop.rows[0].address})`,
+        receipt: `property created: ${out.property.name} (${out.property.address})`,
         property_id: pid,
-        aliases_taught: labels.length,
-        note: "every identity label seen in this deal now resolves to the new property",
+        canonical_key: out.property.canonical_key,
+        canonical_key_absent_reason: out.property.canonical_key_absent_reason,
+        aliases_taught: out.aliases_taught,
+        files_resolved: filesResolved,
+        note: filesResolved === labels.length
+          ? "every identity label seen in this deal now resolves to the new property"
+          : "the property exists; re-run /reresolve to finish linking this deal's files",
       });
     } catch (e) {
-      try { await client.query("rollback"); } catch (_) {}
+      if (e.httpStatus) {
+        return res.status(e.httpStatus).json({ error: e.publicMessage, reason: e.refusalReason, ...e.detail });
+      }
       res.status(500).json({ error: e.message });
-    } finally { client.release(); }
+    }
   });
 
   // rename a deal — POST /deal-intakes/:id/name { deal_name }
