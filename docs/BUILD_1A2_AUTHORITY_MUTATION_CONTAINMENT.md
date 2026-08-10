@@ -53,9 +53,20 @@ Now the session is the actor, and the actor must hold authority **at that
 property**, by one of three server-read bases: `super_admin`, `org_admin` of the
 owning organization, or an active assignment there with `can_manage_roles`.
 
-A body-supplied `invited_by_user_id` is now **ignored rather than rejected** — a
-caller sending the right value alongside a valid session should not be punished,
-and one sending the wrong value must not be believed. Either way the session wins.
+A body-supplied `invited_by_user_id` is **rejected with a 400**, not ignored.
+
+> **Corrected after a cross-check.** This first shipped *ignoring* the field, on
+> the reasoning that a caller sending the right value should not be punished.
+> That contradicts a rule already frozen by the write-authority hardening packet
+> (PR #38, `docs/WRITE_AUTHORITY_HARDENING_INVENTORY.md` §6):
+>
+> > *"Body actor fields will be **rejected**, not ignored: a caller sending
+> > `approved_by` is either a stale client or an attempt, and both deserve a 400
+> > rather than silent substitution. **Silent ignoring would let a stale app keep
+> > sending a field it believes is honoured.**"*
+>
+> That reason is better than the original one, and the house had already ruled.
+> Nothing in the app sends the field, so rejecting costs no live caller.
 
 ### Recognition proposes; ambiguity does not choose
 
@@ -113,6 +124,44 @@ somewhere other than the route.
 Fixing it was in scope — it is the same defect class as pieces 1 and 3, in the
 same blast radius, and containing the resolver while leaving an unauthenticated
 durable-write route open would have been fixing the smaller half.
+
+---
+
+## 2a. A regression this slice introduced, found by cross-checking
+
+**Gating team-invites broke a live flow, and the first version of this receipt
+did not say so because I never checked.**
+
+For the four *creation* doors I measured the app and correctly found no caller.
+I then gated `POST /properties/:id/team-invites` **without running that same
+check**. The app does call it:
+
+```js
+// index.html — the header builder every non-operator call uses
+const headers = (extra={}) => Object.assign(key()?{'x-operator-key':key()}:{}, extra);
+// … the team-invite call site
+getJSON(`/properties/${prop()}/team-invites`, { method:'POST', headers: headers({…}), … })
+```
+
+`headers()` sent **only the operator key**. Against the hardened route that is a
+401, so "invite a teammate" would have failed for every operator the moment the
+API deployed.
+
+**The fix is the shape the repo already froze** — Open Ruling 2, app-first with a
+bounded compatibility window, *"the new API requires the compatibility app."*
+`headers()` now sends the staff session **alongside** the key, never instead of
+it, so the app release runs unchanged against the current API. Verified in a real
+browser: `headers()` returns `["x-operator-key","x-staff-session","Content-Type"]`.
+
+```text
+DEPLOY ORDER FOR THIS SLICE — NOT OPTIONAL
+  1. APP   (sends x-staff-session alongside the key; harmless to today's API)
+  2. API   (begins requiring it)
+Reversed, team invites 401 for the whole window between the two deploys.
+```
+
+The containment harness now also exercises **the app's actual body shape**
+(T3c), not just a synthetic one — which is the check that would have caught this.
 
 ---
 
@@ -191,10 +240,10 @@ word *identity*. **The leak is the word, not the format**; the list now says so.
 
 ## 4. Proof
 
-Real Postgres 16.13, real HTTP, real Chromium. **89 assertions, 0 failures.**
+Real Postgres 16.13, real HTTP, real Chromium. **90 assertions, 0 failures.**
 
 ```
-tests/authority_mutation_containment.db.js     27 run · 27 passed · 0 failed
+tests/authority_mutation_containment.db.js     28 run · 28 passed · 0 failed
 tests/property_creation_canonical.db.js        25 run · 25 passed · 0 failed   (1A-1, re-run)
 tests/property_creation_http.db.js             17 run · 17 passed · 0 failed   (1A-1, re-run)
 property-spine-app/property_creation_experience.browser.js
@@ -223,6 +272,31 @@ single failure is still the same pre-existing Release 0 debt.
 - **The browser proof is not on the standard path** — it needs Playwright and
   Chromium, which the repo does not depend on. Same convention as the existing
   `*.browser.js` harnesses. Run it explicitly; the command is in its header.
+
+---
+
+## 4a. Cross-check against the other build threads — was any of this intentional?
+
+Asked directly: were the things this slice "fixed" actually deliberate, documented
+decisions? Checked against `docs/`, the open and closed PRs, and the other build
+branches. **Git history cannot answer it** — `7a226e9` is a squashed "Live-state
+copy" that brought the whole repo in as one commit, so there is no per-change
+history before it. The evidence is therefore documentary.
+
+| Finding | Verdict | Evidence |
+|---|---|---|
+| `/admin/seed-snapshot` unauthenticated | **Not intentional.** The opposite is documented. | `docs/auth.md`'s public allowlist does **not** include `/admin/*`, and its rule is *"All routes not in the public allowlist require `x-operator-key`"*. The route was never meant to be open; the `/admin/*` gate skip was added for `super_admin.js`'s own session auth and this file inherited it. |
+| `invited_by_user_id` from the body | **Not intentional, and already being fixed elsewhere.** | PR #38 (open) is *"server-derived actor and property on every active staff write"* and its §1 traces the identical defect on `/applications/:id/approve`. team-invites is **not** in that packet's 23-route scope, so this is complementary, not duplicated. Its §6 rule corrected my ignore-vs-reject choice. |
+| Fuzzy `LIKE … limit 1` resolution | **Not intentional.** Contradicted in-repo. | `registry.js` exists specifically because *"Name is not identity… It NEVER guesses"*. No doc defends the substring resolvers. |
+| Org reassignment with no history | **Not intentional, but not previously logged.** | Absent from `docs/build1/INTEGRITY_GAPS.md`, the register of known-and-parked findings, which holds only GAP 1 (orphaned `related_id`) — unrelated. |
+| `properties.organization_id` nullable | **Intentional, and reported as such.** | Migration 093 says so in its own comment: *"nullable — existing properties get org assigned after provisioning, not force-broken now"*. Build 0 recorded it as deliberate rather than as a defect. |
+| Migration chain can't rebuild from empty | **Known and owned.** | PR #33, *"Baseline lane: migration chain cannot rebuild from an empty database (evidence only)"*, plus `UNBLOCK_2`. Cited correctly in both receipts. |
+
+**One method note worth keeping.** PR #38's classification refuses to retire
+zero-consumer routes because *"source can prove a consumer exists; it cannot prove
+one does not"* — the shared key is held outside this repository. Build 1A-1's
+receipt hedged the three creation doors the same way. That discipline is what I
+failed to apply to team-invites, where a consumer **did** exist in the repo.
 
 ---
 
@@ -259,6 +333,10 @@ reason.
 ---
 
 ## 6. Deploy notes
+
+**APP FIRST, THEN API.** See §2a — the app must ship the compatibility header
+before the API begins requiring it, or team invites 401 for the whole window
+between the two deploys. This is Open Ruling 2's shape, not a new rule.
 
 Migrations **150 and 151**, in that order. Both additive; `prestart` applies them.
 

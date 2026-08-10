@@ -19,7 +19,8 @@
    T  TEAM INVITES — the granting actor is derived, never supplied
       T1  no session is refused
       T2  a session with no authority AT THIS PROPERTY is refused
-      T3  a body-supplied invited_by_user_id is IGNORED, not obeyed
+      T3  a body-supplied invited_by_user_id is REJECTED 400, not ignored,
+          and the app's real body shape still works
       T4  each of the three authority bases works
       T5  the refusals wrote no invite
 
@@ -115,7 +116,7 @@ function request(port, method, path, { body, headers = {} } = {}) {
 }
 
 (async () => {
-  receipt.begin(__filename, { url: URL, expected: 26 });
+  receipt.begin(__filename, { url: URL, expected: 27 });
 
   const server = buildApp().listen(0);
   await new Promise((r) => server.once("listening", r));
@@ -240,21 +241,39 @@ function request(port, method, path, { body, headers = {} } = {}) {
   ok("T2  a real session with no authority AT THIS PROPERTY is refused (403)",
     t2.status === 403 && t2.body.reason === "insufficient_property_authority", JSON.stringify(t2));
 
-  //  T3 — the whole point. A forged inviter in the body must be ignored.
+  //  T3 — the whole point. A body actor field is REJECTED, not ignored.
+  //  This follows the rule already frozen by the write-authority hardening
+  //  packet: silent ignoring lets a stale client keep sending a field it
+  //  believes is honoured. This harness first asserted "ignored"; the rule
+  //  was found during a cross-check against that packet, and both the
+  //  service and this assertion were corrected to match it.
   const forged = adminB;
   const t3 = await request(port, "POST", `/properties/${seat}/team-invites`,
     { headers: { ...KEY, "x-staff-session": sSuper },
       body: inviteBody({ invited_by_user_id: forged }) });
+  ok("T3a a body-supplied invited_by_user_id is REJECTED (400), not silently ignored",
+    t3.status === 400 && t3.body.reason === "body_actor_field_rejected", JSON.stringify(t3));
+
+  const t3n = (await pool.query(
+    `select count(*)::int n from team_invites where invited_by_user_id = $1`, [forged])).rows[0].n;
+  ok("T3b the forged inviter was never recorded anywhere", t3n === 0, t3n + " row(s)");
+
+  //  The APP'S OWN body shape — measured from index.html, which sends no
+  //  actor field. This is the call that must keep working.
+  const t3app = await request(port, "POST", `/properties/${seat}/team-invites`, {
+    headers: { ...KEY, "x-staff-session": sSuper },
+    body: { invited_name: TAG + " App Invitee", phone_number: invitee(),
+            role_title: "Maintenance Tech", allowed_modules: ["maintenance"],
+            scope_type: "property", backup_user_id: null,
+            escalates_to_user_id: null, can_manage_roles: false } });
   const t3row = (await pool.query(
-    `select invited_by_user_id from team_invites where id=$1`, [t3.body && t3.body.invite_id])).rows[0];
-  ok("T3a the invite was created by the SESSION's user, not the body's",
-    t3.status === 200 && t3row && String(t3row.invited_by_user_id) === String(superAdmin),
-    JSON.stringify({ recorded: t3row && t3row.invited_by_user_id, session: superAdmin, forged }));
-  ok("T3b and the forged inviter appears nowhere",
-    t3row && String(t3row.invited_by_user_id) !== String(forged));
-  ok("T3c the grant reports its own provenance",
-    t3.body.granted_by_user_id === superAdmin && t3.body.authority_basis === "platform_role:super_admin",
-    JSON.stringify({ by: t3.body.granted_by_user_id, basis: t3.body.authority_basis }));
+    `select invited_by_user_id from team_invites where id=$1`, [t3app.body && t3app.body.invite_id])).rows[0];
+  ok("T3c the APP's actual body shape still works, actor derived from the session",
+    t3app.status === 200 && t3row && String(t3row.invited_by_user_id) === String(superAdmin),
+    JSON.stringify({ status: t3app.status, recorded: t3row && t3row.invited_by_user_id }));
+  ok("T3d the grant reports its own provenance",
+    t3app.body.granted_by_user_id === superAdmin && t3app.body.authority_basis === "platform_role:super_admin",
+    JSON.stringify({ by: t3app.body.granted_by_user_id, basis: t3app.body.authority_basis }));
 
   //  T4 — all three bases. orgA owns `seat`? Not yet: adopt it first so
   //  the org_admin path is a real one rather than a contrived one.
@@ -344,7 +363,7 @@ function request(port, method, path, { body, headers = {} } = {}) {
     s8b.status === 403 && s8b.body.reason === "insufficient_platform_role", JSON.stringify(s8b));
 
   console.log("");
-  const code = receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 26 });
+  const code = receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 27 });
   server.close();
   await pool.end();
   process.exit(code);

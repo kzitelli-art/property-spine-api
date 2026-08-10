@@ -106,10 +106,23 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
   //    · org_admin of the organization owning it        (their client)
   //    · an active assignment here with can_manage_roles
   //
-  //  A body-supplied invited_by_user_id is now ignored rather than
-  //  rejected: a caller sending the right value alongside a valid session
-  //  should not be punished, and a caller sending the wrong one must not
-  //  be believed. Either way the session wins.
+  //  ── A BODY ACTOR FIELD IS REJECTED, NOT IGNORED ──────────────────
+  //  This route first shipped ignoring `invited_by_user_id`, on the
+  //  reasoning that a caller sending the right value should not be
+  //  punished. That contradicts the house rule already frozen by the
+  //  write-authority hardening packet (PR #38,
+  //  docs/WRITE_AUTHORITY_HARDENING_INVENTORY.md §6):
+  //
+  //    "Body actor fields will be REJECTED, not ignored: a caller sending
+  //     approved_by is either a stale client or an attempt, and both
+  //     deserve a 400 rather than silent substitution. Silent ignoring
+  //     would let a stale app keep sending a field it believes is
+  //     honoured."
+  //
+  //  That reason is better than the original one: silently ignoring means
+  //  the broken client never finds out, and the next person reading it
+  //  believes the field still matters. Nothing in the app sends this
+  //  field, so rejecting costs no live caller.
   router.post("/properties/:id/team-invites", async (req, res) => {
     const propertyId = req.params.id;
     try {
@@ -157,6 +170,17 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
       }
 
       const b = req.body || {};
+
+      //  Rejected, not ignored — see the note above the route.
+      if (Object.prototype.hasOwnProperty.call(b, "invited_by_user_id")) {
+        return res.status(400).json({
+          error: "invited_by_user_id is not accepted. The granting actor is the signed-in operator.",
+          reason: "body_actor_field_rejected",
+          receipt: "Remove invited_by_user_id from the request. Who granted access is " +
+                   "derived from the session, so a body value could only ever disagree with it.",
+        });
+      }
+
       const phone = normalizePhone(b.phone_number || b.phone);
       if (!phone) return res.status(400).json({ receipt: "A valid US phone number is required (10 digits or +1 format). Email is optional." });
       if (!b.role_title || !String(b.role_title).trim())
