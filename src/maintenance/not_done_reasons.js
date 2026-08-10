@@ -27,11 +27,20 @@
      escalates_to     where it escalates if that owner does not move
      follow_label(wo) the human sentence that owner reads
 
-   THE ROUTING IS WHY THE LIST CANNOT BE SHORTENED CASUALLY. `bigger_job`
-   and `second_visit` both sound like "more work required" and go to
-   different people — a property manager re-scopes, maintenance simply
-   returns. Collapsing them would silently hand one of those to the wrong
-   role, and nobody would see it happen.
+   THE ROUTING IS WHY THIS MAP MAY NOT BE COLLAPSED. `bigger_job` and
+   `second_visit` both sound like "more work required" and go to different
+   people — a property manager re-scopes, maintenance simply returns.
+   Merging the KEYS would silently hand one of those to the wrong role, and
+   nobody would see it happen.
+
+   WHICH IS NOT THE SAME AS OFFERING ALL SEVEN TO A TECHNICIAN. The field
+   vocabulary below is a PROJECTION of this map: five plain answers, each of
+   which is one of these canonical keys. Nothing is merged, nothing is
+   invented, and history keeps its full resolution — a `bigger_job` row
+   written last year still says `bigger_job` and still routes to the property
+   manager. What changed is only which of them we ask a person to pick from,
+   because choosing between "bigger job" and "needs PM approval" is asking
+   somebody holding a wrench to predict our workflow.
    ════════════════════════════════════════════════════════════════════ */
 "use strict";
 
@@ -96,9 +105,56 @@ const NOT_DONE_REASONS = {
 const FOLLOW_UP_TYPES = Object.freeze(
   Object.values(NOT_DONE_REASONS).map((r) => r.follow_type));
 
-/*  What the operator surface may show. Key + label ONLY: the routing is
+/*  ── WHAT THE FIELD IS ASKED, vs WHAT SPINE STORES ─────────────────
+ *
+ *  The person standing in the unit answers one question — "what is stopping
+ *  completion?" — and the honest set of answers to that question is short.
+ *  The seven keys above are Spine's ROUTING vocabulary, and several of them
+ *  are distinctions only somebody who knows our schema would draw.
+ *
+ *  So the field sees five choices, and each one IS a canonical key. Nothing
+ *  is translated on the way in, no new key is invented, and history keeps its
+ *  full meaning: a row written years ago as `bigger_job` still says
+ *  `bigger_job`, and still routes the way it always did.
+ *
+ *      Need a part           → need_part
+ *      Need access           → no_access
+ *      More work required    → second_visit
+ *      Vendor needed         → need_vendor
+ *      Something else        → other
+ *
+ *  ⚠ ONE JUDGEMENT CALL WORTH REVISITING. "More work required" could route
+ *  to `second_visit` (maintenance returns) or `bigger_job` (the property
+ *  manager re-scopes). It is mapped to `second_visit` — a return visit keeps
+ *  the work inside maintenance and is the lower-ceremony reading of what a
+ *  technician means by "there is more here". If the intended meaning is
+ *  usually "this needs re-scoping and approval", change this ONE line.
+ *
+ *  `bigger_job` and `needs_approval` remain canonical, routable, and reachable
+ *  through the legacy closeout path. They are simply not offered in the field,
+ *  because asking a technician to choose between "bigger job" and "needs PM
+ *  approval" is asking them to predict our workflow.
+ */
+const FIELD_REASON_KEYS = ["need_part", "no_access", "second_visit", "need_vendor", "other"];
+const FIELD_LABELS = {
+  need_part:    "Need a part",
+  no_access:    "Need access",
+  second_visit: "More work required",
+  need_vendor:  "Vendor needed",
+  other:        "Something else",
+};
+
+/*  What the OPERATOR surface may show. Key + label only: the routing is
  *  Spine's decision and travels nowhere near the browser, so a client cannot
  *  select a consequence — only report a fact. */
+function fieldReasonChoices() {
+  return FIELD_REASON_KEYS.map((key) => ({ key, label: FIELD_LABELS[key] }));
+}
+
+/*  The FULL routing vocabulary, for the legacy closeout consumer. Unchanged
+ *  on purpose: the shared operator key is held outside this repo, so absence
+ *  of a caller here is not absence of a caller, and narrowing what that route
+ *  returns could silently remove a choice somebody is using. */
 function reasonChoices() {
   return Object.entries(NOT_DONE_REASONS).map(([key, v]) => ({ key, label: v.label }));
 }
@@ -133,6 +189,6 @@ function reasonForFollowType(type) {
 }
 
 module.exports = {
-  NOT_DONE_REASONS, FOLLOW_UP_TYPES, reasonChoices, routeFor, labelFor,
+  NOT_DONE_REASONS, FOLLOW_UP_TYPES, reasonChoices, fieldReasonChoices, routeFor, labelFor,
   reasonForFollowType,
 };

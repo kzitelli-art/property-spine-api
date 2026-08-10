@@ -255,7 +255,7 @@ module.exports = function maintenance(deps) {
   //  a board row, and it cannot see this closure. Exported rather than
   //  restated there, because a second copy of a routing table is how a
   //  reader and a writer come to disagree about where a stall went.
-  const { NOT_DONE_REASONS, reasonChoices, FOLLOW_UP_TYPES } = require("./not_done_reasons");
+  const { NOT_DONE_REASONS, reasonChoices, fieldReasonChoices, FOLLOW_UP_TYPES } = require("./not_done_reasons");
   const { recordNotDone } = require("./not_done_service");
   const { acceptWork } = require("../technician/acceptance_service");
 
@@ -345,8 +345,13 @@ module.exports = function maintenance(deps) {
   //  §19–20: one vocabulary, read live, no fallback. If this read fails the
   //  door says so and offers nothing, because a reason we cannot route is a
   //  stall with no next step.
+  //  THE FIELD VOCABULARY — five plain answers to one plain question, each
+  //  of which IS a canonical key. The routing behind them is unchanged and
+  //  invisible: a technician reports what is stopping the job, and Spine
+  //  decides what that means. The legacy route above still returns all seven
+  //  for whatever holds the shared key.
   router.get("/operator/work-orders/not-done-reasons", ...operatorGate, (_req, res) => {
-    res.json({ reasons: reasonChoices() });
+    res.json({ reasons: fieldReasonChoices() });
   });
 
   // ════════════════════════════════════════════════════════════════

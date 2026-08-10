@@ -520,7 +520,12 @@ async function readPropertyWorkOrderStatuses(db, { propertyId, limit = 100, view
     if (s) {
       out.push({
         work_order: s.work_order, current: s.current, next_action: s.next_action,
+        //  `preserved_count` rides along so a verified completion can say
+        //  "Proof verified · 2 photos" on the board without the row having to
+        //  fetch the detail to count them. It is the same number the detail
+        //  carries — not a second derivation.
         proof: { required: s.proof.required, satisfied: s.proof.satisfied,
+                 preserved_count: s.proof.preserved_count,
                  not_preserved_count: s.proof.not_preserved_count },
         resident_update_count: s.resident_update.length,
         //  The LIST must be able to band on an unresolved resident update.
