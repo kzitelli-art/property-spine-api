@@ -109,6 +109,16 @@ const PRODUCTION_APPROVED = [
     reason: "Release 0 tester search — must read PRODUCTION staff, leases and leads to find an alternate tester whose phone carries no reachable resident/prospect identity, since routing around an identity collision is what avoids mutating unrelated leasing data; uses the production predicates (eligibleTechnicians, resolveStaffSenderForOrganization, the two inbound reachability tiers) rather than an FK inventory; proves it cannot write before any read; phones appear only as ****last4" },
   { file: "tools/activation/release0_final_receipt.js",
     reason: "Release 0 Gate 10 — generates the final evidence-ingress receipt by RE-DERIVING every database fact live in PRODUCTION with the same bindings the gate tools use (pasted output is never trusted); proves it cannot write before any read; refuses unless every NAMED fact is present — no green-count verdicts; never prints phone, e164, media URL, image bytes, or credentials; falsified 15 refusal cases in gate_tools_falsify.sh" },
+  /*  ── GATE 1, 2026-08-10 ────────────────────────────────────────────
+   *  Main moved to 90ab03d and brought migrations 150/151/152 with it.
+   *  Because prestart VERIFIES rather than applies, a code-only Release 0
+   *  deploy now refuses to start if those are not in the target ledger —
+   *  and refuses equally if the ledger holds Release 0's own 138/139/140
+   *  from some earlier branch deploy, which is precisely how 121 and 126
+   *  got into production. Neither direction has ever been measured.
+   *  Registered WITH the tool this time, not after a gate caught it. */
+  { file: "tools/release0/gate1_production_census.js",
+    reason: "Release 0 Gate 1 — must read the PRODUCTION ledger to answer whether the deployed schema can boot this build at all; the question is about production's schema, so no harness target can answer it. Reuses migrations/ledger_verdict.js, the same classifier prestart runs, so it cannot hold a second opinion the deploy disagrees with. Proven read-only via _readonly.js before any read; connection errors are sanitised because the output is meant to be pasted" },
   { file: "tools/activation/supersede_operations_line.js",
     reason: "Release 0 Gate 9 rollback — WRITE-CAPABLE BY DESIGN: it is the prepared status-supersession command that retires the operations line (status='retired' + superseded_at, the schema's vocabulary for the spec's 'superseded') and proves via resolveInboundLine, pre-commit, that the rail stopped resolving; targets one row by primary key, requires LINE_ID and CONFIRM_SUPERSEDE=yes, --dry-run always rolls back; falsified 23/23 by tools/activation/gate_tools_falsify.sh on the isolated baseline" },
 ];

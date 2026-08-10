@@ -137,7 +137,32 @@ docker-compose down
 curl https://property-spine-api.onrender.com/health
 # → { "ok": true, "db_time": "..." }
 
-# Check which migrations have run
-curl -H "x-operator-key: $OPERATOR_KEY" \
-  https://property-spine-api.onrender.com/health/migrations
 ```
+
+### Checking which migrations have run
+
+This page used to say:
+
+```bash
+curl -H "x-operator-key: $OPERATOR_KEY" \
+  https://property-spine-api.onrender.com/health/migrations   # DOES NOT EXIST
+```
+
+**There is no such route.** Nothing in `server.js` or `src/` defines it, and
+there never was — the endpoint would return the API's 404. It was found while
+looking for a way to take the migration census before a release, which is the
+one moment this page most needed to be right: it sends you to a URL, you get an
+error, and the natural reading is "the service is down" rather than "the
+documentation is wrong."
+
+Read the ledger from the instance instead, where `DATABASE_URL` already exists:
+
+```bash
+node tools/release0/gate1_production_census.js
+```
+
+It reports the running SHA, the ledger ceiling, which migrations are applied,
+what is pending, and — using `migrations/ledger_verdict.js`, the same classifier
+`prestart` runs — whether this build would boot against that database at all. It
+proves read-only before it reads, applies nothing, and prints nothing containing
+the connection string.
