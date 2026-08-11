@@ -236,6 +236,11 @@ create table if not exists work_order_proof_attachments (
   mime_type            text not null
                          check (mime_type in ('image/jpeg','image/png','image/webp')),
   byte_size            integer,
+  --  134:142-143 — the STORED BYTES and their digest. 140's evidence
+  --  predicate reads both; without them that function cannot be created,
+  --  so a database missing these cannot carry the completion guard at all.
+  sha256               text check (sha256 ~ '^[0-9a-f]{64}$'),
+  content              bytea,
   received_at          timestamptz not null default now(),
   stored_at            timestamptz,
   storage_state        text not null default 'received'
