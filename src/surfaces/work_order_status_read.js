@@ -215,6 +215,72 @@ async function readWorkOrderStatus(db, {
       where w.id = $1 and w.property_id = $2`, [workOrderId, propertyId])).rows[0];
   if (!workOrder) return null;
 
+  /*  ── WHO IS THIS ABOUT ──────────────────────────────────────────────
+   *  A work order in unit 631 and the person it affects are one physical
+   *  reality, and nothing related them. The board knew "Unit 631" as a
+   *  STRING; reaching the human meant inferring one from a unit label, which
+   *  §21 forbids — the browser requests, the server decides.
+   *
+   *  A HIERARCHY, NOT A LOOKUP. The first version of this asked one question
+   *  — who holds the active lease — and silently assumed the answer was one
+   *  person. Roommates, by-bed properties, corrected and overlapping leases,
+   *  and common-area work all make that unsafe.
+   *
+   *    1  affected_person_id, when it resolves to a person ON THIS PROPERTY
+   *    2  otherwise current tenancy, ONLY when it names exactly one person
+   *    3  otherwise nothing
+   *
+   *  098_work_order_operational_facts:90 already named this column "whose
+   *  home it affects", and the canonical writer sets it at creation. Deriving
+   *  occupancy while ignoring the column that states it would have been a
+   *  fourth interpretation of one fact (§7).
+   *
+   *  reported_by_person_id IS DELIBERATELY NOT A FALLBACK HERE, although
+   *  three other modules coalesce to it. 098:89 is explicit that a neighbour
+   *  can report a leak in someone else's unit, and those modules want SOMEBODY
+   *  TO TALK TO. This field answers a different question — whose home this is
+   *  — and the reporter is not an answer to it.
+   *
+   *  §5 — AMBIGUITY IS PUBLISHED, NOT RESOLVED. Two leaseholders and no basis
+   *  for choosing means `resident: null` with status `ambiguous` and the count,
+   *  never a coin flip rendered as fact. `none` and `ambiguous` are different
+   *  truths and the surface is told which one it has.  */
+  let resident = null;
+  let residentStatus = "none";
+  let residentCandidates = 0;
+
+  if (workOrder.affected_person_id) {
+    //  VALID FOR THIS PROPERTY, or it is not an answer. A person id that
+    //  resolves somewhere else is a cross-property leak wearing a name.
+    const hit = (await db.query(
+      `select id, name from persons where id = $1 and property_id = $2`,
+      [workOrder.affected_person_id, propertyId])).rows[0];
+    if (hit) {
+      resident = { person_id: hit.id, display_name: hit.name || "(unnamed)",
+                   basis: "affected_person" };
+      residentStatus = "resolved";
+      residentCandidates = 1;
+    }
+  }
+
+  if (!resident && workOrder.unit_id) {
+    const tenants = (await db.query(
+      `select p.id, p.name
+         from leases l
+         join persons p on p.id = any(l.tenant_ids)
+        where l.property_id = $1 and l.unit_id = $2
+          and l.lease_status = 'active'
+        order by p.name asc`, [propertyId, workOrder.unit_id])).rows;
+    residentCandidates = tenants.length;
+    if (tenants.length === 1) {
+      resident = { person_id: tenants[0].id,
+                   display_name: tenants[0].name || "(unnamed)", basis: "tenancy" };
+      residentStatus = "resolved";
+    } else if (tenants.length > 1) {
+      residentStatus = "ambiguous";
+    }
+  }
+
   //  WHO IS ACCOUNTABLE. The obligation is the accountability rail; the
   //  work order's free-text assigned_to column is deliberately not read.
   //
@@ -379,6 +445,14 @@ async function readWorkOrderStatus(db, {
       //  and is driving to is urgent and NOT waiting on anyone.
       is_emergency: workOrder.urgency_status === "emergency",
       opened_at: workOrder.created_at,
+      /*  WHO THIS IS ABOUT. Null unless the server can stand behind exactly
+       *  one person; `resident_status` says WHY it is null so the surface
+       *  never has to guess between "nobody" and "we could not tell". Person
+       *  id and display name only — enough to name someone and open their
+       *  Person Card, nothing that would make this a second dossier (§13). */
+      resident,
+      resident_status: residentStatus,
+      resident_candidate_count: residentCandidates,
     },
     current: {
       state,

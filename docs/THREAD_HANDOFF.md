@@ -598,7 +598,10 @@ number ships.
 ## 2026-08-11 · MAINTENANCE WORK ORDERS — H CLOSED. ONE PRODUCT.
 
 **Merged:** API `6c577dc` (PR #77) · App `5dd2548` (PR #43).
-**Production:** schema readiness READY. Live Work Orders smoke check passed. Migrated: nothing. No schema change in this slice.
+**Production:** schema readiness READY. Original Work Orders release smoke
+check passed. Subsequent visual and resident-projection changes are merged and
+locally/proof verified; production browser verification pending. Migrated:
+nothing. No schema change in this slice.
 
 Smoke check, on `property-spine-app.onrender.com`, Solo on Chestnut, artifact
 `code_sha 5dd25483`: board opened, 4 real property-scoped rows, every row
