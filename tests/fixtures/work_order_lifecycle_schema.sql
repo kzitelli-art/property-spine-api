@@ -85,6 +85,11 @@ create table users (
 
 create table persons (
   id   uuid primary key default gen_random_uuid(),
+  --  001_baseline. The resident projection validates that an
+  --  affected_person_id resolves to a person ON THIS PROPERTY -- a person id
+  --  that resolves somewhere else is a cross-property leak wearing a name.
+  --  Omitted here until the read needed it; load-bearing now.
+  property_id uuid references properties(id) on delete cascade,
   name text
 );
 
