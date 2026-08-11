@@ -15,13 +15,50 @@ Confirmed by `node migrations/migrate.js` on the new instance (`4bcd7`), not
 inferred. The ceiling moved 158 → 159 and the instance changed, so the service
 is running current `main` rather than the survivor.
 
-**⚠ ONE THING IS STILL UNVERIFIED: the app-side half.** 159's identifier sweep
-renamed an API response key and not the app reading it — nothing threw, and the
-deal page silently showed "Setup in progress" for a property whose position
-*was* established. H16b now pins the key by name, but only a real page proves
-the app side. **Open a property with an established position and confirm the
-deal page reads "Lease & occupancy established."** Until someone has, say the
-schema is released and the surface is unconfirmed.
+### ⚠ OPEN RELEASE ITEM — THE PRODUCTION SURFACE IS NOT CONFIRMED
+
+**Classify this precisely, because the two halves are not the same claim:**
+
+```text
+159 schema                          RELEASED and verified (ceiling 159)
+static app/API contract             PROVEN in source
+authenticated production surface    STILL REQUIRES HUMAN CONFIRMATION
+```
+
+159's identifier sweep renamed an API response key and not the app reading it.
+Nothing threw, and the deal page silently showed "Setup in progress" for a
+property whose position *was* established. Only a browser caught it.
+
+**What is proven in source, and it is not nothing:**
+
+```text
+API  deal read emits   p.opening_tenancy_position_id   ← pinned by H16b
+                       (tests/deal_setup_http.db.js:411, by name)
+APP  index.html:26227  if (p.opening_tenancy_position_id)
+                         true  → "Lease & occupancy established"
+                         false → "Setup in progress"
+```
+
+Same key both sides, and the app-side fix (`9f037bf`) is ten commits deep on
+`main`. That de-risks it materially. **It does not replace the check** — it
+proves the code agrees, not that a real page renders.
+
+**What still has to happen, by a human with a real staff session:**
+
+1. A property **with** an established position renders
+   *"Lease & occupancy established."*
+2. A property **genuinely without** one still renders the unestablished state —
+   so we know the condition was not flipped globally.
+
+The second is not ceremony. A change that made every property read
+"established" would pass the first check perfectly.
+
+**⚠ IF THAT CHECK FAILS, INSPECT THE DEPLOYED APP SHA FIRST.** APP auto-deploy
+is **OFF** — every app deploy is manual — so a stale app is a more likely cause
+than the rename. **Do not reopen the identifier work before ruling that out.**
+
+Until someone has run both: **the schema is released and the surface is
+unconfirmed.** Say it that way.
 
 ### What this cost, and it is worth reading before the next release
 
