@@ -458,6 +458,9 @@ falls outside the normal pattern
 
 Major money decisions—including forgiveness, write-offs, and capital classifications—must use the same obligation, proof, attribution, and history discipline as other consequential work.
 
+How an economic consequence accumulates—and why cash and accrual are two
+readings rather than two realities—is in §39.
+
 ## 15. NOI and Exposure
 
 Property Spine should ultimately present two headline truths for each property:
@@ -487,6 +490,10 @@ or only confidence in reported NOI
 ```
 
 A status that users learn to manage cosmetically is not truth.
+
+Exposure is not only a headline. The per-item contract every unresolved
+consequential item must satisfy is in §38, along with the separation of
+recorded fact from derived attribution.
 
 ## 16. Reporting Is an Output Gate
 
@@ -1062,3 +1069,519 @@ The manager reviews the actual operating story, signs it, and presses Generate.
 The product reaches production through one canonical, browser-proven vertical slice at a time—without demo paths, fixture fallback, invented ownership, special property branches, or a second meaning of truth.
 
 **One Property. One Truth State. One Next Action.**
+
+## 36. The Layered Architecture
+
+```text
+                         PROPERTY SPINE
+
+                    DEAL SETUP / SOURCE TRUTH
+                              │
+            Property · Rent Roll · Documents · Standing Facts
+                              │
+              ┌───────────────┴────────────────────────┐
+              │                                        │
+              ▼                                        │
+                                                       │
+                   OPERATING SPINE                     │
+                                                       │
+    LEASING           MANAGEMENT          MAINTENANCE  │
+    ───────           ──────────          ───────────  │
+    Leads             Rent Roll           Work Orders  │  standing facts
+    Tours             Tenant Relations     Turnover    │  create consequence
+    Applications      Occupancy            Vendors     │  with no operating
+    Leases            Evictions            Supplies    │  event at all
+                                                       │
+              │                                        │
+              └───────────────┬────────────────────────┘
+                              ▼
+
+                    ECONOMIC CONSEQUENCE
+
+            What did the operating fact mean economically?
+            What does simply holding this deal mean economically?
+
+              Expense side              Revenue side
+              ────────────              ────────────
+              Repair cost               Rent earned
+              Vendor cost               Vacancy loss
+              Supplies                  Turn delay
+              Taxes                     Concessions
+              Insurance                 Collections
+              Debt                      Lost/gained revenue
+                              │
+                              ▼
+
+                             MONEY
+
+             Expected · Actual · Billed · Settled
+             Service period · Cash · Accrual · Banks
+
+                              │
+                              ▼
+
+                          ACCOUNTING
+
+              Recognition · AP/AR · GL · Reconcile
+                    Close · Opening Accounting Truth
+
+                              │
+                              ▼
+
+                          REPORTING
+
+              IS · BS · T-12 · Rent Roll · AP · AR
+                 Bank Recs · Debt · Issuance History
+
+                              │
+                              ▼
+
+                     ASSET MANAGEMENT
+                       OWNER COMPRESSION
+
+                What changed?
+                Why?
+                What does it mean financially?
+                What is uncertain?
+                What needs my judgment?
+                What will show up in reporting?
+```
+
+> Setup establishes the world.
+> Operations records what happens.
+> Economic Consequence connects the deal and its work to money.
+> Accounting recognizes, classifies, reconciles and closes period truth.
+> Reporting packages it.
+> Asset Management explains the deal to the owner.
+
+### Economic consequence has two parents, not one
+
+The most consequential thing in this diagram is the fork.
+
+Economic consequence descends from **standing truth and operating events
+alike**. A great deal of economic reality originates directly from facts
+established at setup, with nobody performing any operating work:
+
+```text
+a lease earns rent as time passes
+a note accrues interest and amortizes principal
+a tax schedule produces a bill
+an insurance contract produces a premium
+a management agreement produces a fee
+```
+
+**Do not architect every dollar as requiring an operating event parent.**
+An economic consequence relates to whatever actually caused it — a work
+order, a lease, a note, a contract, or the passage of time under one of
+them. A model that insists on an operating parent will either invent
+phantom operating events for rent and interest, or leave the largest and
+most predictable numbers in the deal outside the causal graph entirely.
+
+### Accounting is not the source of truth
+
+Accounting **recognizes, classifies, reconciles and closes**. It is a
+governed reading of period truth, not the origin of it.
+
+Proof lives with the source that produced the fact:
+
+```text
+an invoice           the vendor's document
+a settlement         the bank
+a rent obligation    the lease
+a repair             the work order and its evidence chain
+an approval          the human who gave it, dated and attributed
+```
+
+Domain truth and accounting projections remain separate (§7, §17). When a
+reported number is questioned, the answer is the source — never "because
+accounting says so."
+
+## 37. Four Users, Four Compressions of One Truth
+
+Property Spine has four users doing fundamentally different jobs.
+They are not four permission levels on one screen.
+They are four compressions of the same truth.
+
+```text
+STAFF         Do the work and tell Spine what happened.
+MANAGEMENT    Coordinate the operation and resolve exceptions.
+ACCOUNTING    Turn economic reality into governed period truth.
+OWNER         Understand the economic story and make consequential decisions.
+```
+
+What each is actually asking:
+
+```text
+STAFF         307 needs another part.
+              Tour completed. Resident paid. This repair is done.
+              They should barely feel accounting.
+
+MANAGEMENT    Why isn't 307 ready? Who owns it?
+              Is the move-in at risk? Did we promise the resident something?
+              Do I need to intervene?
+
+ACCOUNTING    What was incurred? What was earned? What was billed? What was paid?
+              What belongs in July? What reconciles?
+              What needs an accrual or adjustment? What can I close?
+
+OWNER         Are we making the money we should be making?
+              Why are we ahead or behind? Is this temporary or structural?
+              What changed since I last looked? Where is money leaking?
+              What decision actually requires me?
+              What can I confidently tell the lender or investors?
+```
+
+### One fact, four readings
+
+One boring maintenance fact — *unit 307 isn't ready because the repair
+uncovered another $1,840 of work* — must arrive at four people as four
+different sentences:
+
+```text
+TECHNICIAN    307 · additional repair needed · part ordered
+
+MANAGER       307 turn delayed · move-in in 4 days · KZ owns repair
+
+ACCOUNTING    $1,840 vendor cost · July incurred expense · invoice pending
+              repair/CapEx treatment needs confirmation
+
+OWNER         307 move-in is at risk.
+              4 days of rent exposure + $1,840 additional work.
+              Management recommends approving the additional repair today
+              rather than moving the resident.
+              Decision needed.
+```
+
+Nobody re-entered anything. Nobody reconstructed the story at month end.
+The expense, the vacancy consequence, the invoice, the work order, the
+approval, the payment, the period treatment and the variance explanation
+are already connected, because they were connected when they happened.
+
+### The rule
+
+This is §7 at a different altitude:
+
+```text
+One recorded fact is never re-entered for another user.
+Later authority may add new governed meaning,
+but never rewrites or duplicates the original fact.
+```
+
+Adding meaning is not duplication. This chain is three **different facts**,
+each attributed to whoever had the standing to state it:
+
+```text
+technician observation            "vendor quoted $1,840"
+→ manager economic confirmation   approved · charged to this turn
+→ accounting recognition          July incurred · repair, not CapEx
+```
+
+Each is dated, attributed and immutable. None of them overwrites the one
+before it. What is forbidden is asking a second human to re-enter a fact
+Spine already holds so a different screen can display it.
+
+### Compression is not censorship
+
+Each reading speaks **first** in that user's decision language. Underlying
+source vocabulary appears when it is needed for explanation or drill-down.
+
+```text
+DEFAULT      say it in the language of the decision this user is making
+ON DEMAND    the source vocabulary, whenever it explains the number
+```
+
+A maintenance manager may legitimately need to know that work is *not
+approved* or that *budget impact is pending* — that is economic vocabulary
+in an operating surface, and it belongs there because it changes what they
+do next. An owner tracing a variance will legitimately end up looking at a
+work order.
+
+Compression decides what is said first, not what may ever be said. A
+compression that withholds the truth underneath it is not compression; it
+is censorship, and it breaks the traversal §38 depends on.
+
+### The failure this section exists to prevent
+
+The mistake is to build a nicer module per user — an owner-facing Leasing,
+an owner-facing Maintenance, an owner-facing Accounting. That is still
+property-management-software thinking. It is modules presented to a
+different reader.
+
+The owner does not care about the modules.
+The owner cares about the deal.
+
+**Different buttons on the same rows is permission, not compression.**
+A surface that has never been asked a question in another user's language
+has no evidence it could answer one.
+
+> The staff operates the property.
+> Management resolves the operation.
+> Accounting proves the economics.
+> The owner steers the deal.
+> Spine makes all four views of the same truth.
+
+## 38. The Owner Surface Is a Compressed Causal Model of the Deal
+
+The owner surface is not a dashboard, not a task list, not a report viewer,
+and not an onboarding wizard.
+
+At any moment it answers:
+
+```text
+What changed?
+Why?
+What does it mean economically?
+What is uncertain?
+What needs my judgment?
+What happens next?
+What will ultimately show up in the reporting?
+```
+
+This is the same philosophy the field person gets in §5 and §9 — *what is
+happening, what is uncertain, what is mine, what I do next* — raised to the
+altitude of the deal.
+
+### Spine sorts the deal before the owner arrives
+
+Do not give the owner a customizable cockpit with sixty widgets.
+Have an opinion about what matters.
+
+Simplicity here is hierarchy, not absence. The complexity does not go away;
+the product absorbs it. The surface can be exceptionally calm precisely
+because Spine is doing extraordinary work underneath.
+
+### What changed
+
+More important than another row of metrics:
+
+```text
+Leasing improved
+11 leases signed this week. September occupancy now projected 94.2%.
++$31K monthly contracted rent
+
+Turn costs increased
+Four units required additional flooring work.
++$12.4K July expense · $7.1K supported · $5.3K awaiting invoices
+
+Collections weakened
+Delinquency increased $18.6K, concentrated in seven residents.
+Management actions underway on five; two need decision.
+```
+
+The owner is looking at the building thinking — not at Leasing, not at
+Maintenance, not at Accounting, but at the consequences of all three.
+
+### Needs your judgment is not an inbox
+
+This requires religious discipline. The owner does not see:
+
+```text
+invoice missing
+resident needs callback
+tech needs photo
+rent-roll row unresolved
+```
+
+Those belong downstream and are solved underneath the owner.
+
+The owner sees only what **owner authority or owner judgment changes**:
+
+```text
+Approve $22K unbudgeted chiller repair.
+Decide eviction or payment agreement on material delinquency.
+Accept management's recommendation to move $84K project into CapEx.
+Approve lender reserve draw.
+Decide whether August concession strategy should change.
+Sign July package despite $13K of disclosed Exposure.
+```
+
+### The Exposure contract
+
+Exposure is honesty, not failure (§15). Every unresolved consequential item
+must be able to say, item by item:
+
+```text
+what it is about
+possible magnitude, if known
+why Spine cannot stand behind it
+what would resolve it
+when the uncertainty was observed
+who owns resolution — or UNASSIGNED
+```
+
+An item that cannot answer these is not Exposure. It is a gap wearing
+Exposure's name, and it will be managed cosmetically.
+
+### No seam between the number and the story
+
+An owner sees `Repairs +$38,420 vs budget`, and can walk it down to the work:
+
+```text
++$38,420 vs budget
+→ 14 events caused it
+→ $7,800 · emergency plumbing · units 214/216
+→ WO #1088 · vendor invoice · manager approval
+→ accrued July 17 · paid August 3
+```
+
+Both directions must work:
+
+```text
+report → money → operating cause → human action → proof
+proof → human action → operating cause → money → report
+```
+
+There is no seam between the number and the story. That is the Spine.
+
+### Recorded fact and derived attribution are different kinds of thing
+
+```text
+$7,800 · emergency plumbing · units 214/216 · WO #1088   RECORDED
+61% turnover delay · 24% weaker leasing                  DERIVED
+```
+
+The first happened and has an evidence chain. The second is the output of
+an allocation model — an opinion with parameters that nobody recorded.
+
+In a drill-down they sit two taps apart. If they look the same, Spine is
+laundering a model as truth, at the altitude where the number goes to a
+lender. §5 forbids this.
+
+Derived attribution must be a visibly different class, and must name the
+model that produced it — the way `UNASSIGNED` is a different class from a
+person's name, not a disclaimer beneath one.
+
+This matters most the moment Spine starts explaining variance. "WO #1088
+cost $7,800" and "61% of the vacancy loss was caused by turnover delay" are
+not the same kind of statement, and a surface that renders them identically
+is a very convincing machine for producing confident nonsense.
+
+### The package is the output contract, not the owner product
+
+The full accounting package — balance sheet, income statement, T-12, GL,
+trial balance, AP, AR, rent roll, deposits, bank recs, debt, management
+fees, reconciliations — defines how rigorous the engine must ultimately be.
+
+**Nobody wants to live inside that package every day.**
+
+The owner interface makes the monthly package feel inevitable:
+
+```text
+Payroll is tracking $19K over plan because maintenance overtime increased
+after three turns.
+→ Two of those turns are complete. $11K supported; $8K remains unexplained.
+→ Accounting accrued the supported portion into July.
+→ July NOI is $27K below budget. $19K is operating performance.
+  $8K remains Exposure.
+→ July package ready for review. Two items need your sign-off.
+→ GENERATE
+```
+
+That is a different product from opening a menu called Reporting (§16).
+
+## 39. Economic Consequence Accumulates; It Does Not Advance
+
+Money is not a fifth department beside Leasing and Maintenance. It is the
+economic consequence layer underneath the deal and its work (§14, §36).
+
+Every meaningful economic consequence must be able to accumulate a story:
+
+```text
+expected
+happened
+incurred / earned
+billed
+paid / collected
+reconciled
+reported
+```
+
+These are not a chain.
+
+```text
+One economic consequence accumulates multiple dated facts and
+relationships. These stages are READINGS of that history,
+not statuses on one row.
+```
+
+This is not pedantry. A single mutable status column cannot represent what
+routinely happens:
+
+```text
+one invoice settled by three payments
+a partial settlement that is never completed
+a reversal, a credit memo, a re-bill
+an accrual later trued up to a different actual
+a payment that clears the bank after the period closed
+```
+
+Each of those is a **new dated fact related to the same consequence**. The
+history is the truth; "billed" is a question you ask of it, not a state the
+row is parked in.
+
+Not every consequence reaches every reading. The structure is what matters.
+
+```text
+A repair is incurred in July and paid in August.
+A resident owes July rent before the cash arrives.
+A tax bill is expected months before it is invoiced.
+A lender payment is contractually due, accrued, funded and settled
+at four different moments.
+```
+
+### Cash and accrual are two readings, not two realities
+
+Because the underlying history is truthful, an owner opening a financial
+statement asks for `Accrual | Cash` and Spine gives two legitimate readings
+of one deal.
+
+That is categorically different from importing two reports and hoping they
+reconcile. There is no cash/accrual configuration to maintain, because there
+is only one set of facts.
+
+### Every fact needs a durable causal hook
+
+```text
+A fact must leave a durable causal hook for economic meaning to
+attach later.
+```
+
+A hook is identity and relationship — this fact, on this property, in this
+unit, under this lease or note, caused by this work, observed by this
+person, at this moment. Economic meaning attaches **to** the hook later, by
+whoever has standing to add it. It does not have to live on the operating
+row, and no operating surface should grow vendor and cost columns to
+satisfy this.
+
+This is the rule a shipped surface has already violated. A technician
+reports *"more work required."* Spine records the reason, routes the
+follow-up to an accountable role, writes an immutable event and ties the
+follow-up to it. Clean, traceable, proven — and it can never become $1,840,
+because there is no hook the vendor's invoice can attach to. When the
+invoice arrives there is nothing to relate it to but an id and a date, and
+someone reconstructs the story by hand. That is a second history, which is
+the one outcome §7 exists to prevent.
+
+### What the technician is, and is not, asked
+
+```text
+The technician is never asked to make the ACCOUNTING or ECONOMIC
+determination. They are always free to report what they observed.
+```
+
+If the technician naturally knows something — *"vendor quoted $1,840"* —
+Spine captures it as a **source observation**, attributed to them, dated to
+the moment they said it. That is a fact about the world, and refusing to
+record it would be its own dishonesty.
+
+What the technician is never asked is what it *means*: expense or CapEx,
+which period, whether it is approved, how it lands in the report. Authority
+adds that meaning later, as its own dated fact (§37).
+
+Honest blank still governs the magnitude:
+
+```text
+unknown cost is BLANK
+never zero
+never estimated into the record as though someone had said it
+```
