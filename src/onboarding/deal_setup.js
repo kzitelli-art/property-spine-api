@@ -146,6 +146,15 @@ module.exports = function dealSetup({ pool, upload }) {
     } catch (e) { fail(res, e); }
   });
 
+  //  What the create form must offer. Asked of the server because the
+  //  server is what enforces it — a picker built from a platform_role the
+  //  browser read off a session is a second copy of an authority rule.
+  router.get("/deal-setup/organizations", requireHuman, async (req, res) => {
+    try {
+      res.json(await dealService.organizationsForActor(pool, { user_id: req.human.id }));
+    } catch (e) { fail(res, e); }
+  });
+
   router.post("/deal-setup/deals", requireHuman, rejectBodyActor, async (req, res) => {
     try {
       const { deal_name, onboarding_type, organization_id } = req.body || {};

@@ -181,7 +181,7 @@ function appParsedRows(text) {
 }
 
 (async () => {
-  receipt.begin(__filename, { url: URL, expected: 26 });
+  receipt.begin(__filename, { url: URL, expected: 32 });
 
   // ── fixtures ─────────────────────────────────────────────────────
   const orgA = (await pool.query(
@@ -263,6 +263,48 @@ function appParsedRows(text) {
   ok("H6  another client's deal is refused and never rendered",
      crossRead.status === 403 && !crossRead.body.deal,
      `${crossRead.status} ${JSON.stringify(crossRead.body).slice(0, 120)}`);
+
+  // ══ THE CASE THAT WOULD HAVE BLOCKED THE FIRST PRODUCTION CLICK ═══
+  //  A super_admin spans every organization, so resolveCreationScope
+  //  correctly refuses to guess and demands one be NAMED. The create form
+  //  had no field for one — so the refusal was right and unanswerable.
+  //  "Name the organization" from a form with no organization is a dead
+  //  end, and dead ends are what the refusal vocabulary exists to prevent.
+  const superAdmin = await mkUser("super_admin", null);
+  const sSuper = await mkSession(superAdmin);
+  const asSuper = Object.assign({}, KEY, { "x-staff-session": sSuper });
+
+  const superNoOrg = await request("POST", "/deal-setup/deals",
+    { headers: asSuper, body: { deal_name: TAG + " no org named" } });
+  ok("H3b a super_admin naming no organization is still refused",
+     superNoOrg.status === 403 && superNoOrg.body.reason === "organization_required",
+     `${superNoOrg.status} ${JSON.stringify(superNoOrg.body).slice(0, 140)}`);
+
+  const superOpts = await request("GET", "/deal-setup/organizations", { headers: asSuper });
+  ok("H3c …and the surface can ASK what it may choose between",
+     superOpts.status === 200 && superOpts.body.must_choose === true
+     && (superOpts.body.organizations || []).some((o) => o.id === orgA),
+     JSON.stringify(superOpts.body).slice(0, 180));
+
+  const superNamed = await request("POST", "/deal-setup/deals", {
+    headers: asSuper, body: { deal_name: TAG + " named", organization_id: orgA } });
+  ok("H3d …so naming one from that list works",
+     superNamed.status === 201 && superNamed.body.deal.organization_id === orgA,
+     `${superNamed.status} ${JSON.stringify(superNamed.body).slice(0, 140)}`);
+
+  //  An org_admin must NOT be asked. Their client comes from the login,
+  //  and a picker would imply a choice the write would ignore.
+  const adminOpts = await request("GET", "/deal-setup/organizations", { headers: asA });
+  ok("H3e an org_admin is told their client, not asked to choose",
+     adminOpts.status === 200 && adminOpts.body.must_choose === false
+     && (adminOpts.body.organizations || []).length === 1
+     && adminOpts.body.organizations[0].id === orgA,
+     JSON.stringify(adminOpts.body).slice(0, 180));
+
+  const memberOpts = await request("GET", "/deal-setup/organizations", { headers: asM });
+  ok("H3f a member is refused before being shown a form at all",
+     memberOpts.status === 403 && memberOpts.body.reason === "insufficient_platform_role",
+     `${memberOpts.status} ${JSON.stringify(memberOpts.body).slice(0, 140)}`);
 
   // ── H7 · a property, through the 1A canonical service ─────────────
   const prop = await request("POST", `/deal-setup/deals/${dealId}/properties/new`, {
@@ -448,7 +490,7 @@ function appParsedRows(text) {
      `rows with a canonical current lease: ${withCanonical.length}`);
 
   await stopServer();
-  receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 23 });
+  receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 28 });
   await pool.end();
   process.exit(fail ? 1 : 0);
 })().catch(async (e) => {
