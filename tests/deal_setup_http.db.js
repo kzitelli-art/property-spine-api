@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /* ════════════════════════════════════════════════════════════════════
-   HARNESS — ASSET MANAGEMENT OVER REAL HTTP, AGAINST THE REAL server.js
+   HARNESS — DEAL SETUP OVER REAL HTTP, AGAINST THE REAL server.js
 
    ── WHY THIS ONE BOOTS server.js ITSELF ─────────────────────────────
    The Build 1A HTTP harness names its own gap in its header: it does not
@@ -11,7 +11,7 @@
    MOUNTING IS NOT REACHABILITY — the /legal/ routes were mounted, and
    still answered "Missing or wrong x-operator-key", because the gate
    allowlists by path and a bare-express harness has no gate at all. This
-   build adds `isAssetPath()` to that same allowlist, so a harness that
+   build adds `isDealSetupPath()` to that same allowlist, so a harness that
    transcribes the gate would be marking its own homework.
 
    So this SPAWNS server.js as a child process, with DATABASE_URL pointed
@@ -24,7 +24,7 @@
    the constraints.
 
    ── WHAT IT PROVES ──────────────────────────────────────────────────
-   H1   /asset/* is reachable through the real gate (not 401 on the key)
+   H1   /deal-setup/* is reachable through the real gate (not 401 on the key)
    H2   …and still requires a human: no session → 401
    H3   create a deal over HTTP
    H4   a member's session is refused, 403
@@ -44,9 +44,9 @@
    H18  the bare lease writer is contained (410, naming both real paths)
    H19  the ingest promote route rejects a body actor field
    H20  THE JOIN OF THE TWO SIDES: /operator/rent-roll — the staff Rent
-        Roll — shows the position established from Asset Management
+        Roll — shows the position established from Deal Setup
 
-   run:  HARNESS_DATABASE_URL="postgres://..." node tests/asset_management_http.db.js
+   run:  HARNESS_DATABASE_URL="postgres://..." node tests/deal_setup_http.db.js
    ════════════════════════════════════════════════════════════════════ */
 "use strict";
 
@@ -181,7 +181,7 @@ function appParsedRows(text) {
 }
 
 (async () => {
-  receipt.begin(__filename, { url: URL, expected: 24 });
+  receipt.begin(__filename, { url: URL, expected: 26 });
 
   // ── fixtures ─────────────────────────────────────────────────────
   const orgA = (await pool.query(
@@ -232,40 +232,40 @@ function appParsedRows(text) {
   console.log(`  (real server.js running on :${PORT})\n`);
 
   // ── H1–H2 · reachability and the human requirement ───────────────
-  const noSession = await request("GET", "/asset/deals", { headers: KEY });
-  ok("H1  /asset/* passes the real operator-key gate (not a key refusal)",
+  const noSession = await request("GET", "/deal-setup/deals", { headers: KEY });
+  ok("H1  /deal-setup/* passes the real operator-key gate (not a key refusal)",
      noSession.status === 401 && noSession.body && noSession.body.error === "sign_in_required",
      JSON.stringify(noSession.body));
   ok("H2  …and requires a human, saying so",
      /signed-in person/i.test((noSession.body || {}).receipt || ""));
 
   // ── H3–H6 · deals ─────────────────────────────────────────────────
-  const created = await request("POST", "/asset/deals",
+  const created = await request("POST", "/deal-setup/deals",
     { headers: asA, body: { deal_name: TAG + " SOLO", onboarding_type: "existing_asset" } });
   ok("H3  a deal is created over HTTP",
      created.status === 201 && created.body.deal && created.body.deal.organization_id === orgA,
      JSON.stringify(created.body).slice(0, 200));
   const dealId = created.body.deal.id;
 
-  const byMember = await request("POST", "/asset/deals",
+  const byMember = await request("POST", "/deal-setup/deals",
     { headers: asM, body: { deal_name: "nope" } });
   ok("H4  a member's session is refused at the HTTP boundary",
      byMember.status === 403 && byMember.body.reason === "insufficient_platform_role",
      `${byMember.status} ${JSON.stringify(byMember.body)}`);
 
-  const withActor = await request("POST", "/asset/deals",
+  const withActor = await request("POST", "/deal-setup/deals",
     { headers: asA, body: { deal_name: "x", confirmed_by: adminB } });
   ok("H5  a body actor field is REJECTED, not ignored",
      withActor.status === 400 && withActor.body.error === "body_actor_field_rejected",
      JSON.stringify(withActor.body));
 
-  const crossRead = await request("GET", `/asset/deals/${dealId}`, { headers: asB });
+  const crossRead = await request("GET", `/deal-setup/deals/${dealId}`, { headers: asB });
   ok("H6  another client's deal is refused and never rendered",
      crossRead.status === 403 && !crossRead.body.deal,
      `${crossRead.status} ${JSON.stringify(crossRead.body).slice(0, 120)}`);
 
   // ── H7 · a property, through the 1A canonical service ─────────────
-  const prop = await request("POST", `/asset/deals/${dealId}/properties/new`, {
+  const prop = await request("POST", `/deal-setup/deals/${dealId}/properties/new`, {
     headers: asA,
     body: { name: TAG + " Chestnut", address: `${N} Chestnut St`,
             city: "Philadelphia", state: "PA", zip: "19104" } });
@@ -280,7 +280,7 @@ function appParsedRows(text) {
   const trueDigest = crypto.createHash("sha256").update(fileBuf).digest("hex");
   const mp = multipart("file", "SOLO Rent Roll 2026-04-30.csv", "text/csv", fileBuf,
     { source_as_of_date: "2026-04-30" });
-  const up = await request("POST", `/asset/deals/${dealId}/properties/${propertyId}/source`,
+  const up = await request("POST", `/deal-setup/deals/${dealId}/properties/${propertyId}/source`,
     { headers: Object.assign({}, asA, mp.headers), raw: mp.body });
   ok("H8  the real file uploads and is retained",
      up.status === 201 && up.body.artifact && up.body.artifact.byte_size === fileBuf.length,
@@ -293,27 +293,27 @@ function appParsedRows(text) {
   ok("H8b the stored digest is of the bytes that crossed the wire",
      stored && stored.sha256 === trueDigest && stored.len === fileBuf.length);
 
-  const up2 = await request("POST", `/asset/deals/${dealId}/properties/${propertyId}/source`,
+  const up2 = await request("POST", `/deal-setup/deals/${dealId}/properties/${propertyId}/source`,
     { headers: Object.assign({}, asA, mp.headers), raw: mp.body });
   ok("H9  the same file uploaded twice is one artifact",
      up2.status === 200 && up2.body.artifact.id === artifactId);
 
   const pdfBytes = Buffer.concat([Buffer.from("%PDF-1.4\n"), crypto.randomBytes(64)]);
   const badMp = multipart("file", "rentroll.csv", "text/csv", pdfBytes);
-  const bad = await request("POST", `/asset/deals/${dealId}/properties/${propertyId}/source`,
+  const bad = await request("POST", `/deal-setup/deals/${dealId}/properties/${propertyId}/source`,
     { headers: Object.assign({}, asA, badMp.headers), raw: badMp.body });
   ok("H10 a file whose contents contradict its name is refused, sayably",
      bad.status === 400 && /readable text|contents are/i.test(bad.body.receipt || ""),
      `${bad.status} ${JSON.stringify(bad.body).slice(0, 200)}`);
 
   // ── H11–H13 · activation ──────────────────────────────────────────
-  const act = await request("POST", `/asset/deals/${dealId}/properties/${propertyId}/activation`,
+  const act = await request("POST", `/deal-setup/deals/${dealId}/properties/${propertyId}/activation`,
     { headers: asA, body: {} });
   ok("H11 an activation opens", act.status === 201 && act.body.activation.property_id === propertyId,
      JSON.stringify(act.body).slice(0, 160));
   const activationId = act.body.activation.id;
 
-  const read = await request("POST", `/asset/activations/${activationId}/read-source`, {
+  const read = await request("POST", `/deal-setup/activations/${activationId}/read-source`, {
     headers: asA,
     body: { rows: appParsedRows(RENT_ROLL), source_artifact_id: artifactId,
             source_as_of_date: "2026-04-30" } });
@@ -327,7 +327,7 @@ function appParsedRows(text) {
      && read.body.mapping.understood.some((u) => u.read_as === "actual rent"),
      JSON.stringify(read.body.mapping).slice(0, 240));
 
-  const view = await request("GET", `/asset/activations/${activationId}`, { headers: asA });
+  const view = await request("GET", `/deal-setup/activations/${activationId}`, { headers: asA });
   const staged = (view.body.proposals || []).filter((p) => p.status === "staged");
   ok("H13b the review reads back with a row per source row",
      view.status === 200 && view.body.proposals.length === 3 && staged.length >= 2,
@@ -335,7 +335,7 @@ function appParsedRows(text) {
 
   // ── H14–H16 · confirm and establish ───────────────────────────────
   for (const p of staged) {
-    const c = await request("POST", `/asset/proposals/${p.id}/confirm`, { headers: asA, body: {} });
+    const c = await request("POST", `/deal-setup/proposals/${p.id}/confirm`, { headers: asA, body: {} });
     if (c.status !== 200) console.log("      (confirm " + p.natural_key + " → " +
       c.status + " " + JSON.stringify(c.body).slice(0, 120) + ")");
   }
@@ -344,19 +344,33 @@ function appParsedRows(text) {
     [propertyId])).rows[0].c;
   ok("H14 confirming wrote canonical leases", leaseCount >= 1, `leases=${leaseCount}`);
 
-  const est = await request("POST", `/asset/activations/${activationId}/establish`,
+  const est = await request("POST", `/deal-setup/activations/${activationId}/establish`,
     { headers: asA, body: {} });
   ok("H15 the opening position is established",
      est.status === 201 && est.body.opening_position
      && est.body.opening_position.positions_established >= 1,
      `${est.status} ${JSON.stringify(est.body).slice(0, 220)}`);
 
-  const posRead = await request("GET", `/asset/properties/${propertyId}/opening-position`,
+  const posRead = await request("GET", `/deal-setup/properties/${propertyId}/opening-position`,
     { headers: asA });
   ok("H16 the position reads back, naming the file it came from",
      posRead.status === 200 && posRead.body.established === true
      && (posRead.body.sources || []).some((s) => s.sha256 === trueDigest),
      JSON.stringify(posRead.body).slice(0, 260));
+
+  //  ── THE API'S OUTPUT KEYS ARE A CONTRACT ──────────────────────────
+  //  A blunt identifier sweep during the 159 rename changed this response
+  //  key and not the app that reads it, so the deal page showed "Setup in
+  //  progress" for a property whose position WAS established. Nothing
+  //  threw; the screen was simply wrong, and only a browser caught it.
+  //  This pins the shape so the next rename cannot do it silently.
+  const dealRead = await request("GET", `/deal-setup/deals/${dealId}`, { headers: asA });
+  const propRow = ((dealRead.body || {}).properties || [])[0] || {};
+  ok("H16b the deal read returns the established position under its documented key",
+     dealRead.status === 200
+     && Object.prototype.hasOwnProperty.call(propRow, "opening_tenancy_position_id")
+     && Boolean(propRow.opening_tenancy_position_id),
+     `keys returned: ${Object.keys(propRow).join(", ")}`);
 
   // ── H17 · PERSISTENCE ACROSS A REAL RESTART ───────────────────────
   const before = JSON.stringify({
@@ -367,7 +381,7 @@ function appParsedRows(text) {
   });
   await stopServer();
   await startServer();
-  const afterRead = await request("GET", `/asset/properties/${propertyId}/opening-position`,
+  const afterRead = await request("GET", `/deal-setup/properties/${propertyId}/opening-position`,
     { headers: asA });
   const after = JSON.stringify({
     est: afterRead.body.position.positions_established,
@@ -378,7 +392,7 @@ function appParsedRows(text) {
   ok("H17 the position is identical after a full server restart", before === after,
      `before=${before}\n        after =${after}`);
 
-  const fileBack = await request("GET", `/asset/source/${artifactId}/download`, { headers: asA });
+  const fileBack = await request("GET", `/deal-setup/source/${artifactId}/download`, { headers: asA });
   ok("H17b the exact source file is still downloadable, byte-identical",
      fileBack.status === 200 && Buffer.compare(fileBack.buffer, fileBuf) === 0);
 
@@ -398,7 +412,7 @@ function appParsedRows(text) {
 
   // ── H20 · THE TWO SIDES SHARE ONE TRUTH ───────────────────────────
   //  The whole point of writing the evidence substrate as well as the
-  //  canonical records: a position established in Asset Management must
+  //  canonical records: a position established in Deal Setup must
   //  appear on the staff Rent Roll, which reads import_batches →
   //  import_source_rows and overlays canonical positions.
   //
@@ -418,7 +432,7 @@ function appParsedRows(text) {
   const rr = await request("GET", "/operator/rent-roll",
     { headers: { "x-staff-session": opTok } });
   const rrRows = (rr.body && rr.body.rows) || [];
-  ok("H20 the staff Rent Roll shows the sourced position from Asset Management",
+  ok("H20 the staff Rent Roll shows the sourced position from Deal Setup",
      rr.status === 200 && rr.body.has_data !== false && rrRows.length === 3,
      `${rr.status} has_data=${rr.body && rr.body.has_data} rows=${rrRows.length} ` +
      `receipt=${(rr.body || {}).receipt || ""}`);
@@ -434,7 +448,7 @@ function appParsedRows(text) {
      `rows with a canonical current lease: ${withCanonical.length}`);
 
   await stopServer();
-  receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 22 });
+  receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 23 });
   await pool.end();
   process.exit(fail ? 1 : 0);
 })().catch(async (e) => {

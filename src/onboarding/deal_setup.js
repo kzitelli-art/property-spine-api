@@ -1,14 +1,23 @@
 // ════════════════════════════════════════════════════════════════════
-//  asset_management.js — THE ASSET MANAGEMENT DOOR
+//  deal_setup.js — DEAL SETUP
 //
-//  The routes behind Spine's fourth surface. Ownership and asset
-//  management will eventually consume what the operating side produces and
-//  read it at the DEAL level — performance, reporting, debt, investors,
-//  risk, obligations, decisions.
+//  Establish the source truth Spine needs before it can operate a Deal:
 //
-//  Tonight it supports exactly one path, end to end:
+//      Deals → Deal → Properties → rent roll → lease & occupancy established
 //
-//      Deals → Deal → Properties → Setup → Opening Position
+//  ── THIS IS NOT ASSET MANAGEMENT, AND THE NAME IS RESERVED ──────────
+//  It shipped under that name and was renamed on the day after, because
+//  what it does is occasional onboarding machinery, not the daily owner
+//  experience. Asset Management is reserved for the surface that
+//  compresses operating truth into economic consequence and owner
+//  judgment — a different product, for a different job, that cannot be
+//  built until the causal Money graph exists.
+//
+//  Renaming the rendered text alone would have RESERVED NOTHING: the next
+//  person reads routes and module names, and would have learned that
+//  Asset Management is a setup wizard. So the route namespace, the module
+//  and the identifiers moved together. A name is reserved in the source
+//  or it is not reserved.
 //
 //  ── EVERY ROUTE HERE REQUIRES A HUMAN ───────────────────────────────
 //  `x-staff-session`, resolved server-side, on all of them. The shared
@@ -31,12 +40,12 @@ const dealService = require("./deal_service.js");
 const activation = require("./activation_service.js");
 const artifacts = require("./source_artifact_service.js");
 
-module.exports = function assetManagement({ pool, upload }) {
+module.exports = function dealSetup({ pool, upload }) {
   const express = require("express");
   const router = express.Router();
 
-  if (!pool) throw new Error("asset_management requires a pool");
-  if (!upload) throw new Error("asset_management requires the multer upload instance");
+  if (!pool) throw new Error("deal_setup requires a pool");
+  if (!upload) throw new Error("deal_setup requires the multer upload instance");
 
   //  ── THE ONLY WAY INTO EVERY ROUTE BELOW ──────────────────────────
   async function requireHuman(req, res, next) {
@@ -45,7 +54,7 @@ module.exports = function assetManagement({ pool, upload }) {
       if (!session) {
         return res.status(401).json({
           error: "sign_in_required", reason: "no_authenticated_actor",
-          receipt: "Asset Management records who did what, so it needs a signed-in person. " +
+          receipt: "Deal Setup records who did what, so it needs a signed-in person. " +
                    "The operator key identifies the app, not the human.",
         });
       }
@@ -92,20 +101,52 @@ module.exports = function assetManagement({ pool, upload }) {
     if (e && ["restrict_violation", "not_null_violation", "foreign_key_violation"].includes(e.code)) {
       return res.status(409).json({ error: "refused_by_the_record", receipt: e.message, detail: e.detail });
     }
-    console.error("asset-management error:", e);
+    console.error("deal-setup error:", e);
     return res.status(500).json({ error: "unexpected", receipt: e && e.message });
   }
 
+  // ══════════════════════════════════════════════════════════════════
+  //  ⏳ TEMPORARY COMPATIBILITY ALIAS — /asset/* → /deal-setup/*
+  //
+  //  CLASS 4. This is a bridge, not architecture.
+  //
+  //  API and app deploys are not atomic. The app currently in production
+  //  calls /asset/*, so removing that namespace in the same release would
+  //  404 a live surface for the window between the two deploys. Open
+  //  Ruling 2 in reverse: the OLD app must keep working against the NEW
+  //  API, never the other way round.
+  //
+  //  REMOVAL CONDITION, in order:
+  //    1. this API ships, serving both namespaces
+  //    2. the app moves to /deal-setup/*
+  //    3. a deploy passes with NO `deal_setup_legacy_alias` line in the
+  //       logs — that is the only available evidence that no caller
+  //       outside this repository is still on the old path
+  //    4. delete this block and the isAssetPath() branch in server.js
+  //
+  //  It logs every use precisely so step 3 is answerable. A bridge whose
+  //  removal condition cannot be measured never gets removed.
+  // ══════════════════════════════════════════════════════════════════
+  router.use((req, res, next) => {
+    if (req.url === "/asset" || req.url.startsWith("/asset/")) {
+      console.warn("deal_setup_legacy_alias", JSON.stringify({
+        at: new Date().toISOString(), path: req.url, ua: req.get("user-agent") || null,
+      }));
+      req.url = "/deal-setup" + req.url.slice("/asset".length);
+    }
+    next();
+  });
+
   // ══ DEALS ═══════════════════════════════════════════════════════════
 
-  router.get("/asset/deals", requireHuman, async (req, res) => {
+  router.get("/deal-setup/deals", requireHuman, async (req, res) => {
     try {
       const deals = await dealService.listDeals(pool, { user_id: req.human.id });
       res.json({ deals, count: deals.length });
     } catch (e) { fail(res, e); }
   });
 
-  router.post("/asset/deals", requireHuman, rejectBodyActor, async (req, res) => {
+  router.post("/deal-setup/deals", requireHuman, rejectBodyActor, async (req, res) => {
     try {
       const { deal_name, onboarding_type, organization_id } = req.body || {};
       const deal = await dealService.createDeal(pool, {
@@ -113,13 +154,13 @@ module.exports = function assetManagement({ pool, upload }) {
         deal_name,
         onboarding_type: onboarding_type || "existing_asset",
         requested_organization_id: organization_id || null,
-        creation_source: "asset_management_console",
+        creation_source: "deal_setup_console",
       });
       res.status(201).json({ deal, receipt: `Deal "${deal.deal_name}" created.` });
     } catch (e) { fail(res, e); }
   });
 
-  router.get("/asset/deals/:dealId", requireHuman, async (req, res) => {
+  router.get("/deal-setup/deals/:dealId", requireHuman, async (req, res) => {
     try {
       const out = await dealService.getDeal(pool, {
         user_id: req.human.id, deal_intake_id: req.params.dealId });
@@ -132,7 +173,7 @@ module.exports = function assetManagement({ pool, upload }) {
   //  Create a NEW property straight into the deal. The property itself is
   //  written by the Build 1A canonical service — this route does not
   //  insert into `properties` and must never learn how.
-  router.post("/asset/deals/:dealId/properties/new", requireHuman, rejectBodyActor, async (req, res) => {
+  router.post("/deal-setup/deals/:dealId/properties/new", requireHuman, rejectBodyActor, async (req, res) => {
     try {
       const scope = await dealService.resolveDealScope(pool, {
         user_id: req.human.id, deal_intake_id: req.params.dealId });
@@ -152,7 +193,7 @@ module.exports = function assetManagement({ pool, upload }) {
       const membership = await dealService.addProperty(pool, {
         user_id: req.human.id, deal_intake_id: req.params.dealId,
         property_id: created.property.id,
-        note: "Created from Asset Management while setting up this deal.",
+        note: "Created from Deal Setup while setting up this deal.",
       });
 
       res.status(201).json({ property: created.property, receipt: membership.receipt });
@@ -160,7 +201,7 @@ module.exports = function assetManagement({ pool, upload }) {
   });
 
   //  Attach a property that already exists.
-  router.post("/asset/deals/:dealId/properties", requireHuman, rejectBodyActor, async (req, res) => {
+  router.post("/deal-setup/deals/:dealId/properties", requireHuman, rejectBodyActor, async (req, res) => {
     try {
       const out = await dealService.addProperty(pool, {
         user_id: req.human.id, deal_intake_id: req.params.dealId,
@@ -169,7 +210,7 @@ module.exports = function assetManagement({ pool, upload }) {
     } catch (e) { fail(res, e); }
   });
 
-  router.delete("/asset/deals/:dealId/properties/:propertyId", requireHuman, async (req, res) => {
+  router.delete("/deal-setup/deals/:dealId/properties/:propertyId", requireHuman, async (req, res) => {
     try {
       const out = await dealService.releaseProperty(pool, {
         user_id: req.human.id, deal_intake_id: req.params.dealId,
@@ -181,7 +222,7 @@ module.exports = function assetManagement({ pool, upload }) {
   //  Properties this actor may add — their organization's, not already in
   //  a current deal. Scoped so a picker never leaks another client's
   //  portfolio.
-  router.get("/asset/deals/:dealId/available-properties", requireHuman, async (req, res) => {
+  router.get("/deal-setup/deals/:dealId/available-properties", requireHuman, async (req, res) => {
     try {
       const scope = await dealService.resolveDealScope(pool, {
         user_id: req.human.id, deal_intake_id: req.params.dealId });
@@ -206,7 +247,7 @@ module.exports = function assetManagement({ pool, upload }) {
   //  in step 2 — so the parser is not rewritten server-side merely to
   //  retain the source, and the source is retained anyway.
   const uploadOne = upload.single("file");
-  router.post("/asset/deals/:dealId/properties/:propertyId/source", requireHuman, (req, res, next) => {
+  router.post("/deal-setup/deals/:dealId/properties/:propertyId/source", requireHuman, (req, res, next) => {
     uploadOne(req, res, (err) => {
       if (err) {
         if (err.code === "LIMIT_FILE_SIZE") {
@@ -249,7 +290,7 @@ module.exports = function assetManagement({ pool, upload }) {
 
   //  Hand the exact bytes back. This is what makes retention meaningful:
   //  a position can produce the document that established it.
-  router.get("/asset/source/:artifactId/download", requireHuman, async (req, res) => {
+  router.get("/deal-setup/source/:artifactId/download", requireHuman, async (req, res) => {
     try {
       const a = await artifacts.read(pool, req.params.artifactId);
       if (!a) return res.status(404).json({ error: "not_found", receipt: "That file is not on record." });
@@ -281,7 +322,7 @@ module.exports = function assetManagement({ pool, upload }) {
 
   // ══ ACTIVATION ══════════════════════════════════════════════════════
 
-  router.post("/asset/deals/:dealId/properties/:propertyId/activation",
+  router.post("/deal-setup/deals/:dealId/properties/:propertyId/activation",
     requireHuman, rejectBodyActor, async (req, res) => {
     try {
       const out = await activation.openActivation(pool, {
@@ -293,7 +334,7 @@ module.exports = function assetManagement({ pool, upload }) {
   });
 
   //  STEP 2: the rows the app parsed, plus the artifact they came from.
-  router.post("/asset/activations/:activationId/read-source",
+  router.post("/deal-setup/activations/:activationId/read-source",
     requireHuman, rejectBodyActor, async (req, res) => {
     try {
       const act = (await pool.query("select * from activations where id=$1",
@@ -315,7 +356,7 @@ module.exports = function assetManagement({ pool, upload }) {
     } catch (e) { fail(res, e); }
   });
 
-  router.get("/asset/activations/:activationId", requireHuman, async (req, res) => {
+  router.get("/deal-setup/activations/:activationId", requireHuman, async (req, res) => {
     try {
       const out = await activation.readActivation(pool, {
         user_id: req.human.id, activation_id: req.params.activationId });
@@ -323,7 +364,7 @@ module.exports = function assetManagement({ pool, upload }) {
     } catch (e) { fail(res, e); }
   });
 
-  router.post("/asset/proposals/:proposedId/confirm", requireHuman, rejectBodyActor, async (req, res) => {
+  router.post("/deal-setup/proposals/:proposedId/confirm", requireHuman, rejectBodyActor, async (req, res) => {
     try {
       const out = await activation.confirmProposal(pool, {
         user_id: req.human.id, proposed_id: req.params.proposedId });
@@ -331,7 +372,7 @@ module.exports = function assetManagement({ pool, upload }) {
     } catch (e) { fail(res, e); }
   });
 
-  router.post("/asset/proposals/:proposedId/dismiss", requireHuman, rejectBodyActor, async (req, res) => {
+  router.post("/deal-setup/proposals/:proposedId/dismiss", requireHuman, rejectBodyActor, async (req, res) => {
     try {
       const out = await activation.rejectProposal(pool, {
         user_id: req.human.id, proposed_id: req.params.proposedId,
@@ -340,7 +381,7 @@ module.exports = function assetManagement({ pool, upload }) {
     } catch (e) { fail(res, e); }
   });
 
-  router.post("/asset/activations/:activationId/establish", requireHuman, rejectBodyActor, async (req, res) => {
+  router.post("/deal-setup/activations/:activationId/establish", requireHuman, rejectBodyActor, async (req, res) => {
     try {
       const out = await activation.establishOpeningPosition(pool, {
         user_id: req.human.id, activation_id: req.params.activationId });
@@ -352,7 +393,7 @@ module.exports = function assetManagement({ pool, upload }) {
   //  canonical state rather than restating it: the counts here are what
   //  was established, and `canonical_units`/`canonical_leases` are what is
   //  true now. Both are shown, because when they differ that IS the news.
-  router.get("/asset/properties/:propertyId/opening-position", requireHuman, async (req, res) => {
+  router.get("/deal-setup/properties/:propertyId/opening-position", requireHuman, async (req, res) => {
     try {
       const held = (await pool.query(
         `select intake_id from deal_intake_properties
@@ -365,19 +406,19 @@ module.exports = function assetManagement({ pool, upload }) {
 
       const position = (await pool.query(
         `select op.*, ib.source_file, ib.source_as_of_date as batch_as_of
-           from opening_positions op
+           from opening_tenancy_positions op
            left join import_batches ib on ib.id = op.import_batch_id
           where op.property_id = $1 and op.status = 'established'`,
         [req.params.propertyId])).rows[0] || null;
       if (!position) {
         return res.json({ established: false,
-          receipt: "No opening position has been established for this property yet." });
+          receipt: "Lease and occupancy have not been established for this property yet." });
       }
       const sources = (await pool.query(
         `select sa.id, sa.original_filename, sa.byte_size, sa.sha256, sa.uploaded_at, ops.role
-           from opening_position_sources ops
+           from opening_tenancy_position_sources ops
            join source_artifacts sa on sa.id = ops.source_artifact_id
-          where ops.opening_position_id = $1`, [position.id])).rows;
+          where ops.opening_tenancy_position_id = $1`, [position.id])).rows;
       const live = (await pool.query(
         `select
            (select count(*)::int from units u where u.property_id=$1) as canonical_units,
