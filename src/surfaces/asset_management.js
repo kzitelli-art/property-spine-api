@@ -460,7 +460,7 @@ module.exports = function assetManagement(deps) {
   const INSURANCE_POSITION = Object.freeze([
     { key: "coverage", label: "Coverage",
       awaiting: "Current coverage has not been established." },
-    { key: "annual_cost", label: "Property Insurance Cost",
+    { key: "annual_cost", label: "Annual Cost",
       awaiting: "Annual allocated economic cost is not established." },
     { key: "monthly_accrual", label: "Monthly Accrual",
       awaiting: "No expense has been recognised for this period." },
@@ -489,7 +489,7 @@ module.exports = function assetManagement(deps) {
       key: "economic_position",
       label: "Economic Position",
       truth: "economic",
-      blurb: "What insurance costs this property, and which period it belongs to.",
+      blurb: "What insurance costs this property and when it belongs.",
       reserved: ["Premium", "Taxes", "Fees", "Total program / policy cost",
                  "Property allocation", "Property-level economic cost",
                  "Coverage / economic period", "Monthly / period accrual"],
@@ -502,7 +502,7 @@ module.exports = function assetManagement(deps) {
       key: "cash_financing",
       label: "Cash & Financing",
       truth: "cash",
-      blurb: "What is actually paid, when, and through which path.",
+      blurb: "What is actually paid, when, and how.",
       reserved: ["Direct payment", "Lender escrow", "Premium financing",
                  "Finance company", "Down payment", "Financed amount",
                  "Installment count", "Installment amount",
@@ -556,6 +556,20 @@ module.exports = function assetManagement(deps) {
           awaiting: p.awaiting,
         })),
 
+        //  ── WHAT THE SURFACE RENDERS vs WHAT THIS CARRIES ──────────
+        //
+        //  The dashboard renders THREE things per section: label, blurb,
+        //  establishment. That is all an institutional operating surface
+        //  should say while a section is empty — an empty screen must feel
+        //  calm, not unfinished, and a card that explains why it is empty
+        //  five different ways feels like a specification rendered into a
+        //  product.
+        //
+        //  `reserved`, `layers`, `doctrine` and `awaiting` are the SPEC.
+        //  They stay in the response because the proofs assert against them
+        //  and because they are the record of what each section is for —
+        //  but no surface prints them, and a browser assertion enforces
+        //  that they never reappear on screen.
         sections: INSURANCE_SECTIONS.map((s) => ({
           key: s.key,
           label: s.label,
