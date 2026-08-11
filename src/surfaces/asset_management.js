@@ -169,6 +169,7 @@ module.exports = function assetManagement(deps) {
   const express = require("express");
   const router = express.Router();
   const staffSessions = require("../identity/staff_session_service");
+  const insurancePosition = require("../asset/insurance_position_read.js");
 
   const { pool } = deps || {};
   if (!pool) throw new Error("asset_management requires a pool");
@@ -533,65 +534,178 @@ module.exports = function assetManagement(deps) {
     }),
   ]);
 
+  //  Money is rendered by the SERVER, never by the browser. desks.js
+  //  states the rule for the other three doors — "the backend owns the
+  //  headline math; the front end renders labels" — and a currency
+  //  formatted two ways is two different numbers to a reader.
+  function money(cents, currency) {
+    if (cents === null || cents === undefined) return null;
+    const sign = cents < 0 ? "-" : "";
+    const whole = Math.floor(Math.abs(cents) / 100).toLocaleString("en-US");
+    const frac = String(Math.abs(cents) % 100).padStart(2, "0");
+    return `${sign}${currency === "USD" ? "$" : currency + " "}${whole}.${frac}`;
+  }
+
+  const COVERAGE_LABEL = Object.freeze({
+    property: "Property", general_liability: "General Liability",
+    umbrella_excess: "Umbrella / Excess", other: "Other",
+  });
+
+  function currentPeriod() {
+    const n = new Date();
+    return `${n.getUTCFullYear()}-${String(n.getUTCMonth() + 1).padStart(2, "0")}`;
+  }
+
   router.get("/operator/asset-management/insurance", ...gate, async (req, res) => {
+    const propertyId = req.operator.property_id;
+    //  A PREFERENCE, not authority. The browser may ask about a month; it
+    //  may not ask about a property.
+    const period = /^\d{4}-\d{2}$/.test(String(req.query && req.query.period || ""))
+      ? String(req.query.period) : currentPeriod();
+
+    let client;
     try {
-      //  Nothing is read from the database yet, and that is honest rather
-      //  than lazy: there is no insurance table anywhere in the schema, so
-      //  a query would be theatre. The moment governed insurance truth
-      //  exists this handler resolves it the way revenueEstablishment
-      //  already resolves leases — the shape does not change.
+      client = await pool.connect();
+      const position = await insurancePosition.readPosition(client, { property_id: propertyId, period });
+      const completeness = position.established
+        ? await insurancePosition.readCompleteness(client, { property_id: propertyId, period })
+        : [];
+      const history = position.established
+        ? await insurancePosition.readHistory(client, { property_id: propertyId })
+        : [];
+
+      const cur = position.currency_code;
+      const established = position.established;
+
+      //  ── THE POSITION STRIP ────────────────────────────────────────
+      //  Four slots fill from governed truth. PAYMENT stays unestablished
+      //  because financing is a different chain and is not built — and
+      //  saying so is the honest answer, not a gap in this one.
+      const VALUES = {
+        coverage: established ? `${position.coverages.length} active` : null,
+        annual_cost: money(position.annual_cost_cents, cur),
+        monthly_accrual: money(position.period_accrual_cents, cur),
+        next_renewal: position.next_renewal,
+        //  Deliberately null, permanently, while this slice stands.
+        //  Direct / escrowed / financed is a CASH fact and cash is a
+        //  different chain that this door cannot see.
+        payment: null,
+      };
+      //  Keys and labels come from INSURANCE_POSITION — the one place the
+      //  strip is defined. Building them inline here would have been a
+      //  second definition of the same five slots, drifting from the first
+      //  the moment either changed.
+      const positionCells = INSURANCE_POSITION.map((p) => ({
+        key: p.key, label: p.label,
+        value: VALUES[p.key] === undefined ? null : VALUES[p.key],
+      }));
+
+      //  ── COVERAGE STACK ────────────────────────────────────────────
+      const stackRows = position.coverages.map((c) => ({
+        coverage_id: c.coverage_id,
+        label: COVERAGE_LABEL[c.coverage_type] || c.coverage_type,
+        carrier: c.carrier_name,
+        program: c.program_name,
+        period: `${c.coverage_period_start} – ${c.coverage_period_end}`,
+        //  Shared vs individually insured is a READ of the allocation
+        //  graph, never a flag somebody sets: a coverage is shared when
+        //  more than one property is allocated to it.
+        participation: null,
+      }));
+      if (stackRows.length) {
+        const shared = await client.query(
+          `select coverage_id, count(distinct property_id)::int n
+             from insurance_property_allocations
+            where coverage_id = any($1::uuid[])
+              and not exists (select 1 from insurance_property_allocations s
+                               where s.supersedes_id = insurance_property_allocations.id)
+            group by coverage_id`,
+          [stackRows.map((r) => r.coverage_id)]);
+        const byCov = new Map(shared.rows.map((r) => [r.coverage_id, r.n]));
+        stackRows.forEach((r) => {
+          const n = byCov.get(r.coverage_id) || 1;
+          r.participation = n > 1 ? `Shared — ${n} properties` : "Individually insured";
+        });
+      }
+
+      //  ── ECONOMIC POSITION ─────────────────────────────────────────
+      //  stated and derived stay visibly different classes all the way to
+      //  the surface, and a derived row carries the model that made it.
+      const economicRows = position.coverages.map((c) => ({
+        coverage_id: c.coverage_id,
+        label: COVERAGE_LABEL[c.coverage_type] || c.coverage_type,
+        property_annual_cost: money(c.property_annual_cost_cents, c.currency_code),
+        monthly_accrual: money(c.property_monthly_accrual_cents, c.currency_code),
+        term_months: c.term_months,
+        allocation_class: c.allocation_class,
+        allocation_basis: c.allocation_basis,
+        basis_detail: c.basis_detail,
+        provenance_strength: c.provenance_strength,
+        effective_from: c.effective_from,
+        effective_to: c.effective_to,
+      }));
+
+      //  THE UNRESOLVED REMAINDER. Stated, never plugged.
+      const unreconciled = completeness.filter((c) => !c.reconciles).map((c) => ({
+        label: COVERAGE_LABEL[c.coverage_type] || c.coverage_type,
+        unallocated: money(c.unallocated_cents, cur),
+      }));
+
       return res.json({
-        property_id: req.operator.property_id,
+        property_id: propertyId,
         room: "property_obligations",
         compartment: "insurance",
         label: "Insurance",
-        establishment: "not_established",
+        period,
+        currency_code: cur,
+        establishment: established ? "partially_established" : "not_established",
+        //  Partially, always, while this slice stands: the economics are
+        //  real and the cash path is not built. Claiming "established"
+        //  would say Spine knows how this was paid for.
 
-        position: INSURANCE_POSITION.map((p) => ({
-          key: p.key,
-          label: p.label,
-          //  The reserved slot, explicitly empty. A surface that renders
-          //  this as "—" or "0" would be inventing a fact.
-          value: null,
-          awaiting: p.awaiting,
+        position: positionCells.map((p) => ({
+          key: p.key, label: p.label, value: p.value,
         })),
 
-        //  ── WHAT THE SURFACE RENDERS vs WHAT THIS CARRIES ──────────
-        //
-        //  The dashboard renders THREE things per section: label, blurb,
-        //  establishment. That is all an institutional operating surface
-        //  should say while a section is empty — an empty screen must feel
-        //  calm, not unfinished, and a card that explains why it is empty
-        //  five different ways feels like a specification rendered into a
-        //  product.
-        //
-        //  `reserved`, `layers`, `doctrine` and `awaiting` are the SPEC.
-        //  They stay in the response because the proofs assert against them
-        //  and because they are the record of what each section is for —
-        //  but no surface prints them, and a browser assertion enforces
-        //  that they never reappear on screen.
-        sections: INSURANCE_SECTIONS.map((s) => ({
-          key: s.key,
-          label: s.label,
-          //  Which of the four truths this section holds. Emitted so the
-          //  separation is legible to a reader who never saw the design
-          //  conversation — and so a later change that tried to merge two
-          //  sections would have to delete a declared boundary to do it.
-          truth: s.truth,
-          blurb: s.blurb,
-          establishment: "not_established",
-          awaiting: s.awaiting,
-          //  The permanent shape, named. This is what makes the empty
-          //  screen a skeleton rather than a placeholder: the operator can
-          //  see what will live here before anything does.
-          reserved: s.reserved,
-          ...(s.layers ? { layers: s.layers } : {}),
-          ...(s.doctrine ? { doctrine: s.doctrine } : {}),
-        })),
+        //  ROWS ARE MERGED INTO THE SPEC, not restated beside it.
+        //  `reserved` and `doctrine` live in INSURANCE_SECTIONS and are
+        //  still emitted: no surface prints them — a browser assertion
+        //  enforces that — but they are what says what a section will
+        //  hold, and Cash & Financing has nothing else to say it with
+        //  while its chain is unbuilt. Proofs and docs read them.
+        sections: INSURANCE_SECTIONS.map((sec) => {
+          const live = {
+            coverage_stack:     { rows: stackRows,
+                                  establishment: established ? "established" : "not_established" },
+            economic_position:  { rows: economicRows, unreconciled,
+                                  establishment: established ? "established" : "not_established" },
+            //  Unchanged, and correct.
+            cash_financing:     { rows: [], establishment: "not_established" },
+            //  Label the coverage type here, where COVERAGE_LABEL lives.
+            //  `general_liability` is a schema token and an operator
+            //  should never be shown one.
+            renewals_history:   { rows: history.map((h) => ({
+                                    ...h,
+                                    coverage_type: COVERAGE_LABEL[h.coverage_type] || h.coverage_type })),
+                                  establishment: history.length ? "established" : "not_established" },
+          }[sec.key] || { rows: [], establishment: "not_established" };
+
+          return {
+            key: sec.key, label: sec.label, truth: sec.truth, blurb: sec.blurb,
+            establishment: live.establishment,
+            reserved: sec.reserved,
+            ...(sec.layers ? { layers: sec.layers } : {}),
+            ...(sec.doctrine ? { doctrine: sec.doctrine } : {}),
+            rows: live.rows,
+            ...(live.unreconciled ? { unreconciled: live.unreconciled } : {}),
+          };
+        }),
       });
     } catch (e) {
       console.error("operator/asset-management/insurance error", e);
       return res.status(503).json({ error: "insurance compartment unavailable" });
+    } finally {
+      if (client) client.release();
     }
   });
 
