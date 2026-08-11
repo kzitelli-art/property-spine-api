@@ -212,6 +212,41 @@ async function main() {
        /licen[cs]e/i.test(po.why) && /(renewal|filing|due)/i.test(po.why),
        po.why);
 
+    //  THE CARD'S EYEBROW MAY BE SHORTER THAN covers. IT MAY NOT DISAGREE.
+    //  The home card drops the "other / catch-all" tail for density; if it
+    //  ever advertised something the room does not claim to hold, the desk
+    //  would be promising a capability that has no room behind it.
+    //  The rule is ABBREVIATE, NEVER INVENT. "Repairs" on the card is the
+    //  same item as "Repairs / other" in the room, so exact membership was
+    //  the wrong test — it would have forced the card to carry the room's
+    //  full catch-all wording. A prefix match still refuses an eyebrow
+    //  entry that has no room item behind it, which is the actual risk.
+    ok("every eyebrow entry abbreviates a real covers entry — never invents one",
+       rooms.every((r) => (r.eyebrow || []).every((e) =>
+         (r.covers || []).some((c) => c === e || c.startsWith(e)))),
+       JSON.stringify(rooms.map((r) => ({ k: r.key, e: r.eyebrow, c: r.covers }))));
+
+    console.log("\n── 2b. HOME CARD vs ROOM — PROGRESSIVE DISCLOSURE ────");
+    //  The presentation ruling, pinned. The home is a desk; the setup
+    //  guidance lives inside the room after a click. An earlier revision
+    //  put the full explanation on every card and the desk read like an
+    //  audit page, with the four-room hierarchy buried underneath it.
+    ok("every room carries a SHORT establishment_summary for the card",
+       rooms.every((r) => typeof r.establishment_summary === "string"
+                          && r.establishment_summary.length > 10));
+    ok("every room carries a one-line `belongs` describing what goes there",
+       rooms.every((r) => typeof r.belongs === "string" && r.belongs.length > 10));
+    ok("the card summary is materially SHORTER than the room explanation",
+       rooms.every((r) => r.establishment_summary.length < r.why.length),
+       JSON.stringify(rooms.map((r) => [r.key, r.establishment_summary.length, r.why.length])));
+    //  The specific leak this guards: the card must not quietly become the
+    //  room by carrying the setup guidance forward into it.
+    ok("no card summary contains the room's 'what would establish it' text",
+       rooms.every((r) => !r.establishment_summary.includes(r.what_would_establish_it)));
+    ok("no card summary mentions source documents — that belongs in the room",
+       rooms.every((r) => !/Deal Setup|loan document|tax bill|certificate/i.test(r.establishment_summary)),
+       JSON.stringify(rooms.map((r) => r.establishment_summary)));
+
     console.log("\n── 3. ESTABLISHMENT IS READ FROM REAL DATA ───────────");
 
     const byKey = (k) => rooms.find((r) => r.key === k);

@@ -60,16 +60,30 @@
 
 //  The four rooms. Sub-labels may evolve; the four-part structure is the
 //  product direction and is stated in CLAUDE.md.
+//  TWO LISTS, AND THEY ARE NOT THE SAME JOB.
+//
+//    covers   the CANONICAL structural list — what the room holds. It is a
+//             product ruling and is pinned by name in the proof.
+//    eyebrow  the DISPLAY list on the home card, which is a dense one-line
+//             context strip and drops the "other / catch-all" tail.
+//
+//  They are allowed to differ in length. They are NOT allowed to disagree:
+//  a proof asserts every eyebrow entry is a member of covers, so the card
+//  can never advertise something the room does not claim to hold.
 const ROOMS = Object.freeze([
   Object.freeze({
     key: "revenue",
     label: "Revenue",
     covers: ["Rent", "Vacancy", "Concessions", "Other Income"],
+    eyebrow: ["Rent", "Vacancy", "Concessions", "Other Income"],
+    belongs: "What this property earns, and what it fails to earn.",
   }),
   Object.freeze({
     key: "capital",
     label: "Capital",
     covers: ["Senior Debt", "Mezzanine Debt", "Preferred Equity", "Reserves / Escrows"],
+    eyebrow: ["Senior Debt", "Mezzanine Debt", "Preferred Equity", "Reserves / Escrows"],
+    belongs: "How the property is financed, and what that structure costs.",
   }),
   //  PROPERTY OBLIGATIONS is the widest of the four, and deliberately so:
   //  it eventually holds everything the asset must maintain simply because
@@ -88,11 +102,15 @@ const ROOMS = Object.freeze([
     key: "property_obligations",
     label: "Property Obligations",
     covers: ["Taxes", "Insurance", "Licenses & Registrations", "Compliance", "Other fixed / recurring"],
+    eyebrow: ["Taxes", "Insurance", "Licenses & Registrations", "Compliance"],
+    belongs: "The recurring obligations required to own and operate this property.",
   }),
   Object.freeze({
     key: "operating_costs",
     label: "Operating Costs",
     covers: ["Payroll", "Management Fees", "Utilities", "Contracts", "Repairs / other"],
+    eyebrow: ["Payroll", "Management Fees", "Utilities", "Contracts", "Repairs"],
+    belongs: "What it costs to run the property day to day.",
   }),
 ]);
 
@@ -180,6 +198,11 @@ module.exports = function assetManagement(deps) {
     if (positioned === 0) {
       return {
         state: "not_established",
+        //  SHORT — the home card. One line, no machinery. It must stay
+        //  shorter than the room's own explanation below; a card line that
+        //  outgrows the room is the card quietly becoming the room again.
+        summary: "No revenue economics are established yet.",
+        //  LONG — inside the room, where it becomes setup guidance.
         //  An honest zero, and it says WHICH zero: no leases at all is a
         //  different situation from leases that carry no economics.
         why: total === 0
@@ -199,6 +222,9 @@ module.exports = function assetManagement(deps) {
     const subject = positioned === 1 ? "1 active lease carries" : `${positioned} active leases carry`;
     return {
       state: "partially_established",
+      //  SHORT — the home card. Says what IS available and what is not, in
+      //  one breath, with no counts and no machinery.
+      summary: "Base rent is available from current leases. Additional revenue economics are not yet established.",
       why: `${subject} a rent amount and a term, so a flat monthly rent position is real. Rent escalations and recurring charges (parking, pet, utilities billed to residents) are not represented anywhere yet, so this room cannot yet state a complete revenue position.`,
       establishes: "Rent escalation schedules and a recurring-charge model.",
     };
@@ -207,14 +233,24 @@ module.exports = function assetManagement(deps) {
   //  The three rooms with no primitives at all. Their text is the Exposure
   //  contract, not an apology: what this is about, why Spine cannot stand
   //  behind it, what would establish it.
+  //  Each carries BOTH a one-line `summary` for the home card and the long
+  //  `why` / `establishes` for inside the room.
+  //
+  //  The split is the point. Putting the full explanation on the home card
+  //  turned the desk into an audit page — four stacked essays of equal
+  //  weight, with the hierarchy buried underneath them. The operator should
+  //  read four room names in three seconds; the setup guidance is useful
+  //  only once they have chosen a room, and that is where it now lives.
   const UNBUILT = Object.freeze({
     capital: {
       state: "not_established",
+      summary: "No debt, equity or reserve terms are established for this property.",
       why: "Spine holds no debt, equity or reserve instruments for this property. Loan documents may have been retained during Deal Setup, but no economic terms have been read out of them, so there is nothing to stand behind.",
       establishes: "Governed debt and equity terms — principal, rate, accrual basis, payment schedule — read from the loan documents.",
     },
     property_obligations: {
       state: "not_established",
+      summary: "No tax, insurance, licence or compliance obligations are established for this property.",
       //  The sentence has to cover the whole room, not the two examples
       //  that are easiest to name. A room whose sub-labels promise
       //  licences and compliance while its copy only mentions tax and
@@ -224,6 +260,7 @@ module.exports = function assetManagement(deps) {
     },
     operating_costs: {
       state: "not_established",
+      summary: "No payroll, fee, utility or contract terms are established for this property.",
       why: "Spine holds no payroll allocations, management-fee terms, utility accounts or service contracts for this property.",
       establishes: "Governed recurring operating terms read from the management agreement, contracts and operating setup.",
     },
@@ -247,6 +284,18 @@ module.exports = function assetManagement(deps) {
           label: room.label,
           covers: room.covers,
           establishment: found.state,
+
+          // ── THE HOME CARD READS THESE THREE, AND NOTHING ELSE ────────
+          eyebrow: room.eyebrow,
+          belongs: room.belongs,
+          //  One line. The card says whether the room is established and
+          //  in one breath what that means — never the full account of
+          //  what is missing.
+          establishment_summary: found.summary,
+
+          // ── THE ROOM READS THESE, AFTER A CLICK ─────────────────────
+          //  Progressive disclosure: this is setup guidance, and it is
+          //  only useful once someone has chosen a room to work in.
           //  Plain English, operator-facing. Never a status word, never an
           //  id, never a table name.
           why: found.why,
