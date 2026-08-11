@@ -30,6 +30,37 @@ Merging it and letting an ordinary deploy discover 160/161 is exactly the
 failure that cost days on 159. Merge is not release, and the deploy after the
 merge will fail until the release is done deliberately.
 
+### ⚠ THE MERGE/DEPLOY RACE — DECIDE THIS BEFORE MERGING #92
+
+**API auto-deploy is ON. APP auto-deploy is OFF.** Opposite postures, verified:
+`CLAUDE.md:319`, `docs/deployment.md:7`, and this file at the 2026-08-05
+section. The sequence depends on both and the asymmetry is easy to get wrong.
+
+So **merging #92 will immediately trigger a normal boot with 160/161 pending**,
+`prestart` will refuse, and that is the 159 pattern recreated on purpose.
+
+**The wrinkle: `EXPECTED_SHA` cannot be known until the merge commit exists**,
+so the release cannot be armed in advance. Two workable paths:
+
+```text
+A · PAUSE AUTO-DEPLOY  (recommended — no red deploy in the history)
+   suspend auto-deploy → merge #92 → read the merged SHA
+   → set the three env vars → MANUAL deploy (this is the release boot)
+   → delete MIGRATION_RELEASE → resume auto-deploy
+
+B · LET THE FIRST DEPLOY FAIL  (proven, and it is what happened with 159)
+   merge → the auto-deploy fails, harmlessly: Render keeps the previous
+   instance live → set the three env vars with the now-known SHA
+   → redeploy (the release boot) → delete MIGRATION_RELEASE
+```
+
+**B is not dangerous; it is what just worked.** The damage 159 did came from the
+failure sitting *unnoticed for days*, not from the failure itself. B is only
+safe if the release is armed immediately after. A avoids the window entirely.
+
+**Either way, the migration-release boot must be the FIRST boot of the merged
+SHA that is allowed to succeed.**
+
 ```text
 1  review only  ⚠ THERE IS NO CI. Neither repo has a .github/workflows/
                  file — measured, not assumed. No green check is coming and
@@ -80,6 +111,20 @@ authenticated surface proven
 ```
 
 State the rung reached. Do not round up.
+
+### 📌 PERMANENT INFRASTRUCTURE DEBT — NO PR CI
+
+**Neither repo has PR CI.** No `.github/workflows/` in either. Release evidence
+therefore depends on **locally run gates** — `npm run verify`, the `.db.js`
+proofs and the browser proofs — executed by whoever prepared the change, on
+their own machine, and reported in the PR body.
+
+That is a real dependency on discipline rather than on machinery, and it is
+worth naming as debt rather than leaving as an unremarked absence. It is also
+the reason a PR here shows no green check and never will.
+
+**Do NOT fix this inside a release.** Adding CI mid-release changes what
+"proven" means in the middle of proving something. It is its own slice.
 
 ### ⚠ OPEN RELEASE ITEM — THE PRODUCTION SURFACE IS NOT CONFIRMED
 
