@@ -30,83 +30,166 @@ Merging it and letting an ordinary deploy discover 160/161 is exactly the
 failure that cost days on 159. Merge is not release, and the deploy after the
 merge will fail until the release is done deliberately.
 
-### ⚠ THE MERGE/DEPLOY RACE — DECIDE THIS BEFORE MERGING #92
+### ⚖ RELEASE RULING — PATH A. PAUSE API AUTO-DEPLOY.
+
+**Ruled 2026-08-11. This is decided; do not re-litigate it at the console.**
+
+> Use Path A — pause API auto-deploy. There is no reason to deliberately
+> manufacture a red production deploy just because Path B worked for 159.
+
+**Path B is recorded below as rejected, not as an alternative.** It works, and
+it is what happened with 159, and that is not a reason to choose it. A failed
+production deploy in the history is a real cost: it teaches whoever reads the
+deploy log next that a red deploy here is normal. It is not.
+
+```text
+B · REJECTED — let the first auto-deploy fail, then arm the release
+    merge → auto-deploy fails (harmless: Render keeps the previous instance
+    live) → set the env vars with the now-known SHA → redeploy → delete
+    MIGRATION_RELEASE
+    Rejected because it manufactures a red deploy we can simply avoid.
+```
+
+### ⚠ THE RACE THIS AVOIDS
 
 **API auto-deploy is ON. APP auto-deploy is OFF.** Opposite postures, verified:
 `CLAUDE.md:319`, `docs/deployment.md:7`, and this file at the 2026-08-05
 section. The sequence depends on both and the asymmetry is easy to get wrong.
 
-So **merging #92 will immediately trigger a normal boot with 160/161 pending**,
-`prestart` will refuse, and that is the 159 pattern recreated on purpose.
+Left alone, **merging #92 immediately triggers a normal boot with 160/161
+pending**, `prestart` refuses, and that is the 159 pattern recreated on purpose.
+Pausing auto-deploy first is what removes the race — not care, not speed.
 
-**The wrinkle: `EXPECTED_SHA` cannot be known until the merge commit exists**,
-so the release cannot be armed in advance. Two workable paths:
+**The wrinkle Path A is built around: `EXPECTED_SHA` cannot be known until the
+merge commit exists**, so the release cannot be armed in advance. Pausing
+auto-deploy buys exactly the window needed to read the SHA and arm it.
+
+**The invariant, whatever happens: the migration-release boot must be the FIRST
+boot of the merged SHA that is allowed to succeed.**
+
+### 🔴 THE POST-MERGE SHA IS THE RELEASE AUTHORITY — NOT THE PR HEAD
+
+**Be obsessive about this one.** `EXPECTED_SHA` must be the SHA that is
+**actually deployed**, which is the commit on `main` after the merge.
 
 ```text
-A · PAUSE AUTO-DEPLOY  (recommended — no red deploy in the history)
-   suspend auto-deploy → merge #92 → read the merged SHA
-   → set the three env vars → MANUAL deploy (this is the release boot)
-   → delete MIGRATION_RELEASE → resume auto-deploy
-
-B · LET THE FIRST DEPLOY FAIL  (proven, and it is what happened with 159)
-   merge → the auto-deploy fails, harmlessly: Render keeps the previous
-   instance live → set the three env vars with the now-known SHA
-   → redeploy (the release boot) → delete MIGRATION_RELEASE
+6fcbb13   PR #92 head.  NOT automatically the release authority.
+<merge>   the resulting main SHA.  THIS is EXPECTED_SHA.
 ```
 
-**B is not dangerous; it is what just worked.** The damage 159 did came from the
-failure sitting *unnoticed for days*, not from the failure itself. B is only
-safe if the release is armed immediately after. A avoids the window entirely.
+A merge commit is a **new commit** — a squash or a merge-commit strategy both
+produce a SHA that is not the PR head. They coincide only under fast-forward,
+and coinciding by luck is not the same as being correct. **Read the SHA off
+`main` after merging. Do not carry the PR-head SHA forward on the assumption
+that it is the same.**
 
-**Either way, the migration-release boot must be the FIRST boot of the merged
-SHA that is allowed to succeed.**
+`EXPECTED_SHA` exists precisely so the release cannot be run against a tree
+different from the one being released. Feeding it a guess disarms the only
+guard that catches that.
+
+### THE SEQUENCE — API #92, PATH A
 
 ```text
-1  review only  ⚠ THERE IS NO CI. Neither repo has a .github/workflows/
+0  review only  ⚠ THERE IS NO CI. Neither repo has a .github/workflows/
                  file — measured, not assumed. No green check is coming and
                  nothing re-runs the gates on a PR. The suite results in the
                  PR bodies are the evidence, produced locally on the merged
                  trees.
 
-2  PREPARE, before merging
-     · read the production ledger — expected prior ceiling 159
-     · confirm the exact API SHA that will be deployed
-     · confirm 160 and 161 are the ONLY pending files
-       ✓ VERIFIED IN SOURCE: the PR head carries exactly
-         160_asset_management_module.sql and
-         161_insurance_economic_truth.sql above 159, and main carries
-         nothing above 159. Re-confirm against production at the time.
+1  PAUSE API auto-deploy.
 
-3  merge API #92
+2  RECONFIRM the production ledger:
+       ceiling = 159
+       both directions clean  (file → ledger, ledger → file)
 
-4  RELEASE 160 + 161 deliberately, via the migration-release boot path
-     MIGRATION_RELEASE=1
-     EXPECTED_LEDGER_CEILING=159
-     EXPECTED_SHA=<the exact deployed SHA>
-     …then DELETE MIGRATION_RELEASE.
-     Receipt must show the new ceiling and both-direction reconciliation.
+3  MERGE API PR #92.
 
-5  prove the API surface against production
+4  READ the actual resulting `main` SHA after the merge.
+     Do NOT use the PR-head SHA unless it is literally the deployed commit.
+     See the section above — this is the step that is easiest to fumble.
 
-6  merge APP #52 and DEPLOY THE APP MANUALLY — app auto-deploy is OFF
+5  CONFIRM the merged tree has exactly these pending migrations:
+       160
+       161
+     ✓ VERIFIED IN SOURCE: the PR head carries exactly
+       160_asset_management_module.sql and 161_insurance_economic_truth.sql
+       above 159, and main carries nothing above 159. Re-confirm against
+       production at the time — a release applies EVERY pending file and
+       there is no per-file selection.
 
-7  authenticated production browser checks
-     · established Deal Setup property renders "Lease & occupancy established"
-     · unestablished property still renders unestablished
-     · Asset Management appears ONLY for an explicitly entitled user/property
-     · Insurance opens and shows the governed economic position
-     · Cash & Financing remains honestly unestablished
+6  SET:
+       MIGRATION_RELEASE=1
+       EXPECTED_LEDGER_CEILING=159
+       EXPECTED_SHA=<actual merged main SHA from step 4>
+
+7  MANUALLY DEPLOY that exact SHA.
+     ← this deploy IS the migration-release boot.
+
+8  CAPTURE the receipt:
+       160 applied
+       161 applied
+       new ledger ceiling = 161
+       file → ledger clean
+       ledger → file clean
+       running SHA = expected SHA
+
+9  REMOVE MIGRATION_RELEASE.
+
+10 NORMAL boot / redeploy. Confirm the service starts cleanly with no
+     pending migration.
+
+11 RESUME API auto-deploy.
+
+── prove the API before touching the app ──────────────────────────────
+
+    Confirm the new Asset Management / Insurance reads behave against
+    production, and that entitlement still FAILS CLOSED where the module
+    is not granted. Only then continue.
+
+12 MERGE APP #52.
+
+13 MANUALLY DEPLOY the app — app auto-deploy is OFF.
+
+14 RUN the authenticated browser pass.
 ```
 
-### THREE STATUSES, NEVER COLLAPSED INTO ONE
-
-**"PR merged", "migration released" and "surface proven" are three different
-facts.** Recording them as one is how a merge comes to be read as a shipped
-feature — and this repo has already paid for a deploy that looked healthy while
-serving older code.
+### THE BROWSER PASS CLOSES BOTH OLD AND NEW OPEN ITEMS
 
 ```text
-source merged  →  schema released  →  API proven  →  app deployed  →
+OLD (159, still open)
+  · established Deal Setup position → "Lease & occupancy established"
+  · genuinely unestablished position → remains unestablished
+
+NEW (160/161)
+  · Asset Management appears ONLY for explicitly entitled staff/property
+  · Insurance opens correctly
+  · governed Insurance economic truth renders where established
+  · Cash & Financing remains honestly unestablished
+```
+
+**No new product work until that chain is complete.**
+
+### PR-HEAD STATE AT THE TIME OF THIS RULING
+
+```text
+API #92   6fcbb13   awaiting merge / release
+APP #52   0a4ec39   waits behind the API
+```
+
+### THE RUNGS ARE SEPARATE STATUSES, NEVER COLLAPSED INTO ONE
+
+**"PR merged", "migration released" and "surface proven" are different facts.**
+Recording them as one is how a merge comes to be read as a shipped feature —
+and this repo has already paid for a deploy that looked healthy while serving
+older code.
+
+**Record each rung separately.** Five, not one:
+
+```text
+source merged
+schema released
+API production proven
+app deployed
 authenticated surface proven
 ```
 
