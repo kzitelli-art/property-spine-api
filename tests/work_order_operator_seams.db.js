@@ -255,7 +255,14 @@ const findWo = (rows, id) => (rows || []).find((r) => r.work_order.id === id) ||
        && acc.accepted_at !== null && acc.status !== "open",
        JSON.stringify({ acc: acc.accepted_by_user_id, asg: acc.assigned_user_id, st: acc.status }));
 
-    const evt = (await pool.query("select * from events where type='work_accepted'")).rows;
+    //  Scoped to this work order for the same reason E9 is — `events` has no
+    //  work_order_id column, so an unscoped count is a count of every run the
+    //  harness database has ever seen, and "exactly one" stops meaning
+    //  "accepted once" the second time anybody runs it.
+    const evt = (await pool.query(
+      `select * from events
+        where type='work_accepted'
+          and (note::jsonb ->> 'work_order_id') = $1`, [s.woA])).rows;
     ok("D4  an immutable acceptance event exists", evt.length === 1, String(evt.length));
 
     const afterTake = await req("GET", "/operator/work-orders/status", s.tok.kz);
@@ -315,7 +322,17 @@ const findWo = (rows, id) => (rows || []).find((r) => r.work_order.id === id) ||
        follow.length === 1 && follow[0].assigned_role === "maintenance" && follow[0].status === "open",
        JSON.stringify(follow.map((f) => ({ t: f.type, r: f.assigned_role, s: f.status }))));
 
-    const stallEvt = (await pool.query("select * from events where type='maintenance_followup'")).rows;
+    //  SCOPED TO THIS WORK ORDER, not to the type. `events` has no
+    //  work_order_id column — the id lives in the JSON note — and an
+    //  unscoped `where type='maintenance_followup'` counts every stall any
+    //  earlier run left behind. It read as a product failure once, on a
+    //  harness database that had simply been used twice: E9 saw two rows,
+    //  and E10/F4 then compared against the OLDER one. A count is a claim
+    //  about a search, so the search names the row it means.
+    const stallEvt = (await pool.query(
+      `select * from events
+        where type='maintenance_followup'
+          and (note::jsonb ->> 'work_order_id') = $1`, [s.woA])).rows;
     ok("E9  an immutable event records what was reported, and by whom",
        stallEvt.length === 1
        && JSON.parse(stallEvt[0].note).reason === "need_part"
