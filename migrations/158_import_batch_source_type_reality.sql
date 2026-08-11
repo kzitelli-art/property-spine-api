@@ -1,42 +1,49 @@
 -- ════════════════════════════════════════════════════════════════════
---  158 — THE SOURCE TYPE THE IMPORTER HAS ALWAYS WRITTEN
+--  158 — THE SOURCE TYPES import_batches ACTUALLY CONTAINS
 --
 --  Migration 046 created `import_batches` with:
 --      check (source_type in ('historical_snapshot','live','demo'))
 --
---  `loadLedgerSnapshot` — reached from `POST /operator/rent-roll/import`,
---  the canonical signed-in rent-roll importer — writes:
---      insert into import_batches (… source_type …) values ($1,'rent_roll_ledger',…)
+--  Production holds `rent_roll_ledger` and `rent_roll_reconciliation`,
+--  neither of which that CHECK permits. Both are written by shipped code.
 --
---  and `readLatestSnapshot` reads back:
---      where source_type in ('rent_roll_ledger','historical_snapshot')
+--  ── THIS FILE'S FIRST VERSION WAS WRONG, IN THE HOUSE WAY ───────────
+--  It widened the list to `rent_roll_ledger` and said, in its own header,
+--  "widened to what the code actually writes, and no further." That was a
+--  claim about a SEARCH, not about the code: one writer was read
+--  (`loadLedgerSnapshot`) and the others were not. It reached production,
+--  and the release refused:
 --
---  No migration has ever permitted that value. Found by building the
---  schema from the migration files and running the importer against it:
---      new row for relation "import_batches" violates check constraint
---      "import_batches_source_type_check"
+--      ✗ FAILED — rolled back. Nothing from this file was applied.
+--        check constraint "import_batches_source_type_check" of relation
+--        "import_batches" is violated by some row
 --
---  ── WHAT THIS MEANS, STATED HONESTLY ────────────────────────────────
---  Against a schema built from this repository, the canonical signed-in
---  rent-roll import CANNOT SUCCEED. Two readings are possible and this
---  migration is correct under both:
+--  The row was `rent_roll_reconciliation`, written by `loadReconciliation`
+--  in the SAME FILE as the writer that was read, ~260 lines further down.
 --
---    · production's constraint was widened by hand, outside the ledger —
---      in which case the ledger has been lying about the schema, and this
---      makes it true. `drop constraint if exists` makes that safe.
---    · the route has never actually run in production — in which case
---      nothing is being fixed retroactively and this simply lets it work.
+--  So this version states its scope. Every `insert into import_batches`
+--  in the repository, excluding node_modules, including the root:
 --
---  Which one it is, is answerable in one query and worth answering:
---      select source_type, count(*) from import_batches group by 1;
+--      src/shared/snapshot_loader.js:272   'historical_snapshot'
+--      src/shared/snapshot_loader.js:595   'rent_roll_ledger'
+--      src/shared/snapshot_loader.js:857   'rent_roll_reconciliation'
+--      src/shared/seed_snapshot.js:97      'historical_snapshot'
+--
+--  And what production actually contains, measured before writing this:
+--
+--      rent_roll_reconciliation   1
+--      historical_snapshot        3
+--
+--  `tests/deal_activation_opening_position.db.js` now asserts that every
+--  value any writer produces is permitted here — so the next writer that
+--  invents a value fails a proof instead of a production release.
 --
 --  ── WHY THE CHECK IS KEPT AT ALL ────────────────────────────────────
---  Dropping it would be the easy move and the wrong one: the column
---  decides which batches the operator rent roll reads, so an unconstrained
---  value is a batch that silently never appears on anyone's screen. The
---  vocabulary is widened to what the code actually writes, and no further.
+--  Dropping it would be the easy move and the wrong one: this column
+--  decides which batches the operator rent roll reads, so an
+--  unconstrained value is a batch that silently never reaches a screen.
 --
---  CLASSIFICATION: Class 1. Constraint widened; no data changes.
+--  CLASSIFICATION: Class 1. Constraint corrected; no data changes.
 -- ════════════════════════════════════════════════════════════════════
 
 alter table import_batches
@@ -44,11 +51,23 @@ alter table import_batches
 
 alter table import_batches
   add constraint import_batches_source_type_check check (source_type in (
-    --  A dated rent-roll ledger import. What the canonical signed-in
-    --  importer and Asset Management activation both write.
+    --  A dated rent-roll ledger import. Written by loadLedgerSnapshot,
+    --  reached from POST /operator/rent-roll/import and from Asset
+    --  Management activation. Read back by readLatestSnapshot.
     'rent_roll_ledger',
+
+    --  A reconciled unit timeline. Written by loadReconciliation, reached
+    --  from the same route's reconciliation branch. Read back by
+    --  readLatestReconciliation — which is why it is NOT in
+    --  readLatestSnapshot's batch filter and must not be added to it.
+    'rent_roll_reconciliation',
+
     --  A point-in-time snapshot reconstructed from a reporting package.
     'historical_snapshot',
-    --  Reserved by 046 and still unused by any writer in this repository.
+
+    --  Reserved by migration 046 and still produced by no writer in this
+    --  repository. Kept because removing a value the schema has always
+    --  permitted is a NARROWING, and narrowing is how a migration breaks
+    --  a caller nobody looked for.
     'live',
     'demo'));

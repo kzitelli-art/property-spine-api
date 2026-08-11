@@ -75,6 +75,11 @@
       F7  re-establishing SUPERSEDES rather than duplicating
       F8  only one established position per property exists at a time
 
+   H  THE CONSTRAINT SCANS WHAT THE CODE WRITES
+      H1  every source_type any writer produces is permitted by the CHECK
+          — read from the SOURCE, whole repo, because 158's first version
+          claimed this after reading one writer and was wrong in production
+
    G  THE WHOLE CHAIN, WALKED IN SQL
       G1  file → source row → proposal → decision → lease, in one join
       G2  the position reaches its artifact through the batch
@@ -172,7 +177,7 @@ function parseCsvLikeTheApp(text) {
 }
 
 (async () => {
-  receipt.begin(__filename, { url: URL, expected: 67 });
+  receipt.begin(__filename, { url: URL, expected: 68 });
 
   // ── fixtures ───────────────────────────────────────────────────────
   const orgA = (await pool.query(
@@ -594,6 +599,66 @@ function parseCsvLikeTheApp(text) {
     [propA.id])).rows[0].c;
   ok("F8  exactly one established position per property", currentCount === 1, `found ${currentCount}`);
 
+  console.log("\n── H · THE CONSTRAINT SCANS WHAT THE CODE WRITES ───────────");
+
+  //  ── WHY THIS ASSERTION EXISTS ─────────────────────────────────────
+  //  Migration 158's first version widened import_batches.source_type to
+  //  "what the code actually writes" after reading ONE writer. It reached
+  //  production and the release refused: a second writer, 260 lines below
+  //  the first IN THE SAME FILE, produces 'rent_roll_reconciliation'.
+  //
+  //  A CHECK constraint is a claim about every writer. So this reads the
+  //  SOURCE — every `insert into import_batches` in the repo — and proves
+  //  the constraint permits each literal it finds. The next writer that
+  //  invents a value fails here instead of in a production release.
+  const fs = require("fs");
+  const pathMod = require("path");
+  const SRC = pathMod.join(__dirname, "..");
+  const scanned = [];
+  (function walk(dir) {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === "node_modules" || e.name === ".git") continue;
+      const full = pathMod.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.name.endsWith(".js")) scanned.push(full);
+    }
+  })(SRC);
+
+  const written = new Set();
+  for (const file of scanned) {
+    const text = fs.readFileSync(file, "utf8");
+    //  Look at the VALUES clause that follows each insert, which is where
+    //  the literal sits. A window rather than a line, because the insert
+    //  and its values are routinely several lines apart.
+    let i = -1;
+    while ((i = text.indexOf("insert into import_batches", i + 1)) !== -1) {
+      const window = text.slice(i, i + 600);
+      const values = window.slice(window.indexOf("values"));
+      for (const m of values.matchAll(/'([a-z_]{4,})'/g)) {
+        //  Only the first literal after `values` that looks like a
+        //  source_type: the column order in every writer is
+        //  (property_id, source_type, ...), so it is the first quoted
+        //  string in the tuple.
+        written.add(m[1]);
+        break;
+      }
+    }
+  }
+
+  const permitted = new Set(
+    ((await pool.query(
+      `select pg_get_constraintdef(oid) as def from pg_constraint
+        where conname = 'import_batches_source_type_check'`)).rows[0] || {}).def
+      ?.match(/'([a-z_]+)'/g)?.map((x) => x.replace(/'/g, "")) || []);
+
+  const missing = [...written].filter((w) => !permitted.has(w));
+  ok(`H1  every source_type any writer produces is permitted by the CHECK ` +
+     `(scanned ${scanned.length} .js files, whole repo incl. root)`,
+     written.size > 0 && missing.length === 0,
+     `writers produce: ${[...written].sort().join(", ")}\n        ` +
+     `constraint permits: ${[...permitted].sort().join(", ")}\n        ` +
+     `NOT PERMITTED: ${missing.join(", ") || "(none)"}`);
+
   console.log("\n── G · THE WHOLE CHAIN ─────────────────────────────────────");
 
   const chain = (await pool.query(
@@ -622,7 +687,7 @@ function parseCsvLikeTheApp(text) {
       where op.id = $1`, [second.opening_position.id])).rows;
   ok("G2  the position reaches its source file through the batch", reach.length === 1);
 
-  receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 60 });
+  receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 61 });
   await pool.end();
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
