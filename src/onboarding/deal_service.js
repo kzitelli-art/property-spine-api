@@ -164,6 +164,52 @@ async function resolveDealScope(db, { user_id, deal_intake_id } = {}) {
   return { ok: true, deal, actor: u, authority_basis: `platform_role:${role}` };
 }
 
+/*  ── organizationsForActor ─────────────────────────────────────────
+ *  Which clients may this actor open a deal for?
+ *
+ *  This exists because the authority rule and the FORM disagreed. A
+ *  super_admin spans every organization, so `resolveCreationScope`
+ *  correctly refuses to guess and demands one be NAMED — and the Deal
+ *  Setup form had no way to name one. The refusal was right and the
+ *  surface made it unanswerable: "Name the organization" with no field.
+ *
+ *  A refusal a user cannot act on is a dead end, and dead ends are the
+ *  thing the refusal vocabulary exists to prevent. So the surface asks
+ *  the server what it may choose between, and the server answers with
+ *  the same rule it will enforce on the write.
+ *
+ *  `must_choose` is the server's answer to "do I need to show a picker",
+ *  so the app never re-derives an authority rule from a platform_role it
+ *  read off a session. */
+async function organizationsForActor(db, { user_id } = {}) {
+  if (!user_id) throw refusal(401, "no_authenticated_actor", "Sign in to open a deal.");
+  const u = (await db.query(
+    `select id, platform_role, organization_id, is_active, status from users where id=$1`,
+    [user_id])).rows[0];
+  if (!u || !u.is_active || u.status !== "active") {
+    throw refusal(403, "actor_inactive", "This account is not active.");
+  }
+  const role = u.platform_role || "member";
+
+  if (role === "super_admin") {
+    const rows = (await db.query(
+      `select id, name from organizations order by name limit 500`)).rows;
+    return { must_choose: true, organizations: rows };
+  }
+  if (role === "org_admin" && u.organization_id) {
+    const rows = (await db.query(
+      `select id, name from organizations where id = $1`, [u.organization_id])).rows;
+    //  Their organization comes from the LOGIN. It is returned so the
+    //  surface can SHOW whose deal this will be, never so it can send it
+    //  back — the write ignores anything the body says.
+    return { must_choose: false, organizations: rows };
+  }
+  //  Anyone else cannot open a deal at all; say so here rather than
+  //  letting them fill in a form that will be refused.
+  throw refusal(403, "insufficient_platform_role",
+    "Opening a deal is an organization-level action. Your account does not hold that authority.");
+}
+
 /*  ── addProperty ───────────────────────────────────────────────────
  *  Membership, through the table that already exists (migration 025).
  *  The human picks; a mention is never membership.
@@ -304,6 +350,6 @@ async function getDeal(db, { user_id, deal_intake_id } = {}) {
 }
 
 module.exports = {
-  createDeal, addProperty, releaseProperty, listDeals, getDeal,
+  createDeal, addProperty, organizationsForActor, releaseProperty, listDeals, getDeal,
   resolveDealScope, CREATION_SOURCES, ONBOARDING_TYPES, refusal,
 };
