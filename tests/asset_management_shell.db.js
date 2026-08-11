@@ -188,8 +188,42 @@ async function main() {
        rooms.every((r) => typeof r.what_would_establish_it === "string" && r.what_would_establish_it.length > 10));
     ok("no room invents an owner — UNASSIGNED until one is recorded",
        rooms.every((r) => r.owner === "UNASSIGNED"));
-    ok("the response states its own limits (scope_note)",
-       typeof (good.body || {}).scope_note === "string");
+    //  The response used to carry a scope_note explaining that this door
+    //  returns no amounts. That is developer language, and it was rendering
+    //  under the desk as product copy. The honest cards say the same thing
+    //  in the operator's words; a caveat nobody needs is noise on a surface
+    //  whose whole job is calm.
+    ok("no developer-facing caveat is emitted at all",
+       !("scope_note" in (good.body || {})));
+    ok("…and no room leaks proof/shell vocabulary into operator copy",
+       rooms.every((r) => !/establishment state only|this door returns|shell/i
+         .test([r.belongs, r.establishment_summary, r.why].join(" "))));
+
+    console.log("\n── 2c. COMPARTMENTS — THE PERMANENT SKELETON ─────────");
+    //  A room is not an empty-state page waiting to be replaced. It already
+    //  breaks into the compartments it will always have, so the operator
+    //  knows where Insurance is going to live and the first real one fills
+    //  a slot that already exists instead of forcing a redesign.
+    ok("every room carries compartments",
+       rooms.every((r) => Array.isArray(r.compartments) && r.compartments.length >= 4),
+       JSON.stringify(rooms.map((r) => [r.key, (r.compartments || []).length])));
+
+    const poc = (rooms.find((r) => r.key === "property_obligations").compartments || [])
+      .map((c) => c.label);
+    ok("Property Obligations breaks into Taxes · Insurance · Licenses · Compliance",
+       ["Taxes", "Insurance", "Licenses & Registrations", "Compliance"]
+         .every((l) => poc.includes(l)), JSON.stringify(poc));
+
+    ok("every compartment carries its own establishment state",
+       rooms.every((r) => (r.compartments || []).every((c) =>
+         ["established", "partially_established", "not_established"].includes(c.establishment))));
+    ok("every compartment says which KIND of thing is missing, not one generic line",
+       new Set(rooms.flatMap((r) => (r.compartments || []).map((c) => c.note))).size
+         >= rooms.reduce((n, r) => n + (r.compartments || []).length, 0) - 1);
+    //  Compartments fill ONE AT A TIME, so a room must be able to hold two
+    //  different states at once. Averaging them would lie in both directions.
+    ok("no compartment invents an amount",
+       !CURRENCYISH.test(JSON.stringify(rooms.map((r) => r.compartments))));
 
     //  THE SUB-LABELS ARE A PRODUCT RULING, SO THEY ARE PINNED BY NAME.
     //  They are what the room is FOR, and the hierarchy is the whole point

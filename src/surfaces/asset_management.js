@@ -60,16 +60,32 @@
 
 //  The four rooms. Sub-labels may evolve; the four-part structure is the
 //  product direction and is stated in CLAUDE.md.
-//  TWO LISTS, AND THEY ARE NOT THE SAME JOB.
+//
+//  ── THREE LISTS PER ROOM, AND THEY ARE NOT THE SAME JOB ─────────────
 //
 //    covers   the CANONICAL structural list — what the room holds. It is a
 //             product ruling and is pinned by name in the proof.
 //    eyebrow  the DISPLAY list on the home card, which is a dense one-line
 //             context strip and drops the "other / catch-all" tail.
 //
-//  They are allowed to differ in length. They are NOT allowed to disagree:
-//  a proof asserts every eyebrow entry is a member of covers, so the card
-//  can never advertise something the room does not claim to hold.
+//    compartments  the room's own sub-doors — the PERMANENT SKELETON.
+//
+//  covers and eyebrow are allowed to differ in length. They are NOT allowed
+//  to disagree: a proof asserts every eyebrow entry abbreviates a real
+//  covers entry, so a card can never advertise something the room does not
+//  hold.
+//
+//  ── COMPARTMENTS ARE THE SKELETON, NOT AN EMPTY STATE ───────────────
+//
+//  Each room breaks into the compartments it will always have. They are
+//  rendered now, honestly empty, so the room is the real Property
+//  Obligations page from day one rather than an explanatory placeholder
+//  that gets thrown away when Insurance arrives. The operator should
+//  already understand where Insurance and Taxes are going to live.
+//
+//  A compartment carries its own establishment, because they will fill in
+//  ONE AT A TIME — Rent is real today while Vacancy is not, and a room
+//  that averaged them into one state would be lying in both directions.
 const ROOMS = Object.freeze([
   Object.freeze({
     key: "revenue",
@@ -77,6 +93,14 @@ const ROOMS = Object.freeze([
     covers: ["Rent", "Vacancy", "Concessions", "Other Income"],
     eyebrow: ["Rent", "Vacancy", "Concessions", "Other Income"],
     belongs: "What this property earns, and what it fails to earn.",
+    compartments: [
+      //  `rent` is the one compartment with a live source today, so its
+      //  establishment is resolved per property rather than declared here.
+      { key: "rent", label: "Rent", derived: true },
+      { key: "vacancy", label: "Vacancy", note: "No governed vacancy position yet" },
+      { key: "concessions", label: "Concessions", note: "No governed concession terms yet" },
+      { key: "other_income", label: "Other Income", note: "No governed other-income terms yet" },
+    ],
   }),
   Object.freeze({
     key: "capital",
@@ -84,6 +108,12 @@ const ROOMS = Object.freeze([
     covers: ["Senior Debt", "Mezzanine Debt", "Preferred Equity", "Reserves / Escrows"],
     eyebrow: ["Senior Debt", "Mezzanine Debt", "Preferred Equity", "Reserves / Escrows"],
     belongs: "How the property is financed, and what that structure costs.",
+    compartments: [
+      { key: "senior_debt", label: "Senior Debt", note: "No governed senior debt yet" },
+      { key: "mezzanine", label: "Mezzanine Debt", note: "No governed mezzanine debt yet" },
+      { key: "preferred_equity", label: "Preferred Equity", note: "No governed preferred equity yet" },
+      { key: "reserves", label: "Reserves / Escrows", note: "No governed reserves or escrows yet" },
+    ],
   }),
   //  PROPERTY OBLIGATIONS is the widest of the four, and deliberately so:
   //  it eventually holds everything the asset must maintain simply because
@@ -104,6 +134,14 @@ const ROOMS = Object.freeze([
     covers: ["Taxes", "Insurance", "Licenses & Registrations", "Compliance", "Other fixed / recurring"],
     eyebrow: ["Taxes", "Insurance", "Licenses & Registrations", "Compliance"],
     belongs: "The recurring obligations required to own and operate this property.",
+    //  ONE ordering of this list, everywhere. covers, eyebrow and
+    //  compartments agree, so nobody has to wonder which is canonical.
+    compartments: [
+      { key: "taxes", label: "Taxes", note: "No governed tax obligations yet" },
+      { key: "insurance", label: "Insurance", note: "No governed policies yet" },
+      { key: "licenses", label: "Licenses & Registrations", note: "No governed licenses yet" },
+      { key: "compliance", label: "Compliance", note: "No governed compliance obligations yet" },
+    ],
   }),
   Object.freeze({
     key: "operating_costs",
@@ -111,6 +149,13 @@ const ROOMS = Object.freeze([
     covers: ["Payroll", "Management Fees", "Utilities", "Contracts", "Repairs / other"],
     eyebrow: ["Payroll", "Management Fees", "Utilities", "Contracts", "Repairs"],
     belongs: "What it costs to run the property day to day.",
+    compartments: [
+      { key: "payroll", label: "Payroll", note: "No governed payroll allocation yet" },
+      { key: "management_fees", label: "Management Fees", note: "No governed fee terms yet" },
+      { key: "utilities", label: "Utilities", note: "No governed utility accounts yet" },
+      { key: "contracts", label: "Contracts", note: "No governed service contracts yet" },
+      { key: "repairs", label: "Repairs / other", note: "No governed operating expense terms yet" },
+    ],
   }),
 ]);
 
@@ -202,6 +247,7 @@ module.exports = function assetManagement(deps) {
         //  shorter than the room's own explanation below; a card line that
         //  outgrows the room is the card quietly becoming the room again.
         summary: "No revenue economics are established yet.",
+        compartment_note: "No governed rent position yet",
         //  LONG — inside the room, where it becomes setup guidance.
         //  An honest zero, and it says WHICH zero: no leases at all is a
         //  different situation from leases that carry no economics.
@@ -225,6 +271,7 @@ module.exports = function assetManagement(deps) {
       //  SHORT — the home card. Says what IS available and what is not, in
       //  one breath, with no counts and no machinery.
       summary: "Base rent is available from current leases. Additional revenue economics are not yet established.",
+      compartment_note: "Base rent from current leases",
       why: `${subject} a rent amount and a term, so a flat monthly rent position is real. Rent escalations and recurring charges (parking, pet, utilities billed to residents) are not represented anywhere yet, so this room cannot yet state a complete revenue position.`,
       establishes: "Rent escalation schedules and a recurring-charge model.",
     };
@@ -279,7 +326,22 @@ module.exports = function assetManagement(deps) {
 
       const rooms = ROOMS.map((room) => {
         const found = room.key === "revenue" ? revenue : UNBUILT[room.key];
+
+        //  A compartment marked `derived` resolves against real data; every
+        //  other compartment is honestly not established, and says which
+        //  KIND of thing is missing rather than repeating one generic line.
+        const compartments = (room.compartments || []).map((c) => (
+          c.derived
+            ? { key: c.key, label: c.label,
+                establishment: revenue.state,
+                note: revenue.compartment_note }
+            : { key: c.key, label: c.label,
+                establishment: "not_established",
+                note: c.note }
+        ));
+
         return {
+          compartments,
           key: room.key,
           label: room.label,
           covers: room.covers,
@@ -311,10 +373,11 @@ module.exports = function assetManagement(deps) {
       return res.json({
         property_id: propertyId,
         rooms,
-        //  The door states its own limits so the surface never has to
-        //  guess, and so a reader cannot mistake a shell for a product.
-        scope_note:
-          "Asset Management shell. Establishment state only — this door returns no amounts, no schedules and no financial positions, because the underlying governed economic terms are not built yet.",
+        //  NO scope_note. It used to sit under the desk explaining that
+        //  this door returns no amounts — developer language leaking into
+        //  the product. The honest cards already say the same thing in the
+        //  operator's words, and a caveat nobody needs is just noise on a
+        //  surface whose whole job is calm.
       });
     } catch (e) {
       //  A failure must never reach the browser shaped like an empty
