@@ -191,6 +191,27 @@ async function main() {
     ok("the response states its own limits (scope_note)",
        typeof (good.body || {}).scope_note === "string");
 
+    //  THE SUB-LABELS ARE A PRODUCT RULING, SO THEY ARE PINNED BY NAME.
+    //  They are what the room is FOR, and the hierarchy is the whole point
+    //  of the shell. A later edit that quietly drops one would change the
+    //  product and break nothing — the same failure mode as a renamed
+    //  response key. Read them by name, exactly like H16b does.
+    const po = rooms.find((r) => r.key === "property_obligations");
+    ok("Property Obligations covers Compliance",
+       (po.covers || []).includes("Compliance"), JSON.stringify(po.covers));
+    ok("Property Obligations covers Licenses & Registrations",
+       (po.covers || []).includes("Licenses & Registrations"), JSON.stringify(po.covers));
+    ok("…and still covers Taxes and Insurance",
+       (po.covers || []).includes("Taxes") && (po.covers || []).includes("Insurance"));
+
+    //  The room's honest-empty sentence must cover the WHOLE room. A room
+    //  promising licences and compliance in its labels while its copy only
+    //  mentions tax and insurance is quietly telling the operator the rest
+    //  is handled.
+    ok("the empty-room copy speaks to licences and renewals, not just tax and insurance",
+       /licen[cs]e/i.test(po.why) && /(renewal|filing|due)/i.test(po.why),
+       po.why);
+
     console.log("\n── 3. ESTABLISHMENT IS READ FROM REAL DATA ───────────");
 
     const byKey = (k) => rooms.find((r) => r.key === k);

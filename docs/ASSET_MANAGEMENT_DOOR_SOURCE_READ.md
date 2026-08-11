@@ -216,7 +216,9 @@ Property Home
      ├─ REVENUE                   Rent · Vacancy · Concessions · Other Income
      ├─ CAPITAL                   Senior Debt · Mezzanine · Preferred Equity ·
      │                            Reserves / Escrows
-     ├─ PROPERTY OBLIGATIONS      Taxes · Insurance · Other fixed / recurring
+     ├─ PROPERTY OBLIGATIONS      Taxes · Insurance · Licenses &
+     │                            Registrations · Compliance ·
+     │                            Other fixed / recurring
      └─ OPERATING COSTS           Payroll · Management Fees · Utilities ·
                                   Contracts · Repairs / other opex
 ```

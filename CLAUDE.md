@@ -54,7 +54,12 @@ product direction:
 REVENUE               Rent · Vacancy · Concessions · Other Income
 CAPITAL               Senior Debt · Mezzanine Debt · Preferred Equity ·
                       Reserves / Escrows
-PROPERTY OBLIGATIONS  Taxes · Insurance · Other fixed / recurring
+PROPERTY OBLIGATIONS  Taxes · Insurance · Licenses & Registrations ·
+                      Compliance · Other fixed / recurring
+                      ↑ everything the asset must maintain simply because
+                        we own and operate it — financial AND regulatory:
+                        rental licences, registrations, filings, tax
+                        compliance, inspections, renewals
 OPERATING COSTS       Payroll · Management Fees · Utilities · Contracts ·
                       Repairs / other operating expense
 ```

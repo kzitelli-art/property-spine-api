@@ -71,10 +71,23 @@ const ROOMS = Object.freeze([
     label: "Capital",
     covers: ["Senior Debt", "Mezzanine Debt", "Preferred Equity", "Reserves / Escrows"],
   }),
+  //  PROPERTY OBLIGATIONS is the widest of the four, and deliberately so:
+  //  it eventually holds everything the asset must maintain simply because
+  //  we own and operate it — financial AND regulatory. Rental licenses,
+  //  registrations, filings, tax compliance, inspections, renewals.
+  //
+  //  Compliance lives HERE rather than as a fifth room, because a lapsed
+  //  rental licence and an unpaid tax bill are the same kind of fact from
+  //  the asset's point of view: a standing obligation of ownership with a
+  //  date and a consequence. Splitting them would make the operator look
+  //  in two places for one answer.
+  //
+  //  NO COMPLIANCE LOGIC EXISTS. This is navigation and product structure
+  //  only — the sub-labels say what the room is FOR, not what it does.
   Object.freeze({
     key: "property_obligations",
     label: "Property Obligations",
-    covers: ["Taxes", "Insurance", "Other fixed / recurring"],
+    covers: ["Taxes", "Insurance", "Licenses & Registrations", "Compliance", "Other fixed / recurring"],
   }),
   Object.freeze({
     key: "operating_costs",
@@ -202,8 +215,12 @@ module.exports = function assetManagement(deps) {
     },
     property_obligations: {
       state: "not_established",
-      why: "Spine holds no tax obligations or insurance policies for this property. Bills and policies may have been retained during Deal Setup, but no economic terms have been read out of them.",
-      establishes: "Governed tax and insurance terms — amount, period covered, billing schedule — read from the tax bills and policies.",
+      //  The sentence has to cover the whole room, not the two examples
+      //  that are easiest to name. A room whose sub-labels promise
+      //  licences and compliance while its copy only mentions tax and
+      //  insurance is quietly telling the operator the rest is handled.
+      why: "Spine holds no tax obligations, insurance policies, licences or registrations for this property, and tracks no filing or renewal dates. Bills, policies and certificates may have been retained during Deal Setup, but nothing has been read out of them, so Spine cannot say what this property owes or when anything is due.",
+      establishes: "Governed obligation terms — amount and period covered for tax and insurance, and the issuing body, expiry and renewal date for each licence, registration and recurring filing.",
     },
     operating_costs: {
       state: "not_established",

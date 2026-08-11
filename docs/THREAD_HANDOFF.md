@@ -56,7 +56,16 @@ Sub-labels may evolve; the four-part structure is the product direction.
 REVENUE               Rent · Vacancy · Concessions · Other Income
 CAPITAL               Senior Debt · Mezzanine Debt · Preferred Equity ·
                       Reserves / Escrows
-PROPERTY OBLIGATIONS  Taxes · Insurance · Other fixed / recurring
+PROPERTY OBLIGATIONS  Taxes · Insurance · Licenses & Registrations ·
+                      Compliance · Other fixed / recurring
+                      ↑ what the asset must maintain simply because we own
+                        and operate it — financial AND regulatory. Later:
+                        rental licences, registrations, filings, tax
+                        compliance, inspections, renewals. Compliance sits
+                        HERE rather than as a fifth room — a lapsed licence
+                        and an unpaid tax bill are the same kind of fact
+                        from the asset's point of view. NO COMPLIANCE LOGIC
+                        EXISTS; this is navigation only.
 OPERATING COSTS       Payroll · Management Fees · Utilities · Contracts ·
                       Repairs / other operating expense
 ```
