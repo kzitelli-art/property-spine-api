@@ -32,7 +32,95 @@ See `docs/BUILD_1A_CLOSEOUT.md` before designing anything above the property.
 **Do not make Property the top-level onboarding or economic container.** Build 0 did,
 and had to be corrected.
 
+## Four operating doors
+
+The central operator product has **four** operating doors. They are the middle of
+the system.
+
+```text
+LEASING      MANAGEMENT      MAINTENANCE      ASSET MANAGEMENT
+```
+
+**Asset Management is the fourth door, not a dashboard and not a report.** It is
+staff/operator side, parallel to the other three. The asset manager is still
+*operating* the deal — economically. Revenue, debt and capital structure, taxes,
+insurance, payroll, management fees, utilities, contracts, and later budgets and
+variances.
+
+Its current hierarchy — sub-labels may evolve, the four-part structure is the
+product direction:
+
+```text
+REVENUE               Rent · Vacancy · Concessions · Other Income
+CAPITAL               Senior Debt · Mezzanine Debt · Preferred Equity ·
+                      Reserves / Escrows
+PROPERTY OBLIGATIONS  Taxes · Insurance · Licenses & Registrations ·
+                      Compliance · Other fixed / recurring
+                      ↑ everything the asset must maintain simply because
+                        we own and operate it — financial AND regulatory:
+                        rental licences, registrations, filings, tax
+                        compliance, inspections, renewals
+OPERATING COSTS       Payroll · Management Fees · Utilities · Contracts ·
+                      Repairs / other operating expense
+```
+
+### The system sequence
+
+```text
+ONBOARDING                                    establishes opening truth
+        ↓
+LEASING · MANAGEMENT · MAINTENANCE ·          operate and continuously update
+ASSET MANAGEMENT                              living property truth
+        ↓
+REPORTING                                     reads and closes/compresses it
+        ↓
+OWNER / INVESTOR SURFACE                      later consumes the compressed
+                                              story for a different audience
+```
+
+**Build the operating middle deeply enough to know what truth it requires. Then
+make onboarding populate it. Then make reporting read it.** Do not pre-design all
+financial onboarding or reporting before the middle exists.
+
+### Progressive economic context — not one screen with permissions
+
+```text
+Property Management / Operations  →  Asset Management  →  Owner / Investment Team
+```
+
+Each step is more compression and more economic context, for a different audience.
+The Owner / Investor experience is **a different audience and potentially a
+different login**. Do not design it now; preserve the boundary. And do not let it
+reuse the Asset Management entitlement merely because it consumes Asset Management
+truth.
+
+### Standing economics vs operating consequence
+
+```text
+STANDING ECONOMIC TRUTH      governed terms already known — leases, debt
+                             documents, tax obligations, insurance policies,
+                             contracts
+
+OPERATING ECONOMIC           arises dynamically from operations — unexpected
+CONSEQUENCE                  repair, turn delay, concession, vacancy loss
+```
+
+They meet in one story, and neither is the whole of it:
+
+```text
+normal governed expectation  +  unexpected operating consequence
+    =  the actual economic story of the property
+```
+
 ## Same truth, four compressions
+
+> ⚠ **Two different fours. Do not merge them.** The section above lists four
+> **operating doors** (Leasing · Management · Maintenance · Asset Management) —
+> *surfaces in the staff product*. This section lists four **compressions**
+> (Staff · Management · Accounting · Owner) — *altitudes of reading*. "Management"
+> appears in both and means different things. A door is where work is done; a
+> compression is how truth is said. Asset Management is a door; Owner is a
+> compression that will later get its own surface.
 
 Staff, Management, Accounting and the Owner are doing four different jobs over
 **one** governed system. They are not four datasets and not four dashboards.
@@ -67,8 +155,14 @@ Do not spend a broad name on a narrow thing.
 ```text
 Deal Setup                  onboarding machinery: give Spine enough starting
                             truth about a Deal that it can begin operating one
-Asset Management            RESERVED — the owner surface. Operating truth →
-                            economic consequence → owner judgment → reporting
+Asset Management            an OPERATING DOOR — the fourth, beside Leasing,
+                            Management and Maintenance. Staff/operator side.
+                            Where the economic structure and economic
+                            performance of the property become operable.
+                            NOT the owner surface. See "Four operating doors".
+Owner / Investor Surface    RESERVED — the later, different audience that
+                            consumes the compressed economic story. Possibly a
+                            different login. Do not spend it on a staff screen.
 Opening Tenancy Position    lease and occupancy, from a rent roll, as of a date
                             (shown to people as "Lease & occupancy established")
 Opening Operating Position  RESERVED — the composed opening state: tenancy +

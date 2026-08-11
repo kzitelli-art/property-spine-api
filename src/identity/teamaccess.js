@@ -42,7 +42,17 @@ const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the O
 module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
   const router = express.Router();
 
-  const ALLOWED_MODULES = ["management", "leasing", "maintenance", "reporting"];
+  //  THE OPERATOR MODULE VOCABULARY.
+  //
+  //  `asset_management` is the fourth operating door (Leasing · Management ·
+  //  Maintenance · Asset Management) and is a MODULE ENTITLEMENT, not a job
+  //  title. Holding it is what opens /operator/asset-management/*; being
+  //  called an asset manager is a separate organizational fact and grants
+  //  nothing on its own.
+  //
+  //  The future Owner / Investor surface is a DIFFERENT audience and must
+  //  NOT reuse this entitlement merely because it consumes this door's truth.
+  const ALLOWED_MODULES = ["management", "leasing", "maintenance", "reporting", "asset_management"];
   const OTP_TTL_MIN = 10;
   const INVITE_TTL_HOURS = 72;
   const SESSION_TTL_DAYS = 14;

@@ -73,6 +73,13 @@ const GATES = [
   //  change it deliberately. See docs/BUILD_0_ONBOARDING_AUTHORITY_AUDIT.md.
   { file: "gate_property_creation_paths.js",
     what: "exactly the known client/property creation paths; no fifth door" },
+  //  The wall between insurance economics and premium financing. The June
+  //  2026 workpaper reconstructs a property's annual insurance cost from
+  //  the IPFS stream, which makes the payment instrument the source of the
+  //  economic fact. This gate is what stops that seam growing back once
+  //  premium financing is built beside it.
+  { file: "gate_insurance_economic_independence.js",
+    what: "insurance economics answerable without financing, escrow or payment" },
   //  The conversational seams. DB-free, so they belong on the standard path:
   //  they check that the extracted logic has ONE implementation, that resident
   //  wording did not drift, and that an operating receipt and a delivery

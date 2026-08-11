@@ -3147,6 +3147,15 @@ app.use("/", require("./src/agent/staff_agent")({ pool, staffAgentService }));
 app.use("/", require("./src/obligations/operator_obligations")({ pool }));
 app.use("/", require("./src/obligations/operator_obligation_actions")({ pool }));
 
+// ── ASSET MANAGEMENT — the FOURTH operating door ────────────────────────
+//  Beside Leasing, Management and Maintenance. Staff/operator side, where
+//  the economic structure and performance of a property become operable.
+//  NOT the Owner / Investor surface, and it does NOT reuse /asset/* (that
+//  prefix is Deal Setup's legacy alias and keeps its own retirement path).
+//
+//  This is a SHELL: four rooms, establishment state only, no amounts.
+app.use("/", require("./src/surfaces/asset_management")({ pool }));
+
 // ── ASK SPINE (SLICE 1) — read-only sibling of the staff agent ───────────
 //  Answers "What needs attention?" from live obligations, property-scoped by
 //  the operator session. No proposals, no confirmations, no writes, and the
@@ -3292,9 +3301,15 @@ app.use("/", dealIntakeModule({ pool, anthropic, INGEST_MODEL, registryInstance,
 //  the human on every write; /deal-setup/* therefore skips the
 //  operator-KEY gate the same way /operator/*, /admin/* and /org/* do.
 //
-//  NOT Asset Management. That name is reserved for the owner surface —
-//  operating truth → economic consequence → owner judgment → reporting —
-//  which cannot be built until the causal Money graph exists.
+//  NOT Asset Management. Deal Setup is ONBOARDING — it establishes opening
+//  truth. Asset Management is one of the four OPERATING doors (Leasing,
+//  Management, Maintenance, Asset Management) that run on that truth
+//  afterwards, and it lives at /operator/asset-management/*.
+//
+//  The `/asset/*` alias below is Deal Setup's own legacy compatibility
+//  rail and has nothing to do with the Asset Management door. It keeps its
+//  original retirement condition; the new door deliberately does NOT reuse
+//  that prefix, because sharing it would make that condition unobservable.
 //
 //  Mounted HERE, after `upload`, because the source-file route needs it.
 //  MOUNTING IS NOT REACHABILITY (the /legal/ lesson): isDealSetupPath()

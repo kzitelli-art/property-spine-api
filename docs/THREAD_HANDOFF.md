@@ -1,5 +1,831 @@
 # Property Spine — Thread Handoff
 
+## ══════════════════════════════════════════════════════════════════
+##  159 IS RELEASED. THE API SHIPS AGAIN. 2026-08-11 (latest).
+##  THIS SECTION WINS.
+## ══════════════════════════════════════════════════════════════════
+
+```text
+API  main   8f29efa   (PR #90) DEPLOYED and running
+ledger ceiling        159   ·  147 migrations, all applied
+both directions       clean — every file in the ledger, every ledger row a file
+```
+
+Confirmed by `node migrations/migrate.js` on the new instance (`4bcd7`), not
+inferred. The ceiling moved 158 → 159 and the instance changed, so the service
+is running current `main` rather than the survivor.
+
+### ▶ THE RELEASE SEQUENCE FOR 160/161 — DO NOT IMPROVISE IT
+
+PRs are open and **feature work is stopped**. The risk from here is
+operational, not conceptual.
+
+```text
+API  kzitelli-art/property-spine-api#92    a988ba8  (carries 160 + 161)
+APP  kzitelli-art/property-spine-app#52    0a4ec39  (depends on the API PR)
+```
+
+**⚠ API #92 CONTAINS MIGRATIONS AND THE API REFUSES TO BOOT ON PENDING ONES.**
+Merging it and letting an ordinary deploy discover 160/161 is exactly the
+failure that cost days on 159. Merge is not release, and the deploy after the
+merge will fail until the release is done deliberately.
+
+### ⚖ RELEASE RULING — PATH A. PAUSE API AUTO-DEPLOY.
+
+**Ruled 2026-08-11. This is decided; do not re-litigate it at the console.**
+
+> Use Path A — pause API auto-deploy. There is no reason to deliberately
+> manufacture a red production deploy just because Path B worked for 159.
+
+**Path B is recorded below as rejected, not as an alternative.** It works, and
+it is what happened with 159, and that is not a reason to choose it. A failed
+production deploy in the history is a real cost: it teaches whoever reads the
+deploy log next that a red deploy here is normal. It is not.
+
+```text
+B · REJECTED — let the first auto-deploy fail, then arm the release
+    merge → auto-deploy fails (harmless: Render keeps the previous instance
+    live) → set the env vars with the now-known SHA → redeploy → delete
+    MIGRATION_RELEASE
+    Rejected because it manufactures a red deploy we can simply avoid.
+```
+
+### ⚠ THE RACE THIS AVOIDS
+
+**API auto-deploy is ON. APP auto-deploy is OFF.** Opposite postures, verified:
+`CLAUDE.md:319`, `docs/deployment.md:7`, and this file at the 2026-08-05
+section. The sequence depends on both and the asymmetry is easy to get wrong.
+
+Left alone, **merging #92 immediately triggers a normal boot with 160/161
+pending**, `prestart` refuses, and that is the 159 pattern recreated on purpose.
+Pausing auto-deploy first is what removes the race — not care, not speed.
+
+**The wrinkle Path A is built around: `EXPECTED_SHA` cannot be known until the
+merge commit exists**, so the release cannot be armed in advance. Pausing
+auto-deploy buys exactly the window needed to read the SHA and arm it.
+
+**The invariant, whatever happens: the migration-release boot must be the FIRST
+boot of the merged SHA that is allowed to succeed.**
+
+### 🔴 THE POST-MERGE SHA IS THE RELEASE AUTHORITY — NOT THE PR HEAD
+
+**Be obsessive about this one.** `EXPECTED_SHA` must be the SHA that is
+**actually deployed**, which is the commit on `main` after the merge.
+
+```text
+6fcbb13   PR #92 head.  NOT automatically the release authority.
+<merge>   the resulting main SHA.  THIS is EXPECTED_SHA.
+```
+
+A merge commit is a **new commit** — a squash or a merge-commit strategy both
+produce a SHA that is not the PR head. They coincide only under fast-forward,
+and coinciding by luck is not the same as being correct. **Read the SHA off
+`main` after merging. Do not carry the PR-head SHA forward on the assumption
+that it is the same.**
+
+`EXPECTED_SHA` exists precisely so the release cannot be run against a tree
+different from the one being released. Feeding it a guess disarms the only
+guard that catches that.
+
+### THE SEQUENCE — API #92, PATH A
+
+```text
+0  review only  ⚠ THERE IS NO CI. Neither repo has a .github/workflows/
+                 file — measured, not assumed. No green check is coming and
+                 nothing re-runs the gates on a PR. The suite results in the
+                 PR bodies are the evidence, produced locally on the merged
+                 trees.
+
+1  PAUSE API auto-deploy.
+
+2  RECONFIRM the production ledger:
+       ceiling = 159
+       both directions clean  (file → ledger, ledger → file)
+
+3  MERGE API PR #92.
+
+4  READ the actual resulting `main` SHA after the merge.
+     Do NOT use the PR-head SHA unless it is literally the deployed commit.
+     See the section above — this is the step that is easiest to fumble.
+
+5  CONFIRM the merged tree has exactly these pending migrations:
+       160
+       161
+     ✓ VERIFIED IN SOURCE: the PR head carries exactly
+       160_asset_management_module.sql and 161_insurance_economic_truth.sql
+       above 159, and main carries nothing above 159. Re-confirm against
+       production at the time — a release applies EVERY pending file and
+       there is no per-file selection.
+
+6  SET:
+       MIGRATION_RELEASE=1
+       EXPECTED_LEDGER_CEILING=159
+       EXPECTED_SHA=<actual merged main SHA from step 4>
+
+7  MANUALLY DEPLOY that exact SHA.
+     ← this deploy IS the migration-release boot.
+
+8  CAPTURE the receipt:
+       160 applied
+       161 applied
+       new ledger ceiling = 161
+       file → ledger clean
+       ledger → file clean
+       running SHA = expected SHA
+
+9  REMOVE MIGRATION_RELEASE.
+
+10 NORMAL boot / redeploy. Confirm the service starts cleanly with no
+     pending migration.
+
+11 RESUME API auto-deploy.
+
+── prove the API before touching the app ──────────────────────────────
+
+    Confirm the new Asset Management / Insurance reads behave against
+    production, and that entitlement still FAILS CLOSED where the module
+    is not granted. Only then continue.
+
+12 MERGE APP #52.
+
+13 MANUALLY DEPLOY the app — app auto-deploy is OFF.
+
+14 RUN the authenticated browser pass.
+```
+
+### THE BROWSER PASS CLOSES BOTH OLD AND NEW OPEN ITEMS
+
+```text
+OLD (159, still open)
+  · established Deal Setup position → "Lease & occupancy established"
+  · genuinely unestablished position → remains unestablished
+
+NEW (160/161)
+  · Asset Management appears ONLY for explicitly entitled staff/property
+  · Insurance opens correctly
+  · governed Insurance economic truth renders where established
+  · Cash & Financing remains honestly unestablished
+```
+
+**No new product work until that chain is complete.**
+
+### PR-HEAD STATE AT THE TIME OF THIS RULING
+
+```text
+API #92   6fcbb13   awaiting merge / release
+APP #52   0a4ec39   waits behind the API
+```
+
+### THE RUNGS ARE SEPARATE STATUSES, NEVER COLLAPSED INTO ONE
+
+**"PR merged", "migration released" and "surface proven" are different facts.**
+Recording them as one is how a merge comes to be read as a shipped feature —
+and this repo has already paid for a deploy that looked healthy while serving
+older code.
+
+**Record each rung separately.** Five, not one:
+
+```text
+source merged
+schema released
+API production proven
+app deployed
+authenticated surface proven
+```
+
+State the rung reached. Do not round up.
+
+### 📌 PERMANENT INFRASTRUCTURE DEBT — NO PR CI
+
+**Neither repo has PR CI.** No `.github/workflows/` in either. Release evidence
+therefore depends on **locally run gates** — `npm run verify`, the `.db.js`
+proofs and the browser proofs — executed by whoever prepared the change, on
+their own machine, and reported in the PR body.
+
+That is a real dependency on discipline rather than on machinery, and it is
+worth naming as debt rather than leaving as an unremarked absence. It is also
+the reason a PR here shows no green check and never will.
+
+**Do NOT fix this inside a release.** Adding CI mid-release changes what
+"proven" means in the middle of proving something. It is its own slice.
+
+### ⚠ OPEN RELEASE ITEM — THE PRODUCTION SURFACE IS NOT CONFIRMED
+
+**Classify this precisely, because the two halves are not the same claim:**
+
+```text
+159 schema                          RELEASED and verified (ceiling 159)
+static app/API contract             PROVEN in source
+authenticated production surface    STILL REQUIRES HUMAN CONFIRMATION
+```
+
+159's identifier sweep renamed an API response key and not the app reading it.
+Nothing threw, and the deal page silently showed "Setup in progress" for a
+property whose position *was* established. Only a browser caught it.
+
+**What is proven in source, and it is not nothing:**
+
+```text
+API  deal read emits   p.opening_tenancy_position_id   ← pinned by H16b
+                       (tests/deal_setup_http.db.js:411, by name)
+APP  index.html:26227  if (p.opening_tenancy_position_id)
+                         true  → "Lease & occupancy established"
+                         false → "Setup in progress"
+```
+
+Same key both sides, and the app-side fix (`9f037bf`) is ten commits deep on
+`main`. That de-risks it materially. **It does not replace the check** — it
+proves the code agrees, not that a real page renders.
+
+**What still has to happen, by a human with a real staff session:**
+
+1. A property **with** an established position renders
+   *"Lease & occupancy established."*
+2. A property **genuinely without** one still renders the unestablished state —
+   so we know the condition was not flipped globally.
+
+The second is not ceremony. A change that made every property read
+"established" would pass the first check perfectly.
+
+**⚠ IF THAT CHECK FAILS, INSPECT THE DEPLOYED APP SHA FIRST.** APP auto-deploy
+is **OFF** — every app deploy is manual — so a stale app is a more likely cause
+than the rename. **Do not reopen the identifier work before ruling that out.**
+
+Until someone has run both: **the schema is released and the surface is
+unconfirmed.** Say it that way.
+
+### What this cost, and it is worth reading before the next release
+
+For several days **every API merge was unshipped** — Asset Management, the Work
+Orders resident projection, all of it — while Render kept serving `7c3da79`
+(PR #83) and `/health` answered normally. **The service looked healthy while
+running code from before 159.** That is the documented trap doing exactly what
+it exists to do: `prestart` verifies rather than applies, refuses to boot with
+a migration in the build and not in the ledger, and Render keeps the previous
+instance live.
+
+### ⚠ TRAP 1 — THE WEB SHELL ATTACHES TO THE SURVIVING INSTANCE
+
+Measured on 2026-08-11, not assumed.
+
+The Render Web Shell attaches to the instance that is **running**, which is the
+**old** build — the one that never had 159. It does not attach to the build
+that is failing to start. So:
+
+```text
+shell instance     7c3da79   several merges behind main
+migrations/159_*   ABSENT from that filesystem
+```
+
+The instance that HAS 159 was precisely the one `prestart` refused to start.
+Chicken-and-egg, and there is no path through the Web Shell.
+
+Staging the file by hand does not work either: the container's clone is
+**grafted (shallow)** and `git fetch origin main` fails — there are no repo
+credentials in the runtime container.
+
+### ⚠ TRAP 2 — `--apply` EXITING 0 IS NOT EVIDENCE A MIGRATION LANDED
+
+Run in that shell, `node migrations/migrate.js --apply` reports
+**"Everything was already up to date"** and exits **0**, having changed
+nothing. It ran three times and was honest every time — there genuinely was
+nothing pending *in that build*.
+
+**A clean exit says the files present in THIS build are all in the ledger. It
+says nothing about the file you are trying to release.** Before believing a
+release, check the file is actually on disk:
+
+```bash
+ls migrations/159*          # is the thing you are releasing even here?
+echo "$RENDER_GIT_COMMIT"   # which build am I standing in?
+```
+
+This is the same class of error as an empty-state pass: a true statement about
+the wrong subject.
+
+### THE WAY OUT — `prestart` CAN RELEASE, AND THAT DISSOLVES THE DEADLOCK
+
+`package.json` runs `prestart` as `node migrations/migrate.js` with no
+`--apply`. But `migrations/migrate.js:66`:
+
+```js
+const APPLY = process.argv.includes("--apply") || process.env.MIGRATION_RELEASE === "1";
+```
+
+**`MIGRATION_RELEASE=1` as a SERVICE ENV VAR makes `prestart` itself release.**
+So the build that HAS 159 — the one currently refusing to start — applies 159
+on its own next boot attempt and then boots. The deadlock dissolves because the
+build holding the file is the build running prestart.
+
+This needs no laptop, and **the production connection string never leaves
+Render**, which is better than the alternative on its own merits.
+
+```text
+1.  From the SURVIVING shell, read-only, get the true ledger ceiling:
+        node migrations/migrate.js          (no --apply — verify-only)
+    It prints the ceiling. Do not type a remembered number.
+
+2.  On the API service, set three env vars:
+        MIGRATION_RELEASE=1
+        EXPECTED_LEDGER_CEILING=<what step 1 printed>
+        EXPECTED_SHA=<the SHA of current main you are deploying>
+
+3.  Deploy current main. prestart applies, then the service starts.
+
+4.  DELETE MIGRATION_RELEASE IMMEDIATELY.
+
+5.  Browser check, not SQL: the deal page must read
+    "Lease & occupancy established" for a property that has one.
+```
+
+**Two independent guards make a second, accidental release refuse** — both
+measured in `migrate.js:327–355`. `EXPECTED_LEDGER_CEILING` no longer matches
+once 159 applies, and `EXPECTED_SHA` is pinned to one build. That is real
+safety, and it is not a reason to leave `MIGRATION_RELEASE` set.
+
+### SEQUENCING — SATISFIED, AND STILL LIVE FOR THE NEXT ONE
+
+159 was released **before** the Asset Management branch merged, which was the
+point: **a release applies EVERY pending file** and there is no per-file
+selection. `claude/property-spine-thread-handoff-i7hj0u` carries migrations
+**160** (asset-management module entitlement) and **161** (insurance economic
+truth), neither of which has its own release receipt.
+
+They are now the next pending pair. Merging that branch makes them pending on
+`main`; releasing them is a **separate deliberate act** with its own ledger
+read (ceiling will be **159**) and its own `EXPECTED_SHA`. Do not let a future
+159-shaped emergency sweep them in as a side effect.
+
+### Not a blocker for Asset Management, and it is worth being precise
+
+Asset Management does **not** read `opening_positions` /
+`opening_tenancy_positions`. Checked: nothing in `src/asset/`,
+`src/surfaces/asset_management.js`, or migrations 160/161 references either
+name; the chain queries `leases`, `deal_intake_properties` and its own
+insurance tables. It is blocked the way *everything* is blocked — nothing has
+shipped — not by a schema dependency, and it deploys correctly on either side
+of the rename.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  FOUR OPERATING DOORS. ASSET MANAGEMENT IS THE FOURTH.
+##  2026-08-11. THIS SECTION WINS ON PRODUCT DIRECTION.
+## ══════════════════════════════════════════════════════════════════
+
+**This is a product-direction change and it retires a reserved name.** Every
+older statement in this file, in `CLAUDE.md`, in `PHILOSOPHY.md` and in route
+comments that said *"Asset Management is reserved for the owner surface"* is
+**superseded**. Those statements have been corrected in place.
+
+### The canonical product structure
+
+```text
+LEASING      MANAGEMENT      MAINTENANCE      ASSET MANAGEMENT
+```
+
+**Asset Management is a staff/operator-side OPERATING door**, parallel to the
+other three. The asset manager is still operating the deal — economically:
+revenue, debt and capital structure, taxes, insurance, payroll, management fees,
+utilities, contracts, and later budgets and variances.
+
+**It is NOT the Owner / Investor surface.** That is a later, different audience,
+potentially a different login, and it is now its own reserved name.
+
+```text
+Property Management / Operations → Asset Management → Owner / Investment Team
+```
+
+Progressive economic context and compression — **not one screen with different
+permissions.**
+
+### The sequence, and the build strategy
+
+```text
+ONBOARDING                            establishes opening truth
+    ↓
+LEASING · MANAGEMENT · MAINTENANCE    operate and continuously update
+· ASSET MANAGEMENT                    living property truth
+    ↓
+REPORTING                             reads and closes/compresses it
+    ↓
+OWNER / INVESTOR SURFACE              later, different audience
+```
+
+**Build the operating middle deeply enough to know what truth it requires. Then
+make onboarding populate it. Then make reporting read it.** Do not pre-design
+financial onboarding or reporting before the middle exists.
+
+### Asset Management hierarchy — four parts
+
+Sub-labels may evolve; the four-part structure is the product direction.
+
+```text
+REVENUE               Rent · Vacancy · Concessions · Other Income
+CAPITAL               Senior Debt · Mezzanine Debt · Preferred Equity ·
+                      Reserves / Escrows
+PROPERTY OBLIGATIONS  Taxes · Insurance · Licenses & Registrations ·
+                      Compliance · Other fixed / recurring
+                      ↑ what the asset must maintain simply because we own
+                        and operate it — financial AND regulatory. Later:
+                        rental licences, registrations, filings, tax
+                        compliance, inspections, renewals. Compliance sits
+                        HERE rather than as a fifth room — a lapsed licence
+                        and an unpaid tax bill are the same kind of fact
+                        from the asset's point of view. NO COMPLIANCE LOGIC
+                        EXISTS; this is navigation only.
+OPERATING COSTS       Payroll · Management Fees · Utilities · Contracts ·
+                      Repairs / other operating expense
+```
+
+### Naming, routes and entitlement — frozen
+
+```text
+canonical name          Asset Management
+canonical route         /operator/asset-management/*
+canonical entitlement   asset_management  (a MODULE, in allowed_modules)
+```
+
+**`/asset/*` is NOT reused.** It remains Deal Setup's ⏳ Class 4 legacy alias
+with its original retirement condition (a deploy with no
+`deal_setup_legacy_alias` log line). Sharing the prefix would have made that
+condition permanently unobservable.
+
+**Module entitlement and job title are different facts.** Access is gated on
+`allowed_modules` containing `asset_management`, exactly like the leasing gate —
+never on the `asset_manager` role name. The future Owner / Investor surface must
+NOT reuse this entitlement merely because it consumes Asset Management truth.
+
+### Standing economics vs operating consequence — both, not either
+
+```text
+STANDING ECONOMIC TRUTH   governed terms already known — leases, debt documents,
+                          tax obligations, insurance policies, contracts
+OPERATING CONSEQUENCE     arises from operations — unexpected repair, turn
+                          delay, concession, vacancy loss
+
+normal governed expectation + unexpected operating consequence
+    = the actual economic story of the property
+```
+
+The `$1,840` maintenance-consequence work is **PARKED, not discarded** (see the
+Deal Setup section below and `docs/STANDING_ECONOMIC_OBLIGATIONS_SOURCE_READ.md`).
+Do not let it define the current build.
+
+### What is stale scaffolding, and must not dictate the new surface
+
+Measured, not assumed:
+
+```text
+index.html money/capital/reporting region   SNAPSHOT-ONLY. __OFFLINE_MODE is
+                                            assigned true unconditionally and
+                                            never set false; getJSON() checks it
+                                            FIRST, so every read is the baked
+                                            snapshot and every write throws 405.
+index.html:24376  CAPITAL_DEMO              FIXTURE FALLBACK — renders demo rows
+                                            when real rows are empty. §19–20
+                                            violation shape. Do not carry it into
+                                            the new door.
+src/money/*_cutover.js, economic_shadow.js  Class 3/4 MIGRATION INSTRUMENTS for a
+fact_migration_preview.js,                  legacy pricing problem. Not product
+economic_decision_room.js, pricing_rehearsal architecture.
+src/money/economic_picture.js,              LEASING economics — what a LEASE
+effective_pricing.js, governed_charges.js   CHARGES. Not what the PROPERTY OWES.
+                                            Do not let this vocabulary into the
+                                            Asset Management door.
+src/surfaces/owner.js                       Despite the name: onboarding property
+                                            cards + attention queue from ingest
+                                            runs. NOT the owner surface.
+ORG_MODULES / KNOWN_DESKS containing        The four-door model consolidates
+'money', 'capital', 'reporting'             these. Left live (see below) but they
+                                            are not the product direction.
+```
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  DEAL SETUP / OPENING TENANCY POSITION — ON `main`, NOT CONFIRMED
+##  IN PRODUCTION. 2026-08-11.
+## ══════════════════════════════════════════════════════════════════
+
+**This supersedes every state claim below it.** The Work Orders section
+beneath is still correct about Work Orders; it is silent about Deal Setup
+because Deal Setup shipped after it, from `6c577dc`.
+
+```text
+API  main  d726188   (this commit moves it — see the standing +1 note below)
+APP  main  60a489c
+next free migration number: 160
+```
+
+### ⚠ TWO THINGS ARE NOT CONFIRMED. DO NOT ASSUME EITHER.
+
+**1. Migration 159 may not be released.** It was merged. Nobody has seen
+evidence it was applied. The thread that shipped it had no production access
+— outbound to `onrender.com` is blocked by the agent proxy — and neither did
+the thread that wrote this section. Released and confirmed by query: **150–158**.
+Ledger ceiling was **158** at last reading.
+
+```sql
+select version, name, applied_at from schema_migrations where version = '159';
+```
+
+**2. The human production pass through Deal Setup has not been reported.**
+Ask before treating Deal Setup as proven in production. On the §33 ladder it
+is **Proven** (real DB + real HTTP) and **Browser verified** in a harness —
+it is not production-verified.
+
+`docs/release/ledger_read_before_release.sql` is **current through 159** and
+was re-derived from `origin/main`'s actual migration files during this
+session — version-for-version identical, including the `125` and `138/139`
+gaps. Run it, do not retype it. A hand-typed range is how 140 was missed.
+
+### What shipped
+
+Create a Deal → add a Property → upload its rent roll → establish lease &
+occupancy → exceptions surfaced → persists → visible on the existing staff
+Rent Roll.
+
+**The load-bearing design decision: ONE activation writes BOTH substrates.**
+
+```text
+retained artifact
+   └─▶ loadLedgerSnapshot ─▶ import_batches
+                             import_source_rows      EVIDENCE
+                             units · spaces
+                   │
+                   └── FK ──▶ proposed_records       DECISION
+                                   │
+                             confirm ─▶ persons · leases
+                                   └─▶ produced_person_id /
+                                       produced_lease_id written back
+                                       onto the evidence row
+```
+
+Why, and do not "simplify" it: `GET /operator/rent-roll` — the staff Rent
+Roll — reads `import_batches` → `import_source_rows` and overlays canonical
+positions. An activation that wrote only canonical leases would establish a
+position **the operator's own rent roll cannot show.**
+
+**The evidence writer is NOT new code.** It is `loadLedgerSnapshot`, the
+existing importer, called inside the caller's transaction. There is no second
+importer. Keep it that way.
+
+New services, all under `src/onboarding/`:
+
+| module | what it is |
+|---|---|
+| `deal_setup.js` | routes, `/deal-setup/*` |
+| `deal_service.js` | canonical deal writer |
+| `activation_service.js` | activation + opening tenancy position |
+| `source_artifact_service.js` | retained file (bytes, sha256, scope) |
+| `rent_roll_field_map.js` | header mapping, reports its own work |
+
+Migrations **153–159**. Read their headers; they carry the reasoning.
+
+### Reserved names — this surface already spent one and was corrected
+
+```text
+Deal Setup                 onboarding machinery (what shipped)
+Asset Management           ⚠ SUPERSEDED 2026-08-11 — see the top section.
+                           No longer "reserved for the owner surface"; it is
+                           the fourth OPERATING door, /operator/asset-management/*
+Owner / Investor Surface   RESERVED — the later, different audience
+Opening Tenancy Position   lease + occupancy, from a rent roll, as of a date.
+                           Shown to people as "Lease & occupancy established"
+Opening Operating Position RESERVED — tenancy + bank + debt + taxes +
+                           insurance + contracts
+Opening Accounting Truth   RESERVED — opening GL / subledger balances
+```
+
+This shipped as "Asset Management" and was renamed the next day. **That rename
+was still correct** — Deal Setup is onboarding, Asset Management is operating —
+and the reason it worked still holds: **renaming rendered text reserves
+nothing**, so the routes, the module, the DOM ids and the function prefix all
+moved with it.
+
+`/asset/*` survives as a ⏳ **Class 4** alias inside `deal_setup.js`. It
+rewrites to `/deal-setup/*` and **logs every use** (`deal_setup_legacy_alias`,
+`src/onboarding/deal_setup.js:132`). **Removal condition:** a deploy with no
+such line in the logs. Delete it then. It is not architecture.
+
+`asset_management_console` survives as a `creation_source` **enum value**
+(`migrations/154`, `159`, `src/onboarding/deal_service.js:42`). That is a
+historical fact about how existing rows were created, not a name spend, and
+it is labelled as such at every site. **Do not sweep it.**
+
+### Traps this thread paid for
+
+**A DEPLOY DOES NOT MIGRATE.** `prestart` runs `migrate.js` in **verify-only**
+mode and refuses to start while anything is pending. Render keeps the old
+instance live, so **the API looks fine while the schema is simply absent.**
+Release deliberately:
+
+```bash
+MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=<read it, do not type it> \
+  EXPECTED_SHA=<deployed sha> node migrations/migrate.js --apply
+```
+
+On Render, set those three as env vars for **one** deploy, then **DELETE
+`MIGRATION_RELEASE`**. This trap has now cost time three times.
+
+**A CONSTRAINT IS A CLAIM ABOUT EVERY WRITER.** Migration 158's first version
+widened `import_batches.source_type` after reading **one** writer, reached
+production, and was refused by a row from a second writer **260 lines below
+the first, in the same file.** There is now a test (H1) that scans every
+writer in the repo.
+
+**RENDERED IS NOT VISIBLE.** Deal Setup shipped writing every message —
+success, failure, refusal — into `#receipt`, which sits in the app shell
+**underneath** a `position:fixed` overlay. Real element, real text,
+`display:block`, and invisible. `innerText` read it perfectly. Two rent-roll
+uploads in a row looked like they did nothing.
+
+- assert with `document.elementFromPoint` at the element's centre
+- **scope selectors to the surface** — an unscoped `button:has-text('Review')`
+  matched a button in the shell beneath the panel
+- **provoke a REAL refusal through the real path.** An earlier proof called
+  the app's own toast function, found it was not on `window` (the surface is
+  an IIFE), silently skipped, and reported the channel broken.
+
+**AN API OUTPUT KEY IS A CONTRACT.** A blunt identifier sweep in 159 renamed
+a response key and not the app reading it. Nothing threw; the deal page just
+showed "Setup in progress" for a property whose position **was** established.
+Only the browser caught it — the HTTP proof was asserting the database, not
+the response shape. Pin renamed keys with an assertion that reads them by
+name (**H16b**).
+
+### Verified in source during this session
+
+Reported facts re-checked against the tree at `d726188`, so the next session
+does not have to. This is a claim about **these** greps, not about the tree:
+
+```text
+deal_setup_legacy_alias      warns at src/onboarding/deal_setup.js:132
+                             rewrite at deal_setup.js:131-135
+bare_lease_writer_contained  refuses 410 at server.js:948-955
+                             asserted at tests/deal_setup_http.db.js:445
+ledger read file             version-for-version == origin/main migrations/
+five new onboarding modules  all present under src/onboarding/
+```
+
+**Not checked:** production, anything over HTTP, the H1/H16b harnesses as
+runs rather than as files.
+
+### ⚠ NEW TRAP — `npm run verify` silently ran 9 of its 12 gates
+
+On a **shallow clone** — which is what the agent container starts with —
+`npm run verify` fails like this, on a clean tree, with no local changes:
+
+```text
+NOT PROVEN  every extracted line appears verbatim in the tenantlink original
+            → HEAD~1 is unreachable (shallow clone or first commit)
+✗ PARENT VALIDATION FAILED — conversation_intent_extraction.test.js exited 3
+  3 gate(s) NOT RUN.
+```
+
+**The runner stops at the first non-zero child.** So the visible failure names
+`conversation_intent_extraction`, and the *actual* cost is the line under it:
+**three gates never executed at all.** Somebody reading the banner goes and
+debugs intent extraction — a product module that is fine — and does not notice
+that a quarter of the gate set produced no evidence either way.
+
+This is not a false green. It is worse in one specific way: **a red that
+points at the wrong subject and conceals a coverage hole.** The check itself
+is honest — it says `NOT PROVEN`, not `FAIL`, and refuses to guess without
+`HEAD~1`. The environment was the defect.
+
+```bash
+git rev-parse --is-shallow-repository   # true ⇒ your verify run is partial
+git fetch --unshallow                   # then re-run
+```
+
+After unshallowing: **12/12 gates exit 0.** Do this *before* trusting any
+verify result in a fresh container, and read the `gate(s) NOT RUN` count on
+every red run — it is the part that is easy to scroll past.
+
+### NEXT BUILD — ECONOMIC CONSEQUENCE V1. DESIGN FIRST.
+
+**Do not write code until the four questions below are answered by the human.**
+Gated on the production pass being green.
+
+`docs/PHILOSOPHY.md` **§36–39 are new** (`c74d355`) and are the governing
+doctrine for this build. Read them before designing anything:
+
+```text
+36  the layered architecture, and THE FORK: economic consequence descends
+    from standing truth AND operating events alike
+37  four users, four compressions; observation → confirmation → recognition
+    is three dated facts, never one row edited three times
+38  the owner surface; the Exposure contract; recorded fact and derived
+    attribution are different epistemic classes
+39  economic consequence ACCUMULATES — the stages are readings of a dated
+    history, not statuses on one row
+```
+
+**THE GAP.** money → work exists (`src/money/attributions.js`, migration 045,
+*"CAUSALITY: money event → operating record"*). work → money does not. *"The
+repair uncovered another $1,840"* originates at the work order, before any
+bank transaction, and has nowhere to live.
+
+**⚠ FINDING THAT KILLS A PLANNED MIGRATION: `work_orders` needs NO
+`completed_at`.** `work_order_progress` (migration 134) already carries
+governed completion with its own `occurred_at`, and already separates:
+
+```text
+'completion_claimed'   the technician says finished
+'completed'            the governed service closed it
+```
+
+with `note` holding their verbatim words and `source_comm_event_id` tracing
+to a real message. **The knower-records / authority-confirms pattern is
+ALREADY BUILT, for a different fact. Mirror it; do not invent it.**
+
+**Precision on §39's closing accusation, measured this session.** §39 says the
+shipped surface *"can never become $1,840, because there is no hook the
+vendor's invoice can attach to."* The *hook* exists —
+`work_order_progress` gives every observation a durable id, `occurred_at`,
+verbatim `note` and comm-event lineage, and migration 136 already made
+`comm_events.derived_from_progress_id` reference it. What is missing is that
+**no economic relation can address it**: `attributions.js` relates money to
+`work_orders` (`related_type='work_order'`) — one altitude too coarse — and
+proxies completion with `wo.updated_at`, saying so in its own comment at
+`attributions.js:40`. So the defect is **granularity and direction, not
+absence.** EC V1 should relate to the progress row and consume
+`work_order_progress` instead of `updated_at`. That is a much smaller build
+than "there is no hook."
+
+**THE FOUR QUESTIONS TO ANSWER BEFORE CODING:**
+
+1. What exactly is the source claim? (technician, natural language)
+2. What exactly does economic authority confirm?
+3. How is historical Deal membership stamped?
+4. How does revision / supersession preserve history?
+
+**RULINGS ALREADY MADE — do not relitigate:**
+
+- **STAMP `deal_membership_id`** (the `deal_intake_properties` row current at
+  origin), never derive the Deal at read time. Migration 155 makes membership
+  historical, so deriving would rewrite old economics when a property changes
+  deals. Null if no governed membership. **Never backfill later.**
+- **Direction-neutral from day one.** Do not put "expense" in the primitive's
+  ontology, even though the first case is a work-order cost.
+- **⚠ PARENT-NEUTRAL from day one.** This is *not* the same ruling as
+  direction-neutral and was added by §36 after the list above was written. A
+  lease earns rent, a note accrues interest, a tax schedule produces a bill —
+  none has an operating event. **`economic_consequence.work_order_id NOT NULL`
+  violates §36 on day one.** An EC relates to whatever actually caused it.
+- **NOT** one mutable row marching expected→incurred→billed→paid. One stable
+  economic subject, multiple dated facts and links (§39).
+- No `expected_cost` column on `work_orders`, turns, tax bills or loans.
+- `amount_cents` **bigint** — matches migration 045, which V1 must converge
+  with. Never floating point.
+- **Exposure is a CONTRACT, not a table.** Six questions, in `CLAUDE.md` and
+  §38. Unknown magnitude is valid Exposure, **never zero**.
+- **Sequence:** completion-time attribution → EC / work-order cost → Bank
+  Accounts → **REVENUE Consequence V1** → broaden. The roadmap was
+  accidentally expense-heavy; revenue causality (turn delay → rent at risk)
+  must not lag five expense rails.
+
+**Carried from §38, with no enforcement anywhere yet:** recorded fact and
+derived attribution must render as visibly different classes, and derived
+attribution must name the model that produced it. Its failure mode is
+invisible — a derived number rendered as recorded looks exactly right. If it
+is going to hold, the assertion has to exist **before** the first derived
+number ships.
+
+### DO NOT
+
+- **Do not do opportunistic work on Deal Setup.** It is frozen pending the
+  production pass.
+- **Do not build the owner Asset Management surface.** It cannot narrate a
+  cause that has no recorded fact behind it, and the causal Money graph does
+  not exist yet. **Connect, then compress.**
+- Do not build legal entities, journals, accrual engines, AP, invoice
+  ingestion, or Opening Accounting Truth.
+- **Do not install any front-end patch bundle without checking every symbol
+  it references against the source first.** One was sent that wrapped eleven
+  functions, of which **zero** existed; it would have renamed one button and
+  reported success.
+
+### Known, recorded, not fixed
+
+- `leases` has **no `security_deposit` column** in the migration-built schema,
+  yet the dormant activation module and the old bare `POST /leases` both wrote
+  to one. **Production may have columns the ledger never created.**
+- `deal_intakes.status` is still `created` / `files_received` / `classified`.
+  No deal lifecycle vocabulary (`active` / `closed`) exists, which is why "one
+  active deal per property" is enforced on **membership currency** instead.
+- **Duplicate building in production:** 4233 Chestnut and Solo on Chestnut,
+  283 units each. Business decision, untouched.
+- `POST /leases` is contained (**410**) with a retirement condition: delete it
+  once a deploy passes with no `bare_lease_writer_contained` log line.
+- `seeds/seed_demo_slots.js` required `../staff_identity_resolver.js` (repo
+  root — the module is at `src/identity/`). **FIXED this session**; see the
+  cleanup note below.
+
+---
+
 ## 2026-08-11 · MAINTENANCE WORK ORDERS — H CLOSED. ONE PRODUCT.
 
 **Merged:** API `6c577dc` (PR #77) · App `5dd2548` (PR #43).

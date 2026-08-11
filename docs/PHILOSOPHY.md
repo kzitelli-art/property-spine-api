@@ -1136,7 +1136,7 @@ The product reaches production through one canonical, browser-proven vertical sl
                               │
                               ▼
 
-                     ASSET MANAGEMENT
+                  OWNER / INVESTOR SURFACE
                        OWNER COMPRESSION
 
                 What changed?
@@ -1147,12 +1147,31 @@ The product reaches production through one canonical, browser-proven vertical sl
                 What will show up in reporting?
 ```
 
+> ⚠ **CORRECTED 2026-08-11.** The bottom of this diagram previously read
+> `ASSET MANAGEMENT / OWNER COMPRESSION`, which taught that Asset Management
+> *is* the owner surface. **It is not.** Asset Management is the fourth
+> **operating door** — staff/operator side, beside Leasing, Management and
+> Maintenance — where the economic structure and performance of the property
+> become operable. The owner compression is a **later, different audience**,
+> potentially behind a different login. The layers above are unchanged; only
+> the audience at the bottom was misnamed.
+>
+> ```text
+> Property Management / Operations → Asset Management → Owner / Investment Team
+> ```
+>
+> That is progressive economic context and compression, not one screen with
+> different permissions. Asset Management appears in this stack **twice over**:
+> as an operating door that reads and operates the layers above it, and as one
+> of the producers of the truth the owner compression later consumes.
+
 > Setup establishes the world.
-> Operations records what happens.
+> Operations records what happens — Leasing, Management, Maintenance and
+>   Asset Management are the four doors where it is recorded.
 > Economic Consequence connects the deal and its work to money.
 > Accounting recognizes, classifies, reconciles and closes period truth.
 > Reporting packages it.
-> Asset Management explains the deal to the owner.
+> The Owner / Investor surface explains the deal to the owner.
 
 ### Economic consequence has two parents, not one
 
@@ -1324,6 +1343,13 @@ has no evidence it could answer one.
 
 The owner surface is not a dashboard, not a task list, not a report viewer,
 and not an onboarding wizard.
+
+**It is also not Asset Management.** Asset Management is an operating door in
+the staff product, where an asset manager *operates* the deal economically. The
+owner surface is a later, different audience — potentially a different login —
+that consumes the compressed story Asset Management and the other three doors
+produce. Everything in this section describes that audience, not the door. Do
+not build this surface into the Asset Management door.
 
 At any moment it answers:
 
