@@ -215,6 +215,37 @@ async function readWorkOrderStatus(db, {
       where w.id = $1 and w.property_id = $2`, [workOrderId, propertyId])).rows[0];
   if (!workOrder) return null;
 
+  /*  ── WHO LIVES THERE ────────────────────────────────────────────────
+   *  A work order in unit 631 and the resident of unit 631 are the same
+   *  physical reality, and until now nothing related them. The board knew
+   *  "Unit 631" as a STRING; a surface wanting to reach the person had to
+   *  guess a human from a unit label, which §21 forbids — the browser
+   *  requests, the server decides.
+   *
+   *  DERIVED FROM THE LEASE, not from the work order. Occupancy is the
+   *  lease's fact, so it is read from the active lease on this unit and
+   *  nowhere else. A work order carries no tenant column and must not grow
+   *  one: that would be a second statement of who lives somewhere, free to
+   *  drift from the first (§7).
+   *
+   *  §5 — EMPTY IS A REAL ANSWER, and it is not a failure. A common-area
+   *  work order has no unit at all; a vacant unit has no active lease. Both
+   *  return nothing, and the surface says nothing rather than inventing a
+   *  resident or rendering a link to a person who does not exist.
+   *
+   *  ALL TENANTS, not a guessed primary. A lease may name several people and
+   *  Spine has no basis for deciding which of them is "the" resident.
+   *  Choosing one would be an invented fact; naming them all is the truth.  */
+  const residents = workOrder.unit_id
+    ? (await db.query(
+        `select p.id, p.name
+           from leases l
+           join persons p on p.id = any(l.tenant_ids)
+          where l.property_id = $1 and l.unit_id = $2
+            and l.lease_status = 'active'
+          order by p.name asc`, [propertyId, workOrder.unit_id])).rows
+    : [];
+
   //  WHO IS ACCOUNTABLE. The obligation is the accountability rail; the
   //  work order's free-text assigned_to column is deliberately not read.
   //
@@ -379,6 +410,10 @@ async function readWorkOrderStatus(db, {
       //  and is driving to is urgent and NOT waiting on anyone.
       is_emergency: workOrder.urgency_status === "emergency",
       opened_at: workOrder.created_at,
+      /*  The people the work is happening TO. Person id plus name only —
+       *  enough for a surface to name them and open their Person Card, and
+       *  nothing that would make this projection a second dossier (§13). */
+      residents: residents.map((r) => ({ person_id: r.id, name: r.name || "(unnamed)" })),
     },
     current: {
       state,
