@@ -22,9 +22,29 @@ offers `Take job` opens into a detail that does not. Both surfaces are honest;
 they are not the same object seen twice, which is what the contract asks for.
 Found by reading source during the smoke check, not by a failing assertion —
 no test covers it, which is the more useful half of the finding. Work Orders is
-frozen, so this is written down rather than fixed. Removal condition: either
-`detailHtml` calls `action()` for its dominant verb, or the contract is amended
-to say acceptance is a list-only affordance and a guard asserts that.
+frozen, so this is written down rather than fixed.
+
+**RULED 2026-08-11, for the next maintenance pass. This is a frozen decision —
+do not re-derive it.** Acceptance is **not** list-only. List and detail are two
+views of the same work order, so the dominant action must agree: if KZ sees
+`Take job` on the row because `may_accept` is true, opening that work order
+must still offer `Take job` as the dominant `Next`. *A user must never lose a
+valid next action merely by opening the object.*
+
+Implement **by subtraction, not another branch**: `detailHtml` consumes the same
+canonical `action()` resolver the list does, instead of independently
+reconstructing its cases. This is a projection-consistency fix. It is not a new
+acceptance feature and it changes **no backend authority** — `may_accept` stays
+server-derived and the write keeps refusing what the surface hides.
+
+Removal condition — the parity proof that does not exist yet, four cases:
+
+| viewer / state | list | detail |
+|---|---|---|
+| KZ, assigned + unaccepted | `Take job` | `Take job` |
+| manager viewing KZ's assignment | none | none |
+| Tom viewing KZ's assignment | none | none |
+| after KZ accepts | gone | gone |
 
 ### The correction this section exists to make
 
