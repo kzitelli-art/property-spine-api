@@ -1,5 +1,105 @@
 # Property Spine — Thread Handoff
 
+## 2026-08-11 · MAINTENANCE WORK ORDERS — H CLOSED. ONE PRODUCT.
+
+**Branch (both repos): `claude/maintenance-work-orders-ui`. Not merged.**
+**Deployed: nothing. Migrated: nothing. No schema change in this slice.**
+
+### The correction this section exists to make
+
+This file said the retired closeout drawer was **"stranded legacy —
+`renderDetail` → `workOrderPanel` is unreachable from any live route."**
+
+**That was false, and it was measured false.** The drawer was reachable and
+suppressed:
+
+```
+renderMaintenance() → real kind:'work_order' rows → the shared .lanes
+  → a lane row's onclick → renderDetail()
+    → kind==='work_order' → workOrderPanel()
+```
+
+`body.maintenance-v6-mode .lanes{display:none}` was the entire separation
+between an operator and a second, complete maintenance application — its own
+detail grammar, its own closeout controls, and a not-done picker reading a
+HARDCODED reason list which, because index.html's `getJSON` is offline-locked,
+was the only thing it ever rendered.
+
+The claim at item 7 below — the `work_*` nav keys "reachable only from the
+retired dashboard's own markup" — was also wrong in the same direction:
+`openMaintenanceModule` dispatched four of them to live renderers. They were
+unreachable only because the code emitting those keys happened to sit inside
+the dead dashboard. **Reachability by accident, not by design.**
+
+**H removed the second runtime path entirely.** 556 lines from `index.html`,
+114 from `policy.js` / `property-spine-data.js`. Unreachable was never the
+goal; absent is.
+
+### What is true now
+
+| | |
+|---|---|
+| one way into a work order | the tile → `openWorkOrdersDoor()` → `work-lifecycle-door.js` |
+| one not-done path | `POST /operator/work-orders/:id/not-done`, staff-session scoped |
+| one acceptance fact | `POST /operator/work-orders/:id/accept` → `technician/acceptance_service.acceptWork` |
+| one proof interpretation | `proof-normalizer.js`, single interpretation point |
+| fixture rails in the signed-in maintenance surface | none |
+
+`.lanes{display:none}` **stays, and is not a concealment**: `leasing-v6-mode`
+and `management-doors-mode` carry the identical rule — it is how every v6 desk
+turns off the shared legacy shell. The lanes keep their proven
+obligations-unavailable behaviour. What left them is work orders.
+
+TWO FIXTURE LIBRARIES EXISTED. `__WO_FLOW_LIBRARY` was read inside the
+maintenance dashboard path and is gone from all three files. `__WO_LIBRARY`
+feeds `DEMO_DB` in the offline preview snapshot — the preview product's own
+data — and stays; the guards prove the live door can see neither it nor any
+offline rail.
+
+### Two dimensions, not one
+
+`current.state` is the physical lifecycle. `current.attention` is what Spine is
+waiting on. `work_order.is_emergency` is how consequential the condition is.
+A routed blocker is **In progress**; an unowned one is **Needs action**; an
+emergency sorts first inside its band and does not change the band at all —
+asserted structurally (`band()` may not read `is_emergency`).
+
+### Evidence
+
+| rung | result |
+|---|---|
+| `work_lifecycle_browser_proof` | **145/145** — real Chromium + real Postgres |
+| `work_order_operator_seams.db.js` | **42/42** — real Postgres + real `server.js` |
+| `proof_presentation_contract.browser` | 43/0 |
+| `work_orders_reachable_when_obligations_fail` | 30/0 |
+| APP source suite · H absence guard · banding | 23/23 · 24/24 · 34/34 |
+| API `npm run verify` | 11/11 |
+
+Playwright is now a declared devDependency with a lockfile entry, and the
+browser rungs were re-run from a clean `npm install`. They are release
+evidence and must not depend on a manual install again.
+
+### Traps this slice paid for
+
+1. **A green harness can be standing up the wrong system.** Six defects, and
+   only one was in the product: the page served no `proof-normalizer.js`; the
+   migration list stopped at 136 so governed completion silently rolled back
+   through all of section 5; the teardown fought migration 137's append-only
+   evidence chain; a token swap was wiped by `page.goto` and read the wrong
+   property's queue while claiming an honest empty. Every one of them ran its
+   assertions. None of them was looking at the system.
+2. **Migration 012 cannot replay from an empty database.**
+   `001_baseline.sql:238` creates `vendors` without `yardi_code`, so
+   `012_bank_intake.sql:33`'s `create table if not exists` is a no-op and its
+   index fails. Use the scoped-schema fixtures. **This is not a Work Orders
+   problem and must not be repaired inside one.**
+3. **Production schema readiness is a SEPARATE check.** "Can migrations replay
+   from zero" and "does the deployment target satisfy this release's schema
+   contract" are different questions. The second is required before deploying
+   this slice and has NOT been done.
+
+---
+
 **Current as of API `main` @ `a9f51da`+ · APP `main` @ `6220ca5` · 2026-08-05 (late).**
 
 > **The API SHA above is ALWAYS one commit stale, by construction.** Editing
@@ -106,9 +206,13 @@ document them away to turn verify green.
 
 ### Closed, do not reopen
 
-Boundary 6 is closed on source + reachability evidence. The closeout drawer is
-**stranded legacy** — `renderDetail` → `workOrderPanel` is unreachable from any
-live route; the work-order door (`work-lifecycle-door.js`) never had that
+Boundary 6 is closed on source + reachability evidence. ⚠ **THE "STRANDED
+LEGACY" VERDICT BELOW WAS WRONG — see the 2026-08-11 section at the top.** The
+drawer was REACHABLE through the desk's lanes and suppressed by one CSS rule;
+H has since deleted it entirely. The paragraph is kept because the reasoning
+that produced the wrong answer is the clearest account of how the reachability
+question was framed. ~~The closeout drawer is **stranded legacy** —
+`renderDetail` → `workOrderPanel` is unreachable from any live route~~; the work-order door (`work-lifecycle-door.js`) never had that
 control. Browser acceptance belongs on the live door, not on a resurrected
 drawer. `closeout_surface_reachability.test.js` 19/19, falsified 11/11 (APP).
 The who-line fix (`KZ · ACCEPTED` / `KZ · NOT ACCEPTED` / `UNASSIGNED`) is
@@ -762,9 +866,12 @@ HARNESS_DATABASE_URL="postgresql://<user>:<pw>@127.0.0.1:5432/postgres" \
 6. **Two back controls on the Work Orders route** — the app bar's
    `‹ BACK MAINTENANCE` and the door's own `‹ MAINTENANCE`. The Unit Turn
    route solved this with a header slot; this one has not. Cosmetic.
-7. **Seven orphaned nav keys.** `work_inprogress`, `work_done`,
-   `work_closed`, `proof`, `work_emergency`, `work_new`, `work_open` are now
-   reachable only from the retired dashboard's own markup. Dead, not broken.
+7. **Seven orphaned nav keys.** ⚠ **CORRECTED 2026-08-11 — this was wrong.**
+   `openMaintenanceModule` dispatched `work_inprogress`, `work_done`, `proof`
+   and `work_closed` to LIVE renderers; they were unreachable only because the
+   code emitting those keys sat inside the dead dashboard. Reachability by
+   accident. H routes every `work_*` key to the canonical door and deleted the
+   renderers. ~~reachable only from the retired dashboard's own markup~~
 8. **A write returning 200 with an unparseable body reports "Done."**
    `writeAction` yields `data: null`; the door falls back to `{}`. Pre-existing
    shape, low likelihood, but it is a confident-wrong if it ever fires.
