@@ -64,6 +64,20 @@ create table units (
   unit_number text
 );
 
+--  001_baseline. Occupancy is the LEASE's fact, and the work-order read now
+--  derives who lives in a unit from the active lease rather than letting a
+--  work order carry a tenant column of its own. Without this table the read
+--  throws and the door honestly renders UNAVAILABLE -- so the fixture has to
+--  carry it for the proof to be a real test rather than a test against a
+--  convenient replica.
+create table leases (
+  id           uuid primary key default gen_random_uuid(),
+  property_id  uuid references properties(id) on delete cascade,
+  unit_id      uuid references units(id) on delete set null,
+  tenant_ids   uuid[] not null default '{}',
+  lease_status text not null default 'active'
+);
+
 create table users (
   id   uuid primary key default gen_random_uuid(),
   name text
