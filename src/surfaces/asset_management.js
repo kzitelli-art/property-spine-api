@@ -404,6 +404,183 @@ module.exports = function assetManagement(deps) {
     }
   });
 
+  /* ════════════════════════════════════════════════════════════════════
+   *  GET /operator/asset-management/insurance
+   *
+   *  The Insurance compartment of Property Obligations. The FIRST
+   *  compartment to get its own surface.
+   *
+   *  ── INSURANCE IS PROPERTY-CENTRIC ON THE SURFACE, EVEN WHEN THE
+   *     UNDERLYING INSURANCE IS NOT ─────────────────────────────────
+   *  The reality underneath includes portfolio and shared programs,
+   *  property-specific policies, Property / GL / Umbrella / Excess
+   *  layers, several carriers, mid-term endorsements and additions,
+   *  property allocations, premium plus taxes and fees, lender escrow,
+   *  and premium financing with down payments and installments.
+   *
+   *  The asset manager must not have to reconstruct any of that. This
+   *  screen answers ONE question — what is this property's current
+   *  insurance position — and everything else is a drill-down.
+   *
+   *  ── FOUR TRUTHS THAT MUST NEVER COLLAPSE INTO ONE RECORD ────────
+   *
+   *    coverage   what coverage/program/policy applies, for what period
+   *    economic   what cost belongs to THIS property and THIS period
+   *    cash       what was or will be paid, when, through which escrow
+   *               or financing path
+   *    history    what changed, when, and why
+   *
+   *  Each section below declares which truth it holds, in the response,
+   *  so the separation survives a later reader who did not read this
+   *  comment. They must reconcile eventually. They must never become one
+   *  mutable insurance row.
+   *
+   *  THE DOCTRINE THAT DECIDES THE ECONOMIC SECTION:
+   *    Coverage period determines when the expense economically belongs.
+   *    Cash payment timing does not.
+   *  A $120k premium paid once in January belongs ~$10k to each month it
+   *  covers. That is §39 — cash and accrual are two readings of one
+   *  history — arriving at its first real domain.
+   *
+   *  ── WHAT THIS SLICE IS NOT ──────────────────────────────────────
+   *  No policy schema, no allocation engine, no accrual generator, no
+   *  financing math, no document extraction, no accounting recognition.
+   *  Those are gated on research still running. This returns the
+   *  permanent SHAPE with honest blanks, and the API keeps ownership of
+   *  all future math so the surface never computes anything.
+   *
+   *  CLASS 2 (permanent). The skeleton is permanent; only its facts fill.
+   * ════════════════════════════════════════════════════════════════════ */
+
+  //  The headline strip. Five slots reserved for real facts, rendered as
+  //  honest blanks until governed insurance truth exists. `value: null` is
+  //  the whole point — never zero, never "$0", never a dash pretending to
+  //  be a number (§5, and the MONEY_OBLIGATION_CONTRACT rule that an
+  //  amount is "a resolved number, OR an explicit unresolved reason").
+  const INSURANCE_POSITION = Object.freeze([
+    { key: "coverage", label: "Coverage",
+      awaiting: "Current coverage has not been established." },
+    { key: "annual_cost", label: "Property Insurance Cost",
+      awaiting: "Annual allocated economic cost is not established." },
+    { key: "monthly_accrual", label: "Monthly Accrual",
+      awaiting: "No expense has been recognised for this period." },
+    { key: "next_renewal", label: "Next Renewal",
+      awaiting: "No renewal or expiration date is established." },
+    { key: "payment", label: "Payment",
+      awaiting: "Direct, escrowed or financed is not established." },
+  ]);
+
+  const INSURANCE_SECTIONS = Object.freeze([
+    Object.freeze({
+      key: "coverage_stack",
+      label: "Coverage Stack",
+      truth: "coverage",
+      blurb: "The insurance affecting this property.",
+      //  DO NOT ASSUME ONE POLICY PER PROPERTY. A property can sit under a
+      //  portfolio program for Property, a separate GL policy, and an
+      //  umbrella above both — three carriers, three periods, one property.
+      layers: ["Property", "General Liability", "Umbrella / Excess", "Other"],
+      reserved: ["Carrier", "Policy / program reference", "Coverage period",
+                 "Current · expiring · historical",
+                 "Individually insured or part of a shared program"],
+      awaiting: "No governed policies or programs are established for this property.",
+    }),
+    Object.freeze({
+      key: "economic_position",
+      label: "Economic Position",
+      truth: "economic",
+      blurb: "What insurance costs this property, and which period it belongs to.",
+      reserved: ["Premium", "Taxes", "Fees", "Total program / policy cost",
+                 "Property allocation", "Property-level economic cost",
+                 "Coverage / economic period", "Monthly / period accrual"],
+      //  Stated in the payload, not just in this comment, because it is the
+      //  rule that decides every number this section will ever show.
+      doctrine: "Coverage period determines when the expense economically belongs. Cash payment timing does not.",
+      awaiting: "No premium, allocation or accrual is established.",
+    }),
+    Object.freeze({
+      key: "cash_financing",
+      label: "Cash & Financing",
+      truth: "cash",
+      blurb: "What is actually paid, when, and through which path.",
+      reserved: ["Direct payment", "Lender escrow", "Premium financing",
+                 "Finance company", "Down payment", "Financed amount",
+                 "Installment count", "Installment amount",
+                 "First payment · payment schedule"],
+      //  SEPARATE FROM ECONOMIC POSITION, PERMANENTLY. The surface must be
+      //  able to say "economic insurance expense this month = X" and "cash
+      //  insurance payment this month = Y" and treat NEITHER as the error.
+      //  Collapsing them is how a financed premium reads as twelve months
+      //  of expense in the month the down payment cleared.
+      awaiting: "No payment, escrow or financing arrangement is established.",
+    }),
+    Object.freeze({
+      key: "renewals_history",
+      label: "Renewals & History",
+      truth: "history",
+      blurb: "What changed, when, and why.",
+      reserved: ["Renewals", "Endorsements", "Mid-term additions / removals",
+                 "Carrier changes", "Premium / allocation changes",
+                 "Cancelled or replaced policies", "Source documents · proof"],
+      //  INSURANCE CHANGES AMEND HISTORY. THEY DO NOT OVERWRITE IT.
+      //  A 2026 renewal is a NEW governed term. A mid-year endorsement is a
+      //  dated change. The prior term stays historically true, because a
+      //  reported period must still be explainable after the policy that
+      //  produced it has been replaced. Same shape as the claim-scoped
+      //  supersession ruling: history accumulates, it does not advance.
+      doctrine: "A renewal is a new governed term and an endorsement is a dated change. The prior term stays historically true.",
+      awaiting: "No renewals, endorsements or history are recorded.",
+    }),
+  ]);
+
+  router.get("/operator/asset-management/insurance", ...gate, async (req, res) => {
+    try {
+      //  Nothing is read from the database yet, and that is honest rather
+      //  than lazy: there is no insurance table anywhere in the schema, so
+      //  a query would be theatre. The moment governed insurance truth
+      //  exists this handler resolves it the way revenueEstablishment
+      //  already resolves leases — the shape does not change.
+      return res.json({
+        property_id: req.operator.property_id,
+        room: "property_obligations",
+        compartment: "insurance",
+        label: "Insurance",
+        establishment: "not_established",
+
+        position: INSURANCE_POSITION.map((p) => ({
+          key: p.key,
+          label: p.label,
+          //  The reserved slot, explicitly empty. A surface that renders
+          //  this as "—" or "0" would be inventing a fact.
+          value: null,
+          awaiting: p.awaiting,
+        })),
+
+        sections: INSURANCE_SECTIONS.map((s) => ({
+          key: s.key,
+          label: s.label,
+          //  Which of the four truths this section holds. Emitted so the
+          //  separation is legible to a reader who never saw the design
+          //  conversation — and so a later change that tried to merge two
+          //  sections would have to delete a declared boundary to do it.
+          truth: s.truth,
+          blurb: s.blurb,
+          establishment: "not_established",
+          awaiting: s.awaiting,
+          //  The permanent shape, named. This is what makes the empty
+          //  screen a skeleton rather than a placeholder: the operator can
+          //  see what will live here before anything does.
+          reserved: s.reserved,
+          ...(s.layers ? { layers: s.layers } : {}),
+          ...(s.doctrine ? { doctrine: s.doctrine } : {}),
+        })),
+      });
+    } catch (e) {
+      console.error("operator/asset-management/insurance error", e);
+      return res.status(503).json({ error: "insurance compartment unavailable" });
+    }
+  });
+
   return router;
 };
 
