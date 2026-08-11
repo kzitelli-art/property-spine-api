@@ -739,8 +739,22 @@ section("11. WORK-ORDER WRITES STAY IN THE CANONICAL SERVICE");
   //  is the canonical writer of field facts and of governed completion, and it
   //  is the only place the technician path can move a work order. The register
   //  grows only with a named reason, never silently.
-  ok("no NEW unexplained direct work-order updater appeared (register pinned at 4 files)",
+  //
+  //  FIVE. src/maintenance/not_done_service.js is the not-done UPDATE that was
+  //  already here, RELOCATED — not a new writer. It lived inline inside the
+  //  closeout route in maintenance.js, which the signed-in operator app cannot
+  //  reach: that route is gated by the shared operator key and carries no
+  //  property scope. Extracting it is what let the new
+  //  POST /operator/work-orders/:id/not-done record the same fact through one
+  //  implementation instead of a second copy behind an authenticated path.
+  //
+  //  maintenance.js REMAINS on the register — it still updates work orders on
+  //  other paths — so this entry is genuinely an additional FILE and not a
+  //  moved one. That is exactly why the count is restated rather than made
+  //  flexible: the gate is supposed to make somebody write this paragraph.
+  ok("no NEW unexplained direct work-order updater appeared (register pinned at 5 files)",
     updaters.join(",") === "src/comms/tenantlink.js,src/maintenance/maintenance.js,"
+      + "src/maintenance/not_done_service.js,"
       + "src/maintenance/work_order_service.js,src/technician/lifecycle_service.js",
     updaters.join(","));
 

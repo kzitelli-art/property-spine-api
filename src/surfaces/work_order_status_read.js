@@ -73,7 +73,33 @@ const COORDINATION_NEXT = {
   failed:    "Retry the resident message",
 };
 
-function nextActionFor({ state, proof, coordination = null }) {
+/*  ── ATTENTION IS A SECOND DIMENSION, NOT AN EIGHTH STATE ───────────
+ *
+ *  A work order reported as not-complete keeps whatever physical lifecycle
+ *  it legitimately had — a technician who accepted, travelled and then found
+ *  the valve was wrong is still `accepted`; nothing about the physical work
+ *  was undone. What changed is what SPINE IS WAITING ON, and that is a
+ *  different axis:
+ *
+ *      physical lifecycle   scheduled · accepted · en_route · no_access ·
+ *                           blocked · completion_claimed · completed
+ *      attention            waiting on a part · vendor needed · approval ·
+ *                           access · re-scope · return visit · PM review
+ *
+ *  Flattening them was the tempting fix and it is wrong twice over. Adding
+ *  `needs_followup` as an eighth lifecycle value would overwrite a true fact
+ *  about the physical work with a fact about the paperwork; writing a second
+ *  `work_order_progress` row so the existing reader notices would duplicate
+ *  history that the not-done path already records immutably in `events`.
+ *
+ *  So the fact is read where it was already written, and reported alongside
+ *  the lifecycle rather than on top of it.
+ */
+function nextActionFor({ state, proof, coordination = null, attention = null }) {
+  //  ATTENTION OUTRANKS THE LIFECYCLE for the next action, because it is the
+  //  thing actually holding the work up. The physical state still describes
+  //  where the work got to; it just is not what anybody does next.
+  if (attention) return attention.label;
   switch (state) {
     case "scheduled":           return "Assign or accept the work";
     case "accepted":            return "Technician to schedule and travel";
@@ -89,13 +115,98 @@ function nextActionFor({ state, proof, coordination = null }) {
 
 const PROOF_REQUIRED_CLASSIFICATIONS = ["repair_photo", "condition", "unclassified"];
 
+const { FOLLOW_UP_TYPES, reasonForFollowType } = require("../maintenance/not_done_reasons");
+const { acceptanceEligibility } = require("../technician/work_selection");
+
+/*  attentionFrom — the open follow-up a stall routed, described from the
+ *  immutable event that created it.
+ *
+ *  WHY THE EVENT AND NOT THE COLUMN. `work_orders.not_done_reason` holds only
+ *  the most recent key, so a job stalled twice would describe its older open
+ *  follow-up with the newer reason. The event note carries the reason that
+ *  actually produced THIS obligation, and it cannot be overwritten.
+ *
+ *  Null when nothing is open. A resolved follow-up is history — the board
+ *  must not keep asking for a part that already arrived.
+ */
+function attentionFrom(rows) {
+  const open = rows.filter((r) => r.status !== "complete");
+  if (open.length === 0) return null;
+  //  The most recent open one. Two open follow-ups is a real (if unusual)
+  //  state; the newest is what a human is being asked about now.
+  const o = open[open.length - 1];
+
+  let fromEvent = null;
+  try {
+    const note = o.event_note ? JSON.parse(o.event_note) : null;
+    if (note && note.kind === "not_done" && note.reason) {
+      fromEvent = { key: note.reason, label: note.reason_label || null };
+    }
+  } catch (e) { fromEvent = null; }   // unparseable note is not a reason to guess
+
+  //  Fall back to reversing the routing table, so an event written before the
+  //  note carried a reason still describes itself correctly.
+  const mapped = reasonForFollowType(o.type);
+  const key = (fromEvent && fromEvent.key) || (mapped && mapped.key) || null;
+  const label = (fromEvent && fromEvent.label) || (mapped && mapped.label) || null;
+
+  return {
+    kind: "needs_followup",
+    reason: key,
+    //  §5 — a follow-up we cannot name is reported as one we cannot name.
+    label: label || "Waiting on a follow-up",
+    since: o.recorded_at || o.created_at || null,
+    routed_to: {
+      obligation_id: o.id, type: o.type,
+      assigned_role: o.assigned_role || null, status: o.status,
+    },
+  };
+}
+
+/*  ── MAY THE PERSON LOOKING AT THIS TAKE IT? ────────────────────────
+ *  Answered by the CANONICAL acceptance predicate, not by a second copy of
+ *  its rules. `Take job` must never appear on a row the write would refuse —
+ *  §28: a button label describes the action that will actually occur.
+ *
+ *  Null when the caller did not say who is looking (the SMS rail reads this
+ *  surface with no viewer), because "nobody may accept" and "we were not
+ *  asked" are different answers.
+ */
+function viewerCapabilityFor({ viewerUserId, assignedPropertyIds, organizationId, acceptance, workOrder }) {
+  if (!viewerUserId) return null;
+  if (!acceptance) {
+    return { may_accept: false, refusal: "no_obligation_for_this_work_order" };
+  }
+  const verdict = acceptanceEligibility({
+    actor: { userId: viewerUserId, organizationId: organizationId || null,
+             assignedPropertyIds: assignedPropertyIds || [] },
+    row: {
+      obligation_id: acceptance.id,
+      work_order_id: workOrder.id,
+      related_type: "work_order",
+      property_id: workOrder.property_id,
+      assigned_user_id: acceptance.assigned_user_id,
+      accepted_by_user_id: acceptance.accepted_by_user_id,
+      status: acceptance.status,
+    },
+  });
+  return { may_accept: verdict.eligible, refusal: verdict.eligible ? null : verdict.verdict };
+}
+
 /*  readWorkOrderStatus — one work order, fully described.
  *
  *  `propertyId` is the SCOPE and comes from the authenticated session. It
  *  is passed into every query rather than checked afterwards, so a work
  *  order at another property returns null instead of leaking a row.
  */
-async function readWorkOrderStatus(db, { propertyId, workOrderId }) {
+async function readWorkOrderStatus(db, {
+  propertyId, workOrderId,
+  //  WHO IS LOOKING. Optional, and server-derived by every caller — the
+  //  operator routes pass the resolved staff session, the SMS rail passes
+  //  nothing. It is used only to answer "may this person take this job",
+  //  never to widen what rows are returned; `propertyId` remains the scope.
+  viewerUserId = null, assignedPropertyIds = null, organizationId = null,
+}) {
   if (!propertyId || !workOrderId) return null;
 
   const workOrder = (await db.query(
@@ -106,6 +217,13 @@ async function readWorkOrderStatus(db, { propertyId, workOrderId }) {
 
   //  WHO IS ACCOUNTABLE. The obligation is the accountability rail; the
   //  work order's free-text assigned_to column is deliberately not read.
+  //
+  //  ACCOUNTABILITY IS NOT A ROUTED FOLLOW-UP. Both are obligations on this
+  //  same work order, and until stalls were readable here the `created_at asc`
+  //  ordering separated them only by luck: a work order whose accountability
+  //  obligation was never created would have reported the assignee of its
+  //  first FOLLOW-UP as the person accountable for the repair. The follow-up
+  //  types are named, so exclude them rather than rely on arrival order.
   const acceptance = (await db.query(
     `select o.id, o.status, o.assigned_user_id, o.accepted_by_user_id, o.accepted_at,
             usr.name as accepted_by_name, asg.name as assigned_name
@@ -113,7 +231,24 @@ async function readWorkOrderStatus(db, { propertyId, workOrderId }) {
        left join users usr on usr.id = o.accepted_by_user_id
        left join users asg on asg.id = o.assigned_user_id
       where o.related_type = 'work_order' and o.related_id = $1 and o.property_id = $2
-      order by o.created_at asc limit 1`, [workOrderId, propertyId])).rows[0] || null;
+        and not (o.type = any($3))
+      order by o.created_at asc limit 1`,
+    [workOrderId, propertyId, FOLLOW_UP_TYPES])).rows[0] || null;
+
+  //  ── WHAT SPINE IS WAITING ON ──────────────────────────────────────
+  //  The routed follow-ups a not-done produced, newest last, each carrying
+  //  the immutable event that created it so the reason can be read from the
+  //  fact rather than from a column that the next stall would overwrite.
+  const followUps = (await db.query(
+    `select o.id, o.type, o.status, o.assigned_role, o.created_at,
+            e.occurred_at as recorded_at, e.note as event_note
+       from obligations o
+       left join events e on e.id = o.source_event_id
+      where o.related_type = 'work_order' and o.related_id = $1 and o.property_id = $2
+        and o.module = 'maintenance' and o.type = any($3)
+      order by o.created_at asc`,
+    [workOrderId, propertyId, FOLLOW_UP_TYPES])).rows;
+  const attention = attentionFrom(followUps);
 
   const progress = (await db.query(
     `select p.id, p.kind, p.note, p.occurred_at, p.reported_by_user_id,
@@ -151,6 +286,21 @@ async function readWorkOrderStatus(db, { propertyId, workOrderId }) {
       received_at: a.received_at, stored_at: a.stored_at, provider: a.provider,
     })),
   };
+
+  //  THE VIEWER'S SCOPE. Resolved here for a single read; the list resolves
+  //  it once and passes it in, because the answer is identical for every row
+  //  at one property and a per-row query would be N+1 for nothing.
+  let scope = assignedPropertyIds, org = organizationId;
+  if (viewerUserId && scope === null) {
+    const s = (await db.query(
+      `select p.organization_id, pta.property_id
+         from properties p
+         left join property_team_assignments pta
+           on pta.property_id = p.id and pta.user_id = $2 and pta.active = true
+        where p.id = $1`, [propertyId, viewerUserId])).rows[0] || null;
+    org = s ? s.organization_id : null;
+    scope = s && s.property_id ? [s.property_id] : [];
+  }
 
   const state = lifecycleStateOf({ workOrder, acceptance, latestByKind });
 
@@ -210,10 +360,40 @@ async function readWorkOrderStatus(db, { propertyId, workOrderId }) {
       id: workOrder.id, reference: workOrder.work_order_ref,
       title: workOrder.title, unit_number: workOrder.unit_number,
       status: workOrder.status, urgency_status: workOrder.urgency_status || null,
+      //  ── TRUE EMERGENCY, DERIVED HERE AND NOWHERE ELSE ──────────────
+      //  The canonical vocabulary is emergency | regular | needs_confirmation
+      //  (078), and the canonical service already draws exactly this line:
+      //  work_order_service.js:252, `is_emergency = urgency_status ===
+      //  "emergency"`. Restating that comparison in a surface would be a
+      //  second definition of what counts as an emergency, and the first
+      //  time somebody decided `needs_confirmation` was close enough, an
+      //  unconfirmed report would be shouting on an operator's board.
+      //
+      //  ONE BOOLEAN, not a severity scale. There is no tier vocabulary here
+      //  on purpose: the product asked for the emergency distinction to be
+      //  preserved, not for the old severity system to be rebuilt.
+      //
+      //  URGENCY IS NOT ATTENTION. This says how consequential the physical
+      //  condition is; `current.attention` and the surface's banding say
+      //  whether a human must act now. An emergency somebody has accepted
+      //  and is driving to is urgent and NOT waiting on anyone.
+      is_emergency: workOrder.urgency_status === "emergency",
       opened_at: workOrder.created_at,
     },
     current: {
       state,
+      //  THE SECOND DIMENSION. Null when nothing is holding the work up.
+      //  It sits beside `state` rather than replacing it, so a surface can
+      //  say "KZ · ACCEPTED / Waiting on a part" — two true facts about one
+      //  job — instead of overwriting the first with the second.
+      attention,
+      //  MAY THE VIEWER TAKE THIS. Null when the caller did not say who is
+      //  looking. Derived from the canonical acceptance predicate, so the
+      //  control can never offer a verb the write would refuse.
+      viewer: viewerCapabilityFor({
+        viewerUserId, assignedPropertyIds: scope, organizationId: org, acceptance,
+        workOrder: { id: workOrder.id, property_id: workOrder.property_id },
+      }),
       //  §5 — an owner we do not have is UNASSIGNED, never blank and never
       //  the technician who happens to have reported something.
       accountable: acceptance && acceptance.accepted_by_user_id
@@ -252,7 +432,7 @@ async function readWorkOrderStatus(db, { propertyId, workOrderId }) {
       resident_coordination: coordination,
       resident_exception,
     },
-    next_action: nextActionFor({ state, proof, coordination }),
+    next_action: nextActionFor({ state, proof, coordination, attention }),
     open_follow_up: followUp,
     proof,
     resident_update,
@@ -322,19 +502,48 @@ function deliveryStateOf(row) {
 
 /*  The list view. Same derivation, compact — so the board and the detail
  *  can never disagree about what state a work order is in. */
-async function readPropertyWorkOrderStatuses(db, { propertyId, limit = 100 }) {
+async function readPropertyWorkOrderStatuses(db, { propertyId, limit = 100, viewerUserId = null }) {
   if (!propertyId) return [];
+
+  //  THE VIEWER'S SCOPE, READ ONCE. `acceptanceEligibility` needs the actor's
+  //  active assignments, and resolving them per work order would issue one
+  //  query per row for an answer that cannot differ between rows — they are
+  //  all at this one property. Read here and passed down.
+  //
+  //  Scope membership, not organization membership: belonging to the company
+  //  is not authority over every building in it, which is why this reads
+  //  property_team_assignments and not the org.
+  let scope = null, organizationId = null;
+  if (viewerUserId) {
+    const s = (await db.query(
+      `select p.organization_id, pta.property_id
+         from properties p
+         left join property_team_assignments pta
+           on pta.property_id = p.id and pta.user_id = $2 and pta.active = true
+        where p.id = $1`, [propertyId, viewerUserId])).rows[0] || null;
+    organizationId = s ? s.organization_id : null;
+    scope = s && s.property_id ? [s.property_id] : [];
+  }
+
   const ids = (await db.query(
     `select id from work_orders where property_id = $1
       order by (status <> 'complete') desc, created_at desc limit $2`, [propertyId, limit])).rows;
   const out = [];
   for (const row of ids) {
     // eslint-disable-next-line no-await-in-loop
-    const s = await readWorkOrderStatus(db, { propertyId, workOrderId: row.id });
+    const s = await readWorkOrderStatus(db, {
+      propertyId, workOrderId: row.id,
+      viewerUserId, assignedPropertyIds: scope, organizationId,
+    });
     if (s) {
       out.push({
         work_order: s.work_order, current: s.current, next_action: s.next_action,
+        //  `preserved_count` rides along so a verified completion can say
+        //  "Proof verified · 2 photos" on the board without the row having to
+        //  fetch the detail to count them. It is the same number the detail
+        //  carries — not a second derivation.
         proof: { required: s.proof.required, satisfied: s.proof.satisfied,
+                 preserved_count: s.proof.preserved_count,
                  not_preserved_count: s.proof.not_preserved_count },
         resident_update_count: s.resident_update.length,
         //  The LIST must be able to band on an unresolved resident update.

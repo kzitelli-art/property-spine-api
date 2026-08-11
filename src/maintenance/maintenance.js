@@ -250,57 +250,42 @@ module.exports = function maintenance(deps) {
   //    escalates_to     — where it escalates if that owner doesn't move
   //    follow_label(wo) — the human sentence the owner sees
   // ════════════════════════════════════════════════════════════════
-  const NOT_DONE_REASONS = {
-    need_part: {
-      label: "Waiting on a part",
-      follow_type: "supply_followup",
-      follow_role: "maintenance",
-      escalates_to: "property_manager",
-      follow_label: (wo) => `Part needed to finish: ${wo.title || "work order"} — order / track the part`,
-    },
-    need_vendor: {
-      label: "Needs an outside vendor",
-      follow_type: "vendor_quote",
-      follow_role: "property_manager",
-      escalates_to: "owner",
-      follow_label: (wo) => `Outside vendor needed for: ${wo.title || "work order"} — get quote / schedule`,
-    },
-    no_access: {
-      label: "Couldn't get access to the unit",
-      follow_type: "reschedule_access",
-      follow_role: "maintenance",
-      escalates_to: "property_manager",
-      follow_label: (wo) => `No access — reschedule a return visit for: ${wo.title || "work order"}`,
-    },
-    needs_approval: {
-      label: "Needs PM approval to proceed",
-      follow_type: "approval_followup",
-      follow_role: "property_manager",
-      escalates_to: "owner",
-      follow_label: (wo) => `Approval needed before finishing: ${wo.title || "work order"}`,
-    },
-    bigger_job: {
-      label: "Bigger job than expected",
-      follow_type: "scope_review",
-      follow_role: "property_manager",
-      escalates_to: "owner",
-      follow_label: (wo) => `Re-scope — larger than expected: ${wo.title || "work order"}`,
-    },
-    second_visit: {
-      label: "Partly done — needs a second visit",
-      follow_type: "return_visit",
-      follow_role: "maintenance",
-      escalates_to: "property_manager",
-      follow_label: (wo) => `Return visit to finish: ${wo.title || "work order"}`,
-    },
-    other: {
-      label: "Other (PM to review)",
-      follow_type: "not_done_followup",
-      follow_role: "property_manager",
-      escalates_to: "owner",
-      follow_label: (wo) => `Stalled — PM to review: ${wo.title || "work order"}`,
-    },
-  };
+  //  ── EXTRACTED TO maintenance/not_done_reasons.js ─────────────────
+  //  The Work Orders read surface has to name the reason a job stalled on
+  //  a board row, and it cannot see this closure. Exported rather than
+  //  restated there, because a second copy of a routing table is how a
+  //  reader and a writer come to disagree about where a stall went.
+  const { NOT_DONE_REASONS, reasonChoices, fieldReasonChoices, receiptFor,
+          FOLLOW_UP_TYPES } = require("./not_done_reasons");
+  const { recordNotDone } = require("./not_done_service");
+  const { acceptWork } = require("../technician/acceptance_service");
+
+  //  ── A REFUSAL A HUMAN CAN SEE IS PRODUCT COPY ─────────────────────
+  //  The acceptance predicate answers in engineering vocabulary, which is
+  //  right for a verdict and wrong for a person holding a phone. Each one
+  //  is said plainly and names what to do instead — a refusal with no next
+  //  step reads as a broken button.
+  const REFUSAL_COPY = (verdict) => ({
+    not_assigned_to_actor:
+      "This job is assigned to someone else, so it is not yours to take. "
+      + "Assign it first if it should be yours.",
+    property_outside_actor_scope:
+      "You are not on the team for this property, so you cannot take work here.",
+    already_accepted_by_another:
+      "Somebody else has already taken this job.",
+    already_accepted_by_actor:
+      "You already have this job.",
+    not_open:
+      "This job is no longer open, so there is nothing to take.",
+    not_actionable_status:
+      "This job is not in a state that can be taken.",
+    not_work_order_related:
+      "That record is not a work order.",
+    state_changed_before_write:
+      "Somebody changed this job while you were taking it. Reload and try again.",
+    acceptance_key_already_used:
+      "That request was already recorded. Nothing changed.",
+  })[verdict] || "This job cannot be taken right now.";
 
   // ════════════════════════════════════════════════════════════════
   //  THE CATEGORY ENGINE  (field + context → operating → gl)
@@ -348,9 +333,26 @@ module.exports = function maintenance(deps) {
   // Returns key + label only — the routing internals (follow_type/role) stay
   // server-side. The UI shows labels; the server decides where each one goes.
   router.get("/maintenance/not-done-reasons", (_req, res) => {
-    res.json(
-      Object.entries(NOT_DONE_REASONS).map(([key, v]) => ({ key, label: v.label }))
-    );
+    res.json(reasonChoices());
+  });
+
+  //  THE SAME VOCABULARY, INSIDE THE STAFF-SESSION PERIMETER.
+  //  The route above is reachable only with the shared operator key, so the
+  //  signed-in app could not read it and shipped a hardcoded copy of these
+  //  labels as a "fallback" — which, because index.html's getJSON is
+  //  offline-locked, was the ONLY thing it ever rendered. A live operator
+  //  surface was populating a governed picker from a literal in the page.
+  //
+  //  §19–20: one vocabulary, read live, no fallback. If this read fails the
+  //  door says so and offers nothing, because a reason we cannot route is a
+  //  stall with no next step.
+  //  THE FIELD VOCABULARY — five plain answers to one plain question, each
+  //  of which IS a canonical key. The routing behind them is unchanged and
+  //  invisible: a technician reports what is stopping the job, and Spine
+  //  decides what that means. The legacy route above still returns all seven
+  //  for whatever holds the shared key.
+  router.get("/operator/work-orders/not-done-reasons", ...operatorGate, (_req, res) => {
+    res.json({ reasons: fieldReasonChoices() });
   });
 
   // ════════════════════════════════════════════════════════════════
@@ -523,67 +525,32 @@ module.exports = function maintenance(deps) {
       //  RIGHT follow-up obligation through the SAME shared engine every other
       //  obligation is born from. The chain cannot break.
       if (done === false) {
-        // Reason must be one we know. Default to 'other' only if none given,
-        // so an old/blank caller still routes somewhere real (PM review) rather
-        // than vanishing. A WRONG reason is rejected — never silently coerced.
-        const reasonKey = not_done_reason || "other";
-        const route = NOT_DONE_REASONS[reasonKey];
-        if (!route) {
-          await client.query("rollback");
-          return res.status(400).json({
-            error: "invalid not_done_reason",
-            allowed: Object.keys(NOT_DONE_REASONS),
+        //  ── THE BEHAVIOR MOVED; THE CONTRACT DID NOT ──────────────────
+        //  Every step this used to perform inline now lives in
+        //  not_done_service.recordNotDone, because the signed-in operator
+        //  surface needs the same fact recorded and must not reach this
+        //  route to get it (shared key, no property scope). One writer,
+        //  two doors. `defaultWhenMissing` preserves THIS caller's promise
+        //  that a blank reason routes to PM review rather than vanishing —
+        //  the operator door passes false, since its picker is populated
+        //  from the same vocabulary and a blank there is a surface defect.
+        let outcome;
+        try {
+          outcome = await recordNotDone(client, {
+            workOrder: wo,
+            reasonKey: not_done_reason,
+            note: completion_note,
+            spawnObligationFromEvent,
+            defaultWhenMissing: true,
           });
+        } catch (e) {
+          if (e.code === "INVALID_REASON") {
+            await client.query("rollback");
+            return res.status(400).json({ error: "invalid not_done_reason", allowed: e.allowed });
+          }
+          throw e;
         }
-
-        // 1) Durable event — the obligation is born only from an event.
-        const followNote = {
-          work_order_id: wo.id,
-          kind: "not_done",
-          reason: reasonKey,
-          reason_label: route.label,
-          routes_to: route.follow_type,
-          owner_role: route.follow_role,
-          note: completion_note || null,   // optional tech context, kept separate
-        };
-        const ev = await client.query(
-          `insert into events (property_id, person_id, unit_id, type, note)
-           values ($1,$2,$3,'maintenance_followup',$4) returning *`,
-          [wo.property_id, wo.affected_person_id ?? wo.reported_by_person_id ?? null, wo.unit_id ?? null, JSON.stringify(followNote)]
-        );
-
-        // 2) The WO stays OPEN, flagged for review, with the structured reason
-        //    in its OWN column. completion_note now means only "completion note"
-        //    — we no longer overwrite it with the stall reason.
-        await client.query(
-          `update work_orders
-             set status='needs_followup', needs_pm_review=true,
-                 not_done_reason=$2, updated_at=now()
-           where id=$1`,
-          [wo.id, reasonKey]
-        );
-
-        // 3) The ROUTED follow-up obligation — through the shared engine, in
-        //    THIS transaction. related_id/related_type link it back to the WO
-        //    so the next owner inherits full context. This is the named next
-        //    step: who owns it, where it escalates, what it's for.
-        const followup = await spawnObligationFromEvent(client, {
-          property_id: wo.property_id,
-          person_id: wo.affected_person_id ?? wo.reported_by_person_id ?? null,
-          unit_id: wo.unit_id ?? null,
-          source_event_id: ev.rows[0].id,
-          module: "maintenance",
-          type: route.follow_type,
-          label: route.follow_label(wo),
-          owner_type: "human",
-          assigned_role: route.follow_role,
-          escalates_to_role: route.escalates_to,
-          status: "open",
-          priority: "normal",
-          severity: "normal",
-          related_id: wo.id,
-          related_type: "work_order",
-        });
+        const { reasonKey, route, followup } = outcome;
 
         await client.query("commit");
         const updated = await pool.query("select * from work_orders where id=$1", [wo.id]);
@@ -713,6 +680,10 @@ module.exports = function maintenance(deps) {
       const rows = await workOrderStatusRead.readPropertyWorkOrderStatuses(pool, {
         propertyId: req.operator.property_id,
         limit: Math.min(Number(req.query.limit) || 100, 200),
+        //  WHO IS LOOKING, from the resolved session and nowhere else. It
+        //  answers "may I take this" per row; it never widens the scope,
+        //  which stays property_id.
+        viewerUserId: req.operator.id,
       });
       //  HONEST EMPTY. An empty list is a fact, and it is returned as one —
       //  never as sample work, and never as an error.
@@ -754,10 +725,201 @@ module.exports = function maintenance(deps) {
       commEventId: (req.body || {}).comm_event_id,
       idempotencyKey: (req.body || {}).idempotency_key || null }, ctx))));
 
+  // ════════════════════════════════════════════════════════════════
+  //  STILL NEEDS WORK  —  POST /operator/work-orders/:id/not-done
+  //
+  //  The same fact the legacy `PATCH /work-orders/:id/closeout done=false`
+  //  records, reached the way a signed-in human reaches it. That route is
+  //  gated by the SHARED operator key and carries no property scope, so the
+  //  operator app could not call it without shipping a shared credential to
+  //  the browser and could not be stopped from stalling a work order at
+  //  another building. Both are §21 failures, and neither is fixed by
+  //  authenticating harder — authentication answers WHO may call, never
+  //  WHERE the output may land.
+  //
+  //  ONE WRITER: not_done_service.recordNotDone. This route contributes
+  //  authority and a receipt, not behavior.
+  //
+  //  The reporter states a FACT — what is stopping completion. Spine decides
+  //  the consequence: which obligation type, which role owns it, where it
+  //  escalates. None of that travels in the request.
+  // ════════════════════════════════════════════════════════════════
+  router.post("/operator/work-orders/:id/not-done", ...operatorGate, async (req, res) => {
+    const { not_done_reason, note } = req.body || {};
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      //  SCOPED IN THE QUERY, not checked after it. A work order at another
+      //  property is not found, rather than found and then refused.
+      const woQ = await client.query(
+        "select * from work_orders where id=$1 and property_id=$2 for update",
+        [req.params.id, req.operator.property_id]);
+      if (woQ.rows.length === 0) {
+        await client.query("rollback");
+        return res.status(404).json({ error: "not_found",
+          receipt: { text: "That work order is not at the property you are operating." } });
+      }
+      const wo = woQ.rows[0];
+
+      //  ALREADY CLOSED WORK CANNOT STALL. Completion is the technician's,
+      //  in the field; re-opening it is not this control's job and inventing
+      //  one here would be a second completion authority by the back door.
+      if (wo.status === "complete") {
+        await client.query("rollback");
+        return res.status(409).json({ error: "already_complete",
+          receipt: { text: "This work order is already complete. A finished job cannot be reported as stalled." } });
+      }
+
+      let out;
+      try {
+        out = await recordNotDone(client, {
+          workOrder: wo,
+          reasonKey: not_done_reason,
+          note: note || null,
+          actorUserId: req.operator.id,
+          spawnObligationFromEvent,
+          //  FALSE, unlike the legacy caller. This surface populates its
+          //  picker from the same vocabulary, so a missing reason is a defect
+          //  in the surface — not an old client to be generous with.
+          defaultWhenMissing: false,
+        });
+      } catch (e) {
+        if (e.code === "INVALID_REASON") {
+          await client.query("rollback");
+          return res.status(400).json({ error: "invalid_not_done_reason", allowed: e.allowed,
+            receipt: { text: "Pick a reason from the list so the next step has an owner." } });
+        }
+        throw e;
+      }
+      await client.query("commit");
+
+      //  §28 — a plain-language receipt: what happened, the durable record,
+      //  and what happens next with who owns it.
+      return res.status(200).json({
+        work_order_id: wo.id,
+        not_done_reason: out.reasonKey,
+        event_id: out.event.id,
+        followup_obligation: out.followup,
+        //  §28 — what happened, and what happens next, in a sentence a person
+        //  standing in a unit can act on. Never the event name.
+        receipt: { text: receiptFor(out.reasonKey, out.route) },
+      });
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      console.error("operator work-order not-done:", e.message);
+      return res.status(503).json({ error: "unavailable",
+        receipt: { text: "That could not be recorded. Nothing was changed. Retry." } });
+    } finally {
+      client.release();
+    }
+  });
+
+  // ════════════════════════════════════════════════════════════════
+  //  TAKE JOB  —  POST /operator/work-orders/:id/accept
+  //
+  //  ONE ACCEPTANCE FACT, TWO AUTHENTICATION RAILS. A technician accepting
+  //  by text and the same technician accepting in the app are the same
+  //  business event; only how they proved who they are differs. SMS
+  //  establishes the organization through the messaging line, the signed-in
+  //  app establishes it through the authenticated property context. So this
+  //  route resolves context and then calls the SAME canonical service the
+  //  SMS rail calls — it does not fork acceptance semantics, and it is NOT
+  //  the unit-turn acceptance rail, which operates on
+  //  `unit_triage_required_work` and is a different object entirely.
+  //
+  //  THE BROWSER SENDS NOTHING AUTHORITATIVE. It knows "I am looking at this
+  //  work order and I want to take it." The server resolves actor, property,
+  //  the work order's owning obligation, and the organization behind that
+  //  property. An `obligation_id` from a client would be a caller supplying
+  //  the fact that authorises it.
+  //
+  //  TAKING IS NOT ASSIGNING. The canonical predicate refuses an obligation
+  //  assigned to somebody else (`not_assigned_to_actor`), so this cannot
+  //  accept on another person's behalf. Assignment stays its own action.
+  // ════════════════════════════════════════════════════════════════
+  router.post("/operator/work-orders/:id/accept", ...operatorGate, async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const woQ = await client.query(
+        "select id, property_id, status, title from work_orders where id=$1 and property_id=$2",
+        [req.params.id, req.operator.property_id]);
+      if (woQ.rows.length === 0) {
+        await client.query("rollback");
+        return res.status(404).json({ error: "not_found",
+          receipt: { text: "That work order is not at the property you are operating." } });
+      }
+      const wo = woQ.rows[0];
+
+      //  THE ORGANIZATION IS DERIVED FROM THE PROPERTY, server-side. The
+      //  acceptance service requires it and must never be handed it by a
+      //  browser; the property is already server-derived from the session,
+      //  so the organization behind it is too.
+      const orgQ = await client.query("select organization_id from properties where id=$1", [wo.property_id]);
+      const organizationId = orgQ.rows[0] && orgQ.rows[0].organization_id;
+      if (!organizationId) {
+        await client.query("rollback");
+        //  §5 — an honest refusal. A property with no organization cannot
+        //  scope an acceptance, and guessing one would invent the boundary
+        //  the whole check exists to enforce.
+        return res.status(409).json({ error: "property_has_no_organization",
+          receipt: { text: "This property is not attached to an organization, so work cannot be accepted here yet." } });
+      }
+
+      //  THE WORK ORDER'S OWN ACCOUNTABILITY OBLIGATION — never a routed
+      //  follow-up, which is a different job with a different owner.
+      const obQ = await client.query(
+        `select id from obligations
+          where related_type='work_order' and related_id=$1 and property_id=$2
+            and not (type = any($3))
+          order by created_at asc limit 1`,
+        [wo.id, wo.property_id, FOLLOW_UP_TYPES]);
+      if (obQ.rows.length === 0) {
+        await client.query("rollback");
+        return res.status(409).json({ error: "no_accountability_obligation",
+          receipt: { text: "This work order has no accountability record yet, so there is nothing to take." } });
+      }
+
+      const out = await acceptWork(client, {
+        obligation_id: obQ.rows[0].id,
+        user_id: req.operator.id,
+        organization_id: organizationId,
+        channel: "operator_app",
+      });
+
+      if (out.outcome === "refused") {
+        await client.query("rollback");
+        return res.status(409).json({ error: out.refusal, receipt: { text: REFUSAL_COPY(out.refusal) } });
+      }
+      await client.query("commit");
+      return res.status(out.outcome === "replayed" ? 200 : 201).json({
+        work_order_id: wo.id,
+        outcome: out.outcome,
+        obligation: out.obligation,
+        receipt: {
+          text: out.outcome === "replayed"
+            ? "You already have this job. Nothing changed."
+            : "You have taken this job. Accepting is not completing — the work is still outstanding.",
+        },
+      });
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      if (e.code === "BAD_INPUT" || e.code === "NOT_FOUND") {
+        return res.status(400).json({ error: e.code, receipt: { text: e.message } });
+      }
+      console.error("operator work-order accept:", e.message);
+      return res.status(503).json({ error: "unavailable",
+        receipt: { text: "That could not be recorded. Nothing was changed. Retry." } });
+    } finally {
+      client.release();
+    }
+  });
+
   router.get("/operator/work-orders/:id/status", ...operatorGate, async (req, res) => {
     try {
       const status = await workOrderStatusRead.readWorkOrderStatus(pool, {
         propertyId: req.operator.property_id, workOrderId: req.params.id,
+        viewerUserId: req.operator.id,
       });
       if (!status) return res.status(404).json({ error: "not_found" });
       res.json(status);
