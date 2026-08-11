@@ -2,8 +2,8 @@
 
 ## 2026-08-11 · MAINTENANCE WORK ORDERS — H CLOSED. ONE PRODUCT.
 
-**Branch (both repos): `claude/maintenance-work-orders-ui`. Not merged.**
-**Deployed: nothing. Migrated: nothing. No schema change in this slice.**
+**Merged:** API `6c577dc` (PR #77) · App `5dd2548` (PR #43).
+**Production:** schema readiness READY. Live Work Orders smoke check pending. Migrated: nothing. No schema change in this slice.
 
 ### The correction this section exists to make
 
