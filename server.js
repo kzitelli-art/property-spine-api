@@ -79,6 +79,13 @@ const app = express();
 // browser that holds the in-memory staff token to drive the operator surface.
 const OPERATOR_APP_ORIGIN = String(process.env.OPERATOR_APP_ORIGIN || "").trim();
 function isOperatorPath(p) { return p === "/operator" || p.startsWith("/operator/"); }
+//  Asset Management. SESSION-GATED, not public: every /asset/* route runs
+//  requireHuman (x-staff-session → a real users row) before it does
+//  anything, and every write records the human it resolved. It skips the
+//  operator-KEY gate for the same reason /operator/*, /admin/* and /org/*
+//  do — the surface is driven by a browser holding a session, not a key.
+//  Exact-boundary, so '/assets' or '/assetX' does NOT bypass the gate.
+function isAssetPath(p) { return p === "/asset" || p.startsWith("/asset/"); }
 
 const operatorCors = cors({
   origin: function (origin, cb) {
@@ -163,6 +170,7 @@ app.use((req, res, next) => {
   const p = req.path;
   if (PUBLIC_EXACT.has(p) || PUBLIC_PREFIXES.some((x) => p === x || p.startsWith(x))) return next();
   if (isOperatorPath(p)) return next(); // /operator/* applies its own staff-session auth
+  if (isAssetPath(p)) return next();    // /asset/* applies its own staff-session auth (requireHuman)
   if (p === "/admin" || p.startsWith("/admin/")) return next(); // /admin/* enforces its own super-admin session auth
   if (p === "/org" || p.startsWith("/org/")) return next();     // /org/* enforces its own org-admin session auth
   if (!OPERATOR_KEY) {
@@ -897,34 +905,58 @@ function addMonths(dateStr, n) {
   return d.toISOString().slice(0, 10);
 }
 
-// ── create a lease (minimal; carries the inputs the schedule derives from) ──
-// Body: { property_id, space_id, tenant_ids?, rent, start_date, end_date,
-//         security_deposit?, application_fee? }
+// ── create a lease ────────────────────────────────────────────────────
+//  THE BARE LEASE WRITER, CONTAINED.
+//
+//  This route created canonical lease truth from a shared bearer key, with
+//  `property_id` and `space_id` taken from the request body and believed.
+//  It is the same shape as the fifth property-creation door Build 1A
+//  closed — no actor, no organization, no evidence, no record that it
+//  happened — one level down, on the object the whole rent roll reads.
+//
+//  Two governed paths now exist for a lease and this is neither:
+//
+//    tenancy_anchor_service.js   a NEW lease signed natively through Spine
+//                                (application → countersign → confirm term).
+//                                Untouched by this: it is the right path
+//                                for the thing it does.
+//    activation_service.js       an EXISTING lease established from a
+//                                retained rent roll, with evidence, a
+//                                proposal and a human confirmation behind
+//                                every row.
+//
+//  ── CONTAINED, NOT DELETED ──────────────────────────────────────────
+//  Nothing in this repo posts here — checked, including the app, whose
+//  every `/leases/` reference is an `/operator/leasing/leases/:id/…`
+//  sub-path. But the shared operator key is held OUTSIDE this repository
+//  and source can prove a consumer exists, never that one does not. Both
+//  choices break an unknown caller; this one breaks it with a refusal that
+//  names the two paths that work, instead of a dead end.
+//
+//  RETIREMENT CONDITION — delete the route once a deploy has passed with
+//  no `bare_lease_writer_contained` refusal recorded in the logs, which is
+//  the only evidence available that nobody outside was calling it.
 app.post("/leases", async (req, res) => {
-  const {
-    property_id, space_id, tenant_ids,
-    rent, start_date, end_date,
-    security_deposit, application_fee,
-  } = req.body || {};
-  if (!property_id || !space_id) return res.status(400).json({ error: "property_id and space_id are required" });
-  if (!rent) return res.status(400).json({ error: "rent is required to build a schedule" });
-  try {
-    const sp = await pool.query("select id from spaces where id=$1", [space_id]);
-    if (sp.rows.length === 0) return res.status(404).json({ error: "space not found" });
-
-    const r = await pool.query(
-      `insert into leases
-         (property_id, space_id, tenant_ids, rent, start_date, end_date,
-          security_deposit, application_fee, lease_status)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,'pending')
-       returning *`,
-      [property_id, space_id, tenant_ids ?? [], rent, start_date ?? null, end_date ?? null,
-       security_deposit ?? null, application_fee ?? null]
-    );
-    res.status(201).json(r.rows[0]);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  console.warn("bare_lease_writer_contained", JSON.stringify({
+    at: new Date().toISOString(),
+    property_id: (req.body || {}).property_id || null,
+    space_id: (req.body || {}).space_id || null,
+    ua: req.get("user-agent") || null,
+  }));
+  return res.status(410).json({
+    error: "bare_lease_writer_contained",
+    reason: "ungoverned_lease_creation",
+    receipt:
+      "A lease can no longer be created by posting terms with a shared key. A lease is " +
+      "either signed through Spine, or established from a rent roll that Spine keeps — " +
+      "both record who did it and what it came from.",
+    what_you_can_do: {
+      signed_in_spine:
+        "The leasing flow: an application, a countersignature, then confirm the term.",
+      established_from_a_rent_roll:
+        "Asset Management → the deal → the property → upload the rent roll → confirm the rows.",
+    },
+  });
 });
 
 // ── GENERATE the revenue schedule from the lease ──
@@ -2851,7 +2883,25 @@ app.post("/ingest/:runId/group-bed-rows", async (req, res) => {
 //  units means a re-run that duplicates a number is caught, not silently doubled.
 // ════════════════════════════════════════════════════════════════════
 app.post("/ingest/:runId/promote", async (req, res) => {
-  const { promoted_by } = req.body || {};  // optional user id; nullable for now
+  //  ── THE ACTOR COMES FROM AUTHENTICATION ──────────────────────────
+  //  `promoted_by` used to be read from the body: whoever called this
+  //  route decided who the record said had done it. Frozen ruling (PR #38):
+  //  a body actor field is REJECTED, never ignored — silently dropping it
+  //  lets a stale caller keep believing it is honoured.
+  //
+  //  The session is optional here rather than required, because this route
+  //  predates staff sessions and gating it outright would break an unknown
+  //  caller outside this repo. What it will not do any more is take the
+  //  caller's word for who acted: with a session the human is recorded,
+  //  without one the field stays honestly blank.
+  if (req.body && req.body.promoted_by !== undefined) {
+    return res.status(400).json({
+      error: "body_actor_field_rejected", field: "promoted_by",
+      receipt: "Who promoted these units comes from the signed-in session, not the request body.",
+    });
+  }
+  const promoter = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
+  const promoted_by = promoter ? promoter.id : null;
   try {
     const run = await pool.query("select id, property_id, model_raw_output from ingest_runs where id=$1", [req.params.runId]);
     if (run.rows.length === 0) return res.status(404).json({ error: "run not found" });
@@ -2976,7 +3026,16 @@ app.post("/ingest/:runId/promote", async (req, res) => {
 //  omit it to approve ALL pending candidates in the run.
 // ════════════════════════════════════════════════════════════════════
 app.post("/ingest/:runId/approve", async (req, res) => {
-  const { reviewed_by, candidate_ids } = req.body || {};  // both optional
+  //  Same rule as /promote above: the reviewer is the session, never the body.
+  if (req.body && req.body.reviewed_by !== undefined) {
+    return res.status(400).json({
+      error: "body_actor_field_rejected", field: "reviewed_by",
+      receipt: "Who reviewed these candidates comes from the signed-in session, not the request body.",
+    });
+  }
+  const { candidate_ids } = req.body || {};
+  const reviewer = await staffSessions.resolveStaffSession(pool, req.get("x-staff-session"));
+  const reviewed_by = reviewer ? reviewer.id : null;
   try {
     const run = await pool.query("select id from ingest_runs where id=$1", [req.params.runId]);
     if (run.rows.length === 0) return res.status(404).json({ error: "run not found" });
@@ -3218,6 +3277,19 @@ const leasingLifecycle = require("./src/leasing/leasing_lifecycle_service")({ po
 
 const leasingLeadsModule = require("./src/leasing/leasingleads"); // leasing lead intake: one-human/many-opportunities funnel + AI first response
 app.use("/", dealIntakeModule({ pool, anthropic, INGEST_MODEL, registryInstance, fileToText, runIngestAuto, upload }));
+
+// ── ASSET MANAGEMENT ─────────────────────────────────────────────────
+//  Spine's fourth surface. Deals → Deal → Properties → Setup → Opening
+//  Position. Every route resolves a staff session first (requireHuman)
+//  and records the human on every write; /asset/* therefore skips the
+//  operator-KEY gate the same way /operator/*, /admin/* and /org/* do.
+//
+//  Mounted HERE, after `upload`, because the source-file route needs it.
+//  MOUNTING IS NOT REACHABILITY (the /legal/ lesson): isAssetPath() above
+//  is what actually lets these through the gate, and the HTTP proof calls
+//  them through the real server for exactly that reason.
+const assetManagementModule = require("./src/onboarding/asset_management");
+app.use("/", assetManagementModule({ pool, upload }));
 // ── Post-tour leasing conversion rail + scheduling intake + interaction ledger ──
 // (migrations 047/048/049). sms + the obligation engine fns are all in scope here.
 // NOTE (wave 3): the conversion module is instantiated BEFORE the leads module so
