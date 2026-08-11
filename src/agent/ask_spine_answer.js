@@ -48,6 +48,36 @@ const MODEL = process.env.ASK_SPINE_MODEL || "claude-sonnet-4-6";
 const MAX_TOKENS = 700;
 const MAX_QUESTION = 500;
 
+/*  ══ THE SCOPE, DECLARED ONCE ══════════════════════════════════════
+ *
+ *  The first version of this slice had no scope at all. A text box was
+ *  added and every sentence went to the model with a bundle of facts and
+ *  an instruction to answer from them. That instruction bounds the DATA
+ *  the model may cite. It does not bound the QUESTION. "Should I raise
+ *  rents?" gets a confident, reasonable-sounding answer built from
+ *  nothing, and `out_of_scope` only ever fired on an empty or oversized
+ *  string — never on a topic.
+ *
+ *  A text box had quietly turned a governed read into a property chatbot.
+ *
+ *  So the scope is a CONSTANT, used in three places that must not drift:
+ *  the model's instruction, the refusal the operator reads, and the test
+ *  that pins both. One definition, no second opinion.
+ *
+ *  Widening it is a product decision with its own facts to gather. It is
+ *  not something a prompt edit should be able to do quietly.  */
+const SUPPORTED_SCOPE =
+  "the current open work and work orders at this property — what is open, " +
+  "who has it, what is waiting, what is overdue, what is blocked, and what is next";
+
+//  The refusal is OWNED BY THE SERVER, not written by the model. A model
+//  that composes its own decline can talk itself into being helpful, and
+//  "I can't really answer that, but generally…" is the failure this
+//  outcome exists to prevent.
+const OUT_OF_SCOPE_ANSWER =
+  "I can only answer about " + SUPPORTED_SCOPE + ". " +
+  "Ask me what needs attention, what is open, or who has a job.";
+
 /*  The bundle. Bounded on purpose: every field here is something the
  *  operator could already see on a surface they are entitled to, read
  *  through the same services those surfaces use. Nothing is derived a
@@ -108,7 +138,27 @@ function systemPrompt() {
     "You are Spine, the assistant inside a property-management system.",
     "You are answering a signed-in operator about ONE property.",
     "",
-    "ABSOLUTE RULES:",
+    "YOU ANSWER ABOUT EXACTLY ONE SUBJECT:",
+    "  " + SUPPORTED_SCOPE + ".",
+    "",
+    "Anything else is out of scope — rent strategy, pricing, legal or tax",
+    "questions, meetings and what was said in them, market conditions, vendors",
+    "you were not given, people you were not given, other properties, anything",
+    "historical you cannot see, and any general knowledge question. Being able",
+    "to answer well is NOT a reason to answer. If it is not the subject above,",
+    "it is out of scope even when you know the answer.",
+    "",
+    "YOU MUST REPLY WITH JSON AND NOTHING ELSE:",
+    '  {"outcome":"answered","answer":"..."}      the question is in scope and',
+    "                                              the facts support an answer",
+    '  {"outcome":"out_of_scope","answer":""}     anything else. Leave the answer',
+    "                                              empty — the system writes the",
+    "                                              refusal, not you.",
+    "",
+    "Choose out_of_scope when the question is off-subject, AND when it is",
+    "on-subject but the facts do not contain what is needed. Do not stretch.",
+    "",
+    "ABSOLUTE RULES FOR AN `answered` REPLY:",
     "1. Answer ONLY from the FACTS JSON provided in the user message. It is the",
     "   complete set of things you know. If the answer is not derivable from it,",
     "   say plainly that you do not have that yet — never guess, never estimate,",
@@ -175,12 +225,17 @@ async function answer(db, anthropic, { property_id, allowed_modules, question })
       model: MODEL,
       max_tokens: MAX_TOKENS,
       system: systemPrompt(),
-      messages: [{
-        role: "user",
-        content: `FACTS:\n${JSON.stringify(facts, null, 2)}\n\nOPERATOR ASKED: ${q}`,
-      }],
+      messages: [
+        { role: "user",
+          content: `FACTS:\n${JSON.stringify(facts, null, 2)}\n\nOPERATOR ASKED: ${q}` },
+        //  Prefilled so the reply IS the object and cannot open with a
+        //  sentence. A model that starts talking has already escaped the
+        //  contract, and salvaging JSON out of prose is how a decline gets
+        //  parsed as an answer.
+        { role: "assistant", content: "{" },
+      ],
     });
-    text = (ai.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+    text = "{" + (ai.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
   } catch (e) {
     //  The model failed. Say that. An operator who is told "nothing needs
     //  attention" when the assistant actually fell over has been lied to.
@@ -190,7 +245,34 @@ async function answer(db, anthropic, { property_id, allowed_modules, question })
              grounded_on: null };
   }
 
-  if (!text) {
+  /*  THE SERVER DECIDES THE OUTCOME, NOT THE PROSE.
+   *
+   *  Before this, the model returned free text and every non-empty reply
+   *  was treated as `answered`. A decline written as a sentence — "I can't
+   *  really answer that, but generally…" — was indistinguishable from a
+   *  grounded answer, to this code and therefore to the operator.
+   *
+   *  Now the reply must PARSE and must carry one of exactly two outcomes.
+   *  Anything else is `unavailable`: a model that did not follow the
+   *  contract is a model whose answer cannot be trusted, and guessing what
+   *  it meant is the whole failure mode.  */
+  let decision = null;
+  try { decision = JSON.parse(text); } catch (_) { decision = null; }
+
+  if (!decision || (decision.outcome !== "answered" && decision.outcome !== "out_of_scope")) {
+    console.error("ask-spine/answer: model did not return a valid decision");
+    return { outcome: "unavailable",
+             answer: "I couldn't put an answer together just then. Try again in a moment.",
+             grounded_on: null };
+  }
+
+  if (decision.outcome === "out_of_scope") {
+    //  The server's words, every time. See OUT_OF_SCOPE_ANSWER.
+    return { outcome: "out_of_scope", answer: OUT_OF_SCOPE_ANSWER, grounded_on: null };
+  }
+
+  const body = String(decision.answer || "").trim();
+  if (!body) {
     return { outcome: "unavailable",
              answer: "I couldn't put an answer together just then. Try again in a moment.",
              grounded_on: null };
@@ -198,7 +280,7 @@ async function answer(db, anthropic, { property_id, allowed_modules, question })
 
   return {
     outcome: "answered",
-    answer: text,
+    answer: body,
     model: MODEL,
     //  What the answer was built from. The caller shows this so a claim
     //  is checkable — the counts, not the rows, because the rows are
@@ -212,4 +294,4 @@ async function answer(db, anthropic, { property_id, allowed_modules, question })
   };
 }
 
-module.exports = { answer, gatherFacts, systemPrompt, MODEL };
+module.exports = { answer, gatherFacts, systemPrompt, MODEL, SUPPORTED_SCOPE, OUT_OF_SCOPE_ANSWER };

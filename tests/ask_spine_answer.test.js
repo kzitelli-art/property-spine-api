@@ -38,13 +38,24 @@ const stubDb = (over) => ({
   },
 });
 
-//  A model that records what it was asked and returns what we tell it to.
+/*  A model that records what it was asked and returns what we tell it to.
+ *
+ *  The service PREFILLS an opening brace and prepends it to whatever comes
+ *  back, so a stub returns the remainder of the object — exactly the shape
+ *  the real model is being asked for. `raw` bypasses that to simulate a
+ *  model that ignored the contract and started talking.  */
 const stubAI = (behaviour) => ({
   messages: {
     create: async (req) => {
       if (behaviour && behaviour.throws) throw new Error("model down");
       if (behaviour) behaviour.lastRequest = req;
-      return { content: [{ type: "text", text: (behaviour && behaviour.text) || "Nothing is open right now." }] };
+      if (behaviour && behaviour.raw !== undefined) {
+        return { content: [{ type: "text", text: behaviour.raw }] };
+      }
+      const outcome = (behaviour && behaviour.outcome) || "answered";
+      const answer = behaviour && "text" in behaviour ? behaviour.text : "Nothing is open right now.";
+      return { content: [{ type: "text",
+        text: JSON.stringify({ outcome, answer }).slice(1) }] };   // drop the prefilled "{"
     },
   },
 });
@@ -139,6 +150,65 @@ const base = { property_id: PROP, allowed_modules: ["maintenance"] };
      /Assigned and accepted are different/.test(sys) &&
      /waiting for X to accept/.test(sys),
      "the distinction the whole work-order rail is built on is missing from the voice");
+
+  // ── B · THE BOUNDARY · scope is enforced, not hoped for ───────────
+  //  The defect this section exists for: the first version of this slice
+  //  had a text box and NO scope. Every sentence went to the model, and
+  //  `out_of_scope` fired only on an empty or oversized string — never on
+  //  a topic. "Should I raise rents?" got a confident answer built from
+  //  nothing. A text box had quietly made a governed read into a chatbot.
+  const scoped = await answerModule.answer(stubDb(), stubAI({ outcome: "out_of_scope", text: "" }),
+    { ...base, question: "should I raise rents?" });
+  ok("B1  a model verdict of out_of_scope is returned AS out_of_scope",
+     scoped.outcome === "out_of_scope", JSON.stringify(scoped));
+  ok("B2  …and the refusal is the SERVER's words, not the model's",
+     scoped.answer === answerModule.OUT_OF_SCOPE_ANSWER,
+     "the model wrote its own decline. A model that composes a refusal can talk " +
+     "itself into being helpful — 'I can't really answer that, but generally…'");
+  ok("B3  …and the refusal names what CAN be asked",
+     /what needs attention|what is open|who has a job/i.test(scoped.answer));
+  ok("B4  …and it carries no grounding, having answered from nothing",
+     scoped.grounded_on === null);
+
+  //  A model that ignored the contract and wrote prose must NOT be read
+  //  as an answer. This is the exact failure the structured decision
+  //  exists to close: a decline in sentence form used to be
+  //  indistinguishable from a grounded answer.
+  const prose = await answerModule.answer(stubDb(), stubAI({ raw: "I can't really answer that, but generally rents rise 3%." }),
+    { ...base, question: "should I raise rents?" });
+  ok("B5  a PROSE reply is `unavailable`, never `answered`",
+     prose.outcome === "unavailable",
+     "free text was accepted as an answer — a model that starts talking has " +
+     "already escaped the contract: " + JSON.stringify(prose));
+
+  const badOutcome = await answerModule.answer(stubDb(), stubAI({ outcome: "maybe", text: "x" }),
+    { ...base, question: "what's open?" });
+  ok("B6  an outcome the contract does not define is `unavailable`",
+     badOutcome.outcome === "unavailable", JSON.stringify(badOutcome));
+
+  const emptyAnswered = await answerModule.answer(stubDb(), stubAI({ outcome: "answered", text: "" }),
+    { ...base, question: "what's open?" });
+  ok("B7  `answered` with an empty body is `unavailable`, not a blank answer",
+     emptyAnswered.outcome === "unavailable");
+
+  //  The scope must be ONE definition. If the prompt and the refusal ever
+  //  describe different things, the operator is told they can ask about
+  //  something the model has been told to decline.
+  ok("B8  the system prompt and the refusal quote the SAME scope constant",
+     sys.includes(answerModule.SUPPORTED_SCOPE) &&
+     answerModule.OUT_OF_SCOPE_ANSWER.includes(answerModule.SUPPORTED_SCOPE),
+     "scope has two definitions — they will drift");
+  ok("B9  …and the prompt names the off-limits topics explicitly",
+     /rent strategy|pricing/.test(sys) && /meetings/.test(sys) &&
+     /general knowledge/.test(sys) && /NOT a reason to answer/.test(sys),
+     "the model is left to infer what is off-subject");
+  ok("B10 …and it is told to decline on-subject questions the facts cannot support",
+     /facts do not contain what is needed/.test(sys) && /Do not stretch/.test(sys));
+  ok("B11 the reply is prefilled so the model cannot open with a sentence",
+     spy.lastRequest.messages.length === 2 &&
+     spy.lastRequest.messages[1].role === "assistant" &&
+     spy.lastRequest.messages[1].content === "{",
+     "no prefill — salvaging JSON out of prose is how a decline gets parsed as an answer");
 
   // ── F · A FAILED READ IS CARRIED, NOT SWALLOWED ───────────────────
   const spy2 = {};
