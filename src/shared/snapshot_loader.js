@@ -527,28 +527,58 @@ function availabilityProjection(rows, positions, asOf) {
 
 
 async function loadLedgerSnapshot(pool, inputRows, options = {}) {
-  const rows = (Array.isArray(inputRows) ? inputRows : []).map(normalizeRow).filter(r => r.unit_number);
+  //  ── EVIDENCE RECORDS WHAT ARRIVED, INCLUDING WHAT WE COULD NOT USE ──
+  //  This used to be `.filter(r => r.unit_number)`, which DISCARDED any row
+  //  the loader could not place. That is silent: the batch then claims to
+  //  be the source, and a row the file genuinely contained is nowhere —
+  //  so "no unit number on line 47" is unanswerable afterwards.
+  //
+  //  Both lists are kept. Usable rows produce units, spaces and positions
+  //  exactly as before; unusable ones are still written as evidence, with
+  //  a parse_note and no produced objects. Nothing about the placeable
+  //  rows changes, which is why this is safe to do underneath the existing
+  //  callers.
+  //  `normalizeRow` returns a FIXED shape and drops every key it does not
+  //  know — including `_source_cells`, the caller's original spreadsheet
+  //  cells. Carrying it across explicitly is what lets evidence hold what
+  //  the document actually said, not only our reading of it. (Without
+  //  this, "which of your columns did we read as rent" is unanswerable
+  //  the moment the page is reloaded.)
+  const allRows = (Array.isArray(inputRows) ? inputRows : []).map((raw, i) => {
+    const n = normalizeRow(raw, i);
+    if (raw && raw._source_cells) n._source_cells = raw._source_cells;
+    return n;
+  });
+  const rows     = allRows.filter(r => r.unit_number);
+  const unusable = allRows.filter(r => !r.unit_number);
   if (!rows.length) return { error:"no_rows" };
-  const client = await pool.connect();
+
+  //  ── ONE TRANSACTION, WHEN THE CALLER NEEDS ONE ──────────────────────
+  //  Activation stores an artifact, writes this batch and stages its
+  //  proposals as a single act; a batch that survives a failed staging is
+  //  evidence for a decision nobody ever made. When `options.client` is
+  //  supplied the caller owns begin/commit and this manages neither.
+  const borrowed = options.client || null;
+  const client   = borrowed || await pool.connect();
   try {
-    await client.query("begin");
+    if (!borrowed) await client.query("begin");
     let propertyId = options.targetPropertyId || null;
     if (!propertyId) {
       if (!options.propertyConfig) {
-        await client.query("rollback");
+        if (!borrowed) await client.query("rollback");
         return { error: "property_not_found", property: "session_scoped",
                  receipt: "No property was supplied and none could be derived from the session." };
       }
       const res = await resolveProperty(client, options.propertyConfig);
       if (res.status !== "resolved") {
-        await client.query("rollback");
+        if (!borrowed) await client.query("rollback");
         return { ...resolutionError(res), property: "session_scoped" };
       }
       propertyId = res.property_id;
     }
     const sourceFile = options.sourceFile || "Rent roll ledger export";
     const sourceAsOfDate = dt(options.sourceAsOfDate);
-    if (!sourceAsOfDate) { await client.query("rollback"); return { error:"valid_source_as_of_date_required" }; }
+    if (!sourceAsOfDate) { if (!borrowed) await client.query("rollback"); return { error:"valid_source_as_of_date_required" }; }
     const prior = await client.query(
       `select id from import_batches
         where property_id=$1 and source_type='rent_roll_ledger'
@@ -556,7 +586,7 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
         order by loaded_at desc limit 1`, [propertyId, sourceFile, sourceAsOfDate]
     );
     if (prior.rows.length && !options.force) {
-      await client.query("rollback");
+      if (!borrowed) await client.query("rollback");
       return { ok:true, idempotent:true, already_loaded:true, property_id:propertyId,
                import_batch_id:prior.rows[0].id, source_file:sourceFile,
                source_as_of_date:sourceAsOfDate, parsed_rows:rows.length };
@@ -564,11 +594,15 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
     const batch = (await client.query(
       `insert into import_batches
          (property_id, source_type, source_file, source_as_of_date,
-          leasing_model, confidence, status, notes)
-       values ($1,'rent_roll_ledger',$2,$3,$4,$5,'parsed',$6) returning id`,
+          leasing_model, confidence, status, notes, source_artifact_id)
+       values ($1,'rent_roll_ledger',$2,$3,$4,$5,'parsed',$6,$7) returning id`,
       [propertyId, sourceFile, sourceAsOfDate, options.leasingModel || "unit",
        options.confidence || "confirmed",
-       options.notes || `Dated rent-roll ledger evidence; ${rows.length} normalized rows. No person or lease records fabricated.`]
+       options.notes || `Dated rent-roll ledger evidence; ${rows.length} normalized rows. No person or lease records fabricated.`,
+       //  The retained file this batch was read from (migration 153/156).
+       //  Null for every legacy caller, which is honest: they had only a
+       //  filename, and a filename is not a file.
+       options.sourceArtifactId || null]
     )).rows[0];
     const batchId=batch.id, unitCache=new Map(), spaceCache=new Map();
     const counts={source_rows:0,units_created:0,units_reused:0,spaces_created:0,spaces_reused:0,current_rows:0,future_rows:0};
@@ -602,15 +636,43 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
       await client.query(
         `insert into import_source_rows (import_batch_id,row_index,raw,produced_unit_id,produced_space_id,produced_person_id,produced_lease_id,parse_note)
          values ($1,$2,$3,$4,$5,null,null,$6)`,
-        [batchId,row.row_index,JSON.stringify(row),unitId,spaceId,row.section==='future'?'future ledger row — evidence only':'current ledger row — evidence only']
+        //  `raw` stays normalizeRow-shaped because the rent-roll read
+        //  re-normalizes it. The ORIGINAL cells ride alongside under
+        //  `_source_cells` — normalizeRow ignores keys it does not know, so
+        //  the display is unaffected and the evidence stops being only our
+        //  reading of the document.
+        [batchId,row.row_index,JSON.stringify({ ...row, _source_cells: row._source_cells || null }),
+         unitId,spaceId,row.section==='future'?'future ledger row — evidence only':'current ledger row — evidence only']
       );
     }
+
+    //  ── ROWS THE SOURCE CONTAINED THAT WE COULD NOT PLACE ──────────────
+    //  Written as evidence with no produced objects. They are not
+    //  positions and must never be counted as any, but "line 47 had no
+    //  unit number" is only answerable if line 47 is on record.
+    for (const row of unusable) {
+      counts.unusable_rows = (counts.unusable_rows || 0) + 1;
+      await client.query(
+        `insert into import_source_rows (import_batch_id,row_index,raw,produced_unit_id,produced_space_id,produced_person_id,produced_lease_id,parse_note)
+         values ($1,$2,$3,null,null,null,null,$4)`,
+        [batchId,row.row_index,JSON.stringify({ ...row, _source_cells: row._source_cells || null }),
+         'unusable: no unit number — recorded as evidence, established as nothing']
+      );
+    }
+
     await client.query("update import_batches set status='committed',updated_at=now() where id=$1",[batchId]);
-    await client.query("commit");
+    if (!borrowed) await client.query("commit");
     return {ok:true,property_id:propertyId,import_batch_id:batchId,source_type:'rent_roll_ledger',source_file:sourceFile,source_as_of_date:sourceAsOfDate,loaded:counts};
   } catch(e){
-    await client.query("rollback"); console.error("rent-roll ledger load error:",e); return {error:"ledger_load_failed",detail:e.message};
-  } finally { client.release(); }
+    if (!borrowed) await client.query("rollback");
+    console.error("rent-roll ledger load error:", e);
+    //  A borrowed client belongs to a transaction this function did not
+    //  open. Swallowing the error and returning a shape would let the
+    //  caller commit a half-written batch; it is rethrown so the owner of
+    //  the transaction decides.
+    if (borrowed) throw e;
+    return {error:"ledger_load_failed",detail:e.message};
+  } finally { if (!borrowed) client.release(); }
 }
 
 function validateReconciliation(doc) {
@@ -842,7 +904,12 @@ async function readLatestSnapshot(pool, propertyId, asOf = null) {
       `select row_index, raw, parse_note from import_source_rows
         where import_batch_id=$1 order by row_index`, [batch.id]
     )).rows;
-    rows = sourceRows.map((r,i) => normalizeRow(r.raw || {}, i));
+    //  Evidence holds every row the source contained, including ones that
+    //  could not be placed (no unit number). Those are evidence, not
+    //  positions: showing them here would put blank lines in a rent roll
+    //  and inflate every count computed from it. They remain readable
+    //  through the batch's source rows, which is where they belong.
+    rows = sourceRows.map((r,i) => normalizeRow(r.raw || {}, i)).filter(r => r.unit_number);
   } else if (reconciliation) {
     rows = reconciliationRows(reconciliation.document);
   }
