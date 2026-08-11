@@ -3,7 +3,28 @@
 ## 2026-08-11 · MAINTENANCE WORK ORDERS — H CLOSED. ONE PRODUCT.
 
 **Merged:** API `6c577dc` (PR #77) · App `5dd2548` (PR #43).
-**Production:** schema readiness READY. Live Work Orders smoke check pending. Migrated: nothing. No schema change in this slice.
+**Production:** schema readiness READY. Live Work Orders smoke check passed. Migrated: nothing. No schema change in this slice.
+
+Smoke check, on `property-spine-app.onrender.com`, Solo on Chestnut, artifact
+`code_sha 5dd25483`: board opened, 4 real property-scoped rows, every row
+carrying its reference (`refs 4 / rows 4`), ownership reading `KZ · NOT
+ACCEPTED` / `Tom · NOT ACCEPTED`, `unavailable false`, no fixture rows, no
+console error. `Take job` rendered on KZ's row and **not** on Tom's — the
+server-derived acceptance rail holding in production. Detail `#1006` opened
+with the same handle line as its row, one `What is happening` statement, a
+`Next`, `Still needs work`, and `History` folded.
+
+**RECORDED, NOT CHASED — the detail has no acceptance verb.** `action()` at
+`work-lifecycle-door.js:368` returns `Take job` when the server says
+`may_accept`, and only the LIST calls it. `detailHtml` builds its `Next` band
+from its own two cases — `ask_photo` and `coordinate` — so a row the list
+offers `Take job` opens into a detail that does not. Both surfaces are honest;
+they are not the same object seen twice, which is what the contract asks for.
+Found by reading source during the smoke check, not by a failing assertion —
+no test covers it, which is the more useful half of the finding. Work Orders is
+frozen, so this is written down rather than fixed. Removal condition: either
+`detailHtml` calls `action()` for its dominant verb, or the contract is amended
+to say acceptance is a list-only affordance and a guard asserts that.
 
 ### The correction this section exists to make
 
