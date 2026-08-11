@@ -15,6 +15,72 @@ Confirmed by `node migrations/migrate.js` on the new instance (`4bcd7`), not
 inferred. The ceiling moved 158 → 159 and the instance changed, so the service
 is running current `main` rather than the survivor.
 
+### ▶ THE RELEASE SEQUENCE FOR 160/161 — DO NOT IMPROVISE IT
+
+PRs are open and **feature work is stopped**. The risk from here is
+operational, not conceptual.
+
+```text
+API  kzitelli-art/property-spine-api#92    a988ba8  (carries 160 + 161)
+APP  kzitelli-art/property-spine-app#52    0a4ec39  (depends on the API PR)
+```
+
+**⚠ API #92 CONTAINS MIGRATIONS AND THE API REFUSES TO BOOT ON PENDING ONES.**
+Merging it and letting an ordinary deploy discover 160/161 is exactly the
+failure that cost days on 159. Merge is not release, and the deploy after the
+merge will fail until the release is done deliberately.
+
+```text
+1  review only  ⚠ THERE IS NO CI. Neither repo has a .github/workflows/
+                 file — measured, not assumed. No green check is coming and
+                 nothing re-runs the gates on a PR. The suite results in the
+                 PR bodies are the evidence, produced locally on the merged
+                 trees.
+
+2  PREPARE, before merging
+     · read the production ledger — expected prior ceiling 159
+     · confirm the exact API SHA that will be deployed
+     · confirm 160 and 161 are the ONLY pending files
+       ✓ VERIFIED IN SOURCE: the PR head carries exactly
+         160_asset_management_module.sql and
+         161_insurance_economic_truth.sql above 159, and main carries
+         nothing above 159. Re-confirm against production at the time.
+
+3  merge API #92
+
+4  RELEASE 160 + 161 deliberately, via the migration-release boot path
+     MIGRATION_RELEASE=1
+     EXPECTED_LEDGER_CEILING=159
+     EXPECTED_SHA=<the exact deployed SHA>
+     …then DELETE MIGRATION_RELEASE.
+     Receipt must show the new ceiling and both-direction reconciliation.
+
+5  prove the API surface against production
+
+6  merge APP #52 and DEPLOY THE APP MANUALLY — app auto-deploy is OFF
+
+7  authenticated production browser checks
+     · established Deal Setup property renders "Lease & occupancy established"
+     · unestablished property still renders unestablished
+     · Asset Management appears ONLY for an explicitly entitled user/property
+     · Insurance opens and shows the governed economic position
+     · Cash & Financing remains honestly unestablished
+```
+
+### THREE STATUSES, NEVER COLLAPSED INTO ONE
+
+**"PR merged", "migration released" and "surface proven" are three different
+facts.** Recording them as one is how a merge comes to be read as a shipped
+feature — and this repo has already paid for a deploy that looked healthy while
+serving older code.
+
+```text
+source merged  →  schema released  →  API proven  →  app deployed  →
+authenticated surface proven
+```
+
+State the rung reached. Do not round up.
+
 ### ⚠ OPEN RELEASE ITEM — THE PRODUCTION SURFACE IS NOT CONFIRMED
 
 **Classify this precisely, because the two halves are not the same claim:**
