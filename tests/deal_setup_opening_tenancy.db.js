@@ -77,6 +77,7 @@
 
    H  THE CONSTRAINT SCANS WHAT THE CODE WRITES
       H1  every source_type any writer produces is permitted by the CHECK
+      H2  the service's creation-source list and the database CHECK agree
           — read from the SOURCE, whole repo, because 158's first version
           claimed this after reading one writer and was wrong in production
 
@@ -84,7 +85,7 @@
       G1  file → source row → proposal → decision → lease, in one join
       G2  the position reaches its artifact through the batch
 
-   run:  HARNESS_DATABASE_URL="postgres://..." node tests/deal_activation_opening_position.db.js
+   run:  HARNESS_DATABASE_URL="postgres://..." node tests/deal_setup_opening_tenancy.db.js
    ════════════════════════════════════════════════════════════════════ */
 "use strict";
 
@@ -177,7 +178,7 @@ function parseCsvLikeTheApp(text) {
 }
 
 (async () => {
-  receipt.begin(__filename, { url: URL, expected: 68 });
+  receipt.begin(__filename, { url: URL, expected: 69 });
 
   // ── fixtures ───────────────────────────────────────────────────────
   const orgA = (await pool.query(
@@ -554,20 +555,20 @@ function parseCsvLikeTheApp(text) {
      `unresolved=${pos.positions_unresolved}`);
 
   const srcs = (await pool.query(
-    `select source_artifact_id from opening_position_sources where opening_position_id=$1`,
+    `select source_artifact_id from opening_tenancy_position_sources where opening_tenancy_position_id=$1`,
     [pos.id])).rows;
   ok("F4  it names its source artifact",
      srcs.length === 1 && srcs[0].source_artifact_id === art.id);
 
   const posCols = (await pool.query(
-    `select column_name from information_schema.columns where table_name='opening_positions'`)).rows
+    `select column_name from information_schema.columns where table_name='opening_tenancy_positions'`)).rows
     .map((r) => r.column_name);
   ok("F5  it holds no copy of any lease",
      !posCols.some((c) => /tenant|rent_amount|lease_id|unit_number/.test(c)),
      posCols.join(","));
 
   await refusedByDatabase("F6  what it established cannot be rewritten", () =>
-    pool.query(`update opening_positions set positions_established=99 where id=$1`, [pos.id]));
+    pool.query(`update opening_tenancy_positions set positions_established=99 where id=$1`, [pos.id]));
 
   //  `act` is now 'activated', so this opens a genuinely NEW activation —
   //  which is what re-establishing from a later rent roll really is.
@@ -590,12 +591,12 @@ function parseCsvLikeTheApp(text) {
   const second = await activation.establishOpeningPosition(pool, {
     user_id: adminA, activation_id: mayAct.id });
   const priorNow = (await pool.query(
-    `select status, superseded_by_id from opening_positions where id=$1`, [pos.id])).rows[0];
+    `select status, superseded_by_id from opening_tenancy_positions where id=$1`, [pos.id])).rows[0];
   ok("F7  re-establishing supersedes rather than duplicating",
      priorNow.status === "superseded" && priorNow.superseded_by_id === second.opening_position.id);
 
   const currentCount = (await pool.query(
-    `select count(*)::int c from opening_positions where property_id=$1 and status='established'`,
+    `select count(*)::int c from opening_tenancy_positions where property_id=$1 and status='established'`,
     [propA.id])).rows[0].c;
   ok("F8  exactly one established position per property", currentCount === 1, `found ${currentCount}`);
 
@@ -659,6 +660,20 @@ function parseCsvLikeTheApp(text) {
      `constraint permits: ${[...permitted].sort().join(", ")}\n        ` +
      `NOT PERMITTED: ${missing.join(", ") || "(none)"}`);
 
+  //  ── TWO LISTS, ONE VOCABULARY ─────────────────────────────────────
+  //  The service keeps CREATION_SOURCES so it can refuse readably; the
+  //  database keeps ck_dce_source so the table is actually protected.
+  //  They must agree, or one path refuses what the other accepts and the
+  //  weaker one is the one somebody calls.
+  const svcSources = [...dealService.CREATION_SOURCES].sort();
+  const dbSources = (((await pool.query(
+    `select pg_get_constraintdef(oid) as def from pg_constraint
+      where conname = 'ck_dce_source'`)).rows[0] || {}).def || "")
+    .match(/'([a-z_]+)'/g)?.map((x) => x.replace(/'/g, "")).sort() || [];
+  ok("H2  the service's creation-source list and the database CHECK agree",
+     svcSources.length > 0 && JSON.stringify(svcSources) === JSON.stringify(dbSources),
+     `service: ${svcSources.join(", ")}\n        database: ${dbSources.join(", ")}`);
+
   console.log("\n── G · THE WHOLE CHAIN ─────────────────────────────────────");
 
   const chain = (await pool.query(
@@ -681,13 +696,13 @@ function parseCsvLikeTheApp(text) {
 
   const reach = (await pool.query(
     `select sa.original_filename
-       from opening_positions op
+       from opening_tenancy_positions op
        join import_batches ib on ib.id = op.import_batch_id
        join source_artifacts sa on sa.id = ib.source_artifact_id
       where op.id = $1`, [second.opening_position.id])).rows;
   ok("G2  the position reaches its source file through the batch", reach.length === 1);
 
-  receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 61 });
+  receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 62 });
   await pool.end();
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

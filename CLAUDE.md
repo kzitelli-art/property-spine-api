@@ -32,6 +32,73 @@ See `docs/BUILD_1A_CLOSEOUT.md` before designing anything above the property.
 **Do not make Property the top-level onboarding or economic container.** Build 0 did,
 and had to be corrected.
 
+## Same truth, four compressions
+
+Staff, Management, Accounting and the Owner are doing four different jobs over
+**one** governed system. They are not four datasets and not four dashboards.
+
+```text
+STAFF        operate the property; record what happened at the moment of work
+MANAGEMENT   resolve the operation; coordinate obligations and exceptions
+ACCOUNTING   prove the economics; recognition, reconciliation, close, support
+OWNER        steer the Deal; understand the economic story, decide what needs
+             their judgment
+```
+
+Precedent in this repo: `dated_positions.js` — *"One service. Four
+interpretations."* Same move, one altitude up.
+
+**The person closest to the fact records what happened. Spine carries that fact
+upward; authority adds meaning, not transcription.** A technician says "needs
+another flooring run, vendor quoted $1,840" — that is operating language, not
+accounting. Economic authority confirms what it *means*. The authority never
+retypes the number: **recognition over re-entry**, and the meaning walks back to
+the statement, quote or photo it came from. Where the source carries no amount,
+the amount stays unknown. No invented estimate.
+
+**At owner altitude:** the owner surface may only assert a cause it can walk back
+to a recorded fact. What it cannot support stays visible uncertainty; it is never
+smoothed into a narrative. A convincing unsupported story is worse than a blank.
+
+## Reserved names
+
+Do not spend a broad name on a narrow thing.
+
+```text
+Deal Setup                  onboarding machinery: give Spine enough starting
+                            truth about a Deal that it can begin operating one
+Asset Management            RESERVED — the owner surface. Operating truth →
+                            economic consequence → owner judgment → reporting
+Opening Tenancy Position    lease and occupancy, from a rent roll, as of a date
+                            (shown to people as "Lease & occupancy established")
+Opening Operating Position  RESERVED — the composed opening state: tenancy +
+                            bank + debt + taxes + insurance + contracts
+Opening Accounting Truth    RESERVED — opening GL and subledger balances
+```
+
+**A name is reserved in the source or it is not reserved.** Renaming rendered
+text while routes, modules and identifiers keep the old word reserves nothing —
+the next person reads the code. When Build 1B shipped as "Asset Management" and
+was corrected the next day, the routes, the module, the DOM ids and the function
+prefix all moved with it.
+
+## Exposure — a contract, not a table
+
+Exposure is *a consequential thing Spine cannot yet stand behind*. It appears at
+different altitudes and is **not** one storage primitive; do not build a
+universal `exposure` column. Any domain participating in the owner compression
+must be able to answer:
+
+1. what is this about
+2. what is the possible magnitude, **if known** — unknown is a valid Exposure,
+   never zero
+3. why can Spine not stand behind it
+4. what would resolve it
+5. as of when was this observed
+6. who owns resolving it — or `UNASSIGNED`
+
+Storage stays domain-specific. The owner layer consumes the contract.
+
 ## Non-negotiables (see PHILOSOPHY.md for full text)
 
 - **Honest blank beats confident wrong** (§5). Never fake a number, status, owner, dispatch, proof, or healthy state. Show missing as missing; `UNASSIGNED` when no owner.
@@ -68,6 +135,24 @@ say what it would have missed.
   it read `innerText` from an element that never rendered, and `innerText` silently
   falls back to `textContent`. **Assert the app actually loaded, and read only
   layout-aware text.** Look at the screenshot, not the output.
+- Then it happened again in a form layout-awareness does not catch: Deal Setup
+  shipped writing every message — success, failure, refusal — into `#receipt`,
+  which lives in the app shell **underneath** a `position:fixed` full-screen
+  overlay. Real element, real text, real box, `display:block`, and **invisible**.
+  Two rent-roll uploads in a row looked like they did nothing. `innerText` read it
+  perfectly.
+  **Rendered is not visible.** Ask the DOCUMENT, not the element:
+  `document.elementFromPoint` at the element's centre must return that element or
+  something inside it. Anything else is covered, and covered is invisible whatever
+  the styles say.
+- A proof that reaches past the product to assert the product is testing its own
+  reach. The first version of that visibility test called the app's toast function
+  directly, found it was not on `window` (the surface is inside an IIFE), silently
+  skipped, and reported the channel broken. **Provoke a real refusal through the
+  real path.**
+- In a full-screen-overlay app, an unscoped selector is a coin flip.
+  `button:has-text('Review')` matched a button in the shell *underneath* the panel.
+  Scope selectors to the surface under test.
 - "Every source-governance gate passes" means *those gates*, not "the tree is clean."
   Say which.
 
@@ -117,6 +202,16 @@ in PR #38 and was contradicted by accident.
   and a retirement condition tied to the data being reconciled.
 - **A compatibility bridge is not a destination.** Say so in the receipt, name what
   removes it, or "it works now" quietly becomes the architecture.
+
+### A rename is a contract change
+
+A blunt identifier sweep during migration 159 renamed an API response key and
+not the app that read it. Nothing threw. The deal page simply showed "Setup in
+progress" for a property whose position **was** established, and only a browser
+caught it — the HTTP proof was asserting the database, not the response shape.
+
+**An API output key is a contract.** When you rename one, pin it with an
+assertion that reads the key by name, or the next sweep breaks it silently too.
 
 ### When you find an adjacent defect
 

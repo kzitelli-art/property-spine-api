@@ -79,13 +79,21 @@ const app = express();
 // browser that holds the in-memory staff token to drive the operator surface.
 const OPERATOR_APP_ORIGIN = String(process.env.OPERATOR_APP_ORIGIN || "").trim();
 function isOperatorPath(p) { return p === "/operator" || p.startsWith("/operator/"); }
-//  Asset Management. SESSION-GATED, not public: every /asset/* route runs
-//  requireHuman (x-staff-session → a real users row) before it does
-//  anything, and every write records the human it resolved. It skips the
-//  operator-KEY gate for the same reason /operator/*, /admin/* and /org/*
-//  do — the surface is driven by a browser holding a session, not a key.
-//  Exact-boundary, so '/assets' or '/assetX' does NOT bypass the gate.
-function isAssetPath(p) { return p === "/asset" || p.startsWith("/asset/"); }
+//  Deal Setup. SESSION-GATED, not public: every route runs requireHuman
+//  (x-staff-session → a real users row) before it does anything, and every
+//  write records the human it resolved. It skips the operator-KEY gate for
+//  the same reason /operator/*, /admin/* and /org/* do — the surface is
+//  driven by a browser holding a session, not a key.
+//  Exact-boundary, so '/deal-setups' does NOT bypass the gate.
+//
+//  `/asset/*` is the TEMPORARY alias for the app currently in production;
+//  it is rewritten inside deal_setup.js and carries its removal condition
+//  there. Both must pass this gate or the alias would 401 instead of
+//  working, which is the opposite of what a compatibility bridge is for.
+function isDealSetupPath(p) {
+  return p === "/deal-setup" || p.startsWith("/deal-setup/")
+      || p === "/asset" || p.startsWith("/asset/");   // ⏳ alias — see deal_setup.js
+}
 
 const operatorCors = cors({
   origin: function (origin, cb) {
@@ -170,7 +178,7 @@ app.use((req, res, next) => {
   const p = req.path;
   if (PUBLIC_EXACT.has(p) || PUBLIC_PREFIXES.some((x) => p === x || p.startsWith(x))) return next();
   if (isOperatorPath(p)) return next(); // /operator/* applies its own staff-session auth
-  if (isAssetPath(p)) return next();    // /asset/* applies its own staff-session auth (requireHuman)
+  if (isDealSetupPath(p)) return next(); // /deal-setup/* applies its own staff-session auth (requireHuman)
   if (p === "/admin" || p.startsWith("/admin/")) return next(); // /admin/* enforces its own super-admin session auth
   if (p === "/org" || p.startsWith("/org/")) return next();     // /org/* enforces its own org-admin session auth
   if (!OPERATOR_KEY) {
@@ -3278,18 +3286,22 @@ const leasingLifecycle = require("./src/leasing/leasing_lifecycle_service")({ po
 const leasingLeadsModule = require("./src/leasing/leasingleads"); // leasing lead intake: one-human/many-opportunities funnel + AI first response
 app.use("/", dealIntakeModule({ pool, anthropic, INGEST_MODEL, registryInstance, fileToText, runIngestAuto, upload }));
 
-// ── ASSET MANAGEMENT ─────────────────────────────────────────────────
-//  Spine's fourth surface. Deals → Deal → Properties → Setup → Opening
-//  Position. Every route resolves a staff session first (requireHuman)
-//  and records the human on every write; /asset/* therefore skips the
+// ── DEAL SETUP ───────────────────────────────────────────────────────
+//  Establish the source truth Spine needs before it can operate a Deal.
+//  Every route resolves a staff session first (requireHuman) and records
+//  the human on every write; /deal-setup/* therefore skips the
 //  operator-KEY gate the same way /operator/*, /admin/* and /org/* do.
 //
+//  NOT Asset Management. That name is reserved for the owner surface —
+//  operating truth → economic consequence → owner judgment → reporting —
+//  which cannot be built until the causal Money graph exists.
+//
 //  Mounted HERE, after `upload`, because the source-file route needs it.
-//  MOUNTING IS NOT REACHABILITY (the /legal/ lesson): isAssetPath() above
-//  is what actually lets these through the gate, and the HTTP proof calls
-//  them through the real server for exactly that reason.
-const assetManagementModule = require("./src/onboarding/asset_management");
-app.use("/", assetManagementModule({ pool, upload }));
+//  MOUNTING IS NOT REACHABILITY (the /legal/ lesson): isDealSetupPath()
+//  above is what actually lets these through the gate, and the HTTP proof
+//  calls them through the real server for exactly that reason.
+const dealSetupModule = require("./src/onboarding/deal_setup");
+app.use("/", dealSetupModule({ pool, upload }));
 // ── Post-tour leasing conversion rail + scheduling intake + interaction ledger ──
 // (migrations 047/048/049). sms + the obligation engine fns are all in scope here.
 // NOTE (wave 3): the conversion module is instantiated BEFORE the leads module so

@@ -4,10 +4,16 @@
 //    ACTIVATION is the process:
 //      retained artifact → evidence → proposal → review → canonical records
 //
-//    OPENING POSITION is the outcome:
-//      "As of 30 April this is the established current lease and occupancy
-//       position for this property, from these sources, with these
-//       remaining exceptions."
+//    OPENING TENANCY POSITION is the outcome:
+//      "As of 30 April this is the established lease and occupancy position
+//       for this property, from these sources, with these remaining
+//       exceptions."
+//
+//    TENANCY, not the deal's opening state. It holds no debt, taxes,
+//    insurance, contracts or bank balances and never will. "Opening
+//    Operating Position" is reserved for that composed state; "Opening
+//    Accounting Truth" for the GL/subledger cutover after it. Shown to
+//    people as "Lease & occupancy established" — see migration 159.
 //
 //  ── THE CORRECTION THIS EXISTS TO MAKE ──────────────────────────────
 //  `src/identity/activation.js` designed this flow and was never mounted:
@@ -96,7 +102,7 @@ function classify(n) {
   }
 
   //  A VACANT / MODEL / DOWN row is a real position — an empty unit is part
-  //  of an opening position, not missing from it. Its market rent is the
+  //  of the established position, not missing from it. Its market rent is the
   //  right and only rent it has, and no lease is created for it.
   const vacant = Boolean(n.non_revenue) || !n.name;
   if (vacant) {
@@ -198,7 +204,7 @@ async function ingestRentRoll(db, {
   //  from" gets two answers.
   //
   //  Correcting a file is a NEW setup, which supersedes cleanly and leaves
-  //  both readable. `opening_position_sources` is already a join table for
+  //  both readable. `opening_tenancy_position_sources` is already a join table for
   //  the day a position is genuinely established from more than one
   //  document (a rent roll plus a correction); this refusal is what stops
   //  that arriving by accident before it is designed.
@@ -545,7 +551,7 @@ async function rejectProposal(db, { user_id, proposed_id, reason = null } = {}) 
   return { receipt: "Left out of the position." };
 }
 
-/*  ── establishOpeningPosition ──────────────────────────────────────
+/*  ── establishOpeningTenancyPosition ───────────────────────────────
  *  The statement. It does not copy any lease: it records what was
  *  established, from what, by whom, as of when, and what remains
  *  unresolved. Every actual position is read canonically.
@@ -592,17 +598,17 @@ async function establishOpeningPosition(db, { user_id, activation_id } = {}) {
     //  exist — so the shape rule is a deferred constraint trigger and this
     //  intermediate state resolves before commit. See migration 157.
     const prior = (await client.query(
-      `select id from opening_positions
+      `select id from opening_tenancy_positions
         where property_id = $1 and status = 'established' for update`,
       [act.property_id])).rows[0];
     if (prior) {
       await client.query(
-        `update opening_positions set status='superseded', superseded_at=now() where id=$1`,
+        `update opening_tenancy_positions set status='superseded', superseded_at=now() where id=$1`,
         [prior.id]);
     }
 
     const created = (await client.query(
-      `insert into opening_positions
+      `insert into opening_tenancy_positions
          (property_id, deal_intake_id, activation_id, import_batch_id, as_of_date,
           positions_established, positions_unresolved, source_rows_read,
           established_by_user_id, established_by_person_id, authority_basis, status)
@@ -616,13 +622,13 @@ async function establishOpeningPosition(db, { user_id, activation_id } = {}) {
       //  Now the successor exists, so the prior position can name it. The
       //  deferred trigger validates both rows at commit.
       await client.query(
-        `update opening_positions set superseded_by_id=$2 where id=$1`,
+        `update opening_tenancy_positions set superseded_by_id=$2 where id=$1`,
         [prior.id, created.id]);
     }
 
     if (act.source_artifact_id) {
       await client.query(
-        `insert into opening_position_sources (opening_position_id, source_artifact_id, role)
+        `insert into opening_tenancy_position_sources (opening_tenancy_position_id, source_artifact_id, role)
          values ($1,$2,'rent_roll') on conflict do nothing`,
         [created.id, act.source_artifact_id]);
     }
@@ -631,11 +637,21 @@ async function establishOpeningPosition(db, { user_id, activation_id } = {}) {
       `update activations set status='activated', updated_at=now() where id=$1`, [activation_id]);
 
     await client.query("commit");
+    //  A receipt is product copy. `act.source_as_of_date` is a JS Date, and
+    //  interpolating one produces "Thu Apr 30 2026 00:00:00 GMT+0000
+    //  (Coordinated Universal Time)" in the middle of a sentence a person
+    //  reads. It is a DATE; it is written as one.
+    const asOfText = act.source_as_of_date
+      ? new Date(act.source_as_of_date).toISOString().slice(0, 10)
+      : "an unstated date";
+
     return { opening_position: created, superseded: prior ? prior.id : null,
       receipt:
-        `Opening position established as of ${act.source_as_of_date}: ` +
-        `${tally.established} position${tally.established === 1 ? "" : "s"}` +
-        (tally.unresolved ? `, ${tally.unresolved} still needing attention.` : ", nothing outstanding.") };
+        `Lease & occupancy established as of ${asOfText}: ` +
+        `${tally.established} unit${tally.established === 1 ? "" : "s"}` +
+        (tally.unresolved
+          ? `, ${tally.unresolved} still needing attention.`
+          : ", nothing outstanding.") };
   } catch (e) {
     try { await client.query("rollback"); } catch { /* already rolled back */ }
     throw e;
@@ -689,7 +705,7 @@ async function readActivation(db, { user_id, activation_id } = {}) {
   }
 
   const position = (await db.query(
-    `select * from opening_positions
+    `select * from opening_tenancy_positions
       where property_id = $1 and status = 'established'`, [act.property_id])).rows[0] || null;
 
   return {

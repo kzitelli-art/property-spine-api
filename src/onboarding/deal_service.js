@@ -33,8 +33,13 @@
 
 const { resolveCreationScope } = require("../identity/property_creation_service.js");
 
+//  Kept in step with migration 159's ck_dce_source CHECK. Two lists is
+//  one list too many, but the CHECK is what actually protects the table
+//  and this is what produces the readable refusal — so they are written
+//  next to each other deliberately, and the DB test asserts they agree.
 const CREATION_SOURCES = Object.freeze(new Set([
-  "asset_management_console",   // the Asset Management surface
+  "deal_setup_console",         // the Deal Setup surface
+  "asset_management_console",   // ⏳ historical: the same surface, before 159 renamed it
   "deal_intake_api",            // the existing upload-a-folder front door
   "legacy_backfill",            // migration 154 only; never a live caller
 ]));
@@ -255,7 +260,7 @@ async function listDeals(db, { user_id } = {}) {
        from deal_intakes d
        left join organizations o on o.id = d.organization_id
        left join deal_intake_properties dp on dp.intake_id = d.id
-       left join opening_positions op
+       left join opening_tenancy_positions op
               on op.deal_intake_id = d.id and op.status = 'established'
       where ($1::boolean or d.organization_id = $2::uuid)
       group by d.id, o.name
@@ -276,7 +281,7 @@ async function getDeal(db, { user_id, deal_intake_id } = {}) {
             p.canonical_key, p.canonical_key_absent_reason, p.leasing_basis,
             dp.note, dp.created_at as added_at,
             (select count(*)::int from units u where u.property_id = p.id) as unit_count,
-            op.id            as opening_position_id,
+            op.id            as opening_tenancy_position_id,
             op.as_of_date    as opening_as_of,
             op.positions_established,
             op.positions_unresolved,
@@ -285,7 +290,7 @@ async function getDeal(db, { user_id, deal_intake_id } = {}) {
             act.status       as activation_status
        from deal_intake_properties dp
        join properties p on p.id = dp.property_id
-       left join opening_positions op
+       left join opening_tenancy_positions op
               on op.property_id = p.id and op.status = 'established'
        left join lateral (
             select a.id, a.status from activations a
