@@ -1,8 +1,121 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  ⛔ THE API HAS NOT SHIPPED SINCE 159 MERGED. 2026-08-11 (latest).
+##  THE WEB SHELL CANNOT RELEASE IT. THIS SECTION WINS.
+## ══════════════════════════════════════════════════════════════════
+
+**Every API merge since 159 is unshipped** — Asset Management, the Work Orders
+resident projection, all of it. Render keeps serving `7c3da79` (PR #83) and
+`/health` answers, so **the service looks healthy while running code from
+before 159.** This is the documented trap doing exactly what it exists to do:
+`prestart` verifies rather than applies, refuses to boot with a migration in
+the build and not in the ledger, and Render keeps the previous instance live.
+
+### ⚠ TRAP 1 — THE WEB SHELL ATTACHES TO THE SURVIVING INSTANCE
+
+Measured on 2026-08-11, not assumed.
+
+The Render Web Shell attaches to the instance that is **running**, which is the
+**old** build — the one that never had 159. It does not attach to the build
+that is failing to start. So:
+
+```text
+shell instance     7c3da79   several merges behind main
+migrations/159_*   ABSENT from that filesystem
+```
+
+The instance that HAS 159 is precisely the one `prestart` refuses to start.
+Chicken-and-egg, and there is no path through the Web Shell.
+
+Staging the file by hand does not work either: the container's clone is
+**grafted (shallow)** and `git fetch origin main` fails — there are no repo
+credentials in the runtime container.
+
+### ⚠ TRAP 2 — `--apply` EXITING 0 IS NOT EVIDENCE A MIGRATION LANDED
+
+Run in that shell, `node migrations/migrate.js --apply` reports
+**"Everything was already up to date"** and exits **0**, having changed
+nothing. It ran three times and was honest every time — there genuinely was
+nothing pending *in that build*.
+
+**A clean exit says the files present in THIS build are all in the ledger. It
+says nothing about the file you are trying to release.** Before believing a
+release, check the file is actually on disk:
+
+```bash
+ls migrations/159*          # is the thing you are releasing even here?
+echo "$RENDER_GIT_COMMIT"   # which build am I standing in?
+```
+
+This is the same class of error as an empty-state pass: a true statement about
+the wrong subject.
+
+### THE WAY OUT — `prestart` CAN RELEASE, AND THAT DISSOLVES THE DEADLOCK
+
+`package.json` runs `prestart` as `node migrations/migrate.js` with no
+`--apply`. But `migrations/migrate.js:66`:
+
+```js
+const APPLY = process.argv.includes("--apply") || process.env.MIGRATION_RELEASE === "1";
+```
+
+**`MIGRATION_RELEASE=1` as a SERVICE ENV VAR makes `prestart` itself release.**
+So the build that HAS 159 — the one currently refusing to start — applies 159
+on its own next boot attempt and then boots. The deadlock dissolves because the
+build holding the file is the build running prestart.
+
+This needs no laptop, and **the production connection string never leaves
+Render**, which is better than the alternative on its own merits.
+
+```text
+1.  From the SURVIVING shell, read-only, get the true ledger ceiling:
+        node migrations/migrate.js          (no --apply — verify-only)
+    It prints the ceiling. Do not type a remembered number.
+
+2.  On the API service, set three env vars:
+        MIGRATION_RELEASE=1
+        EXPECTED_LEDGER_CEILING=<what step 1 printed>
+        EXPECTED_SHA=<the SHA of current main you are deploying>
+
+3.  Deploy current main. prestart applies, then the service starts.
+
+4.  DELETE MIGRATION_RELEASE IMMEDIATELY.
+
+5.  Browser check, not SQL: the deal page must read
+    "Lease & occupancy established" for a property that has one.
+```
+
+**Two independent guards make a second, accidental release refuse** — both
+measured in `migrate.js:327–355`. `EXPECTED_LEDGER_CEILING` no longer matches
+once 159 applies, and `EXPECTED_SHA` is pinned to one build. That is real
+safety, and it is not a reason to leave `MIGRATION_RELEASE` set.
+
+### ⚠ SEQUENCING — RELEASE 159 BEFORE MERGING THE ASSET MANAGEMENT BRANCH
+
+**A release applies EVERY pending file.** There is no per-file selection.
+`claude/property-spine-thread-handoff-i7hj0u` carries migrations **160**
+(asset-management module entitlement) and **161** (insurance economic truth),
+neither of which has its own release receipt. If that branch merges to `main`
+before 159 is released, the release sweeps all three in at once.
+
+Order: **release 159 → confirm → then merge.**
+
+### Not a blocker for Asset Management, and it is worth being precise
+
+Asset Management does **not** read `opening_positions` /
+`opening_tenancy_positions`. Checked: nothing in `src/asset/`,
+`src/surfaces/asset_management.js`, or migrations 160/161 references either
+name; the chain queries `leases`, `deal_intake_properties` and its own
+insurance tables. It is blocked the way *everything* is blocked — nothing has
+shipped — not by a schema dependency, and it deploys correctly on either side
+of the rename.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
 ##  FOUR OPERATING DOORS. ASSET MANAGEMENT IS THE FOURTH.
-##  2026-08-11 (latest). THIS SECTION WINS.
+##  2026-08-11. THIS SECTION WINS ON PRODUCT DIRECTION.
 ## ══════════════════════════════════════════════════════════════════
 
 **This is a product-direction change and it retires a reserved name.** Every
