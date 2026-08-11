@@ -3161,7 +3161,7 @@ app.use("/", require("./src/surfaces/asset_management")({ pool }));
 //  the operator session. No proposals, no confirmations, no writes, and the
 //  question is not recorded as a staff-agent message. It shares the authority
 //  seam above and nothing else.
-app.use("/", require("./src/agent/ask_spine")({ pool }));
+app.use("/", require("./src/agent/ask_spine")({ pool, anthropic }));
 
 // ── THE ONE UNIT TURN PAGE (BUILD 6A) ────────────────────────────────────
 //  READ-ONLY consolidation of the Build 1-5 canonical reads. Creates no state
