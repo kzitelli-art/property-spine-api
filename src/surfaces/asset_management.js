@@ -355,11 +355,25 @@ module.exports = function assetManagement(deps) {
           //  what is missing.
           establishment_summary: found.summary,
 
-          // ── THE ROOM READS THESE, AFTER A CLICK ─────────────────────
-          //  Progressive disclosure: this is setup guidance, and it is
-          //  only useful once someone has chosen a room to work in.
-          //  Plain English, operator-facing. Never a status word, never an
-          //  id, never a table name.
+          // ── ⏳ CLASS 4 — ROOM-LEVEL EXPLANATION, NOT RENDERED IN V1 ──
+          //
+          //  These three are emitted and no surface reads them. That is
+          //  deliberate and it is classified rather than left to rot.
+          //
+          //  The room page STOPS at its compartment skeleton. Property
+          //  Obligations explaining how all four of its children get
+          //  established is the wrong altitude — it is more than the
+          //  operator asked for, and it is not actionable until you are
+          //  standing in the compartment it concerns.
+          //
+          //  They stay in the response because they are the Exposure
+          //  contract's answers for this room and they are true today.
+          //
+          //  REMOVAL / RELOCATION CONDITION: when the first compartment
+          //  surface is built (Insurance), this explanation moves DOWN to
+          //  compartment level — each compartment carrying its own why,
+          //  its own source documents and its own next owner — and these
+          //  room-level fields are deleted in the same commit.
           why: found.why,
           what_would_establish_it: found.establishes,
           //  §5 / the Exposure contract: a room with no established

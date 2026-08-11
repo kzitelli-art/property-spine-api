@@ -260,11 +260,11 @@ async function main() {
          (r.covers || []).some((c) => c === e || c.startsWith(e)))),
        JSON.stringify(rooms.map((r) => ({ k: r.key, e: r.eyebrow, c: r.covers }))));
 
-    console.log("\n── 2b. HOME CARD vs ROOM — PROGRESSIVE DISCLOSURE ────");
-    //  The presentation ruling, pinned. The home is a desk; the setup
-    //  guidance lives inside the room after a click. An earlier revision
-    //  put the full explanation on every card and the desk read like an
-    //  audit page, with the four-room hierarchy buried underneath it.
+    console.log("\n── 2b. CARD COPY vs ROOM-LEVEL EXPLANATION ───────────");
+    //  The card line and the room-level explanation are different jobs and
+    //  must not converge. The card is a desk line; the explanation is the
+    //  ⏳ Class 4 room-level text that V1 does not render at all and that
+    //  relocates to compartment level when Insurance is built.
     ok("every room carries a SHORT establishment_summary for the card",
        rooms.every((r) => typeof r.establishment_summary === "string"
                           && r.establishment_summary.length > 10));
