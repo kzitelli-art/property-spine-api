@@ -1,4 +1,33 @@
-# Build 1B — Asset Management, Activation, and the Opening Position
+# Build 1B — Deal Setup, Activation, and the Opening Tenancy Position
+
+> ## ⚠ VOCABULARY CORRECTION — read this before the body
+>
+> **This build shipped as "Asset Management" and was renamed the next day.**
+> The body below is preserved **as written**, because the reasoning in it is
+> still the clearest account of why the build is shaped the way it is. Its
+> vocabulary is **superseded**. The file was renamed off the reserved name on
+> 2026-08-11; nothing linked to it.
+>
+> | the body says | the shipped name is |
+> |---|---|
+> | Asset Management *(the surface)* | **Deal Setup** |
+> | Opening Position | **Opening Tenancy Position** — shown to people as *"Lease & occupancy established"* |
+> | Opening Truth | **Opening Accounting Truth** |
+>
+> **`Asset Management` is RESERVED** for the owner surface — operating truth →
+> economic consequence → owner judgment → reporting. It is not this build, and
+> this build must not be described with it.
+>
+> The rename moved the **routes, the module, the DOM ids and the function
+> prefix** with it, which is the only thing that reserves a name. `/asset/*`
+> survives as a ⏳ Class 4 alias that logs every use
+> (`deal_setup_legacy_alias`); `asset_management_console` survives as a
+> historical `creation_source` enum value and is a fact about existing rows,
+> not a name spend. Migration **159** is part of this build; the header below
+> says 153–158 because it was written before 159 existed.
+>
+> Current state, and what supersedes this document:
+> [`THREAD_HANDOFF.md`](THREAD_HANDOFF.md) top section.
 
 **2026-08-11. Started from `main` @ `6c577dc`.** Migrations **153–158**.
 API branch `claude/property-spine-registration-365eys` · APP same branch.

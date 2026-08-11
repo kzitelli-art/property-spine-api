@@ -96,7 +96,7 @@ async function seedDemoSlots(pool, opts = {}) {
   // with no one behind it. Honest blank beats confident wrong.
   let hostUserId = null;
   try {
-    const staffIdentity = require("../staff_identity_resolver.js");
+    const staffIdentity = require("../src/identity/staff_identity_resolver.js");
     const client = await pool.connect();
     try {
       const eligible = await staffIdentity.listEligibleStaff(client, DEMO_PROPERTY_ID);
