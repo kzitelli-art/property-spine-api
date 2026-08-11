@@ -1,16 +1,37 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
-##  ⛔ THE API HAS NOT SHIPPED SINCE 159 MERGED. 2026-08-11 (latest).
-##  THE WEB SHELL CANNOT RELEASE IT. THIS SECTION WINS.
+##  159 IS RELEASED. THE API SHIPS AGAIN. 2026-08-11 (latest).
+##  THIS SECTION WINS.
 ## ══════════════════════════════════════════════════════════════════
 
-**Every API merge since 159 is unshipped** — Asset Management, the Work Orders
-resident projection, all of it. Render keeps serving `7c3da79` (PR #83) and
-`/health` answers, so **the service looks healthy while running code from
-before 159.** This is the documented trap doing exactly what it exists to do:
-`prestart` verifies rather than applies, refuses to boot with a migration in
-the build and not in the ledger, and Render keeps the previous instance live.
+```text
+API  main   8f29efa   (PR #90) DEPLOYED and running
+ledger ceiling        159   ·  147 migrations, all applied
+both directions       clean — every file in the ledger, every ledger row a file
+```
+
+Confirmed by `node migrations/migrate.js` on the new instance (`4bcd7`), not
+inferred. The ceiling moved 158 → 159 and the instance changed, so the service
+is running current `main` rather than the survivor.
+
+**⚠ ONE THING IS STILL UNVERIFIED: the app-side half.** 159's identifier sweep
+renamed an API response key and not the app reading it — nothing threw, and the
+deal page silently showed "Setup in progress" for a property whose position
+*was* established. H16b now pins the key by name, but only a real page proves
+the app side. **Open a property with an established position and confirm the
+deal page reads "Lease & occupancy established."** Until someone has, say the
+schema is released and the surface is unconfirmed.
+
+### What this cost, and it is worth reading before the next release
+
+For several days **every API merge was unshipped** — Asset Management, the Work
+Orders resident projection, all of it — while Render kept serving `7c3da79`
+(PR #83) and `/health` answered normally. **The service looked healthy while
+running code from before 159.** That is the documented trap doing exactly what
+it exists to do: `prestart` verifies rather than applies, refuses to boot with
+a migration in the build and not in the ledger, and Render keeps the previous
+instance live.
 
 ### ⚠ TRAP 1 — THE WEB SHELL ATTACHES TO THE SURVIVING INSTANCE
 
@@ -25,7 +46,7 @@ shell instance     7c3da79   several merges behind main
 migrations/159_*   ABSENT from that filesystem
 ```
 
-The instance that HAS 159 is precisely the one `prestart` refuses to start.
+The instance that HAS 159 was precisely the one `prestart` refused to start.
 Chicken-and-egg, and there is no path through the Web Shell.
 
 Staging the file by hand does not work either: the container's clone is
@@ -91,15 +112,18 @@ measured in `migrate.js:327–355`. `EXPECTED_LEDGER_CEILING` no longer matches
 once 159 applies, and `EXPECTED_SHA` is pinned to one build. That is real
 safety, and it is not a reason to leave `MIGRATION_RELEASE` set.
 
-### ⚠ SEQUENCING — RELEASE 159 BEFORE MERGING THE ASSET MANAGEMENT BRANCH
+### SEQUENCING — SATISFIED, AND STILL LIVE FOR THE NEXT ONE
 
-**A release applies EVERY pending file.** There is no per-file selection.
-`claude/property-spine-thread-handoff-i7hj0u` carries migrations **160**
-(asset-management module entitlement) and **161** (insurance economic truth),
-neither of which has its own release receipt. If that branch merges to `main`
-before 159 is released, the release sweeps all three in at once.
+159 was released **before** the Asset Management branch merged, which was the
+point: **a release applies EVERY pending file** and there is no per-file
+selection. `claude/property-spine-thread-handoff-i7hj0u` carries migrations
+**160** (asset-management module entitlement) and **161** (insurance economic
+truth), neither of which has its own release receipt.
 
-Order: **release 159 → confirm → then merge.**
+They are now the next pending pair. Merging that branch makes them pending on
+`main`; releasing them is a **separate deliberate act** with its own ledger
+read (ceiling will be **159**) and its own `EXPECTED_SHA`. Do not let a future
+159-shaped emergency sweep them in as a side effect.
 
 ### Not a blocker for Asset Management, and it is worth being precise
 
