@@ -14,9 +14,16 @@
 > | Opening Position | **Opening Tenancy Position** — shown to people as *"Lease & occupancy established"* |
 > | Opening Truth | **Opening Accounting Truth** |
 >
-> **`Asset Management` is RESERVED** for the owner surface — operating truth →
-> economic consequence → owner judgment → reporting. It is not this build, and
-> this build must not be described with it.
+> **`Asset Management` is the fourth OPERATING DOOR** — staff/operator side,
+> beside Leasing, Management and Maintenance, where the economic structure and
+> performance of a property become operable. It is **not** this build: Deal Setup
+> is onboarding, Asset Management is operating, and this build must not be
+> described with that name.
+>
+> *(Superseded detail: an earlier revision of this header said the name was
+> reserved for the owner surface. That reservation was retired on 2026-08-11 —
+> the owner/investor surface is now its own reserved name and its own later
+> audience. The rename of this build was still correct for the reason above.)*
 >
 > The rename moved the **routes, the module, the DOM ids and the function
 > prefix** with it, which is the only thing that reserves a name. `/asset/*`

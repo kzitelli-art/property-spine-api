@@ -1,8 +1,134 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  FOUR OPERATING DOORS. ASSET MANAGEMENT IS THE FOURTH.
+##  2026-08-11 (latest). THIS SECTION WINS.
+## ══════════════════════════════════════════════════════════════════
+
+**This is a product-direction change and it retires a reserved name.** Every
+older statement in this file, in `CLAUDE.md`, in `PHILOSOPHY.md` and in route
+comments that said *"Asset Management is reserved for the owner surface"* is
+**superseded**. Those statements have been corrected in place.
+
+### The canonical product structure
+
+```text
+LEASING      MANAGEMENT      MAINTENANCE      ASSET MANAGEMENT
+```
+
+**Asset Management is a staff/operator-side OPERATING door**, parallel to the
+other three. The asset manager is still operating the deal — economically:
+revenue, debt and capital structure, taxes, insurance, payroll, management fees,
+utilities, contracts, and later budgets and variances.
+
+**It is NOT the Owner / Investor surface.** That is a later, different audience,
+potentially a different login, and it is now its own reserved name.
+
+```text
+Property Management / Operations → Asset Management → Owner / Investment Team
+```
+
+Progressive economic context and compression — **not one screen with different
+permissions.**
+
+### The sequence, and the build strategy
+
+```text
+ONBOARDING                            establishes opening truth
+    ↓
+LEASING · MANAGEMENT · MAINTENANCE    operate and continuously update
+· ASSET MANAGEMENT                    living property truth
+    ↓
+REPORTING                             reads and closes/compresses it
+    ↓
+OWNER / INVESTOR SURFACE              later, different audience
+```
+
+**Build the operating middle deeply enough to know what truth it requires. Then
+make onboarding populate it. Then make reporting read it.** Do not pre-design
+financial onboarding or reporting before the middle exists.
+
+### Asset Management hierarchy — four parts
+
+Sub-labels may evolve; the four-part structure is the product direction.
+
+```text
+REVENUE               Rent · Vacancy · Concessions · Other Income
+CAPITAL               Senior Debt · Mezzanine Debt · Preferred Equity ·
+                      Reserves / Escrows
+PROPERTY OBLIGATIONS  Taxes · Insurance · Other fixed / recurring
+OPERATING COSTS       Payroll · Management Fees · Utilities · Contracts ·
+                      Repairs / other operating expense
+```
+
+### Naming, routes and entitlement — frozen
+
+```text
+canonical name          Asset Management
+canonical route         /operator/asset-management/*
+canonical entitlement   asset_management  (a MODULE, in allowed_modules)
+```
+
+**`/asset/*` is NOT reused.** It remains Deal Setup's ⏳ Class 4 legacy alias
+with its original retirement condition (a deploy with no
+`deal_setup_legacy_alias` log line). Sharing the prefix would have made that
+condition permanently unobservable.
+
+**Module entitlement and job title are different facts.** Access is gated on
+`allowed_modules` containing `asset_management`, exactly like the leasing gate —
+never on the `asset_manager` role name. The future Owner / Investor surface must
+NOT reuse this entitlement merely because it consumes Asset Management truth.
+
+### Standing economics vs operating consequence — both, not either
+
+```text
+STANDING ECONOMIC TRUTH   governed terms already known — leases, debt documents,
+                          tax obligations, insurance policies, contracts
+OPERATING CONSEQUENCE     arises from operations — unexpected repair, turn
+                          delay, concession, vacancy loss
+
+normal governed expectation + unexpected operating consequence
+    = the actual economic story of the property
+```
+
+The `$1,840` maintenance-consequence work is **PARKED, not discarded** (see the
+Deal Setup section below and `docs/STANDING_ECONOMIC_OBLIGATIONS_SOURCE_READ.md`).
+Do not let it define the current build.
+
+### What is stale scaffolding, and must not dictate the new surface
+
+Measured, not assumed:
+
+```text
+index.html money/capital/reporting region   SNAPSHOT-ONLY. __OFFLINE_MODE is
+                                            assigned true unconditionally and
+                                            never set false; getJSON() checks it
+                                            FIRST, so every read is the baked
+                                            snapshot and every write throws 405.
+index.html:24376  CAPITAL_DEMO              FIXTURE FALLBACK — renders demo rows
+                                            when real rows are empty. §19–20
+                                            violation shape. Do not carry it into
+                                            the new door.
+src/money/*_cutover.js, economic_shadow.js  Class 3/4 MIGRATION INSTRUMENTS for a
+fact_migration_preview.js,                  legacy pricing problem. Not product
+economic_decision_room.js, pricing_rehearsal architecture.
+src/money/economic_picture.js,              LEASING economics — what a LEASE
+effective_pricing.js, governed_charges.js   CHARGES. Not what the PROPERTY OWES.
+                                            Do not let this vocabulary into the
+                                            Asset Management door.
+src/surfaces/owner.js                       Despite the name: onboarding property
+                                            cards + attention queue from ingest
+                                            runs. NOT the owner surface.
+ORG_MODULES / KNOWN_DESKS containing        The four-door model consolidates
+'money', 'capital', 'reporting'             these. Left live (see below) but they
+                                            are not the product direction.
+```
+
+---
+
+## ══════════════════════════════════════════════════════════════════
 ##  DEAL SETUP / OPENING TENANCY POSITION — ON `main`, NOT CONFIRMED
-##  IN PRODUCTION. 2026-08-11 (latest). THIS SECTION WINS.
+##  IN PRODUCTION. 2026-08-11.
 ## ══════════════════════════════════════════════════════════════════
 
 **This supersedes every state claim below it.** The Work Orders section
@@ -84,7 +210,10 @@ Migrations **153–159**. Read their headers; they carry the reasoning.
 
 ```text
 Deal Setup                 onboarding machinery (what shipped)
-Asset Management           RESERVED — the owner surface
+Asset Management           ⚠ SUPERSEDED 2026-08-11 — see the top section.
+                           No longer "reserved for the owner surface"; it is
+                           the fourth OPERATING door, /operator/asset-management/*
+Owner / Investor Surface   RESERVED — the later, different audience
 Opening Tenancy Position   lease + occupancy, from a rent roll, as of a date.
                            Shown to people as "Lease & occupancy established"
 Opening Operating Position RESERVED — tenancy + bank + debt + taxes +
@@ -92,9 +221,11 @@ Opening Operating Position RESERVED — tenancy + bank + debt + taxes +
 Opening Accounting Truth   RESERVED — opening GL / subledger balances
 ```
 
-This shipped as "Asset Management" and was renamed the next day. **Renaming
-rendered text reserves nothing** — the routes, the module, the DOM ids and
-the function prefix all moved with it.
+This shipped as "Asset Management" and was renamed the next day. **That rename
+was still correct** — Deal Setup is onboarding, Asset Management is operating —
+and the reason it worked still holds: **renaming rendered text reserves
+nothing**, so the routes, the module, the DOM ids and the function prefix all
+moved with it.
 
 `/asset/*` survives as a ⏳ **Class 4** alias inside `deal_setup.js`. It
 rewrites to `/deal-setup/*` and **logs every use** (`deal_setup_legacy_alias`,

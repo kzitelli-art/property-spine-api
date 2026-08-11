@@ -1,0 +1,61 @@
+-- ════════════════════════════════════════════════════════════════════
+--  160_asset_management_module.sql — THE FOURTH OPERATING DOOR'S
+--  ENTITLEMENT.
+--
+--  Asset Management is the fourth operating door, beside Leasing,
+--  Management and Maintenance. Staff/operator side. Access to it is a
+--  MODULE ENTITLEMENT — `asset_management` in allowed_modules — and is
+--  gated exactly the way leasing already is.
+--
+--  ── ENTITLEMENT IS NOT JOB TITLE ────────────────────────────────────
+--  Whether a human is called an asset manager is an organizational fact
+--  and lives in role_title / the role_name enum. Whether they may open
+--  this door AT THIS PROPERTY is an entitlement fact and lives in
+--  allowed_modules. The repo keeps those apart deliberately, and this
+--  migration does not merge them: it grants no access to anyone by
+--  virtue of a title.
+--
+--  ── WHAT THIS CHANGES, AND WHAT IT DELIBERATELY DOES NOT ────────────
+--  staff_roles is a PRESET CATALOG. super_admin applies a preset when an
+--  assignment is created; the live gate reads
+--  property_team_assignments.allowed_modules.
+--
+--  So this migration updates PRESETS ONLY. It is forward-looking:
+--  assignments created after it pick the module up from their preset.
+--
+--  IT DOES NOT TOUCH ANY EXISTING property_team_assignments ROW. A
+--  migration that widened live access for everyone already assigned
+--  would be granting authority nobody asked for, silently, to real
+--  people at real properties — and "authentication answers WHO may call
+--  a tool, not WHERE its output may land" cuts the same way here. Any
+--  existing human who should hold this module is granted it explicitly,
+--  through the normal team-access path, by someone with the standing to
+--  decide.
+--
+--  ── WHICH PRESETS, AND WHY THOSE ────────────────────────────────────
+--  Only the presets that ALREADY carry economic modules:
+--
+--    owner           already holds 'reporting' and 'capital'
+--    property_admin  already holds 'reporting'
+--
+--  property_manager, leasing_agent and maintenance_tech are left alone.
+--  A property manager may legitimately hold this module — and is granted
+--  it per assignment when that is true. Adding it to the operational
+--  preset would make it the default for every PM in every organization,
+--  which is a staffing decision this migration has no standing to make.
+--
+--  Idempotent: array_append only fires where the module is absent, so
+--  re-running changes nothing.
+--
+--  CLASSIFICATION: Class 1. Additive. No table, no column, no constraint.
+-- ════════════════════════════════════════════════════════════════════
+
+update staff_roles
+   set allowed_modules = array_append(allowed_modules, 'asset_management')
+ where key in ('owner', 'property_admin')
+   and not ('asset_management' = any(allowed_modules));
+
+--  The preset's PRIMARY module is what the operator lands on. Asset
+--  Management is deliberately not made primary for anyone: it is a door
+--  they open, not the room they start in. Changing that is a product
+--  decision, not a schema one.
