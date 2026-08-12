@@ -146,6 +146,95 @@ normal governed expectation  +  unexpected operating consequence
     =  the actual economic story of the property
 ```
 
+## Every domain has two readers — the UI and Ask Spine
+
+**Ask Spine is not a feature and not an AI layer. It is a permanent interface
+contract of Property Spine** — the conversational interface to the same canonical
+truth and governed actions the application uses. Full doctrine: `PHILOSOPHY.md`
+§40, where eleven rulings are frozen and numbered for citation.
+
+This is the shape every governed domain is built into. It is the domain's own
+structure, not an integration diagram:
+
+```text
+                 CANONICAL DOMAIN TRUTH
+                          │
+                 CANONICAL SERVICE
+                          │
+                 CANONICAL DOMAIN READ
+                          │
+              ┌───────────┴───────────┐
+              ▼                       ▼
+        OPERATOR UI               ASK SPINE
+```
+
+Same truth, two projections, neither derived from the other. **Ask Spine never
+scrapes a screen, retrieves over rendered UI, or queries arbitrary tables hoping
+to understand the schema.** A conversational layer that retrieves over the UI has
+made the UI a source of truth, which §7 forbids.
+
+**A domain is not done until Ask Spine can read it** (§33, §40.2). Not "the app
+can display it" — a person can *ask* for it without knowing where it lives. The
+build sequence, and the order is load-bearing:
+
+```text
+canonical truth → writer → canonical read → compact standing projection
+                → operator UI → Ask Spine registration → browser proof
+```
+
+Registration is a rung, not a follow-up ticket. A domain browser-verified in the
+UI but unreadable by Ask Spine is done as a *screen* and not done as a *domain*.
+That cost is part of building the domain and stays in the estimate.
+
+**One conversational architecture, every role.** Technician, leasing agent,
+property manager, asset manager and owner get different authority, scope and
+verbs over the *same* Spine truth. What varies is entitlement and compression
+(§37) — never the source. Do not build a per-role assistant; that is "a nicer
+module per user" in a new medium.
+
+The rule that governs every implementation:
+
+```text
+THE MODEL GETS FLUENCY OVER WORDING. IT NEVER GETS AUTHORITY OVER
+ATTRIBUTION, SOURCE AUTHORITY, CURRENT STATE, RELEVANCE, OR CONFLICT.
+```
+
+The rulings a builder trips over first:
+
+- **Facts carry authority in their shape** (§40.4). An envelope, never a bag:
+  `domain · concept · value|truth_state · source_authority · provenance · as_of ·
+  entitled reference`. `governed_read` outranks `transcript_claim`, `email_claim`,
+  `user_assertion`. Lower authority may **explain** canonical truth, never replace
+  it — *"I think the taxes were paid"* does not move `city_payment =
+  NOT_ESTABLISHED`.
+- **Truth walls are executable contracts** (§40.5), declared as data with the
+  domain's collapsing vocabulary — *paid, current, covered, filed, funded,
+  complete, done*. `escrow funded ≠ City paid` · `filed ≠ paid` ·
+  `financing established ≠ coverage established` · `assessment ≠ liability`. The
+  test suite is generated from the declaration, which is what makes it survive the
+  next domain.
+- **Compact standing projection per domain** (§40.6) — current position, important
+  unknowns, next milestone — cheap enough to gather routinely so cross-domain
+  questions need no intent router. Detail is a second read. **This constrains
+  schema**, not just reads.
+- **Four silences never collapse** (§40.7) — `NOT_ESTABLISHED` (the property),
+  `READ_FAILED`, `READ_TIMED_OUT` (Spine), `QUIET`. Composite silence is health
+  **only if every required reader returned**, computed in code, never prompted.
+- **Entitlements precede intelligence** (§40.8). Unentitled facts never enter model
+  context; a prompt is not a security boundary. References are minted server-side
+  from entitled facts — the model is never given a record id, because a model
+  holding an id can compose a link Spine did not resolve.
+- **Reads required, actions granted** (§40.9). When Ask Spine acts it is a new
+  surface over an existing canonical writer, never a parallel path to the same
+  durable object. The read door does not quietly become the write door.
+- **Retrieval ≠ causal explanation** (§40.10). *"What is our debt service?"* may
+  ship with a domain's first build; *"why did it increase?"* requires recorded
+  causal linkage and must not be implicitly promised. Say which one shipped.
+
+**Enforced by `tests/gate_ask_spine_readers.js`, not by memory** (§40.11). It
+discovers domains from their canonical standing reads, so a domain that lands
+without registering goes red on its own.
+
 ## Same truth, four compressions
 
 > ⚠ **Three different fours. Do not merge them.** The section above lists four
@@ -238,19 +327,30 @@ Storage stays domain-specific. The owner layer consumes the contract.
 - **Solo-first, never Solo-special** (§22). No `if property is Solo` business branches.
 - **Server-derived identity & authority** (§21). The browser requests; the server decides. A client-provided property ID is never authority.
 - **Capture once, read everywhere** (§7). One canonical service write updates board, Person Card, and reporting projections.
+- **Every domain has two readers — the UI and Ask Spine** (§40). Ask Spine is a permanent interface contract, not an AI layer: it reads the same canonical reads the screens do, never scrapes a screen or queries arbitrary tables. The model gets fluency over wording, never authority over attribution, source authority, current state, relevance, or conflict. A domain is not done until it is registered (§40.2).
 - **Classify every component 1–4** (§18) with an exact removal condition for anything temporary.
 
 ## Before any feature — the Eight Questions (§31)
 
-1. What real-world fact is recorded? 2. What canonical service records it? 3. Who is the authenticated actor, and what property can they operate? 4. What durable object changes? 5. What immutable history remains? 6. What other surfaces read it automatically? 7. What happens when ownership/proof/live data is missing? 8. What class is every new component, and what removes any temporary part?
+1. What real-world fact is recorded? 2. What canonical service records it? 3. Who is the authenticated actor, and what property can they operate? 4. What durable object changes? 5. What immutable history remains? 6. What other surfaces read it automatically, **including Ask Spine** — what is the compact standing projection? 7. What happens when ownership/proof/live data is missing? 8. What class is every new component, and what removes any temporary part?
+
+Question 6 is where domains get forgotten. The concrete form, asked at the **first
+schema conversation** and not after the UI ships: *"what must this domain expose so
+an entitled person can text Spine from a meeting and get its current position, what
+is unknown, and what needs their attention?"* If the schema cannot answer that
+cheaply, the schema is not finished (§40.6).
 
 ## Definition of Done (§33)
 
 Proof ladder: Reported → Locally exercised → Built-but-dormant → **Proven** (real DB + real HTTP) → **Browser verified**. For operator workflows, browser verification is part of "done." Do not call something live/deployed/enforced without the matching evidence.
 
+**And a domain is not done until Ask Spine can read it** (§40.2) — its governed standing state available to entitled users, registered, and proven in the browser. This is a rung on the ladder, not a note beneath it: a domain browser-verified in the operator UI but unreadable by Ask Spine is done as a **screen** and not done as a **domain**. Say it that way in the receipt. Enforced by `tests/gate_ask_spine_readers.js` (§40.11).
+
 ## Build discipline (§30)
 
-One narrow, real, vertically complete slice at a time: inspect current source → confirm live schema/runtime → classify components → implement one canonical slice → prove against real Postgres → prove through real HTTP → verify in the browser → preserve a receipt/screenshot.
+One narrow, real, vertically complete slice at a time: inspect current source → confirm live schema/runtime → classify components → implement one canonical slice → prove against real Postgres → prove through real HTTP → **register the Ask Spine standing read** → verify in the browser → preserve a receipt/screenshot.
+
+"Vertically complete" includes the conversational reader (§40.2). A slice that stops at the screen is horizontally complete.
 
 ## How not to fool yourself
 

@@ -1,5 +1,16 @@
 # Ask Spine — source audit (Phase 1, read-only)
 
+> ## ⚠ STATUS — 2026-08-12. HISTORICAL SOURCE AUDIT. SHAs BELOW ARE STALE.
+>
+> Read against commits that are many releases behind `main`. It remains a good
+> record of *how* the audit was done and of the security findings it raised, and
+> those findings should be checked against current source before being repeated
+> as fact. **It is not current state** — `THREAD_HANDOFF.md` is.
+>
+> Doctrine that now governs Ask Spine: `PHILOSOPHY.md` §40. The next builds are
+> `ASK_SPINE_CANONICAL_READ_LAYER.md`, then
+> `ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md`.
+
 **No feature code. No redesign. Nothing implemented.** Source reading only,
 across both repositories.
 

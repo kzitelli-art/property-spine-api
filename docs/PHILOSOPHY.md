@@ -975,7 +975,10 @@ Before implementing a feature, answer in plain English:
 3. Who is the authenticated actor, and what property can they operate?
 4. What durable object changes?
 5. What immutable history remains afterward?
-6. What other surfaces read this truth automatically?
+6. What other surfaces read this truth automatically — **including Ask Spine**?
+   Name the compact standing projection an entitled person gets when they ask for
+   this domain without knowing where it lives (§40.1, §40.6). "The screen renders
+   it" is half an answer.
 7. What happens when ownership, proof, or live data is missing?
 8. What class is every new component, and what removes any temporary part?
 
@@ -1030,6 +1033,50 @@ Browser verified
 
 Do not call something live, deployed, or enforced without the corresponding evidence.
 For operator workflows, browser verification is part of completion.
+
+### A domain is not done until Ask Spine can read it
+
+```text
+A CANONICAL SPINE DOMAIN IS NOT COMPLETE UNTIL ITS GOVERNED STANDING STATE
+IS AVAILABLE TO ASK SPINE FOR ENTITLED USERS.
+```
+
+A domain is not integrated because the application can display it. It is
+integrated when a person can **ask** for it without knowing where it lives in the
+application (§40).
+
+The build sequence, and the order is load-bearing:
+
+```text
+canonical truth
+  → writer
+  → canonical read
+  → compact standing projection
+  → operator UI
+  → Ask Spine registration
+  → browser proof
+```
+
+Not: build the entire application, then months later teach a chatbot about it.
+
+**Registration is a rung on the ladder, not a follow-up ticket.** A domain that
+has been browser-verified in the operator UI but is not readable by Ask Spine is
+at *Browser verified* for its screen and **not done** as a domain. Say it that
+way in the receipt; "the UI is done" is a true statement about a surface and a
+false one about a domain.
+
+Every governed domain needs conversational **reads**. Not every module needs
+conversational **writes** (§40.9). The standing projection is deliberately small —
+current position, important unknowns, next action — so it is cheap enough to
+gather routinely; richer detail is a second read, called only when the question
+requires it (§40.6). A domain whose only read is "everything the screen needs"
+cannot participate.
+
+**This cost is part of building the domain.** It is not free polish afterward, and
+it stays visible in estimates. A rule of this shape is exactly what gets quietly
+dropped under schedule pressure, so it belongs here rather than in a build doc —
+and `tests/gate_ask_spine_readers.js` enforces it so that it does not depend on
+this paragraph being remembered (§40.11).
 
 ## 34. Codex Operating Instructions
 
@@ -1611,3 +1658,327 @@ unknown cost is BLANK
 never zero
 never estimated into the record as though someone had said it
 ```
+
+
+## 40. Ask Spine Is a Governed Interface, Not an AI Layer
+
+§24 governs how the AI *speaks*. This section governs what it **is**.
+
+Ask Spine is not a feature bolted onto Spine, and it is not a separate
+intelligence that has to rediscover what Spine already knows. It is **another
+reader of the same governed truth**, sitting beside the application rather than
+on top of it.
+
+```text
+THE APP        the durable visual interface over Spine's truth
+ASK SPINE      the conversational interface over the SAME truth
+```
+
+It never scrapes prose from a screen, retrieves over the rendered UI, or queries
+arbitrary tables hoping to understand the schema. It calls the same server-side
+canonical reads that produce the pages. Precedent: `dated_positions.js` —
+*one service, four interpretations* — one altitude up.
+
+**This section is a permanent interface contract of Property Spine, not a
+description of a feature.** Ten rulings are frozen here, and an eleventh says how
+they are kept. They are numbered so they can be cited:
+
+```text
+40.1   every domain has two primary readers
+40.2   a domain is not complete until Ask Spine can read it
+40.3   conversation is role-independent architecture
+40.4   facts carry authority in their shape
+40.5   truth walls are executable contracts
+40.6   every domain exposes a compact standing projection
+40.7   four silences remain distinct
+40.8   entitlements precede intelligence
+40.9   read capability is required; action capability is granted
+40.10  retrieval and causal explanation are different capability classes
+40.11  the rule is enforced by a gate, not by memory
+```
+
+### The rule that governs every implementation
+
+```text
+THE MODEL GETS FLUENCY OVER WORDING.
+IT NEVER GETS AUTHORITY OVER ATTRIBUTION, SOURCE AUTHORITY, CURRENT STATE,
+RELEVANCE, OR CONFLICT.
+```
+
+Everything load-bearing is decided server-side and handed to the model already
+resolved. The model is a writer of things it was given, never a decider. A
+surface that lets the model decide any of the five will eventually decide one of
+them wrong, fluently, with a citation attached — and a confident wrong wearing a
+citation is worse than a blank, because it reads as verified (§5).
+
+### 40.1 Every domain has two primary readers
+
+This is the shape every governed domain is built into. It is not an integration
+diagram; it is the domain's own structure.
+
+```text
+                    CANONICAL DOMAIN TRUTH
+                      durable · attributed · append-only
+                              │
+                              ▼
+                     CANONICAL SERVICE
+                      the one owner of business meaning
+                              │
+                              ▼
+                    CANONICAL DOMAIN READ
+                              │
+                  ┌───────────┴───────────┐
+                  ▼                       ▼
+            OPERATOR UI               ASK SPINE
+       the durable visual         the conversational
+        interface over it          interface over it
+```
+
+Same truth, two projections. Neither is privileged and neither derives from the
+other.
+
+**Ask Spine must never reverse-engineer a screen.** It does not scrape rendered
+output, re-parse a page's prose, or reach around the canonical read into
+arbitrary tables. A conversational layer that retrieves over the UI has made the
+UI a source of truth, which §7 forbids at every altitude.
+
+This is §7 — *capture once, read everywhere* — extended to say that "everywhere"
+includes the conversation. A domain with exactly one reader has not proven it has
+a canonical read at all; it has proven it has a screen.
+
+### 40.2 A domain is not complete until Ask Spine can read it
+
+```text
+A CANONICAL SPINE DOMAIN IS NOT COMPLETE UNTIL ITS GOVERNED STANDING STATE
+IS AVAILABLE TO ASK SPINE FOR ENTITLED USERS.
+```
+
+A domain is not integrated because the application can display it. It is
+integrated when a person can **ask** for it without knowing where it lives in the
+application.
+
+The build sequence, and the order is load-bearing:
+
+```text
+canonical truth
+  → writer
+  → canonical read
+  → compact standing projection
+  → operator UI
+  → Ask Spine registration
+  → browser proof
+```
+
+Not: build the entire application, then months later teach a chatbot about it.
+
+Registration is a step in the sequence, not a follow-up ticket. **This cost is
+part of building the domain.** It is not free polish afterward, and it stays
+visible in estimates. A rule of this shape is exactly what gets quietly dropped
+under schedule pressure, which is why it is doctrine and why 40.11 makes a gate
+enforce it rather than a memory.
+
+### 40.3 Conversation is role-independent architecture
+
+The same conversational interface serves every altitude of §37, and it is one
+architecture rather than five products:
+
+```text
+TECHNICIAN         what needs doing, what did I record, what is waiting on me
+LEASING AGENT      who is this person, where are they in the funnel, what next
+PROPERTY MANAGER   what is at risk, who owns it, what missed its window
+ASSET MANAGER      what does this cost, what is owed, what is not established
+OWNER              what changed, what does it mean, what needs my judgment
+```
+
+Different authority, different scope, different verbs — **the same Spine truth
+underneath**. What varies between them is entitlement and compression (§37), not
+the source and not the architecture.
+
+This is why Ask Spine cannot be built as a per-role assistant. A per-role
+assistant is the same failure §37 names for surfaces: *"the mistake is to build a
+nicer module per user."* Five conversational products over one truth is that
+mistake in a new medium.
+
+### 40.4 Facts carry authority in their shape
+
+The composer never receives an undifferentiated bag of facts. Every fact carries,
+at minimum:
+
+```text
+domain              which governed domain asserted it
+concept             what it is about
+value | truth_state the value, or why there is none
+source_authority    what this source is AUTHORIZED to assert
+provenance          where it came from
+as_of / occurred_at when it was true, or when it happened
+openable reference  the durable record — only if the actor is entitled
+```
+
+`source_authority` is not merely *where* a fact came from. It is **what that
+source is authorized to assert**, and the levels are not peers:
+
+```text
+governed_read        canonical Spine truth
+transcript_claim     evidence of what a transcription system recorded
+email_claim
+user_assertion
+```
+
+Only `governed_read` exists today. The lower classes are named now so that the
+first one to arrive slots into a ranking that already exists, rather than
+arriving as a peer of canonical truth because nothing said otherwise.
+
+A lower authority may **coexist** with a governed read. It may never silently
+upgrade one.
+
+```text
+transcript   "I think the taxes were paid last week"
+governed     city_payment = NOT_ESTABLISHED
+
+WRONG        "Taxes are paid."
+RIGHT        "Spine does not have a confirmed City payment. In Tuesday's
+              meeting, John said he believed they had been."
+```
+
+Lower-authority evidence may **explain** canonical truth. It may never replace
+it, and the replacement is always silent when it happens — nobody writes a commit
+saying "let the transcript win."
+
+### 40.5 Truth walls are executable contracts
+
+Natural language erodes distinctions the domain enforces. *"Are our taxes paid?"*
+asks for a binary the governed truth does not have, and a conversational surface
+inherits the **asker's** vocabulary unless something stops it.
+
+```text
+escrow funded          ≠  City paid
+filed                  ≠  paid
+financing established  ≠  coverage established
+assessment             ≠  liability
+coverage discussed     ≠  coverage bound
+unknown applicability  ≠  not applicable
+```
+
+Each domain declares its walls, and its collapsing vocabulary — *paid, current,
+covered, filed, funded, complete, insured, done* — **as data, as part of its read
+contract.** When a question crosses a declared wall, the server constrains the
+answer form so the named underlying states survive into the answer.
+
+Declaring walls as data rather than prose has a second effect that matters more
+than the first: the test suite is generated from the declaration. That is what
+makes the rule survive Debt, Compliance and Payroll without being re-litigated,
+and it is why this is a contract and not prompt craftsmanship.
+
+### 40.6 Every domain exposes a compact standing projection
+
+The canonical read that serves the screen is not automatically the read that
+serves the conversation. The screen needs everything to render a page; gathering
+that for every entitled domain on every question does not scale.
+
+```text
+STANDING PROJECTION      small · cheap · safe to gather routinely
+                         current position
+                         important unknowns
+                         next action / next milestone
+
+DETAIL PROJECTION        richer · called only when the question requires it
+```
+
+Same canonical service, two projections. The standing projection is deliberately
+small so that many entitled domains can be gathered on every question, which is
+what lets Ask Spine answer cross-domain questions **without a classifier or an
+intent router** deciding in advance which domain the question was about. An
+intent router is judgement with no edge, and it fails in the direction of
+answering the wrong domain confidently.
+
+A domain whose only read is "everything the screen needs" cannot participate.
+
+**This constrains schema, not just reads.** A domain must be able to answer its
+standing projection cheaply — without walking its full payment, amendment or
+event history. That is a design input at the first schema conversation, not an
+optimisation afterward.
+
+### 40.7 Four silences remain distinct
+
+```text
+NOT_ESTABLISHED    a fact about the PROPERTY
+READ_FAILED        a fact about SPINE
+READ_TIMED_OUT     also about Spine, and different again
+QUIET              read successfully, nothing needs attention
+```
+
+They must never collapse. **Composite silence may only mean "nothing needs
+attention" when every required reader successfully returned** — computed from
+reader outcomes in code, never asked of the model, never inferred from an empty
+result set.
+
+An attention surface that cannot tell quiet from blind is worse than none,
+because composite silence reads as health (§5).
+
+### 40.8 Entitlements precede intelligence
+
+```text
+authenticated actor → server-derived property scope
+                    → ENTITLED DOMAIN READERS ONLY
+                    → governed fact envelope → composer
+```
+
+Unentitled facts never enter model context. A prompt instruction is not a
+security boundary (§21).
+
+**Openable references are minted server-side from entitled facts**, never by
+finding a name in the answer text and linking it afterward. The model is not
+given record identifiers at all: a model holding an id is a model that can put an
+id in a sentence, at which point a link is something it composed rather than
+something Spine resolved. Those are different epistemic classes (§38), and only
+one of them is safe to click.
+
+### 40.9 Read capability is required; action capability is granted
+
+```text
+READS      required for every governed domain
+ACTIONS    added only where a canonical service and an authority rule
+           already permit them
+```
+
+Ask Spine will eventually write, communicate, route and act within authority.
+When it does, it is a **new surface over existing canonical writers** — never a
+parallel path to the same durable object. A conversational completion routes
+through the canonical completion writer or it is a second writer, and the gate
+that proves there is only one will fail, correctly.
+
+Conversation never becomes another writer of domain truth, and the read door does
+not quietly become the write door.
+
+### 40.10 Retrieval and causal explanation are different capability classes
+
+Do not let the second be inherited by assumption because the first shipped.
+
+```text
+"What is our debt service?"        governed retrieval
+"Why did debt service increase?"   causal attribution
+```
+
+The second requires Spine to connect a changed result to a **recorded** cause —
+rate reset, principal event, amendment, new financing terms. A cause may only be
+asserted if it walks back to a recorded fact (§38); what cannot be supported
+stays visible uncertainty.
+
+A domain's first build may promise retrieval and **preserve the causal hooks**
+without claiming causal explanation. Saying which of the two shipped is part of
+the receipt, because a surface that answers "what" fluently is assumed to answer
+"why" honestly.
+
+### 40.11 The rule is enforced by a gate, not by memory
+
+Every domain that reaches a governed standing state must be **registered** as an
+Ask Spine reader, or carry an explicit, dated waiver saying why not.
+
+`tests/gate_ask_spine_readers.js` discovers domains from their canonical standing
+reads rather than from a hand-maintained list, so a new domain that lands without
+registering goes red on its own. A registry that only knows what someone
+remembered to add to it cannot detect the omission it exists to prevent.
+
+This is doctrine's own lesson applied to itself: a rule that lives only in a
+document decays under schedule pressure, and *"we will wire it to the real path
+later"* is a stop-sign phrase (§32).

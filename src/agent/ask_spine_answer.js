@@ -141,6 +141,29 @@ async function gatherFacts(db, { property_id, allowed_modules }) {
         due_at: i.due_at, is_overdue: i.is_overdue, is_unassigned: i.is_unassigned,
       })),
     };
+    /*  ── WHAT THE ANSWER REFERS TO, AS RECORDS ──────────────────────
+     *  The prose above is the model's. These are not: each is an item
+     *  the attention service already resolved to a durable target
+     *  (`navigationFor`), carried through untouched so the caller can
+     *  open the actual thing.
+     *
+     *  ON `__refs`, AND WHY IT IS NOT IN `items`: the model is never
+     *  given a record id. It has no use for one, and a model holding
+     *  ids is a model that can put an id in a sentence — at which point
+     *  a link is a thing it composed rather than a thing Spine
+     *  resolved. The two are different epistemic classes (§38) and only
+     *  one of them is safe to click. The key is stripped explicitly
+     *  when the facts are serialised for the model; see `answer`.  */
+    facts.__refs = (a.items || [])
+      .filter((i) => i.open && i.open.kind && i.open.id)
+      .map((i) => ({
+        label: i.label,
+        module: i.module,
+        due_at: i.due_at,
+        is_overdue: !!i.is_overdue,
+        is_unassigned: !!i.is_unassigned,
+        open: { kind: i.open.kind, id: i.open.id },
+      }));
   } catch (e) { failures.push("attention"); }
 
   try {
@@ -303,8 +326,12 @@ async function answer(db, anthropic, { property_id, allowed_modules, question })
       //  ENDS ON THE USER TURN. Nothing may follow it — see DECISION_SCHEMA
       //  for what the assistant prefill that used to sit here cost.
       messages: [
+        //  `__refs` is STRIPPED HERE. The model gets labels and dates and
+        //  never a record id — see gatherFacts for why a model holding ids
+        //  is a model that can compose a link Spine did not resolve.
         { role: "user",
-          content: `FACTS:\n${JSON.stringify(facts, null, 2)}\n\nOPERATOR ASKED: ${q}` },
+          content: `FACTS:\n${JSON.stringify(facts, (k, v) => (k === "__refs" ? undefined : v), 2)}`
+                   + `\n\nOPERATOR ASKED: ${q}` },
       ],
     });
     text = (ai.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
@@ -354,6 +381,13 @@ async function answer(db, anthropic, { property_id, allowed_modules, question })
     outcome: "answered",
     answer: body,
     model: MODEL,
+    //  THE RECORDS THE ANSWER IS ABOUT. Server-resolved, never parsed out
+    //  of the prose: matching names in model output back to rows would
+    //  invent a link every time two people share a first name, and would
+    //  make the surface's most clickable element its least trustworthy.
+    //  Empty is a legitimate answer — an operator can read the prose and
+    //  simply have nothing to open.
+    references: facts.__refs || [],
     //  What the answer was built from. The caller shows this so a claim
     //  is checkable — the counts, not the rows, because the rows are
     //  already on the surfaces the operator can open.

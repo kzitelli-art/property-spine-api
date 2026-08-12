@@ -1,8 +1,321 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
-##  ASSET MANAGEMENT REORGANISED TO FOUR DOORS. 2026-08-12 (latest).
-##  THIS SECTION WINS ON ASSET MANAGEMENT AND ON RELEASE STATE.
+##  ASK SPINE IS NOW AN INTERFACE CONTRACT, NOT A FEATURE.
+##  2026-08-12 (latest). THIS SECTION WINS ON DOCTRINE AND ON
+##  WHAT "DONE" MEANS FOR A DOMAIN. DOCS + ONE GATE. NO PRODUCT CODE.
+## ══════════════════════════════════════════════════════════════════
+
+A docs-only doctrine pass, run **before Debt starts**, so the conversational
+rule is something the architecture forces rather than something a builder
+remembers.
+
+**`PHILOSOPHY.md` §40 now freezes eleven numbered rulings** — citable as §40.1
+… §40.11. New since the last pass: every domain has **two primary readers**
+(40.1), conversation is **role-independent architecture** (40.3), every domain
+exposes a **compact standing projection** (40.6), and **retrieval ≠ causal
+explanation** (40.10).
+
+**The Definition of Done gained a rung, and it is a rung.**
+
+```text
+canonical truth → writer → canonical read → compact standing projection
+                → operator UI → Ask Spine registration → browser proof
+```
+
+A domain browser-verified in the operator UI but unreadable by Ask Spine is
+done as a **screen** and not done as a **domain**. Say it that way in receipts.
+
+**`CLAUDE.md` carries it as architecture, not a sidebar** — the two-reader
+diagram, the eleven rulings in brief, and Eight-Question **6 extended** to
+demand the standing projection by name. §31 was NOT renumbered: six documents
+cite "the Eight Questions" and several are historical receipts.
+
+**`tests/gate_ask_spine_readers.js` enforces it (§40.11).** It **discovers**
+domains from `src/asset/*_{position_read,establishment}.js` rather than from a
+hand-maintained list, so a domain that lands without registering goes red on
+its own — a list only knows what someone remembered to add.
+
+```text
+20/20 · exit 0 · insurance and tax both `pending`, both with owner + exit
+FALSIFIED BOTH WAYS   a stub debt_position_read.js  → RED (undeclared)
+                      `registered` without wiring   → RED (claim ≠ implementation)
+```
+
+⚠ **The gate is green because the gap is DECLARED, not closed. ZERO domains
+are conversationally readable today** — Ask Spine gathers `attention` and
+`work_orders` only. Insurance and Tax are browser-verified screens and are not
+done as domains. The gate prints this in its own output. Do not cite its exit
+code as coverage.
+
+**Two documentation defects fixed, both live traps:**
+
+```text
+U&O said "25th of the FOLLOWING month" in the four-obligation summary while
+the same document recorded the same-month correction. The summary would have
+reintroduced the defect. Authority is philadelphia_tax_rules.js.
+
+The release block said NOT merged · 162–167 pending · ceiling 161. All four
+lines were stale — merged (#97/#57) and released; ceiling 167.
+```
+
+**A third, fixed in the same pass:** `release/ledger_read_before_release.sql`
+had a `build` list ending at **159**. It could not see 160–167 and would have
+reported a clean `pending` for a set it never looked at — the migration-140
+failure mode described in its own footer, reproduced by the file that warns
+about it. **Regenerated from `origin/main` by the command in its header**, not
+hand-edited: 155 versions, verified identical to the migration files on main,
+with the real 125 and 138/139 gaps preserved. `pending` should now come back
+**empty** until a new migration lands, and an empty pending there is the
+correct answer rather than a broken query.
+
+**Where this lands for Debt.** The first schema conversation now has to answer:
+*what must Debt expose so an entitled person can text Spine from a meeting and
+ask what we owe, the rate, the maturity, and what needs their attention?*
+§40.6 makes that a schema constraint — Debt must answer it **without** walking
+its payment or amendment history. §40.10 caps Debt Build 1 at retrieval with
+causal hooks preserved, not causal explanation.
+
+## ══════════════════════════════════════════════════════════════════
+##  ASK SPINE ANSWERS TYPED QUESTIONS. IT NEVER COULD BEFORE.
+##  2026-08-12. THIS SECTION WINS ON ASK SPINE IMPLEMENTATION STATE.
+##  NEXT SLICE IS MEETING INTELLIGENCE — DESIGN DOC WRITTEN, NOT BUILT.
+## ══════════════════════════════════════════════════════════════════
+
+```text
+LIVE   api main 7ebb400 · app main bf86673
+       POST /operator/ask-spine/ask     answers, scoped, server-derived property
+       the composer                     shipped, browser-verified in production
+
+ON A BRANCH, NOT MERGED, NOT DEPLOYED
+       api  bcc5446   claude/ask-spine-conversational-dash-97bwcx
+                      adds `references[]` to the ask response
+       app  ddfa59c   claude/ask-spine-conversational-dash-97bwcx
+                      pins the proof verdict to `state` by name
+```
+
+**⚠ `references[]` IS NOT IN PRODUCTION.** It is written, tested and pushed, and
+`origin/main` does not contain it. Anyone building a UI against that field today
+gets `undefined` from the live API. Merge the branch before, or alongside, the
+visual patch — not after.
+
+### The bug that mattered, and why nothing caught it
+
+Ask Spine had **never once answered a question.** Every typed question returned
+`unavailable`. The cause was one line:
+
+```text
+{ role: "assistant", content: "{" }      an answer-shape prefill
+→ 400 invalid_request_error
+  "This model does not support assistant message prefill."
+```
+
+The catch block rendered that as `unavailable` — indistinguishable from a real
+model outage, which is exactly the state the surface is designed to report
+honestly. It looked like correct behaviour.
+
+**The test suite asserted the prefill was present, and passed the whole time.**
+It pinned the *mechanism* (there is a prefill) instead of the *guarantee* (the
+reply parses as a decision). A stub cannot return a 400, so no stub-backed
+assertion could ever have failed. The fix removes the prefill entirely and uses
+`output_config.format` / `json_schema`, so the API enforces the shape rather than
+the prompt hoping for it.
+
+Worth carrying forward as method: **an assertion about how something is done
+cannot detect that it does not work.** Pin the outcome, and ask what would have
+to break for the green to go red.
+
+### Traps this slice paid for
+
+- **`innerText` applies `text-transform`.** The browser gate reported the
+  grounding line missing on a working surface: `.as-ground` is
+  `text-transform: uppercase`, `innerText` returned `READ 1 OPEN ITEM`, and the
+  assertion was `/Read /`, case-sensitive. This is the *inverse* of the
+  `innerText` trap already in CLAUDE.md — there it read too much, here it read a
+  true thing in a form the assertion did not recognise. Proved with a standalone
+  Playwright run before changing the assertion, because "the gate is wrong" is
+  the most expensive thing to be wrong about.
+- **A scope rule that depends on a judgement has no edge.** Check 3 passed one
+  run and failed the next, unchanged. The prompt made `out_of_scope` depend on
+  whether the facts were *sufficient* — a call with no boundary. Scope is now
+  about the **subject only**: an on-subject question is always `answered`, and
+  "nothing is overdue right now" is an answer, not a refusal.
+- **A contract pin can be blind twice.** The first version searched the whole
+  file and passed on an identical read in a different function; the second used
+  `indexOf("function proofLine")`, which prefix-matches `proofLineX(`. Both were
+  found by trying to make them fail. A pin that has never been falsified is a
+  claim about nothing.
+- **Stale local `main` nearly produced a false ancestry claim** in both repos.
+  `git ls-remote` / `git fetch --prune` before saying anything is or is not
+  merged. Shallow clones also make `npm run verify` skip gates silently —
+  `git rev-parse --is-shallow-repository` before believing a green run.
+
+### Recorded, not fixed
+
+```text
+1  `COULD NOT READ: WORK_ORDERS` appears in live production answers. A real
+   read failure, honestly surfaced by the grounding line rather than hidden.
+   Not diagnosed.
+2  The browser gate's fault-injection checks 6/6b run ONLY when the API key is
+   absent, so a keyed receipt carries `fault_injection_proven.model_unavailable:
+   false` — which deployed mode's D3 then consumes. The gate under-proves
+   exactly the failure path the prefill bug hid in.
+```
+
+### The app side is with the owner's UI developer
+
+A written brief covers the conversational redesign, the DOM contracts the
+browser gate enforces (`#askSpineMount`, `#askSpineInput`, `.as-send`,
+`#askSpineBody`, `[data-as]`, `.as-ground`, `.as-unavail`, `askSpineTyped()`),
+the response shape, and the `innerText` trap above. Do not rename those without
+moving the gate with them — a rename is a contract change.
+
+The one instruction that matters for the next slice: the renderer switches on
+`references[].kind` with a fallback, rather than branching over the two kinds
+visible today. Meeting citations arrive in that same array.
+
+### ▶ WHICH ASK SPINE DOCUMENT GOVERNS — there are seven, and five are history
+
+`docs/` carries seven Ask Spine documents. Only two govern new work. The rest are
+dated receipts and audits, now stamped with status headers at the top of each so
+nobody builds against one by accident.
+
+```text
+GOVERNING
+  PHILOSOPHY.md §40                            what Ask Spine IS — doctrine
+  PHILOSOPHY.md §33                            not done until it can be asked
+  ASK_SPINE_CANONICAL_READ_LAYER.md            next build — Taxes + Insurance
+  ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md    second — transcript evidence
+
+HISTORY — stamped, do not build against
+  ASK_SPINE_BUILD_CONTRACT.md          PARKED maintenance charter. Never shipped.
+                                       ⚠ opened with "read before writing any Ask
+                                       Spine code" — that sentence is now false.
+                                       §19 open rulings ARE still frozen.
+  ASK_SPINE_SLICE_2_DESIGN_INPUT.md    premortem for the parked charter
+  ASK_SPINE_SLICE_1_RECEIPT.md         dated receipt; its status line is stale
+  ASK_SPINE_SOURCE_AUDIT.md            stale SHAs; findings need re-checking
+  BUILD_1_ASK_SPINE_SOURCE_CLASSIFICATION.md   stale counts; do not quote them
+```
+
+### ▶ NEXT — TWO DESIGNS, AND THE ORDER IS LOAD-BEARING
+
+```text
+1  docs/ASK_SPINE_CANONICAL_READ_LAYER.md      Taxes + Insurance. LANDS FIRST.
+2  docs/ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md   transcript evidence.
+```
+
+Both converge on the same composer. **Canonical reads first** — governed truth,
+one authority level, no tier machinery. Reversed, transcript passages arrive into
+a composer that has only ever known one kind of fact, and *"I think the taxes got
+paid last week"* ends up beside `city_payment: NOT_ESTABLISHED` with nothing
+structural separating them.
+
+The rule the canonical-read design establishes, headed for `PHILOSOPHY.md` §33:
+
+> **A canonical Spine domain is not complete until its governed standing state is
+> available to Ask Spine for entitled users.**
+
+Every governed domain needs conversational *reads*. Not every module needs
+conversational *writes*. Three collisions with things already frozen in source
+are recorded in §1a of that document — read them before designing:
+
+```text
+the read door does NOT become the write door — ask_spine.js says so
+"I'm done" already has a canonical writer: lifecycle_service.claimCompletion,
+   via the technician SMS path, proven single by gate_completion_writers.js.
+   A conversational write ROUTES THROUGH it or the gate fails, correctly.
+Owner is a RESERVED name — a different audience, possibly a different login.
+   It must not reuse the Asset Management entitlement.
+```
+
+### ▶ AND — meeting intelligence. FOUR RULINGS ARE FROZEN.
+
+Read **`docs/ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md`** before designing any of
+it. Nothing is built. It carries the owner's framing verbatim, four rulings the
+owner froze on 2026-08-12, the assertion ladder as an actual data contract, and
+one correction that a real transcript forced on the premise:
+
+> A transcript is not evidence of what was said. It is evidence of what a
+> machine rendered from a recording of what was said.
+
+In the owner's own demo transcript a three-bedroom rent appears as `$29.97`, one
+staff member appears under two spellings, and eight turns are `Unidentified
+Speaker`. The phrasing rule that follows is frozen: **until a passage is
+human-confirmed, Ask Spine says "the transcript records Robert as saying…", not
+"Robert said…"** Quote passages; never paraphrase a number or name out of one.
+
+```text
+R1 retention        transcript kept while the account is active, as an explicit
+                    ORG POLICY. Promoted decisions/obligations/confirmed facts
+                    survive independently of the transcript.
+R2 consent          Spine does NOT record meetings. It ingests from an approved
+                    source under the org's recording policy. Do not build a
+                    second consent mechanism inside Spine.
+R3 retrievability   full transcript preserved; only OPERATIONALLY RELEVANT
+                    segments enter conversational retrieval. Personal chatter
+                    stays out unless the source transcript is asked for directly.
+R4 unmapped speakers  allowed in generic answers as `Unidentified Speaker` with
+                    meeting + timestamp. Never infer identity. An unidentified
+                    segment CANNOT satisfy "what did Kandice say".
+```
+
+The ladder now has a contract rather than prose — Tier 1 transcript claim,
+Tier 2 confirmed statement, Tier 3 governed operating truth, and **no tier is
+ever inferred from the one below it.** Tier 2 carries `as_recorded` alongside
+`as_confirmed`, which is where `$29.97` becomes `$2,997` while the segment still
+reads `$29.97` forever. Slice 1 stays read-only and builds Tier 1 only.
+
+**§4 is the seam that keeps conversational ease from dissolving all of it**, and
+it is one rule wearing seven hats:
+
+```text
+THE MODEL GETS FLUENCY OVER WORDING. IT NEVER GETS AUTHORITY OVER
+ATTRIBUTION, TIER, CURRENT STATE, RELEVANCE, OR CONFLICT.
+```
+
+The four that will be got wrong by default:
+
+```text
+attribution   the server hands the model a PRE-BUILT attribution string. Told
+              to be conversational, a model smooths "the transcript records"
+              into "said" every time, because the second is better English.
+current state a state question answers from the operating reads; meeting
+              evidence is additive and labelled, never substitutive. And if the
+              state read FAILS, meeting memory does not fill the hole — that is
+              fixture-fallback in a new costume. Do NOT implement this as a
+              routing classifier; that is the judgement-with-no-edge that made
+              check 3 flaky in the first place.
+relevance     a segment is retrievable because it references an operating
+              OBJECT, not because its text scored well. Plus a second axis:
+              sensitivity overrides relevance. The sample's hospitalization is
+              attached to a real leasing fact, so entity linkage alone lets it
+              straight in.
+retrieval     the unit is a THREAD, not a chunk, presented chronologically. The
+              roommate ruling lands at 13:56, twelve minutes after the
+              discussion opens. Top-one RAG misses the conclusion by design.
+```
+
+Conflict is an output, never something the model resolves — the sample reports
+the elevator fixed and broken inside one meeting.
+
+**Release order is now a dependency, not cleanup.** The meeting slice must not
+pretend citation UI is live: `references[]` is on the branch, not in `main`.
+Build against the branch contract or merge it first — never against production
+behavior that does not yet exist.
+
+Migration files exist through **161**; the ledger ceiling was **not confirmed**
+from that session (no `DATABASE_URL` present). Confirm it against production
+before writing 162 — see §3 of this file for why that has already cost time
+twice.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  ASSET MANAGEMENT REORGANISED TO FOUR DOORS. 2026-08-12.
+##  THIS SECTION WINS ON ASSET MANAGEMENT. IT NO LONGER WINS ON
+##  RELEASE STATE — 162–167 ARE RELEASED, CEILING 167. SEE
+##  "PHILADELPHIA TAXES V1 IS BUILT AND RELEASED" BELOW.
 ## ══════════════════════════════════════════════════════════════════
 
 > The section immediately below — **the completion guard is ON** — is separate,
@@ -50,10 +363,17 @@ expenses are not.")
 including the four-door journey, 390px and keyboard. Screenshots under
 `/tmp/am-browser` (`02-asset-management-open.png`, `am-four-doors-narrow.png`).
 
-**No new migrations.** This is a surface/navigation change; the release
-picture below is UNCHANGED — 162–167 still pending, ceiling still 161.
+**No new migrations.** This is a surface/navigation change. ⚠ The release
+picture below said "162–167 still pending, ceiling still 161" and that is
+**no longer true** — see the release section, corrected 2026-08-12.
 
-**Doctrine still describes the OLD AM sub-hierarchy.** `CLAUDE.md` → "Four
+**Doctrine still describes the OLD AM sub-hierarchy.** ⚠ **NO LONGER TRUE —
+corrected 2026-08-12.** `CLAUDE.md` and `PHILOSOPHY.md` both carry the four
+rooms now; neither mentions REVENUE / CAPITAL / PROPERTY OBLIGATIONS /
+OPERATING COSTS anywhere. The paragraph below is kept as the record of what
+was deliberately deferred, not as a live instruction. Original text follows.
+
+`CLAUDE.md` → "Four
 operating doors" and `PHILOSOPHY.md` still list REVENUE / CAPITAL / PROPERTY
 OBLIGATIONS / OPERATING COSTS as AM's shape. The code has moved past that
 text; the doctrine edit is the owner's call and is deliberately NOT made in
@@ -160,23 +480,42 @@ provable.
 
 ---
 
-##  PHILADELPHIA TAXES V1 IS BUILT AND UNRELEASED. 2026-08-12.
-##  Superseded as "latest" by the reorg above; still current, still unreleased.
+##  PHILADELPHIA TAXES V1 IS BUILT AND **RELEASED**. 2026-08-12.
+##  CORRECTED 2026-08-12 — THIS SECTION SAID "UNRELEASED" AND WAS WRONG.
 ## ══════════════════════════════════════════════════════════════════
 
 ```text
-API  claude/philosophy-doctrine-reference-jv7s7r   NOT merged
-APP  claude/philosophy-doctrine-reference-jv7s7r   NOT merged
-pending migrations                                 162, 163, 164, 165, 166, 167
-production ledger ceiling                          161  (expected — READ IT)
+API  merged to main                                7ebb400  (PR #97)
+APP  merged to main                                bf86673  (PR #57)
+migrations 162–167                                 APPLIED
+production ledger ceiling                          167
 ```
 
-**⚠ THE MERGE WARNING BELOW NOW COVERS SIX MIGRATIONS, NOT TWO.** Same
-trap, larger blast radius: auto-deploy is ON, `prestart` verifies rather
-than applies, and merging with 162–167 pending is a failed production
-deploy. Pause auto-deploy first. The run card is still
-[`release/INSURANCE_162_163_RUN_CARD.md`](release/INSURANCE_162_163_RUN_CARD.md)
-and its sequence is unchanged — the ceiling it releases to is now 167.
+**⚠ THIS BLOCK PREVIOUSLY READ "NOT merged · pending 162–167 · ceiling 161."**
+All four lines were stale. The branch merged and the release ran. A handoff
+that describes a release as pending after it has happened is worse than one
+that says nothing: the merge warning below tells you to pause auto-deploy for
+a release that is already done, and the next reader either repeats it or stops
+trusting the file.
+
+**The ceiling above is reported, not read by the author of this edit.** Per §3
+and the standing rule, `EXPECTED_LEDGER_CEILING` is never typed from memory or
+from this document — **read it from the ledger** before any release. The value
+here orients you; it does not authorise anything.
+
+**The merge warning that stood here is now HISTORY, not instruction.** It read:
+*"auto-deploy is ON, `prestart` verifies rather than applies, and merging with
+162–167 pending is a failed production deploy — pause auto-deploy first."*
+That was correct while those six were pending. It no longer applies to them.
+**The underlying trap is permanent and applies to the next migration**, so keep
+the mechanism in mind and see §3; the run card is
+[`release/INSURANCE_162_163_RUN_CARD.md`](release/INSURANCE_162_163_RUN_CARD.md).
+
+⚠ **`release/ledger_read_before_release.sql` is stale for the next release.**
+Its `build` list ends at **159** and does not know 160–167, so running it as-is
+reports a clean `pending` for a set it never looked at — the migration-140
+failure mode its own footer warns about. Regenerate it before use; the command
+is in the file and must not be hand-edited.
 
 ### ⚠ THE CLOCKS AND THE STANDING MODEL WERE WRONG, AND WERE CORRECTED
 
@@ -224,8 +563,17 @@ BIRT              ENTITY   subject · annual  · return + balance Apr 15 (Y+1)
 NPT               ENTITY   subject · annual  · return Apr 15, estimates
                                                Apr 15 and Jun 15
 U&O               PROPERTY subject · monthly · filing + payment, 25th of
-                                               the following month
+                                               the SAME month
 ```
+
+**⚠ U&O IS SAME-MONTH.** This table said "the following month" until 2026-08-12,
+which is the exact defect the correction above — *"U&O was a MONTH late"* — records
+as fixed. One document asserting both is how a repaired defect gets reintroduced by
+someone reading the summary instead of the correction. The authority is
+`philadelphia_tax_rules.js`: *"U&O IS SAME-MONTH. The tax for month M is filed and
+paid by the 25th of the SAME month"*, shifted forward past weekends and City
+holidays, and the City's published 2026 schedule is pinned there so the derivation
+must reproduce it.
 
 **Commercial Trash was cut, deliberately.** It is a municipal fee with its
 own exemption machinery, not one of these four. It may return later under a
@@ -1768,7 +2116,7 @@ out of the activation decision; the train does not depend on it.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
-##  ⛔ THE DEPLOYED APP IS BROKEN. 2026-08-06 (latest).
+##  ⛔ THE DEPLOYED APP IS BROKEN. 2026-08-06 (historical — see above).
 ## ══════════════════════════════════════════════════════════════════
 
 **This supersedes the APP SHA in the header above and every deployment claim
