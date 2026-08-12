@@ -8,16 +8,54 @@
 ```text
 API  claude/philosophy-doctrine-reference-jv7s7r   NOT merged
 APP  claude/philosophy-doctrine-reference-jv7s7r   NOT merged
-pending migrations                                 162, 163, 164, 165, 166
+pending migrations                                 162, 163, 164, 165, 166, 167
 production ledger ceiling                          161  (expected — READ IT)
 ```
 
-**⚠ THE MERGE WARNING BELOW NOW COVERS FIVE MIGRATIONS, NOT TWO.** Same
+**⚠ THE MERGE WARNING BELOW NOW COVERS SIX MIGRATIONS, NOT TWO.** Same
 trap, larger blast radius: auto-deploy is ON, `prestart` verifies rather
-than applies, and merging with 162–166 pending is a failed production
+than applies, and merging with 162–167 pending is a failed production
 deploy. Pause auto-deploy first. The run card is still
 [`release/INSURANCE_162_163_RUN_CARD.md`](release/INSURANCE_162_163_RUN_CARD.md)
-and its sequence is unchanged — the ceiling it releases to is now 166.
+and its sequence is unchanged — the ceiling it releases to is now 167.
+
+### ⚠ THE CLOCKS AND THE STANDING MODEL WERE WRONG, AND WERE CORRECTED
+
+A review of this branch found three wrong answers in the layer that turns
+governed facts into "what is due now?". The facts underneath were sound;
+the compression on top of them was not. Every one is now pinned by a
+proof that fails if it returns.
+
+```text
+U&O was a MONTH late      modelled as "month M, due the 25th of M+1".
+                          It is the SAME MONTH, shifted forward past
+                          weekends and City holidays.
+NPT estimates a YEAR late  the estimates for tax year Y are due Apr 15
+                          and Jun 15 OF Y. Only the RETURN is Y+1.
+any payment satisfied      `if (oblPayments.length) return true` made a
+every requirement          $50,000 payment against a $122,259.93 bill
+                          read PAID, and let an NPT first estimate close
+                          out the second.
+a row was ONE PERIOD       it could not hold 2025's BIRT return beside
+                          the 2026 estimate that rides on it, nor July
+                          U&O closed beside August open.
+```
+
+**The City's published 2026 U&O schedule is pinned in
+`philadelphia_tax_rules.js` and the derivation must reproduce it.** Every
+milestone carries `due`, `derived_due` and `date_source`, so a published
+date can never mask a broken rule — which it did, once, during
+falsification.
+
+**A payment names the requirement it satisfies** (`satisfies_requirement`,
+migration 167). The writer fills it where an obligation carries exactly
+one requirement and REFUSES where it carries several. Where the amount is
+governed, satisfaction is a comparison: part paid reads as part paid.
+
+**BIRT's mandatory estimate depends on a FILER PROFILE.** The City grants
+first-year filers relief, so the cadence is not the same for every
+taxpayer. With no profile recorded the requirement is reported UNKNOWN —
+never assumed present, never assumed absent.
 
 ### FOUR OBLIGATIONS. NOT FIVE.
 
@@ -94,29 +132,64 @@ asserting the FUNDING read did change, so the comparison is not vacuous.
 ### Evidence at this build
 
 ```text
-API  philadelphia_tax_http.db.js       92/92   real PG + real HTTP
-     philadelphia_tax.db.js            58/58
-     philadelphia_tax_funding.db.js    54/54
+API  philadelphia_tax_http.db.js      106/106  real PG + real HTTP
+     philadelphia_tax.db.js            64/64
+     philadelphia_tax_standing.db.js   41/41   the corrected defects
+     philadelphia_tax_funding.db.js    55/55
      legal_entity.db.js                28/28
+     philadelphia_tax_clocks.test.js   44/44   PURE — a governance gate
+     tax_document_read.test.js         35/35   PURE — a governance gate
      gate_funding_boundary.js          50/50   tax side no longer vacuous
-     npm run verify                    14/14
-APP  asset_management_shell.browser   207/207  real Chromium
-     run_harnesses.sh                 1041 · 0 failed · 0 red
+     npm run verify                    16/16
+APP  run_harnesses.sh                 1041 · 0 failed · 0 red
 ```
+
+The two PURE tests are on the standard path deliberately. The clocks
+shipped wrong twice with every surrounding proof green, because those
+proofs asserted the implementation; these assert the City.
+
+### The document reader
+
+`tax_document_read.js` — upload → read/propose → human confirms →
+canonical write, the same contract as Insurance, label-scan only, no
+model call. Proven against the extracted text of TWO REAL PORTFOLIO
+DOCUMENTS in `tests/fixtures/tax`:
+
+```text
+2116 Chestnut RET bill 2023   OPA 881566975 · 2023 · due 2023-03-31 ·
+                              $201,512.97 — the AMOUNT TO PAY, not the
+                              $2,015,129.68 printed before reductions
+Onefive 4233 BIRT 2023        tax ID 2000179694 · 2023 · submitted
+                              2024-03-29 · $0.00 due, and the mandatory
+                              next-year estimate as its OWN field
+```
+
+⚠ Those fixtures contain real OPA and Philadelphia tax account numbers
+for portfolio entities. They are here because a reader proven against an
+invented format is proven against nothing — but it is a deliberate
+choice, and it is reversible.
+
+`available` means A READ HAPPENED in both adapters; `found_count` is what
+a surface tests. They disagreed for one commit.
 
 ### Still open
 
 ```text
-release 162–166        nothing is in production. Same run card, new ceiling.
+release 162–167        nothing is in production. Same run card, new ceiling.
 BIRT/NPT amounts       no calculator, by design. Amount is evidenced or
                        unknown — never computed.
-tax extractor          there is NO document reader for tax evidence yet.
-                       Upload retains the file; the human types what it
-                       says. Insurance has a label scan; Taxes does not,
-                       and the sheet says so rather than pretending.
-legal entity capture   no UI. An entity must exist before BIRT/NPT can be
-                       recorded, and the sheet names that dead end honestly
-                       instead of showing an empty picker.
+duplicate entities     the taxpayer capture route ESTABLISHES only; there
+                       is no "pick an existing entity" picker, because
+                       `legal_entities` carries no tenancy of its own and
+                       listing candidates would read entities this
+                       operator has no relationship to. The same LLC
+                       entered from two properties becomes two rows.
+                       Fixing it needs the primitive to know whose it is —
+                       a decision, not a side effect of a capture form.
+model fallback         the reader is the scan half only, as in Insurance.
+                       A model pass is a separate deliberate act with its
+                       own proof that a hallucinated liability cannot
+                       reach a confirm screen looking like a reading.
 ```
 
 ---
