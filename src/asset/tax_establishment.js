@@ -502,7 +502,11 @@ module.exports = function taxEstablishment(deps) {
         user_id: req.operator.id,
       });
     },
-    (row) => `Recorded as ${rules.BIRT_FILER_LABEL[row.birt_filer_profile].toLowerCase()}. ` +
+    //  ⚠ NOT `.toLowerCase()` ON THE LABEL. It rendered as "first year of
+    //  business in philadelphia" on a real screen — lowercasing a whole
+    //  phrase to make it fit a sentence also lowercases the proper noun
+    //  inside it.
+    (row) => `Recorded: ${rules.BIRT_FILER_LABEL[row.birt_filer_profile]}. ` +
              (row.birt_filer_profile === "first_year"
                ? "The City grants first-year filers relief from the mandatory estimated payment."
                : "The mandatory estimated payment for the following year applies."));
