@@ -19,33 +19,105 @@ diligence (environmental, zoning, property information) and holds no loan
 documents, and tenant-wide content search for the binder returns **10 of 10
 results that are 4233's binder, not 4125's**.
 
-**This is a Phase E finding of the first order, not merely an obstacle.** The
-charter says *"use the smallest reader capable of reliably proposing facts from
-the real specimen."* The real specimen's governing instruments are page images.
-The smallest sufficient reader is therefore **not** a text extractor, and the Tax
-label scanner is not a starting point. Any Phase E estimate that assumed text
-extraction is wrong.
+### What this establishes, and what it does NOT
+
+> **⚠ CORRECTED 2026-08-12 by owner ruling.** This section originally concluded
+> *"the smallest sufficient reader is therefore not a text extractor."* That
+> overreached — it froze an implementation from one fact. The requirement is
+> established; the mechanism is not chosen.
+
+```text
+ESTABLISHED   Debt establishment must support source artifacts that do not
+              expose usable embedded text.
+
+NOT CHOSEN    page rendering · multimodal document reading · OCR ·
+              human-selected pages · hybrid extraction
+```
+
+Phase A does not choose. At source establishment we use the smallest mechanism
+that reliably works against the actual documents.
+
+**And Phase A's binder read is not Phase E.** They are different problems and
+must not merge:
+
+```text
+PHASE A   a targeted, human-assisted read to learn what the loan IS.
+          Research. One pass. No production code.
+PHASE E   a production-capable document-establishment mechanism.
+          A later slice, scoped by evidence we do not yet have.
+```
+
+"The binder is scanned" is not a reason to start building document
+infrastructure now.
+
+### I cannot perform this pass — three independent confirmations
+
+```text
+1  no download capability exists in the Microsoft 365 tool surface
+   (search · read_resource · upload · update · copy · move · rename · delete)
+2  read_resource is the only content path and it fails on this file
+3  the network gateway DENIES onefivecapital.sharepoint.com:443 by policy
+   → "connect_rejected · gateway answered 403 to CONNECT"
+```
+
+So the bytes cannot reach this environment by any available route. The
+human-assisted part of "human-assisted page-image read" is load-bearing. §8 below
+states exactly what a human pass must return, keyed to the six questions, so the
+pass is targeted rather than an archaeology project.
 
 Everything below marked `NOT ESTABLISHED — blocked` is blocked by this one file.
 
 ---
 
-## INSTRUMENTS
+## SOURCE AUTHORITY HIERARCHY
+
+Applied throughout. Lower sources are not useless; they are the wrong source for
+certain kinds of fact.
 
 ```text
-ONE debt instrument established.
+1  executed governing instrument                 note · mortgage · loan agreement
+2  executed amendment / modification / assignment
+3  lender / servicer statement                   billing statement · amortization schedule
+4  closing / supporting documentation            registration forms · certifications
+5  internal org chart / reporting workbook
+6  folder naming / contextual inference
+```
+
+**A servicing statement can establish an observed balance while being the wrong
+source for the legal collateral definition. An org chart can strongly support
+entity identity without proving who signed a guaranty.**
+
+Nothing in this map is currently supported by a level-1 or level-2 source,
+because none has been read. Every structural conclusion below rests on levels 3–6.
+
+---
+
+## INSTRUMENTS
+
+> **⚠ POSTURE CORRECTED.** This section said *"one instrument"* and *"mezzanine /
+> supplemental / facility debt: absent."* Both stated absence more strongly than
+> the evidence permits. **"I have not found one" is not "none exists"** — and
+> closing that specific uncertainty is the whole point of the binder read.
+
+```text
+ONE INSTRUMENT CURRENTLY EVIDENCED           authority 3 (servicer statement + schedule)
 
   senior mortgage loan · number 480010465 · Lument
   original principal $28,250,000 · first payment 2020-09-01
   maturity 2030-08-01 · balloon $24,716,182.48
+
+NO ADDITIONAL DEBT INSTRUMENT FOUND IN REVIEWED SOURCES
+ADDITIONAL INSTRUMENT STRUCTURE NOT YET RULED OUT BY THE GOVERNING BINDER
 ```
 
-No second debt instrument found. **Morrison Street is preferred equity** — ruled
-by the owner, and independently corroborated by the org chart, where
-`MSC – 4125 Chestnut HoldCo, LLC` appears in the *ownership* structure at 21.432%
-of Borrower.
+**Morrison Street is preferred equity** — owner-ruled, and corroborated by the
+org chart (authority 5), where `MSC – 4125 Chestnut HoldCo, LLC` appears in the
+*ownership* structure at 21.432% of Borrower. That corroboration is strong for
+*equity classification* and is not a level-1 source for whether any other debt
+exists.
 
-Mezzanine / supplemental / facility debt: **absent** on this specimen.
+Mezzanine / supplemental / facility debt: **not found in reviewed sources; not
+ruled out.**
 
 ---
 
@@ -174,12 +246,16 @@ NOT ESTABLISHED — blocked.**
 Three categories, all established from the billing statement:
 
 ```text
-tax escrow             monthly contribution + balance
-insurance escrow       monthly contribution + balance
-replacement reserve    monthly contribution + balance + a governed draw process
+tax escrow             monthly contribution + balance      authority 3
+insurance escrow       monthly contribution + balance      authority 3
+replacement reserve    monthly contribution + balance      authority 3
+                       + a governed draw process           authority 4
 ```
 
-Interest reserve / debt-service reserve: absent on this specimen.
+Interest reserve / debt-service reserve: **not found in reviewed sources; not
+ruled out.** A reserve funded once at closing and never billed monthly would not
+appear on a servicing statement at all, so a level-3 source is structurally weak
+evidence of absence here.
 
 ---
 
@@ -273,3 +349,79 @@ guarantor                           attributed fact, not a minted identity
 Seams preserved without subsystems: **extension**, **covenant**, **amendment**,
 **cross-collateral**, **second instrument** — each `NOT ESTABLISHED` rather than
 absent, and each cheap to add once the binder is read.
+
+---
+
+## 8. THE HUMAN BINDER PASS — WHAT IT MUST RETURN
+
+One targeted pass. Do not process 55 MB indiscriminately. Six questions.
+
+### Where to look
+
+A closing binder opens with a **tab index**. Photographing or exporting that
+index alone probably answers questions 1, 4 and 5 outright, because it names
+every document that exists — including any amendment, modification or assignment
+that would otherwise be invisible. **Start there; it is the single highest-value
+page in the file.**
+
+Precedent that the index exists: `4125 Interest Holder LLC Operating Agreement.pdf`
+opens with `TAB 49B`, so this binder is tabbed to at least 49.
+
+Then, only the documents the index identifies as:
+
+```text
+Q1  instruments      Promissory Note · any second note · Loan Agreement
+Q2  obligors         signature pages of Note and Guaranty; Guaranty parties
+Q3  collateral       Mortgage / Security Instrument — the granting clause and
+                     Exhibit A legal description
+Q4  amendments       any Amendment · Modification · Assignment · Assumption
+Q5  extension        Loan Agreement — maturity + any extension option article
+Q6  covenants        Loan Agreement — financial covenants + reporting article,
+                     CATEGORY NAMES ONLY, no thresholds, no calculations
++   lender/servicer  whether the Note names a payee different from Lument, and
+                     whether any assignment or servicing transfer appears
+```
+
+### What to bring back per finding
+
+```text
+fact
+source document      e.g. "Promissory Note"
+page / section       e.g. "p. 3, §2.1" or "Tab 12, signature page"
+authority level      1–6 per the hierarchy above
+```
+
+If the scan does not establish something clearly: **`NOT_ESTABLISHED`.** A blurry
+page is not evidence of absence.
+
+### The return format
+
+Only the deltas against this map:
+
+```text
+INSTRUMENT COUNT              confirmed / revised
+OBLIGORS + GUARANTORS         confirmed / revised
+COLLATERAL                    confirmed / revised
+AMENDMENT CHAIN               exists / none found / not established
+EXTENSION                     exists + structure / absent / not established
+COVENANTS                     categories that exist        (no calculations)
+REPORTING REQUIREMENTS        categories that exist
+LENDER-CONTROLLED ACCOUNTS    categories established
+LENDER VS SERVICER            established / not established
+ANY FINDING THAT BREAKS THE PROPOSED MODEL      yes / no
+```
+
+### Getting it to Spine
+
+The bytes cannot reach this environment (see the blocker above). Any of these
+works, most reliable first:
+
+```text
+1  paste the findings as text, in the format above
+2  commit the exported pages into the repo on a branch — local files ARE readable
+3  paste the relevant document text directly
+```
+
+**If the answer to the last line is `no`** — nothing breaks the model — Phase C
+starts with the minimal historical schema. The build is not held open to solve
+document automation first.
