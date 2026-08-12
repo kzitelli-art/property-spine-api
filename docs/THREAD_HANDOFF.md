@@ -1,8 +1,63 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
-##  PHILADELPHIA TAXES V1 IS BUILT AND UNRELEASED. 2026-08-12 (latest).
+##  ASSET MANAGEMENT REORGANISED TO FOUR DOORS. 2026-08-12 (latest).
 ##  THIS SECTION WINS.
+## ══════════════════════════════════════════════════════════════════
+
+Asset Management is now **four durable doors**, replacing the old
+REVENUE / CAPITAL / PROPERTY OBLIGATIONS / OPERATING COSTS set:
+
+```text
+CAPITAL STACK        Debt · Equity · Reserves & Escrows
+PROPERTY EXPENSES    Taxes · Insurance · Payroll · Utilities · Contracted
+                     Services · Repairs · Management · Marketing · Other  (nine)
+PROJECTS & CAPEX     Projects · Unit Improvements · Building Systems ·
+                     Equipment / FF&E · Capital Reserves & Draws
+COMPLIANCE           Licenses · Inspections · Certificates · Violations ·
+                     Recurring Requirements
+```
+
+**The door is navigation; the module underneath owns the truth.** The AM
+surface writes NO domain table — pinned by `gate_funding_boundary.js` (the
+NAVIGATION assertion). It reads the canonical domain reads and renders.
+
+**Taxes and Insurance moved intact.** Re-homed from Property Obligations to
+Property Expenses with nothing rewritten — the four-row tax position and the
+four-section insurance dashboard are unchanged. This build moved doors; it
+did not touch either HTTP house beyond the room key.
+
+**`room` is a contract key, and it moved.** The tax compartment payload now
+returns `room: "property_expenses"` (was `property_obligations`), pinned by
+name in `philadelphia_tax_http.db.js`. Migration 159's silent key rename is
+the precedent that assertion exists to prevent.
+
+**Property Expenses establishment is DERIVED and CAPPED.** It probes the tax
+and insurance canonical reads and reports `partially_established` when either
+is established; it can NEVER read `established`, because that would claim
+payroll, utilities and five more are accounted for. The parent never
+manufactures a CURRENT it cannot stand behind. (Desk chip reads
+"PARTIALLY ESTABLISHED — Insurance is established. The other operating
+expenses are not.")
+
+**Proven** — asset_management_shell.db.js 54/54 · philadelphia_tax_http.db.js
+106/106 · insurance_establishment.db.js 141/141 · gate_funding_boundary.js
+51/51 · source-governance 16/16 · asset_management_shell.browser.js **260/260**
+including the four-door journey, 390px and keyboard. Screenshots under
+`/tmp/am-browser` (`02-asset-management-open.png`, `am-four-doors-narrow.png`).
+
+**No new migrations.** This is a surface/navigation change; the release
+picture below is UNCHANGED — 162–167 still pending, ceiling still 161.
+
+**Doctrine still describes the OLD AM sub-hierarchy.** `CLAUDE.md` → "Four
+operating doors" and `PHILOSOPHY.md` still list REVENUE / CAPITAL / PROPERTY
+OBLIGATIONS / OPERATING COSTS as AM's shape. The code has moved past that
+text; the doctrine edit is the owner's call and is deliberately NOT made in
+this build.
+
+## ══════════════════════════════════════════════════════════════════
+##  PHILADELPHIA TAXES V1 IS BUILT AND UNRELEASED. 2026-08-12.
+##  Superseded as "latest" by the reorg above; still current, still unreleased.
 ## ══════════════════════════════════════════════════════════════════
 
 ```text

@@ -197,8 +197,16 @@ async function main() {
 
     let r = await get(`${B}?as_of=${AS_OF}`);
     ok("the compartment answers 200", r.status === 200, r.raw.slice(0, 200));
+    /*  ⚠ AN API OUTPUT KEY IS A CONTRACT, AND `room` JUST MOVED.
+     *  Taxes was re-homed from Property Obligations to Property Expenses
+     *  by the AM reorganization. This assertion caught the rename the
+     *  moment the surface changed — which is the whole reason it reads
+     *  the key by name rather than checking the shape. Migration 159
+     *  renamed a response key with no such assertion and the deal page
+     *  silently showed the wrong state for a day. */
     ok("it names itself, so a surface never has to guess",
-       r.body.compartment === "taxes" && r.body.room === "property_obligations");
+       r.body.compartment === "taxes" && r.body.room === "property_expenses",
+       JSON.stringify({ compartment: r.body.compartment, room: r.body.room }));
     ok("FOUR rows, one per Philadelphia tax", r.body.rows.length === 4);
     ok("and Commercial Trash is not one of them",
        !JSON.stringify(r.body.rows).toLowerCase().includes("trash"));

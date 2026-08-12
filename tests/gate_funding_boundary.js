@@ -381,6 +381,46 @@ for (const d of DOMAINS) {
   }
 }
 
+/*  ══ THE NAVIGATION LAYER MAY READ EVERY DOMAIN AND AUTHOR NONE ═══
+ *
+ *  Asset Management's four doors — Capital Stack, Property Expenses,
+ *  Projects & CapEx, Compliance — are NAVIGATION. Each module underneath
+ *  owns its own truth, and the surface is the composition point: it may
+ *  read establishment state from any of them, and it must never write.
+ *
+ *  This is not hypothetical tidiness. Two of the four doors sit directly
+ *  on top of the temptation:
+ *
+ *    · Capital Stack holds RESERVES & ESCROWS. Tax escrow truth belongs
+ *      to the Tax module and insurance escrow truth to the Insurance
+ *      module, each behind the wall above. A capital room that started
+ *      writing escrow would reopen the exact seam that wall keeps shut,
+ *      from a direction the wall does not watch.
+ *    · Property Expenses reads Taxes and Insurance to state its own
+ *      establishment. Reading a boolean is the whole permission; the
+ *      first `insert` here would make the taxonomy a second author of a
+ *      number the modules already own.
+ */
+console.log("\n══ NAVIGATION ═══════════════════════════════════════════");
+{
+  const SURFACE = "src/surfaces/asset_management.js";
+  const src = readIf(SURFACE);
+  if (src === null) {
+    ok(`${SURFACE} is present`, false, "the Asset Management surface is missing");
+  } else {
+    const owned = [
+      ...INSURANCE_ECONOMIC_TABLES, ...INSURANCE_FUNDING_TABLES,
+      ...TAX_ECONOMIC_TABLES, ...TAX_FUNDING_TABLES,
+    ];
+    const writes = owned.filter((t) => writesTable(src, t, false));
+    ok(`${SURFACE} writes no domain table — it navigates, it does not author`,
+       writes.length === 0, writes.join(", "));
+    //  Reading IS permitted and is deliberately not asserted against.
+    //  Saying so here stops the next reader "tightening" this into a ban
+    //  and breaking the establishment probe the four doors depend on.
+  }
+}
+
 console.log("\n════════════════════════════════════════════════════════════════");
 console.log(`  ASSERTIONS COMPLETE · ${pass + fail} run · ${pass} passed · ${fail} failed`);
 if (fail) {

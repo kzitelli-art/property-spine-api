@@ -86,75 +86,177 @@
 //  A compartment carries its own establishment, because they will fill in
 //  ONE AT A TIME — Rent is real today while Vacancy is not, and a room
 //  that averaged them into one state would be lying in both directions.
+/*  ── THE FOUR DOORS. THE PERMANENT SKELETON. ─────────────────────────
+ *
+ *      CAPITAL STACK · PROPERTY EXPENSES · PROJECTS & CAPEX · COMPLIANCE
+ *
+ *  ── WHY THE PREVIOUS FOUR WERE REPLACED ─────────────────────────────
+ *  Revenue · Capital · Property Obligations · Operating Costs mixed four
+ *  different KINDS of thing at one level: an income category, a
+ *  capitalisation structure, a bundle of standing obligations, and a
+ *  bundle of operating costs. Two consequences followed, and both were
+ *  real:
+ *
+ *    · Taxes and Insurance sat under "Property Obligations" alongside
+ *      Licences and Compliance, which are not expenses at all — so the
+ *      room could never answer "what does this property cost to own".
+ *    · Operating Costs was a second, parallel home for expenses, so the
+ *      same question had two rooms and neither had the whole answer.
+ *
+ *  The new four are cut by QUESTION, not by accounting category:
+ *
+ *      CAPITAL STACK      how is this property capitalised, and what do
+ *                         we owe the people who capitalised it?
+ *      PROPERTY EXPENSES  what does it cost to own and operate?
+ *      PROJECTS & CAPEX   where are we investing capital in the asset?
+ *      COMPLIANCE         is it legally and regulatorily in good standing?
+ *
+ *  ── THE DOOR IS NAVIGATION. THE MODULE OWNS THE TRUTH. ──────────────
+ *  Taxes and Insurance move INTACT under Property Expenses. Neither is
+ *  flattened into a summary row and neither loses a capability: the room
+ *  is a way in, and the domain behind it is unchanged. This build moves
+ *  doors; it does not rewrite either house.
+ *
+ *  ── AND REVENUE IS NOT A DOOR HERE ──────────────────────────────────
+ *  It was removed rather than relocated. Revenue's operating sources
+ *  live in Leasing and Management, which own the leases, the concessions
+ *  and the vacancy. Asset Management will later READ the economic
+ *  consequence — T-12, NOI, budget vs actual — and must not grow a
+ *  second revenue-management surface to do it. A door here would have
+ *  been exactly that invitation.
+ *
+ *  ── THREE LISTS PER ROOM, AND THEY ARE NOT THE SAME JOB ─────────────
+ *    covers        the CANONICAL structural list — what the room holds.
+ *    eyebrow       the DISPLAY list on the home card. It ABBREVIATES
+ *                  covers and never invents; a proof asserts it.
+ *    compartments  the room's own sub-doors — the permanent skeleton.
+ *
+ *  A compartment carries its own establishment, because they fill in ONE
+ *  AT A TIME. Taxes and Insurance are governed today while the other
+ *  seven expense modules do not exist, and a room that averaged them
+ *  into one state would be lying in both directions.
+ */
 const ROOMS = Object.freeze([
   Object.freeze({
-    key: "revenue",
-    label: "Revenue",
-    covers: ["Rent", "Vacancy", "Concessions", "Other Income"],
-    eyebrow: ["Rent", "Vacancy", "Concessions", "Other Income"],
-    belongs: "What this property earns, and what it fails to earn.",
+    key: "capital_stack",
+    label: "Capital Stack",
+    covers: ["Debt", "Equity & Preferred Equity", "Reserves & Escrows"],
+    eyebrow: ["Debt", "Equity", "Reserves"],
+    belongs: "How this property is capitalised, and what it owes the people who capitalised it.",
+    //  ⚠ RESERVES & ESCROWS IS A READER, NEVER A SECOND WRITER.
+    //  Tax escrow truth is owned by the Tax module and insurance escrow
+    //  truth by the Insurance module, each behind the executable funding
+    //  wall in gate_funding_boundary.js. Capital Stack may aggregate
+    //  those positions later; it may never author them. A capital room
+    //  that started writing escrow would reopen the exact seam the wall
+    //  exists to keep shut.
     compartments: [
-      //  `rent` is the one compartment with a live source today, so its
-      //  establishment is resolved per property rather than declared here.
-      { key: "rent", label: "Rent", derived: true },
-      { key: "vacancy", label: "Vacancy", note: "No governed vacancy position yet" },
-      { key: "concessions", label: "Concessions", note: "No governed concession terms yet" },
-      { key: "other_income", label: "Other Income", note: "No governed other-income terms yet" },
+      { key: "debt", label: "Debt",
+        note: "No governed debt instruments yet" },
+      { key: "equity", label: "Equity & Preferred Equity",
+        note: "No governed equity or preferred terms yet" },
+      { key: "reserves_escrows", label: "Reserves & Escrows",
+        note: "No governed reserve accounts yet" },
     ],
   }),
+
+  /*  PROPERTY EXPENSES is the widest of the four and the only one with
+   *  anything live in it. Nine modules, two of them governed today.
+   *
+   *  ⚠ A LICENCE FEE IS AN EXPENSE. A LICENCE IS NOT.
+   *  When Licences & Registrations is built it lives under COMPLIANCE —
+   *  its status, renewal, expiry and evidence are compliance truth. The
+   *  fee it generates may later be read as an expense here. One domain
+   *  owns the operational truth; the economic consequence is read
+   *  elsewhere; there are never two truths. The old taxonomy had
+   *  licences sitting beside taxes as though they were the same kind of
+   *  fact, which is how that distinction gets lost.
+   */
   Object.freeze({
-    key: "capital",
-    label: "Capital",
-    covers: ["Senior Debt", "Mezzanine Debt", "Preferred Equity", "Reserves / Escrows"],
-    eyebrow: ["Senior Debt", "Mezzanine Debt", "Preferred Equity", "Reserves / Escrows"],
-    belongs: "How the property is financed, and what that structure costs.",
+    key: "property_expenses",
+    label: "Property Expenses",
+    covers: ["Taxes", "Insurance", "Payroll & Staffing", "Utilities",
+             "Contracted Services", "Repairs & Maintenance",
+             "Management & Administration", "Marketing & Leasing Costs",
+             "Other Operating Expenses"],
+    eyebrow: ["Taxes", "Insurance", "Payroll", "Utilities"],
+    belongs: "What this property costs to own and operate.",
     compartments: [
-      { key: "senior_debt", label: "Senior Debt", note: "No governed senior debt yet" },
-      { key: "mezzanine", label: "Mezzanine Debt", note: "No governed mezzanine debt yet" },
-      { key: "preferred_equity", label: "Preferred Equity", note: "No governed preferred equity yet" },
-      { key: "reserves", label: "Reserves / Escrows", note: "No governed reserves or escrows yet" },
+      //  `derived` resolves against the domain's own canonical read. The
+      //  two live modules keep everything they had — this room is the way
+      //  in, not a summary that replaces them.
+      { key: "taxes", label: "Taxes", derived: "taxes" },
+      { key: "insurance", label: "Insurance", derived: "insurance" },
+      { key: "payroll_staffing", label: "Payroll & Staffing",
+        note: "No governed payroll allocation yet" },
+      { key: "utilities", label: "Utilities",
+        note: "No governed utility accounts yet" },
+      { key: "contracted_services", label: "Contracted Services",
+        note: "No governed service contracts yet" },
+      { key: "repairs_maintenance", label: "Repairs & Maintenance",
+        note: "No governed repair or maintenance expense terms yet" },
+      { key: "management_administration", label: "Management & Administration",
+        note: "No governed management fee or administrative terms yet" },
+      { key: "marketing_leasing", label: "Marketing & Leasing Costs",
+        note: "No governed marketing or leasing cost terms yet" },
+      { key: "other_operating_expenses", label: "Other Operating Expenses",
+        note: "No other governed operating expense terms yet" },
     ],
   }),
-  //  PROPERTY OBLIGATIONS is the widest of the four, and deliberately so:
-  //  it eventually holds everything the asset must maintain simply because
-  //  we own and operate it — financial AND regulatory. Rental licenses,
-  //  registrations, filings, tax compliance, inspections, renewals.
-  //
-  //  Compliance lives HERE rather than as a fifth room, because a lapsed
-  //  rental licence and an unpaid tax bill are the same kind of fact from
-  //  the asset's point of view: a standing obligation of ownership with a
-  //  date and a consequence. Splitting them would make the operator look
-  //  in two places for one answer.
-  //
-  //  NO COMPLIANCE LOGIC EXISTS. This is navigation and product structure
-  //  only — the sub-labels say what the room is FOR, not what it does.
+
+  /*  ⚠ PROJECTS & CAPEX IS NOT A SECOND WORK-ORDER SYSTEM.
+   *  Maintenance owns the work EVENT — who was dispatched, what they
+   *  found, what they did, the photograph. This room owns the
+   *  asset-management view of capital work: what was budgeted, committed,
+   *  spent and drawn against which source of capital. When it is built it
+   *  will REFERENCE operating work; it will never duplicate it, and a
+   *  work order must never be creatable from inside Asset Management.
+   */
   Object.freeze({
-    key: "property_obligations",
-    label: "Property Obligations",
-    covers: ["Taxes", "Insurance", "Licenses & Registrations", "Compliance", "Other fixed / recurring"],
-    eyebrow: ["Taxes", "Insurance", "Licenses & Registrations", "Compliance"],
-    belongs: "The recurring obligations required to own and operate this property.",
-    //  ONE ordering of this list, everywhere. covers, eyebrow and
-    //  compartments agree, so nobody has to wonder which is canonical.
+    key: "projects_capex",
+    label: "Projects & CapEx",
+    covers: ["Projects", "Unit Improvements", "Building Systems",
+             "Equipment & FF&E", "Capital Reserves & Draws"],
+    eyebrow: ["Projects", "Unit Improvements", "Building Systems"],
+    belongs: "Where capital is being invested in the physical property, and what that work costs.",
     compartments: [
-      { key: "taxes", label: "Taxes", note: "No governed tax obligations yet" },
-      { key: "insurance", label: "Insurance", note: "No governed policies yet" },
-      { key: "licenses", label: "Licenses & Registrations", note: "No governed licenses yet" },
-      { key: "compliance", label: "Compliance", note: "No governed compliance obligations yet" },
+      { key: "projects", label: "Projects",
+        note: "No governed capital projects yet" },
+      { key: "unit_improvements", label: "Unit Improvements",
+        note: "No governed unit improvement work yet" },
+      { key: "building_systems", label: "Building Systems",
+        note: "No governed building system work yet" },
+      { key: "equipment_ff_e", label: "Equipment & FF&E",
+        note: "No governed equipment or FF&E yet" },
+      { key: "capital_reserves_draws", label: "Capital Reserves & Draws",
+        note: "No governed reserve draws yet" },
     ],
   }),
+
+  /*  COMPLIANCE is its own door rather than a compartment of an
+   *  obligations room, because "is the property in good standing" is a
+   *  different question from "what does it cost", and it is answered by
+   *  different evidence with different consequences. A lapsed rental
+   *  licence stops you letting a unit; an unpaid bill does not.
+   */
   Object.freeze({
-    key: "operating_costs",
-    label: "Operating Costs",
-    covers: ["Payroll", "Management Fees", "Utilities", "Contracts", "Repairs / other"],
-    eyebrow: ["Payroll", "Management Fees", "Utilities", "Contracts", "Repairs"],
-    belongs: "What it costs to run the property day to day.",
+    key: "compliance",
+    label: "Compliance",
+    covers: ["Licenses & Registrations", "Inspections", "Certificates",
+             "Violations & Cure", "Recurring Requirements"],
+    eyebrow: ["Licenses", "Inspections", "Certificates"],
+    belongs: "Whether this property is legally and regulatorily in good standing.",
     compartments: [
-      { key: "payroll", label: "Payroll", note: "No governed payroll allocation yet" },
-      { key: "management_fees", label: "Management Fees", note: "No governed fee terms yet" },
-      { key: "utilities", label: "Utilities", note: "No governed utility accounts yet" },
-      { key: "contracts", label: "Contracts", note: "No governed service contracts yet" },
-      { key: "repairs", label: "Repairs / other", note: "No governed operating expense terms yet" },
+      { key: "licenses_registrations", label: "Licenses & Registrations",
+        note: "No governed licences or registrations yet" },
+      { key: "inspections", label: "Inspections",
+        note: "No governed inspection schedule yet" },
+      { key: "certificates", label: "Certificates",
+        note: "No governed certificates yet" },
+      { key: "violations_cure", label: "Violations & Cure",
+        note: "No governed violations or cure deadlines yet" },
+      { key: "recurring_requirements", label: "Recurring Requirements",
+        note: "No governed recurring requirements yet" },
     ],
   }),
 ]);
@@ -252,67 +354,97 @@ module.exports = function assetManagement(deps) {
   const gate = [requireOperator, refuseClientAuthority, requireAssetManagementModule];
 
 
-  /*  Is there a real, dated rent position at this property?
+  /*  ── WHAT IS ACTUALLY ESTABLISHED IN PROPERTY EXPENSES ─────────────
+   *  The only room with anything live in it, so the only one whose state
+   *  is resolved against data rather than declared.
    *
-   *  A lease counts only when it can actually carry a monthly position:
-   *  a rent amount AND a start date. A row with neither is a tenancy
-   *  record, not an economic one, and counting it would make the room
-   *  look established when nothing could be generated from it.
+   *  ⚠ IT ASKS THE DOMAINS. IT DOES NOT RE-DERIVE THEM.
+   *  Establishment comes from each module's own canonical read, and
+   *  NOTHING ELSE from those reads is kept — no liability, no accrual, no
+   *  premium, no coverage. The taxonomy is navigation; the modules own
+   *  the truth. A room that started carrying its children's figures would
+   *  be a second place those figures could be wrong, and the first place
+   *  anyone would look.
    *
-   *  This is the ONLY room whose state is read from data, because it is
-   *  the only one whose primitives exist. */
-  async function revenueEstablishment(client, propertyId) {
-    const { rows } = await client.query(
-      `select
-         count(*) filter (where rent is not null and rent > 0 and start_date is not null)::int
-           as positioned,
-         count(*)::int as total
-       from leases
-       where property_id = $1
-         and lease_status = 'active'`,
-      [propertyId]);
+   *  ⚠ AND IT CANNOT REACH `established`.
+   *  Two of nine modules are governed. A room reporting ESTABLISHED
+   *  because Taxes and Insurance are in hand would be telling an operator
+   *  that payroll, utilities, contracted services and four more are
+   *  accounted for. The cap is deliberate and the copy names the gap.
+   */
+  async function propertyExpensesEstablishment(client, propertyId) {
+    const live = [];
 
-    const positioned = (rows[0] && rows[0].positioned) || 0;
-    const total = (rows[0] && rows[0].total) || 0;
+    //  Each probe is defensive on purpose: this is a NAVIGATION read, and
+    //  a domain that cannot answer must not take the whole desk down with
+    //  it. An unavailable module reads as not established here, which is
+    //  the honest answer to "what can Spine stand behind right now".
+    let taxes = null;
+    try {
+      const pos = await taxPosition.readTaxPosition(client,
+        { property_id: propertyId, rules: taxRules });
+      const answered = pos.rows.filter((r) => r.applicability !== "not_established").length;
+      taxes = answered > 0
+        ? { established: true,
+            note: `${answered} of ${pos.rows.length} Philadelphia taxes answered` }
+        : { established: false, note: "No governed tax obligations yet" };
+    } catch (e) {
+      console.error("asset-management overview: tax establishment probe failed", e);
+      taxes = { established: false, note: "No governed tax obligations yet" };
+    }
+    if (taxes.established) live.push("Taxes");
 
-    if (positioned === 0) {
+    let insurance = null;
+    try {
+      const part = await insurancePosition.readParticipation(client,
+        { property_id: propertyId, period: currentPeriod() });
+      insurance = part.participates
+        ? { established: true,
+            note: `${part.coverages.length} active ` +
+                  `coverage${part.coverages.length === 1 ? "" : "s"}` }
+        : { established: false, note: "No governed policies yet" };
+    } catch (e) {
+      console.error("asset-management overview: insurance establishment probe failed", e);
+      insurance = { established: false, note: "No governed policies yet" };
+    }
+    if (insurance.established) live.push("Insurance");
+
+    const byKey = { taxes, insurance };
+
+    if (!live.length) {
       return {
         state: "not_established",
-        //  SHORT — the home card. One line, no machinery. It must stay
-        //  shorter than the room's own explanation below; a card line that
-        //  outgrows the room is the card quietly becoming the room again.
-        summary: "No revenue economics are established yet.",
-        compartment_note: "No governed rent position yet",
-        //  LONG — inside the room, where it becomes setup guidance.
-        //  An honest zero, and it says WHICH zero: no leases at all is a
-        //  different situation from leases that carry no economics.
-        why: total === 0
-          ? "No active leases are established for this property yet."
-          : `${total} active lease${total === 1 ? "" : "s"} exist, but none carries both a rent amount and a start date.`,
-        establishes: "Establish the opening tenancy position from a rent roll (Deal Setup).",
+        byKey,
+        //  SHORT — the home card. One line, no machinery.
+        summary: "No tax, insurance or other operating expense terms are established for this property.",
+        why: "Spine holds no governed expense terms for this property. Bills, policies, " +
+             "contracts and payroll arrangements may have been retained during Deal Setup, " +
+             "but nothing has been read out of them, so Spine cannot say what this property " +
+             "costs to own or operate.",
+        establishes: "Governed expense terms — what is owed, for what period, on what evidence — " +
+                     "starting with the tax and insurance a property carries from day one.",
       };
     }
 
-    //  Deliberately never 'established'. Flat monthly rent is real, but a
-    //  revenue position is not complete without escalations and recurring
-    //  charges, and neither exists. Saying 'established' here would be the
-    //  confident-wrong this door is built to avoid.
-    //  Product copy, so it is written as a person would say it. The verb
-    //  agrees with the count as well as the noun — "1 active lease carry"
-    //  is the kind of seam that makes a careful surface read as generated.
-    const subject = positioned === 1 ? "1 active lease carries" : `${positioned} active leases carry`;
+    //  PARTIAL, ALWAYS, AND IT SAYS WHICH PART. Naming the two that are
+    //  governed is what stops the sentence reading as a claim about the
+    //  other seven.
+    const named = live.join(" and ");
     return {
       state: "partially_established",
-      //  SHORT — the home card. Says what IS available and what is not, in
-      //  one breath, with no counts and no machinery.
-      summary: "Base rent is available from current leases. Additional revenue economics are not yet established.",
-      compartment_note: "Base rent from current leases",
-      why: `${subject} a rent amount and a term, so a flat monthly rent position is real. Rent escalations and recurring charges (parking, pet, utilities billed to residents) are not represented anywhere yet, so this room cannot yet state a complete revenue position.`,
-      establishes: "Rent escalation schedules and a recurring-charge model.",
+      byKey,
+      summary: `${named} ${live.length === 1 ? "is" : "are"} established. ` +
+               `The other operating expenses are not.`,
+      why: `${named} ${live.length === 1 ? "carries" : "carry"} governed terms Spine can ` +
+           `stand behind. Payroll, utilities, contracted services, repairs, management and ` +
+           `administration, marketing and other operating expenses have no governed terms ` +
+           `anywhere, so this room cannot yet state what the property costs in total.`,
+      establishes: "Governed terms for the remaining operating expenses, each with its own " +
+                   "evidence and period.",
     };
   }
 
-  //  The three rooms with no primitives at all. Their text is the Exposure
+  //  The three rooms with no primitives at all.  //  The three rooms with no primitives at all. Their text is the Exposure
   //  contract, not an apology: what this is about, why Spine cannot stand
   //  behind it, what would establish it.
   //  Each carries BOTH a one-line `summary` for the home card and the long
@@ -324,27 +456,26 @@ module.exports = function assetManagement(deps) {
   //  read four room names in three seconds; the setup guidance is useful
   //  only once they have chosen a room, and that is where it now lives.
   const UNBUILT = Object.freeze({
-    capital: {
+    capital_stack: {
       state: "not_established",
       summary: "No debt, equity or reserve terms are established for this property.",
       why: "Spine holds no debt, equity or reserve instruments for this property. Loan documents may have been retained during Deal Setup, but no economic terms have been read out of them, so there is nothing to stand behind.",
-      establishes: "Governed debt and equity terms — principal, rate, accrual basis, payment schedule — read from the loan documents.",
+      establishes: "Governed debt and equity terms — principal, rate, accrual basis, payment schedule, covenant position — read from the loan documents.",
     },
-    property_obligations: {
+    projects_capex: {
       state: "not_established",
-      summary: "No tax, insurance, licence or compliance obligations are established for this property.",
-      //  The sentence has to cover the whole room, not the two examples
-      //  that are easiest to name. A room whose sub-labels promise
-      //  licences and compliance while its copy only mentions tax and
-      //  insurance is quietly telling the operator the rest is handled.
-      why: "Spine holds no tax obligations, insurance policies, licences or registrations for this property, and tracks no filing or renewal dates. Bills, policies and certificates may have been retained during Deal Setup, but nothing has been read out of them, so Spine cannot say what this property owes or when anything is due.",
-      establishes: "Governed obligation terms — amount and period covered for tax and insurance, and the issuing body, expiry and renewal date for each licence, registration and recurring filing.",
+      summary: "No capital projects or improvement work are established for this property.",
+      //  Says what this room is FOR, in a way that does not read as a
+      //  promise about maintenance. Maintenance owns the work event; this
+      //  room will own the economic position of capital work.
+      why: "Spine holds no capital projects, budgets or draw positions for this property. Maintenance may hold operating work orders against it, and those are a different fact — this room is about what capital work costs and where the capital comes from, not about who was dispatched.",
+      establishes: "Governed project terms — budget, approved amount, committed and spent, the source of capital, and the evidence behind each draw.",
     },
-    operating_costs: {
+    compliance: {
       state: "not_established",
-      summary: "No payroll, fee, utility or contract terms are established for this property.",
-      why: "Spine holds no payroll allocations, management-fee terms, utility accounts or service contracts for this property.",
-      establishes: "Governed recurring operating terms read from the management agreement, contracts and operating setup.",
+      summary: "No licences, inspections or certificates are established for this property.",
+      why: "Spine holds no licences, registrations, inspection schedules or certificates for this property, and tracks no expiry or cure deadlines. Certificates may have been retained during Deal Setup, but nothing has been read out of them, so Spine cannot say whether this property is in good standing.",
+      establishes: "Governed compliance records — the issuing body, expiry and renewal date for each licence and registration, and the schedule for each recurring inspection or filing.",
     },
   });
 
@@ -357,23 +488,29 @@ module.exports = function assetManagement(deps) {
     try {
       client = await pool.connect();
 
-      const revenue = await revenueEstablishment(client, propertyId);
+      //  ONE room resolves against data. The other three declare, because
+      //  a repo-wide search finds no table for any of them — "not
+      //  established" there is a statement the server can defend rather
+      //  than a placeholder.
+      const expenses = await propertyExpensesEstablishment(client, propertyId);
 
       const rooms = ROOMS.map((room) => {
-        const found = room.key === "revenue" ? revenue : UNBUILT[room.key];
+        const found = room.key === "property_expenses" ? expenses : UNBUILT[room.key];
 
-        //  A compartment marked `derived` resolves against real data; every
-        //  other compartment is honestly not established, and says which
-        //  KIND of thing is missing rather than repeating one generic line.
-        const compartments = (room.compartments || []).map((c) => (
-          c.derived
+        //  A compartment marked `derived` names the module that answers
+        //  for it; every other compartment is honestly not established and
+        //  says which KIND of thing is missing rather than repeating one
+        //  generic line.
+        const compartments = (room.compartments || []).map((c) => {
+          const answer = c.derived ? expenses.byKey[c.derived] : null;
+          return answer
             ? { key: c.key, label: c.label,
-                establishment: revenue.state,
-                note: revenue.compartment_note }
+                establishment: answer.established ? "established" : "not_established",
+                note: answer.note }
             : { key: c.key, label: c.label,
                 establishment: "not_established",
-                note: c.note }
-        ));
+                note: c.note };
+        });
 
         return {
           compartments,
@@ -782,7 +919,7 @@ module.exports = function assetManagement(deps) {
 
       return res.json({
         property_id: propertyId,
-        room: "property_obligations",
+        room: "property_expenses",
         compartment: "insurance",
         label: "Insurance",
         period,
@@ -1050,7 +1187,7 @@ module.exports = function assetManagement(deps) {
 
       return res.json({
         compartment: "taxes",
-        room: "property_obligations",
+        room: "property_expenses",
         acting_on: propertyId,
         jurisdiction: position.jurisdiction,
         as_of: position.as_of,
