@@ -40,10 +40,17 @@ const stubDb = (over) => ({
 
 /*  A model that records what it was asked and returns what we tell it to.
  *
- *  The service PREFILLS an opening brace and prepends it to whatever comes
- *  back, so a stub returns the remainder of the object — exactly the shape
- *  the real model is being asked for. `raw` bypasses that to simulate a
- *  model that ignored the contract and started talking.  */
+ *  It returns a WHOLE object, because that is what a schema-constrained
+ *  reply is. This stub used to return the remainder of one — `.slice(1)`,
+ *  dropping a brace the service prepended — which was faithful to the
+ *  prefill contract while that contract existed. It no longer does: every
+ *  current model rejects an assistant prefill with a 400, and the shape is
+ *  enforced by the response schema instead.
+ *
+ *  `raw` still bypasses the shape, because the service must keep refusing a
+ *  reply it cannot parse. The schema makes that unreachable through the
+ *  real API; it does not make the branch unnecessary, and a stub is the
+ *  only way left to reach it.  */
 const stubAI = (behaviour) => ({
   messages: {
     create: async (req) => {
@@ -54,8 +61,7 @@ const stubAI = (behaviour) => ({
       }
       const outcome = (behaviour && behaviour.outcome) || "answered";
       const answer = behaviour && "text" in behaviour ? behaviour.text : "Nothing is open right now.";
-      return { content: [{ type: "text",
-        text: JSON.stringify({ outcome, answer }).slice(1) }] };   // drop the prefilled "{"
+      return { content: [{ type: "text", text: JSON.stringify({ outcome, answer }) }] };
     },
   },
 });
@@ -204,11 +210,41 @@ const base = { property_id: PROP, allowed_modules: ["maintenance"] };
      "the model is left to infer what is off-subject");
   ok("B10 …and it is told to decline on-subject questions the facts cannot support",
      /facts do not contain what is needed/.test(sys) && /Do not stretch/.test(sys));
-  ok("B11 the reply is prefilled so the model cannot open with a sentence",
-     spy.lastRequest.messages.length === 2 &&
-     spy.lastRequest.messages[1].role === "assistant" &&
-     spy.lastRequest.messages[1].content === "{",
-     "no prefill — salvaging JSON out of prose is how a decline gets parsed as an answer");
+  /*  B11 USED TO ASSERT THE OPPOSITE OF THIS.
+   *
+   *  It required an assistant turn containing "{" — a prefill, so the reply
+   *  could not open with a sentence. The reasoning was sound and the
+   *  mechanism was not: every current model refuses a prefill outright with
+   *  `400 invalid_request_error — "This model does not support assistant
+   *  message prefill. The conversation must end with a user message."` The
+   *  service caught that 400 and returned `unavailable`, so the surface
+   *  reported an outage on every question ever asked.
+   *
+   *  This test passed throughout, because a stub cannot 400. That is the
+   *  whole lesson: it pinned the MECHANISM rather than the GUARANTEE, and a
+   *  mechanism the real API rejects is not a guarantee at all.
+   *
+   *  So these assert the guarantee — the reply's shape is constrained by
+   *  the API — and name the fields, because an unnamed contract is the one
+   *  the next sweep breaks silently.  */
+  ok("B11 the conversation ENDS on the user turn — a prefill is a 400",
+     spy.lastRequest.messages.length === 1 &&
+     spy.lastRequest.messages[0].role === "user" &&
+     !spy.lastRequest.messages.some((m) => m.role === "assistant"),
+     "an assistant turn is back; the real API refuses this and the failure " +
+     "renders as an outage, which is indistinguishable from a real one");
+  const fmt = spy.lastRequest.output_config && spy.lastRequest.output_config.format;
+  ok("B11b …and the shape is enforced by a json_schema, not coaxed by prose",
+     !!fmt && fmt.type === "json_schema" && !!fmt.schema,
+     "no output_config.format — the two-outcome contract is back to being hoped for");
+  ok("B11c …and the schema pins BOTH outcomes by name, and admits no others",
+     fmt.schema.additionalProperties === false &&
+     Array.isArray(fmt.schema.properties.outcome.enum) &&
+     fmt.schema.properties.outcome.enum.slice().sort().join(",") === "answered,out_of_scope",
+     JSON.stringify(fmt.schema.properties.outcome));
+  ok("B11d …and `grounded_on` is NOT the model's to supply",
+     !("grounded_on" in fmt.schema.properties),
+     "grounding must stay a thing the server measured, never a thing the model claimed");
 
   // ── F · A FAILED READ IS CARRIED, NOT SWALLOWED ───────────────────
   const spy2 = {};

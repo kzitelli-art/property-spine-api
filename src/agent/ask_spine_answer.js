@@ -44,9 +44,53 @@
 const askSpineService = require("./ask_spine_service");
 const workOrderRead = require("../surfaces/work_order_status_read");
 
-const MODEL = process.env.ASK_SPINE_MODEL || "claude-sonnet-4-6";
-const MAX_TOKENS = 700;
+const MODEL = process.env.ASK_SPINE_MODEL || "claude-opus-5";
+/*  THINKING AND THE ANSWER SHARE THIS CEILING. On this model family
+ *  thinking is on by default and `max_tokens` caps reasoning PLUS reply,
+ *  not the reply alone. The old value here was 700 — sized for a two-line
+ *  answer on a model that did not think — and it truncates mid-reasoning
+ *  before a word is written. The reply itself is still short; the room is
+ *  for the thinking in front of it.  */
+const MAX_TOKENS = 4000;
+/*  A bounded read-and-narrate task over facts that are already gathered:
+ *  decide in-scope or not, then say one honest paragraph. That is not deep
+ *  reasoning, and this is a dashboard where latency is felt. Tune by
+ *  sweeping against the browser gate rather than by argument.  */
+const EFFORT = process.env.ASK_SPINE_EFFORT || "medium";
 const MAX_QUESTION = 500;
+
+/*  ══ THE DECISION SHAPE, ENFORCED BY THE API ═══════════════════════
+ *
+ *  This replaces an assistant-turn prefill of `{`. That trick existed for
+ *  a good reason — "a model that starts talking has already escaped the
+ *  contract, and salvaging JSON out of prose is how a decline gets parsed
+ *  as an answer" — but it was an approximation of a guarantee, and every
+ *  current model REFUSES it outright:
+ *
+ *      400 invalid_request_error — "This model does not support assistant
+ *      message prefill. The conversation must end with a user message."
+ *
+ *  The catch below turned that 400 into `unavailable`, so the surface said
+ *  "I couldn't reach the assistant just then" forever. Honest, and
+ *  indistinguishable from a real outage — which is exactly why it survived.
+ *
+ *  Structured outputs are the real mechanism the prefill was imitating: the
+ *  API constrains the reply to this schema, so a reply that parses is not
+ *  luck. `additionalProperties:false` and the `outcome` enum mean the
+ *  two-outcome contract is refused at the wire rather than downstream.
+ *
+ *  ONLY WHAT THE MODEL DECIDES LIVES HERE. `grounded_on` is absent on
+ *  purpose: the server builds it from the facts it gathered, so grounding
+ *  is a thing Spine measured, never a thing the model claimed.  */
+const DECISION_SCHEMA = {
+  type: "object",
+  properties: {
+    outcome: { type: "string", enum: ["answered", "out_of_scope"] },
+    answer: { type: "string" },
+  },
+  required: ["outcome", "answer"],
+  additionalProperties: false,
+};
 
 /*  ══ THE SCOPE, DECLARED ONCE ══════════════════════════════════════
  *
@@ -148,12 +192,15 @@ function systemPrompt() {
     "to answer well is NOT a reason to answer. If it is not the subject above,",
     "it is out of scope even when you know the answer.",
     "",
-    "YOU MUST REPLY WITH JSON AND NOTHING ELSE:",
-    '  {"outcome":"answered","answer":"..."}      the question is in scope and',
-    "                                              the facts support an answer",
-    '  {"outcome":"out_of_scope","answer":""}     anything else. Leave the answer',
-    "                                              empty — the system writes the",
-    "                                              refusal, not you.",
+    //  The SHAPE is enforced by the response schema, so this says which
+    //  outcome to choose rather than how to format one. Instructing a
+    //  format the API already guarantees only invites the model to spend
+    //  attention on syntax it cannot get wrong.
+    "YOUR REPLY CARRIES ONE OF TWO OUTCOMES:",
+    '  "answered"       the question is in scope and the facts support an',
+    "                   answer. Put it in `answer`.",
+    '  "out_of_scope"   anything else. Leave `answer` empty — the system',
+    "                   writes the refusal, not you.",
     "",
     "Choose out_of_scope when the question is off-subject, AND when it is",
     "on-subject but the facts do not contain what is needed. Do not stretch.",
@@ -225,17 +272,16 @@ async function answer(db, anthropic, { property_id, allowed_modules, question })
       model: MODEL,
       max_tokens: MAX_TOKENS,
       system: systemPrompt(),
+      //  The shape is enforced here, not coaxed. See DECISION_SCHEMA.
+      output_config: { format: { type: "json_schema", schema: DECISION_SCHEMA }, effort: EFFORT },
+      //  ENDS ON THE USER TURN. Nothing may follow it — see DECISION_SCHEMA
+      //  for what the assistant prefill that used to sit here cost.
       messages: [
         { role: "user",
           content: `FACTS:\n${JSON.stringify(facts, null, 2)}\n\nOPERATOR ASKED: ${q}` },
-        //  Prefilled so the reply IS the object and cannot open with a
-        //  sentence. A model that starts talking has already escaped the
-        //  contract, and salvaging JSON out of prose is how a decline gets
-        //  parsed as an answer.
-        { role: "assistant", content: "{" },
       ],
     });
-    text = "{" + (ai.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+    text = (ai.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
   } catch (e) {
     //  The model failed. Say that. An operator who is told "nothing needs
     //  attention" when the assistant actually fell over has been lied to.
