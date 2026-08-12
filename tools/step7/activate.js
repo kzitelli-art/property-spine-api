@@ -308,7 +308,13 @@ const digestOf = (rows) => crypto.createHash("sha256").update(JSON.stringify(
   console.log(bar);
   console.log("  ✓ CUTOVER RECORDED");
   console.log(bar);
-  say("activation id", receipt && receipt.activation_id ? receipt.activation_id : "(see receipt)");
+  //  The service returns the row under `activation`, not a flat
+  //  activation_id. The first version guessed the shape and printed
+  //  "(see receipt)" on a successful cutover — harmless, but a receipt
+  //  that cannot name what it just did is a poor receipt.
+  const act = (receipt && receipt.activation) || {};
+  say("activation id", act.id || "(not returned)");
+  say("outcome", (receipt && receipt.outcome) || "(not returned)");
   say("epoch activation_id", after ? after.activation_id : "(absent)");
   say("epoch activated_at", after ? String(after.activated_at) : "(absent)");
   say("legacy inventoried", JSON.stringify(receipt && receipt.inventory));
