@@ -180,11 +180,24 @@ module.exports = function assetManagement(deps) {
   //  participates in. No table, no stored state, nothing to go stale.
   const insuranceStanding = require("../asset/insurance_standing.js");
   //  HOW insurance is paid for. A SEPARATE chain from what it costs, and
-  //  the separation is enforced by gate_insurance_funding_boundary.js.
+  //  the separation is enforced by gate_funding_boundary.js.
   //  This surface may hold both because a surface is the composition
   //  point; the economic chain itself may never reach funding.
   const insuranceFunding = require("../asset/insurance_funding.js");
   const insuranceFundingRead = require("../asset/insurance_funding_read.js");
+
+  //  ── TAXES ─────────────────────────────────────────────────────────
+  //  The same two-chain shape, one domain over. The economic read is
+  //  given its jurisdiction rules rather than importing them, so a second
+  //  jurisdiction is a new rules module and not a new read.
+  const taxPosition = require("../asset/tax_position_read.js");
+  const taxRules = require("../asset/philadelphia_tax_rules.js");
+  const taxEstablishment = require("../asset/tax_establishment.js");
+  //  HOW tax is paid for. A SEPARATE chain, enforced by
+  //  gate_funding_boundary.js — including that nothing on this side can
+  //  write `tax_payments`, so no escrow can make a bill read as paid.
+  const taxFunding = require("../asset/tax_funding.js");
+  const taxFundingRead = require("../asset/tax_funding_read.js");
 
   const { pool, fileToText } = deps || {};
   if (!pool) throw new Error("asset_management requires a pool");
@@ -909,6 +922,195 @@ module.exports = function assetManagement(deps) {
     }
   });
 
+  /* ════════════════════════════════════════════════════════════════════
+   *  GET /operator/asset-management/taxes
+   *
+   *  The Taxes compartment of Property Obligations. FOUR ROWS, because
+   *  Philadelphia has four governed taxes and an operator should be able
+   *  to answer "are our taxes current" in one look.
+   *
+   *      Real Estate Tax   the PROPERTY owes it, annual, due Mar 31
+   *      BIRT              the TAXPAYER owes it, annual return Apr 15
+   *      NPT               the TAXPAYER owes it, return + two estimates
+   *      U&O               tied to business USE, monthly, due the 25th
+   *
+   *  Commercial Trash is deliberately absent. It is a municipal fee with
+   *  its own exemption machinery, not one of these four.
+   *
+   *  ── THE COMPOSITION IS THE POINT, AND SO IS THE SEAM ────────────
+   *  Two reads, held apart:
+   *
+   *      tax_position_read   what is owed, filed, paid — the economics
+   *      tax_funding_read    how it is paid for — escrow, contribution,
+   *                          balance, the servicer's disbursements
+   *
+   *  This surface is the only place they meet, and they meet by
+   *  ADJACENCY, never by merge. Funding is attached under each row's
+   *  `funding` key and contributes NOTHING to that row's `state`,
+   *  `annual_liability_cents` or `monthly_accrual_cents`. A surface is
+   *  allowed to compose what the economic chain may not import.
+   *
+   *  ── WHAT THE SCREEN MUST NEVER SAY ──────────────────────────────
+   *  That a bill is paid because an escrow is funded. `state` comes from
+   *  the position read, which cannot see an escrow by any path, and the
+   *  boundary gate fails the build if that ever stops being true.
+   *
+   *  CLASS 1 (permanent).
+   * ════════════════════════════════════════════════════════════════════ */
+
+  //  The headline strip. Honest blanks until governed truth exists —
+  //  never zero, never a dash pretending to be a number (§5).
+  const TAX_POSITION = Object.freeze([
+    { key: "standing", label: "Standing",
+      awaiting: "No tax applicability has been confirmed." },
+    { key: "annual_liability", label: "Annual Liability",
+      awaiting: "No governed liability is established." },
+    { key: "monthly_accrual", label: "Monthly Accrual",
+      awaiting: "No expense has been recognised for this period." },
+    { key: "next_due", label: "Next Due",
+      awaiting: "No due date is established." },
+    { key: "funding", label: "Funding",
+      awaiting: "Escrowed or paid directly is not established." },
+  ]);
+
+  const TAX_STANDING_LABEL = Object.freeze({
+    not_established: "Not established",
+    overdue: "Overdue",
+    action_required: "Action required",
+    current: "Current",
+  });
+
+  router.get("/operator/asset-management/taxes", ...gate, async (req, res) => {
+    const propertyId = req.operator.property_id;
+    //  A PREFERENCE, not authority. The browser may ask about a date; it
+    //  may not ask about a property.
+    const asOf = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query && req.query.as_of || ""))
+      ? String(req.query.as_of) : null;
+
+    let client;
+    try {
+      client = await pool.connect();
+
+      const position = await taxPosition.readTaxPosition(client,
+        { property_id: propertyId, as_of: asOf, rules: taxRules });
+      //  Read alongside, never mixed in. Nothing from this read reaches
+      //  any row's state, liability or accrual.
+      const funding = await taxFundingRead.readTaxFunding(client,
+        { property_id: propertyId, as_of: asOf });
+
+      //  ── TOTALS ────────────────────────────────────────────────────
+      //  Only what is KNOWN is summed, and the count of unknowns travels
+      //  with the total. A sum of three of four liabilities presented as
+      //  "the annual tax" is a confident wrong number at exactly the
+      //  altitude where it reaches a lender.
+      const applicable = position.rows.filter((r) => r.applicability === "applies");
+      const known = applicable.filter((r) => r.annual_liability_cents !== null);
+      const unknownCount = applicable.length - known.length;
+      const currencies = Array.from(new Set(known.map((r) => r.currency_code).filter(Boolean)));
+      const cur = currencies.length === 1 ? currencies[0] : null;
+      const totalAnnual = known.length
+        ? known.reduce((a, r) => a + r.annual_liability_cents, 0) : null;
+      const totalAccrual = known.length
+        ? known.reduce((a, r) => a + (r.monthly_accrual_cents || 0), 0) : null;
+
+      const VALUES = {
+        standing: TAX_STANDING_LABEL[position.overall] || null,
+        //  Blank while nothing is known. Partial while some is — and it
+        //  says so beside the number rather than presenting a subtotal as
+        //  a total.
+        annual_liability: money(totalAnnual, cur),
+        monthly_accrual: money(totalAccrual, cur),
+        next_due: position.next_due,
+        //  A LABEL, NEVER AN AMOUNT. The monthly escrow contribution is
+        //  cash to a servicer; putting it in a strip of tax figures is how
+        //  it starts reading as the tax.
+        funding: funding.established
+          ? Array.from(new Set(funding.arrangements.map((a) => a.method_label))).join(" · ")
+          : null,
+      };
+
+      const positionCells = TAX_POSITION.map((p) => ({
+        key: p.key, label: p.label,
+        value: VALUES[p.key] === undefined ? null : VALUES[p.key],
+        awaiting: (VALUES[p.key] === undefined || VALUES[p.key] === null) ? p.awaiting : null,
+      }));
+
+      return res.json({
+        compartment: "taxes",
+        room: "property_obligations",
+        acting_on: propertyId,
+        jurisdiction: position.jurisdiction,
+        as_of: position.as_of,
+        overall: position.overall,
+        overall_why: position.overall_why,
+        position: positionCells,
+        totals: {
+          annual_liability_cents: totalAnnual,
+          monthly_accrual_cents: totalAccrual,
+          currency_code: cur,
+          //  Stated, not hidden. This is the difference between "the
+          //  annual tax is $48,000" and "the annual tax is at least
+          //  $48,000, and one obligation has no bill yet".
+          obligations_with_unknown_amount: unknownCount,
+          is_partial: unknownCount > 0,
+        },
+
+        //  ── THE FOUR ROWS ─────────────────────────────────────────
+        //  Position first, funding attached beside it. The spread order
+        //  is deliberate: funding is added UNDER its own key and can
+        //  never overwrite a state, a liability or an accrual.
+        rows: position.rows.map((r) => {
+          const arr = funding.arrangements.find((a) => a.tax_type === r.tax_type) || null;
+          const gaps = funding.unevidenced_disbursements
+            .filter((d) => d.tax_type === r.tax_type);
+          return {
+            ...r,
+            annual_liability: money(r.annual_liability_cents, r.currency_code),
+            monthly_accrual: money(r.monthly_accrual_cents, r.currency_code),
+            city_balance: money(r.city_balance_cents, r.currency_code),
+            funding: arr ? {
+              arrangement_id: arr.arrangement_id,
+              funding_method: arr.funding_method,
+              method_label: arr.method_label,
+              escrow: arr.escrow ? {
+                ...arr.escrow,
+                monthly_contribution: money(arr.escrow.monthly_contribution_cents, cur || "USD"),
+                balance_amount: arr.escrow.balance
+                  ? money(arr.escrow.balance.balance_cents, arr.escrow.balance.currency_code)
+                  : null,
+              } : null,
+            } : null,
+            //  UNKNOWN, SAID AS UNKNOWN. An absent arrangement is never
+            //  rendered as "paid directly".
+            funding_awaiting: arr ? null
+              : "How this is paid has not been established.",
+            //  ⚠ THE DISAGREEMENT, CARRIED ONTO THE ROW.
+            //  The servicer says they paid it; Spine has no City evidence.
+            //  It sits beside the row's state, which stays unpaid.
+            unevidenced_disbursements: gaps,
+          };
+        }),
+
+        //  BIRT and NPT belong to these, not to the property.
+        entities: position.entities,
+        clearance: position.clearance,
+        //  The correction that matters this year: the exemption ended,
+        //  the tax did not.
+        uo_exemption: position.uo_exemption,
+        funding_summary: {
+          established: funding.established,
+          unknown_for: funding.unknown_for,
+          unevidenced_disbursements: funding.unevidenced_disbursements,
+        },
+      });
+    } catch (e) {
+      console.error("operator/asset-management/taxes error", e);
+      return res.status(503).json({ error: "taxes compartment unavailable" });
+    } finally {
+      if (client) client.release();
+    }
+  });
+
   /*  ── THE INSURANCE WRITE PATH ──────────────────────────────────────
    *  Mounted behind THIS door's authority, injected rather than
    *  re-implemented. The establishment module owns what the routes do;
@@ -930,6 +1132,20 @@ module.exports = function assetManagement(deps) {
     //  existed. A missing reader degrades to a blank form, never to a
     //  broken upload.
     fileToText,
+  }));
+
+  /*  ── THE TAX WRITE PATHS ───────────────────────────────────────────
+   *  Two routers, mounted side by side, that may not import each other.
+   *  Funding first, matching Insurance: neither order matters to Express,
+   *  and keeping the two surfaces identical means a reader who has
+   *  understood one has understood both.
+   */
+  router.use(taxFunding({
+    pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
+  }));
+
+  router.use(taxEstablishment({
+    pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
   }));
 
   return router;

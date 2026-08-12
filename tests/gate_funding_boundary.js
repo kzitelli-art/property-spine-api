@@ -1,7 +1,7 @@
 /* ════════════════════════════════════════════════════════════════════
-   gate_insurance_funding_boundary.js — THE WALL BETWEEN WHAT INSURANCE
-   COSTS AND HOW IT IS PAID FOR, ASSERTED STRUCTURALLY AND IN BOTH
-   DIRECTIONS.
+   gate_funding_boundary.js — THE WALL BETWEEN WHAT AN OBLIGATION COSTS
+   AND HOW IT IS PAID FOR, ASSERTED STRUCTURALLY AND IN BOTH DIRECTIONS,
+   FOR EVERY DOMAIN THAT HAS ONE.
 
    Migration 161 exists because the June 2026 Skyline workpaper computed
    a property's annual insurance cost FROM THE FINANCING STREAM —
@@ -24,11 +24,14 @@
    ── THE BOUNDARY, AS RULED ──────────────────────────────────────────
    1  The economic chain may NEVER import funding. Not directly, not
       transitively, not through an innocent-looking intermediary.
-   2  Funding MAY reference the insurance obligation or coverage it
-      funds. That is the whole point of a funding record.
-   3  Funding may NOT determine insurance cost or accrual. Structurally
-      that means: funding may not WRITE economic tables and may not
-      ALTER economic schema. It reads and references; it never authors.
+   2  Funding MAY reference the obligation, coverage or bill it funds.
+      That is the whole point of a funding record.
+   3  Funding may NOT determine what an obligation costs or accrues.
+      Structurally that means: funding may not WRITE economic tables and
+      may not ALTER economic schema. It reads and references; it never
+      authors. In Taxes that clause carries a second load — `tax_payments`
+      is an economic table, so no escrow record can ever make a bill read
+      as paid.
 
    Direction is the asymmetry. Funding → economics is a legitimate
    reference. Economics → funding is the defect, always.
@@ -41,13 +44,15 @@
    long after everyone has forgotten it exists.
 
    ── IT REPORTS ITS OWN COVERAGE ─────────────────────────────────────
-   The funding set is EMPTY until Slice B lands. An empty set makes
-   assertions 1 and 3 pass trivially, so the gate says out loud how many
-   funding files it actually found. "0 declared, 0 present" is a
-   statement about scope, not a clean bill of health, and it must not
-   read as one.
+   A domain's file set may be declared before it is written. An empty set
+   makes assertions 1 and 3 pass trivially, so the gate says out loud how
+   many files it actually found on each side. "0 declared, 0 present" is
+   a statement about scope, not a clean bill of health, and it must not
+   read as one. Both domains are now fully present; when a third is
+   declared ahead of its schema, it will announce itself as vacuous until
+   the first file lands.
 
-   Run:  node tests/gate_insurance_funding_boundary.js
+   Run:  node tests/gate_funding_boundary.js
    ════════════════════════════════════════════════════════════════════ */
 "use strict";
 
@@ -133,15 +138,29 @@ const INSURANCE_FUNDING_TABLES = [
   "premium_finance_agreements",
   "insurance_escrow_arrangements",
 ];
+/*  ⚠ `tax_payments` IS THE MOST IMPORTANT NAME IN THIS LIST.
+ *  It is the table that means PAID. The first version of this gate omitted
+ *  it — every other tax table was guarded while the one an escrow is most
+ *  tempted to write was not, which is precisely the "escrow proves payment"
+ *  defect the wall exists to prevent, left with an open door.
+ *  A servicer's disbursement record belongs to funding. Evidence the City
+ *  was paid is written by `tax_obligation_service.recordPayment` and by
+ *  nothing else. */
 const TAX_ECONOMIC_TABLES = [
   "tax_obligations",
+  "tax_obligation_properties",
   "tax_liabilities",
   "tax_obligation_applicability",
   "tax_filings",
+  "tax_payments",
+  "tax_appeals",
+  "tax_clearances",
 ];
 const TAX_FUNDING_TABLES = [
   "tax_funding_arrangements",
   "tax_escrow_arrangements",
+  "tax_escrow_observations",
+  "tax_escrow_disbursements",
 ];
 
 const DOMAINS = [

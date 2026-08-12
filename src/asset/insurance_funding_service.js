@@ -3,7 +3,7 @@
    is paid for. It never touches WHAT it costs.
 
    ── IT LIVES ON THE FUNDING SIDE OF AN EXECUTABLE WALL ──────────────
-   `tests/gate_insurance_funding_boundary.js` asserts, structurally:
+   `tests/gate_funding_boundary.js` asserts, structurally:
 
        the economic chain may never import this file, transitively
        this file may REFERENCE the coverage it funds — reads, joins, FKs

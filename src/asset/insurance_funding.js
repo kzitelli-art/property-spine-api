@@ -4,7 +4,7 @@
    Its own module, mounted by the Asset Management surface behind that
    door's authority. It is NOT part of insurance_establishment.js, and
    that is structural rather than tidy: establishment is in the economic
-   chain, and `gate_insurance_funding_boundary.js` fails the build if an
+   chain, and `gate_funding_boundary.js` fails the build if an
    economic file imports funding. Putting these two routes beside the
    establish route would break the wall the moment it was written.
 

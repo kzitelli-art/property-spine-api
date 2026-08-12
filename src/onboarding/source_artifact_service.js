@@ -82,6 +82,21 @@ const KIND_SHAPES = Object.freeze({
   //  someone to print an export back into a PDF to satisfy us.
   insurance_finance_agreement:   Object.freeze(["pdf"]),
   insurance_escrow_statement:    Object.freeze(["pdf", "xlsx", "xls", "csv"]),
+  //  ── TAX EVIDENCE ─────────────────────────────────────────────────
+  //  The City issues bills, returns, receipts and certificates as PDFs.
+  //  Its account and balance views EXPORT as spreadsheets, and so do
+  //  servicer escrow statements — refusing those would send someone to
+  //  print a CSV back into a PDF to satisfy our list, which is our
+  //  machinery leaking into their day.
+  tax_bill:                      Object.freeze(["pdf"]),
+  tax_return:                    Object.freeze(["pdf"]),
+  tax_payment_receipt:           Object.freeze(["pdf"]),
+  tax_clearance_certificate:     Object.freeze(["pdf"]),
+  tax_appeal_document:           Object.freeze(["pdf"]),
+  tax_balance_statement:         Object.freeze(["pdf", "xlsx", "xls", "csv"]),
+  tax_account_statement:         Object.freeze(["pdf", "xlsx", "xls", "csv"]),
+  tax_escrow_statement:          Object.freeze(["pdf", "xlsx", "xls", "csv"]),
+  tax_escrow_analysis:           Object.freeze(["pdf", "xlsx", "xls", "csv"]),
 });
 
 //  Per-kind refusal copy. §5 and the repo's rule that a refusal a user
@@ -104,6 +119,33 @@ const KIND_REFUSAL = Object.freeze({
   insurance_escrow_statement: (filename) =>
     `Spine reads an escrow statement as a PDF or a spreadsheet. "${filename}" is neither. ` +
     `Upload the statement from the lender or servicer.`,
+  tax_bill: (filename) =>
+    `Spine reads a tax bill as a PDF. "${filename}" is not one. ` +
+    `Upload the bill or notice the City issued.`,
+  tax_return: (filename) =>
+    `Spine reads a filed return as a PDF. "${filename}" is not one. ` +
+    `Upload the return as filed, or its confirmation.`,
+  tax_payment_receipt: (filename) =>
+    `Spine reads a payment receipt as a PDF. "${filename}" is not one. ` +
+    `Upload the City's receipt or payment confirmation.`,
+  tax_clearance_certificate: (filename) =>
+    `Spine reads a tax clearance certificate as a PDF. "${filename}" is not one. ` +
+    `Upload the certificate the City issued.`,
+  tax_appeal_document: (filename) =>
+    `Spine reads an appeal document as a PDF. "${filename}" is not one. ` +
+    `Upload the filing or the board's decision.`,
+  tax_balance_statement: (filename) =>
+    `Spine reads a balance statement as a PDF or a spreadsheet. "${filename}" is neither. ` +
+    `Upload the statement or the export from the City's account view.`,
+  tax_account_statement: (filename) =>
+    `Spine reads an account statement as a PDF or a spreadsheet. "${filename}" is neither. ` +
+    `Upload the statement or the export from the City's account view.`,
+  tax_escrow_statement: (filename) =>
+    `Spine reads an escrow statement as a PDF or a spreadsheet. "${filename}" is neither. ` +
+    `Upload the statement from the lender or servicer.`,
+  tax_escrow_analysis: (filename) =>
+    `Spine reads an escrow analysis as a PDF or a spreadsheet. "${filename}" is neither. ` +
+    `Upload the analysis the servicer sent.`,
 });
 
 function shapesFor(artifact_kind) {

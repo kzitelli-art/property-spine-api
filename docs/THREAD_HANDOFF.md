@@ -41,7 +41,7 @@ Add Payment / Financing the funding capture sheet
 
 ### ⚠ THE WALL, AND IT IS EXECUTABLE
 
-`tests/gate_insurance_funding_boundary.js` asserts, structurally and in
+`tests/gate_funding_boundary.js` asserts, structurally and in
 both directions:
 
 ```text

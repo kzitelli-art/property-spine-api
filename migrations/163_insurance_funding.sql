@@ -16,7 +16,7 @@
 --  reopening the door 161 closed.
 --
 --  ── THE WALL, AND IT IS EXECUTABLE ──────────────────────────────────
---  `tests/gate_insurance_funding_boundary.js` asserts, structurally and
+--  `tests/gate_funding_boundary.js` asserts, structurally and
 --  in both directions:
 --
 --      the economic chain may never IMPORT funding, transitively
