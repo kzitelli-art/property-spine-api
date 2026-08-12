@@ -133,6 +133,23 @@ const base = { property_id: PROP, allowed_modules: ["maintenance"] };
   ok("G3  the model was given the FACTS bundle and the question, in one message",
      !!spy.lastRequest && /FACTS:/.test(spy.lastRequest.messages[0].content) &&
      /OPERATOR ASKED: what needs attention\?/.test(spy.lastRequest.messages[0].content));
+  /*  ── REFERENCES ARE RESOLVED, NEVER PARSED ──────────────────────────
+   *  The answer carries openable records so the operator can go to the
+   *  thing that was described. They come from the attention service's own
+   *  `navigationFor`, not from matching names in the prose — two residents
+   *  sharing a first name is all it takes for a parsed link to open the
+   *  wrong person's card, and the most clickable thing on the surface
+   *  would be the least trustworthy.
+   *
+   *  The model is therefore never given an id. It cannot put one in a
+   *  sentence it did not get.  */
+  ok("R1  the answer carries a references array",
+     Array.isArray(answered.references), JSON.stringify(answered.references));
+  ok("R2  …and the FACTS given to the model contain NO record ids",
+     !/__refs/.test(spy.lastRequest.messages[0].content) &&
+     !/"open"\s*:/.test(spy.lastRequest.messages[0].content),
+     "the model was handed navigation targets; it can now compose a link " +
+     "Spine never resolved");
   ok("G4  …and the facts it was given name the server-derived property",
      spy.lastRequest.messages[0].content.includes(PROP),
      "the model was not told which property it is talking about");

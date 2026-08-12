@@ -115,6 +115,11 @@ module.exports = function askSpine(deps) {
         outcome: out.outcome,
         answer: out.answer,
         grounded_on: out.grounded_on,
+        //  Openable records the answer is about, resolved by the service
+        //  rather than parsed out of the model's sentence. Absent on any
+        //  outcome that is not `answered`, because there is nothing the
+        //  operator was told about to go and look at.
+        references: out.references || [],
       });
     } catch (e) {
       //  A genuine server failure. Never shaped like an empty answer.
