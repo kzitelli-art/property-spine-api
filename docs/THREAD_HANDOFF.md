@@ -2,8 +2,12 @@
 
 ## ══════════════════════════════════════════════════════════════════
 ##  ASSET MANAGEMENT REORGANISED TO FOUR DOORS. 2026-08-12 (latest).
-##  THIS SECTION WINS.
+##  THIS SECTION WINS ON ASSET MANAGEMENT AND ON RELEASE STATE.
 ## ══════════════════════════════════════════════════════════════════
+
+> The section immediately below — **the completion guard is ON** — is separate,
+> live production truth about Maintenance. It is not superseded by this one.
+> Two different domains, both current. Read both.
 
 Asset Management is now **four durable doors**, replacing the old
 REVENUE / CAPITAL / PROPERTY OBLIGATIONS / OPERATING COSTS set:
@@ -56,6 +60,106 @@ text; the doctrine edit is the owner's call and is deliberately NOT made in
 this build.
 
 ## ══════════════════════════════════════════════════════════════════
+## ══════════════════════════════════════════════════════════════════
+##  ⚠ THE COMPLETION GUARD IS **ON**. IT CUT OVER 2026-08-12 01:49 UTC.
+##  THIS REPLACES "THE GUARD IS OFF" — THAT SENTENCE IS NOW FALSE.
+##  2026-08-12. FOR WHOEVER IS WORKING IN MAINTENANCE.
+## ══════════════════════════════════════════════════════════════════
+
+```text
+boundary 6   operator completion control retired (app)      LIVE
+boundary 7   legacy done-path fails closed (409)            LIVE   e94cf0a
+boundary 7b  migration 140 — the completion guard           APPLIED 22db7f6
+boundary 8a  activation machinery, shipped dormant          LIVE   4aec686
+boundary 8b  the cutover runner                             LIVE   e10133a
+boundary 8   THE ACTIVATION ITSELF                          DONE   ← irreversible
+boundary 8   closeout proof, 16/16 in production            DONE   3e47739 (PR #94)
+```
+
+```text
+activation_id  d93b08dd-c682-46d2-acf9-78ab6b960827
+activated_at   2026-08-12T01:49:57.866Z      the census instant, not a wall clock
+legacy frozen  1 row, inventoried and immutable
+```
+
+**There is no supported way to un-activate.** The epoch is append-only; the
+E1 freeze refuses `update release_0_activation_epoch set activation_id = null`
+by name. Boundary 8 is the line.
+
+### What this means for you, right now
+
+**The database refuses any work order reaching a terminal status without a
+grounded proof evaluation.** Not the app checking — the database, on commit,
+through a deferred constraint trigger. No route, repair script or psql session
+gets around it.
+
+This is no longer a warning about a future day. It is live, and it has been
+measured live — not inferred from the migration being applied:
+
+```text
+node tools/step7/prove_guard_active.js      instance kbtb6 · 16/16 · exit 0
+
+R0001  terminal with no proof evaluation              REFUSED
+R0004  `satisfied` citing non-qualifying evidence     REFUSED
+R0001  a `not_satisfied` evaluation                   REFUSED
+R0003  `closed` — even WITH grounded proof            REFUSED
+       grounded `satisfied`                           PERMITTED
+```
+
+`not_done_service.js` and the work-order surfaces landed while the guard was
+dormant, so **they have never felt it**. Anything that puts a work order into
+`complete` or `closed` must go through the canonical writer or it will fail at
+commit. `closed` in particular is now dead vocabulary: R0003 refuses it even
+when the proof is perfect.
+
+That tool is safe to re-run any time. Every state it builds is judged by
+`SET CONSTRAINTS ALL IMMEDIATE` and rolled back; it leaves nothing behind.
+Do NOT hand-write a probe instead — the proof tables are append-only with
+`ON DELETE RESTRICT`, so a committed test completion is **permanent** and makes
+its work order undeletable. That defect was caught in review, not in production.
+
+Today there are exactly two completion writers and `gate_completion_writers.js`
+proves there is no third:
+
+```text
+CANONICAL  src/technician/lifecycle_service.claimCompletion
+           called only from src/technician/conversation.js (the SMS path)
+LEGACY     src/maintenance/maintenance.js closeout — done=true returns 409
+           done=false is untouched and still works
+```
+
+### What the cutover cost, and why the first attempt was refused
+
+The first live attempt was **refused by one millisecond** and rolled back —
+nothing changed. The runner took `activated_at` from `new Date()` on Render
+while `now()` came from Neon, and the boundary must be strictly earlier than the
+transaction that records it. Fixed in PR #91: the instant is the census's own
+`taken_at`, which is what the service always documented it should be.
+
+Worth keeping, because it is the reason to trust the rest: **the activation
+refused itself over a millisecond of clock skew.** It was not being cautious
+about something conceptual. It was reading its own precondition.
+
+### What is left of Release 0
+
+```text
+ITEM 2  a canonical completion through claimCompletion, with real proof,
+        end to end — needs a real technician SMS completion.        OPEN
+```
+
+The closeout proof establishes that the **database** permits a grounded
+completion (D1). It does not establish that `claimCompletion` produces one.
+Those are different claims and only the second finishes the release.
+
+### If you are about to touch work-order completion
+
+Read `docs/RELEASE_0_ACTIVATION_RUNBOOK.md` and
+`tools/step7/activate.js` first. The activation is the one irreversible act in
+the release: it draws a permanent line, and everything terminal after it must be
+provable.
+
+---
+
 ##  PHILADELPHIA TAXES V1 IS BUILT AND UNRELEASED. 2026-08-12.
 ##  Superseded as "latest" by the reorg above; still current, still unreleased.
 ## ══════════════════════════════════════════════════════════════════

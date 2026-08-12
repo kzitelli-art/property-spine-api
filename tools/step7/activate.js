@@ -246,10 +246,40 @@ const digestOf = (rows) => crypto.createHash("sha256").update(JSON.stringify(
       `epoch activation_id=${epoch && epoch.activation_id} — the cutover already happened.`);
   }
 
-  const activatedAt = new Date();
+  /*  ── THE BOUNDARY INSTANT IS THE CENSUS, NOT THE CLOCK ────────────
+   *
+   *  The first version of this runner used `new Date()` here and was
+   *  REFUSED against production:
+   *
+   *    BAD_INPUT  activated_at (…:49.436Z) is not earlier than this
+   *    transaction's start (…:49.435Z)
+   *
+   *  One millisecond, and the guard was right twice over.
+   *
+   *  Practically: Node runs on Render and now() comes from Neon. Two
+   *  machines, two clocks. A wall-clock instant taken microseconds before
+   *  `begin` can still land after the transaction start, and no amount of
+   *  ordering the statements fixes a skew.
+   *
+   *  Semantically — and this is the real point — the service already says
+   *  what this argument is for: "step 6 happens, then step 7's transaction
+   *  opens. A legitimate captured instant is minutes older." The boundary
+   *  is not "when I ran this command". It is the moment the legacy
+   *  population was measured. Everything after it must be proven;
+   *  everything at or before it is what the census just inventoried.
+   *
+   *  That instant is the census's own `taken_at`. It is already
+   *  authorized, already reviewed, and already the thing the drift check
+   *  guarantees nothing has moved since. Using it makes the boundary a
+   *  recorded decision rather than an artifact of when someone typed.
+   *
+   *  The service's comment calls its own check "a happy accident" — a
+   *  second, independent guard against a derived instant. It caught this
+   *  on the first real run. Nothing about it is accidental now.  */
+  const activatedAt = new Date(census.taken_at);
   console.log("  ── cutting over ──────────────────────────────────────────────────");
   say("authorization", AUTH);
-  say("activated_at", activatedAt.toISOString());
+  say("activated_at", activatedAt.toISOString() + "   (the census instant, not the wall clock)");
 
   let receipt;
   await c.query("begin");
@@ -278,7 +308,13 @@ const digestOf = (rows) => crypto.createHash("sha256").update(JSON.stringify(
   console.log(bar);
   console.log("  ✓ CUTOVER RECORDED");
   console.log(bar);
-  say("activation id", receipt && receipt.activation_id ? receipt.activation_id : "(see receipt)");
+  //  The service returns the row under `activation`, not a flat
+  //  activation_id. The first version guessed the shape and printed
+  //  "(see receipt)" on a successful cutover — harmless, but a receipt
+  //  that cannot name what it just did is a poor receipt.
+  const act = (receipt && receipt.activation) || {};
+  say("activation id", act.id || "(not returned)");
+  say("outcome", (receipt && receipt.outcome) || "(not returned)");
   say("epoch activation_id", after ? after.activation_id : "(absent)");
   say("epoch activated_at", after ? String(after.activated_at) : "(absent)");
   say("legacy inventoried", JSON.stringify(receipt && receipt.inventory));
