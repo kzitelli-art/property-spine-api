@@ -64,6 +64,11 @@ const CHAIN = [
   //  — the description of a deliberately unbuilt section — so it cannot
   //  be scanned whole and the write path would have had no gate at all.
   "src/asset/insurance_establishment.js",
+  //  The proposal adapter. It writes nothing, but it decides what an
+  //  operator is SHOWN off a document — and a reader that started
+  //  proposing installment or down-payment fields would be walking
+  //  financing back into the chain through the confirm screen.
+  "src/asset/insurance_document_read.js",
 ];
 
 //  Financing / cash vocabulary. Word-boundary matched so ordinary English

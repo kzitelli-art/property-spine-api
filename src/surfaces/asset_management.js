@@ -177,7 +177,7 @@ module.exports = function assetManagement(deps) {
   //  Financing section spec).
   const insuranceEstablishment = require("../asset/insurance_establishment.js");
 
-  const { pool } = deps || {};
+  const { pool, fileToText } = deps || {};
   if (!pool) throw new Error("asset_management requires a pool");
 
   async function requireOperator(req, res, next) {
@@ -718,9 +718,12 @@ module.exports = function assetManagement(deps) {
         //  Unknown, and said so rather than shown as a dash or a zero.
         property_share: null,
         why: "This property's share of this policy has not been established.",
+        //  Reads after `why`, so it has to be a sentence rather than a
+        //  fragment. On screen the two run together and "A stated share for
+        //  this property." on its own read like a truncated thought.
         resolved_by: c.properties_on_policy > 1
-          ? "The allocation schedule, or a broker-stated share for this property."
-          : "A stated share for this property.",
+          ? "Resolved by the allocation schedule, or a broker-stated share for this property."
+          : "Resolved by a stated share for this property.",
         observed_as_of: c.observed_as_of,
       }));
 
@@ -814,6 +817,12 @@ module.exports = function assetManagement(deps) {
   router.use(insuranceEstablishment({
     pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
     currentPeriod,
+    //  OPTIONAL BY DESIGN. Without it the evidence route still retains the
+    //  document and simply reports that Spine has not read it — which is
+    //  the honest answer and was the shipped behaviour before the scan
+    //  existed. A missing reader degrades to a blank form, never to a
+    //  broken upload.
+    fileToText,
   }));
 
   return router;

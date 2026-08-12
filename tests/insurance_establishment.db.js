@@ -41,7 +41,7 @@ const URL_ = receipt.harnessConnectionString();
 //  EVERY assertion is counted, and a short run is a FAILED run. A harness
 //  that dies halfway prints a clean-looking tail otherwise — this repo has
 //  already paid for one that ran zero assertions for 204 commits.
-const EXPECTED_ASSERTIONS = 62;
+const EXPECTED_ASSERTIONS = 80;
 let pass = 0, fail = 0;
 function ok(label, cond, detail) {
   if (cond) { pass++; console.log("  ok    " + label); }
@@ -453,6 +453,122 @@ async function main() {
       `select deal_membership_id from insurance_property_allocations where property_id=$1`,
       [skyline])).rows[0];
     ok("the allocation stamped Deal membership at origin", !!memb.deal_membership_id);
+
+    console.log("\n── 11. THE READER PROPOSES; IT NEVER WRITES ──────────");
+
+    /*  ── WHAT IS PROVEN HERE, AND WHAT IS NOT ────────────────────────
+     *  propose() is a pure function and is proven directly, which gives
+     *  far better coverage of its judgement than one sample document
+     *  would. What is NOT re-proven here is PDF bytes → text: that is
+     *  server.js's existing `fileToText`, already carrying the rent-roll
+     *  path in production, and it is injected rather than reimplemented.
+     *  Say it that way rather than implying the whole chain was exercised.
+     */
+    const reader = require("../src/asset/insurance_document_read.js");
+
+    const POLICY_TEXT = [
+      "COMMERCIAL PROPERTY POLICY",
+      "Carrier: Ally Insurance Company",
+      "Broker: USI Insurance Services",
+      "Policy Number: 01-CPK-104720-02",
+      "Effective Date: 2026-03-01",
+      "Expiration Date: 2027-03-01",
+      "Total Premium: $100,000.00",
+      "Broker Fee: $1,500.00",
+      "Schedule of locations attached.",
+    ].join("\n");
+
+    const read = reader.propose(POLICY_TEXT);
+    ok("a labelled policy yields proposals", read.available && read.found_count > 0,
+       JSON.stringify(read.fields));
+    ok("the carrier is read from its label", read.fields.carrier_name === "Ally Insurance Company",
+       JSON.stringify(read.fields.carrier_name));
+    ok("the policy number is read VERBATIM, not normalised",
+       read.fields.policy_number === "01-CPK-104720-02", JSON.stringify(read.fields.policy_number));
+    ok("dates are read as ISO", read.fields.coverage_period_start === "2026-03-01"
+       && read.fields.coverage_period_end === "2027-03-01", JSON.stringify(read.fields));
+    ok("the premium is read as a decimal string, not cents",
+       read.fields.premium === "100000.00", JSON.stringify(read.fields.premium));
+
+    //  ── THE REFUSALS THAT MATTER MORE THAN THE READS ────────────────
+    ok("NO SHARE is ever proposed, even from a document that states one",
+       reader.propose(POLICY_TEXT + "\nProperty Allocation: $40,000.00").fields.share === undefined);
+    ok("no currency is proposed — the service refuses a missing one by name " +
+       "and a scan must not defeat that",
+       read.fields.currency_code === undefined);
+
+    ok("an AMBIGUOUS numeric date is refused rather than guessed",
+       reader.propose("Effective Date: 03/04/2026").fields.coverage_period_start === undefined,
+       "03/04/2026 is 3 April or 4 March depending on the reader");
+    ok("…while a written month is unambiguous and is accepted",
+       reader.propose("Effective Date: March 1, 2026").fields.coverage_period_start === "2026-03-01");
+
+    ok("a bare integer beside the word premium is NOT read as money",
+       reader.propose("Premium 4").fields.premium === undefined);
+    ok("a label with no value proposes nothing",
+       reader.propose("Carrier:").fields.carrier_name === undefined);
+    ok("the word appearing in a sentence is not a labelled field",
+       reader.propose("The carrier will invoice the premium annually.").found_count === 0,
+       JSON.stringify(reader.propose("The carrier will invoice the premium annually.").fields));
+
+    const empty = reader.propose("");
+    ok("an unreadable document proposes nothing and says so",
+       empty.available === true && empty.found_count === 0 && empty.unknown.length > 0);
+    ok("every unproposed field is NAMED as unknown, not silently absent",
+       read.unknown.includes("program_name"), JSON.stringify(read.unknown));
+
+    //  ── THE ROUTE, WITH A READER PRESENT ────────────────────────────
+    //  A second mount, because the first was built without a reader on
+    //  purpose — that is the honest-degradation case section 3 asserts.
+    const app2 = express();
+    app2.use(express.json());
+    app2.use("/", require("../src/surfaces/asset_management.js")({
+      pool: scoped,
+      //  Stands in for server.js's fileToText at its real injection point.
+      //  Bytes → text is that function's job and is not re-proven here.
+      fileToText: async () => POLICY_TEXT,
+    }));
+    const server2 = http.createServer(app2);
+    await new Promise((r) => server2.listen(0, "127.0.0.1", r));
+    const port2 = server2.address().port;
+    try {
+      const up = await new Promise((resolve) => {
+        const B = "----spineproof2";
+        const body = Buffer.concat([
+          Buffer.from(`--${B}\r\nContent-Disposition: form-data; name="file"; ` +
+                      `filename="scanned.pdf"\r\nContent-Type: application/pdf\r\n\r\n`),
+          Buffer.concat([Buffer.from("%PDF-1.7\n"), Buffer.from("x")]),
+          Buffer.from(`\r\n--${B}\r\nContent-Disposition: form-data; name="artifact_kind"\r\n\r\n` +
+                      `insurance_policy\r\n--${B}--\r\n`),
+        ]);
+        const rq = http.request({ host: "127.0.0.1", port: port2,
+          path: "/operator/asset-management/insurance/evidence", method: "POST",
+          headers: { "x-staff-session": "entitled",
+                     "content-type": `multipart/form-data; boundary=${B}`,
+                     "content-length": body.length } }, (res) => {
+          let b = ""; res.on("data", (d) => b += d);
+          res.on("end", () => { let j = null; try { j = JSON.parse(b); } catch (_) {}
+            resolve({ status: res.statusCode, body: j }); });
+        });
+        rq.write(body); rq.end();
+      });
+      ok("the evidence route returns proposals when a reader is present",
+         up.status === 201 && up.body.proposal && up.body.proposal.available === true,
+         JSON.stringify(up.body && up.body.proposal));
+      ok("…and they are labelled as suggestions, not facts",
+         /suggestions, not facts/i.test((up.body.proposal || {}).reason || ""),
+         JSON.stringify((up.body.proposal || {}).reason));
+      ok("…and the share is still not among them",
+         up.body.proposal.fields && up.body.proposal.fields.share === undefined);
+
+      //  THE POINT OF THE WHOLE ADAPTER: reading changed nothing durable.
+      const progsAfter = Number((await c.query(
+        `select count(*)::int n from insurance_programs`)).rows[0].n);
+      ok("reading a document wrote NOTHING — the count is unchanged by the scan",
+         progsAfter === 2, `insurance_programs rows = ${progsAfter}`);
+    } finally {
+      await new Promise((r) => server2.close(r));
+    }
 
   } finally {
     //  RELEASE BEFORE end(), or pool.end() waits on the checked-out client

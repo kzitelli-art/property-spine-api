@@ -66,9 +66,17 @@ module.exports = function insuranceEstablishment(deps) {
   const insurancePosition = require("./insurance_position_read.js");
   const artifacts = require("../onboarding/source_artifact_service.js");
 
+  const documentRead = require("./insurance_document_read.js");
+
   const {
     pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
     currentPeriod,
+    //  OPTIONAL. Injected from server.js, where it is declared. Without it
+    //  the route retains the document and reports that Spine has not read
+    //  it — the honest answer, and the shipped behaviour before the scan
+    //  existed. A missing reader degrades to a blank form, never to a
+    //  failed upload.
+    fileToText,
   } = deps || {};
   if (!pool) throw new Error("insurance_establishment requires a pool");
   for (const [name, fn] of Object.entries({
@@ -191,6 +199,54 @@ module.exports = function insuranceEstablishment(deps) {
           artifact_kind: kind,
         });
 
+        /*  ── READ THE DOCUMENT, PROPOSE NOTHING BINDING ──────────────
+         *  The scan runs AFTER the artifact is safely stored, and its
+         *  failure is not the upload's failure: a policy Spine could not
+         *  parse is still a policy worth retaining, and the operator can
+         *  still type what it says. Losing the document because a PDF
+         *  library threw would be the worse outcome by far.
+         *
+         *  Nothing here is written. The establish route reads the human's
+         *  confirmed body and never consults this proposal.
+         */
+        let proposal = {
+          available: false,
+          reason: "Spine has not read this document. Enter what it says — " +
+                  "Spine records your answers against the file you uploaded.",
+          fields: {},
+        };
+        if (typeof fileToText === "function") {
+          try {
+            const text = await fileToText({
+              originalname: req.file.originalname, buffer: req.file.buffer,
+            });
+            const read = documentRead.propose(text);
+            proposal = {
+              available: true,
+              //  A read that found nothing is a DIFFERENT answer from a
+              //  document nobody opened, and the operator is told which.
+              reason: read.found_count
+                ? "Spine read this document and suggested what it could. " +
+                  "Check every value against the document — these are suggestions, " +
+                  "not facts, until you confirm them."
+                : "Spine read this document and could not find labelled values in it. " +
+                  "Enter what it says.",
+              fields: read.fields,
+              unknown: read.unknown,
+              source: read.source,
+              found_count: read.found_count,
+            };
+          } catch (readErr) {
+            //  Recorded, not raised. The document is already on file.
+            console.error("insurance document scan failed", readErr);
+            proposal = {
+              available: false,
+              reason: "Spine kept the document but could not read it. Enter what it says.",
+              fields: {},
+            };
+          }
+        }
+
         return res.status(stored.deduplicated ? 200 : 201).json({
           artifact: {
             id: stored.id,
@@ -200,13 +256,7 @@ module.exports = function insuranceEstablishment(deps) {
             uploaded_at: stored.uploaded_at,
             deduplicated: !!stored.deduplicated,
           },
-          proposal: {
-            //  Becomes true when the reader lands. Nothing else moves.
-            available: false,
-            reason: "Spine has not read this document. Enter what it says — " +
-                    "Spine records your answers against the file you uploaded.",
-            fields: {},
-          },
+          proposal,
           receipt: stored.receipt ||
             `${stored.original_filename} is on file. Spine keeps it so it can always ` +
             `show what this position came from.`,

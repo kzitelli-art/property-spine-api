@@ -3154,7 +3154,11 @@ app.use("/", require("./src/obligations/operator_obligation_actions")({ pool }))
 //  prefix is Deal Setup's legacy alias and keeps its own retirement path).
 //
 //  This is a SHELL: four rooms, establishment state only, no amounts.
-app.use("/", require("./src/surfaces/asset_management")({ pool }));
+//  `fileToText` is injected, not imported: it is declared in this file and a
+//  module requiring server.js back would be circular. Same shape identify.js
+//  is mounted with. Insurance uses it to PROPOSE fields off an uploaded
+//  policy — a suggestion the human confirms, never a write.
+app.use("/", require("./src/surfaces/asset_management")({ pool, fileToText }));
 
 // ── ASK SPINE (SLICE 1) — read-only sibling of the staff agent ───────────
 //  Answers "What needs attention?" from live obligations, property-scoped by
