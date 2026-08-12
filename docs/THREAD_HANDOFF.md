@@ -1,12 +1,10 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
-##  RELEASE 0 IS NOT FINISHED. THE COMPLETION GUARD IS OFF.
-##  2026-08-11. FOR WHOEVER IS WORKING IN MAINTENANCE.
+##  ⚠ THE COMPLETION GUARD IS **ON**. IT CUT OVER 2026-08-12 01:49 UTC.
+##  THIS REPLACES "THE GUARD IS OFF" — THAT SENTENCE IS NOW FALSE.
+##  2026-08-12. FOR WHOEVER IS WORKING IN MAINTENANCE.
 ## ══════════════════════════════════════════════════════════════════
-
-Release 0's machinery is shipped. Release 0 is **not complete** — the thing the
-release exists for is still inactive.
 
 ```text
 boundary 6   operator completion control retired (app)      LIVE
@@ -14,23 +12,51 @@ boundary 7   legacy done-path fails closed (409)            LIVE   e94cf0a
 boundary 7b  migration 140 — the completion guard           APPLIED 22db7f6
 boundary 8a  activation machinery, shipped dormant          LIVE   4aec686
 boundary 8b  the cutover runner                             LIVE   e10133a
-boundary 8   THE ACTIVATION ITSELF                          NOT DONE
+boundary 8   THE ACTIVATION ITSELF                          DONE   ← irreversible
+boundary 8   closeout proof, 16/16 in production            DONE   3e47739 (PR #94)
 ```
 
-**Migration 140 installed database triggers that are switched off.** They fire
-from an activation epoch row whose `activation_id` is still null.
+```text
+activation_id  d93b08dd-c682-46d2-acf9-78ab6b960827
+activated_at   2026-08-12T01:49:57.866Z      the census instant, not a wall clock
+legacy frozen  1 row, inventoried and immutable
+```
 
-### What changes on the day it is switched on
+**There is no supported way to un-activate.** The epoch is append-only; the
+E1 freeze refuses `update release_0_activation_epoch set activation_id = null`
+by name. Boundary 8 is the line.
 
-From that instant, **the database refuses any work order reaching a terminal
-status without a grounded proof evaluation.** Not the app checking — the
-database, on commit, through a deferred constraint trigger. No route, repair
-script or psql session gets around it.
+### What this means for you, right now
 
-That matters to anyone building in maintenance right now. `not_done_service.js`
-and the work-order surfaces landed while the guard was dormant, so nothing has
-felt it yet. Anything that puts a work order into `complete` or `closed` must go
-through the canonical writer, or it will start failing at commit.
+**The database refuses any work order reaching a terminal status without a
+grounded proof evaluation.** Not the app checking — the database, on commit,
+through a deferred constraint trigger. No route, repair script or psql session
+gets around it.
+
+This is no longer a warning about a future day. It is live, and it has been
+measured live — not inferred from the migration being applied:
+
+```text
+node tools/step7/prove_guard_active.js      instance kbtb6 · 16/16 · exit 0
+
+R0001  terminal with no proof evaluation              REFUSED
+R0004  `satisfied` citing non-qualifying evidence     REFUSED
+R0001  a `not_satisfied` evaluation                   REFUSED
+R0003  `closed` — even WITH grounded proof            REFUSED
+       grounded `satisfied`                           PERMITTED
+```
+
+`not_done_service.js` and the work-order surfaces landed while the guard was
+dormant, so **they have never felt it**. Anything that puts a work order into
+`complete` or `closed` must go through the canonical writer or it will fail at
+commit. `closed` in particular is now dead vocabulary: R0003 refuses it even
+when the proof is perfect.
+
+That tool is safe to re-run any time. Every state it builds is judged by
+`SET CONSTRAINTS ALL IMMEDIATE` and rolled back; it leaves nothing behind.
+Do NOT hand-write a probe instead — the proof tables are append-only with
+`ON DELETE RESTRICT`, so a committed test completion is **permanent** and makes
+its work order undeletable. That defect was caught in review, not in production.
 
 Today there are exactly two completion writers and `gate_completion_writers.js`
 proves there is no third:
@@ -42,24 +68,28 @@ LEGACY     src/maintenance/maintenance.js closeout — done=true returns 409
            done=false is untouched and still works
 ```
 
-### The cutover is blocked, and not on anything conceptual
+### What the cutover cost, and why the first attempt was refused
 
-```text
-API  PR #91   claude/boundary-8b-census-instant   2 files, tooling only
-```
-
-A one-millisecond clock-skew bug: the runner took `activated_at` from
-`new Date()` on Render while `now()` came from Neon. Production refused it and
-rolled back — nothing changed. The boundary instant is now the census's own
+The first live attempt was **refused by one millisecond** and rolled back —
+nothing changed. The runner took `activated_at` from `new Date()` on Render
+while `now()` came from Neon, and the boundary must be strictly earlier than the
+transaction that records it. Fixed in PR #91: the instant is the census's own
 `taken_at`, which is what the service always documented it should be.
 
-**#91 cannot deploy until 160/161 is released**, because a deploy does not
-migrate and main currently carries pending migrations. It is queued behind that
-release, not competing with it.
+Worth keeping, because it is the reason to trust the rest: **the activation
+refused itself over a millisecond of clock skew.** It was not being cautious
+about something conceptual. It was reading its own precondition.
 
-After it deploys: fresh census → dry run → **stop for owner authorization** →
-activate → prove both sides → re-census. The previous census (1 legacy row,
-digest `698b88ae…`) is stale and must be retaken.
+### What is left of Release 0
+
+```text
+ITEM 2  a canonical completion through claimCompletion, with real proof,
+        end to end — needs a real technician SMS completion.        OPEN
+```
+
+The closeout proof establishes that the **database** permits a grounded
+completion (D1). It does not establish that `claimCompletion` produces one.
+Those are different claims and only the second finishes the release.
 
 ### If you are about to touch work-order completion
 
