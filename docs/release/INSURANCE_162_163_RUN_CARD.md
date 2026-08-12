@@ -103,7 +103,7 @@ agreement**:
 
 ```text
 □  Asset Management card appears on Home
-□  Property Obligations → Insurance opens
+□  Property Expenses → Insurance opens
 □  ADD CURRENT INSURANCE → upload the real policy PDF
 □  the review sheet says whether Spine read it, and every field it did
    not read is BLANK
