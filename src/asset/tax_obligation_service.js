@@ -27,6 +27,18 @@
 const rules = require("./philadelphia_tax_rules.js");
 
 const DETERMINATIONS = Object.freeze(["applies", "not_applicable"]);
+
+/*  pg hands back a `date` column as a JS Date at LOCAL midnight, so
+ *  String(d).slice(0,10) yields "Mon Jan 01". Built from local components
+ *  rather than toISOString(), which shifts the DAY west of UTC — and a tax
+ *  due date off by one is not a rounding error. */
+function isoDay(d) {
+  if (!d) return null;
+  if (typeof d === "string") return d.slice(0, 10);
+  if (!(d instanceof Date)) return null;
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 const FILING_KINDS = Object.freeze(["return", "estimate", "extension", "amended_return"]);
 const PAID_BY = Object.freeze(["property", "lender_escrow", "other"]);
 
@@ -315,9 +327,21 @@ async function recordFiling(client, {
  *  Evidence the City was paid. `paid_by = 'lender_escrow'` records WHO
  *  remitted — it does not make the escrow the proof, and no escrow
  *  balance anywhere can call this function.
+ *
+ *  ── AND IT MUST SAY WHICH REQUIREMENT IT PAYS ─────────────────────
+ *  Migration 167's whole point. An obligation can carry several payment
+ *  requirements on the same day — the City's BIRT return prints the
+ *  year's balance and the following year's mandatory estimate as
+ *  separate lines — and money against one of them is not money against
+ *  the other.
+ *
+ *  Where there is exactly ONE payment requirement there is no ambiguity,
+ *  so the writer fills it in. Where there are several it REFUSES rather
+ *  than guessing, and the refusal names the choices.
  */
 async function recordPayment(client, {
   obligation_id, paid_at, amount_cents, paid_by = null,
+  satisfies_requirement = null,
   confirmation_reference = null,
   source_artifact_id = null, provenance_note = null, user_id,
 } = {}) {
@@ -333,13 +357,82 @@ async function recordPayment(client, {
   if (!user_id) throw taxError("BAD_INPUT", "user_id is required");
   requireProvenance(source_artifact_id, provenance_note, "a tax payment");
 
+  const obl = (await client.query(
+    `select id, tax_type, period_start, birt_filer_profile
+       from tax_obligations where id = $1`, [obligation_id])).rows[0];
+  if (!obl) throw taxError("NOT_FOUND", "tax obligation not found");
+
+  const options = rules.milestonesFor(obl.tax_type, isoDay(obl.period_start),
+    { birt_filer_profile: obl.birt_filer_profile })
+    .filter((m) => m.kind === "payment");
+
+  let key = satisfies_requirement;
+  if (!key) {
+    if (options.length === 1) {
+      //  UNAMBIGUOUS. One requirement, so naming it adds nothing a caller
+      //  could get wrong. Real Estate Tax and U&O land here.
+      key = options[0].key;
+    } else {
+      throw taxError("REQUIREMENT_REQUIRED",
+        `${rules.TAX_LABEL[obl.tax_type]} has ${options.length} separate payment ` +
+        `requirements, so a payment has to say which one it is for: ` +
+        `${options.map((m) => `${m.label} (${m.key})`).join("; ")}. Money against one ` +
+        "of them is not money against the others.");
+    }
+  } else if (!options.some((m) => m.key === key)) {
+    throw taxError("UNKNOWN_REQUIREMENT",
+      `"${key}" is not a payment requirement of this ` +
+      `${rules.TAX_LABEL[obl.tax_type]} obligation.` +
+      (options.length
+        ? ` It carries: ${options.map((m) => m.key).join(", ")}.`
+        : " It carries none — its requirements are not established yet."));
+  }
+
   const { rows } = await client.query(
     `insert into tax_payments
-       (obligation_id, paid_at, amount_cents, paid_by, confirmation_reference,
-        source_artifact_id, provenance_note, recorded_by_user_id)
-     values ($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
-    [obligation_id, paid_at, amount_cents, paid_by, confirmation_reference,
+       (obligation_id, paid_at, amount_cents, paid_by, satisfies_requirement,
+        confirmation_reference, source_artifact_id, provenance_note,
+        recorded_by_user_id)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
+    [obligation_id, paid_at, amount_cents, paid_by, key, confirmation_reference,
      source_artifact_id, provenance_note, user_id]);
+  return rows[0];
+}
+
+/*  ── THE BIRT FILER PROFILE ─────────────────────────────────────────
+ *  Whether the mandatory estimated payment for the following year
+ *  applies to this taxpayer in this year. A DETERMINATION, never an
+ *  inference — not from entity_type, not from a formation date, and not
+ *  from the absence of a prior return in Spine, since a business that
+ *  has filed in Philadelphia for a decade can still be new to us.
+ */
+async function setBirtFilerProfile(client, {
+  obligation_id, birt_filer_profile, basis, user_id,
+} = {}) {
+  if (!obligation_id) throw taxError("BAD_INPUT", "obligation_id is required");
+  if (!rules.BIRT_FILER_PROFILES.includes(birt_filer_profile)) {
+    throw taxError("BAD_INPUT",
+      `birt_filer_profile must be one of ${rules.BIRT_FILER_PROFILES.join(", ")}`);
+  }
+  if (!(basis && String(basis).trim())) {
+    throw taxError("BASIS_REQUIRED",
+      "recording a filer profile requires a stated basis. It decides whether a " +
+      "MANDATORY payment exists, and a determination nobody can re-examine is not " +
+      "one Spine will stand behind.");
+  }
+  if (!user_id) throw taxError("BAD_INPUT", "user_id is required");
+
+  const { rows } = await client.query(
+    `update tax_obligations
+        set birt_filer_profile = $2, birt_filer_profile_basis = $3
+      where id = $1 and tax_type = 'birt'
+      returning *`,
+    [obligation_id, birt_filer_profile, String(basis).trim()]);
+  if (!rows[0]) {
+    throw taxError("NOT_FOUND",
+      "no BIRT obligation with that id. A filer profile belongs to BIRT — it is the " +
+      "tax whose estimated payment depends on it.");
+  }
   return rows[0];
 }
 
@@ -391,5 +484,5 @@ module.exports = {
   DETERMINATIONS, FILING_KINDS, PAID_BY,
   establishObligation, relateObligationToProperty, confirmApplicability,
   recordLiability, recordFiling, recordPayment, openAppeal, recordClearance,
-  taxError,
+  setBirtFilerProfile, taxError, isoDay,
 };

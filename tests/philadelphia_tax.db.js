@@ -27,7 +27,7 @@ const taxes = require("../src/asset/tax_obligation_service.js");
 const rules = require("../src/asset/philadelphia_tax_rules.js");
 const position = require("../src/asset/tax_position_read.js");
 
-const EXPECTED_ASSERTIONS = 58;
+const EXPECTED_ASSERTIONS = 64;
 let pass = 0, fail = 0;
 function ok(label, cond, detail) {
   if (cond) { pass++; console.log("  ok    " + label); }
@@ -67,6 +67,9 @@ async function main() {
       [/alter table source_artifacts drop constraint[\s\S]*$/m]));
     await c.query(scopedMigration("165_philadelphia_tax_position.sql",
       [/alter table source_artifacts drop constraint[\s\S]*$/m]));
+    //  167 — payment identity. Without it a payment satisfies every
+    //  requirement on its obligation, which is the defect it exists to close.
+    await c.query(scopedMigration("167_tax_payment_identity.sql"));
 
     const uid = (await c.query(`insert into users (name) values ('Asset Ops') returning id`)).rows[0].id;
     const p1850 = (await c.query(
@@ -324,13 +327,35 @@ async function main() {
     ok("…and it was available before 2026",
        rules.uoExemptionStatus("2025-06-01").annual_exemption_available === true);
 
+    /*  ⚠ THIS BLOCK ASSERTED THE WRONG RULE AND WAS CORRECTED.
+     *  It read "U&O for July is due on the 25th of AUGUST". U&O is
+     *  SAME-MONTH: the tax for month M is filed and paid by the 25th of
+     *  month M, shifted forward past weekends and City holidays. July 25
+     *  2026 is a Saturday, so the City's own schedule says July 27.
+     *
+     *  The old assertion was green for a whole build while the clock was
+     *  a month late, which is why the published City schedule is now
+     *  pinned and checked against the derivation on every load. */
     const uoMs = rules.milestonesFor("uo", "2026-07-01");
-    ok("U&O for July is due on the 25th of August",
-       uoMs.every((m) => m.due === "2026-08-25"), JSON.stringify(uoMs));
+    ok("U&O for July is due IN JULY — the 25th, shifted off the Saturday",
+       uoMs.every((m) => m.due === "2026-07-27"), JSON.stringify(uoMs));
+    ok("…and it is the City's PUBLISHED date, not one Spine worked out",
+       uoMs.every((m) => m.date_source === "published"));
+    ok("…and the rule reproduces every published 2026 date on its own",
+       rules.scheduleDisagreements().length === 0,
+       JSON.stringify(rules.scheduleDisagreements()));
+    ok("August is the 25th itself — a Tuesday, so nothing shifts",
+       rules.milestonesFor("uo", "2026-08-01")[0].due === "2026-08-25");
 
     pos = await read(p1850);
-    ok("with July U&O unestablished, the row says exactly that",
-       /2026-07/.test(rowOf(pos, "uo").why_not_current || ""), rowOf(pos, "uo").why_not_current);
+    //  AUGUST is the live month at TODAY, and its 25th has not arrived.
+    //  An unopened month that is not yet late is not a delinquency — the
+    //  row says CURRENT and names the date, which is the whole point of a
+    //  standing read.
+    ok("the live U&O month is August, and it is not yet late",
+       rowOf(pos, "uo").state === "current", rowOf(pos, "uo").state);
+    ok("⚠ …and the row can say NEXT AUG 25 with nothing yet established",
+       rowOf(pos, "uo").next_due === "2026-08-25", rowOf(pos, "uo").next_due);
 
     const uo = await taxes.establishObligation(c, { tax_type: "uo", period_year: 2026,
       period_month: 7, property_id: p1850, provenance_note: "City U&O account",
@@ -340,8 +365,17 @@ async function main() {
     await taxes.recordPayment(c, { obligation_id: uo.id, paid_at: "2026-08-10",
       amount_cents: USD(1450), provenance_note: "City receipt", user_id: uid });
     pos = await read(p1850);
-    ok("a filed and paid July U&O reads PAID", rowOf(pos, "uo").state === "paid",
-       rowOf(pos, "uo").state);
+    //  July is complete; August is open and not yet due. The ROW is the
+    //  compression of both — which the one-period model could not express.
+    ok("a filed and paid July U&O reads PAID on its own period",
+       (rowOf(pos, "uo").periods.find((x) => x.period_label === "2026-07") || {}).state === "paid",
+       JSON.stringify(rowOf(pos, "uo").periods.map((x) => [x.period_label, x.state])));
+    ok("…and the row holds BOTH months at once",
+       rowOf(pos, "uo").periods.length === 2,
+       JSON.stringify(rowOf(pos, "uo").periods.map((x) => x.period_label)));
+    ok("…with the row compressed to the live month's answer",
+       rowOf(pos, "uo").state === "current" && rowOf(pos, "uo").next_due === "2026-08-25",
+       `${rowOf(pos, "uo").state} / ${rowOf(pos, "uo").next_due}`);
 
     //  Residential-only, confirmed. NOT inferred from the absence of
     //  commercial space — a human established it with a basis.

@@ -88,6 +88,14 @@ const GATES = [
   //  would rot while the vocabulary gate kept passing.
   { file: "gate_funding_boundary.js",
     what: "economics cannot reach funding; funding cannot author economics (insurance + tax)" },
+  //  The jurisdiction's dates. A PURE module, so it belongs on the standard
+  //  path rather than behind a database nobody starts — and it earned its
+  //  place: the clocks shipped wrong twice (U&O a month late, NPT estimates
+  //  a YEAR late) with every surrounding proof green, because those proofs
+  //  asserted the implementation. This one asserts the City's published
+  //  schedule, date by date, and requires the derivation to reproduce it.
+  { file: "philadelphia_tax_clocks.test.js",
+    what: "Philadelphia tax clocks agree with the City's published schedule" },
   //  The conversational seams. DB-free, so they belong on the standard path:
   //  they check that the extracted logic has ONE implementation, that resident
   //  wording did not drift, and that an operating receipt and a delivery

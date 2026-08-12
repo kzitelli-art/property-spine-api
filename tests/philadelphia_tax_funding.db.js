@@ -40,7 +40,7 @@ const position = require("../src/asset/tax_position_read.js");
 const funding = require("../src/asset/tax_funding_service.js");
 const fundingRead = require("../src/asset/tax_funding_read.js");
 
-const EXPECTED_ASSERTIONS = 54;
+const EXPECTED_ASSERTIONS = 55;
 let pass = 0, fail = 0;
 function ok(label, cond, detail) {
   if (cond) { pass++; console.log("  ok    " + label); }
@@ -84,6 +84,9 @@ async function main() {
     await c.query(scopedMigration("164_legal_entities.sql", dropKindCheck));
     await c.query(scopedMigration("165_philadelphia_tax_position.sql", dropKindCheck));
     await c.query(scopedMigration("166_tax_funding.sql", dropKindCheck));
+    //  167 — payment identity. Without it a payment satisfies every
+    //  requirement on its obligation, which is the defect it exists to close.
+    await c.query(scopedMigration("167_tax_payment_identity.sql"));
 
     console.log("\n══ 0. THE FIXTURE ═══════════════════════════════════════════");
 
@@ -146,6 +149,16 @@ async function main() {
     const birt2025 = await taxes.establishObligation(c, {
       tax_type: "birt", period_year: 2025, legal_entity_id: holdings.id,
       related_property_ids: [prop], provenance_note: "prior-year return", user_id: uid });
+    /*  ⚠ THE FILER PROFILE IS PART OF THE FIXTURE NOW, AND HAS TO BE.
+     *  The City's BIRT return carries a MANDATORY estimated payment for
+     *  the following year and grants relief to first-year filers, so
+     *  whether that requirement exists is a determination — not something
+     *  Spine assumes either way. Without it the position cannot read
+     *  current, which is the honest answer and is asserted below. */
+    await taxes.setBirtFilerProfile(c, {
+      obligation_id: birt2025.id, birt_filer_profile: "first_year",
+      basis: "2025 was the entity's first year of business in Philadelphia.",
+      user_id: uid });
     await taxes.recordFiling(c, {
       obligation_id: birt2025.id, filed_at: "2026-04-10", filing_kind: "return",
       provenance_note: "filed by the accountant", user_id: uid });
@@ -303,6 +316,15 @@ async function main() {
        reRow().state === "paid", `state=${reRow().state}`);
     ok("and the overall standing clears",
        p.overall === "current", `${p.overall} — ${p.overall_why}`);
+    //  A first-year filer has NO mandatory estimate, so nothing is left
+    //  unknown — and the row proves the relief path exists rather than
+    //  every BIRT row carrying an estimate Spine invented.
+    ok("a first-year filer carries no mandatory estimate requirement",
+       p.rows.find((r) => r.tax_type === "birt").unestablished_requirements.length === 0
+       && !p.rows.find((r) => r.tax_type === "birt").periods[0].requirements
+            .some((q) => q.key === "payment:estimate_next_year"),
+       JSON.stringify(p.rows.find((r) => r.tax_type === "birt").periods[0].requirements
+         .map((q) => q.key)));
 
     f = await fundingRead.readTaxFunding(c, { property_id: prop, as_of: AS_OF });
     ok("the funding gap closes because the CITY side arrived, not the escrow side",

@@ -87,6 +87,9 @@ async function main() {
     await c.query(scopedMigration("164_legal_entities.sql", dropKindCheck));
     await c.query(scopedMigration("165_philadelphia_tax_position.sql", dropKindCheck));
     await c.query(scopedMigration("166_tax_funding.sql", dropKindCheck));
+    //  167 — payment identity. Without it a payment satisfies every
+    //  requirement on its obligation, which is the defect it exists to close.
+    await c.query(scopedMigration("167_tax_payment_identity.sql"));
 
     const entities = require("../src/entity/legal_entity_service.js");
 
