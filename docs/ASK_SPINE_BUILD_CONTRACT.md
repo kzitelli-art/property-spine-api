@@ -12,11 +12,33 @@
 > **What governs Ask Spine work now:**
 >
 > ```text
-> PHILOSOPHY.md §40                        what Ask Spine IS — doctrine
-> PHILOSOPHY.md §33                        a domain is not done until it can be asked
+> PHILOSOPHY.md §40                        what Ask Spine IS — doctrine, 11 rulings
+> PHILOSOPHY.md §40.2 / §33                a domain is not done until it can be asked
+> tests/gate_ask_spine_readers.js          the gate that enforces §40.2
 > ASK_SPINE_CANONICAL_READ_LAYER.md        the next build. Taxes + Insurance.
 > ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md   transcript evidence, second
 > ```
+>
+> ### ⚠ THE CROSS-DOMAIN LAYER IS §40, AND IT SITS ABOVE THIS DOCUMENT
+>
+> This charter is **one domain's instance** of a general interface contract. It
+> is not the general contract, and it must not be stretched into one.
+>
+> ```text
+> PHILOSOPHY.md §40      the permanent cross-domain interface contract
+>         ↑ above
+> this charter           Maintenance's instance of it — parked
+> ```
+>
+> When it was written, "the first release is maintenance-specific… later domains
+> — including money — can follow" was the correct call. That moment has passed:
+> Taxes and Insurance are real governed domains and Debt is next. The pattern
+> those domains follow is **§40**, not a generalised descendant of this file.
+>
+> Do not widen this charter's vocabulary, coverage model or definition of done to
+> cover a second domain. A maintenance contract stretched until it is generic
+> keeps maintenance's assumptions in the load-bearing places, where the next
+> domain inherits them without ever agreeing to them.
 >
 > **What in here is still live:** §19's open rulings and §3's stable intent
 > identities are frozen decisions and must be searched before anything they

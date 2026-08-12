@@ -1,8 +1,78 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  ASK SPINE IS NOW AN INTERFACE CONTRACT, NOT A FEATURE.
+##  2026-08-12 (latest). THIS SECTION WINS ON DOCTRINE AND ON
+##  WHAT "DONE" MEANS FOR A DOMAIN. DOCS + ONE GATE. NO PRODUCT CODE.
+## ══════════════════════════════════════════════════════════════════
+
+A docs-only doctrine pass, run **before Debt starts**, so the conversational
+rule is something the architecture forces rather than something a builder
+remembers.
+
+**`PHILOSOPHY.md` §40 now freezes eleven numbered rulings** — citable as §40.1
+… §40.11. New since the last pass: every domain has **two primary readers**
+(40.1), conversation is **role-independent architecture** (40.3), every domain
+exposes a **compact standing projection** (40.6), and **retrieval ≠ causal
+explanation** (40.10).
+
+**The Definition of Done gained a rung, and it is a rung.**
+
+```text
+canonical truth → writer → canonical read → compact standing projection
+                → operator UI → Ask Spine registration → browser proof
+```
+
+A domain browser-verified in the operator UI but unreadable by Ask Spine is
+done as a **screen** and not done as a **domain**. Say it that way in receipts.
+
+**`CLAUDE.md` carries it as architecture, not a sidebar** — the two-reader
+diagram, the eleven rulings in brief, and Eight-Question **6 extended** to
+demand the standing projection by name. §31 was NOT renumbered: six documents
+cite "the Eight Questions" and several are historical receipts.
+
+**`tests/gate_ask_spine_readers.js` enforces it (§40.11).** It **discovers**
+domains from `src/asset/*_{position_read,establishment}.js` rather than from a
+hand-maintained list, so a domain that lands without registering goes red on
+its own — a list only knows what someone remembered to add.
+
+```text
+20/20 · exit 0 · insurance and tax both `pending`, both with owner + exit
+FALSIFIED BOTH WAYS   a stub debt_position_read.js  → RED (undeclared)
+                      `registered` without wiring   → RED (claim ≠ implementation)
+```
+
+⚠ **The gate is green because the gap is DECLARED, not closed. ZERO domains
+are conversationally readable today** — Ask Spine gathers `attention` and
+`work_orders` only. Insurance and Tax are browser-verified screens and are not
+done as domains. The gate prints this in its own output. Do not cite its exit
+code as coverage.
+
+**Two documentation defects fixed, both live traps:**
+
+```text
+U&O said "25th of the FOLLOWING month" in the four-obligation summary while
+the same document recorded the same-month correction. The summary would have
+reintroduced the defect. Authority is philadelphia_tax_rules.js.
+
+The release block said NOT merged · 162–167 pending · ceiling 161. All four
+lines were stale — merged (#97/#57) and released; ceiling 167.
+```
+
+**Also flagged, not fixed:** `release/ledger_read_before_release.sql` has a
+`build` list ending at **159**. It cannot see 160–167 and will report a clean
+`pending` for a set it never looked at. Regenerate before the next release.
+
+**Where this lands for Debt.** The first schema conversation now has to answer:
+*what must Debt expose so an entitled person can text Spine from a meeting and
+ask what we owe, the rate, the maturity, and what needs their attention?*
+§40.6 makes that a schema constraint — Debt must answer it **without** walking
+its payment or amendment history. §40.10 caps Debt Build 1 at retrieval with
+causal hooks preserved, not causal explanation.
+
+## ══════════════════════════════════════════════════════════════════
 ##  ASK SPINE ANSWERS TYPED QUESTIONS. IT NEVER COULD BEFORE.
-##  2026-08-12 (latest). THIS SECTION WINS ON ASK SPINE.
+##  2026-08-12. THIS SECTION WINS ON ASK SPINE IMPLEMENTATION STATE.
 ##  NEXT SLICE IS MEETING INTELLIGENCE — DESIGN DOC WRITTEN, NOT BUILT.
 ## ══════════════════════════════════════════════════════════════════
 
@@ -236,8 +306,10 @@ twice.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
-##  ASSET MANAGEMENT REORGANISED TO FOUR DOORS. 2026-08-12 (latest).
-##  THIS SECTION WINS ON ASSET MANAGEMENT AND ON RELEASE STATE.
+##  ASSET MANAGEMENT REORGANISED TO FOUR DOORS. 2026-08-12.
+##  THIS SECTION WINS ON ASSET MANAGEMENT. IT NO LONGER WINS ON
+##  RELEASE STATE — 162–167 ARE RELEASED, CEILING 167. SEE
+##  "PHILADELPHIA TAXES V1 IS BUILT AND RELEASED" BELOW.
 ## ══════════════════════════════════════════════════════════════════
 
 > The section immediately below — **the completion guard is ON** — is separate,
@@ -285,10 +357,17 @@ expenses are not.")
 including the four-door journey, 390px and keyboard. Screenshots under
 `/tmp/am-browser` (`02-asset-management-open.png`, `am-four-doors-narrow.png`).
 
-**No new migrations.** This is a surface/navigation change; the release
-picture below is UNCHANGED — 162–167 still pending, ceiling still 161.
+**No new migrations.** This is a surface/navigation change. ⚠ The release
+picture below said "162–167 still pending, ceiling still 161" and that is
+**no longer true** — see the release section, corrected 2026-08-12.
 
-**Doctrine still describes the OLD AM sub-hierarchy.** `CLAUDE.md` → "Four
+**Doctrine still describes the OLD AM sub-hierarchy.** ⚠ **NO LONGER TRUE —
+corrected 2026-08-12.** `CLAUDE.md` and `PHILOSOPHY.md` both carry the four
+rooms now; neither mentions REVENUE / CAPITAL / PROPERTY OBLIGATIONS /
+OPERATING COSTS anywhere. The paragraph below is kept as the record of what
+was deliberately deferred, not as a live instruction. Original text follows.
+
+`CLAUDE.md` → "Four
 operating doors" and `PHILOSOPHY.md` still list REVENUE / CAPITAL / PROPERTY
 OBLIGATIONS / OPERATING COSTS as AM's shape. The code has moved past that
 text; the doctrine edit is the owner's call and is deliberately NOT made in
@@ -395,23 +474,42 @@ provable.
 
 ---
 
-##  PHILADELPHIA TAXES V1 IS BUILT AND UNRELEASED. 2026-08-12.
-##  Superseded as "latest" by the reorg above; still current, still unreleased.
+##  PHILADELPHIA TAXES V1 IS BUILT AND **RELEASED**. 2026-08-12.
+##  CORRECTED 2026-08-12 — THIS SECTION SAID "UNRELEASED" AND WAS WRONG.
 ## ══════════════════════════════════════════════════════════════════
 
 ```text
-API  claude/philosophy-doctrine-reference-jv7s7r   NOT merged
-APP  claude/philosophy-doctrine-reference-jv7s7r   NOT merged
-pending migrations                                 162, 163, 164, 165, 166, 167
-production ledger ceiling                          161  (expected — READ IT)
+API  merged to main                                7ebb400  (PR #97)
+APP  merged to main                                bf86673  (PR #57)
+migrations 162–167                                 APPLIED
+production ledger ceiling                          167
 ```
 
-**⚠ THE MERGE WARNING BELOW NOW COVERS SIX MIGRATIONS, NOT TWO.** Same
-trap, larger blast radius: auto-deploy is ON, `prestart` verifies rather
-than applies, and merging with 162–167 pending is a failed production
-deploy. Pause auto-deploy first. The run card is still
-[`release/INSURANCE_162_163_RUN_CARD.md`](release/INSURANCE_162_163_RUN_CARD.md)
-and its sequence is unchanged — the ceiling it releases to is now 167.
+**⚠ THIS BLOCK PREVIOUSLY READ "NOT merged · pending 162–167 · ceiling 161."**
+All four lines were stale. The branch merged and the release ran. A handoff
+that describes a release as pending after it has happened is worse than one
+that says nothing: the merge warning below tells you to pause auto-deploy for
+a release that is already done, and the next reader either repeats it or stops
+trusting the file.
+
+**The ceiling above is reported, not read by the author of this edit.** Per §3
+and the standing rule, `EXPECTED_LEDGER_CEILING` is never typed from memory or
+from this document — **read it from the ledger** before any release. The value
+here orients you; it does not authorise anything.
+
+**The merge warning that stood here is now HISTORY, not instruction.** It read:
+*"auto-deploy is ON, `prestart` verifies rather than applies, and merging with
+162–167 pending is a failed production deploy — pause auto-deploy first."*
+That was correct while those six were pending. It no longer applies to them.
+**The underlying trap is permanent and applies to the next migration**, so keep
+the mechanism in mind and see §3; the run card is
+[`release/INSURANCE_162_163_RUN_CARD.md`](release/INSURANCE_162_163_RUN_CARD.md).
+
+⚠ **`release/ledger_read_before_release.sql` is stale for the next release.**
+Its `build` list ends at **159** and does not know 160–167, so running it as-is
+reports a clean `pending` for a set it never looked at — the migration-140
+failure mode its own footer warns about. Regenerate it before use; the command
+is in the file and must not be hand-edited.
 
 ### ⚠ THE CLOCKS AND THE STANDING MODEL WERE WRONG, AND WERE CORRECTED
 
@@ -459,8 +557,17 @@ BIRT              ENTITY   subject · annual  · return + balance Apr 15 (Y+1)
 NPT               ENTITY   subject · annual  · return Apr 15, estimates
                                                Apr 15 and Jun 15
 U&O               PROPERTY subject · monthly · filing + payment, 25th of
-                                               the following month
+                                               the SAME month
 ```
+
+**⚠ U&O IS SAME-MONTH.** This table said "the following month" until 2026-08-12,
+which is the exact defect the correction above — *"U&O was a MONTH late"* — records
+as fixed. One document asserting both is how a repaired defect gets reintroduced by
+someone reading the summary instead of the correction. The authority is
+`philadelphia_tax_rules.js`: *"U&O IS SAME-MONTH. The tax for month M is filed and
+paid by the 25th of the SAME month"*, shifted forward past weekends and City
+holidays, and the City's published 2026 schedule is pinned there so the derivation
+must reproduce it.
 
 **Commercial Trash was cut, deliberately.** It is a municipal fee with its
 own exemption machinery, not one of these four. It may return later under a
@@ -2003,7 +2110,7 @@ out of the activation decision; the train does not depend on it.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
-##  ⛔ THE DEPLOYED APP IS BROKEN. 2026-08-06 (latest).
+##  ⛔ THE DEPLOYED APP IS BROKEN. 2026-08-06 (historical — see above).
 ## ══════════════════════════════════════════════════════════════════
 
 **This supersedes the APP SHA in the header above and every deployment claim
