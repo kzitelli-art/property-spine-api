@@ -67,7 +67,8 @@ module.exports = function taxEstablishment(deps) {
     const SAYABLE = new Set([
       "BAD_INPUT", "NOT_FOUND", "PROVENANCE_REQUIRED", "REASON_REQUIRED",
       "SUBJECT_REQUIRED", "WRONG_SUBJECT", "BASIS_REQUIRED", "PERIOD_REQUIRED",
-      "CORRECTION_REQUIRED", "ALREADY_ESTABLISHED",
+      "CORRECTION_REQUIRED", "ALREADY_ESTABLISHED", "UNKNOWN_REQUIREMENT",
+      "REQUIREMENT_REQUIRED",
     ]);
     if (e && SAYABLE.has(e.code)) {
       return res.status(e.code === "NOT_FOUND" ? 404 : 422)
@@ -470,6 +471,10 @@ module.exports = function taxEstablishment(deps) {
         paid_at: b.paid_at,
         amount_cents: b.amount_cents === undefined ? undefined : Number(b.amount_cents),
         paid_by: b.paid_by || null,
+        //  WHICH requirement this money pays. Omitted where an obligation
+        //  carries exactly one, refused by the writer where it carries
+        //  several — the browser never guesses on the caller's behalf.
+        satisfies_requirement: b.satisfies_requirement || null,
         confirmation_reference: b.confirmation_reference || null,
         source_artifact_id: b.artifact_id || null,
         provenance_note: b.provenance_note || null,
@@ -479,6 +484,28 @@ module.exports = function taxEstablishment(deps) {
     (row, obl) => `${rules.TAX_LABEL[obl.tax_type]} payment recorded from City evidence` +
                   `${row.paid_by === "lender_escrow"
                       ? " — remitted by the lender's escrow, and evidenced by the City." : "."}`);
+
+  /*  ══ …/:id/filer-profile ═════════════════════════════════════════
+   *  Whether the City's mandatory next-year estimated payment applies to
+   *  this taxpayer in this year. A DETERMINATION with a stated basis —
+   *  never inferred from entity_type, a formation date, or the absence of
+   *  a prior return in Spine. Until it is recorded the row reports the
+   *  requirement as UNKNOWN rather than inventing or omitting it.
+   */
+  perObligation("/operator/asset-management/taxes/obligation/:id/filer-profile",
+    (client, req) => {
+      const b = req.body || {};
+      return taxes.setBirtFilerProfile(client, {
+        obligation_id: req.params.id,
+        birt_filer_profile: b.birt_filer_profile,
+        basis: b.basis,
+        user_id: req.operator.id,
+      });
+    },
+    (row) => `Recorded as ${rules.BIRT_FILER_LABEL[row.birt_filer_profile].toLowerCase()}. ` +
+             (row.birt_filer_profile === "first_year"
+               ? "The City grants first-year filers relief from the mandatory estimated payment."
+               : "The mandatory estimated payment for the following year applies."));
 
   /*  ══ …/:id/appeal ════════════════════════════════════════════════
    *  An open appeal changes NOTHING about the current liability. It is
