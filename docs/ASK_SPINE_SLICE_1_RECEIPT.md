@@ -1,7 +1,19 @@
 # Ask Spine Slice 1 — proof receipt
 
-**Status: Built and locally exercised. Awaiting real Postgres, canonical
-session, authenticated real HTTP, and end-to-end browser proof.**
+> ## ⚠ STATUS — 2026-08-12. THIS IS A DATED RECEIPT, NOT CURRENT STATE.
+>
+> The status line below was true when written and is **no longer the proof
+> state**. Slice 1 and slice 2 have both shipped, and the door now carries a POST
+> that answers typed questions. **`THREAD_HANDOFF.md` is the current state; read
+> it instead of this line.** The evidence recorded below remains an accurate
+> record of what was proven *on that date* — it is not restated here, because
+> re-asserting a proof rung without re-running it is exactly the claim this
+> repo's proof ladder exists to prevent.
+>
+> Doctrine that now governs this surface: `PHILOSOPHY.md` §40.
+
+**Status when written: Built and locally exercised. Awaiting real Postgres,
+canonical session, authenticated real HTTP, and end-to-end browser proof.**
 
 Base SHAs the branches were cut from:
 
