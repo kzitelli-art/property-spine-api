@@ -182,7 +182,10 @@ module.exports = function taxEstablishment(deps) {
         });
         return res.status(stored.deduplicated ? 200 : 201).json({
           artifact: { id: stored.id, filename: stored.original_filename,
-                      artifact_kind: kind, deduplicated: !!stored.deduplicated },
+                      //  THE STORED KIND, not the requested one. Dedup resolves by
+                      //  bytes, and the kind on file wins.
+                      artifact_kind: stored.artifact_kind || kind,
+                      deduplicated: !!stored.deduplicated },
           receipt: stored.receipt ||
             `${stored.original_filename} is on file. A document on file is not yet a ` +
             `governed fact — confirm what it establishes next.`,

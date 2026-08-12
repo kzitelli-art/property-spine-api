@@ -252,7 +252,9 @@ module.exports = function insuranceEstablishment(deps) {
             id: stored.id,
             filename: stored.original_filename,
             byte_size: stored.byte_size,
-            artifact_kind: kind,
+            //  THE STORED KIND, not the requested one. Dedup resolves by
+            //  bytes and says nothing about kind, so the kind on file wins.
+            artifact_kind: stored.artifact_kind || kind,
             uploaded_at: stored.uploaded_at,
             deduplicated: !!stored.deduplicated,
           },

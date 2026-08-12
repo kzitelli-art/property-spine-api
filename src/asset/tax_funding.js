@@ -154,7 +154,10 @@ module.exports = function taxFunding(deps) {
         });
         return res.status(stored.deduplicated ? 200 : 201).json({
           artifact: { id: stored.id, filename: stored.original_filename,
-                      artifact_kind: kind, deduplicated: !!stored.deduplicated },
+                      //  THE STORED KIND, not the requested one. Dedup resolves by
+                      //  bytes, and the kind on file wins.
+                      artifact_kind: stored.artifact_kind || kind,
+                      deduplicated: !!stored.deduplicated },
           receipt: stored.receipt ||
             `${stored.original_filename} is on file. A statement on file does not yet say ` +
             `how anything is paid, and it never says a bill was paid — confirm the ` +

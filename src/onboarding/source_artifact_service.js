@@ -288,15 +288,28 @@ async function store(db, {
   //  that never passed it behave exactly as before.
   const v = validateUpload({ filename, mimetype, buffer, artifact_kind });
 
+  //  ⚠ THE STORED KIND COMES BACK, AND CALLERS MUST REPORT IT.
+  //  Dedup is by (scope, sha256) and says nothing about kind, so the same
+  //  bytes offered a second time under a different kind resolve to the
+  //  EXISTING row with its ORIGINAL kind. A caller echoing the requested
+  //  kind would then tell someone their escrow statement is on file as an
+  //  escrow statement when Spine holds it as a tax bill — a small lie, in
+  //  the one place the product is supposed to be exact about provenance.
   const existing = (await db.query(
-    `select id, original_filename, byte_size, sha256, uploaded_at
+    `select id, original_filename, artifact_kind, byte_size, sha256, uploaded_at
        from source_artifacts
       where scope_type = $1 and scope_id = $2 and sha256 = $3
       limit 1`,
     [scope_type, scope_id, v.sha256])).rows[0];
   if (existing) {
-    return { ...existing, deduplicated: true,
-      receipt: `That is the same file already on record (${existing.original_filename}).` };
+    const mismatched = existing.artifact_kind !== artifact_kind;
+    return { ...existing, deduplicated: true, requested_artifact_kind: artifact_kind,
+      kind_differs: mismatched,
+      receipt: mismatched
+        ? `That is the same file already on record (${existing.original_filename}), held as ` +
+          `${existing.artifact_kind.replace(/_/g, " ")}. It stays on file as that — upload ` +
+          `the other document if this was meant to be a different one.`
+        : `That is the same file already on record (${existing.original_filename}).` };
   }
 
   const row = (await db.query(
@@ -305,7 +318,8 @@ async function store(db, {
         byte_size, sha256, content, stored_at,
         source_as_of_date, uploaded_by_user_id, uploaded_by_basis)
      values ($1,$2,$3,$4,$5,$6,$7,$8,now(),$9,$10,$11)
-     returning id, original_filename, byte_size, sha256, uploaded_at, source_as_of_date`,
+     returning id, original_filename, artifact_kind, byte_size, sha256,
+               uploaded_at, source_as_of_date`,
     [scope_type, scope_id, String(filename), v.mime_type, artifact_kind,
      v.byte_size, v.sha256, buffer, source_as_of_date,
      uploaded_by_user_id, authority_basis || "unstated"])).rows[0];
