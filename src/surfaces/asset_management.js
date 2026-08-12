@@ -559,7 +559,14 @@ module.exports = function assetManagement(deps) {
     const sign = cents < 0 ? "-" : "";
     const whole = Math.floor(Math.abs(cents) / 100).toLocaleString("en-US");
     const frac = String(Math.abs(cents) % 100).padStart(2, "0");
-    return `${sign}${currency === "USD" ? "$" : currency + " "}${whole}.${frac}`;
+    //  AN UNKNOWN CURRENCY MUST NOT PRINT ITSELF. `currency + " "` with a
+    //  null currency rendered "null 9,400.00" on a real screen — a caller
+    //  formatting a governed amount for a property that has no allocation,
+    //  and therefore no currency from the position. The amount is real;
+    //  only its denomination is unknown, so the number stands alone rather
+    //  than wearing the word null.
+    const unit = currency === "USD" ? "$" : (currency ? currency + " " : "");
+    return `${sign}${unit}${whole}.${frac}`;
   }
 
   const COVERAGE_LABEL = Object.freeze({
@@ -848,19 +855,24 @@ module.exports = function assetManagement(deps) {
                                     //  the finance company — neither is an
                                     //  insurance number and neither
                                     //  appears in the position strip.
-                                    finance: a.finance ? {
+                                    //  The PROGRAM's currency, not the
+                                    //  position's: financing exists whether
+                                    //  or not this property's share does,
+                                    //  and `cur` is null until an allocation
+                                    //  establishes one.
+                                    finance: a.finance ? (function (fc) { return {
                                       provider: a.finance.finance_provider,
-                                      down_payment: money(a.finance.down_payment_cents, cur),
-                                      principal_financed: money(a.finance.principal_financed_cents, cur),
-                                      finance_charge: money(a.finance.finance_charge_cents, cur),
+                                      down_payment: money(a.finance.down_payment_cents, fc),
+                                      principal_financed: money(a.finance.principal_financed_cents, fc),
+                                      finance_charge: money(a.finance.finance_charge_cents, fc),
                                       installments: (a.finance.installment_count !== null
                                         && a.finance.installment_cents !== null)
                                         ? `${a.finance.installment_count} × ` +
-                                          `${money(a.finance.installment_cents, cur)}`
+                                          `${money(a.finance.installment_cents, fc)}`
                                         : null,
                                       first_payment_date: a.finance.first_payment_date,
-                                      total_of_payments: money(a.finance.total_of_payments_cents, cur),
-                                    } : null,
+                                      total_of_payments: money(a.finance.total_of_payments_cents, fc),
+                                    }; })(a.currency_code || cur) : null,
                                     escrow: a.escrow || null,
                                   })),
                                   establishment: funding.established

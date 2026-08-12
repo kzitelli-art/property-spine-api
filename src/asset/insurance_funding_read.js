@@ -55,12 +55,17 @@ async function readFunding(client, { property_id, period }) {
        a.source_artifact_id, a.provenance_note,
        a.supersedes_id, a.revision_reason, a.recorded_at,
        c.coverage_type, c.carrier_name,
+       --  The currency the coverage is written in. Financing is
+       --  denominated by the program, and the surface needs it because
+       --  the POSITION's currency is null until an allocation exists.
+       pr.currency_code,
        f.finance_provider, f.agreement_reference,
        f.down_payment_cents, f.principal_financed_cents, f.finance_charge_cents,
        f.installment_count, f.installment_cents, f.first_payment_date,
        e.lender_name, e.servicer_name, e.escrow_account_reference
      from insurance_funding_arrangements a
      join insurance_coverages c on c.id = a.coverage_id
+     join insurance_programs  pr on pr.id = c.program_id
      left join premium_finance_agreements f on f.arrangement_id = a.id
      left join insurance_escrow_arrangements e on e.arrangement_id = a.id
     where a.property_id = $1
@@ -77,6 +82,7 @@ async function readFunding(client, { property_id, period }) {
       coverage_id: r.coverage_id,
       coverage_type: r.coverage_type,
       carrier_name: r.carrier_name,
+      currency_code: r.currency_code,
       funding_method: r.funding_method,
       method_label: METHOD_LABEL[r.funding_method] || r.funding_method,
       effective_from: iso(r.effective_from),

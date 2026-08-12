@@ -76,6 +76,12 @@ const KIND_SHAPES = Object.freeze({
   //  workflow needing a file.
   insurance_policy:              Object.freeze(["pdf"]),
   insurance_binder:              Object.freeze(["pdf"]),
+  //  Funding evidence. A finance agreement is issued as a PDF; an escrow
+  //  statement arrives as a PDF from the servicer or, often enough, as a
+  //  spreadsheet export — so that one accepts both rather than forcing
+  //  someone to print an export back into a PDF to satisfy us.
+  insurance_finance_agreement:   Object.freeze(["pdf"]),
+  insurance_escrow_statement:    Object.freeze(["pdf", "xlsx", "xls", "csv"]),
 });
 
 //  Per-kind refusal copy. §5 and the repo's rule that a refusal a user
@@ -92,6 +98,12 @@ const KIND_REFUSAL = Object.freeze({
   insurance_binder: (filename) =>
     `Spine reads an insurance binder as a PDF. "${filename}" is not one. ` +
     `Upload the binder your broker issued.`,
+  insurance_finance_agreement: (filename) =>
+    `Spine reads a premium finance agreement as a PDF. "${filename}" is not one. ` +
+    `Upload the agreement the finance company issued.`,
+  insurance_escrow_statement: (filename) =>
+    `Spine reads an escrow statement as a PDF or a spreadsheet. "${filename}" is neither. ` +
+    `Upload the statement from the lender or servicer.`,
 });
 
 function shapesFor(artifact_kind) {

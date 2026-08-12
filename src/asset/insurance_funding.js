@@ -52,6 +52,80 @@ module.exports = function insuranceFunding(deps) {
     return res.status(500).json({ error: "insurance_funding_write_failed" });
   }
 
+  /*  ══ POST …/insurance/funding/evidence ═══════════════════════════
+   *  Retain a finance agreement or escrow statement.
+   *
+   *  ITS OWN ROUTE, ON THIS SIDE OF THE WALL. The establishment module
+   *  has an evidence route already, and reusing it would have been two
+   *  lines — but that module is in the economic chain, and funding
+   *  documents would then be stored by economic code. The boundary is
+   *  worth more than the two lines.
+   *
+   *  Storing the document asserts nothing about how anything is paid.
+   *  The arrangement is a separate, confirmed act.
+   */
+  const multer = require("multer");
+  const artifacts = require("../onboarding/source_artifact_service.js");
+  const FUNDING_EVIDENCE_KINDS = Object.freeze([
+    "insurance_finance_agreement", "insurance_escrow_statement",
+  ]);
+
+  const uploadOne = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: artifacts.MAX_BYTES, files: 1 },
+  }).single("file");
+
+  //  Multer FIRST, then authority — req.body does not exist before it, so
+  //  the ordinary gate order would read undefined and silently IGNORE a
+  //  body property_id instead of refusing it. Identity still comes first.
+  function acceptFile(req, res, next) {
+    uploadOne(req, res, (err) => {
+      if (!err) return next();
+      if (err.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({ error: "file_too_large",
+          receipt: "That file is over 25 MB. Upload the agreement on its own." });
+      }
+      return res.status(400).json({ error: "upload_failed", receipt: err.message });
+    });
+  }
+
+  router.post("/operator/asset-management/insurance/funding/evidence",
+    requireOperator, acceptFile, refuseClientAuthority, requireAssetManagementModule,
+    async (req, res) => {
+      const kind = String((req.body && req.body.artifact_kind) || "insurance_finance_agreement");
+      if (!FUNDING_EVIDENCE_KINDS.includes(kind)) {
+        return res.status(422).json({ error: "unsupported_artifact_kind",
+          receipt: `Funding evidence is a finance agreement or an escrow statement. ` +
+                   `"${kind}" is neither.` });
+      }
+      if (!req.file) {
+        return res.status(400).json({ error: "no_file",
+          receipt: "Choose the agreement or statement to upload." });
+      }
+      try {
+        const stored = await artifacts.store(pool, {
+          scope_type: "property",
+          //  SERVER-DERIVED, never a body field.
+          scope_id: req.operator.property_id,
+          filename: req.file.originalname, mimetype: req.file.mimetype,
+          buffer: req.file.buffer, uploaded_by_user_id: req.operator.id,
+          authority_basis: "asset_management_module", artifact_kind: kind,
+        });
+        return res.status(stored.deduplicated ? 200 : 201).json({
+          artifact: { id: stored.id, filename: stored.original_filename,
+                      artifact_kind: kind, deduplicated: !!stored.deduplicated },
+          receipt: stored.receipt ||
+            `${stored.original_filename} is on file. Recording it does not yet say ` +
+            `how anything is paid — confirm the arrangement next.`,
+        });
+      } catch (e) {
+        if (e && e.artifactRefusal) {
+          return res.status(422).json({ error: e.reason, receipt: e.message });
+        }
+        return fail(res, e);
+      }
+    });
+
   /*  ══ POST …/insurance/funding ═════════════════════════════════════
    *  Record how a coverage is funded for THIS property.
    *
