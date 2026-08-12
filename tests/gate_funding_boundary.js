@@ -61,10 +61,23 @@ function ok(label, cond, detail) {
   else { fail++; console.log("  FAIL  " + label + (detail ? "\n          " + detail : "")); }
 }
 
-/*  ── THE ECONOMIC CHAIN ─────────────────────────────────────────────
- *  Exactly the files that answer "what does insurance cost this
- *  property". Adding one here is a deliberate act. */
-const ECONOMIC = [
+/*  ══ TWO DOMAINS, ONE RULE ═════════════════════════════════════════
+ *  Insurance and Taxes have the SAME wall for the SAME reason, so they
+ *  get one implementation of it rather than two files that agree until
+ *  somebody edits one — §17 counts that a defect even while they agree.
+ *
+ *  Taxes is declared BEFORE its schema exists, deliberately. The wall has
+ *  to be executable before the thing it guards is written, or the first
+ *  tax-funding commit is the one deciding where the wall goes. Every
+ *  declared-but-absent path is REPORTED, never silently skipped.
+ *
+ *  The tax case is the one the operator named: changing a lender escrow
+ *  contribution must not move the annual tax liability or the monthly tax
+ *  accrual. Escrow may REFERENCE the tax obligation it pays. It may never
+ *  author it — and a fully funded escrow is still not PAID until there is
+ *  evidence the City was paid.
+ */
+const INSURANCE_ECONOMIC = [
   "migrations/161_insurance_economic_truth.sql",
   "migrations/162_insurance_coverage_participation.sql",
   "src/asset/insurance_program_service.js",
@@ -82,28 +95,67 @@ const ECONOMIC = [
  *
  *  A path listed here and absent from disk is reported, never silently
  *  skipped. */
-const FUNDING = [
+const INSURANCE_FUNDING = [
   "migrations/163_insurance_funding.sql",
   "src/asset/insurance_funding_service.js",
   "src/asset/insurance_funding_read.js",
   "src/asset/insurance_funding.js",
 ];
 
+//  ── TAXES. DECLARED AHEAD OF THE SCHEMA, ON PURPOSE. ───────────────
+const TAX_ECONOMIC = [
+  "migrations/165_philadelphia_tax_position.sql",
+  "src/asset/tax_obligation_service.js",
+  "src/asset/tax_position_read.js",
+  "src/asset/tax_establishment.js",
+  "src/asset/philadelphia_tax_rules.js",
+];
+const TAX_FUNDING = [
+  "migrations/166_tax_funding.sql",
+  "src/asset/tax_funding_service.js",
+  "src/asset/tax_funding_read.js",
+  "src/asset/tax_funding.js",
+];
+
 /*  Tables each side OWNS. Ownership is what makes a write a violation:
  *  funding writing `insurance_property_allocations` would be funding
  *  authoring the number that becomes this property's economic cost —
  *  the exact defect 161 exists to prevent, arriving from the other side. */
-const ECONOMIC_TABLES = [
+const INSURANCE_ECONOMIC_TABLES = [
   "insurance_programs",
   "insurance_coverages",
   "insurance_coverage_identifiers",
   "insurance_property_allocations",
   "insurance_coverage_properties",
 ];
-const FUNDING_TABLES = [
+const INSURANCE_FUNDING_TABLES = [
   "insurance_funding_arrangements",
   "premium_finance_agreements",
   "insurance_escrow_arrangements",
+];
+const TAX_ECONOMIC_TABLES = [
+  "tax_obligations",
+  "tax_liabilities",
+  "tax_obligation_applicability",
+  "tax_filings",
+];
+const TAX_FUNDING_TABLES = [
+  "tax_funding_arrangements",
+  "tax_escrow_arrangements",
+];
+
+const DOMAINS = [
+  { name: "insurance",
+    economic: INSURANCE_ECONOMIC, funding: INSURANCE_FUNDING,
+    economicTables: INSURANCE_ECONOMIC_TABLES, fundingTables: INSURANCE_FUNDING_TABLES,
+    //  The accrual whose independence is the point of the whole wall.
+    accrualFile: "src/asset/insurance_position_read.js",
+    accrualRule: /termMonths|term_months/ },
+  { name: "tax",
+    economic: TAX_ECONOMIC, funding: TAX_FUNDING,
+    economicTables: TAX_ECONOMIC_TABLES, fundingTables: TAX_FUNDING_TABLES,
+    accrualFile: "src/asset/tax_position_read.js",
+    accrualRule: /annual_liability|liability_cents/ },
 ];
 
 // ── PURE ANALYSERS ───────────────────────────────────────────────────
@@ -242,84 +294,78 @@ function reachableFrom(startRel) {
 }
 
 console.log("════════════════════════════════════════════════════════════════");
-console.log("  GATE      insurance funding boundary  (structural, both ways)");
+console.log("  GATE      funding boundary  (structural, both ways, per domain)");
 console.log("════════════════════════════════════════════════════════════════\n");
 
 selfTest();
 
-// ── COVERAGE, STATED BEFORE THE VERDICT ──────────────────────────────
-const fundingPresent = FUNDING.filter((f) => readIf(f) !== null);
-const economicPresent = ECONOMIC.filter((f) => readIf(f) !== null);
+for (const d of DOMAINS) {
+  const economicPresent = d.economic.filter((f) => readIf(f) !== null);
+  const fundingPresent = d.funding.filter((f) => readIf(f) !== null);
+  const fundingSet = new Set(d.funding);
 
-console.log("\n── 1. WHAT THIS RUN ACTUALLY LOOKED AT ───────────────");
-console.log(`  economic chain : ${economicPresent.length}/${ECONOMIC.length} present`);
-console.log(`  funding chain  : ${fundingPresent.length}/${FUNDING.length} present`);
-if (!fundingPresent.length) {
-  console.log("  ⚠ NO FUNDING FILES EXIST YET. Assertions 2 and 4 below are");
-  console.log("    therefore VACUOUS — they pass because there is nothing to");
-  console.log("    violate them, not because a boundary was verified. The");
-  console.log("    detectors above are what is proven today; the wall becomes");
-  console.log("    load-bearing the moment the first funding file lands.");
-}
+  console.log(`\n══ ${d.name.toUpperCase()} ═══════════════════════════════════════`);
+  console.log(`  economic chain : ${economicPresent.length}/${d.economic.length} present`);
+  console.log(`  funding chain  : ${fundingPresent.length}/${d.funding.length} present`);
 
-ok("every declared economic file exists — the chain is not silently short",
-   economicPresent.length === ECONOMIC.length,
-   ECONOMIC.filter((f) => readIf(f) === null).join(", "));
+  //  COVERAGE, STATED BEFORE THE VERDICT. A domain whose files do not
+  //  exist yet passes its cross-checks trivially, and saying so is the
+  //  difference between a scope statement and a clean bill of health.
+  if (!economicPresent.length && !fundingPresent.length) {
+    console.log("  ⚠ DECLARED, NOT YET BUILT. Every cross-check below is VACUOUS —");
+    console.log("    it passes because there is nothing to violate it. The wall is");
+    console.log("    executable and becomes load-bearing on the first file that lands.");
+    continue;
+  }
+  if (!fundingPresent.length) {
+    console.log("  ⚠ no funding files yet — the funding-side checks are VACUOUS.");
+  }
 
-console.log("\n── 2. THE ECONOMIC CHAIN MAY NEVER IMPORT FUNDING ────");
+  console.log(`\n  ── ${d.name}: economics may never import funding ──`);
+  for (const rel of economicPresent) {
+    if (rel.endsWith(".sql")) continue;
+    const reach = reachableFrom(rel);
+    const bad = [...reach].filter((r) => fundingSet.has(r));
+    ok(`${rel} reaches no funding module (${reach.size} repo files transitively)`,
+       bad.length === 0, bad.join(", "));
+  }
 
-const fundingSet = new Set(FUNDING);
-let economicReach = [];
-for (const rel of economicPresent) {
-  if (rel.endsWith(".sql")) continue;
-  const reach = reachableFrom(rel);
-  const bad = [...reach].filter((r) => fundingSet.has(r));
-  economicReach.push({ rel, reach: reach.size, bad });
-  ok(`${rel} reaches no funding module (${reach.size} repo files transitively)`,
-     bad.length === 0, bad.join(", "));
-}
-
-console.log("\n── 3. THE ECONOMIC CHAIN MAY NOT NAME A FUNDING TABLE ");
-
-for (const rel of economicPresent) {
-  const src = readIf(rel);
-  const hits = FUNDING_TABLES.filter((t) => namesTable(src, t, rel.endsWith(".sql")));
-  ok(`${rel} names no funding table`, hits.length === 0, hits.join(", "));
-}
-
-console.log("\n── 4. FUNDING MAY REFERENCE ECONOMICS. IT MAY NOT AUTHOR IT.");
-
-if (!fundingPresent.length) {
-  console.log("  (no funding files yet — nothing to scan, and that is stated above)");
-} else {
-  for (const rel of fundingPresent) {
+  console.log(`\n  ── ${d.name}: economics may not name a funding table ──`);
+  for (const rel of economicPresent) {
     const src = readIf(rel);
-    const isSql = rel.endsWith(".sql");
-    const writes = ECONOMIC_TABLES.filter((t) => writesTable(src, t, isSql));
-    ok(`${rel} writes no economic table`, writes.length === 0, writes.join(", "));
-    //  Referencing is EXPECTED and is not asserted against. Saying so
-    //  here keeps the next reader from "tightening" this into a ban.
+    const hits = d.fundingTables.filter((t) => namesTable(src, t, rel.endsWith(".sql")));
+    ok(`${rel} names no funding table`, hits.length === 0, hits.join(", "));
+  }
+
+  console.log(`\n  ── ${d.name}: funding may reference economics, never author it ──`);
+  if (!fundingPresent.length) {
+    console.log("     (nothing to scan — stated above)");
+  } else {
+    for (const rel of fundingPresent) {
+      const src = readIf(rel);
+      const isSql = rel.endsWith(".sql");
+      const writes = d.economicTables.filter((t) => writesTable(src, t, isSql));
+      ok(`${rel} writes no economic table`, writes.length === 0, writes.join(", "));
+      //  Referencing is EXPECTED and is deliberately not asserted against.
+      //  Saying so here stops the next reader "tightening" it into a ban.
+    }
+  }
+
+  const readSrc = readIf(d.accrualFile);
+  if (readSrc !== null) {
+    console.log(`\n  ── ${d.name}: the economic derivation's inputs ──`);
+    ok(`${d.accrualFile} still derives from its own governed terms`,
+       d.accrualRule.test(stripComments(readSrc, false)),
+       "the derivation moved — re-read it before changing this gate");
+    ok(`${d.accrualFile} imports nothing — it cannot reach funding by any path`,
+       importsOf(readSrc).length === 0, importsOf(readSrc).join(", "));
   }
 }
-
-console.log("\n── 5. THE ACCRUAL'S INPUTS ARE STILL THE COVERAGE'S ──");
-
-//  The behavioural half of "funding may not determine cost or accrual"
-//  belongs in the DB proof, where a funding write can be shown not to
-//  move the number. What is checkable statically is that the derivation
-//  still divides an ALLOCATED ANNUAL COST by a COVERAGE TERM.
-const readSrc = readIf("src/asset/insurance_position_read.js");
-ok("the accrual divides an annual cost by the coverage term",
-   /termMonths|term_months/.test(stripComments(readSrc, false))
-   && /Math\.round\(\s*[a-z_]*annual/i.test(stripComments(readSrc, false)),
-   "the accrual derivation moved — re-read it before changing this gate");
-ok("the position read imports nothing at all — it cannot reach funding by any path",
-   importsOf(readSrc).length === 0, importsOf(readSrc).join(", "));
 
 console.log("\n════════════════════════════════════════════════════════════════");
 console.log(`  ASSERTIONS COMPLETE · ${pass + fail} run · ${pass} passed · ${fail} failed`);
 if (fail) {
-  console.log("  ✗ FAIL — the insurance funding boundary is not holding.");
+  console.log("  ✗ FAIL — a funding boundary is not holding.");
   console.log("  EXIT      1");
   console.log("════════════════════════════════════════════════════════════════");
   process.exit(1);

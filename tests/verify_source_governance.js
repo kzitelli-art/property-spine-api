@@ -86,8 +86,8 @@ const GATES = [
   //  funding module whose name is innocent, nor a funding module writing an
   //  economic table — and once funding exists, that is exactly how the seam
   //  would rot while the vocabulary gate kept passing.
-  { file: "gate_insurance_funding_boundary.js",
-    what: "economics cannot reach funding; funding cannot author economics" },
+  { file: "gate_funding_boundary.js",
+    what: "economics cannot reach funding; funding cannot author economics (insurance + tax)" },
   //  The conversational seams. DB-free, so they belong on the standard path:
   //  they check that the extracted logic has ONE implementation, that resident
   //  wording did not drift, and that an operating receipt and a delivery
