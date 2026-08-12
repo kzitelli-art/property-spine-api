@@ -27,7 +27,7 @@ const fs = require("fs");
 const path = require("path");
 const doc = require("../src/asset/tax_document_read.js");
 
-const EXPECTED_ASSERTIONS = 34;
+const EXPECTED_ASSERTIONS = 35;
 let pass = 0, fail = 0;
 function ok(label, cond, detail) {
   if (cond) { pass++; console.log("  ok    " + label); }
@@ -43,7 +43,8 @@ console.log("══════════════════════�
 console.log("\n── 1. A REAL CITY REAL ESTATE TAX BILL ───────────────");
 
 const bill = doc.propose(fixture("2116_chestnut_ret_bill_2023.txt"), "tax_bill");
-ok("the bill is readable", bill.available === true, JSON.stringify(bill));
+ok("the bill is readable", bill.available === true && bill.found_count === 4,
+   JSON.stringify(bill));
 ok("⚠ the OPA number is read despite the label appearing twice",
    bill.fields.account_identifier === "881566975", bill.fields.account_identifier);
 ok("the tax year comes from the bill's own masthead",
@@ -64,7 +65,8 @@ ok("⚠ the ASSESSMENT is not proposed — its labels and values are separated",
 console.log("\n── 2. A REAL FILED BIRT RETURN ───────────────────────");
 
 const birt = doc.propose(fixture("onefive_4233_birt_2023.txt"), "tax_return");
-ok("the return is readable", birt.available === true, JSON.stringify(birt));
+ok("the return is readable", birt.available === true && birt.found_count === 5,
+   JSON.stringify(birt));
 ok("the Philadelphia tax ID is read",
    birt.fields.account_identifier === "2000179694", birt.fields.account_identifier);
 ok("the tax year comes from the filing period, not the submission date",
@@ -116,8 +118,13 @@ ok("…and still names every field it would have wanted",
    empty.unknown.length === 4, JSON.stringify(empty.unknown));
 
 const nothing = doc.propose("A letter from the City about nothing in particular.", "tax_bill");
+//  ⚠ READ, AND LEARNED NOTHING — a different answer from never opened,
+//  and the same distinction insurance_document_read.js draws.
 ok("a document with none of the labels proposes nothing",
-   nothing.available === false && Object.keys(nothing.fields).length === 0);
+   nothing.found_count === 0 && Object.keys(nothing.fields).length === 0);
+ok("…but Spine says it DID read it, unlike a kind it never opens",
+   nothing.available === true
+   && doc.propose("x", "tax_clearance_certificate").available === false);
 ok("…and tells the operator to enter what it says",
    /Enter what it says/.test(nothing.reason), nothing.reason);
 

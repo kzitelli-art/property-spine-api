@@ -242,14 +242,17 @@ function propose(text, artifact_kind) {
   const spec = KIND_FIELDS[artifact_kind];
 
   if (!spec) {
-    return { available: false, fields: {}, unknown: [], source: "label_scan",
+    //  NEVER OPENED. Spine does not read this kind of document at all.
+    return { available: false, found_count: 0, fields: {}, unknown: [],
+             source: "label_scan",
              reason: NO_PROPOSAL[artifact_kind]
                || "Spine does not read this kind of document. Enter what it says — " +
                   "your answers are recorded against the file you uploaded." };
   }
   if (!body.trim()) {
-    return { available: false, fields: {}, unknown: spec.map((f) => f.key),
-             source: "label_scan",
+    //  NOTHING TO READ. No text came out of the file at all.
+    return { available: false, found_count: 0, fields: {},
+             unknown: spec.map((f) => f.key), source: "label_scan",
              reason: "Spine could not read any text out of this document. Enter what " +
                      "it says — your answers are recorded against the file you uploaded." };
   }
@@ -264,9 +267,18 @@ function propose(text, artifact_kind) {
     else unknown.push(f.key);
   }
 
+  /*  ⚠ `available` MEANS A READ HAPPENED, NOT THAT IT FOUND ANYTHING.
+   *  `insurance_document_read.js` already drew that distinction — "a
+   *  document Spine read and learned nothing from is a different answer
+   *  from a document Spine never opened" — and this adapter shipped with
+   *  the opposite meaning. Two sibling adapters using one key for two
+   *  things is a §17 defect even while nothing has broken, so they now
+   *  agree. `found_count` is what a surface tests to decide whether it
+   *  has anything to show. */
   const found = Object.keys(fields).length;
   return {
-    available: found > 0,
+    available: true,
+    found_count: found,
     fields, unknown, source: "label_scan",
     reason: found
       ? `Spine read ${found} field${found === 1 ? "" : "s"} off this document. Check ` +

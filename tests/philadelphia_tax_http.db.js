@@ -636,7 +636,7 @@ async function main() {
       file: { name: "2023 RET bill.pdf", type: "application/pdf", bytes: REAL_BILL },
       fields: { artifact_kind: "tax_bill" } } });
     ok("a real City bill is retained and READ", r.status === 201
-       && r.body.proposal && r.body.proposal.available === true, r.raw.slice(0, 300));
+       && r.body.proposal && r.body.proposal.found_count === 4, r.raw.slice(0, 300));
     ok("…the OPA number reaches the operator",
        r.body.proposal.fields.account_identifier === "881566975",
        JSON.stringify(r.body.proposal.fields));
