@@ -198,6 +198,11 @@ module.exports = function assetManagement(deps) {
   //  write `tax_payments`, so no escrow can make a bill read as paid.
   const taxFunding = require("../asset/tax_funding.js");
   const taxFundingRead = require("../asset/tax_funding_read.js");
+  //  The taxpayer capture seam. NOT owned by Taxes — `legal_entities` is a
+  //  shared primitive that ownership and debt work will want too — but
+  //  mounted here because this is the door an operator is standing in when
+  //  BIRT asks them for an entity that does not exist yet.
+  const legalEntityRoutes = require("../entity/legal_entity_routes.js");
 
   const { pool, fileToText } = deps || {};
   if (!pool) throw new Error("asset_management requires a pool");
@@ -1162,6 +1167,15 @@ module.exports = function assetManagement(deps) {
   }));
 
   router.use(taxEstablishment({
+    pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
+    //  OPTIONAL BY DESIGN, exactly as in Insurance. Without it the
+    //  evidence route still retains the document and reports honestly
+    //  that Spine has not read it. A missing reader degrades to a blank
+    //  form, never to a broken upload.
+    fileToText,
+  }));
+
+  router.use(legalEntityRoutes({
     pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
   }));
 

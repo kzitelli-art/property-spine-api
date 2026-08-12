@@ -96,6 +96,11 @@ const GATES = [
   //  schedule, date by date, and requires the derivation to reproduce it.
   { file: "philadelphia_tax_clocks.test.js",
     what: "Philadelphia tax clocks agree with the City's published schedule" },
+  //  The tax proposal adapter, against the extracted text of REAL City
+  //  documents held in tests/fixtures/tax. Pure, so it runs here. A reader
+  //  proven against an invented format is proven against nothing.
+  { file: "tax_document_read.test.js",
+    what: "tax document reader: reads real City bills and returns, refuses to guess" },
   //  The conversational seams. DB-free, so they belong on the standard path:
   //  they check that the extracted logic has ONE implementation, that resident
   //  wording did not drift, and that an operating receipt and a delivery

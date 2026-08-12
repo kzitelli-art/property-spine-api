@@ -43,8 +43,16 @@ module.exports = function taxEstablishment(deps) {
   //  operator may write a BIRT record at all.
   const entities = require("../entity/legal_entity_service.js");
 
+  //  The proposal adapter. It has no authority: nothing it returns is
+  //  written, and the confirm routes never consult it.
+  const docRead = require("./tax_document_read.js");
+
   const {
     pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
+    //  OPTIONAL. Without it the evidence route still retains the document
+    //  and says plainly that Spine has not read it — a missing reader
+    //  degrades to a blank form, never to a broken upload.
+    fileToText,
   } = deps || {};
   if (!pool) throw new Error("tax_establishment requires a pool");
   for (const [name, fn] of Object.entries({
@@ -180,12 +188,40 @@ module.exports = function taxEstablishment(deps) {
           buffer: req.file.buffer, uploaded_by_user_id: req.operator.id,
           authority_basis: "asset_management_module", artifact_kind: kind,
         });
+        /*  ── READ THE DOCUMENT, PROPOSE NOTHING BINDING ────────────
+         *  The scan runs AFTER the artifact is safely stored, and its
+         *  failure is not the upload's failure: a City bill Spine could
+         *  not parse is still a bill worth retaining, and the operator
+         *  can type what it says. Losing the document because a PDF
+         *  library threw would be the worse outcome by far.
+         */
+        const storedKind = stored.artifact_kind || kind;
+        let proposal = {
+          available: false, fields: {}, unknown: [], source: "none",
+          reason: "Spine has not read this document. Enter what it says — Spine " +
+                  "records your answers against the file you uploaded.",
+        };
+        if (typeof fileToText === "function") {
+          try {
+            const text = await fileToText({
+              buffer: req.file.buffer, mimetype: req.file.mimetype,
+              filename: req.file.originalname,
+            });
+            proposal = docRead.propose(text, storedKind);
+          } catch (scanErr) {
+            console.error("tax document scan failed (document retained)", scanErr);
+          }
+        }
+
         return res.status(stored.deduplicated ? 200 : 201).json({
           artifact: { id: stored.id, filename: stored.original_filename,
                       //  THE STORED KIND, not the requested one. Dedup resolves by
                       //  bytes, and the kind on file wins.
-                      artifact_kind: stored.artifact_kind || kind,
+                      artifact_kind: storedKind,
                       deduplicated: !!stored.deduplicated },
+          //  Carried, never merged into anything. The confirm routes read
+          //  the human's body and nothing else.
+          proposal,
           receipt: stored.receipt ||
             `${stored.original_filename} is on file. A document on file is not yet a ` +
             `governed fact — confirm what it establishes next.`,

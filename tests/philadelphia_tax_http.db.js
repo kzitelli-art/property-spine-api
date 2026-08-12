@@ -32,7 +32,7 @@ const { Pool } = require("pg");
 const receipt = require("./_run_receipt.js");
 const URL_ = receipt.harnessConnectionString();
 
-const EXPECTED_ASSERTIONS = 92;
+const EXPECTED_ASSERTIONS = 106;
 let pass = 0, fail = 0;
 function ok(label, cond, detail) {
   if (cond) { pass++; console.log("  ok    " + label); }
@@ -135,7 +135,15 @@ async function main() {
     app.use(express.json());
     scoped = new Pool({ connectionString: URL_ });
     scoped.on("connect", (cl) => cl.query(`set search_path to ${schema}`));
-    app.use("/", require("../src/surfaces/asset_management.js")({ pool: scoped }));
+    /*  `fileToText` is the same injected seam production uses (server.js
+     *  supplies a PDF extractor). Here it hands back the bytes as text —
+     *  the PDF library is not what this proof is about, and the route,
+     *  the reader and the proposal contract are all the real shipped
+     *  code. Stated, not silent. */
+    app.use("/", require("../src/surfaces/asset_management.js")({
+      pool: scoped,
+      fileToText: async ({ buffer }) => buffer.toString("utf8"),
+    }));
     server = http.createServer(app);
     await new Promise((r) => server.listen(0, "127.0.0.1", r));
     port = server.address().port;
@@ -575,7 +583,88 @@ async function main() {
     ok("and the headline still reflects the obligation, not the certificate",
        r.body.overall === "overdue", r.body.overall);
 
-    console.log("\n── 12. THE OTHER PROPERTY SEES NONE OF IT ────────────");
+    console.log("\n── 12. THE TAXPAYER DEAD END IS CLOSED ───────────────");
+
+    /*  Until this route existed, BIRT and NPT could not be established
+     *  from a property whose entity was not already in the database by
+     *  hand. The sheet explained the problem honestly and offered no way
+     *  out of it, which is still a dead end. */
+    r = await post("/operator/asset-management/legal-entity", { token: "entitled", json: {
+      legal_name: "Chestnut Holdings LLC", entity_type: "llc",
+      relationship_type: "owner", effective_from: "2026-01-01" } });
+    ok("an entity with no provenance is refused", r.status === 422
+       && r.body.error === "PROVENANCE_REQUIRED", r.raw.slice(0, 200));
+
+    r = await post("/operator/asset-management/legal-entity", { token: "entitled", json: {
+      property_id: other, legal_name: "Chestnut Holdings LLC",
+      effective_from: "2026-01-01", provenance_note: "deed" } });
+    ok("§21 a client-supplied property is refused on this route too",
+       r.status === 403, String(r.status));
+
+    r = await post("/operator/asset-management/legal-entity", { token: "unentitled", json: {
+      legal_name: "Chestnut Holdings LLC", effective_from: "2026-01-01",
+      provenance_note: "deed" } });
+    ok("an unentitled operator cannot name a taxpayer", r.status === 403);
+
+    r = await post("/operator/asset-management/legal-entity", { token: "entitled", json: {
+      legal_name: "Chestnut Holdings LLC", entity_type: "llc",
+      formation_jurisdiction: "PA", relationship_type: "owner",
+      effective_from: "2026-01-01", provenance_note: "deed recorded 2026-01-04" } });
+    ok("a taxpayer is established and related in one act", r.status === 201
+       && !!r.body.legal_entity_id && !!r.body.relationship_id, r.raw.slice(0, 250));
+    ok("⚠ …and it establishes NO tax fact — the response says so",
+       r.body.tax_truth_established === false
+       && /does not yet say which taxes apply/.test(r.body.receipt), r.body.receipt);
+    ok("the property now reaches two taxpayers",
+       r.body.entities.length === 2, JSON.stringify(r.body.entities.map((e) => e.legal_name)));
+
+    r = await get(`${B}?as_of=${AS_OF}`);
+    ok("…and the taxes screen sees the new one immediately",
+       r.body.entities.some((e) => e.legal_name === "Chestnut Holdings LLC"));
+
+    console.log("\n── 13. THE DOCUMENT IS READ, AND PROPOSES ONLY ───────");
+
+    /*  The extracted text of a REAL City Real Estate Tax bill. The
+     *  reader has its own pure test; what this rung proves is that the
+     *  proposal actually reaches an operator over HTTP, and that nothing
+     *  it proposed was written. */
+    const REAL_BILL = Buffer.concat([Buffer.from("%PDF-1.7\n"),
+      fs.readFileSync(path.join(__dirname, "fixtures", "tax",
+        "2116_chestnut_ret_bill_2023.txt"))]);
+
+    r = await post(`${B}/evidence`, { token: "entitled", multipart: {
+      file: { name: "2023 RET bill.pdf", type: "application/pdf", bytes: REAL_BILL },
+      fields: { artifact_kind: "tax_bill" } } });
+    ok("a real City bill is retained and READ", r.status === 201
+       && r.body.proposal && r.body.proposal.available === true, r.raw.slice(0, 300));
+    ok("…the OPA number reaches the operator",
+       r.body.proposal.fields.account_identifier === "881566975",
+       JSON.stringify(r.body.proposal.fields));
+    ok("…so does the amount to pay, and the March 31 date",
+       r.body.proposal.fields.annual_liability === "201512.97"
+       && r.body.proposal.fields.due_date === "2023-03-31");
+    ok("…and the proposal names itself a proposal, to be checked",
+       r.body.proposal.source === "label_scan"
+       && /Check every one before confirming/.test(r.body.proposal.reason));
+
+    //  ⚠ NOTHING PROPOSED WAS WRITTEN. Uploading is retention, not a
+    //  claim, and the position must be untouched by it.
+    const afterScan = await get(`${B}?as_of=${AS_OF}`);
+    ok("⚠ reading a document established NO tax fact",
+       !afterScan.body.rows.some((x) => x.period_label === "2023"),
+       JSON.stringify(afterScan.body.rows.map((x) => x.period_label)));
+
+    r = await post(`${B}/evidence`, { token: "entitled", multipart: {
+      file: { name: "clearance.pdf", type: "application/pdf",
+              bytes: Buffer.concat([Buffer.from("%PDF-1.7\n"),
+                Buffer.from("TAX CLEARANCE CERTIFICATE  Amount to Pay: $500.00")]) },
+      fields: { artifact_kind: "tax_clearance_certificate" } } });
+    ok("a clearance certificate is retained but proposes nothing",
+       r.status === 201 && r.body.proposal.available === false);
+    ok("…and says why, instead of looking like a failed read",
+       /compliance evidence/.test(r.body.proposal.reason), r.body.proposal.reason);
+
+    console.log("\n── 14. THE OTHER PROPERTY SEES NONE OF IT ────────────");
 
     r = await get(`${B}?as_of=${AS_OF}`, "elsewhere");
     ok("a different property's screen is honestly empty",
