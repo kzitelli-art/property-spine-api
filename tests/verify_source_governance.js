@@ -93,6 +93,10 @@ const GATES = [
   //  nobody has seen fire. These run with no credentials.
   { file: "technician_work_selection.test.js",
     what: "technician: identity, scope, eligibility, replay, cross-property refusal" },
+  //  Ask Spine slice 2. A chat box is the easiest place to ship a
+  //  confident lie, so the honesty properties are on the standard path.
+  { file: "ask_spine_answer.test.js",
+    what: "Ask Spine: answers only from reads, names them, and an outage never reads as good news" },
   { file: "technician_language.test.js",
     what: "technician language: plain phrases read correctly, nothing guessed into an action" },
 ];
