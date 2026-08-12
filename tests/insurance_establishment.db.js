@@ -41,7 +41,7 @@ const URL_ = receipt.harnessConnectionString();
 //  EVERY assertion is counted, and a short run is a FAILED run. A harness
 //  that dies halfway prints a clean-looking tail otherwise — this repo has
 //  already paid for one that ran zero assertions for 204 commits.
-const EXPECTED_ASSERTIONS = 80;
+const EXPECTED_ASSERTIONS = 105;
 let pass = 0, fail = 0;
 function ok(label, cond, detail) {
   if (cond) { pass++; console.log("  ok    " + label); }
@@ -569,6 +569,115 @@ async function main() {
     } finally {
       await new Promise((r) => server2.close(r));
     }
+
+    console.log("\n── 12. GOOD STANDING IS DERIVED, NEVER STORED ────────");
+
+    const standing = require("../src/asset/insurance_standing.js");
+    //  One in-force property policy, 2026-03-01 → 2027-03-01, evidenced.
+    const TERM = [{ coverage_id: "c1", coverage_type: "property", carrier_name: "Ally",
+                    coverage_period_start: "2026-03-01", coverage_period_end: "2027-03-01",
+                    observed_in_artifact_id: "a1" }];
+    const at = (d, cov) => standing.standingOf({ coverages: cov || TERM, asOf: d });
+
+    //  ── THE DETERMINISTIC PROGRESSION ────────────────────────────────
+    ok("well outside the window reads CURRENT", at("2026-06-01").state === "current",
+       JSON.stringify(at("2026-06-01").state));
+    ok("…and names no milestone", at("2026-06-01").milestone === null);
+
+    ok("91 days out is still CURRENT — the window has not opened",
+       at("2026-11-30").state === "current", `days=${at("2026-11-30").days_to_expiry}`);
+    ok("90 days out enters RENEWAL APPROACHING",
+       at("2026-12-01").state === "renewal_approaching" && at("2026-12-01").milestone === 90,
+       JSON.stringify(at("2026-12-01")));
+    ok("60 days out reports the 60 milestone", at("2027-01-01").milestone === 60,
+       `days=${at("2027-01-01").days_to_expiry}`);
+    ok("45 days out reports the 45 milestone", at("2027-01-15").milestone === 45,
+       `days=${at("2027-01-15").days_to_expiry}`);
+    ok("30 days out reports the 30 milestone", at("2027-01-30").milestone === 30,
+       `days=${at("2027-01-30").days_to_expiry}`);
+    ok("the TIGHTEST band wins — 44 days is inside 45, not 60",
+       standing.milestoneFor(44) === 45);
+
+    //  ── NEVER HEALTHY FROM ABSENCE. THE POINT OF THE WHOLE SLICE. ────
+    ok("the day after expiry is EXPIRED, not current",
+       at("2027-03-02").state === "expired", JSON.stringify(at("2027-03-02").state));
+    ok("…and it says no bound term exists after it",
+       at("2027-03-02").bound_next_term === null && /no bound term/i.test(at("2027-03-02").why),
+       JSON.stringify(at("2027-03-02").why));
+    ok("no coverage at all is COVERAGE NOT CONFIRMED, never CURRENT",
+       standing.standingOf({ coverages: [], asOf: "2026-06-01" }).state === "coverage_not_confirmed");
+    ok("…and it never reads as a healthy blank",
+       standing.standingOf({ coverages: [] }).state !== "current");
+
+    //  ── A BOUND NEXT TERM RESTORES CONFIRMED COVERAGE ────────────────
+    //  And note what a bound term IS: another coverage, established the
+    //  ordinary way. There is no "renewed" flag to set.
+    const RENEWED = TERM.concat([{ coverage_id: "c2", coverage_type: "property",
+      carrier_name: "Ally", coverage_period_start: "2027-03-01",
+      coverage_period_end: "2028-03-01", observed_in_artifact_id: "a2" }]);
+    ok("inside the window WITH a bound successor reads CURRENT again",
+       at("2027-01-30", RENEWED).state === "current", JSON.stringify(at("2027-01-30", RENEWED)));
+    ok("…and it names the bound term rather than merely going quiet",
+       at("2027-01-30", RENEWED).bound_next_term.starts === "2027-03-01");
+    ok("…and reports no milestone, because nothing is approaching",
+       at("2027-01-30", RENEWED).milestone === null);
+
+    //  A DIFFERENT coverage type is not a successor. This is the failure
+    //  that would let a property read CURRENT while its Property policy
+    //  lapses behind a bound GL policy.
+    const WRONG_TYPE = TERM.concat([{ coverage_id: "c3", coverage_type: "general_liability",
+      carrier_name: "Lantern", coverage_period_start: "2027-03-01",
+      coverage_period_end: "2028-03-01", observed_in_artifact_id: "a3" }]);
+    ok("a bound GL policy does NOT renew the Property policy",
+       at("2027-01-30", WRONG_TYPE).state === "renewal_approaching",
+       JSON.stringify(at("2027-01-30", WRONG_TYPE).state));
+
+    //  The soonest expiry governs — not the longest-dated policy.
+    const TWO = [
+      { coverage_id: "p", coverage_type: "property", coverage_period_start: "2026-03-01",
+        coverage_period_end: "2028-03-01", observed_in_artifact_id: "a" },
+      { coverage_id: "g", coverage_type: "general_liability", coverage_period_start: "2026-03-01",
+        coverage_period_end: "2026-09-01", observed_in_artifact_id: "a" },
+    ];
+    ok("the SOONEST expiry governs standing, not the longest-dated policy",
+       at("2026-08-01", TWO).state === "renewal_approaching"
+       && at("2026-08-01", TWO).next_expiry === "2026-09-01", JSON.stringify(at("2026-08-01", TWO)));
+
+    //  ── AND OVER REAL HTTP ───────────────────────────────────────────
+    //  The property established a 2026-03-01 → 2027-03-01 property policy
+    //  in section 5 and a GL policy in section 8, neither with a successor.
+    const s1 = await get(DASHBOARD + "?period=2026-06&as_of=2026-06-01");
+    ok("the dashboard emits standing", !!s1.body.standing, JSON.stringify(s1.body.standing));
+    ok("…reading CURRENT well outside the window",
+       s1.body.standing.state === "current", JSON.stringify(s1.body.standing));
+
+    const s2 = await get(DASHBOARD + "?period=2027-01&as_of=2027-01-30");
+    ok("…and RENEWAL APPROACHING at 30 days, over real HTTP",
+       s2.body.standing.state === "renewal_approaching" && s2.body.standing.milestone === 30,
+       JSON.stringify(s2.body.standing));
+    ok("…naming what would resolve it",
+       /policy or binder/i.test(s2.body.standing.resolved_by || ""),
+       JSON.stringify(s2.body.standing.resolved_by));
+    ok("…and refusing to accept a quote as coverage",
+       /quote/i.test(s2.body.standing.resolved_by || ""),
+       JSON.stringify(s2.body.standing.resolved_by));
+
+    //  STANDING IS NOT GATED ON ALLOCATION. The property policy has no
+    //  share established and the property is still insured by it.
+    ok("standing is independent of whether the share is known",
+       s1.body.standing.in_force.length === 2
+       && s1.body.awaiting_allocation_count === 1,
+       JSON.stringify({ inForce: s1.body.standing.in_force.length,
+                        awaiting: s1.body.awaiting_allocation_count }));
+
+    //  as_of may move the clock. It may NOT move the property.
+    const spoofDate = await get(DASHBOARD + "?as_of=2027-03-02");
+    ok("as_of moves the clock and the state follows it",
+       spoofDate.body.standing.state === "expired", JSON.stringify(spoofDate.body.standing.state));
+    const spoofProp = await request({ method: "GET",
+      path: DASHBOARD + "?property_id=" + other, token: "entitled" });
+    ok("a client-supplied property on the standing read is still REFUSED",
+       spoofProp.status === 403, JSON.stringify(spoofProp.body));
 
   } finally {
     //  RELEASE BEFORE end(), or pool.end() waits on the checked-out client

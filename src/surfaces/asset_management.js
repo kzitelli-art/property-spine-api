@@ -176,6 +176,9 @@ module.exports = function assetManagement(deps) {
   //  and this file legitimately contains financing words in the Cash &
   //  Financing section spec).
   const insuranceEstablishment = require("../asset/insurance_establishment.js");
+  //  Good standing — a pure derivation over the coverages the property
+  //  participates in. No table, no stored state, nothing to go stale.
+  const insuranceStanding = require("../asset/insurance_standing.js");
 
   const { pool, fileToText } = deps || {};
   if (!pool) throw new Error("asset_management requires a pool");
@@ -744,6 +747,23 @@ module.exports = function assetManagement(deps) {
         //  one place so no surface has to derive it from row counts.
         participates: participation.participates,
         awaiting_allocation_count: participation.awaiting_allocation_count,
+
+        //  ── ARE WE INSURED, AND IN GOOD STANDING? ──────────────────
+        //  Derived here, every request, from coverage periods and the
+        //  presence of a bound successor. Never stored, so it cannot go
+        //  stale and no backfill is needed when a renewal is recorded.
+        //
+        //  It is deliberately NOT gated on allocation: whether this
+        //  property's share of a policy has been worked out has nothing
+        //  to do with whether the property is covered.
+        standing: insuranceStanding.standingOf({
+          coverages: participation.coverages,
+          asOf: (req.query && /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.as_of || "")))
+            //  A PREFERENCE, not authority — the same rule `period` follows.
+            //  It exists so a proof can ask about a date without waiting for
+            //  one, and it can only move the clock, never the property.
+            ? String(req.query.as_of) : null,
+        }),
 
         position: positionCells.map((p) => ({
           key: p.key, label: p.label, value: p.value,
