@@ -98,7 +98,38 @@ The one instruction that matters for the next slice: the renderer switches on
 `references[].kind` with a fallback, rather than branching over the two kinds
 visible today. Meeting citations arrive in that same array.
 
-### ▶ NEXT — meeting intelligence. FOUR RULINGS ARE FROZEN.
+### ▶ NEXT — TWO DESIGNS, AND THE ORDER IS LOAD-BEARING
+
+```text
+1  docs/ASK_SPINE_CANONICAL_READ_LAYER.md      Taxes + Insurance. LANDS FIRST.
+2  docs/ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md   transcript evidence.
+```
+
+Both converge on the same composer. **Canonical reads first** — governed truth,
+one authority level, no tier machinery. Reversed, transcript passages arrive into
+a composer that has only ever known one kind of fact, and *"I think the taxes got
+paid last week"* ends up beside `city_payment: NOT_ESTABLISHED` with nothing
+structural separating them.
+
+The rule the canonical-read design establishes, headed for `PHILOSOPHY.md` §33:
+
+> **A canonical Spine domain is not complete until its governed standing state is
+> available to Ask Spine for entitled users.**
+
+Every governed domain needs conversational *reads*. Not every module needs
+conversational *writes*. Three collisions with things already frozen in source
+are recorded in §1a of that document — read them before designing:
+
+```text
+the read door does NOT become the write door — ask_spine.js says so
+"I'm done" already has a canonical writer: lifecycle_service.claimCompletion,
+   via the technician SMS path, proven single by gate_completion_writers.js.
+   A conversational write ROUTES THROUGH it or the gate fails, correctly.
+Owner is a RESERVED name — a different audience, possibly a different login.
+   It must not reuse the Asset Management entitlement.
+```
+
+### ▶ AND — meeting intelligence. FOUR RULINGS ARE FROZEN.
 
 Read **`docs/ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md`** before designing any of
 it. Nothing is built. It carries the owner's framing verbatim, four rulings the
