@@ -209,6 +209,102 @@ the reason a PR here shows no green check and never will.
 **Do NOT fix this inside a release.** Adding CI mid-release changes what
 "proven" means in the middle of proving something. It is its own slice.
 
+## ═══ 2026-08-11 · RELEASE 160/161 — WHERE IT ACTUALLY STOPPED ═══
+
+**Released and live. Proven in production up to the entitlement wall, and
+not one rung past it.**
+
+```text
+source merged                 ✓  API 30e1c1a · APP 713625a
+schema released               ✓  ceiling 161, both directions clean, disarmed
+API production proven         ◐  deployed; refuses with no session (401) and
+                                 with no module (403). Correct reads NOT
+                                 confirmed in production.
+app deployed                  ✓  713625a, confirmed from Render's record
+authenticated surface proven   ✗  BLOCKED — see below
+```
+
+**What IS proven in production, with a real account:** the Asset Management
+card is **absent** for a signed-in operator who lacks the module, and the API
+returns a clean 403 for that operator. That is the *fail-closed* direction,
+and it is the half that proves the gate exists rather than proving a card can
+render.
+
+**What is NOT proven in production:** anything requiring an entitled account.
+Insurance rendering governed truth, the accrual figures, Cash & Financing
+staying unestablished — all 105/105 in the browser harness against the real
+router, none of it seen on a production page. **Do not describe Insurance as
+production-verified.**
+
+### 🅿 PARKED 1 — TEAM IS OFFLINE/SNAPSHOT AND CANNOT MAKE LIVE PERMISSION CHANGES
+
+```text
+index.html:4901   window.__OFFLINE_MODE = true;     ← unconditional
+index.html:11033  "Reads only; any write or unknown endpoint throws a clean 404"
+```
+
+The TEAM roster renders from baked demo config — it announces itself with
+`DEMO/OFFLINE ROSTER` and `LOCAL STORAGE` chips, so it is labelled rather
+than lying — and its invite POST cannot reach the API. Asset Management works
+live because it uses the live-required loader that bypasses the snapshot;
+TEAM does not.
+
+**Consequence for migration 160:** adding `asset_management` to the TEAM
+picker (APP #54) was necessary and is correct, but it is **built-but-dormant**
+in production. It removed one of two blockers. There is currently no working
+in-product path to grant the module to an existing person, because TEAM
+cannot write at all.
+
+**This is its own slice.** Do not treat "make TEAM live" as a defect fix
+attached to an Asset Management release.
+
+### 🅿 PARKED 2 — STAFF IDENTITY COULD NOT BE RESOLVED FROM THE ROSTER
+
+Granting the module through the documented admin route
+(`PATCH /property-team-assignments/:id`, operator-key authenticated — not a
+DB edit and not a bypass) needs the caller's `assignment_id`. It could not be
+found:
+
+- a scan of **all 41 properties'** rosters matched no member against the
+  operator's email
+- the operator's chrome shows `ORGS ADMIN` / `DEAL SETUP`, which render only
+  for `super_admin` / `org_admin` — so the account is a platform admin whose
+  staff assignment, if any, is filed under a different name
+
+`/operator/me` returns the session's `id` and `property_id` and would settle
+it in one lookup. That was not run; the hunt was stopped deliberately rather
+than expanded.
+
+### 📌 RECORDED, NOT CHASED — DUPLICATE OPERATING NAMES
+
+Three distinct properties are named **"Solo on Chestnut"**
+(`21197bb1…`, `79a5a8d1…`, `a50fbdd0…`). The production boot log seeds
+`a50fbdd0…` as `solo-qa-baseline`. Any script that resolves a property by
+name is picking one of three by luck — one already did during this release.
+Resolve Solo by **id**, never by name, until this is cleaned up.
+
+Also seen and not chased: `[slots] boot seed: +21 new, 0 existed` on the
+release boot, `+0 new, 21 existed` on the next — idempotent, so it writes
+once and then recognises its own rows. A boot-time seed in production is
+still worth a look against §19–20 someday.
+
+### WHAT CLOSES THIS RELEASE
+
+One authenticated production pass by an entitled operator:
+
+```text
+Asset Management card appears
+Asset Management opens
+Insurance opens
+governed Insurance economic truth renders
+Cash & Financing remains honestly unestablished
+── and the old 159 pair, still open ──
+established Deal Setup property → "Lease & occupancy established"
+genuinely unestablished property → still unestablished
+```
+
+Until then: **schema released, surface unconfirmed.** Say it that way.
+
 ### ⚠ OPEN RELEASE ITEM — THE PRODUCTION SURFACE IS NOT CONFIRMED
 
 **Classify this precisely, because the two halves are not the same claim:**
