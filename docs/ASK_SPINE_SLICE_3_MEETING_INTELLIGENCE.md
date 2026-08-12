@@ -3,7 +3,8 @@
 Written at the close of the Ask Spine composer thread, as the direct input to the
 build of **meeting evidence retrieval**. Nothing here is built. This is the record
 of what the owner asked for, what a real transcript proved about it, the four
-rulings the owner then froze, and the assertion contract those rulings imply.
+rulings the owner then froze, the assertion contract those rulings imply, and
+**the seam that keeps a conversational surface from dissolving them** (§4).
 
 State at the time of writing:
 
@@ -18,7 +19,7 @@ migration files     through 161  ledger ceiling NOT confirmed from this session
                                  (no DATABASE_URL here — confirm before writing 162)
 ```
 
-**The `references[]` dependency is a release-order item, not cleanup.** See §8.
+**The `references[]` dependency is a release-order item, not cleanup.** See §9.
 
 ---
 
@@ -42,7 +43,7 @@ meeting → transcript stored in Spine → attributed passages
 The first slice is **read-only**. Meeting statements create and modify nothing.
 
 The questions it must answer, all five of which a real transcript already
-supports (see §7):
+supports (see §8):
 
 ```text
 What did we say about Unit 527?
@@ -206,7 +207,162 @@ the common case, and it works.
 
 ---
 
-## 4. The four rulings — FROZEN 2026-08-12. Do not re-litigate.
+## 4. The conversational seam — what fluency may and may not decide
+
+The sentence to protect, from the owner, and the one to check any implementation
+against:
+
+> **Ask Spine should feel conversational on the surface, while underneath it
+> remains extremely literal about authority, provenance, uncertainty, and
+> current state.**
+
+All of §4 is one rule wearing seven hats:
+
+```text
+THE MODEL GETS FLUENCY OVER WORDING.
+IT NEVER GETS AUTHORITY OVER ATTRIBUTION, TIER, CURRENT STATE, RELEVANCE,
+OR CONFLICT.
+```
+
+Everything load-bearing is decided server-side and handed to the model already
+resolved. This is the same seam as `references[]` in the composer slice, and it
+is the reason that slice is worth reusing rather than re-deciding: the model
+never resolved an identity there either.
+
+### 4.1 · Fluency must not launder tier
+
+The dangerous failure is not that the transcript says `$29.97`. It is Ask Spine
+saying *"Robert said the rent was $29.97"* — fluent, cited, and now sounding like
+institutional truth. **A model told to be conversational will smooth "the
+transcript records" into "said" every time**, because the second is better
+English. So the phrasing cannot be left to it.
+
+```text
+attribution   "The transcript records Robert Vernicek as saying"   ← SERVER-BUILT
+passage       "…"                                                  ← verbatim
+tier          1                                                    ← server
+```
+
+The model receives the attribution pre-built and is forbidden from constructing
+another. It is a writer of things it was handed, not a decider.
+
+**The assertion that pins it, and what turns it red:** retrieve only unconfirmed
+passages, then assert the answer contains the Tier 1 formulation and does *not*
+contain a bare `<speaker> said`. It goes red the moment someone loosens the
+prompt, swaps the model, or lets the model see a raw speaker field. An assertion
+that cannot go red is the prefill bug again.
+
+### 4.2 · "What is true now" outranks "what did we say"
+
+*"What's going on with the elevator?"* is a state question. It answers from the
+work-order and asset reads. Meeting evidence is **additive and labelled** —
+*"it was also discussed in Monday's meeting"* — never substitutive. Meeting
+memory must not become a competing source of current state.
+
+**Do not implement this as routing.** A classifier deciding "is this a state
+question or a memory question" is a judgement with no edge, and this thread
+already paid for one: the `out_of_scope` rule that depended on whether facts were
+*sufficient* passed one run and failed the next, unchanged. Instead:
+
+```text
+ALWAYS   run the operating reads for an on-subject question
+THEN     attach meeting evidence as an additional, separately labelled block
+NEVER    let one substitute for the other
+```
+
+**And the prohibition that matters most:** if the state read fails, meeting
+evidence does **not** fill the hole. `COULD NOT READ: WORK_ORDERS` already
+happens in production. Backfilling that gap from what someone said in a meeting
+would make the surface look healthier while being less true — a fixture-fallback
+in a new costume (§19–20). The grounding line says the read failed. The meeting
+passage does not get promoted to cover it.
+
+### 4.3 · Relevance is an entity link, not a similarity score
+
+This is what makes R3 implementable instead of hand-wavy. A segment is
+operationally relevant **because it references an operating object** — a unit, a
+person, an asset, an obligation, a work order, a vendor — not because its text
+scored well against the question.
+
+```text
+Unit 527 compensation claim   → unit · resident · potential obligation   IN
+Robert's mattress (15:51)     → no operating object at all               OUT
+```
+
+That is the "bed" problem closed by structure rather than by ranking.
+
+**But entity linkage alone is not sufficient, and the sample proves it.** The
+hospitalization at 8:04 is attached to a real leasing fact — a notice put in,
+then cancelled by the resident's mother, and possibly returning. It references a
+resident and a notice, so a purely entity-based filter pulls it straight in. The
+derived layer therefore needs **two axes, not one**:
+
+```text
+OPERATIONAL RELEVANCE   does it reference an operating object?
+SENSITIVITY             does it disclose personal, health or family matter?
+
+a segment may be BOTH — and sensitivity wins for conversational retrieval
+```
+
+Both axes are derivations. Both live in the mutable layer beside the property
+reference (D1), both are correctable, and neither touches the evidence.
+
+### 4.4 · The retrieval unit is a thread, not a chunk
+
+Top-one RAG routinely misses the conclusion. The roommate discussion is the
+proof: it opens at 2:02, develops at 4:01, and **the actual ruling lands at
+13:56** — twelve minutes later, and it is the part anyone asking the question
+wants.
+
+```text
+1  match segments
+2  expand to the thread they belong to (same entities, same meeting)
+3  present in CHRONOLOGICAL order — never score order
+4  a later decision or reversal in the thread is always included
+```
+
+Score order buries the conclusion in the middle or drops it. Chronological order
+also preserves the thing the human needs in order to judge: **which statement
+came last.**
+
+### 4.5 · Conflict is an output, not something to resolve
+
+The sample contains one inside a single meeting: at 8:51 the third elevator is
+reported running again, and in the same breath the freight elevator stopped
+Saturday during ten move-ins.
+
+The model may not pick. It presents both, in order, and says they conflict. Same
+entity + incompatible assertions + different offsets → surface both. Reconciling
+them is a human act, and if it results in anything durable it is a Tier 2 or
+Tier 3 promotion, not a sentence.
+
+### 4.6 · Uncertainty is a first-class answer
+
+Two responses must exist, be reachable, and be *tested* — not left as things the
+model might say if it feels appropriately humble:
+
+```text
+"The transcript records this, but it has not been confirmed."
+"I found two conflicting statements."
+```
+
+Staff trust collapses faster from one confident wrong than from twenty honest
+blanks. This is §5 at conversational altitude: a neat answer is not the goal.
+
+### 4.7 · What memory may not do on its own
+
+If the owner raises the bedroom-fitting-a-bed concern repeatedly, retrieval is
+not the end state — that unresolved risk should eventually reach the leasing team
+*at the moment it matters*. That is the Exposure contract in `CLAUDE.md`, and it
+must answer all six of its questions including who owns resolving it.
+
+**It arrives by explicit promotion to Tier 3, never by model intuition.** Nothing
+in slice 1 builds it. What slice 1 must not foreclose: segments need stable,
+addressable ids, so a promotion can point at the exact passage it came from.
+
+---
+
+## 5. The four rulings — FROZEN 2026-08-12. Do not re-litigate.
 
 ### R1 · Retention
 
@@ -281,7 +437,7 @@ speaker mapping. The ruling and the ladder are one rule, not two bolted together
 
 ---
 
-## 5. The five decisions that cost a migration if wrong
+## 6. The five decisions that cost a migration if wrong
 
 ### D1 · What container does a meeting attach to?
 
@@ -364,7 +520,7 @@ This slice is that durable object. R1 is that decision.
 
 ---
 
-## 6. What read-only means, precisely
+## 7. What read-only means, precisely
 
 A meeting statement must not create, modify, close or contradict:
 
@@ -391,7 +547,7 @@ written both.
 
 ---
 
-## 7. What the answer must carry, and the five demo questions
+## 8. What the answer must carry, and the five demo questions
 
 Reuse the seam the composer slice built — do not invent a second one.
 `references[]` is server-resolved, the model never sees an id, and the renderer
@@ -435,7 +591,7 @@ before they may be answered at all (R4).
 
 ---
 
-## 8. Release order — a dependency, not cleanup
+## 9. Release order — a dependency, not cleanup
 
 **RULED.** The citation UI depends on an API contract that is not in production.
 
@@ -456,7 +612,7 @@ there by then" is not a release plan.**
 
 ---
 
-## 9. Where the sample lives
+## 10. Where the sample lives
 
 **The transcript is NOT committed to this repo.** It names a resident
 compensation dispute, a hospitalization, staff departures and a vendor waiving a

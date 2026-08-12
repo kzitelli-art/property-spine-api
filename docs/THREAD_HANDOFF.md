@@ -135,6 +135,39 @@ ever inferred from the one below it.** Tier 2 carries `as_recorded` alongside
 `as_confirmed`, which is where `$29.97` becomes `$2,997` while the segment still
 reads `$29.97` forever. Slice 1 stays read-only and builds Tier 1 only.
 
+**§4 is the seam that keeps conversational ease from dissolving all of it**, and
+it is one rule wearing seven hats:
+
+```text
+THE MODEL GETS FLUENCY OVER WORDING. IT NEVER GETS AUTHORITY OVER
+ATTRIBUTION, TIER, CURRENT STATE, RELEVANCE, OR CONFLICT.
+```
+
+The four that will be got wrong by default:
+
+```text
+attribution   the server hands the model a PRE-BUILT attribution string. Told
+              to be conversational, a model smooths "the transcript records"
+              into "said" every time, because the second is better English.
+current state a state question answers from the operating reads; meeting
+              evidence is additive and labelled, never substitutive. And if the
+              state read FAILS, meeting memory does not fill the hole — that is
+              fixture-fallback in a new costume. Do NOT implement this as a
+              routing classifier; that is the judgement-with-no-edge that made
+              check 3 flaky in the first place.
+relevance     a segment is retrievable because it references an operating
+              OBJECT, not because its text scored well. Plus a second axis:
+              sensitivity overrides relevance. The sample's hospitalization is
+              attached to a real leasing fact, so entity linkage alone lets it
+              straight in.
+retrieval     the unit is a THREAD, not a chunk, presented chronologically. The
+              roommate ruling lands at 13:56, twelve minutes after the
+              discussion opens. Top-one RAG misses the conclusion by design.
+```
+
+Conflict is an output, never something the model resolves — the sample reports
+the elevator fixed and broken inside one meeting.
+
 **Release order is now a dependency, not cleanup.** The meeting slice must not
 pretend citation UI is live: `references[]` is on the branch, not in `main`.
 Build against the branch contract or merge it first — never against production
