@@ -98,21 +98,47 @@ The one instruction that matters for the next slice: the renderer switches on
 `references[].kind` with a fallback, rather than branching over the two kinds
 visible today. Meeting citations arrive in that same array.
 
-### ▶ NEXT — meeting intelligence
+### ▶ NEXT — meeting intelligence. FOUR RULINGS ARE FROZEN.
 
-Read **`docs/ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md`** before designing any
-of it. Nothing is built. It carries the owner's framing verbatim, five decisions
-that cost a migration if made wrong, and one correction that a real transcript
-forced on the premise:
+Read **`docs/ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md`** before designing any of
+it. Nothing is built. It carries the owner's framing verbatim, four rulings the
+owner froze on 2026-08-12, the assertion ladder as an actual data contract, and
+one correction that a real transcript forced on the premise:
 
 > A transcript is not evidence of what was said. It is evidence of what a
 > machine rendered from a recording of what was said.
 
 In the owner's own demo transcript a three-bedroom rent appears as `$29.97`, one
-staff member appears under two spellings, and eight turns are attributed to
-`Unidentified Speaker`. So: **quote passages, never paraphrase numbers or
-names out of them**, and never resolve a speaker label to a Person Card without
-a confirmed mapping. The slice stays read-only, and that is why it is safe.
+staff member appears under two spellings, and eight turns are `Unidentified
+Speaker`. The phrasing rule that follows is frozen: **until a passage is
+human-confirmed, Ask Spine says "the transcript records Robert as saying…", not
+"Robert said…"** Quote passages; never paraphrase a number or name out of one.
+
+```text
+R1 retention        transcript kept while the account is active, as an explicit
+                    ORG POLICY. Promoted decisions/obligations/confirmed facts
+                    survive independently of the transcript.
+R2 consent          Spine does NOT record meetings. It ingests from an approved
+                    source under the org's recording policy. Do not build a
+                    second consent mechanism inside Spine.
+R3 retrievability   full transcript preserved; only OPERATIONALLY RELEVANT
+                    segments enter conversational retrieval. Personal chatter
+                    stays out unless the source transcript is asked for directly.
+R4 unmapped speakers  allowed in generic answers as `Unidentified Speaker` with
+                    meeting + timestamp. Never infer identity. An unidentified
+                    segment CANNOT satisfy "what did Kandice say".
+```
+
+The ladder now has a contract rather than prose — Tier 1 transcript claim,
+Tier 2 confirmed statement, Tier 3 governed operating truth, and **no tier is
+ever inferred from the one below it.** Tier 2 carries `as_recorded` alongside
+`as_confirmed`, which is where `$29.97` becomes `$2,997` while the segment still
+reads `$29.97` forever. Slice 1 stays read-only and builds Tier 1 only.
+
+**Release order is now a dependency, not cleanup.** The meeting slice must not
+pretend citation UI is live: `references[]` is on the branch, not in `main`.
+Build against the branch contract or merge it first — never against production
+behavior that does not yet exist.
 
 Migration files exist through **161**; the ledger ceiling was **not confirmed**
 from that session (no `DATABASE_URL` present). Confirm it against production
