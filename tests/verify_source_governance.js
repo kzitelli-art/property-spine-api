@@ -80,6 +80,14 @@ const GATES = [
   //  premium financing is built beside it.
   { file: "gate_insurance_economic_independence.js",
     what: "insurance economics answerable without financing, escrow or payment" },
+  //  The same wall, asserted STRUCTURALLY and in BOTH directions. The gate
+  //  above reads vocabulary in the economic chain; this one reads the
+  //  dependency graph. Vocabulary cannot catch an economic file requiring a
+  //  funding module whose name is innocent, nor a funding module writing an
+  //  economic table — and once funding exists, that is exactly how the seam
+  //  would rot while the vocabulary gate kept passing.
+  { file: "gate_insurance_funding_boundary.js",
+    what: "economics cannot reach funding; funding cannot author economics" },
   //  The conversational seams. DB-free, so they belong on the standard path:
   //  they check that the extracted logic has ONE implementation, that resident
   //  wording did not drift, and that an operating receipt and a delivery
