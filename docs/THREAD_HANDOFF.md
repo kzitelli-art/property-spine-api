@@ -1,6 +1,127 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  ASK SPINE ANSWERS TYPED QUESTIONS. IT NEVER COULD BEFORE.
+##  2026-08-12 (latest). THIS SECTION WINS ON ASK SPINE.
+##  NEXT SLICE IS MEETING INTELLIGENCE — DESIGN DOC WRITTEN, NOT BUILT.
+## ══════════════════════════════════════════════════════════════════
+
+```text
+LIVE   api main 7ebb400 · app main bf86673
+       POST /operator/ask-spine/ask     answers, scoped, server-derived property
+       the composer                     shipped, browser-verified in production
+
+ON A BRANCH, NOT MERGED, NOT DEPLOYED
+       api  bcc5446   claude/ask-spine-conversational-dash-97bwcx
+                      adds `references[]` to the ask response
+       app  ddfa59c   claude/ask-spine-conversational-dash-97bwcx
+                      pins the proof verdict to `state` by name
+```
+
+**⚠ `references[]` IS NOT IN PRODUCTION.** It is written, tested and pushed, and
+`origin/main` does not contain it. Anyone building a UI against that field today
+gets `undefined` from the live API. Merge the branch before, or alongside, the
+visual patch — not after.
+
+### The bug that mattered, and why nothing caught it
+
+Ask Spine had **never once answered a question.** Every typed question returned
+`unavailable`. The cause was one line:
+
+```text
+{ role: "assistant", content: "{" }      an answer-shape prefill
+→ 400 invalid_request_error
+  "This model does not support assistant message prefill."
+```
+
+The catch block rendered that as `unavailable` — indistinguishable from a real
+model outage, which is exactly the state the surface is designed to report
+honestly. It looked like correct behaviour.
+
+**The test suite asserted the prefill was present, and passed the whole time.**
+It pinned the *mechanism* (there is a prefill) instead of the *guarantee* (the
+reply parses as a decision). A stub cannot return a 400, so no stub-backed
+assertion could ever have failed. The fix removes the prefill entirely and uses
+`output_config.format` / `json_schema`, so the API enforces the shape rather than
+the prompt hoping for it.
+
+Worth carrying forward as method: **an assertion about how something is done
+cannot detect that it does not work.** Pin the outcome, and ask what would have
+to break for the green to go red.
+
+### Traps this slice paid for
+
+- **`innerText` applies `text-transform`.** The browser gate reported the
+  grounding line missing on a working surface: `.as-ground` is
+  `text-transform: uppercase`, `innerText` returned `READ 1 OPEN ITEM`, and the
+  assertion was `/Read /`, case-sensitive. This is the *inverse* of the
+  `innerText` trap already in CLAUDE.md — there it read too much, here it read a
+  true thing in a form the assertion did not recognise. Proved with a standalone
+  Playwright run before changing the assertion, because "the gate is wrong" is
+  the most expensive thing to be wrong about.
+- **A scope rule that depends on a judgement has no edge.** Check 3 passed one
+  run and failed the next, unchanged. The prompt made `out_of_scope` depend on
+  whether the facts were *sufficient* — a call with no boundary. Scope is now
+  about the **subject only**: an on-subject question is always `answered`, and
+  "nothing is overdue right now" is an answer, not a refusal.
+- **A contract pin can be blind twice.** The first version searched the whole
+  file and passed on an identical read in a different function; the second used
+  `indexOf("function proofLine")`, which prefix-matches `proofLineX(`. Both were
+  found by trying to make them fail. A pin that has never been falsified is a
+  claim about nothing.
+- **Stale local `main` nearly produced a false ancestry claim** in both repos.
+  `git ls-remote` / `git fetch --prune` before saying anything is or is not
+  merged. Shallow clones also make `npm run verify` skip gates silently —
+  `git rev-parse --is-shallow-repository` before believing a green run.
+
+### Recorded, not fixed
+
+```text
+1  `COULD NOT READ: WORK_ORDERS` appears in live production answers. A real
+   read failure, honestly surfaced by the grounding line rather than hidden.
+   Not diagnosed.
+2  The browser gate's fault-injection checks 6/6b run ONLY when the API key is
+   absent, so a keyed receipt carries `fault_injection_proven.model_unavailable:
+   false` — which deployed mode's D3 then consumes. The gate under-proves
+   exactly the failure path the prefill bug hid in.
+```
+
+### The app side is with the owner's UI developer
+
+A written brief covers the conversational redesign, the DOM contracts the
+browser gate enforces (`#askSpineMount`, `#askSpineInput`, `.as-send`,
+`#askSpineBody`, `[data-as]`, `.as-ground`, `.as-unavail`, `askSpineTyped()`),
+the response shape, and the `innerText` trap above. Do not rename those without
+moving the gate with them — a rename is a contract change.
+
+The one instruction that matters for the next slice: the renderer switches on
+`references[].kind` with a fallback, rather than branching over the two kinds
+visible today. Meeting citations arrive in that same array.
+
+### ▶ NEXT — meeting intelligence
+
+Read **`docs/ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md`** before designing any
+of it. Nothing is built. It carries the owner's framing verbatim, five decisions
+that cost a migration if made wrong, and one correction that a real transcript
+forced on the premise:
+
+> A transcript is not evidence of what was said. It is evidence of what a
+> machine rendered from a recording of what was said.
+
+In the owner's own demo transcript a three-bedroom rent appears as `$29.97`, one
+staff member appears under two spellings, and eight turns are attributed to
+`Unidentified Speaker`. So: **quote passages, never paraphrase numbers or
+names out of them**, and never resolve a speaker label to a Person Card without
+a confirmed mapping. The slice stays read-only, and that is why it is safe.
+
+Migration files exist through **161**; the ledger ceiling was **not confirmed**
+from that session (no `DATABASE_URL` present). Confirm it against production
+before writing 162 — see §3 of this file for why that has already cost time
+twice.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
 ##  ⚠ THE COMPLETION GUARD IS **ON**. IT CUT OVER 2026-08-12 01:49 UTC.
 ##  THIS REPLACES "THE GUARD IS OFF" — THAT SENTENCE IS NOW FALSE.
 ##  2026-08-12. FOR WHOEVER IS WORKING IN MAINTENANCE.
