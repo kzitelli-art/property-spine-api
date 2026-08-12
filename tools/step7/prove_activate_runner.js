@@ -249,6 +249,33 @@ function takeCensus(file) {
   ok("A5  the receipt names the authorization that ran it",
      go.out.includes(AUTH));
 
+  /*  ── THE ONE THAT COST A LIVE ATTEMPT ─────────────────────────────
+   *  The first runner used `new Date()` as activated_at and production
+   *  refused it by ONE MILLISECOND: Node's clock is on Render, now() is
+   *  on Neon, and a wall-clock instant taken before `begin` still landed
+   *  after the transaction start.
+   *
+   *  This isolated baseline runs Node and Postgres on the same machine,
+   *  so the skew that caught it in production does not exist here — which
+   *  is exactly why the assertion is about the VALUE, not about whether
+   *  this particular run happened to succeed. A proof that only checks
+   *  "it worked on my machine" is how that bug reached production.  */
+  ok("A6  the boundary instant is the CENSUS instant, not the wall clock",
+     go.out.includes(new Date(fresh.taken_at).toISOString()) &&
+     /the census instant, not the wall clock/.test(go.out),
+     "activated_at is being derived from the clock. That is refused in production " +
+     "by clock skew alone, and it is semantically wrong: the boundary is when the " +
+     "population was measured, not when someone typed the command.");
+
+  const rec = (await db.query(
+    `select activated_at from release_0_activation_history order by id desc limit 1`)).rows[0];
+  ok("A7  …and that instant is what the database recorded",
+     !!rec && new Date(rec.activated_at).getTime() === new Date(fresh.taken_at).getTime(),
+     `recorded ${rec && rec.activated_at} · census ${fresh.taken_at}`);
+  ok("A8  …which is strictly EARLIER than the cutover transaction",
+     !!rec && new Date(rec.activated_at).getTime() < Date.now(),
+     "the boundary is not in the past — later writes would be classed as pre-cutover legacy");
+
   // ── O · ONCE, AND ONLY ONCE ───────────────────────────────────────
   const again = run(["--activate", "--census", censusFile], { R0_ACTIVATION_AUTHORIZATION: AUTH });
   ok("O1  a SECOND cutover is refused",

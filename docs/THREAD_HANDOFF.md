@@ -1,6 +1,76 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  RELEASE 0 IS NOT FINISHED. THE COMPLETION GUARD IS OFF.
+##  2026-08-11. FOR WHOEVER IS WORKING IN MAINTENANCE.
+## ══════════════════════════════════════════════════════════════════
+
+Release 0's machinery is shipped. Release 0 is **not complete** — the thing the
+release exists for is still inactive.
+
+```text
+boundary 6   operator completion control retired (app)      LIVE
+boundary 7   legacy done-path fails closed (409)            LIVE   e94cf0a
+boundary 7b  migration 140 — the completion guard           APPLIED 22db7f6
+boundary 8a  activation machinery, shipped dormant          LIVE   4aec686
+boundary 8b  the cutover runner                             LIVE   e10133a
+boundary 8   THE ACTIVATION ITSELF                          NOT DONE
+```
+
+**Migration 140 installed database triggers that are switched off.** They fire
+from an activation epoch row whose `activation_id` is still null.
+
+### What changes on the day it is switched on
+
+From that instant, **the database refuses any work order reaching a terminal
+status without a grounded proof evaluation.** Not the app checking — the
+database, on commit, through a deferred constraint trigger. No route, repair
+script or psql session gets around it.
+
+That matters to anyone building in maintenance right now. `not_done_service.js`
+and the work-order surfaces landed while the guard was dormant, so nothing has
+felt it yet. Anything that puts a work order into `complete` or `closed` must go
+through the canonical writer, or it will start failing at commit.
+
+Today there are exactly two completion writers and `gate_completion_writers.js`
+proves there is no third:
+
+```text
+CANONICAL  src/technician/lifecycle_service.claimCompletion
+           called only from src/technician/conversation.js (the SMS path)
+LEGACY     src/maintenance/maintenance.js closeout — done=true returns 409
+           done=false is untouched and still works
+```
+
+### The cutover is blocked, and not on anything conceptual
+
+```text
+API  PR #91   claude/boundary-8b-census-instant   2 files, tooling only
+```
+
+A one-millisecond clock-skew bug: the runner took `activated_at` from
+`new Date()` on Render while `now()` came from Neon. Production refused it and
+rolled back — nothing changed. The boundary instant is now the census's own
+`taken_at`, which is what the service always documented it should be.
+
+**#91 cannot deploy until 160/161 is released**, because a deploy does not
+migrate and main currently carries pending migrations. It is queued behind that
+release, not competing with it.
+
+After it deploys: fresh census → dry run → **stop for owner authorization** →
+activate → prove both sides → re-census. The previous census (1 legacy row,
+digest `698b88ae…`) is stale and must be retaken.
+
+### If you are about to touch work-order completion
+
+Read `docs/RELEASE_0_ACTIVATION_RUNBOOK.md` and
+`tools/step7/activate.js` first. The activation is the one irreversible act in
+the release: it draws a permanent line, and everything terminal after it must be
+provable.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
 ##  159 IS RELEASED. THE API SHIPS AGAIN. 2026-08-11 (latest).
 ##  THIS SECTION WINS.
 ## ══════════════════════════════════════════════════════════════════
