@@ -170,6 +170,12 @@ module.exports = function assetManagement(deps) {
   const router = express.Router();
   const staffSessions = require("../identity/staff_session_service");
   const insurancePosition = require("../asset/insurance_position_read.js");
+  //  The Insurance WRITE path. Its own module, mounted here behind this
+  //  door's authority — see its header for why it is not two more routes
+  //  in this file (the independence gate has to be able to read it whole,
+  //  and this file legitimately contains financing words in the Cash &
+  //  Financing section spec).
+  const insuranceEstablishment = require("../asset/insurance_establishment.js");
 
   const { pool } = deps || {};
   if (!pool) throw new Error("asset_management requires a pool");
@@ -217,6 +223,7 @@ module.exports = function assetManagement(deps) {
   }
 
   const gate = [requireOperator, refuseClientAuthority, requireAssetManagementModule];
+
 
   /*  Is there a real, dated rent position at this property?
    *
@@ -567,6 +574,11 @@ module.exports = function assetManagement(deps) {
     try {
       client = await pool.connect();
       const position = await insurancePosition.readPosition(client, { property_id: propertyId, period });
+      //  Every coverage this property is NAMED ON, allocated or not. This
+      //  is a SUPERSET of position.coverages — migration 162's foreign key
+      //  guarantees it, because an allocation cannot exist without one.
+      const participation = await insurancePosition.readParticipation(client,
+        { property_id: propertyId, period });
       const completeness = position.established
         ? await insurancePosition.readCompleteness(client, { property_id: propertyId, period })
         : [];
@@ -582,10 +594,24 @@ module.exports = function assetManagement(deps) {
       //  because financing is a different chain and is not built — and
       //  saying so is the honest answer, not a gap in this one.
       const VALUES = {
-        coverage: established ? `${position.coverages.length} active` : null,
+        //  COUNTED FROM PARTICIPATION. A coverage this property is named
+        //  on is active insurance whether or not its share is worked out,
+        //  and reporting "1 active" while the property sits on three real
+        //  policies would understate the coverage it actually has.
+        coverage: participation.participates
+          ? `${participation.coverages.length} active`
+          : null,
+        //  ⚠ MONEY STAYS ALLOCATION-GATED, AND MUST. These come from
+        //  readPosition, which is unchanged. A coverage with no stated
+        //  share contributes NOTHING here — its cost to this property is
+        //  unknown, and the policy's own total is what the whole policy
+        //  costs across every property on it, not what this one owes.
+        //  Blank, never zero (§39).
         annual_cost: money(position.annual_cost_cents, cur),
         monthly_accrual: money(position.period_accrual_cents, cur),
-        next_renewal: position.next_renewal,
+        //  From participation, so a policy expiring soon is reported even
+        //  while its share is unestablished. A date is not a cost.
+        next_renewal: participation.next_renewal,
         //  Deliberately null, permanently, while this slice stands.
         //  Direct / escrowed / financed is a CASH fact and cash is a
         //  different chain that this door cannot see.
@@ -601,32 +627,50 @@ module.exports = function assetManagement(deps) {
       }));
 
       //  ── COVERAGE STACK ────────────────────────────────────────────
-      const stackRows = position.coverages.map((c) => ({
+      //  Built from PARTICIPATION, not from the allocation-gated position.
+      //  Coverage is a coverage whether or not anyone has worked out this
+      //  property's share of it, and rendering only the allocated ones is
+      //  what made an honestly-partial establishment look like nothing.
+      //
+      //  ⚠ TWO SENSES OF ONE WORD, KEPT APART ON PURPOSE.
+      //    `sharing`          how many properties are on this policy
+      //    participation      THE ROW EXISTS AT ALL — this property is
+      //                       named on this coverage
+      //  The field below was called `participation` while it meant only
+      //  the first. Now that the second is a real durable fact with its
+      //  own table, one name for both would be the merge CLAUDE.md warns
+      //  about, so the display string is `sharing` and the fact keeps the
+      //  name. Renaming a response key is a contract change, so the old
+      //  key is still emitted beside it — see below.
+      const stackRows = participation.coverages.map((c) => ({
         coverage_id: c.coverage_id,
         label: COVERAGE_LABEL[c.coverage_type] || c.coverage_type,
         carrier: c.carrier_name,
         program: c.program_name,
         period: `${c.coverage_period_start} – ${c.coverage_period_end}`,
-        //  Shared vs individually insured is a READ of the allocation
-        //  graph, never a flag somebody sets: a coverage is shared when
-        //  more than one property is allocated to it.
-        participation: null,
+        //  Counted from the participation table, so a policy naming three
+        //  properties reads as shared from the first one established —
+        //  not only once somebody has allocated all three.
+        sharing: c.properties_on_policy > 1
+          ? `Shared — ${c.properties_on_policy} properties`
+          : "Individually insured",
+        //  ⏳ CLASS 2 — COMPATIBILITY KEY. The deployed app reads
+        //  `participation` as the display string. An API output key is a
+        //  contract and 159 already broke one by renaming without the
+        //  reader; this emits both so the app can move first.
+        //  REMOVAL CONDITION: delete once no deployed app build reads
+        //  `row.participation` — grep property-spine-app/index.html and
+        //  asset-management-door.js before removing.
+        participation: c.properties_on_policy > 1
+          ? `Shared — ${c.properties_on_policy} properties`
+          : "Individually insured",
+        //  THE NEW TRUTH THE STACK CAN NOW TELL. A row is real coverage
+        //  either way; this says whether its cost to THIS property is
+        //  known yet. Never a zero, never an estimate.
+        share_established: c.share_established,
+        share_status: c.share_established ? "established" : "not_established",
+        provenance_strength: c.provenance_strength,
       }));
-      if (stackRows.length) {
-        const shared = await client.query(
-          `select coverage_id, count(distinct property_id)::int n
-             from insurance_property_allocations
-            where coverage_id = any($1::uuid[])
-              and not exists (select 1 from insurance_property_allocations s
-                               where s.supersedes_id = insurance_property_allocations.id)
-            group by coverage_id`,
-          [stackRows.map((r) => r.coverage_id)]);
-        const byCov = new Map(shared.rows.map((r) => [r.coverage_id, r.n]));
-        stackRows.forEach((r) => {
-          const n = byCov.get(r.coverage_id) || 1;
-          r.participation = n > 1 ? `Shared — ${n} properties` : "Individually insured";
-        });
-      }
 
       //  ── ECONOMIC POSITION ─────────────────────────────────────────
       //  stated and derived stay visibly different classes all the way to
@@ -651,6 +695,35 @@ module.exports = function assetManagement(deps) {
         unallocated: money(c.unallocated_cents, cur),
       }));
 
+      //  ── COVERAGE ESTABLISHED, SHARE NOT ───────────────────────────
+      //  Named in the economic section, because that is where somebody is
+      //  reading the numbers and needs to know a real coverage is
+      //  contributing NOTHING to them yet.
+      //
+      //  This satisfies the Exposure contract's shape: what it is about,
+      //  why Spine cannot stand behind it, what would resolve it, when it
+      //  was observed. MAGNITUDE IS DELIBERATELY ABSENT — the whole policy
+      //  total is not this property's share, and putting a number here
+      //  that nobody stated is the confident-wrong this refuses to be.
+      //  Unknown is a valid Exposure; zero would be a lie.
+      const awaitingAllocation = participation.awaiting_allocation.map((c) => ({
+        coverage_id: c.coverage_id,
+        label: COVERAGE_LABEL[c.coverage_type] || c.coverage_type,
+        carrier: c.carrier_name,
+        program: c.program_name,
+        period: `${c.coverage_period_start} – ${c.coverage_period_end}`,
+        sharing: c.properties_on_policy > 1
+          ? `Shared — ${c.properties_on_policy} properties`
+          : "Individually insured",
+        //  Unknown, and said so rather than shown as a dash or a zero.
+        property_share: null,
+        why: "This property's share of this policy has not been established.",
+        resolved_by: c.properties_on_policy > 1
+          ? "The allocation schedule, or a broker-stated share for this property."
+          : "A stated share for this property.",
+        observed_as_of: c.observed_as_of,
+      }));
+
       return res.json({
         property_id: propertyId,
         room: "property_obligations",
@@ -658,10 +731,16 @@ module.exports = function assetManagement(deps) {
         label: "Insurance",
         period,
         currency_code: cur,
-        establishment: established ? "partially_established" : "not_established",
-        //  Partially, always, while this slice stands: the economics are
-        //  real and the cash path is not built. Claiming "established"
-        //  would say Spine knows how this was paid for.
+        //  Driven by PARTICIPATION, not by the allocation. Coverage
+        //  recorded with its share still missing is real work and must not
+        //  report as nothing — that equivalence is what this slice exists
+        //  to end. Still never "established": the cash path is unbuilt.
+        establishment: participation.participates ? "partially_established" : "not_established",
+
+        //  The state the dashboard could not previously express, said in
+        //  one place so no surface has to derive it from row counts.
+        participates: participation.participates,
+        awaiting_allocation_count: participation.awaiting_allocation_count,
 
         position: positionCells.map((p) => ({
           key: p.key, label: p.label, value: p.value,
@@ -675,10 +754,22 @@ module.exports = function assetManagement(deps) {
         //  while its chain is unbuilt. Proofs and docs read them.
         sections: INSURANCE_SECTIONS.map((sec) => {
           const live = {
+            //  Coverage is established when the property is NAMED on a
+            //  policy. Its cost being unknown is the economic section's
+            //  problem to state, not a reason to deny the coverage exists.
             coverage_stack:     { rows: stackRows,
-                                  establishment: established ? "established" : "not_established" },
+                                  establishment: participation.participates
+                                    ? "established" : "not_established" },
+            //  Three states, not two. `partially_established` is the one
+            //  the schema could not previously represent: some real cost
+            //  is known AND some coverage still has no stated share.
             economic_position:  { rows: economicRows, unreconciled,
-                                  establishment: established ? "established" : "not_established" },
+                                  awaiting_allocation: awaitingAllocation,
+                                  establishment:
+                                    !established
+                                      ? "not_established"
+                                      : (awaitingAllocation.length
+                                          ? "partially_established" : "established") },
             //  Unchanged, and correct.
             cash_financing:     { rows: [], establishment: "not_established" },
             //  Label the coverage type here, where COVERAGE_LABEL lives.
@@ -698,6 +789,10 @@ module.exports = function assetManagement(deps) {
             ...(sec.doctrine ? { doctrine: sec.doctrine } : {}),
             rows: live.rows,
             ...(live.unreconciled ? { unreconciled: live.unreconciled } : {}),
+            //  Coverage whose share is unknown. Emitted even when empty,
+            //  so a surface can tell "none outstanding" from "this build
+            //  does not report it" — absent and zero are different answers.
+            ...(live.awaiting_allocation ? { awaiting_allocation: live.awaiting_allocation } : {}),
           };
         }),
       });
@@ -708,6 +803,18 @@ module.exports = function assetManagement(deps) {
       if (client) client.release();
     }
   });
+
+  /*  ── THE INSURANCE WRITE PATH ──────────────────────────────────────
+   *  Mounted behind THIS door's authority, injected rather than
+   *  re-implemented. The establishment module owns what the routes do;
+   *  this file owns who may reach them. Two copies of an authority rule
+   *  is a §17 defect even while the copies agree, and it is exactly how
+   *  the two would drift the first time either changed.
+   */
+  router.use(insuranceEstablishment({
+    pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
+    currentPeriod,
+  }));
 
   return router;
 };

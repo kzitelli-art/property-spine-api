@@ -264,4 +264,122 @@ async function readHistory(client, { property_id }) {
   }));
 }
 
-module.exports = { readPosition, readCompleteness, readHistory, termMonths, periodBounds };
+/*  ── READ PARTICIPATION ─────────────────────────────────────────────
+ *  Every coverage this property is NAMED ON, whether or not its share has
+ *  been established — and which of the two each one is.
+ *
+ *  ── THE STATE THIS EXISTS TO MAKE EXPRESSIBLE ──────────────────────
+ *  readPosition and readCompleteness are allocation-gated by design and
+ *  are NOT changed by this: economics still require an allocation, so no
+ *  cost can appear for a share nobody established. But that gating meant
+ *  a shared master policy — recorded carrier, term, premium, policy
+ *  number, this property on the schedule of locations — rendered exactly
+ *  like a property with no insurance at all.
+ *
+ *  "Established what is known, the share is still missing" and "nobody
+ *  has done anything" are different truths and must not look the same.
+ *  That is §5 failing in the direction nobody checks: the honest partial
+ *  answer was unrepresentable, so it displayed as absence.
+ *
+ *  ── IT REPORTS, IT DOES NOT TOTAL ──────────────────────────────────
+ *  No amount is summed here and none is inferred. A coverage whose share
+ *  is unestablished contributes NOTHING to any figure — its cost to this
+ *  property is unknown, and unknown is blank, never zero (§39). The
+ *  coverage's own total_cents is the whole policy's cost across every
+ *  property on it, so reporting it as this property's would be the
+ *  confident-wrong this whole chain exists to prevent. It is returned
+ *  only as `coverage_total_cents`, named for what it is.
+ */
+async function readParticipation(client, { property_id, period }) {
+  const { start, next } = periodBounds(period);
+
+  const { rows } = await client.query(
+    `select
+       cp.id                as participation_id,
+       cp.observed_in_artifact_id, cp.observed_as_of, cp.recorded_at,
+       c.id                 as coverage_id,
+       c.coverage_type, c.carrier_name, c.broker_name,
+       c.coverage_period_start, c.coverage_period_end,
+       c.total_cents        as coverage_total_cents,
+       p.id                 as program_id,
+       p.program_name, p.term_start, p.term_end, p.currency_code,
+       --  Does a LIVE allocation exist for this property on this coverage,
+       --  governing the requested period? Same liveness rule readPosition
+       --  uses: nothing supersedes it, and its range overlaps the period.
+       exists (
+         select 1 from insurance_property_allocations a
+          where a.coverage_id = c.id
+            and a.property_id = cp.property_id
+            and not exists (select 1 from insurance_property_allocations s
+                             where s.supersedes_id = a.id)
+            and a.effective_from < $3
+            and (a.effective_to is null or a.effective_to > $2)
+       )                    as share_established,
+       --  How many properties are named on this policy. Read from
+       --  participation, not from allocations: a policy covering three
+       --  properties is shared even when only one share has been worked
+       --  out yet.
+       (select count(*)::int from insurance_coverage_properties o
+         where o.coverage_id = c.id) as properties_on_policy
+     from insurance_coverage_properties cp
+     join insurance_coverages c on c.id = cp.coverage_id
+     join insurance_programs  p on p.id = c.program_id
+    where cp.property_id = $1
+      and c.coverage_period_start < $3
+      and c.coverage_period_end   > $2
+    order by c.coverage_type asc, c.coverage_period_start asc`,
+    [property_id, start, next]);
+
+  const coverages = rows.map((r) => ({
+    participation_id: r.participation_id,
+    coverage_id: r.coverage_id,
+    program_id: r.program_id,
+    program_name: r.program_name,
+    coverage_type: r.coverage_type,
+    carrier_name: r.carrier_name,
+    broker_name: r.broker_name,
+    coverage_period_start: iso(r.coverage_period_start),
+    coverage_period_end: iso(r.coverage_period_end),
+    currency_code: r.currency_code,
+    //  The WHOLE policy's cost, named so it can never be mistaken for
+    //  this property's. This property's cost lives in readPosition and
+    //  only exists when a share has been established.
+    coverage_total_cents: r.coverage_total_cents === null ? null : Number(r.coverage_total_cents),
+    share_established: r.share_established,
+    properties_on_policy: r.properties_on_policy,
+    shared: r.properties_on_policy > 1,
+    observed_in_artifact_id: r.observed_in_artifact_id,
+    observed_as_of: iso(r.observed_as_of),
+    provenance_strength: r.observed_in_artifact_id ? "documentary" : "attested",
+    recorded_at: r.recorded_at,
+  }));
+
+  const awaiting = coverages.filter((c) => !c.share_established);
+
+  //  Same derivation readPosition uses — earliest coverage end — but over
+  //  every coverage the property is NAMED on rather than only the
+  //  allocated ones. A policy expiring in three weeks is a renewal
+  //  whether or not anyone has worked out this property's share of it,
+  //  and readPosition's answer would silently omit it. Superset is
+  //  guaranteed: migration 162's FK means an allocation cannot exist
+  //  without a participation row, so this can never miss one readPosition
+  //  would have found.
+  const next_renewal = coverages
+    .map((c) => c.coverage_period_end).filter(Boolean).sort()[0] || null;
+
+  return {
+    period,
+    participates: coverages.length > 0,
+    coverages,
+    next_renewal,
+    //  The count the surface needs to say "coverage established, share
+    //  not yet" without recomputing the filter and drifting from it.
+    awaiting_allocation_count: awaiting.length,
+    awaiting_allocation: awaiting,
+  };
+}
+
+module.exports = {
+  readPosition, readCompleteness, readHistory, readParticipation,
+  termMonths, periodBounds,
+};

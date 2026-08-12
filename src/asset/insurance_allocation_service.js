@@ -147,6 +147,24 @@ async function openSlice(client, spec = {}) {
     `select * from insurance_coverages where id = $1 for update`, [coverage_id])).rows[0];
   if (!cov) throw insuranceError("NOT_FOUND", "coverage not found");
 
+  //  ── ALLOCATION REQUIRES PARTICIPATION ──────────────────────────────
+  //  Migration 162 enforces this with a foreign key, which is what makes
+  //  it an invariant rather than a convention. This check exists so the
+  //  refusal is SAYABLE: a raw FK violation is our machinery leaking at
+  //  someone who is trying to record a number off a policy document.
+  //
+  //  You cannot hold a share of a policy you are not named on. Record the
+  //  participation first — that is the smaller, better-evidenced fact,
+  //  and it is what the schedule of locations actually says.
+  const named = (await client.query(
+    `select 1 from insurance_coverage_properties
+      where coverage_id = $1 and property_id = $2`, [coverage_id, property_id])).rows[0];
+  if (!named) {
+    throw insuranceError("PARTICIPATION_REQUIRED",
+      "this property is not recorded as named on this coverage, so it cannot hold a share " +
+      "of it. Record that the property is on the policy first.");
+  }
+
   //  CLOSE the prior live slice for this scope before opening the next.
   //  Only slices that are still open, or that extend past the new start.
   await client.query(

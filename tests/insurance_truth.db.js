@@ -84,6 +84,16 @@ async function main() {
              .replace(/alter table source_artifacts[\s\S]*?;\s*$/m, "");
     await c.query(mig);
 
+    //  162 is part of the insurance schema now. It adds participation and
+    //  the foreign key making an allocation impossible for a property that
+    //  is not named on the coverage — so this file must build the same
+    //  schema production has, or it would be proving 161 against a shape
+    //  that no longer exists anywhere.
+    let mig162 = fs.readFileSync(
+      path.join(__dirname, "..", "migrations", "162_insurance_coverage_participation.sql"), "utf8");
+    mig162 = mig162.replace(/^begin;\s*/m, "").replace(/commit;\s*$/m, "");
+    await c.query(mig162);
+
     const uid = (await c.query(`insert into users (name) values ('Asset Ops') returning id`)).rows[0].id;
     const skyline = (await c.query(`insert into properties (name) values ('Skyline') returning id`)).rows[0].id;
     const c4233 = (await c.query(`insert into properties (name) values ('4233 Chestnut') returning id`)).rows[0].id;
@@ -145,6 +155,22 @@ async function main() {
       coverage_period_start: "2026-03-01", coverage_period_end: "2027-03-01",
       premium_cents: USD(90000), taxes_cents: 0, fees_cents: 0,
       broker_fee_cents: USD(1000), user_id: uid });
+
+    //  ── NAMED ON THE POLICY, BEFORE ANY SHARE OF IT ─────────────────
+    //  Migration 162's foreign key makes allocation imply participation.
+    //  Recording it here is not test scaffolding — it is the order the
+    //  real establish route writes in, and the order the schema now
+    //  requires: you cannot hold a share of a policy you are not on.
+    //  (glCov, c4233) is named too, so the OVER-allocation case below
+    //  actually reaches the over-allocation guard. Without it that test
+    //  would refuse one step earlier, on participation, and would stop
+    //  proving the arithmetic rule it was written for.
+    for (const [cov, prop] of [[propCov, skyline], [glCov, skyline],
+                               [propCov, c4233], [glCov, c4233]]) {
+      await programs.recordParticipation(c, {
+        coverage_id: cov.id, property_id: prop,
+        observed_in_artifact_id: artifact, user_id: uid });
+    }
 
     console.log("\n── 3. ALLOCATION IS A GOVERNED FACT ──────────────────");
 

@@ -166,7 +166,72 @@ async function recordIdentifier(client, {
   return rows[0] || null;
 }
 
+/*  ── RECORD PARTICIPATION ───────────────────────────────────────────
+ *  "This property is named on this coverage." One fact. No amount.
+ *
+ *  ── WHY THIS IS NOT THE ALLOCATION ─────────────────────────────────
+ *  Migration 161 made the only property↔policy link an allocation row
+ *  carrying `allocated_amount_cents not null check (> 0)`, so recording
+ *  that a property is ON a policy required producing its SHARE — and
+ *  where no broker figure exists, that means deriving one. A recorded
+ *  fact should never require manufacturing a different one.
+ *
+ *  Participation is what the schedule of locations says. Allocation is
+ *  what the money is. Migration 162's foreign key makes allocation imply
+ *  participation at the database, so this is the narrower fact and it
+ *  can stand alone.
+ *
+ *  ── WHY IT LIVES IN THIS FILE ──────────────────────────────────────
+ *  This service already owns coverage-side facts — programs, coverages,
+ *  identifiers. Participation is coverage-side. A third service would
+ *  have been a second writer for the same side of the same domain, which
+ *  is what the build was told not to create. Economics stay entirely in
+ *  insurance_allocation_service.js.
+ *
+ *  ── DELIBERATELY NOT HERE ──────────────────────────────────────────
+ *  No status. No renewal state. No money. No effective slice — a slice
+ *  is how an AMOUNT changes over time and there is no amount. Insurance
+ *  is the specimen; the general shape gets extracted after a second
+ *  obligation proves it.
+ */
+async function recordParticipation(client, {
+  coverage_id, property_id,
+  observed_in_artifact_id = null, observed_as_of = null, user_id,
+} = {}) {
+  if (!coverage_id) throw insuranceError("BAD_INPUT", "coverage_id is required");
+  if (!property_id) throw insuranceError("BAD_INPUT", "property_id is required");
+  if (!user_id) throw insuranceError("BAD_INPUT", "user_id is required");
+
+  //  A named refusal rather than a foreign-key violation, so the operator
+  //  learns what is missing. Mirrors establishCoverage's program check.
+  const cov = (await client.query(
+    `select id from insurance_coverages where id = $1`, [coverage_id])).rows[0];
+  if (!cov) throw insuranceError("NOT_FOUND", "coverage not found");
+
+  //  IDEMPOTENT, AND THE FIRST RECORDING KEEPS ATTRIBUTION. Naming the
+  //  same property twice on one policy is one fact stated twice. `do
+  //  update` would let a later, less-evidenced recording overwrite who
+  //  first observed it and what they saw it in — a silent correction with
+  //  no correction record, which §6 does not allow.
+  const ins = await client.query(
+    `insert into insurance_coverage_properties
+       (coverage_id, property_id, observed_in_artifact_id, observed_as_of, recorded_by_user_id)
+     values ($1,$2,$3,$4,$5)
+     on conflict (coverage_id, property_id) do nothing
+     returning *`,
+    [coverage_id, property_id, observed_in_artifact_id, observed_as_of, user_id]);
+  if (ins.rows[0]) return ins.rows[0];
+
+  //  Already recorded. Return the durable row so the caller always has an
+  //  id, rather than a null the route would have to interpret.
+  const { rows } = await client.query(
+    `select * from insurance_coverage_properties
+      where coverage_id = $1 and property_id = $2`, [coverage_id, property_id]);
+  return rows[0];
+}
+
 module.exports = {
   COVERAGE_TYPES, IDENTIFIER_ISSUERS,
-  establishProgram, establishCoverage, recordIdentifier, insuranceError,
+  establishProgram, establishCoverage, recordIdentifier, recordParticipation,
+  insuranceError,
 };
