@@ -3,6 +3,47 @@
 **2026-08-12. Design, not schema. No migration written.**
 **Follows `DEBT_BUILD_1_PHASE_A_SOURCE_READ.md`.**
 
+> ## OWNER RULINGS — 2026-08-12. FROZEN.
+>
+> All three challenges accepted, with three constraints that narrow them. Where
+> a ruling changes what this document originally argued, the section says so.
+>
+> ```text
+> 1  borrower correction        ACCEPTED. 164 untouched. Stop here.
+> 2  position is derived        ACCEPTED and FROZEN — with the cache caveat below
+> 3  falsification moves up     ACCEPTED
+> 4  multi-domain artifact      BOUNDARY accepted; IMPLEMENTATION kept narrow
+> 5  B0                         DONE. Stop extending the gate.
+> ```
+>
+> **Caveat on 2 — do not turn this into purity that makes every read expensive.**
+>
+> ```text
+> canonical truth     = history          cannot be rebuilt
+> derived projection  = disposable read  CAN be rebuilt, and may be materialised
+> ```
+>
+> A materialised or cached current projection is acceptable later. The ruling is
+> about which one is *canonical*, not about forbidding a cache.
+>
+> **Constraint on 4 — Debt must not become the router.** This corrects §3 of this
+> document as originally written. See the amended §3.
+>
+> **Constraint on 5 — B0 is a boundary primitive, not licence to keep extending
+> the gate while Debt itself is empty.** Taken; no further gate work this slice.
+>
+> **And the ruling that governs the whole build:** Ask Spine is not inside Debt.
+> Debt owns instrument truth, terms, observations, payments, `position()`, truth
+> states and its own walls. Ask Spine owns understanding the question, selecting
+> a permitted read, composing the result, and preserving source/as-of/uncertainty
+> boundaries. **It does not decide Debt truth.** The envelope in the charter is an
+> *interface*, not a second store — Debt does not create "Ask Spine facts"
+> alongside Debt facts:
+>
+> ```text
+> canonical Debt history → standing projection → Ask Spine adapter → conversation
+> ```
+
 This document takes a position the Debt charter does not take, in three places,
 and corrects one thing the Phase A read got wrong. It exists because a schema
 written to the charter as literally specified would be wrong in a way that is
@@ -206,27 +247,52 @@ position and an insurance funding position. `gate_funding_boundary.js` would not
 catch it — the wall it enforces is *"funding may not author economics"* and this
 is the mirror: an economic domain authoring another domain's funding.
 
-**Proposal: extraction proposes facts with a declared DESTINATION DOMAIN, and
-each destination is written by its own canonical writer.**
+### ⚠ AMENDED BY RULING — Debt must not become the router
+
+This section originally proposed that extraction call each destination's writer:
+*"debt writer → tax funding writer → insurance funding writer."* **That is
+refused, and correctly.** Debt calling Tax's writer creates precisely the
+coupling the wall exists to prevent — the boundary would be respected on paper
+while Debt became the orchestrator of three domains.
+
+The boundary is right; the plumbing was wrong. The permanent shape:
 
 ```text
-one retained artifact
-  → proposals, each carrying its destination domain
-  → human confirms
-  → debt writer          writes debt facts
-  → tax funding writer   writes the tax escrow contribution and balance
-  → insurance funding writer   likewise
+retained source artifact
+        ↓
+source interpretation
+        ↓
+domain-scoped PROPOSED CLAIMS      Debt · Tax · Insurance
+        ↓
+each OWNING domain confirms and governs its own truth
 ```
 
-This is §7 — *capture once, read everywhere* — applied to a document instead of
-an action. The alternative is that the same escrow line gets typed twice, once by
-whoever establishes Debt and once by whoever maintains Tax funding, and the two
-disagree by the second month.
+**The artifact is shared. Authority is not.** No domain writes, or triggers a
+write to, another domain's canonical truth.
 
-It also means **Debt is not the owner of the escrow balances it can see**, which
-is the correct and slightly uncomfortable answer. Debt owns *"this loan requires
-monthly tax escrow of $4,076.24"* — a contractual term of the instrument. It does
-not own what is in the account.
+### What Debt V1 actually does — deliberately smaller
+
+```text
+same artifact retained ONCE
+Debt claims          → proposed and establishable now
+Tax / Insurance      → retained as domain-scoped CANDIDATE claims
+                     → NOT written into Debt
+                     → NOT silently promoted into Tax/Insurance truth
+```
+
+Candidate claims are retained rather than discarded because capture-once matters
+and the escrow line is genuinely governed information. They are inert until the
+owning domain establishes them.
+
+**If the existing proposal machinery can carry a destination domain cheaply, use
+it. If carrying it requires inventing a generic multi-domain orchestration
+framework, stop** — the permanent rule matters more than completing every future
+workflow in this slice.
+
+It remains true, and remains the uncomfortable part, that **Debt is not the owner
+of the escrow balances it can see.** Debt owns *"this loan requires monthly tax
+escrow of $4,076.24"* — a contractual term of the instrument. It does not own
+what is in the account, and it does not put it there.
 
 ---
 
