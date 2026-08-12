@@ -1006,6 +1006,14 @@ module.exports = function assetManagement(deps) {
       const applicable = position.rows.filter((r) => r.applicability === "applies");
       const known = applicable.filter((r) => r.annual_liability_cents !== null);
       const unknownCount = applicable.length - known.length;
+      //  ⚠ A TAX NOBODY HAS ANSWERED FOR MAKES THE TOTAL PARTIAL TOO.
+      //  The first version counted only APPLICABLE obligations missing an
+      //  amount, so a property with one established bill and three
+      //  unanswered taxes showed a confident-looking total with no caveat.
+      //  A browser proof caught it. Not knowing whether a tax applies is
+      //  not the same as it contributing zero.
+      const unresolved = position.rows
+        .filter((r) => r.applicability === "not_established").length;
       const currencies = Array.from(new Set(known.map((r) => r.currency_code).filter(Boolean)));
       const cur = currencies.length === 1 ? currencies[0] : null;
       const totalAnnual = known.length
@@ -1052,7 +1060,11 @@ module.exports = function assetManagement(deps) {
           //  annual tax is $48,000" and "the annual tax is at least
           //  $48,000, and one obligation has no bill yet".
           obligations_with_unknown_amount: unknownCount,
-          is_partial: unknownCount > 0,
+          //  The other way a total can be short: a tax nobody has yet said
+          //  applies or does not. Counted separately because they are
+          //  different gaps with different next steps.
+          taxes_not_established: unresolved,
+          is_partial: unknownCount > 0 || unresolved > 0,
         },
 
         //  ── THE FOUR ROWS ─────────────────────────────────────────
@@ -1065,6 +1077,11 @@ module.exports = function assetManagement(deps) {
             .filter((d) => d.tax_type === r.tax_type);
           return {
             ...r,
+            //  A JURISDICTION RULE, SENT RATHER THAN RE-IMPLEMENTED.
+            //  Real Estate Tax is billed by the City and paid; there is no
+            //  return. The browser must not decide that — a second copy of
+            //  Philadelphia's rules in an app is a copy nobody updates.
+            requires_filing: !!taxRules.REQUIRES_FILING[r.tax_type],
             annual_liability: money(r.annual_liability_cents, r.currency_code),
             monthly_accrual: money(r.monthly_accrual_cents, r.currency_code),
             city_balance: money(r.city_balance_cents, r.currency_code),

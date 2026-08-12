@@ -1,8 +1,130 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
-##  INSURANCE V1 IS BUILT AND UNRELEASED. 2026-08-12 (latest).
-##  THIS SECTION WINS. FEATURE WORK ON INSURANCE IS CLOSED.
+##  PHILADELPHIA TAXES V1 IS BUILT AND UNRELEASED. 2026-08-12 (latest).
+##  THIS SECTION WINS.
+## ══════════════════════════════════════════════════════════════════
+
+```text
+API  claude/philosophy-doctrine-reference-jv7s7r   NOT merged
+APP  claude/philosophy-doctrine-reference-jv7s7r   NOT merged
+pending migrations                                 162, 163, 164, 165, 166
+production ledger ceiling                          161  (expected — READ IT)
+```
+
+**⚠ THE MERGE WARNING BELOW NOW COVERS FIVE MIGRATIONS, NOT TWO.** Same
+trap, larger blast radius: auto-deploy is ON, `prestart` verifies rather
+than applies, and merging with 162–166 pending is a failed production
+deploy. Pause auto-deploy first. The run card is still
+[`release/INSURANCE_162_163_RUN_CARD.md`](release/INSURANCE_162_163_RUN_CARD.md)
+and its sequence is unchanged — the ceiling it releases to is now 166.
+
+### FOUR OBLIGATIONS. NOT FIVE.
+
+```text
+Real Estate Tax   PROPERTY subject · annual  · payment due Mar 31
+BIRT              ENTITY   subject · annual  · return + balance Apr 15 (Y+1)
+NPT               ENTITY   subject · annual  · return Apr 15, estimates
+                                               Apr 15 and Jun 15
+U&O               PROPERTY subject · monthly · filing + payment, 25th of
+                                               the following month
+```
+
+**Commercial Trash was cut, deliberately.** It is a municipal fee with its
+own exemption machinery, not one of these four. It may return later under a
+broader municipal-fees area. Do not re-add it to the applicability model,
+the clocks, the evidence kinds, the standing read, the UI or the proofs
+without a ruling.
+
+**U&O did not disappear in 2026.** The $2,000 ANNUAL EXEMPTION ended
+2026-01-01; the tax remains active and monthly. `philadelphia_tax_rules.js`
+answers this explicitly rather than leaving it to memory, and the screen
+prints it — anyone reasoning "the exemption is gone, so U&O is gone" is
+wrong in the direction that under-reports a live obligation.
+
+### What was built
+
+```text
+164  legal_entities + dated legal_entity_properties. BIRT/NPT belong to the
+     TAXPAYER. `organizations` is the SaaS tenant and is not a taxpayer.
+165  tax_obligations · applicability · liabilities · filings · payments ·
+     appeals · clearances. Subject is property XOR legal entity, enforced
+     by check constraints, matched to the tax type.
+166  tax funding — direct | lender_escrow, standing and dated, with escrow
+     terms, balance OBSERVATIONS and servicer DISBURSEMENTS in their own
+     tables.
+
+philadelphia_tax_rules.js   every Philadelphia date, in one pure module.
+                            It computes CLOCKS and never amounts.
+tax_position_read.js        one property-facing read. Imports NOTHING.
+                            Every state derived; no status column exists.
+tax_establishment.js        7 economic routes. Filing and payment stay
+                            separate verbs — there is no "mark handled".
+tax_funding.js              5 funding routes, on the other side of the wall.
+```
+
+### THE TWO SENTENCES THE ARCHITECTURE MAKES UNWRITEABLE
+
+```text
+"the escrow is healthy, so the taxes are paid"
+"the escrow contribution went up, so the tax went up"
+```
+
+`tax_payments` is an ECONOMIC table in `gate_funding_boundary.js`, so no
+funding module can write it. PAID means the City was paid and there is
+evidence; `tax_obligation_service.recordPayment` is the only writer, and
+nothing on the funding side can reach it. A servicer's disbursement is a
+funding fact and surfaces as `unevidenced_disbursements` — the disagreement
+is shown, never resolved.
+
+**The first version of that gate omitted `tax_payments`.** Every other tax
+table was guarded while the one an escrow is most tempted to write was not.
+If you extend this to a third domain, list the table that means DONE first.
+
+### The invariant everything else serves
+
+```text
+tax accrual = governed annual liability ÷ months in the obligation's period
+```
+
+Never a contribution, never a balance, never a disbursement. Proven
+byte-identical before and after a contribution change — with a guard
+asserting the FUNDING read did change, so the comparison is not vacuous.
+
+### Evidence at this build
+
+```text
+API  philadelphia_tax_http.db.js       92/92   real PG + real HTTP
+     philadelphia_tax.db.js            58/58
+     philadelphia_tax_funding.db.js    54/54
+     legal_entity.db.js                28/28
+     gate_funding_boundary.js          50/50   tax side no longer vacuous
+     npm run verify                    14/14
+APP  asset_management_shell.browser   207/207  real Chromium
+     run_harnesses.sh                 1041 · 0 failed · 0 red
+```
+
+### Still open
+
+```text
+release 162–166        nothing is in production. Same run card, new ceiling.
+BIRT/NPT amounts       no calculator, by design. Amount is evidenced or
+                       unknown — never computed.
+tax extractor          there is NO document reader for tax evidence yet.
+                       Upload retains the file; the human types what it
+                       says. Insurance has a label scan; Taxes does not,
+                       and the sheet says so rather than pretending.
+legal entity capture   no UI. An entity must exist before BIRT/NPT can be
+                       recorded, and the sheet names that dead end honestly
+                       instead of showing an empty picker.
+```
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  INSURANCE V1 IS BUILT AND UNRELEASED. 2026-08-12.
+##  FEATURE WORK ON INSURANCE IS CLOSED. SUPERSEDED ABOVE for the
+##  release state; the WALL and the invariant here still govern.
 ## ══════════════════════════════════════════════════════════════════
 
 ```text

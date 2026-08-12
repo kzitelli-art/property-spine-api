@@ -32,7 +32,7 @@ const { Pool } = require("pg");
 const receipt = require("./_run_receipt.js");
 const URL_ = receipt.harnessConnectionString();
 
-const EXPECTED_ASSERTIONS = 91;
+const EXPECTED_ASSERTIONS = 92;
 let pass = 0, fail = 0;
 function ok(label, cond, detail) {
   if (cond) { pass++; console.log("  ok    " + label); }
@@ -212,6 +212,13 @@ async function main() {
     ok("totals are null, not 0 — nothing is known yet",
        r.body.totals.annual_liability_cents === null
        && r.body.totals.monthly_accrual_cents === null);
+    //  ⚠ AN UNANSWERED TAX MAKES THE TOTAL PARTIAL TOO. The first version
+    //  counted only APPLICABLE obligations missing an amount, so a property
+    //  with one established bill and three unanswered taxes showed a
+    //  confident total with no caveat. A browser proof caught it.
+    ok("all four taxes count as unanswered, and that alone marks it partial",
+       r.body.totals.taxes_not_established === 4 && r.body.totals.is_partial === true,
+       JSON.stringify(r.body.totals));
     ok("funding is unknown for all four, never defaulted to paid directly",
        r.body.funding_summary.unknown_for.length === 4
        && r.body.funding_summary.established === false);
