@@ -15,6 +15,52 @@ the reason this document exists before any table:
 
 ---
 
+## ⚠ 0. WHY 4125, AND WHY ITS NUMBERS DO NOT MATTER
+
+**4125 was chosen because its debt and escrows are SIMPLE. It is not the demo
+property. Everything else in the demo is 4233C.**
+
+```text
+4125 CHESTNUT     the DEBT SPECIMEN — chosen for tractability
+                  one loan · fixed rate · one lender · plain escrow
+4233 CHESTNUT     the DEMO PROPERTY — where everything else lives
+                  a $68.25M mortgage from Delphi against an $88M purchase
+```
+
+Two consequences, and the second is the one that gets forgotten.
+
+**The framework is the deliverable. The stats are not.** No number in this
+document is a product requirement. `$27,745,265.77`, `3.28%`, `$123,411.40` —
+these exist to prove the *shape* of the truth Debt must hold, and to falsify a
+model that cannot hold it. Getting 4125's balance onto a screen is not the goal
+and never was.
+
+**This is §22 in a new costume: 4125-first, never 4125-special.** The doctrine
+already learned this once — *"a feature that works only because of a hardcoded
+Solo branch is not canonical"* — and specimen choice is exactly where the
+mistake recurs, because the specimen is simple *by selection* and a model shaped
+to it will look complete while being narrow.
+
+Concretely, what 4125's simplicity must **not** be allowed to bake in:
+
+```text
+4125 happens to have        the model must not assume
+─────────────────────────   ────────────────────────────────────────────
+one loan                    one instrument per property (§1, §3)
+a fixed rate                no index, spread, floor, cap or rate reset
+one lender = one servicer   lender and servicer are one party (§5)
+tax + insurance escrowed    every loan escrows, or escrows the same things
+no amendment found          the amendment chain is optional (§9)
+no covenant read yet        covenants are absent rather than unread (§8)
+```
+
+4233's financing is a different lender, roughly 2.4× the size, and its terms are
+unread. **Debt Build 1 ships when the framework can hold 4233's loan without a
+schema change** — not when 4125 renders. If a Phase B decision would need
+revisiting to onboard 4233, that decision is wrong now, not later.
+
+---
+
 ## Scope of this read — what was and was not looked at
 
 **Looked at:** the `4125 Chestnut (Uno Chestnut) - MGMT` document library — full
