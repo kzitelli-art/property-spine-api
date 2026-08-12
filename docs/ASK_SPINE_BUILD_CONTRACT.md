@@ -1,8 +1,35 @@
 # Ask Spine — Maintenance Agent Build Charter
 
+> ## ⚠ STATUS — 2026-08-12. THIS CHARTER IS PARKED. IT IS NOT WHAT SHIPPED.
+>
+> It describes the **maintenance intent-coverage agent** of Build 1/2, which was
+> never released. The RC branch it belongs to calls a `/capabilities` endpoint
+> the API does not implement and depends on unmerged migrations 141–143.
+>
+> **What actually shipped is smaller and different**: the attention read, and a
+> typed question answered from governed reads. See `THREAD_HANDOFF.md`.
+>
+> **What governs Ask Spine work now:**
+>
+> ```text
+> PHILOSOPHY.md §40                        what Ask Spine IS — doctrine
+> PHILOSOPHY.md §33                        a domain is not done until it can be asked
+> ASK_SPINE_CANONICAL_READ_LAYER.md        the next build. Taxes + Insurance.
+> ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md   transcript evidence, second
+> ```
+>
+> **What in here is still live:** §19's open rulings and §3's stable intent
+> identities are frozen decisions and must be searched before anything they
+> already decided is re-decided. The product character in §2 and the coverage
+> vocabulary in §10 remain good thinking.
+>
+> **What is stale:** the release sequence (§16), the definition of done (§20 —
+> superseded by `PHILOSOPHY.md` §33), and any statement that this charter is the
+> thing to read first. Do not build against it without reconciling it to §40.
+
 **Version 3 — Canonical Truth, Declared Coverage, Frictionless Operation**
 
-This is the build charter. Read it before writing any Ask Spine code.
+The build charter for the parked maintenance agent.
 Companion: [`ASK_SPINE_SLICE_2_DESIGN_INPUT.md`](ASK_SPINE_SLICE_2_DESIGN_INPUT.md) —
 the premortem and schema audit behind it.
 

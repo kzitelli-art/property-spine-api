@@ -1,5 +1,18 @@
 # Ask Spine Slice 2 — design input
 
+> ## ⚠ STATUS — 2026-08-12. DESIGN INPUT FOR A BUILD THAT WAS NOT RELEASED.
+>
+> The state block below (`a04a1df`, ledger ceiling 136) is many releases stale.
+> This is the premortem behind the parked maintenance charter
+> (`ASK_SPINE_BUILD_CONTRACT.md`), not a description of what shipped.
+>
+> **Still live:** the schema audit and the coverage-state vocabulary — a read
+> reports its own status and `coverage_state` is computed, never chosen by a
+> renderer. That principle survives into `PHILOSOPHY.md` §40's four silences.
+>
+> **Superseded:** the state block, and the intent-coverage contract as the
+> governing design. Current: §40, then `ASK_SPINE_CANONICAL_READ_LAYER.md`.
+
 Written at the close of the Ask Spine Slice 1 thread, as the direct input to the
 build of the **intent coverage contract**. Nothing here is built. This is the
 record of what was decided, what was audited against the schema, and what will

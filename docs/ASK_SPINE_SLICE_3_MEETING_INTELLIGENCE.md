@@ -10,14 +10,18 @@ State at the time of writing:
 
 ```text
 api main            7ebb400      (PR #97) deployed
-api branch          84830d0      claude/ask-spine-conversational-dash-97bwcx
-                                 NOT merged, NOT deployed — carries `references[]`
 app main            bf86673      (PR #57) deployed
-app branch          ddfa59c      claude/ask-spine-conversational-dash-97bwcx
-                                 NOT merged — carries the proof-verdict contract pin
 migration files     through 161  ledger ceiling NOT confirmed from this session
                                  (no DATABASE_URL here — confirm before writing 162)
+
+api branch   claude/ask-spine-conversational-dash-97bwcx   NOT MERGED
+             carries `references[]`, both design docs, and PHILOSOPHY.md §40
+app branch   claude/ask-spine-conversational-dash-97bwcx   NOT MERGED
+             carries the proof-verdict contract pin
 ```
+
+The branch heads move; **`NOT MERGED` is the durable fact.** Verify with
+`git merge-base --is-ancestor` rather than trusting this block.
 
 **The `references[]` dependency is a release-order item, not cleanup.** See §9.
 

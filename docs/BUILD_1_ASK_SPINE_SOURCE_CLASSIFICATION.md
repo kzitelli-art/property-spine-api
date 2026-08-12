@@ -1,5 +1,13 @@
 # Build 1 — classifying the existing Ask Spine path
 
+> ## ⚠ STATUS — 2026-08-12. HISTORICAL CLASSIFICATION. COUNTS ARE STALE.
+>
+> `ask_spine.js` is no longer 81 lines with one route — it carries two, and the
+> POST answers typed questions. The classification method here is sound; the
+> inventory it produced is out of date. **Do not quote its counts.**
+>
+> Doctrine that now governs Ask Spine: `PHILOSOPHY.md` §40.
+
 **The one source-grounded audit required before code** (ruling 21). Read against
 the RC tree `f6873d7`, not against memory.
 

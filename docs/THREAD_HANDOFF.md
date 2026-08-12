@@ -98,6 +98,30 @@ The one instruction that matters for the next slice: the renderer switches on
 `references[].kind` with a fallback, rather than branching over the two kinds
 visible today. Meeting citations arrive in that same array.
 
+### ▶ WHICH ASK SPINE DOCUMENT GOVERNS — there are seven, and five are history
+
+`docs/` carries seven Ask Spine documents. Only two govern new work. The rest are
+dated receipts and audits, now stamped with status headers at the top of each so
+nobody builds against one by accident.
+
+```text
+GOVERNING
+  PHILOSOPHY.md §40                            what Ask Spine IS — doctrine
+  PHILOSOPHY.md §33                            not done until it can be asked
+  ASK_SPINE_CANONICAL_READ_LAYER.md            next build — Taxes + Insurance
+  ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md    second — transcript evidence
+
+HISTORY — stamped, do not build against
+  ASK_SPINE_BUILD_CONTRACT.md          PARKED maintenance charter. Never shipped.
+                                       ⚠ opened with "read before writing any Ask
+                                       Spine code" — that sentence is now false.
+                                       §19 open rulings ARE still frozen.
+  ASK_SPINE_SLICE_2_DESIGN_INPUT.md    premortem for the parked charter
+  ASK_SPINE_SLICE_1_RECEIPT.md         dated receipt; its status line is stale
+  ASK_SPINE_SOURCE_AUDIT.md            stale SHAs; findings need re-checking
+  BUILD_1_ASK_SPINE_SOURCE_CLASSIFICATION.md   stale counts; do not quote them
+```
+
 ### ▶ NEXT — TWO DESIGNS, AND THE ORDER IS LOAD-BEARING
 
 ```text

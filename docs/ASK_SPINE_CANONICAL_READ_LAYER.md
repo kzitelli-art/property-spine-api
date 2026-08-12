@@ -10,11 +10,18 @@ State at the time of writing:
 
 ```text
 api main            7ebb400      (PR #97) deployed
-api branch          fb8fe01      claude/ask-spine-conversational-dash-97bwcx
-                                 NOT merged — carries `references[]`
 app main            bf86673      (PR #57) deployed
 migration files     through 161  ledger ceiling NOT confirmed from this session
+
+api branch   claude/ask-spine-conversational-dash-97bwcx   NOT MERGED
+             carries `references[]`, both design docs, and PHILOSOPHY.md §40
+app branch   claude/ask-spine-conversational-dash-97bwcx   NOT MERGED
+             carries the proof-verdict contract pin
 ```
+
+The branch heads move; **`NOT MERGED` is the durable fact.** Doctrine sitting on
+an unmerged branch is not doctrine — the next thread reads `main`. Verify with
+`git merge-base --is-ancestor` rather than trusting this block.
 
 Companion document: **`ASK_SPINE_SLICE_3_MEETING_INTELLIGENCE.md`** — transcript
 evidence, the assertion ladder, and the conversational seam. **This document
