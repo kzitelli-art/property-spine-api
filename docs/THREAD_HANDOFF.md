@@ -209,6 +209,25 @@ the reason a PR here shows no green check and never will.
 **Do NOT fix this inside a release.** Adding CI mid-release changes what
 "proven" means in the middle of proving something. It is its own slice.
 
+## ═══ NEXT BUILD · ADD CURRENT INSURANCE ═══
+
+**The pre-build read is [`INSURANCE_ESTABLISHMENT_SOURCE_READ.md`](INSURANCE_ESTABLISHMENT_SOURCE_READ.md).
+Read it first. It is a PROPOSAL — no code was written.**
+
+Insurance has a complete, released economic architecture (161) and a working
+read, and **zero HTTP write callers**. The missing seam is the human
+establishment path: empty Insurance → ADD CURRENT INSURANCE → upload evidence →
+Spine proposes → human confirms → canonical services write → the existing
+dashboard populates.
+
+**The one decision that gates the build:** both reads are allocation-gated, and
+the only property↔policy link in the schema is an allocation carrying an amount.
+So a coverage established without this property's stated share is invisible —
+"establish what is known and surface the missing allocation honestly" is not
+currently expressible. The source read lays out the two honest options and
+recommends one narrow Insurance-specific table separating *participation* from
+*allocation*. **Make that call before writing code.**
+
 ## ═══ 2026-08-11 · RELEASE 160/161 — WHERE IT ACTUALLY STOPPED ═══
 
 **Released and live. Proven in production up to the entitlement wall, and
