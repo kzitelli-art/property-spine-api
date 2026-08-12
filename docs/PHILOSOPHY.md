@@ -1031,6 +1031,41 @@ Browser verified
 Do not call something live, deployed, or enforced without the corresponding evidence.
 For operator workflows, browser verification is part of completion.
 
+### A domain is not done until Ask Spine can read it
+
+```text
+A CANONICAL SPINE DOMAIN IS NOT COMPLETE UNTIL ITS GOVERNED STANDING STATE
+IS AVAILABLE TO ASK SPINE FOR ENTITLED USERS.
+```
+
+A domain is not integrated because the application can display it. It is
+integrated when a person can **ask** for it without knowing where it lives in the
+application (§40).
+
+The build sequence, and the order is load-bearing:
+
+```text
+canonical truth
+  → writer
+  → canonical read
+  → compact standing projection
+  → operator UI
+  → Ask Spine read
+  → proof
+```
+
+Not: build the entire application, then months later teach a chatbot about it.
+
+Every governed domain needs conversational **reads**. Not every module needs
+conversational **writes**. The standing projection is deliberately small — current
+position, important unknowns, next action — so it is cheap enough to gather
+routinely; richer detail is a second read, called only when the question requires
+it. A domain whose only read is "everything the screen needs" cannot participate.
+
+**This cost is part of building the domain.** It is not free polish afterward, and
+it stays visible in estimates. A rule of this shape is exactly what gets quietly
+dropped under schedule pressure, so it belongs here rather than in a build doc.
+
 ## 34. Codex Operating Instructions
 
 When working on Property Spine:
@@ -1611,3 +1646,121 @@ unknown cost is BLANK
 never zero
 never estimated into the record as though someone had said it
 ```
+
+## 40. Ask Spine Is a Governed Interface, Not an AI Layer
+
+§24 governs how the AI *speaks*. This section governs what it **is**.
+
+Ask Spine is not a feature bolted onto Spine, and it is not a separate
+intelligence that has to rediscover what Spine already knows. It is **another
+reader of the same governed truth**, sitting beside the application rather than
+on top of it.
+
+```text
+THE APP        the durable visual interface over Spine's truth
+ASK SPINE      the conversational interface over the SAME truth
+```
+
+It never scrapes prose from a screen, retrieves over the rendered UI, or queries
+arbitrary tables hoping to understand the schema. It calls the same server-side
+canonical reads that produce the pages. Precedent: `dated_positions.js` —
+*one service, four interpretations* — one altitude up.
+
+### The rule that governs every implementation
+
+```text
+THE MODEL GETS FLUENCY OVER WORDING.
+IT NEVER GETS AUTHORITY OVER ATTRIBUTION, SOURCE AUTHORITY, CURRENT STATE,
+RELEVANCE, OR CONFLICT.
+```
+
+Everything load-bearing is decided server-side and handed to the model already
+resolved. The model is a writer of things it was given, never a decider. A
+surface that lets the model decide any of the five will eventually decide one of
+them wrong, fluently, with a citation attached — and a confident wrong wearing a
+citation is worse than a blank, because it reads as verified (§5).
+
+### Facts carry authority in their shape
+
+The composer never receives an undifferentiated bag of facts. Every fact carries:
+
+```text
+domain · concept · value | truth_state · source_authority
+provenance · as_of / occurred_at · openable reference if entitled
+```
+
+`source_authority` is not merely *where* a fact came from. It is **what that
+source is authorized to assert**, and the levels are not peers:
+
+```text
+governed_read        canonical Spine truth
+transcript_claim     evidence of what a transcription system recorded
+email_claim
+user_assertion
+```
+
+A lower authority may **coexist** with a governed read. It may never silently
+upgrade one.
+
+```text
+transcript   "I think the taxes were paid last week"
+governed     city_payment = NOT_ESTABLISHED
+
+WRONG        "Taxes are paid."
+RIGHT        "Spine does not have a confirmed City payment. In Tuesday's
+              meeting, John said he believed they had been."
+```
+
+### Truth walls are executable, not prompt text
+
+Natural language erodes distinctions the domain enforces. *"Are our taxes paid?"*
+asks for a binary the governed truth does not have, and a conversational surface
+inherits the **asker's** vocabulary unless something stops it.
+
+```text
+escrow funded  ≠  City paid          filed  ≠  paid
+assessment     ≠  liability          coverage discussed ≠ coverage bound
+unknown applicability ≠ not applicable
+```
+
+Each domain declares its walls and its collapsing vocabulary — *paid, current,
+covered, filed, funded, complete, insured, done* — as part of its read contract.
+When a question crosses a declared wall, the **server constrains the answer
+form**. That is product behavior, not prompt craftsmanship.
+
+### Silence has four meanings
+
+```text
+NOT_ESTABLISHED    a fact about the PROPERTY
+READ_FAILED        a fact about SPINE
+READ_TIMED_OUT     also about Spine, and different again
+QUIET              read successfully, nothing needs attention
+```
+
+They must never collapse. **Composite silence is only health if every required
+reader successfully returned** — computed from reader outcomes in code, never
+asked of the model. An attention surface that cannot tell quiet from blind is
+worse than none, because composite silence reads as health (§5).
+
+### Entitlements run before intelligence
+
+```text
+authenticated actor → server-derived property scope
+                    → ENTITLED DOMAIN READERS ONLY
+                    → governed fact envelope → composer
+```
+
+Unentitled facts never enter model context; a prompt instruction is not a
+security boundary. Openable references are minted server-side from entitled
+facts, never by finding a name in the answer text and linking it afterward (§21).
+
+### Reads now; writes later, and never by extension
+
+Ask Spine will eventually write, communicate, route and act within authority.
+When it does, it is a **new surface over existing canonical writers** — never a
+parallel path to the same durable object. A conversational completion routes
+through the canonical completion writer or it is a second writer, and the gate
+that proves there is only one will fail, correctly.
+
+The read door does not quietly become the write door.
+

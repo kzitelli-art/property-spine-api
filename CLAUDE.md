@@ -112,6 +112,51 @@ normal governed expectation  +  unexpected operating consequence
     =  the actual economic story of the property
 ```
 
+## Ask Spine — the conversational interface over the same truth
+
+**Ask Spine is not a feature. It is a second interface to Spine**, beside the
+application and over the same governed truth. It never scrapes a screen, retrieves
+over rendered UI, or queries tables hoping to understand the schema. It calls the
+same canonical reads that produce the pages. Full doctrine: `PHILOSOPHY.md` §40.
+
+```text
+THE APP        the durable visual interface over Spine's truth
+ASK SPINE      the conversational interface over the SAME truth
+```
+
+**A domain is not done until Ask Spine can read it** (§33). Not "the app can
+display it" — a person can *ask* for it without knowing where it lives.
+
+```text
+canonical truth → writer → canonical read → compact standing projection
+                → operator UI → Ask Spine read → proof
+```
+
+Every governed domain needs conversational **reads**. Not every module needs
+conversational **writes**. That cost is part of building the domain, and it stays
+in the estimate.
+
+The rule that governs every implementation:
+
+```text
+THE MODEL GETS FLUENCY OVER WORDING. IT NEVER GETS AUTHORITY OVER
+ATTRIBUTION, SOURCE AUTHORITY, CURRENT STATE, RELEVANCE, OR CONFLICT.
+```
+
+Facts reach the composer in an envelope, never as a bag. `source_authority` says
+what a source is **authorized to assert** — `governed_read` outranks
+`transcript_claim`, `email_claim`, `user_assertion`. A lower authority may coexist
+with a governed read; it may never silently upgrade one. *"I think the taxes were
+paid"* does not move `city_payment = NOT_ESTABLISHED`.
+
+Four silences that must never collapse — `NOT_ESTABLISHED` (about the property),
+`READ_FAILED`, `READ_TIMED_OUT` (about Spine), `QUIET`. **Composite silence is
+only health if every required reader returned**, computed in code, never prompted.
+
+**Writes later, and never by extension.** When Ask Spine acts, it is a new surface
+over existing canonical writers, never a parallel path to the same durable object.
+The read door does not quietly become the write door.
+
 ## Same truth, four compressions
 
 > ⚠ **Two different fours. Do not merge them.** The section above lists four
@@ -201,6 +246,7 @@ Storage stays domain-specific. The owner layer consumes the contract.
 - **Solo-first, never Solo-special** (§22). No `if property is Solo` business branches.
 - **Server-derived identity & authority** (§21). The browser requests; the server decides. A client-provided property ID is never authority.
 - **Capture once, read everywhere** (§7). One canonical service write updates board, Person Card, and reporting projections.
+- **Ask Spine is an interface, not an AI layer** (§40). It reads the same canonical reads the screens do. The model gets fluency over wording, never authority over attribution, source authority, current state, relevance, or conflict.
 - **Classify every component 1–4** (§18) with an exact removal condition for anything temporary.
 
 ## Before any feature — the Eight Questions (§31)
@@ -210,6 +256,8 @@ Storage stays domain-specific. The owner layer consumes the contract.
 ## Definition of Done (§33)
 
 Proof ladder: Reported → Locally exercised → Built-but-dormant → **Proven** (real DB + real HTTP) → **Browser verified**. For operator workflows, browser verification is part of "done." Do not call something live/deployed/enforced without the matching evidence.
+
+**And a domain is not done until Ask Spine can read it** — its governed standing state available to entitled users, proven in the browser. See the Ask Spine section above and `PHILOSOPHY.md` §40.
 
 ## Build discipline (§30)
 
