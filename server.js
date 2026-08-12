@@ -3175,6 +3175,19 @@ app.use("/", require("./src/surfaces/asset_management")({ pool, fileToText }));
 //  seam above and nothing else.
 app.use("/", require("./src/agent/ask_spine")({ pool, anthropic }));
 
+// ── MEETING TRANSCRIPT INGEST — STORAGE ONLY, DEFAULT OFF ───────────────
+//  Stores a meeting transcript and its ordered turns against the operator's
+//  own property. It is NOT wired to Ask Spine: retrieval waits on the
+//  canonical fact envelope, so nothing here can answer a question yet.
+//
+//  Two independent controls, and they answer different questions. Property
+//  and module entitlement come from the session as everywhere else; the
+//  COHORT GATE is separate and asks whether meeting evidence may exist for
+//  this user at all. Entitlement cannot answer that — one passage in the
+//  first real specimen carries an occupancy confirmation and a resident's
+//  hospitalisation in the same breath. Default is deny.
+app.use("/", require("./src/meetings/meeting_transcript_ingest")({ pool, upload }));
+
 // ── THE ONE UNIT TURN PAGE (BUILD 6A) ────────────────────────────────────
 //  READ-ONLY consolidation of the Build 1-5 canonical reads. Creates no state
 //  and owns no domain model; every write action on the page posts to the

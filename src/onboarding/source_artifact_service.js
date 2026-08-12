@@ -124,6 +124,14 @@ const KIND_SHAPES = Object.freeze({
   contracted_service_service_report: CONTRACTED_SERVICE_PDF_SHAPES,
   contracted_service_accounting_report: CONTRACTED_SERVICE_ACCOUNTING_SHAPES,
   contracted_service_other:      OTHER_SHAPES,
+  //  ── MEETING EVIDENCE ─────────────────────────────────────────────
+  //  A transcript export, as plain text. Narrow to ONE shape because the
+  //  parser reads exactly one grammar ("0:03 - Name" then what was said);
+  //  accepting .vtt or .srt here would let a file through that no reader
+  //  can segment, and a stored transcript Spine cannot quote is worse
+  //  than a refused one. Another export format is a new grammar and a
+  //  deliberate act, not a widened list.
+  meeting_transcript:            Object.freeze(["txt"]),
 });
 
 //  Per-kind refusal copy. §5 and the repo's rule that a refusal a user
@@ -212,6 +220,9 @@ const KIND_REFUSAL = Object.freeze({
   contracted_service_other: (filename) =>
     `Spine retains other Contracted Services evidence as a PDF, spreadsheet or text file. ` +
     `"${filename}" is none of those. Upload the source in its original format.`,
+  meeting_transcript: (filename) =>
+    `Spine reads a meeting transcript as a .txt file. "${filename}" is not one. ` +
+    `Export the transcript as plain text, with timestamps and speaker names included.`,
 });
 
 function shapesFor(artifact_kind) {

@@ -130,6 +130,7 @@ const GATES = [
     what: "Contracted Services Ask Spine: entitlement, question-bound facts, failures, and references" },
   { file: "technician_language.test.js",
     what: "technician language: plain phrases read correctly, nothing guessed into an action" },
+<<<<<<< HEAD
   { file: "compliance_document_read.test.js",
     what: "Compliance reader: real City license, explicit unknowns, hostile classification refusals" },
   { file: "compliance_evidence_intake.test.js",
@@ -140,6 +141,23 @@ const GATES = [
     what: "Insurance + Tax readers: retrieval declared; comparison and cause not claimed" },
   { file: "compliance_user_journey.test.js",
     what: "Compliance user journey: six natural questions, honest attention, server-minted openers" },
+=======
+  //  Meeting transcripts. A transcript is the first evidence in Spine
+  //  with NO other surface behind it — every fact Ask Spine can cite
+  //  today is already visible on a desk the operator can open, and a
+  //  passage is not. So if a segment is wrong nothing else in the
+  //  product disagrees with it. Pure, so it runs here.
+  { file: "meeting_transcript.test.js",
+    what: "meeting transcript: verbatim survives, sequence is identity, an unreadable file is refused whole" },
+  //  The ingest door, over real HTTP. This one earned its place on the
+  //  standard path immediately: refuseClientProperty was copied from a
+  //  JSON route onto a MULTIPART one, where req.body does not exist until
+  //  multer has run — so the guard passed vacuously and a cross-property
+  //  property_id returned 201. A real guard rendered inert by middleware
+  //  order is worse than no guard, and only a real request finds it.
+  { file: "meeting_transcript_http_proof.js",
+    what: "meeting ingest door: default deny, cohort is per-user, and a refusal writes nothing" },
+>>>>>>> f28c249 (Meeting transcripts become retained, citable evidence)
 ];
 
 const bar = "════════════════════════════════════════════════════════════════";
