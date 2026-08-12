@@ -208,8 +208,25 @@ const base = { property_id: PROP, allowed_modules: ["maintenance"] };
      /rent strategy|pricing/.test(sys) && /meetings/.test(sys) &&
      /general knowledge/.test(sys) && /NOT a reason to answer/.test(sys),
      "the model is left to infer what is off-subject");
-  ok("B10 …and it is told to decline on-subject questions the facts cannot support",
-     /facts do not contain what is needed/.test(sys) && /Do not stretch/.test(sys));
+  /*  B10 USED TO ASSERT THE OPPOSITE TOO.
+   *
+   *  It required the prompt to tell the model to decline ON-SUBJECT
+   *  questions whose facts came up empty. That produced a refusal which
+   *  misnamed its own reason — "I can only answer about the open work at
+   *  this property", said in reply to a question about exactly that — and
+   *  it made scope turn on a judgement with no edge, so the browser gate
+   *  passed check 3 on one run and failed it on the next with nothing
+   *  changed. Scope is decided on SUBJECT; emptiness is answered honestly.  */
+  ok("B10 …and out_of_scope is reserved for OFF-SUBJECT questions only",
+     /out_of_scope ONLY when the question is off-subject/.test(sys),
+     "the prompt lets thin facts become out_of_scope again — that refusal " +
+     "misnames its reason, and makes the scope decision unstable");
+  ok("B10b …and an on-subject question with nothing to report is still answered",
+     /ALWAYS `answered`/.test(sys) && /Nothing is overdue right now/.test(sys),
+     "the prompt no longer tells the model that an empty result is an answer");
+  ok("B10c …and it is still forbidden from inventing one to fill the gap",
+     /[Nn]ever stretch the facts/.test(sys) && /never invent one/.test(sys),
+     "removing the decline rule must not remove the no-stretching rule");
   /*  B11 USED TO ASSERT THE OPPOSITE OF THIS.
    *
    *  It required an assistant turn containing "{" — a prefill, so the reply

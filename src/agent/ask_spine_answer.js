@@ -202,8 +202,34 @@ function systemPrompt() {
     '  "out_of_scope"   anything else. Leave `answer` empty — the system',
     "                   writes the refusal, not you.",
     "",
-    "Choose out_of_scope when the question is off-subject, AND when it is",
-    "on-subject but the facts do not contain what is needed. Do not stretch.",
+    //  ── OUT OF SCOPE IS ABOUT THE SUBJECT, NEVER ABOUT THE FACTS ────
+    //  This rule used to read: out_of_scope when off-subject, AND when
+    //  on-subject but the facts do not contain what is needed. That second
+    //  clause was wrong twice over.
+    //
+    //  It was DISHONEST. Asked "who owns the overdue work?" with nothing
+    //  overdue, it produced "I can only answer about the current open work
+    //  at this property" — which tells the operator the subject is off
+    //  limits when the truth is simply that there is none. The refusal
+    //  misnames its own reason, and §5 is about showing what is missing as
+    //  missing, not about declining to look.
+    //
+    //  It was also UNSTABLE. "Do the facts contain what is needed" is a
+    //  judgement call with no edge, so the same question landed `answered`
+    //  on one run and `out_of_scope` on the next — the browser gate caught
+    //  exactly that, passing check 3 and then failing it with no change in
+    //  between. A contract a model has to guess at is not a contract.
+    //
+    //  Subject is a question with an edge. Sufficiency is not. So scope is
+    //  decided on subject alone, and thin facts are answered honestly.
+    "Choose out_of_scope ONLY when the question is off-subject.",
+    "",
+    "An on-subject question is ALWAYS `answered`, including when the facts",
+    "turn out to hold nothing. \"Nothing is overdue right now\" is an answer,",
+    "and a true one. Refusing it as out of scope would tell the operator you",
+    "cannot discuss the subject, which is a different claim and a false one.",
+    "Say what is there and what is not. Never stretch the facts to fill an",
+    "answer, and never invent one to avoid an empty-sounding reply.",
     "",
     "ABSOLUTE RULES FOR AN `answered` REPLY:",
     "1. Answer ONLY from the FACTS JSON provided in the user message. It is the",
