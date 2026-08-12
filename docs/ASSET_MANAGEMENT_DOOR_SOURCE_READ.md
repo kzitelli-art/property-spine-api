@@ -1,5 +1,11 @@
 # Asset Management Operating Door — Source & App Read
 
+> ⚠ **THE SUB-HIERARCHY IN THIS DOCUMENT IS SUPERSEDED (2026-08-12).** Asset
+> Management now has four rooms — **Capital Stack · Property Expenses ·
+> Projects & CapEx · Compliance**. Revenue, Property Obligations and Operating
+> Costs are no longer rooms; see `CLAUDE.md` → "Four operating doors". The
+> source read itself stands as the dated record it is.
+
 **2026-08-11. Read-only. No code, no schema, no build.**
 **API `main` @ `d726188` · APP `main` @ `60a489c`.**
 

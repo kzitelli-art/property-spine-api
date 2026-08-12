@@ -44,9 +44,31 @@ const ROOT = path.join(__dirname, "..");
 //  insurance cost this property". Adding a file here is a deliberate act.
 const CHAIN = [
   "migrations/161_insurance_economic_truth.sql",
+  //  Participation — named on the policy, no amount. It is part of the
+  //  chain because it is what the economic read now hangs off, and a
+  //  financing reference could reach the chain through it just as easily.
+  "migrations/162_insurance_coverage_participation.sql",
   "src/asset/insurance_program_service.js",
   "src/asset/insurance_allocation_service.js",
   "src/asset/insurance_position_read.js",
+  //  THE WRITE PATH. Added when establishment shipped. Without it this
+  //  gate asserted independence over the readers only, while the routes
+  //  that actually CREATE insurance truth went unscanned — a gate that
+  //  scans less than the claim it makes, which is worse than no gate
+  //  because it launders the gap into evidence.
+  //
+  //  This is also why those routes are their own module rather than two
+  //  more handlers in src/surfaces/asset_management.js: that file
+  //  legitimately contains "Premium financing", "Down payment" and
+  //  "Financed amount" in the Cash & Financing section's `reserved` spec
+  //  — the description of a deliberately unbuilt section — so it cannot
+  //  be scanned whole and the write path would have had no gate at all.
+  "src/asset/insurance_establishment.js",
+  //  The proposal adapter. It writes nothing, but it decides what an
+  //  operator is SHOWN off a document — and a reader that started
+  //  proposing installment or down-payment fields would be walking
+  //  financing back into the chain through the confirm screen.
+  "src/asset/insurance_document_read.js",
 ];
 
 //  Financing / cash vocabulary. Word-boundary matched so ordinary English

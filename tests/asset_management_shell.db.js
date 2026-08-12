@@ -177,9 +177,25 @@ async function main() {
 
     const rooms = (good.body && good.body.rooms) || [];
     ok("exactly four rooms", rooms.length === 4, `got ${rooms.length}`);
-    ok("canonical order: revenue · capital · property_obligations · operating_costs",
-       rooms.map((r) => r.key).join(",") === "revenue,capital,property_obligations,operating_costs",
+    /*  ⚠ THE FOUR DOORS ARE A PRODUCT RULING, PINNED BY KEY AND ORDER.
+     *  The previous four — revenue · capital · property_obligations ·
+     *  operating_costs — mixed an income category, a capitalisation
+     *  structure, a bundle of standing obligations and a bundle of
+     *  operating costs at one level, so "what does this property cost to
+     *  own" had two rooms and neither had the whole answer. The new four
+     *  are cut by QUESTION. */
+    ok("canonical order: capital_stack · property_expenses · projects_capex · compliance",
+       rooms.map((r) => r.key).join(",")
+         === "capital_stack,property_expenses,projects_capex,compliance",
        rooms.map((r) => r.key).join(","));
+    //  ⚠ THE OLD DOORS ARE GONE, NOT ALIASED. An alias would leave two
+    //  pathways to one room and the next reader would not know which is
+    //  canonical.
+    ok("Revenue is not a door here — its sources live in Leasing and Management",
+       !rooms.some((r) => /revenue/i.test(r.key) || /revenue/i.test(r.label)),
+       rooms.map((r) => r.label).join(","));
+    ok("neither is Property Obligations, nor Operating Costs",
+       !rooms.some((r) => ["property_obligations", "operating_costs"].includes(r.key)));
     ok("every room carries an establishment state",
        rooms.every((r) => ["established", "partially_established", "not_established"].includes(r.establishment)));
     ok("every room says WHY in plain language",
@@ -204,15 +220,62 @@ async function main() {
     //  breaks into the compartments it will always have, so the operator
     //  knows where Insurance is going to live and the first real one fills
     //  a slot that already exists instead of forcing a redesign.
+    //  Capital Stack legitimately holds three. The claim is that a room
+    //  is never an empty page waiting to be replaced — it already breaks
+    //  into the skeleton it will always have.
     ok("every room carries compartments",
-       rooms.every((r) => Array.isArray(r.compartments) && r.compartments.length >= 4),
+       rooms.every((r) => Array.isArray(r.compartments) && r.compartments.length >= 3),
        JSON.stringify(rooms.map((r) => [r.key, (r.compartments || []).length])));
 
-    const poc = (rooms.find((r) => r.key === "property_obligations").compartments || [])
-      .map((c) => c.label);
-    ok("Property Obligations breaks into Taxes · Insurance · Licenses · Compliance",
-       ["Taxes", "Insurance", "Licenses & Registrations", "Compliance"]
-         .every((l) => poc.includes(l)), JSON.stringify(poc));
+    const pxc = (rooms.find((r) => r.key === "property_expenses").compartments || [])
+      .map((c) => c.key);
+    ok("Property Expenses breaks into all nine expense modules, in order",
+       pxc.join(",") === "taxes,insurance,payroll_staffing,utilities,contracted_services,"
+         + "repairs_maintenance,management_administration,marketing_leasing,"
+         + "other_operating_expenses", JSON.stringify(pxc));
+
+    /*  ⚠ A LICENCE FEE IS AN EXPENSE. A LICENCE IS NOT.
+     *  The old taxonomy sat licences beside taxes as though they were the
+     *  same kind of fact. Compliance status, renewal and evidence belong
+     *  to COMPLIANCE; the fee may later be read as an expense. One domain
+     *  owns the operational truth and the economic consequence is read
+     *  elsewhere — never two truths. */
+    ok("⚠ Licenses & Registrations lives under Compliance",
+       (rooms.find((r) => r.key === "compliance").compartments || [])
+         .some((c) => c.key === "licenses_registrations"));
+    ok("⚠ …and NOT under Property Expenses",
+       !pxc.some((k) => /licen/i.test(k)), JSON.stringify(pxc));
+    ok("Inspections, Certificates and Violations are compliance, not expense",
+       ["inspections", "certificates", "violations_cure", "recurring_requirements"]
+         .every((k) => (rooms.find((r) => r.key === "compliance").compartments || [])
+           .some((c) => c.key === k)));
+
+    /*  ⚠ PROJECTS & CAPEX IS NOT A SECOND WORK-ORDER SYSTEM.
+     *  Maintenance owns the work event. This room owns the economic
+     *  position of capital work and will reference operating work later;
+     *  a work order must never be creatable from inside Asset Management. */
+    const pjc = rooms.find((r) => r.key === "projects_capex");
+    ok("Projects & CapEx holds the capital view, not work orders",
+       (pjc.compartments || []).map((c) => c.key).join(",")
+         === "projects,unit_improvements,building_systems,equipment_ff_e,"
+           + "capital_reserves_draws",
+       JSON.stringify((pjc.compartments || []).map((c) => c.key)));
+    ok("⚠ …and its copy says the work event belongs to Maintenance",
+       /Maintenance may hold operating work orders/.test(pjc.why), pjc.why);
+    ok("no compartment anywhere is a work order",
+       !rooms.some((r) => (r.compartments || []).some((c) =>
+         /work_order|dispatch|technician/i.test(c.key))));
+
+    /*  ⚠ CAPITAL STACK MAY READ ESCROW. IT MAY NOT WRITE IT.
+     *  Tax escrow truth is owned by the Tax module and insurance escrow
+     *  by the Insurance module, each behind gate_funding_boundary.js. */
+    const cs = rooms.find((r) => r.key === "capital_stack");
+    ok("Capital Stack holds Debt · Equity · Reserves & Escrows",
+       (cs.compartments || []).map((c) => c.key).join(",")
+         === "debt,equity,reserves_escrows");
+    ok("⚠ …and reserves are honestly empty — it is not a second escrow writer",
+       (cs.compartments || []).find((c) => c.key === "reserves_escrows")
+         .establishment === "not_established");
 
     ok("every compartment carries its own establishment state",
        rooms.every((r) => (r.compartments || []).every((c) =>
@@ -230,21 +293,31 @@ async function main() {
     //  of the shell. A later edit that quietly drops one would change the
     //  product and break nothing — the same failure mode as a renamed
     //  response key. Read them by name, exactly like H16b does.
-    const po = rooms.find((r) => r.key === "property_obligations");
-    ok("Property Obligations covers Compliance",
-       (po.covers || []).includes("Compliance"), JSON.stringify(po.covers));
-    ok("Property Obligations covers Licenses & Registrations",
-       (po.covers || []).includes("Licenses & Registrations"), JSON.stringify(po.covers));
-    ok("…and still covers Taxes and Insurance",
-       (po.covers || []).includes("Taxes") && (po.covers || []).includes("Insurance"));
+    const px = rooms.find((r) => r.key === "property_expenses");
+    ok("Property Expenses covers Taxes and Insurance",
+       (px.covers || []).includes("Taxes") && (px.covers || []).includes("Insurance"),
+       JSON.stringify(px.covers));
+    ok("…and Payroll & Staffing, Utilities and Contracted Services",
+       ["Payroll & Staffing", "Utilities", "Contracted Services"]
+         .every((l) => (px.covers || []).includes(l)), JSON.stringify(px.covers));
+    ok("Compliance covers Licenses & Registrations",
+       (rooms.find((r) => r.key === "compliance").covers || [])
+         .includes("Licenses & Registrations"));
 
     //  The room's honest-empty sentence must cover the WHOLE room. A room
     //  promising licences and compliance in its labels while its copy only
     //  mentions tax and insurance is quietly telling the operator the rest
     //  is handled.
-    ok("the empty-room copy speaks to licences and renewals, not just tax and insurance",
-       /licen[cs]e/i.test(po.why) && /(renewal|filing|due)/i.test(po.why),
-       po.why);
+    //  The room's honest-empty sentence must cover the WHOLE room, not
+    //  the two modules easiest to name. A room promising seven more
+    //  expense types while its copy mentions only tax and insurance is
+    //  quietly telling the operator the rest is handled.
+    ok("the empty-expenses copy speaks to the whole room, not just tax and insurance",
+       /contract|payroll/i.test(px.why) && /(cost|operate)/i.test(px.why), px.why);
+    ok("and Compliance's copy speaks to expiry and standing, not to cost",
+       /(expiry|expire|cure|good standing)/i.test(
+         rooms.find((r) => r.key === "compliance").why),
+       rooms.find((r) => r.key === "compliance").why);
 
     //  THE CARD'S EYEBROW MAY BE SHORTER THAN covers. IT MAY NOT DISAGREE.
     //  The home card drops the "other / catch-all" tail for density; if it
@@ -277,51 +350,69 @@ async function main() {
     //  room by carrying the setup guidance forward into it.
     ok("no card summary contains the room's 'what would establish it' text",
        rooms.every((r) => !r.establishment_summary.includes(r.what_would_establish_it)));
+    /*  ⚠ NARROWED, AND THE NARROWING IS THE POINT.
+     *  The rule is that a CARD must not talk about where truth comes from
+     *  — Deal Setup, a retained document — because that is room-level
+     *  setup guidance at desk altitude. The old pattern also caught the
+     *  bare word "certificate", which now mis-fires: Certificates is one
+     *  of Compliance's five MODULES, and naming a room's contents on its
+     *  card is exactly what every other card does. Matching a module name
+     *  is not evidence of document language. */
     ok("no card summary mentions source documents — that belongs in the room",
-       rooms.every((r) => !/Deal Setup|loan document|tax bill|certificate/i.test(r.establishment_summary)),
+       rooms.every((r) => !/Deal Setup|loan document|tax bill|retained|uploaded|on file/i
+         .test(r.establishment_summary)),
        JSON.stringify(rooms.map((r) => r.establishment_summary)));
 
     console.log("\n── 3. ESTABLISHMENT IS READ FROM REAL DATA ───────────");
 
     const byKey = (k) => rooms.find((r) => r.key === k);
 
-    ok("with NO leases, Revenue is not_established",
-       byKey("revenue").establishment === "not_established",
-       byKey("revenue").establishment);
-    ok("…and says so as 'no active leases', not as a generic blank",
-       /No active leases/i.test(byKey("revenue").why));
+    /*  ── EVERY DOOR IS EMPTY ON A PROPERTY WITH NOTHING ─────────────
+     *  This harness builds no tax or insurance schema at all, which makes
+     *  it the right place to prove the DEFENSIVE path: a navigation read
+     *  whose child domain cannot answer must report "not established"
+     *  rather than taking the whole desk down. An operator with a broken
+     *  module still needs the other three doors.
+     */
+    ok("Capital Stack is not_established",
+       byKey("capital_stack").establishment === "not_established");
+    ok("Projects & CapEx is not_established",
+       byKey("projects_capex").establishment === "not_established");
+    ok("Compliance is not_established",
+       byKey("compliance").establishment === "not_established");
+    ok("⚠ Property Expenses reports not_established when its modules cannot answer",
+       byKey("property_expenses").establishment === "not_established",
+       byKey("property_expenses").establishment);
+    ok("…and the desk still returns all four doors rather than failing",
+       rooms.length === 4 && good.status === 200);
+    ok("…and its two live compartments say so individually, not generically",
+       (byKey("property_expenses").compartments || [])
+         .filter((c) => ["taxes", "insurance"].includes(c.key))
+         .every((c) => c.establishment === "not_established"
+                       && /No governed/.test(c.note)),
+       JSON.stringify((byKey("property_expenses").compartments || []).slice(0, 2)));
 
-    ok("Capital is not_established", byKey("capital").establishment === "not_established");
-    ok("Property Obligations is not_established", byKey("property_obligations").establishment === "not_established");
-    ok("Operating Costs is not_established", byKey("operating_costs").establishment === "not_established");
-
-    //  A lease that carries NEITHER rent nor a start date is a tenancy
-    //  record, not an economic one. It must not move the room.
-    await pool.query(
-      `insert into ${schema}.leases (property_id, lease_status) values ($1,'active')`, [propId]);
-    const hollow = await get(PATH, "tok-am");
-    const hollowRev = hollow.body.rooms.find((r) => r.key === "revenue");
-    ok("a lease with no rent and no term does NOT establish Revenue",
-       hollowRev.establishment === "not_established", hollowRev.establishment);
-    ok("…and the sentence distinguishes 'leases exist but carry no economics'",
-       /carries both a rent amount and a start date/i.test(hollowRev.why),
-       hollowRev.why);
-
-    //  Now a real economic position.
+    /*  ⚠ A LEASE IS NOT AN ASSET-MANAGEMENT FACT ANY MORE.
+     *  Revenue was removed as a door, so rent — which is real, and which
+     *  this harness now writes — must move NOTHING here. Leasing and
+     *  Management own it. Before the reorganization a lease made a room
+     *  partially established; if that ever comes back, Asset Management
+     *  has grown a second revenue surface.
+     */
     await pool.query(
       `insert into ${schema}.leases (property_id, rent, start_date, end_date, lease_status)
        values ($1, 1850.00, '2026-01-01', '2026-12-31', 'active')`, [propId]);
     const withLease = await get(PATH, "tok-am");
-    const rev2 = withLease.body.rooms.find((r) => r.key === "revenue");
-    ok("a lease with rent AND a term makes Revenue partially_established",
-       rev2.establishment === "partially_established", rev2.establishment);
-    ok("Revenue is NEVER 'established' — escalations and recurring charges do not exist",
-       rev2.establishment !== "established");
-    ok("…and the sentence says what is still missing",
-       /escalation/i.test(rev2.why) && /recurring/i.test(rev2.why));
-    ok("the other three rooms are unmoved by a lease",
-       withLease.body.rooms.filter((r) => r.key !== "revenue")
-         .every((r) => r.establishment === "not_established"));
+    ok("⚠ a real lease with rent and a term moves NO Asset Management door",
+       withLease.body.rooms.every((r) => r.establishment === "not_established"),
+       JSON.stringify(withLease.body.rooms.map((r) => [r.key, r.establishment])));
+    //  WORD-BOUNDED. The first version matched "rent" inside "cur-RENT-ly"
+    //  and reported a leak that was not one — a false alarm in a gate is
+    //  the same defect class as a miss, one direction over.
+    const LEASEISH = /\b(lease|leases|rent|rents|rental|occupancy|occupied)\b/i;
+    ok("…and no room mentions leases, rent or occupancy at all",
+       !LEASEISH.test(JSON.stringify(withLease.body.rooms)),
+       (JSON.stringify(withLease.body.rooms).match(LEASEISH) || [])[0]);
 
     console.log("\n── 4. NO FABRICATED ECONOMICS ────────────────────────");
     //  The assertion this slice exists for.
