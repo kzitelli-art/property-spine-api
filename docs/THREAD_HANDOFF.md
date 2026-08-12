@@ -59,9 +59,15 @@ The release block said NOT merged · 162–167 pending · ceiling 161. All four
 lines were stale — merged (#97/#57) and released; ceiling 167.
 ```
 
-**Also flagged, not fixed:** `release/ledger_read_before_release.sql` has a
-`build` list ending at **159**. It cannot see 160–167 and will report a clean
-`pending` for a set it never looked at. Regenerate before the next release.
+**A third, fixed in the same pass:** `release/ledger_read_before_release.sql`
+had a `build` list ending at **159**. It could not see 160–167 and would have
+reported a clean `pending` for a set it never looked at — the migration-140
+failure mode described in its own footer, reproduced by the file that warns
+about it. **Regenerated from `origin/main` by the command in its header**, not
+hand-edited: 155 versions, verified identical to the migration files on main,
+with the real 125 and 138/139 gaps preserved. `pending` should now come back
+**empty** until a new migration lands, and an empty pending there is the
+correct answer rather than a broken query.
 
 **Where this lands for Debt.** The first schema conversation now has to answer:
 *what must Debt expose so an entitled person can text Spine from a meeting and
