@@ -1,8 +1,124 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
-##  159 IS RELEASED. THE API SHIPS AGAIN. 2026-08-11 (latest).
-##  THIS SECTION WINS.
+##  INSURANCE V1 IS BUILT AND UNRELEASED. 2026-08-12 (latest).
+##  THIS SECTION WINS. FEATURE WORK ON INSURANCE IS CLOSED.
+## ══════════════════════════════════════════════════════════════════
+
+```text
+API  claude/philosophy-doctrine-reference-jv7s7r   f4d639a   NOT merged
+APP  claude/philosophy-doctrine-reference-jv7s7r   4390db3   NOT merged
+pending migrations                                 162, 163
+production ledger ceiling                          161  (expected — READ IT)
+```
+
+**⚠ DO NOT MERGE THE API BRANCH UNTIL API AUTO-DEPLOY IS PAUSED.**
+Auto-deploy is ON. Merging triggers a normal boot with 162/163 pending,
+`prestart` refuses, and that is a failed production deploy — Path B, which
+the 160/161 ruling explicitly REJECTED. Pausing first is step 1 of the run
+card and it is the whole point of the card.
+
+**The run card is [`release/INSURANCE_162_163_RUN_CARD.md`](release/INSURANCE_162_163_RUN_CARD.md).**
+It carries the ordered steps, the production-pass checklist, and what is
+still open from 159/160/161. Follow it; do not improvise the sequence.
+
+### What was built
+
+```text
+162  participation, separated from allocation. Backfills from existing
+     allocations BEFORE adding its FK, so release does not depend on the
+     allocation table being empty.
+163  funding — direct | lender_escrow | premium_financed, effective-dated,
+     with finance-agreement and escrow detail in their own tables.
+
+Add Current Insurance   evidence → label-scan proposal → human confirm →
+                        canonical write → the dashboard populates
+Good standing           CURRENT · RENEWAL APPROACHING (90/60/45/30) ·
+                        COVERAGE NOT CONFIRMED · EXPIRED. ZERO SCHEMA —
+                        a bound next term is just a later coverage.
+Add Payment / Financing the funding capture sheet
+```
+
+### ⚠ THE WALL, AND IT IS EXECUTABLE
+
+`tests/gate_insurance_funding_boundary.js` asserts, structurally and in
+both directions:
+
+```text
+economics ↛ funding   transitive import graph, not just direct edges
+economics ↛ funding   no economic file names a funding table
+funding → economics   PERMITTED — reference, select, join, foreign key
+funding ↛ economics   no insert/update/delete/alter on an economic table
+```
+
+The older `gate_insurance_economic_independence.js` reads VOCABULARY and
+stays. It could not catch an economic file requiring a funding module whose
+name is innocent, nor a funding module writing an economic table — so once
+funding existed it would have kept passing while the seam rotted.
+
+**The boundary gate tests its own detectors every run** and reports its own
+coverage. Falsified four ways before being trusted, including reaching
+funding transitively through an innocently-named intermediary, and including
+the case that must NOT trip: an FK from funding to a coverage.
+
+**Do not put funding routes in `insurance_establishment.js`.** That file is
+in the economic chain and the gate will fail the build. The surface is the
+composition point; the chain is not.
+
+### The invariant everything else serves
+
+```text
+insurance accrual = allocated annual cost ÷ coverage term months
+```
+
+Never an installment, never a down payment, never a finance charge, never
+an escrow withdrawal. `insurance_position_read.js` imports NOTHING and
+cannot reach funding by any path. Proven behaviourally: the position is
+BYTE-IDENTICAL before and after recording funding in every shape.
+
+### Evidence at these SHAs
+
+```text
+API  insurance_establishment.db.js   141/141    real PG + real HTTP
+     insurance_truth.db.js            52/52
+     asset_management_shell.db.js     46/46
+     npm run verify                   14/14
+APP  asset_management_shell.browser  171/171    real Chromium
+     run_harnesses.sh                1041 · 0 failed · 0 red
+```
+
+⚠ `npm run verify` silently runs a SUBSET on a shallow clone — the agent
+container starts shallow. `git rev-parse --is-shallow-repository` before
+believing green.
+
+### NOT PROVEN, AND MUST NOT BE CLAIMED
+
+```text
+anything in production            no access from the build container
+                                  (proxy 403 to onrender.com, no DATABASE_URL)
+Insurance rendering real truth    NEVER seen on a production page by an
+                                  entitled account. Only the fail-closed
+                                  direction (401/403) is production-proven,
+                                  and that predates this work.
+PDF bytes → text                  server.js's existing fileToText, injected.
+                                  The label scan over its output IS proven.
+deal_setup_http.db.js             cannot run — needs the full schema, which
+                                  cannot rebuild from empty (012/yardi_code)
+```
+
+### After the production pass
+
+**Insurance is closed.** No more Insurance architecture until real usage
+says something is missing. Next domain is **Taxes** — and the Standing
+Obligation primitive is still NOT to be extracted. Insurance is one
+specimen; the shared shape gets pulled out after a second obligation proves
+what is actually shared, not before.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  159 IS RELEASED. THE API SHIPS AGAIN. 2026-08-11.
+##  SUPERSEDED BY THE SECTION ABOVE.
 ## ══════════════════════════════════════════════════════════════════
 
 ```text
