@@ -41,7 +41,7 @@ const URL_ = receipt.harnessConnectionString();
 //  EVERY assertion is counted, and a short run is a FAILED run. A harness
 //  that dies halfway prints a clean-looking tail otherwise — this repo has
 //  already paid for one that ran zero assertions for 204 commits.
-const EXPECTED_ASSERTIONS = 105;
+const EXPECTED_ASSERTIONS = 141;
 let pass = 0, fail = 0;
 function ok(label, cond, detail) {
   if (cond) { pass++; console.log("  ok    " + label); }
@@ -101,6 +101,10 @@ async function main() {
     await c.query(scopedMigration("161_insurance_economic_truth.sql",
       [/alter table source_artifacts[\s\S]*?;\s*$/m]));
     await c.query(scopedMigration("162_insurance_coverage_participation.sql"));
+    //  163 is the FUNDING side. Applied here so the accrual can be proven
+    //  unmoved BY funding rather than merely unmoved while funding is absent.
+    await c.query(scopedMigration("163_insurance_funding.sql",
+      [/alter table source_artifacts drop constraint[\s\S]*$/m]));
 
     const uid = (await c.query(`insert into users (name) values ('Asset Ops') returning id`)).rows[0].id;
     const skyline = (await c.query(`insert into properties (name) values ('Skyline') returning id`)).rows[0].id;
@@ -678,6 +682,224 @@ async function main() {
       path: DASHBOARD + "?property_id=" + other, token: "entitled" });
     ok("a client-supplied property on the standing read is still REFUSED",
        spoofProp.status === 403, JSON.stringify(spoofProp.body));
+
+    console.log("\n── 13. FUNDING CANNOT MOVE WHAT INSURANCE COSTS ──────");
+
+    /*  THE ASSERTION SLICE B EXISTS TO SURVIVE.
+     *
+     *  The June 2026 Skyline workpaper computed the property's annual
+     *  insurance cost FROM the financing stream. Everything below records
+     *  funding in every shape it comes in — direct, escrowed, financed
+     *  with a down payment and twelve installments and a finance charge —
+     *  and asserts the insurance position is BYTE-IDENTICAL before and
+     *  after each one.
+     *
+     *  Not "close". Identical. The accrual reads the coverage and the
+     *  allocation; it cannot see a funding table, and the boundary gate
+     *  makes that a build failure rather than a promise.
+     */
+    const FUNDING = "/operator/asset-management/insurance/funding";
+    /*  THE COST-BEARING SURFACE, and PAYMENT is deliberately not in it.
+     *
+     *  PAYMENT names the MECHANISM and is supposed to change when funding
+     *  is recorded — that is the cell's whole job. Including it would make
+     *  these assertions fail for the one correct reason and would blunt
+     *  the claim being made, which is narrower and sharper: funding cannot
+     *  move what insurance COSTS.
+     *
+     *  A separate assertion below proves PAYMENT is the ONLY thing that
+     *  moved, so excluding it here concedes nothing. */
+    const COST_CELLS = ["coverage", "annual_cost", "monthly_accrual", "next_renewal"];
+    const positionOf = async () => {
+      const r = await get(DASHBOARD + "?period=2026-06");
+      return JSON.stringify({
+        cost: r.body.position.filter((p) => COST_CELLS.includes(p.key)),
+        economic: (r.body.sections || []).find((x) => x.key === "economic_position").rows,
+      });
+    };
+    const paymentOf = async () => {
+      const r = await get(DASHBOARD + "?period=2026-06");
+      return (r.body.position.find((p) => p.key === "payment") || {}).value;
+    };
+
+    //  The GL coverage from section 8 is the one with a stated share, so
+    //  it is the one carrying real economics to disturb.
+    const glCovId = (await c.query(
+      `select id from insurance_coverages where coverage_type = 'general_liability'`)).rows[0].id;
+
+    const BEFORE = await positionOf();
+    ok("cash is unknown while the economics are already valid",
+       (await get(DASHBOARD + "?period=2026-06")).body.funding_established === false);
+
+    //  ── REFUSALS FIRST ───────────────────────────────────────────────
+    let f = await post(FUNDING, { token: "entitled", json: {
+      coverage_id: glCovId, funding_method: "direct", effective_from: "2026-03-01",
+      provenance_note: "confirmed with the owner",
+      finance: { finance_provider: "AFCO" } } });
+    ok("a DIRECT arrangement carrying a finance agreement is refused",
+       f.status === 422 && f.body.error === "DIRECT_HAS_NO_INSTRUMENT", JSON.stringify(f.body));
+
+    f = await post(FUNDING, { token: "entitled", json: {
+      coverage_id: glCovId, funding_method: "premium_financed", effective_from: "2026-03-01",
+      provenance_note: "x", finance: {} } });
+    ok("premium financing with no provider is refused by name",
+       f.status === 422 && f.body.error === "FINANCE_PROVIDER_REQUIRED", JSON.stringify(f.body));
+
+    f = await post(FUNDING, { token: "entitled", json: {
+      coverage_id: glCovId, funding_method: "direct", effective_from: "2026-03-01" } });
+    ok("funding with no provenance is refused",
+       f.status === 422 && f.body.error === "PROVENANCE_REQUIRED", JSON.stringify(f.body));
+
+    f = await post(FUNDING, { token: "unentitled", json: { coverage_id: glCovId } });
+    ok("an operator without the module cannot record funding", f.status === 403);
+    f = await post(FUNDING, { token: "entitled", json: {
+      property_id: other, coverage_id: glCovId, funding_method: "direct",
+      effective_from: "2026-03-01", provenance_note: "x" } });
+    ok("a body property_id on the funding route is REFUSED, not ignored", f.status === 403,
+       JSON.stringify(f.body));
+
+    ok("no refused write moved the insurance position",
+       (await positionOf()) === BEFORE);
+
+    //  ── DIRECT ───────────────────────────────────────────────────────
+    f = await post(FUNDING, { token: "entitled", json: {
+      coverage_id: glCovId, funding_method: "direct", effective_from: "2026-03-01",
+      provenance_note: "confirmed with the owner", period: "2026-06" } });
+    ok("a DIRECT arrangement is recorded", f.status === 201, JSON.stringify(f.body));
+    ok("…and the response says outright that insurance cost did not change",
+       f.body.insurance_cost_changed === false);
+    ok("…and the receipt says the two are separate facts",
+       /separate facts/i.test(f.body.receipt || ""), JSON.stringify(f.body.receipt));
+    ok("DIRECT DID NOT MOVE THE INSURANCE POSITION — byte-identical",
+       (await positionOf()) === BEFORE);
+    //  ONE cell moved, and it is the one that describes funding.
+    ok("…and PAYMENT is the ONLY cell that moved, naming the mechanism",
+       (await paymentOf()) === "Paid directly", JSON.stringify(await paymentOf()));
+
+    //  ── PREMIUM FINANCED: DOWN PAYMENT, 11 INSTALLMENTS, FINANCE CHARGE
+    //  The exact shape the workpaper derived a monthly expense from.
+    f = await post(FUNDING, { token: "entitled", json: {
+      coverage_id: glCovId, funding_method: "premium_financed",
+      effective_from: "2026-04-01", provenance_note: "IPFS agreement on file",
+      period: "2026-06",
+      finance: { finance_provider: "AFCO Credit", agreement_reference: "AF-2026-118",
+                 down_payment_cents: USD(23100), principal_financed_cents: USD(96000),
+                 finance_charge_cents: USD(7400), installment_count: 11,
+                 installment_cents: USD(9400), first_payment_date: "2026-05-01" } } });
+    ok("a PREMIUM FINANCED arrangement is recorded", f.status === 201, JSON.stringify(f.body));
+    ok("PREMIUM FINANCING DID NOT MOVE THE INSURANCE POSITION — byte-identical",
+       (await positionOf()) === BEFORE);
+
+    const withFin = await get(DASHBOARD + "?period=2026-06");
+    const cashSec = (withFin.body.sections || []).find((x) => x.key === "cash_financing");
+    ok("Cash & Financing now reads established", cashSec.establishment === "established",
+       JSON.stringify(cashSec.establishment));
+    const finRow = cashSec.rows.find((r) => r.method === "premium_financed");
+    ok("…and renders the financing distinctly from the other methods",
+       !!finRow && finRow.method_label === "Premium financed", JSON.stringify(finRow && finRow.method_label));
+    ok("…naming the provider", finRow.finance.provider === "AFCO Credit");
+    ok("…and the total of payments, as a FINANCING figure",
+       /126,500\.00/.test(String(finRow.finance.total_of_payments)),
+       JSON.stringify(finRow.finance.total_of_payments));
+
+    //  ── THE FINANCE CHARGE IS NOT INSURANCE EXPENSE ─────────────────
+    const posCells = withFin.body.position.reduce((m, x) => (m[x.key] = x.value, m), {});
+    ok("ANNUAL COST is still the allocated premium, not premium + finance charge",
+       /24,000\.00/.test(String(posCells.annual_cost)), JSON.stringify(posCells.annual_cost));
+    ok("MONTHLY ACCRUAL is still premium ÷ coverage term, not an installment",
+       /2,000\.00/.test(String(posCells.monthly_accrual)), JSON.stringify(posCells.monthly_accrual));
+    ok("the $9,400 INSTALLMENT never appears as a monthly insurance figure",
+       !/9,400\.00/.test(String(posCells.monthly_accrual)));
+    const econRows = JSON.stringify(
+      (withFin.body.sections || []).find((x) => x.key === "economic_position").rows);
+    ok("the $7,400 FINANCE CHARGE appears nowhere in the economic section",
+       !/7,400/.test(econRows), econRows.slice(0, 200));
+    //  23,100 is chosen to collide with NOTHING on the economic side. An
+    //  earlier draft used 24,000, which is also the GL policy's allocated
+    //  annual cost — so the assertion could not tell a leak from the
+    //  correct figure and passed for the wrong reason.
+    ok("…nor the $23,100 down payment", !/23,100|2310000/.test(econRows), econRows.slice(0, 200));
+
+    //  ── ESCROW ───────────────────────────────────────────────────────
+    const propCovId = (await c.query(
+      `select id from insurance_coverages where coverage_type = 'property'`)).rows[0].id;
+    f = await post(FUNDING, { token: "entitled", json: {
+      coverage_id: propCovId, funding_method: "lender_escrow", effective_from: "2026-03-01",
+      provenance_note: "servicer statement", period: "2026-06",
+      escrow: { lender_name: "Regional Bank", servicer_name: "Cenlar" } } });
+    ok("an ESCROW arrangement is recorded", f.status === 201, JSON.stringify(f.body));
+    ok("ESCROW DID NOT MOVE THE INSURANCE POSITION — byte-identical",
+       (await positionOf()) === BEFORE);
+
+    const all = await get(DASHBOARD + "?period=2026-06");
+    const cash2 = (all.body.sections || []).find((x) => x.key === "cash_financing");
+    //  Two coverages, two live methods. The `direct` slice recorded
+    //  earlier on the GL coverage is GONE from the live read, and that is
+    //  the effective-dating working: financing that coverage from April
+    //  closed the direct slice. A mid-term change moves the future and
+    //  leaves the past readable — it does not accumulate contradictory
+    //  live answers for one coverage.
+    ok("the methods that ARE live render distinctly, side by side",
+       new Set(cash2.rows.map((r) => r.method)).size === cash2.rows.length
+       && cash2.rows.some((r) => r.method === "lender_escrow")
+       && cash2.rows.some((r) => r.method === "premium_financed"),
+       JSON.stringify(cash2.rows.map((r) => r.method)));
+    ok("…and financing a coverage SUPERSEDED its earlier direct slice, " +
+       "rather than leaving two live answers",
+       !cash2.rows.some((r) => r.method === "direct"),
+       JSON.stringify(cash2.rows.map((r) => r.method)));
+    const closed = (await c.query(
+      `select effective_to from insurance_funding_arrangements
+        where funding_method = 'direct'`)).rows[0];
+    ok("…and the superseded direct slice is CLOSED, not deleted — " +
+       "last month's answer stays true",
+       !!closed && !!closed.effective_to, JSON.stringify(closed));
+    const escRow = cash2.rows.find((r) => r.method === "lender_escrow");
+    ok("…and escrow names its lender and servicer",
+       escRow.escrow.lender_name === "Regional Bank" && escRow.escrow.servicer_name === "Cenlar");
+
+    //  ── FUNDING A POLICY THIS PROPERTY IS NOT ON ────────────────────
+    const foreignCov = (await c.query(
+      `insert into insurance_coverages (program_id, coverage_type, coverage_period_start,
+         coverage_period_end, premium_cents, established_by_user_id)
+       select program_id,'umbrella_excess','2026-03-01','2027-03-01',100,$1
+         from insurance_coverages limit 1 returning id`, [uid])).rows[0].id;
+    f = await post(FUNDING, { token: "entitled", json: {
+      coverage_id: foreignCov, funding_method: "direct", effective_from: "2026-03-01",
+      provenance_note: "x" } });
+    ok("funding a coverage this property is not named on is refused",
+       f.status === 422 && f.body.error === "PARTICIPATION_REQUIRED", JSON.stringify(f.body));
+
+    //  ── CORRECTION PRESERVES PRIOR TRUTH ────────────────────────────
+    const arrId = finRow.arrangement_id;
+    f = await post(FUNDING + "/" + arrId + "/correct", { token: "entitled", json: {
+      funding_method: "premium_financed", revision_reason: "finance charge transcribed wrong",
+      provenance_note: "corrected IPFS agreement", period: "2026-06",
+      finance: { finance_provider: "AFCO Credit", down_payment_cents: USD(24000),
+                 principal_financed_cents: USD(96000), finance_charge_cents: USD(7100),
+                 installment_count: 11, installment_cents: USD(9400) } } });
+    ok("a correction is accepted and requires a reason", f.status === 201, JSON.stringify(f.body));
+    ok("CORRECTING FUNDING DID NOT MOVE THE INSURANCE POSITION — byte-identical",
+       (await positionOf()) === BEFORE);
+    const priorStill = (await c.query(
+      `select finance_charge_cents from premium_finance_agreements a
+         join insurance_funding_arrangements r on r.id = a.arrangement_id
+        where r.id = $1`, [arrId])).rows[0];
+    ok("the superseded claim is preserved and still readable",
+       Number(priorStill.finance_charge_cents) === USD(7400),
+       JSON.stringify(priorStill));
+    const liveNow = (await get(DASHBOARD + "?period=2026-06")).body.sections
+      .find((x) => x.key === "cash_financing").rows.find((r) => r.method === "premium_financed");
+    ok("…while the live read shows the corrected figure",
+       /7,100\.00/.test(String(liveNow.finance.finance_charge)),
+       JSON.stringify(liveNow.finance.finance_charge));
+    ok("…and marks it as corrected rather than silently replacing it",
+       liveNow.corrected === true);
+
+    f = await post(FUNDING + "/" + arrId + "/correct", { token: "entitled", json: {
+      funding_method: "direct" } });
+    ok("a correction with no reason is refused", f.status === 422
+       && f.body.error === "REASON_REQUIRED", JSON.stringify(f.body));
 
   } finally {
     //  RELEASE BEFORE end(), or pool.end() waits on the checked-out client

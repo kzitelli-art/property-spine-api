@@ -94,6 +94,17 @@ async function main() {
     mig162 = mig162.replace(/^begin;\s*/m, "").replace(/commit;\s*$/m, "");
     await c.query(mig162);
 
+    //  163 — the FUNDING side. This file proves the ECONOMIC chain, and
+    //  none of its assertions touch funding. It is applied because the
+    //  Asset Management surface now reads funding alongside economics,
+    //  and a scoped schema missing the table makes the compartment 503 —
+    //  which would look like an economic defect and is not one.
+    let mig163 = fs.readFileSync(
+      path.join(__dirname, "..", "migrations", "163_insurance_funding.sql"), "utf8");
+    mig163 = mig163.replace(/^begin;\s*/m, "").replace(/commit;\s*$/m, "")
+                   .replace(/alter table source_artifacts drop constraint[\s\S]*$/m, "");
+    await c.query(mig163);
+
     const uid = (await c.query(`insert into users (name) values ('Asset Ops') returning id`)).rows[0].id;
     const skyline = (await c.query(`insert into properties (name) values ('Skyline') returning id`)).rows[0].id;
     const c4233 = (await c.query(`insert into properties (name) values ('4233 Chestnut') returning id`)).rows[0].id;

@@ -179,6 +179,12 @@ module.exports = function assetManagement(deps) {
   //  Good standing — a pure derivation over the coverages the property
   //  participates in. No table, no stored state, nothing to go stale.
   const insuranceStanding = require("../asset/insurance_standing.js");
+  //  HOW insurance is paid for. A SEPARATE chain from what it costs, and
+  //  the separation is enforced by gate_insurance_funding_boundary.js.
+  //  This surface may hold both because a surface is the composition
+  //  point; the economic chain itself may never reach funding.
+  const insuranceFunding = require("../asset/insurance_funding.js");
+  const insuranceFundingRead = require("../asset/insurance_funding_read.js");
 
   const { pool, fileToText } = deps || {};
   if (!pool) throw new Error("asset_management requires a pool");
@@ -582,6 +588,11 @@ module.exports = function assetManagement(deps) {
       //  guarantees it, because an allocation cannot exist without one.
       const participation = await insurancePosition.readParticipation(client,
         { property_id: propertyId, period });
+      //  Read alongside, never mixed in. Nothing from this read reaches
+      //  annual_cost or monthly_accrual — those come from readPosition,
+      //  which cannot see the funding tables at all.
+      const funding = await insuranceFundingRead.readFunding(client,
+        { property_id: propertyId, period });
       const completeness = position.established
         ? await insurancePosition.readCompleteness(client, { property_id: propertyId, period })
         : [];
@@ -615,10 +626,24 @@ module.exports = function assetManagement(deps) {
         //  From participation, so a policy expiring soon is reported even
         //  while its share is unestablished. A date is not a cost.
         next_renewal: participation.next_renewal,
-        //  Deliberately null, permanently, while this slice stands.
-        //  Direct / escrowed / financed is a CASH fact and cash is a
-        //  different chain that this door cannot see.
-        payment: null,
+        //  ── HOW IT IS PAID, ONCE SOMEBODY HAS RECORDED IT ──────────
+        //  This cell was permanently null while the funding chain did not
+        //  exist. It does now, and leaving it blank would be honest-blank
+        //  inverted: claiming ignorance of something Spine holds. The
+        //  slot has always been named PAYMENT for exactly this.
+        //
+        //  A LABEL, NEVER AN AMOUNT. Every financing figure — installment,
+        //  down payment, finance charge, total of payments — stays inside
+        //  Cash & Financing. A borrowing cost sitting in a strip of
+        //  insurance figures is how it starts reading as one.
+        //
+        //  Several methods are NAMED, not averaged into "Mixed": a
+        //  property whose Property policy is escrowed and whose GL is
+        //  financed is two different arrangements, and the strip can say
+        //  so in the space it has.
+        payment: funding.established
+          ? Array.from(new Set(funding.arrangements.map((a) => a.method_label))).join(" · ")
+          : null,
       };
       //  Keys and labels come from INSURANCE_POSITION — the one place the
       //  strip is defined. Building them inline here would have been a
@@ -748,6 +773,12 @@ module.exports = function assetManagement(deps) {
         participates: participation.participates,
         awaiting_allocation_count: participation.awaiting_allocation_count,
 
+        //  How it is paid, said at the top level so a surface does not
+        //  have to dig it out of a section to know whether it is known.
+        //  It is deliberately NOT in the position strip's money cells.
+        funding_established: funding.established,
+        funding_methods: funding.methods,
+
         //  ── ARE WE INSURED, AND IN GOOD STANDING? ──────────────────
         //  Derived here, every request, from coverage periods and the
         //  presence of a bound successor. Never stored, so it cannot go
@@ -793,8 +824,47 @@ module.exports = function assetManagement(deps) {
                                       ? "not_established"
                                       : (awaitingAllocation.length
                                           ? "partially_established" : "established") },
-            //  Unchanged, and correct.
-            cash_financing:     { rows: [], establishment: "not_established" },
+            //  ── HOW IT IS PAID. NEVER WHAT IT COSTS. ──────────────
+            //  Established means somebody recorded the mechanism —
+            //  including recording that it is paid DIRECTLY, which is a
+            //  positive finding. Absence stays not_established: no
+            //  arrangement means Spine does not know, and defaulting to
+            //  "direct" would be a healthy state invented from silence.
+            cash_financing:     { rows: funding.arrangements.map((a) => ({
+                                    arrangement_id: a.arrangement_id,
+                                    coverage_id: a.coverage_id,
+                                    label: COVERAGE_LABEL[a.coverage_type] || a.coverage_type,
+                                    carrier: a.carrier_name,
+                                    method: a.funding_method,
+                                    method_label: a.method_label,
+                                    effective_from: a.effective_from,
+                                    provenance_strength: a.provenance_strength,
+                                    corrected: a.corrected,
+                                    //  FINANCING FIGURES, FORMATTED AND
+                                    //  NAMED AS SUCH. `finance_charge` is
+                                    //  the cost of borrowing, not part of
+                                    //  what insurance costs, and
+                                    //  `total_of_payments` is what goes to
+                                    //  the finance company — neither is an
+                                    //  insurance number and neither
+                                    //  appears in the position strip.
+                                    finance: a.finance ? {
+                                      provider: a.finance.finance_provider,
+                                      down_payment: money(a.finance.down_payment_cents, cur),
+                                      principal_financed: money(a.finance.principal_financed_cents, cur),
+                                      finance_charge: money(a.finance.finance_charge_cents, cur),
+                                      installments: (a.finance.installment_count !== null
+                                        && a.finance.installment_cents !== null)
+                                        ? `${a.finance.installment_count} × ` +
+                                          `${money(a.finance.installment_cents, cur)}`
+                                        : null,
+                                      first_payment_date: a.finance.first_payment_date,
+                                      total_of_payments: money(a.finance.total_of_payments_cents, cur),
+                                    } : null,
+                                    escrow: a.escrow || null,
+                                  })),
+                                  establishment: funding.established
+                                    ? "established" : "not_established" },
             //  Label the coverage type here, where COVERAGE_LABEL lives.
             //  `general_liability` is a schema token and an operator
             //  should never be shown one.
@@ -834,6 +904,11 @@ module.exports = function assetManagement(deps) {
    *  is a §17 defect even while the copies agree, and it is exactly how
    *  the two would drift the first time either changed.
    */
+  router.use(insuranceFunding({
+    pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
+    currentPeriod,
+  }));
+
   router.use(insuranceEstablishment({
     pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
     currentPeriod,
