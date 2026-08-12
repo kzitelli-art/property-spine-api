@@ -1,5 +1,16 @@
 # Asset Management — Shell Closeout
 
+> ⚠ **THE HIERARCHY IN THIS DOCUMENT IS SUPERSEDED (2026-08-12).** Asset
+> Management was reorganised into four rooms — **Capital Stack · Property
+> Expenses · Projects & CapEx · Compliance**. Revenue, Property Obligations
+> and Operating Costs are no longer rooms. In particular the ruling below
+> that *"Compliance sits inside Property Obligations, not beside it"* is
+> **reversed**: Compliance is now its own room, and licences, inspections and
+> certificates live there rather than beside Taxes and Insurance. The current
+> structure is in `CLAUDE.md` → "Four operating doors". Everything else here
+> — naming, routes, entitlement, the proof record — stands as the dated
+> record of that build.
+
 **2026-08-11. Branch `claude/property-spine-thread-handoff-i7hj0u`, both repos.**
 
 ```text

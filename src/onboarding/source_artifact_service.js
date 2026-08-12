@@ -46,10 +46,111 @@ const SIGNATURES = Object.freeze([
   { kind: "xlsx", bytes: [0x50, 0x4b, 0x05, 0x06] },   // empty archive
   { kind: "xlsx", bytes: [0x50, 0x4b, 0x07, 0x08] },   // spanned archive
   { kind: "xls",  bytes: [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1] },
+  { kind: "pdf",  bytes: [0x25, 0x50, 0x44, 0x46, 0x2d] },   // "%PDF-"
 ]);
 
 const TEXTUAL_EXT = new Set(["csv", "tsv", "txt"]);
-const BINARY_EXT  = new Set(["xlsx", "xlsm", "xls"]);
+const BINARY_EXT  = new Set(["xlsx", "xlsm", "xls", "pdf"]);
+
+/*  ── WHAT SHAPE IS LEGITIMATE DEPENDS ON WHAT THE ARTIFACT IS ───────
+ *  This file's header warns that loan PDFs and contracts "are NOT solved
+ *  by widening this list", and that is right: one flat list serving every
+ *  artifact kind would mean a rent roll silently starts accepting PDFs —
+ *  a real regression, because a PDF rent roll is exactly the mistake the
+ *  rent-roll refusal exists to catch and name.
+ *
+ *  So the list is not widened. It becomes a function of the KIND, which
+ *  is the fact that actually determines what shapes are legitimate. A
+ *  rent roll is a spreadsheet. An insurance binder is a PDF. Both
+ *  statements are narrow, and neither one loosens the other.
+ *
+ *  DEFAULT IS TODAY'S RENT-ROLL LIST, so every existing caller — all of
+ *  Deal Setup — is byte-identical without passing anything new.
+ */
+const RENT_ROLL_SHAPES = Object.freeze(["csv", "tsv", "txt", "xlsx", "xlsm", "xls"]);
+
+const KIND_SHAPES = Object.freeze({
+  rent_roll:                     RENT_ROLL_SHAPES,
+  //  A policy and a binder are issued as PDFs. Narrow on purpose: adding
+  //  a kind here is a deliberate act, not a side effect of some other
+  //  workflow needing a file.
+  insurance_policy:              Object.freeze(["pdf"]),
+  insurance_binder:              Object.freeze(["pdf"]),
+  //  Funding evidence. A finance agreement is issued as a PDF; an escrow
+  //  statement arrives as a PDF from the servicer or, often enough, as a
+  //  spreadsheet export — so that one accepts both rather than forcing
+  //  someone to print an export back into a PDF to satisfy us.
+  insurance_finance_agreement:   Object.freeze(["pdf"]),
+  insurance_escrow_statement:    Object.freeze(["pdf", "xlsx", "xls", "csv"]),
+  //  ── TAX EVIDENCE ─────────────────────────────────────────────────
+  //  The City issues bills, returns, receipts and certificates as PDFs.
+  //  Its account and balance views EXPORT as spreadsheets, and so do
+  //  servicer escrow statements — refusing those would send someone to
+  //  print a CSV back into a PDF to satisfy our list, which is our
+  //  machinery leaking into their day.
+  tax_bill:                      Object.freeze(["pdf"]),
+  tax_return:                    Object.freeze(["pdf"]),
+  tax_payment_receipt:           Object.freeze(["pdf"]),
+  tax_clearance_certificate:     Object.freeze(["pdf"]),
+  tax_appeal_document:           Object.freeze(["pdf"]),
+  tax_balance_statement:         Object.freeze(["pdf", "xlsx", "xls", "csv"]),
+  tax_account_statement:         Object.freeze(["pdf", "xlsx", "xls", "csv"]),
+  tax_escrow_statement:          Object.freeze(["pdf", "xlsx", "xls", "csv"]),
+  tax_escrow_analysis:           Object.freeze(["pdf", "xlsx", "xls", "csv"]),
+});
+
+//  Per-kind refusal copy. §5 and the repo's rule that a refusal a user
+//  can see is PRODUCT COPY — it must be sayable, and must name the next
+//  step. Telling someone holding an insurance binder to "export the rent
+//  roll sheet" is our machinery leaking into their day.
+const KIND_REFUSAL = Object.freeze({
+  rent_roll: (filename) =>
+    `Spine reads rent rolls as .xlsx, .xls, .csv or .tsv. "${filename}" is none of those. ` +
+    `If it is a PDF, export or save it as a spreadsheet first.`,
+  insurance_policy: (filename) =>
+    `Spine reads an insurance policy as a PDF. "${filename}" is not one. ` +
+    `Upload the policy document your broker or carrier issued.`,
+  insurance_binder: (filename) =>
+    `Spine reads an insurance binder as a PDF. "${filename}" is not one. ` +
+    `Upload the binder your broker issued.`,
+  insurance_finance_agreement: (filename) =>
+    `Spine reads a premium finance agreement as a PDF. "${filename}" is not one. ` +
+    `Upload the agreement the finance company issued.`,
+  insurance_escrow_statement: (filename) =>
+    `Spine reads an escrow statement as a PDF or a spreadsheet. "${filename}" is neither. ` +
+    `Upload the statement from the lender or servicer.`,
+  tax_bill: (filename) =>
+    `Spine reads a tax bill as a PDF. "${filename}" is not one. ` +
+    `Upload the bill or notice the City issued.`,
+  tax_return: (filename) =>
+    `Spine reads a filed return as a PDF. "${filename}" is not one. ` +
+    `Upload the return as filed, or its confirmation.`,
+  tax_payment_receipt: (filename) =>
+    `Spine reads a payment receipt as a PDF. "${filename}" is not one. ` +
+    `Upload the City's receipt or payment confirmation.`,
+  tax_clearance_certificate: (filename) =>
+    `Spine reads a tax clearance certificate as a PDF. "${filename}" is not one. ` +
+    `Upload the certificate the City issued.`,
+  tax_appeal_document: (filename) =>
+    `Spine reads an appeal document as a PDF. "${filename}" is not one. ` +
+    `Upload the filing or the board's decision.`,
+  tax_balance_statement: (filename) =>
+    `Spine reads a balance statement as a PDF or a spreadsheet. "${filename}" is neither. ` +
+    `Upload the statement or the export from the City's account view.`,
+  tax_account_statement: (filename) =>
+    `Spine reads an account statement as a PDF or a spreadsheet. "${filename}" is neither. ` +
+    `Upload the statement or the export from the City's account view.`,
+  tax_escrow_statement: (filename) =>
+    `Spine reads an escrow statement as a PDF or a spreadsheet. "${filename}" is neither. ` +
+    `Upload the statement from the lender or servicer.`,
+  tax_escrow_analysis: (filename) =>
+    `Spine reads an escrow analysis as a PDF or a spreadsheet. "${filename}" is neither. ` +
+    `Upload the analysis the servicer sent.`,
+});
+
+function shapesFor(artifact_kind) {
+  return KIND_SHAPES[artifact_kind] || RENT_ROLL_SHAPES;
+}
 
 function refusal(reason, receipt, extra = {}) {
   const e = new Error(receipt);
@@ -87,37 +188,60 @@ function looksTextual(buf) {
  *  Everything that can be judged from the bytes alone, judged BEFORE any
  *  row is written. Returns {ok:true, kind, sha256, byte_size} or throws a
  *  refusal whose receipt is sayable to the person who chose the file. */
-function validateUpload({ filename, mimetype, buffer } = {}) {
+function validateUpload({ filename, mimetype, buffer, artifact_kind = "rent_roll" } = {}) {
+  const shapes = shapesFor(artifact_kind);
+  const isRentRoll = shapes === RENT_ROLL_SHAPES;
+
   if (!buffer || !Buffer.isBuffer(buffer) || buffer.length === 0) {
-    throw refusal("empty_file", "That file is empty. Choose the rent roll you exported.");
+    throw refusal("empty_file", isRentRoll
+      ? "That file is empty. Choose the rent roll you exported."
+      : "That file is empty. Choose the document you meant to upload.");
   }
   if (buffer.length > MAX_BYTES) {
     throw refusal("file_too_large",
       `That file is ${(buffer.length / 1024 / 1024).toFixed(1)} MB. The limit is 25 MB — ` +
-      `export just the rent roll sheet rather than the whole workbook.`);
+      (isRentRoll
+        ? `export just the rent roll sheet rather than the whole workbook.`
+        : `upload the document on its own rather than a combined file.`));
   }
 
   const ext = extensionOf(filename);
-  if (!TEXTUAL_EXT.has(ext) && !BINARY_EXT.has(ext)) {
-    throw refusal("unsupported_file_type",
-      `Spine reads rent rolls as .xlsx, .xls, .csv or .tsv. "${filename}" is none of those. ` +
-      `If it is a PDF, export or save it as a spreadsheet first.`);
+  if (!shapes.includes(ext)) {
+    const say = KIND_REFUSAL[artifact_kind] || KIND_REFUSAL.rent_roll;
+    throw refusal("unsupported_file_type", say(filename));
   }
 
   const sig = SIGNATURES.find((s) => startsWith(buffer, s.bytes));
 
   if (BINARY_EXT.has(ext)) {
     if (!sig) {
+      throw refusal("content_does_not_match_extension", ext === "pdf"
+        ? `"${filename}" is named like a PDF but its contents are not one. ` +
+          `Re-export it from the program that produced it.`
+        : `"${filename}" is named like a spreadsheet but its contents are not one. ` +
+          `Re-export it from the program that produced it.`);
+    }
+    //  A .pdf holding a workbook, or a .xlsx holding a PDF.
+    //
+    //  ⚠ SCOPED TO PDF DELIBERATELY. Within the spreadsheet family the
+    //  original leniency is PRESERVED: a .xls carrying xlsx bytes has
+    //  always passed here and is an ordinary, legitimate file — Excel
+    //  produces them. Tightening that would be a rent-roll regression
+    //  smuggled in by an insurance change, and rent-roll behaviour is
+    //  supposed to be untouched by this.
+    const pdfInvolved = ext === "pdf" || sig.kind === "pdf";
+    if (pdfInvolved && sig.kind !== ext) {
       throw refusal("content_does_not_match_extension",
-        `"${filename}" is named like a spreadsheet but its contents are not one. ` +
-        `Re-export it from the program that produced it.`);
+        `"${filename}" is named .${ext} but its contents are a ${sig.kind} file. ` +
+        `Renaming a file does not convert it.`);
     }
   } else {
     //  A .csv that is really a workbook is the common real mistake: the
     //  file was renamed rather than re-exported. Name it precisely.
     if (sig) {
       throw refusal("content_does_not_match_extension",
-        `"${filename}" is named .${ext} but its contents are a ${sig.kind} spreadsheet. ` +
+        `"${filename}" is named .${ext} but its contents are a ${sig.kind}` +
+        `${sig.kind === "pdf" ? "" : " spreadsheet"}. ` +
         `Renaming a file does not convert it — export it as ${ext.toUpperCase()} instead.`);
     }
     if (!looksTextual(buffer)) {
@@ -159,17 +283,33 @@ async function store(db, {
       "Storing a source file requires a signed-in operator. A shared key is not an uploader.");
   }
 
-  const v = validateUpload({ filename, mimetype, buffer });
+  //  The kind decides which shapes are legitimate, so it must reach the
+  //  validator. Defaults to rent_roll inside validateUpload, so callers
+  //  that never passed it behave exactly as before.
+  const v = validateUpload({ filename, mimetype, buffer, artifact_kind });
 
+  //  ⚠ THE STORED KIND COMES BACK, AND CALLERS MUST REPORT IT.
+  //  Dedup is by (scope, sha256) and says nothing about kind, so the same
+  //  bytes offered a second time under a different kind resolve to the
+  //  EXISTING row with its ORIGINAL kind. A caller echoing the requested
+  //  kind would then tell someone their escrow statement is on file as an
+  //  escrow statement when Spine holds it as a tax bill — a small lie, in
+  //  the one place the product is supposed to be exact about provenance.
   const existing = (await db.query(
-    `select id, original_filename, byte_size, sha256, uploaded_at
+    `select id, original_filename, artifact_kind, byte_size, sha256, uploaded_at
        from source_artifacts
       where scope_type = $1 and scope_id = $2 and sha256 = $3
       limit 1`,
     [scope_type, scope_id, v.sha256])).rows[0];
   if (existing) {
-    return { ...existing, deduplicated: true,
-      receipt: `That is the same file already on record (${existing.original_filename}).` };
+    const mismatched = existing.artifact_kind !== artifact_kind;
+    return { ...existing, deduplicated: true, requested_artifact_kind: artifact_kind,
+      kind_differs: mismatched,
+      receipt: mismatched
+        ? `That is the same file already on record (${existing.original_filename}), held as ` +
+          `${existing.artifact_kind.replace(/_/g, " ")}. It stays on file as that — upload ` +
+          `the other document if this was meant to be a different one.`
+        : `That is the same file already on record (${existing.original_filename}).` };
   }
 
   const row = (await db.query(
@@ -178,7 +318,8 @@ async function store(db, {
         byte_size, sha256, content, stored_at,
         source_as_of_date, uploaded_by_user_id, uploaded_by_basis)
      values ($1,$2,$3,$4,$5,$6,$7,$8,now(),$9,$10,$11)
-     returning id, original_filename, byte_size, sha256, uploaded_at, source_as_of_date`,
+     returning id, original_filename, artifact_kind, byte_size, sha256,
+               uploaded_at, source_as_of_date`,
     [scope_type, scope_id, String(filename), v.mime_type, artifact_kind,
      v.byte_size, v.sha256, buffer, source_as_of_date,
      uploaded_by_user_id, authority_basis || "unstated"])).rows[0];

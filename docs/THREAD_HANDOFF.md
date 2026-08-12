@@ -212,6 +212,66 @@ twice.
 ---
 
 ## ══════════════════════════════════════════════════════════════════
+##  ASSET MANAGEMENT REORGANISED TO FOUR DOORS. 2026-08-12 (latest).
+##  THIS SECTION WINS ON ASSET MANAGEMENT AND ON RELEASE STATE.
+## ══════════════════════════════════════════════════════════════════
+
+> The section immediately below — **the completion guard is ON** — is separate,
+> live production truth about Maintenance. It is not superseded by this one.
+> Two different domains, both current. Read both.
+
+Asset Management is now **four durable doors**, replacing the old
+REVENUE / CAPITAL / PROPERTY OBLIGATIONS / OPERATING COSTS set:
+
+```text
+CAPITAL STACK        Debt · Equity · Reserves & Escrows
+PROPERTY EXPENSES    Taxes · Insurance · Payroll · Utilities · Contracted
+                     Services · Repairs · Management · Marketing · Other  (nine)
+PROJECTS & CAPEX     Projects · Unit Improvements · Building Systems ·
+                     Equipment / FF&E · Capital Reserves & Draws
+COMPLIANCE           Licenses · Inspections · Certificates · Violations ·
+                     Recurring Requirements
+```
+
+**The door is navigation; the module underneath owns the truth.** The AM
+surface writes NO domain table — pinned by `gate_funding_boundary.js` (the
+NAVIGATION assertion). It reads the canonical domain reads and renders.
+
+**Taxes and Insurance moved intact.** Re-homed from Property Obligations to
+Property Expenses with nothing rewritten — the four-row tax position and the
+four-section insurance dashboard are unchanged. This build moved doors; it
+did not touch either HTTP house beyond the room key.
+
+**`room` is a contract key, and it moved.** The tax compartment payload now
+returns `room: "property_expenses"` (was `property_obligations`), pinned by
+name in `philadelphia_tax_http.db.js`. Migration 159's silent key rename is
+the precedent that assertion exists to prevent.
+
+**Property Expenses establishment is DERIVED and CAPPED.** It probes the tax
+and insurance canonical reads and reports `partially_established` when either
+is established; it can NEVER read `established`, because that would claim
+payroll, utilities and five more are accounted for. The parent never
+manufactures a CURRENT it cannot stand behind. (Desk chip reads
+"PARTIALLY ESTABLISHED — Insurance is established. The other operating
+expenses are not.")
+
+**Proven** — asset_management_shell.db.js 54/54 · philadelphia_tax_http.db.js
+106/106 · insurance_establishment.db.js 141/141 · gate_funding_boundary.js
+51/51 · source-governance 16/16 · asset_management_shell.browser.js **260/260**
+including the four-door journey, 390px and keyboard. Screenshots under
+`/tmp/am-browser` (`02-asset-management-open.png`, `am-four-doors-narrow.png`).
+
+**No new migrations.** This is a surface/navigation change; the release
+picture below is UNCHANGED — 162–167 still pending, ceiling still 161.
+
+**Doctrine still describes the OLD AM sub-hierarchy.** `CLAUDE.md` → "Four
+operating doors" and `PHILOSOPHY.md` still list REVENUE / CAPITAL / PROPERTY
+OBLIGATIONS / OPERATING COSTS as AM's shape. The code has moved past that
+text; the doctrine edit is the owner's call and is deliberately NOT made in
+this build.
+
+## ══════════════════════════════════════════════════════════════════
+## ══════════════════════════════════════════════════════════════════
 ##  ⚠ THE COMPLETION GUARD IS **ON**. IT CUT OVER 2026-08-12 01:49 UTC.
 ##  THIS REPLACES "THE GUARD IS OFF" — THAT SENTENCE IS NOW FALSE.
 ##  2026-08-12. FOR WHOEVER IS WORKING IN MAINTENANCE.
@@ -311,9 +371,319 @@ provable.
 
 ---
 
+##  PHILADELPHIA TAXES V1 IS BUILT AND UNRELEASED. 2026-08-12.
+##  Superseded as "latest" by the reorg above; still current, still unreleased.
 ## ══════════════════════════════════════════════════════════════════
-##  159 IS RELEASED. THE API SHIPS AGAIN. 2026-08-11 (latest).
-##  THIS SECTION WINS.
+
+```text
+API  claude/philosophy-doctrine-reference-jv7s7r   NOT merged
+APP  claude/philosophy-doctrine-reference-jv7s7r   NOT merged
+pending migrations                                 162, 163, 164, 165, 166, 167
+production ledger ceiling                          161  (expected — READ IT)
+```
+
+**⚠ THE MERGE WARNING BELOW NOW COVERS SIX MIGRATIONS, NOT TWO.** Same
+trap, larger blast radius: auto-deploy is ON, `prestart` verifies rather
+than applies, and merging with 162–167 pending is a failed production
+deploy. Pause auto-deploy first. The run card is still
+[`release/INSURANCE_162_163_RUN_CARD.md`](release/INSURANCE_162_163_RUN_CARD.md)
+and its sequence is unchanged — the ceiling it releases to is now 167.
+
+### ⚠ THE CLOCKS AND THE STANDING MODEL WERE WRONG, AND WERE CORRECTED
+
+A review of this branch found three wrong answers in the layer that turns
+governed facts into "what is due now?". The facts underneath were sound;
+the compression on top of them was not. Every one is now pinned by a
+proof that fails if it returns.
+
+```text
+U&O was a MONTH late      modelled as "month M, due the 25th of M+1".
+                          It is the SAME MONTH, shifted forward past
+                          weekends and City holidays.
+NPT estimates a YEAR late  the estimates for tax year Y are due Apr 15
+                          and Jun 15 OF Y. Only the RETURN is Y+1.
+any payment satisfied      `if (oblPayments.length) return true` made a
+every requirement          $50,000 payment against a $122,259.93 bill
+                          read PAID, and let an NPT first estimate close
+                          out the second.
+a row was ONE PERIOD       it could not hold 2025's BIRT return beside
+                          the 2026 estimate that rides on it, nor July
+                          U&O closed beside August open.
+```
+
+**The City's published 2026 U&O schedule is pinned in
+`philadelphia_tax_rules.js` and the derivation must reproduce it.** Every
+milestone carries `due`, `derived_due` and `date_source`, so a published
+date can never mask a broken rule — which it did, once, during
+falsification.
+
+**A payment names the requirement it satisfies** (`satisfies_requirement`,
+migration 167). The writer fills it where an obligation carries exactly
+one requirement and REFUSES where it carries several. Where the amount is
+governed, satisfaction is a comparison: part paid reads as part paid.
+
+**BIRT's mandatory estimate depends on a FILER PROFILE.** The City grants
+first-year filers relief, so the cadence is not the same for every
+taxpayer. With no profile recorded the requirement is reported UNKNOWN —
+never assumed present, never assumed absent.
+
+### FOUR OBLIGATIONS. NOT FIVE.
+
+```text
+Real Estate Tax   PROPERTY subject · annual  · payment due Mar 31
+BIRT              ENTITY   subject · annual  · return + balance Apr 15 (Y+1)
+NPT               ENTITY   subject · annual  · return Apr 15, estimates
+                                               Apr 15 and Jun 15
+U&O               PROPERTY subject · monthly · filing + payment, 25th of
+                                               the following month
+```
+
+**Commercial Trash was cut, deliberately.** It is a municipal fee with its
+own exemption machinery, not one of these four. It may return later under a
+broader municipal-fees area. Do not re-add it to the applicability model,
+the clocks, the evidence kinds, the standing read, the UI or the proofs
+without a ruling.
+
+**U&O did not disappear in 2026.** The $2,000 ANNUAL EXEMPTION ended
+2026-01-01; the tax remains active and monthly. `philadelphia_tax_rules.js`
+answers this explicitly rather than leaving it to memory, and the screen
+prints it — anyone reasoning "the exemption is gone, so U&O is gone" is
+wrong in the direction that under-reports a live obligation.
+
+### What was built
+
+```text
+164  legal_entities + dated legal_entity_properties. BIRT/NPT belong to the
+     TAXPAYER. `organizations` is the SaaS tenant and is not a taxpayer.
+165  tax_obligations · applicability · liabilities · filings · payments ·
+     appeals · clearances. Subject is property XOR legal entity, enforced
+     by check constraints, matched to the tax type.
+166  tax funding — direct | lender_escrow, standing and dated, with escrow
+     terms, balance OBSERVATIONS and servicer DISBURSEMENTS in their own
+     tables.
+
+philadelphia_tax_rules.js   every Philadelphia date, in one pure module.
+                            It computes CLOCKS and never amounts.
+tax_position_read.js        one property-facing read. Imports NOTHING.
+                            Every state derived; no status column exists.
+tax_establishment.js        7 economic routes. Filing and payment stay
+                            separate verbs — there is no "mark handled".
+tax_funding.js              5 funding routes, on the other side of the wall.
+```
+
+### THE TWO SENTENCES THE ARCHITECTURE MAKES UNWRITEABLE
+
+```text
+"the escrow is healthy, so the taxes are paid"
+"the escrow contribution went up, so the tax went up"
+```
+
+`tax_payments` is an ECONOMIC table in `gate_funding_boundary.js`, so no
+funding module can write it. PAID means the City was paid and there is
+evidence; `tax_obligation_service.recordPayment` is the only writer, and
+nothing on the funding side can reach it. A servicer's disbursement is a
+funding fact and surfaces as `unevidenced_disbursements` — the disagreement
+is shown, never resolved.
+
+**The first version of that gate omitted `tax_payments`.** Every other tax
+table was guarded while the one an escrow is most tempted to write was not.
+If you extend this to a third domain, list the table that means DONE first.
+
+### The invariant everything else serves
+
+```text
+tax accrual = governed annual liability ÷ months in the obligation's period
+```
+
+Never a contribution, never a balance, never a disbursement. Proven
+byte-identical before and after a contribution change — with a guard
+asserting the FUNDING read did change, so the comparison is not vacuous.
+
+### Evidence at this build
+
+```text
+API  philadelphia_tax_http.db.js      106/106  real PG + real HTTP
+     philadelphia_tax.db.js            64/64
+     philadelphia_tax_standing.db.js   41/41   the corrected defects
+     philadelphia_tax_funding.db.js    55/55
+     legal_entity.db.js                28/28
+     philadelphia_tax_clocks.test.js   44/44   PURE — a governance gate
+     tax_document_read.test.js         35/35   PURE — a governance gate
+     gate_funding_boundary.js          50/50   tax side no longer vacuous
+     npm run verify                    16/16
+APP  run_harnesses.sh                 1041 · 0 failed · 0 red
+```
+
+The two PURE tests are on the standard path deliberately. The clocks
+shipped wrong twice with every surrounding proof green, because those
+proofs asserted the implementation; these assert the City.
+
+### The document reader
+
+`tax_document_read.js` — upload → read/propose → human confirms →
+canonical write, the same contract as Insurance, label-scan only, no
+model call. Proven against the extracted text of TWO REAL PORTFOLIO
+DOCUMENTS in `tests/fixtures/tax`:
+
+```text
+2116 Chestnut RET bill 2023   OPA 881566975 · 2023 · due 2023-03-31 ·
+                              $201,512.97 — the AMOUNT TO PAY, not the
+                              $2,015,129.68 printed before reductions
+Onefive 4233 BIRT 2023        tax ID 2000179694 · 2023 · submitted
+                              2024-03-29 · $0.00 due, and the mandatory
+                              next-year estimate as its OWN field
+```
+
+⚠ Those fixtures contain real OPA and Philadelphia tax account numbers
+for portfolio entities. They are here because a reader proven against an
+invented format is proven against nothing — but it is a deliberate
+choice, and it is reversible.
+
+`available` means A READ HAPPENED in both adapters; `found_count` is what
+a surface tests. They disagreed for one commit.
+
+### Still open
+
+```text
+release 162–167        nothing is in production. Same run card, new ceiling.
+BIRT/NPT amounts       no calculator, by design. Amount is evidenced or
+                       unknown — never computed.
+duplicate entities     the taxpayer capture route ESTABLISHES only; there
+                       is no "pick an existing entity" picker, because
+                       `legal_entities` carries no tenancy of its own and
+                       listing candidates would read entities this
+                       operator has no relationship to. The same LLC
+                       entered from two properties becomes two rows.
+                       Fixing it needs the primitive to know whose it is —
+                       a decision, not a side effect of a capture form.
+model fallback         the reader is the scan half only, as in Insurance.
+                       A model pass is a separate deliberate act with its
+                       own proof that a hallucinated liability cannot
+                       reach a confirm screen looking like a reading.
+```
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  INSURANCE V1 IS BUILT AND UNRELEASED. 2026-08-12.
+##  FEATURE WORK ON INSURANCE IS CLOSED. SUPERSEDED ABOVE for the
+##  release state; the WALL and the invariant here still govern.
+## ══════════════════════════════════════════════════════════════════
+
+```text
+API  claude/philosophy-doctrine-reference-jv7s7r   f4d639a   NOT merged
+APP  claude/philosophy-doctrine-reference-jv7s7r   4390db3   NOT merged
+pending migrations                                 162, 163
+production ledger ceiling                          161  (expected — READ IT)
+```
+
+**⚠ DO NOT MERGE THE API BRANCH UNTIL API AUTO-DEPLOY IS PAUSED.**
+Auto-deploy is ON. Merging triggers a normal boot with 162/163 pending,
+`prestart` refuses, and that is a failed production deploy — Path B, which
+the 160/161 ruling explicitly REJECTED. Pausing first is step 1 of the run
+card and it is the whole point of the card.
+
+**The run card is [`release/INSURANCE_162_163_RUN_CARD.md`](release/INSURANCE_162_163_RUN_CARD.md).**
+It carries the ordered steps, the production-pass checklist, and what is
+still open from 159/160/161. Follow it; do not improvise the sequence.
+
+### What was built
+
+```text
+162  participation, separated from allocation. Backfills from existing
+     allocations BEFORE adding its FK, so release does not depend on the
+     allocation table being empty.
+163  funding — direct | lender_escrow | premium_financed, effective-dated,
+     with finance-agreement and escrow detail in their own tables.
+
+Add Current Insurance   evidence → label-scan proposal → human confirm →
+                        canonical write → the dashboard populates
+Good standing           CURRENT · RENEWAL APPROACHING (90/60/45/30) ·
+                        COVERAGE NOT CONFIRMED · EXPIRED. ZERO SCHEMA —
+                        a bound next term is just a later coverage.
+Add Payment / Financing the funding capture sheet
+```
+
+### ⚠ THE WALL, AND IT IS EXECUTABLE
+
+`tests/gate_funding_boundary.js` asserts, structurally and in
+both directions:
+
+```text
+economics ↛ funding   transitive import graph, not just direct edges
+economics ↛ funding   no economic file names a funding table
+funding → economics   PERMITTED — reference, select, join, foreign key
+funding ↛ economics   no insert/update/delete/alter on an economic table
+```
+
+The older `gate_insurance_economic_independence.js` reads VOCABULARY and
+stays. It could not catch an economic file requiring a funding module whose
+name is innocent, nor a funding module writing an economic table — so once
+funding existed it would have kept passing while the seam rotted.
+
+**The boundary gate tests its own detectors every run** and reports its own
+coverage. Falsified four ways before being trusted, including reaching
+funding transitively through an innocently-named intermediary, and including
+the case that must NOT trip: an FK from funding to a coverage.
+
+**Do not put funding routes in `insurance_establishment.js`.** That file is
+in the economic chain and the gate will fail the build. The surface is the
+composition point; the chain is not.
+
+### The invariant everything else serves
+
+```text
+insurance accrual = allocated annual cost ÷ coverage term months
+```
+
+Never an installment, never a down payment, never a finance charge, never
+an escrow withdrawal. `insurance_position_read.js` imports NOTHING and
+cannot reach funding by any path. Proven behaviourally: the position is
+BYTE-IDENTICAL before and after recording funding in every shape.
+
+### Evidence at these SHAs
+
+```text
+API  insurance_establishment.db.js   141/141    real PG + real HTTP
+     insurance_truth.db.js            52/52
+     asset_management_shell.db.js     46/46
+     npm run verify                   14/14
+APP  asset_management_shell.browser  171/171    real Chromium
+     run_harnesses.sh                1041 · 0 failed · 0 red
+```
+
+⚠ `npm run verify` silently runs a SUBSET on a shallow clone — the agent
+container starts shallow. `git rev-parse --is-shallow-repository` before
+believing green.
+
+### NOT PROVEN, AND MUST NOT BE CLAIMED
+
+```text
+anything in production            no access from the build container
+                                  (proxy 403 to onrender.com, no DATABASE_URL)
+Insurance rendering real truth    NEVER seen on a production page by an
+                                  entitled account. Only the fail-closed
+                                  direction (401/403) is production-proven,
+                                  and that predates this work.
+PDF bytes → text                  server.js's existing fileToText, injected.
+                                  The label scan over its output IS proven.
+deal_setup_http.db.js             cannot run — needs the full schema, which
+                                  cannot rebuild from empty (012/yardi_code)
+```
+
+### After the production pass
+
+**Insurance is closed.** No more Insurance architecture until real usage
+says something is missing. Next domain is **Taxes** — and the Standing
+Obligation primitive is still NOT to be extracted. Insurance is one
+specimen; the shared shape gets pulled out after a second obligation proves
+what is actually shared, not before.
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  159 IS RELEASED. THE API SHIPS AGAIN. 2026-08-11.
+##  SUPERSEDED BY THE SECTION ABOVE.
 ## ══════════════════════════════════════════════════════════════════
 
 ```text
@@ -519,6 +889,121 @@ the reason a PR here shows no green check and never will.
 
 **Do NOT fix this inside a release.** Adding CI mid-release changes what
 "proven" means in the middle of proving something. It is its own slice.
+
+## ═══ NEXT BUILD · ADD CURRENT INSURANCE ═══
+
+**The pre-build read is [`INSURANCE_ESTABLISHMENT_SOURCE_READ.md`](INSURANCE_ESTABLISHMENT_SOURCE_READ.md).
+Read it first. It is a PROPOSAL — no code was written.**
+
+Insurance has a complete, released economic architecture (161) and a working
+read, and **zero HTTP write callers**. The missing seam is the human
+establishment path: empty Insurance → ADD CURRENT INSURANCE → upload evidence →
+Spine proposes → human confirms → canonical services write → the existing
+dashboard populates.
+
+**The one decision that gates the build:** both reads are allocation-gated, and
+the only property↔policy link in the schema is an allocation carrying an amount.
+So a coverage established without this property's stated share is invisible —
+"establish what is known and surface the missing allocation honestly" is not
+currently expressible. The source read lays out the two honest options and
+recommends one narrow Insurance-specific table separating *participation* from
+*allocation*. **Make that call before writing code.**
+
+## ═══ 2026-08-11 · RELEASE 160/161 — WHERE IT ACTUALLY STOPPED ═══
+
+**Released and live. Proven in production up to the entitlement wall, and
+not one rung past it.**
+
+```text
+source merged                 ✓  API 30e1c1a · APP 713625a
+schema released               ✓  ceiling 161, both directions clean, disarmed
+API production proven         ◐  deployed; refuses with no session (401) and
+                                 with no module (403). Correct reads NOT
+                                 confirmed in production.
+app deployed                  ✓  713625a, confirmed from Render's record
+authenticated surface proven   ✗  BLOCKED — see below
+```
+
+**What IS proven in production, with a real account:** the Asset Management
+card is **absent** for a signed-in operator who lacks the module, and the API
+returns a clean 403 for that operator. That is the *fail-closed* direction,
+and it is the half that proves the gate exists rather than proving a card can
+render.
+
+**What is NOT proven in production:** anything requiring an entitled account.
+Insurance rendering governed truth, the accrual figures, Cash & Financing
+staying unestablished — all 105/105 in the browser harness against the real
+router, none of it seen on a production page. **Do not describe Insurance as
+production-verified.**
+
+### 🅿 PARKED 1 — TEAM IS OFFLINE/SNAPSHOT AND CANNOT MAKE LIVE PERMISSION CHANGES
+
+```text
+index.html:4901   window.__OFFLINE_MODE = true;     ← unconditional
+index.html:11033  "Reads only; any write or unknown endpoint throws a clean 404"
+```
+
+The TEAM roster renders from baked demo config — it announces itself with
+`DEMO/OFFLINE ROSTER` and `LOCAL STORAGE` chips, so it is labelled rather
+than lying — and its invite POST cannot reach the API. Asset Management works
+live because it uses the live-required loader that bypasses the snapshot;
+TEAM does not.
+
+**Consequence for migration 160:** adding `asset_management` to the TEAM
+picker (APP #54) was necessary and is correct, but it is **built-but-dormant**
+in production. It removed one of two blockers. There is currently no working
+in-product path to grant the module to an existing person, because TEAM
+cannot write at all.
+
+**This is its own slice.** Do not treat "make TEAM live" as a defect fix
+attached to an Asset Management release.
+
+### 🅿 PARKED 2 — STAFF IDENTITY COULD NOT BE RESOLVED FROM THE ROSTER
+
+Granting the module through the documented admin route
+(`PATCH /property-team-assignments/:id`, operator-key authenticated — not a
+DB edit and not a bypass) needs the caller's `assignment_id`. It could not be
+found:
+
+- a scan of **all 41 properties'** rosters matched no member against the
+  operator's email
+- the operator's chrome shows `ORGS ADMIN` / `DEAL SETUP`, which render only
+  for `super_admin` / `org_admin` — so the account is a platform admin whose
+  staff assignment, if any, is filed under a different name
+
+`/operator/me` returns the session's `id` and `property_id` and would settle
+it in one lookup. That was not run; the hunt was stopped deliberately rather
+than expanded.
+
+### 📌 RECORDED, NOT CHASED — DUPLICATE OPERATING NAMES
+
+Three distinct properties are named **"Solo on Chestnut"**
+(`21197bb1…`, `79a5a8d1…`, `a50fbdd0…`). The production boot log seeds
+`a50fbdd0…` as `solo-qa-baseline`. Any script that resolves a property by
+name is picking one of three by luck — one already did during this release.
+Resolve Solo by **id**, never by name, until this is cleaned up.
+
+Also seen and not chased: `[slots] boot seed: +21 new, 0 existed` on the
+release boot, `+0 new, 21 existed` on the next — idempotent, so it writes
+once and then recognises its own rows. A boot-time seed in production is
+still worth a look against §19–20 someday.
+
+### WHAT CLOSES THIS RELEASE
+
+One authenticated production pass by an entitled operator:
+
+```text
+Asset Management card appears
+Asset Management opens
+Insurance opens
+governed Insurance economic truth renders
+Cash & Financing remains honestly unestablished
+── and the old 159 pair, still open ──
+established Deal Setup property → "Lease & occupancy established"
+genuinely unestablished property → still unestablished
+```
+
+Until then: **schema released, surface unconfirmed.** Say it that way.
 
 ### ⚠ OPEN RELEASE ITEM — THE PRODUCTION SURFACE IS NOT CONFIRMED
 

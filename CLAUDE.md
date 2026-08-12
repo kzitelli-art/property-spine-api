@@ -43,26 +43,60 @@ LEASING      MANAGEMENT      MAINTENANCE      ASSET MANAGEMENT
 
 **Asset Management is the fourth door, not a dashboard and not a report.** It is
 staff/operator side, parallel to the other three. The asset manager is still
-*operating* the deal — economically. Revenue, debt and capital structure, taxes,
-insurance, payroll, management fees, utilities, contracts, and later budgets and
-variances.
+*operating* the deal — economically. Debt and capital structure, taxes,
+insurance, payroll, management fees, utilities, contracts, capital work, and
+later budgets and variances.
 
-Its current hierarchy — sub-labels may evolve, the four-part structure is the
-product direction:
+Inside it are **four rooms**:
 
 ```text
-REVENUE               Rent · Vacancy · Concessions · Other Income
-CAPITAL               Senior Debt · Mezzanine Debt · Preferred Equity ·
-                      Reserves / Escrows
-PROPERTY OBLIGATIONS  Taxes · Insurance · Licenses & Registrations ·
-                      Compliance · Other fixed / recurring
-                      ↑ everything the asset must maintain simply because
-                        we own and operate it — financial AND regulatory:
-                        rental licences, registrations, filings, tax
-                        compliance, inspections, renewals
-OPERATING COSTS       Payroll · Management Fees · Utilities · Contracts ·
-                      Repairs / other operating expense
+CAPITAL STACK       Debt · Equity · Reserves & Escrows
+                    ↑ how this property is capitalised, and what it owes the
+                      people who capitalised it
+PROPERTY EXPENSES   Taxes · Insurance · Payroll & Staffing · Utilities ·
+                    Contracted Services · Repairs & Maintenance ·
+                    Management & Administration · Marketing & Leasing Costs ·
+                    Other Operating Expenses
+                    ↑ what this property costs to own and operate
+PROJECTS & CAPEX    Projects · Unit Improvements · Building Systems ·
+                    Equipment / FF&E · Capital Reserves & Draws
+                    ↑ where capital is being invested in the physical
+                      property, and what that work costs
+COMPLIANCE          Licenses & Registrations · Inspections · Certificates ·
+                    Violations & Cure · Recurring Requirements
+                    ↑ whether this property is legally and regulatorily in
+                      good standing
 ```
+
+**The room is navigation. The module underneath owns the truth.** A room reads
+its children's canonical reads and renders them; it does not author domain
+truth, and it may not manufacture an establishment its children cannot
+support. Property Expenses is capped at *partially established* for exactly
+this reason — with two of nine modules live, saying `established` would tell
+an operator that payroll, utilities and five more are accounted for.
+
+Five rulings this structure carries:
+
+- **Revenue is not an Asset Management room.** Rent, vacancy and concessions
+  are recorded by Leasing and Management, where the work happens. Their
+  economics flow into financial reporting from those canonical operating
+  domains — Asset Management does not restate them as a room of its own.
+- **Taxes and Insurance live under Property Expenses and keep their full
+  independent domain depth.** Being reached through a room does not flatten
+  them into expense lines; each remains its own domain with its own governed
+  truth, evidence and clocks.
+- **Licenses, registrations, inspections, certificates and regulatory
+  standing live under Compliance.** The *fees* they generate may flow
+  economically into Property Expenses; the operational and regulatory truth
+  stays in Compliance. One domain owns the standing.
+- **Maintenance owns work execution. Projects & CapEx owns the AM/economic
+  view of capital work.** A work order is a Maintenance event. What that work
+  costs, and whether it is capital, is the Asset Management reading of it.
+  Do not put a work order in Projects & CapEx.
+- **Capital Stack may read escrow and funding positions, but must never
+  bypass the Tax and Insurance funding boundaries.** An escrow balance is
+  readable there; it is authored on the funding side of those domains, and
+  the economic chain may never import funding to get it.
 
 ### The system sequence
 
@@ -159,13 +193,16 @@ The read door does not quietly become the write door.
 
 ## Same truth, four compressions
 
-> ⚠ **Two different fours. Do not merge them.** The section above lists four
+> ⚠ **Three different fours. Do not merge them.** The section above lists four
 > **operating doors** (Leasing · Management · Maintenance · Asset Management) —
-> *surfaces in the staff product*. This section lists four **compressions**
+> *surfaces in the staff product* — and, inside the fourth of those, four
+> **rooms** (Capital Stack · Property Expenses · Projects & CapEx · Compliance)
+> — *navigation within one door*. This section lists four **compressions**
 > (Staff · Management · Accounting · Owner) — *altitudes of reading*. "Management"
-> appears in both and means different things. A door is where work is done; a
-> compression is how truth is said. Asset Management is a door; Owner is a
-> compression that will later get its own surface.
+> appears in more than one and means something different each time. A door is
+> where work is done; a room is where you go inside a door; a compression is how
+> truth is said. Asset Management is a door; Owner is a compression that will
+> later get its own surface.
 
 Staff, Management, Accounting and the Owner are doing four different jobs over
 **one** governed system. They are not four datasets and not four dashboards.
