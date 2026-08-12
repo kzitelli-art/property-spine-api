@@ -163,6 +163,52 @@ const TAX_FUNDING_TABLES = [
   "tax_escrow_disbursements",
 ];
 
+/*  ══ DEBT — DECLARED BEFORE ITS SCHEMA, DELIBERATELY ════════════════
+ *  Same move as Taxes: the wall has to be executable before the thing it
+ *  guards is written, or the first Debt commit is the one deciding where
+ *  the wall goes. Every path below is absent today and is REPORTED as
+ *  vacuous rather than silently skipped.
+ *
+ *  ⚠ DEBT APPROACHES THIS WALL FROM THE OTHER SIDE, AND THAT IS NEW.
+ *  Insurance and Taxes each author their own funding and must not let it
+ *  back into their economics. Debt's exposure is the mirror: a single
+ *  Lument statement carries, in one document,
+ *
+ *      principal · interest · balance          DEBT
+ *      tax escrow contribution and balance     TAX FUNDING
+ *      insurance escrow contribution/balance   INSURANCE FUNDING
+ *
+ *  so a Debt document reader that writes what it reads would author two
+ *  other domains' funding positions. Nothing in the per-domain checks
+ *  below would catch that — they only ever compare a domain to ITSELF.
+ *  The CROSS-DOMAIN section near the end of this file exists for it.
+ *
+ *  Debt's own funding chain is how debt service is PAID (the loan is on
+ *  ACH auto-draft), as distinct from what the instrument ACCRUES.  */
+const DEBT_ECONOMIC = [
+  "migrations/168_debt_instruments.sql",
+  "src/asset/debt_instrument_service.js",
+  "src/asset/debt_position_read.js",
+  "src/asset/debt_establishment.js",
+];
+const DEBT_FUNDING = [
+  "src/asset/debt_funding_service.js",
+  "src/asset/debt_funding_read.js",
+];
+const DEBT_ECONOMIC_TABLES = [
+  "debt_instruments",
+  "debt_instrument_properties",
+  "debt_instrument_parties",
+  "debt_terms",
+  "debt_schedule_publications",
+  "debt_balance_observations",
+  "debt_payments",
+  "debt_escrow_requirements",
+];
+const DEBT_FUNDING_TABLES = [
+  "debt_payment_arrangements",
+];
+
 const DOMAINS = [
   { name: "insurance",
     economic: INSURANCE_ECONOMIC, funding: INSURANCE_FUNDING,
@@ -175,6 +221,13 @@ const DOMAINS = [
     economicTables: TAX_ECONOMIC_TABLES, fundingTables: TAX_FUNDING_TABLES,
     accrualFile: "src/asset/tax_position_read.js",
     accrualRule: /annual_liability|liability_cents/ },
+  { name: "debt",
+    economic: DEBT_ECONOMIC, funding: DEBT_FUNDING,
+    economicTables: DEBT_ECONOMIC_TABLES, fundingTables: DEBT_FUNDING_TABLES,
+    //  What the instrument accrues must derive from its governed TERMS,
+    //  never from what was drafted out of the operating account.
+    accrualFile: "src/asset/debt_position_read.js",
+    accrualRule: /debt_terms|day_count|effective_from/ },
 ];
 
 // ── PURE ANALYSERS ───────────────────────────────────────────────────
@@ -401,6 +454,46 @@ for (const d of DOMAINS) {
  *      first `insert` here would make the taxonomy a second author of a
  *      number the modules already own.
  */
+/*  ══ NO DOMAIN AUTHORS ANOTHER DOMAIN'S TRUTH ══════════════════════
+ *  Every check above compares a domain to ITSELF — its economics against
+ *  its own funding. That is the wall 161 was written for, and it has a
+ *  blind spot the Debt build walks straight into.
+ *
+ *  A Lument mortgage statement carries, in ONE document, principal and
+ *  interest (Debt), a tax escrow contribution and balance (Tax funding)
+ *  and an insurance escrow contribution and balance (Insurance funding).
+ *  A Debt document reader that writes what it reads would author two
+ *  other domains' funding positions — and every per-domain assertion
+ *  above would stay green while it happened, because none of them ever
+ *  looks at another domain's tables.
+ *
+ *  The rule: a domain may READ another domain's position. It may never
+ *  WRITE another domain's table. Extraction from a shared document
+ *  proposes facts with a destination domain, and each destination is
+ *  written by its own canonical writer.
+ *
+ *  Vacuous for a domain with no files present, and it says so.
+ */
+console.log("\n══ CROSS-DOMAIN ════════════════════════════════════════");
+for (const d of DOMAINS) {
+  const mine = new Set([...d.economicTables, ...d.fundingTables]);
+  const foreign = DOMAINS
+    .filter((o) => o.name !== d.name)
+    .flatMap((o) => [...o.economicTables, ...o.fundingTables])
+    .filter((t) => !mine.has(t));
+  const present = [...d.economic, ...d.funding].filter((f) => readIf(f) !== null);
+
+  if (!present.length) {
+    console.log(`  ⚠ ${d.name}: 0 files present — VACUOUS, not clean.`);
+    continue;
+  }
+  for (const rel of present) {
+    const src = readIf(rel);
+    const writes = foreign.filter((t) => writesTable(src, t, rel.endsWith(".sql")));
+    ok(`${rel} writes no other domain's table`, writes.length === 0, writes.join(", "));
+  }
+}
+
 console.log("\n══ NAVIGATION ═══════════════════════════════════════════");
 {
   const SURFACE = "src/surfaces/asset_management.js";
@@ -408,10 +501,10 @@ console.log("\n══ NAVIGATION ═══════════════�
   if (src === null) {
     ok(`${SURFACE} is present`, false, "the Asset Management surface is missing");
   } else {
-    const owned = [
-      ...INSURANCE_ECONOMIC_TABLES, ...INSURANCE_FUNDING_TABLES,
-      ...TAX_ECONOMIC_TABLES, ...TAX_FUNDING_TABLES,
-    ];
+    //  Derived from DOMAINS rather than listed, so a domain declared above
+    //  is covered here the moment it is added. The hand-listed version of
+    //  this omitted Debt for exactly as long as someone forgot to edit it.
+    const owned = DOMAINS.flatMap((o) => [...o.economicTables, ...o.fundingTables]);
     const writes = owned.filter((t) => writesTable(src, t, false));
     ok(`${SURFACE} writes no domain table — it navigates, it does not author`,
        writes.length === 0, writes.join(", "));
