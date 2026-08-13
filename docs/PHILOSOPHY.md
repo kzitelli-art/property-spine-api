@@ -12,6 +12,15 @@ It is not a list of stylistic preferences. It defines what the product is, what 
 
 **Record the truth at the moment of work, so reporting becomes a read, not a reconstruction project.**
 
+The same sentence has a second consumer, and it is the same sentence:
+
+> **Spine records truth so that operating, reporting, and asking are all reads
+> of the same system.**
+
+Operating, reporting and asking are not three products over three datasets. They
+are three readings of one record — which is why the question a person will ask
+is a design input to the schema, not a feature request against it (§31, §40).
+
 Property operations usually happen through calls, texts, emails, spreadsheets, bank transactions, vendor conversations, and human memory. The formal record is created later, often at month-end, after context has been lost.
 
 Property Spine closes that gap.
@@ -970,17 +979,38 @@ The goal is a truthful operating path.
 
 Before implementing a feature, answer in plain English:
 
-1. What real-world fact is being recorded?
-2. What canonical service records it?
-3. Who is the authenticated actor, and what property can they operate?
-4. What durable object changes?
-5. What immutable history remains afterward?
-6. What other surfaces read this truth automatically — **including Ask Spine**?
-   Name the compact standing projection an entitled person gets when they ask for
-   this domain without knowing where it lives (§40.1, §40.6). "The screen renders
-   it" is half an answer.
-7. What happens when ownership, proof, or live data is missing?
-8. What class is every new component, and what removes any temporary part?
+1. **What will an authorized person ask about this, and what must be recorded for
+   that to be answerable?** Name the compact standing projection an entitled
+   person gets when they ask for this domain without knowing where it lives
+   (§40.1, §40.6). Say which capability class is being claimed — retrieval,
+   comparison, causal explanation (§40.10) — and which are not.
+2. What real-world fact is being recorded?
+3. What canonical service records it?
+4. Who is the authenticated actor, and what property can they operate?
+5. What durable object changes?
+6. What immutable history remains afterward?
+7. What other surfaces read this truth automatically — the screen **and** Ask
+   Spine? "The screen renders it" is half an answer.
+8. What happens when ownership, proof, or live data is missing?
+9. What class is every new component, and what removes any temporary part?
+
+**Question 1 moved.** It was question 6, asked after the domain was designed —
+and a question asked sixth is answered by whatever the schema already happens to
+support. Asked first, it is a specification.
+
+The build question inverts with it:
+
+```text
+WAS   what screen does Debt need?
+IS    what truth must Debt record so that every authorized person can ask
+      the natural questions they will have about it and get a governed
+      answer?
+```
+
+The screen is then one useful projection of that truth, and the conversational
+reader is another. Neither is the truth (§7).
+
+They are still called the Eight Questions. The count is not the point.
 
 If these questions cannot be answered, the feature is not ready to build.
 
@@ -1799,6 +1829,70 @@ assistant is the same failure §37 names for surfaces: *"the mistake is to build
 nicer module per user."* Five conversational products over one truth is that
 mistake in a new medium.
 
+#### A screen is a pre-answered question
+
+This is what the conversational reader is *for*, and why it is not simply another
+interface.
+
+Every screen is a guess about what someone will want to know, frozen into layout
+at build time. That is a real service for the questions people ask constantly —
+what is on my board, what is the rent roll, who is overdue. Pre-answering those
+is worth doing.
+
+```text
+SCREEN        questions asked often enough that pre-answering is a service
+CONVERSATION  the unbounded questions that emerge from actual work
+```
+
+The second set is larger, and it includes every question nobody thought to
+anticipate.
+
+Conversation is not the only surface that could serve four audiences from one
+truth. It is the one that can do it **without pre-building four separate
+interpretations of that truth** — because a screen must commit to an altitude
+and a sentence need not. That is what makes §37 a property of the surface rather
+than an aspiration maintained by discipline.
+
+#### One agent, N role profiles
+
+"Role-specific agents" is the right product intuition and the wrong structure.
+Enumerate what a role actually needs its own rules for, and most of it turns out
+to belong to something that already exists:
+
+```text
+information access     entitlement — §40.8, server-derived, NOT per-role
+permitted actions      entitlement + §40.9              NOT per-role
+confirmation           owned by the canonical writer    NOT per-role
+privacy & disclosure   audience (§43)                   cross-cutting
+escalation             the obligation engine (§11)      already exists
+uncertainty            the four silences (§40.7)        universal by design
+
+priorities             ← genuinely varies by role
+interpretation         ← genuinely varies by role
+```
+
+Six of eight already have homes, and they are the security-relevant six. Only
+**ranking** and **compression** vary.
+
+So the shape is one engine and a small declarative profile per role — what this
+role is trying to accomplish, how facts rank for them, which vocabulary leads.
+Precedent in this repo: `dated_positions.js` — *"one service, four
+interpretations."*
+
+Six implementations of entitlement diverge six ways, and they diverge **silently**.
+
+#### The agent layer is a meter, not just a layer
+
+```text
+If an agent needs logic the UI does not need, that logic is MISSING
+FROM THE SPINE.
+```
+
+Agent thickness is a measurement, not a design choice. Every piece of reasoning
+that accumulates in the conversational layer is a domain that failed to expose
+its truth properly. The substrate is the durable advantage; the agent is the
+instrument that keeps telling you whether you actually built it.
+
 ### 40.4 Facts carry authority in their shape
 
 The composer never receives an undifferentiated bag of facts. Every fact carries,
@@ -1933,6 +2027,35 @@ id in a sentence, at which point a link is something it composed rather than
 something Spine resolved. Those are different epistemic classes (§38), and only
 one of them is safe to click.
 
+#### Authorization must survive COMPOSITION, not just the door
+
+A screen shows one domain, so its authorization only has to hold locally. One
+conversational question does not.
+
+```text
+"Why is this deal underperforming?"
+   → debt · insurance · payroll · maintenance · leasing · resident history
+   ALL IN ONE ANSWER
+```
+
+Every one of those domains may be individually entitled and the composed answer
+still disclose something none of them would alone. Aggregation is itself a
+disclosure: a figure that is unremarkable per domain can identify a person, or
+reveal a position, once it sits beside five others in one sentence.
+
+**Endpoint-level and screen-level authorization do not compose.** Entitlement
+must be carried on each fact, into the composer, and hold *inside* the assembled
+answer — including on anything the answer derives from a mix of sources, which
+inherits the most restrictive constraint of its inputs, never the loosest.
+
+The same applies to audience (§43): sensitivity overrides relevance, and it
+overrides it in the composition, not only at the door.
+
+This is a **major architectural problem, and it is unsolved.** It is named here
+so it is designed deliberately when the first genuinely cross-domain answer is
+built, rather than discovered by a composed answer that was individually
+authorized at every step and wrong as a whole.
+
 ### 40.9 Read capability is required; action capability is granted
 
 ```text
@@ -1968,6 +2091,33 @@ A domain's first build may promise retrieval and **preserve the causal hooks**
 without claiming causal explanation. Saying which of the two shipped is part of
 the receipt, because a surface that answers "what" fluently is assumed to answer
 "why" honestly.
+
+#### Comparison is a third class, and it is not retrieval
+
+```text
+"What is insurance on 4125?"              governed retrieval
+"Compare insurance across the portfolio"  NORMALIZATION
+"Which properties are outliers?"          DERIVED ATTRIBUTION
+"Why is 4125 higher?"                     causal attribution
+```
+
+The second is not a bigger version of the first. Comparing requires a basis —
+per unit, per square foot, per coverage limit, per replacement value — and the
+basis is a **model nobody recorded**. Change it and the answer changes, with no
+underlying fact having moved.
+
+"4125 is an outlier" is not a fact about 4125. It is the output of a comparison
+whose parameters were chosen, and §38 requires it be a **visibly different class**
+from a recorded figure, naming the basis that produced it — the way `UNASSIGNED`
+is a different class from a person's name, not a disclaimer beneath one.
+
+This matters most at asset-management and owner altitude, where comparison *is*
+the value proposition and the number goes to a lender. A surface that says
+*"insurance on 4125 is $84,000"* and *"4125 is an outlier"* in the same voice has
+laundered a model as truth (§38).
+
+Retrieval, comparison and causal explanation are three capability classes. Each
+is claimed explicitly or not at all.
 
 ### 40.11 The rule is enforced by a gate, not by memory
 
