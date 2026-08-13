@@ -1,4 +1,4 @@
--- 169_compliance_canonical_truth.sql -- branch-only behind Debt migration 168.
+-- 168_compliance_canonical_truth.sql -- Compliance canonical persistence.
 --
 -- Compliance persists source-backed institutional truth, not its readings.
 -- Standing, attention, requirement coverage, UI state and Ask Spine answers

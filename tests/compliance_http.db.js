@@ -124,7 +124,7 @@ async function main() {
       );
     `);
     await client.query(fs.readFileSync(
-      path.join(__dirname, "../migrations/169_compliance_canonical_truth.sql"), "utf8"));
+      path.join(__dirname, "../migrations/168_compliance_canonical_truth.sql"), "utf8"));
 
     const propertyA = (await client.query(
       "insert into properties(name) values ('Authority A') returning id")).rows[0];

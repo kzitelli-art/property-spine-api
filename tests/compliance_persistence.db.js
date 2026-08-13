@@ -57,7 +57,7 @@ async function main() {
         source_as_of_date date, uploaded_by_user_id uuid references users(id));
     `);
     await c.query(fs.readFileSync(
-      path.join(__dirname, "../migrations/169_compliance_canonical_truth.sql"), "utf8"));
+      path.join(__dirname, "../migrations/168_compliance_canonical_truth.sql"), "utf8"));
 
     const tables = (await c.query(
       `select table_name from information_schema.tables
