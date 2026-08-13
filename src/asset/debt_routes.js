@@ -17,6 +17,17 @@
    4125 will be established in production through a narrow controlled
    step. This file stays read-only and boring.
 
+   ── CAPABILITY CLASSES, CLAIMED EXPLICITLY (§40.10) ─────────────────
+       RETRIEVAL            claimed
+       COMPARISON           NOT claimed
+       CAUSAL EXPLANATION   NOT claimed — hooks preserved
+
+   `/standing` is scoped to the operator's own property, so there is no
+   cross-property surface to aggregate over. That is deliberate: comparing
+   debt needs a basis — per unit, per SF, per dollar of value — and the
+   basis is a model nobody recorded. A portfolio comparison is a NEW read
+   with a declared basis, never a wider filter on this one.
+
    ── IT ADDS NO DOMAIN LOGIC ─────────────────────────────────────────
        route → listInstrumentsForProperty → loadHistory → position → JSON
 

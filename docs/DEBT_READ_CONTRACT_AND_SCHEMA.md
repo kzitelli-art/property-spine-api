@@ -208,6 +208,55 @@ canonical open target
 
 On 4125 today roughly half is `NOT_ESTABLISHED`, and that is the correct output.
 
+### Capability classes Debt Build 1 claims — all three, explicitly
+
+§40.10 now names **three** classes, not two, and says each is claimed explicitly
+or not at all. Debt's earlier receipts addressed retrieval and causal explanation
+and were **silent on comparison**. Silence is no longer a permitted answer.
+
+```text
+RETRIEVAL              CLAIMED
+                       "what is our debt service" · "when does it mature" ·
+                       "what is the balance, as of when"
+
+COMPARISON             NOT CLAIMED
+                       "compare debt across the portfolio" ·
+                       "is 4125's rate high" · "which loans are outliers"
+
+CAUSAL EXPLANATION     NOT CLAIMED — hooks preserved
+                       "why did debt service increase"
+```
+
+**Why comparison is not merely a bigger retrieval here.** Comparing debt needs a
+basis — per unit, per square foot, per dollar of value, per year of remaining
+term — and that basis is a model nobody recorded. Change it and the answer
+changes with no underlying fact having moved. *"4125's rate is high"* is not a
+fact about 4125; it is the output of a comparison whose parameters were chosen,
+and §38 requires it to render as a visibly different class naming its basis.
+
+**The read seam already makes this structurally hard, and that is deliberate.**
+`GET /operator/debt/standing` is scoped to the operator's own property, so there
+is no cross-property surface to aggregate over. A portfolio comparison would need
+a new read with a declared basis — not a wider filter on this one.
+
+### Debt does not solve authorization-under-composition (§40.8)
+
+Recorded as a known limitation rather than solved locally, per the ruling.
+
+Debt's entitlement is **endpoint-level**: actor → server-derived property →
+Asset Management module → this property's instruments. That holds at the door and
+composes with nothing.
+
+```text
+"why is this deal underperforming?"
+   → debt · insurance · payroll · maintenance · resident history, in one answer
+```
+
+Each domain individually entitled; the composed answer may still disclose what
+none would alone. **Debt is one of the domains that composition will pull**, and
+the read seam does nothing to prevent it. Flagged here so the eventual composition
+boundary is not discovered by a Debt answer being the one that leaked.
+
 ### What Ask Spine receives — and does not
 
 ```text
