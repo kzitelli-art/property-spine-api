@@ -4,7 +4,7 @@
 const contracts = require("../src/asset/compliance_contracts.js");
 const reader = require("../src/asset/compliance_document_read.js");
 
-const EXPECTED_ASSERTIONS = 34;
+const EXPECTED_ASSERTIONS = 39;
 let pass = 0, fail = 0;
 function ok(label, condition, detail) {
   if (condition) { pass++; console.log("  ok    " + label); }
@@ -69,6 +69,8 @@ const confirmation = {
 ok("confirmation request is typed and exact", contracts.validateConfirmationRequest(confirmation) === confirmation);
 rejects("confirmation refuses a missing artifact identity", () =>
   contracts.validateConfirmationRequest({ ...confirmation, artifact_id: null }));
+rejects("confirmation refuses a malformed artifact digest", () =>
+  contracts.validateConfirmationRequest({ ...confirmation, artifact_sha256: "not-a-digest" }));
 ok("confirmation carries no actor identity", !("actor_id" in confirmation));
 ok("confirmation carries no property authority claim", !("property_id" in confirmation));
 rejects("browser cannot add property_id to confirmation", () =>
@@ -103,7 +105,7 @@ const item = {
   entity: { type: "credential", compliance_type: "rental_license", record_id: "item-1", label: "Rental License #922616" },
   standing: { code: "current", as_of: "2026-08-13" },
   why: { basis: "established_credential_period", effective_from: "2026-04-30", effective_through: "2027-05-01" },
-  evidence: [{ role: "issuance", artifact_id: "artifact-1", label: "City license" }],
+  evidence: [{ role: "issuance", label: "City license", reference }],
   unresolved: [{ code: "renewal_not_established", detail: "An expiration date is not a renewal obligation." }],
   next: { date: "2027-05-01", action: "License period ends", state: "date_only" },
   attention: { state: "none_established", obligation_id: null },
@@ -113,6 +115,7 @@ const standing = {
   contract_version: contracts.VERSIONS.standing,
   capability_classes: contracts.retrievalCapabilityReceipt(
     "canonical Compliance standing and its recorded derivation basis"),
+  composition_authorization: "unsolved_cross_domain",
   as_of: "2026-08-13",
   coverage: { state: "unknown", meaning: "No requirement census has been established." },
   items: [item],
@@ -125,6 +128,17 @@ ok("standing separates attention from standing", standing.items[0].attention.sta
 ok("standing claims retrieval only", standing.capability_classes.retrieval.claim === "claimed" &&
   standing.capability_classes.comparison.claim === "not_claimed" &&
   standing.capability_classes.causal_explanation.claim === "not_claimed");
+ok("standing flags cross-domain composition as unsolved",
+  standing.composition_authorization === "unsolved_cross_domain");
+ok("standing evidence exposes a server reference, not an artifact id",
+  !("artifact_id" in standing.items[0].evidence[0])
+  && standing.items[0].evidence[0].reference.opener.kind === "server_minted");
+rejects("standing refuses an invented composition authorization", () => contracts.validateStanding({
+  ...standing, composition_authorization: "endpoint_authorized",
+}));
+rejects("standing refuses an impossible calendar date", () => contracts.validateStanding({
+  ...standing, as_of: "2026-02-30",
+}));
 rejects("standing refuses arbitrary why inputs", () => contracts.validateStanding({
   ...standing, items: [{ ...item, why: { ...item.why, inputs: { guessed: true } } }],
 }));
@@ -133,6 +147,7 @@ const detail = {
   contract_version: contracts.VERSIONS.detail,
   capability_classes: contracts.retrievalCapabilityReceipt(
     "canonical Compliance record, evidence and correction history"),
+  composition_authorization: "unsolved_cross_domain",
   as_of: "2026-08-13",
   item,
   history: [{

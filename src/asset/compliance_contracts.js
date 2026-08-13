@@ -8,8 +8,8 @@ const VERSIONS = Object.freeze({
   intake: "compliance.evidence_intake.v2",
   confirmation: "compliance.confirmation_request.v1",
   write_receipt: "compliance.write_receipt.v1",
-  standing: "compliance.standing.v2",
-  detail: "compliance.detail.v2",
+  standing: "compliance.standing.v3",
+  detail: "compliance.detail.v3",
   reference: "compliance.reference.v1",
   failure: "compliance.failure.v1",
 });
@@ -52,7 +52,7 @@ const UNKNOWN_FIELDS = Object.freeze({
 const FAILURE_CODES = Object.freeze([
   "recognition_failed", "proposal_stale", "artifact_out_of_scope",
   "confirmation_conflict", "standing_unavailable", "detail_unavailable",
-  "reference_unavailable",
+  "reference_unavailable", "composition_authorization_unavailable",
 ]);
 
 const CAPABILITY_NAMES = readerCapabilities.CAPABILITY_NAMES;
@@ -88,6 +88,12 @@ function isoDate(value, path, nullable = true) {
   if (nullable && value === null) return;
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     throw new TypeError(`${path} must be an ISO date${nullable ? " or null" : ""}`);
+  }
+  const [year, month, day] = value.split("-").map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() + 1 !== month ||
+      parsed.getUTCDate() !== day) {
+    throw new TypeError(`${path} must be a real calendar date`);
   }
 }
 
@@ -143,7 +149,9 @@ function validateIntake(value) {
   if (value.contract_version !== VERSIONS.intake) throw new TypeError("intake version mismatch");
   exact(value.artifact, ["id", "sha256", "artifact_kind", "deduplicated"], "intake.artifact");
   for (const key of ["id", "sha256", "artifact_kind"])
-    nullableString(value.artifact[key], `intake.artifact.${key}`);
+    requiredString(value.artifact[key], `intake.artifact.${key}`);
+  if (!/^[0-9a-f]{64}$/.test(value.artifact.sha256))
+    throw new TypeError("intake.artifact.sha256 must be a lowercase SHA-256 digest");
   if (typeof value.artifact.deduplicated !== "boolean")
     throw new TypeError("intake.artifact.deduplicated must be boolean");
   if (value.failure !== null) {
@@ -192,6 +200,10 @@ function validateConfirmationRequest(value) {
   if (value.contract_version !== VERSIONS.confirmation) throw new TypeError("confirmation version mismatch");
   for (const key of ["artifact_id", "artifact_sha256", "proposal_fingerprint", "idempotency_key"])
     requiredString(value[key], `confirmation.${key}`);
+  if (!/^[0-9a-f]{64}$/.test(value.artifact_sha256))
+    throw new TypeError("confirmation.artifact_sha256 must be a lowercase SHA-256 digest");
+  if (!/^[0-9a-f]{64}$/.test(value.proposal_fingerprint))
+    throw new TypeError("confirmation.proposal_fingerprint must be a lowercase SHA-256 digest");
   exact(value.confirmed, PROPOSED_KEYS, "confirmation.confirmed");
   for (const key of PROPOSED_KEYS) {
     if (key === "unit_count") {
@@ -244,10 +256,10 @@ function validateStandingItem(value, path = "standing.items[]") {
   if (!Array.isArray(value.evidence) || !Array.isArray(value.unresolved) || !Array.isArray(value.references))
     throw new TypeError(`${path} evidence, unresolved and references must be arrays`);
   value.evidence.forEach((e, i) => {
-    exact(e, ["role", "artifact_id", "label"], `${path}.evidence[${i}]`);
+    exact(e, ["role", "label", "reference"], `${path}.evidence[${i}]`);
     oneOf(e.role, ["issuance", "supporting"], `${path}.evidence[${i}].role`);
-    requiredString(e.artifact_id, `${path}.evidence[${i}].artifact_id`);
     requiredString(e.label, `${path}.evidence[${i}].label`);
+    validateReference(e.reference);
   });
   value.unresolved.forEach((u, i) => {
     exact(u, ["code", "detail"], `${path}.unresolved[${i}]`);
@@ -267,10 +279,12 @@ function validateStandingItem(value, path = "standing.items[]") {
 }
 
 function validateStanding(value) {
-  exact(value, ["contract_version", "capability_classes", "as_of", "coverage", "items", "references"], "standing");
+  exact(value, ["contract_version", "capability_classes", "composition_authorization", "as_of", "coverage", "items", "references"], "standing");
   if (value.contract_version !== VERSIONS.standing) throw new TypeError("standing version mismatch");
   isoDate(value.as_of, "standing.as_of", false);
   validateCapabilityClasses(value.capability_classes, "standing.capability_classes");
+  if (value.composition_authorization !== "unsolved_cross_domain")
+    throw new TypeError("standing cross-domain composition authorization is not governed");
   exact(value.coverage, ["state", "meaning"], "standing.coverage");
   oneOf(value.coverage.state, ["unknown", "partial", "established"], "standing.coverage.state");
   requiredString(value.coverage.meaning, "standing.coverage.meaning");
@@ -281,10 +295,12 @@ function validateStanding(value) {
 }
 
 function validateDetail(value) {
-  exact(value, ["contract_version", "capability_classes", "as_of", "item", "history", "references"], "detail");
+  exact(value, ["contract_version", "capability_classes", "composition_authorization", "as_of", "item", "history", "references"], "detail");
   if (value.contract_version !== VERSIONS.detail) throw new TypeError("detail version mismatch");
   isoDate(value.as_of, "detail.as_of", false);
   validateCapabilityClasses(value.capability_classes, "detail.capability_classes");
+  if (value.composition_authorization !== "unsolved_cross_domain")
+    throw new TypeError("detail cross-domain composition authorization is not governed");
   validateStandingItem(value.item, "detail.item");
   if (!Array.isArray(value.history) || !Array.isArray(value.references)) throw new TypeError("detail lists required");
   value.history.forEach((event, i) => {
@@ -304,7 +320,7 @@ function validateDetail(value) {
 function proposalFingerprint(artifactSha256, proposal) {
   validateProposal(proposal);
   return crypto.createHash("sha256")
-    .update(`compliance_rental_license_v1\n${artifactSha256}\n${JSON.stringify(proposal)}`)
+    .update(`${VERSIONS.proposal}\n${artifactSha256}\n${JSON.stringify(proposal)}`)
     .digest("hex");
 }
 

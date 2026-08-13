@@ -128,6 +128,8 @@ const GATES = [
     what: "Compliance contracts: exact proposal and frozen future writer/read/reference wires" },
   { file: "asset_reader_capabilities.test.js",
     what: "Insurance + Tax readers: retrieval declared; comparison and cause not claimed" },
+  { file: "compliance_user_journey.test.js",
+    what: "Compliance user journey: six natural questions, honest attention, server-minted openers" },
 ];
 
 const bar = "════════════════════════════════════════════════════════════════";
