@@ -12,7 +12,7 @@ into a conversational surface.
 ## 1. What shipped
 
 ```text
-migrations/168_meeting_transcript_segments.sql   artifact kind + segments + immutability
+migrations/169_meeting_transcript_segments.sql   artifact kind + segments + immutability
 src/meetings/meeting_transcript_parser.js        deterministic parser, pure
 src/meetings/meeting_transcript_service.js       the canonical writer
 src/meetings/meeting_transcript_ingest.js        POST /operator/meetings/transcript
@@ -119,7 +119,7 @@ Default is deny. Both switches unset means the door is shut.
 
 - **Not proven against real Postgres.** No `DATABASE_URL` in this environment.
   The HTTP proof uses a scripted stub, which is what makes "no insert ran" an
-  assertable fact — but it means migration 168's DDL, the CHECK constraints, the
+  assertable fact — but it means migration 169's DDL, the CHECK constraints, the
   unique index and the immutability trigger have **never executed**.
 - **Not browser verified.** There is no UI. The route is reachable only by a
   direct multipart POST.
@@ -134,7 +134,7 @@ number, a misspelling — and none of the content. Run the real one with
 
 ## 7. ⚠ A deploy does NOT migrate
 
-Migration **168 is not in the ledger**. `prestart` runs `migrate.js` in
+Migration **169 is not in the ledger**. `prestart` runs `migrate.js` in
 verify-only mode, so merging this and hitting deploy produces a **failed deploy**
 — Render keeps the previous instance live and the API looks fine while the
 schema is simply absent.
@@ -179,3 +179,24 @@ The HTTP proof is on the standard gate path for exactly this reason.
 - Speaker confirmation (Tier 2) — its own table, one row per (artifact, label),
   carrying who confirmed and when. Not built.
 - Meeting-level audience model — the condition that retires the cohort gate.
+
+## 11. §42 — where the quote rule binds
+
+PHILOSOPHY §42 (*Recorded Speech Is Quoted, Never Paraphrased*) is doctrine as
+of this slice. The storage half already satisfies its storage-side obligations:
+
+- segments are immutable at the database, so a quotation cannot drift
+- nothing in the ingest path repairs the text
+- `readSegments` returns `verbatim_text` straight off the row, pinned by an
+  assertion that the projection does not repair the number it carries
+
+**The structural enforcement point is not built, because the code it constrains
+does not exist yet.** §42 requires that the retrieval reply carry passage
+identifiers and no field the words could travel in — that is a response schema,
+and it lands with the retrieval slice.
+
+**Condition:** the first commit that sends transcript text to a model must
+introduce that schema in the same commit, and pin it with an assertion that the
+model's reply has no text-bearing field. Shipping retrieval with the rule as a
+prompt instruction would be §42's own stated failure mode, and migration 092's
+lesson repeated: a contract at the read layer, unbacked at the storage layer.

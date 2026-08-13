@@ -2132,3 +2132,235 @@ remembered to add to it cannot detect the omission it exists to prevent.
 This is doctrine's own lesson applied to itself: a rule that lives only in a
 document decays under schedule pressure, and *"we will wire it to the real path
 later"* is a stop-sign phrase (§32).
+
+## 42. Recorded Speech Is Quoted, Never Paraphrased
+
+This is the sharper half of §40.4, stated as a wall.
+
+```text
+a transcript is evidence of what was SAID
+it is never evidence that what was said is TRUE
+```
+
+Quoting preserves the first without asserting the second. That is why quoting
+and authority-ranking are one wall seen from two sides: §40.4 governs what a
+source may **assert**, and this governs what Spine may **say on its behalf**.
+
+When Spine reports what a person said, and Spine holds a verbatim record of
+them saying it, **Spine quotes it.**
+
+```text
+QUOTE       the recorded words, unaltered, attributed, timestamped
+NEVER       a summary, a paraphrase, a tidy-up, a restatement,
+            a "he said that…", or the gist
+```
+
+### The hedge is the payload
+
+An operator asked what was decided about a unit. The record says:
+
+```text
+Rob · 6:05
+"I don't know why the fifth floor is different, but just the one unit
+ in the same line that has a different story."
+```
+
+The paraphrase is *"Rob said it's just the one unit."* It is accurate,
+readable, and it has deleted the four words that mattered — **I don't know
+why**. One version tells the operator the question is settled. The other tells
+them it is open. A summariser drops the hedge first, every time, because
+hedges are what summarisation is for.
+
+The most important word in a quotation is usually the one a summary removes.
+
+### What Spine may still do
+
+Compression is about what is said first, not what may be said (§37).
+
+```text
+MAY      choose which passages answer the question
+MAY      say how many, from when, by whom, in what order
+MAY      write framing around a quote — "Rob raised this at 4:01
+         and ruled at 14:54"
+MAY      say plainly that the record does not answer it
+
+MAY NOT  render the words themselves in any form but the recorded one
+```
+
+Selecting is not paraphrasing. Framing is not paraphrasing. Putting the
+speaker's meaning in Spine's words is.
+
+### Length is never the reason
+
+A long passage is quoted shorter, not restated. A shorter quote is still a
+quote.
+
+```text
+TRIM     from the ends, marked
+ELIDE    from the middle — FORBIDDEN
+```
+
+Cutting the middle out is exactly how *"I don't know why the fifth floor is
+different, but just the one unit"* becomes *"…just the one unit."* An ellipsis
+inside a quotation is an edit wearing punctuation.
+
+### Enforced by structure, not by instruction
+
+A model told not to paraphrase will paraphrase, because paraphrasing is what
+it is good at.
+
+```text
+the model returns IDENTIFIERS       which passages answer this
+the server fetches the TEXT         by id, from the record
+the reply has NO FIELD              the words could travel in
+```
+
+The words the operator reads were never in the model's output. That is a
+guarantee; "please quote accurately" is a hope.
+
+### It applies wherever the record does
+
+Any verbatim record of a human speaking or writing that Spine did not author:
+meeting transcripts, voice notes, resident messages, vendor quotes, technician
+reports. Wherever Spine holds the actual words, the actual words are what it
+shows.
+
+And it never repairs them (§39). A transcript reading `$29.97` where everyone
+present knew it was $2,997 is quoted as `$29.97`. Authority may state the
+corrected figure as its own dated fact beside it. The quotation does not move.
+
+## 43. Recorded Conversation as an Evidence Source
+
+§40.4 ranks what a source may assert. §42 governs how its words are rendered.
+This section covers what is specific to **recorded human conversation** —
+meeting transcripts today; voice notes, resident messages, vendor quotes and
+technician reports later.
+
+It adds nothing to the authority model. `source_authority` remains exactly the
+four levels named in §40.4, and a transcript is `transcript_claim`. A second
+vocabulary for the same hierarchy is how two implementations diverge.
+
+### The ladder is a data contract, not a state machine
+
+```text
+TIER 1   transcript claim       somebody said it
+TIER 2   confirmed statement    somebody with standing confirmed what
+                                they meant
+TIER 3   governed truth         the domain owns it
+```
+
+**No tier is ever inferred from the one below.** A confident Tier 1 does not
+become Tier 2 by going unchallenged, and Tier 2 does not become Tier 3 by
+being confirmed twice.
+
+Tier 2 keeps `as_recorded` beside `as_confirmed`. When authority states the
+figure was $2,997, the segment still reads `$29.97` forever (§42).
+
+### Speakers are labels until a human says otherwise
+
+A speaker label is **evidence of identity, never identity** (§12).
+
+```text
+"Robert"                a label
+"Unidentified Speaker"  a label
+```
+
+Those differ in content, not in standing. Both are unconfirmed, and Spine may
+not resolve either to a person by inference — not from the name, not from who
+spoke before and after, not from who was obviously in the room.
+
+Until a human with standing confirms a label, Spine cannot answer *"what did
+Kandice say?"* It can only answer *"what did the speaker labelled Kandice
+say?"* — and it must say so.
+
+### Retrieval is a thread, not a chunk
+
+Recorded conversation is **discourse**, and discourse resolves late.
+
+```text
+raised    4:01
+ruled    13:56
+```
+
+A retriever that scores passages independently returns the raising and misses
+the ruling, confidently, because the raising is where the topic words are. The
+ruling frequently contains none of them.
+
+So the retrieval unit is a **chronological span of the conversation**, not the
+best-matching fragment. Top-one relevance misses conclusions by design.
+
+### Entitlement is not audience
+
+§40.8 rules that entitlements precede intelligence. Recorded conversation adds
+a second question that entitlement cannot answer:
+
+```text
+ENTITLEMENT   may this person operate this property and module?
+AUDIENCE      may this person hear this material at all?
+```
+
+One passage of one real meeting carried an occupancy confirmation and a
+resident's hospitalisation in the same breath. No module mapping separates
+them: answering *"are we full in September?"* from that meeting hands over the
+health information. A technician correctly assigned to the property has no
+business hearing it.
+
+**Sensitivity overrides relevance.** A passage may be exactly what was asked
+for and still not be sayable to the person asking.
+
+### Evidence never writes to the property
+
+```text
+1  THE RECORD        an immutable source and its addressable parts
+2  A CANDIDATE       "the record says X" — points at the source,
+                     confirms nothing, writes nothing
+3  THE OBJECT        a human with standing confirms, and the EXISTING
+                     canonical service writes it
+```
+
+**The record never writes to the property. A human does — and the record is
+why they could do it in one step instead of from memory.**
+
+This is §37's chain at a new altitude: observation → confirmation →
+recognition. Three dated facts, none overwriting the one before.
+
+What travels onto the object is a **durable reference back to the exact part
+of the source** (§39's causal hook). Nothing else in the system learns what a
+meeting is. Tenant Relations renders an obligation, Leasing renders an offer
+term, Maintenance renders a work order — each now with a *why* that opens the
+record.
+
+Bind to the **most durable object that already exists** — property, unit,
+vendor, work order, lease, person, in that order of certainty. Where nothing
+exists yet, the item stays honestly unattached rather than manufacturing an
+anchor. Same discipline as `UNASSIGNED`.
+
+### Where recorded conversation appears
+
+**Never in the feed. Always one tap behind an object.**
+
+A meeting is a source, like a rent roll — it sits behind the facts it
+produced. It is not a conversation with a person, not a `comm_event`, and not
+Person Card history. Staff discussing a resident is not a message *with* them,
+and rendering it on their Person Card is the surveillance record §13 forbids.
+
+The obligation reaches the Person Card. The transcript does not. You get to
+the passage by opening the obligation.
+
+### A transcript is not a standing domain
+
+Recorded conversation has no standing projection and is not discovered by the
+§40.11 reader gate, which scans canonical standing reads under `src/asset`.
+That is deliberate, not an oversight: a domain has a position Ask Spine can
+state; a transcript has only passages it can quote. Evidence is read *beside*
+governed standing, never *as* it.
+
+### Consent and retention
+
+Spine **does not record**. It ingests from a source the organisation already
+approved and already consented to. There is no second consent mechanism,
+because Spine is not the recorder.
+
+The record is kept while the account is active, as organisational policy.
+Facts promoted out of it survive independently — they are their own dated
+facts, not views onto the source.

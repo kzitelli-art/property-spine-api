@@ -365,6 +365,53 @@ must be able to answer:
 
 Storage stays domain-specific. The owner layer consumes the contract.
 
+## Recorded conversation as evidence (§42–§43)
+
+Meeting transcripts today; voice notes, resident messages, vendor quotes later.
+They add **nothing** to the authority model — a transcript is `transcript_claim`
+under §40.4's existing four levels, and a second vocabulary for the same
+hierarchy is how two implementations diverge.
+
+**Quote, never paraphrase** (§42). A transcript is evidence of what was *said*,
+never evidence that what was said is *true*. Quoting preserves the first without
+asserting the second. Selecting which passages answer a question is allowed;
+restating them in Spine's words is not. Trim from the ends, marked; never elide
+the middle — that is how *"I don't know why the fifth floor is different, but
+just the one unit"* becomes *"…just the one unit."* Enforced structurally: the
+model returns passage identifiers, the server fetches the text by id, and the
+reply has no field the words could travel in.
+
+**A speaker label is evidence of identity, never identity** (§12, §43).
+"Robert" and "Unidentified Speaker" differ in content, not standing. Never infer
+from name, adjacency, or who was obviously in the room.
+
+**Retrieval is a chronological thread, not a chunk** (§43). Discourse resolves
+late — raised at 4:01, ruled at 13:56. Top-one relevance misses conclusions by
+design.
+
+**Entitlement ≠ audience** (§43, extending §40.8). Entitlement asks what
+property/module you may operate; audience asks whether you may hear this
+material. One real passage carried an occupancy confirmation and a resident's
+hospitalisation in the same breath — no module mapping separates them.
+Sensitivity overrides relevance.
+
+**Evidence never writes to the property** (§43). `record → candidate → human
+confirms → existing canonical service writes`. What travels onto the object is a
+durable reference back to the exact part of the source. Bind to the most durable
+object that already exists; where none does, stay unattached rather than invent
+an anchor.
+
+**Never in the feed — always one tap behind an object** (§43). A meeting is a
+source like a rent roll. Not a `comm_event`, not Person Card history. The
+obligation reaches the Person Card; the transcript does not.
+
+**A transcript is not a standing domain** (§43). It has no standing projection
+and is deliberately not discovered by the §40.11 reader gate: a domain has a
+position Ask Spine can state; a transcript has only passages it can quote.
+
+Spine **does not record**; it ingests from an already-approved source. No second
+consent mechanism.
+
 ## Non-negotiables (see PHILOSOPHY.md for full text)
 
 - **Honest blank beats confident wrong** (§5). Never fake a number, status, owner, dispatch, proof, or healthy state. Show missing as missing; `UNASSIGNED` when no owner.
@@ -372,6 +419,7 @@ Storage stays domain-specific. The owner layer consumes the contract.
 - **One canonical architecture** (§17). Identical product meaning across prod / Solo / Demo Building / QA. "Demo data may exist. Demo paths may not."
 - **Solo-first, never Solo-special** (§22). No `if property is Solo` business branches.
 - **Server-derived identity & authority** (§21). The browser requests; the server decides. A client-provided property ID is never authority.
+- **Quote, never paraphrase** (§42). A transcript is evidence of what was said, never that it is true. The recorded words, unaltered — selection is allowed, restatement is not. Enforced structurally, not by prompt. See the section above.
 - **Capture once, read everywhere** (§7). One canonical service write updates board, Person Card, and reporting projections.
 - **Every domain has two readers — the UI and Ask Spine** (§40). Ask Spine is a permanent interface contract, not an AI layer: it reads the same canonical reads the screens do, never scrapes a screen or queries arbitrary tables. The model gets fluency over wording, never authority over attribution, source authority, current state, relevance, or conflict. A domain is not done until it is registered (§40.2).
 - **Classify every component 1–4** (§18) with an exact removal condition for anything temporary.
