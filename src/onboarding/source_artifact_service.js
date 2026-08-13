@@ -102,6 +102,14 @@ const KIND_SHAPES = Object.freeze({
   tax_account_statement:         Object.freeze(["pdf", "xlsx", "xls", "csv"]),
   tax_escrow_statement:          Object.freeze(["pdf", "xlsx", "xls", "csv"]),
   tax_escrow_analysis:           Object.freeze(["pdf", "xlsx", "xls", "csv"]),
+  //  Utility evidence stays on the shared retained-source rail. Provider
+  //  statements and agreements are issued as PDFs; meter schedules and
+  //  account confirmations are also commonly exported as spreadsheets.
+  utility_statement:             Object.freeze(["pdf"]),
+  utility_service_agreement:     Object.freeze(["pdf"]),
+  utility_addendum:              Object.freeze(["pdf"]),
+  utility_meter_schedule:        Object.freeze(["pdf", "xlsx", "xls", "csv"]),
+  utility_account_confirmation:  Object.freeze(["pdf", "xlsx", "xls", "csv"]),
 });
 
 //  Per-kind refusal copy. §5 and the repo's rule that a refusal a user
@@ -154,6 +162,21 @@ const KIND_REFUSAL = Object.freeze({
   tax_escrow_analysis: (filename) =>
     `Spine reads an escrow analysis as a PDF or a spreadsheet. "${filename}" is neither. ` +
     `Upload the analysis the servicer sent.`,
+  utility_statement: (filename) =>
+    `Spine reads a Utility statement as a PDF. "${filename}" is not one. ` +
+    `Upload the statement the provider issued.`,
+  utility_service_agreement: (filename) =>
+    `Spine reads a Utility service agreement as a PDF. "${filename}" is not one. ` +
+    `Upload the agreement the provider issued.`,
+  utility_addendum: (filename) =>
+    `Spine reads a Utility addendum as a PDF. "${filename}" is not one. ` +
+    `Upload the signed addendum.`,
+  utility_meter_schedule: (filename) =>
+    `Spine reads a Utility meter schedule as a PDF or a spreadsheet. "${filename}" is neither. ` +
+    `Upload the schedule or export that identifies the meters.`,
+  utility_account_confirmation: (filename) =>
+    `Spine reads a Utility account confirmation as a PDF or a spreadsheet. "${filename}" is neither. ` +
+    `Upload the provider confirmation or account export.`,
 });
 
 function shapesFor(artifact_kind) {

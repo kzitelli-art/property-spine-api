@@ -189,8 +189,7 @@ const ROOMS = Object.freeze([
       { key: "insurance", label: "Insurance", derived: "insurance" },
       { key: "payroll_staffing", label: "Payroll & Staffing",
         note: "No governed payroll allocation yet" },
-      { key: "utilities", label: "Utilities",
-        note: "No governed utility accounts yet" },
+      { key: "utilities", label: "Utilities", derived: "utilities" },
       { key: "contracted_services", label: "Contracted Services",
         note: "No governed service contracts yet" },
       { key: "repairs_maintenance", label: "Repairs & Maintenance",
@@ -300,6 +299,8 @@ module.exports = function assetManagement(deps) {
   //  write `tax_payments`, so no escrow can make a bill read as paid.
   const taxFunding = require("../asset/tax_funding.js");
   const taxFundingRead = require("../asset/tax_funding_read.js");
+  const utilityPosition = require("../asset/utility_position_read.js");
+  const utilityRoutes = require("../asset/utility_routes.js");
   //  The taxpayer capture seam. NOT owned by Taxes — `legal_entities` is a
   //  shared primitive that ownership and debt work will want too — but
   //  mounted here because this is the door an operator is standing in when
@@ -411,14 +412,31 @@ module.exports = function assetManagement(deps) {
     }
     if (insurance.established) live.push("Insurance");
 
-    const byKey = { taxes, insurance };
+    let utilities = null;
+    try {
+      const standing = await utilityPosition.readStanding(client, { property_id: propertyId });
+      utilities = standing.setup_state !== "not_established"
+        ? { established: true,
+            note: `${standing.established_services} service` +
+                  `${standing.established_services === 1 ? "" : "s"} established` +
+                  (standing.unresolved_count
+                    ? `, ${standing.unresolved_count} setup question${standing.unresolved_count === 1 ? "" : "s"} open`
+                    : "") }
+        : { established: false, note: "No governed Utility setup yet" };
+    } catch (e) {
+      console.error("asset-management overview: Utility establishment probe failed", e);
+      utilities = { established: false, note: "No governed Utility setup yet" };
+    }
+    if (utilities.established) live.push("Utilities");
+
+    const byKey = { taxes, insurance, utilities };
 
     if (!live.length) {
       return {
         state: "not_established",
         byKey,
         //  SHORT — the home card. One line, no machinery.
-        summary: "No tax, insurance or other operating expense terms are established for this property.",
+        summary: "No tax, insurance, Utility or other operating expense terms are established for this property.",
         why: "Spine holds no governed expense terms for this property. Bills, policies, " +
              "contracts and payroll arrangements may have been retained during Deal Setup, " +
              "but nothing has been read out of them, so Spine cannot say what this property " +
@@ -431,15 +449,22 @@ module.exports = function assetManagement(deps) {
     //  PARTIAL, ALWAYS, AND IT SAYS WHICH PART. Naming the two that are
     //  governed is what stops the sentence reading as a claim about the
     //  other seven.
-    const named = live.join(" and ");
+    const named = live.length > 1
+      ? `${live.slice(0, -1).join(", ")} and ${live[live.length - 1]}`
+      : live[0];
+    const absent = [];
+    if (!taxes.established) absent.push("taxes");
+    if (!insurance.established) absent.push("insurance");
+    if (!utilities.established) absent.push("utilities");
+    absent.push("payroll", "contracted services", "repairs", "management and administration",
+      "marketing", "other operating expenses");
     return {
       state: "partially_established",
       byKey,
       summary: `${named} ${live.length === 1 ? "is" : "are"} established. ` +
                `The other operating expenses are not.`,
       why: `${named} ${live.length === 1 ? "carries" : "carry"} governed terms Spine can ` +
-           `stand behind. Payroll, utilities, contracted services, repairs, management and ` +
-           `administration, marketing and other operating expenses have no governed terms ` +
+           `stand behind. ${absent.join(", ")} have no governed terms ` +
            `anywhere, so this room cannot yet state what the property costs in total.`,
       establishes: "Governed terms for the remaining operating expenses, each with its own " +
                    "evidence and period.",
@@ -1335,6 +1360,11 @@ module.exports = function assetManagement(deps) {
     //  evidence route still retains the document and reports honestly
     //  that Spine has not read it. A missing reader degrades to a blank
     //  form, never to a broken upload.
+    fileToText,
+  }));
+
+  router.use(utilityRoutes({
+    pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
     fileToText,
   }));
 
