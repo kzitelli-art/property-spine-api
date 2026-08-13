@@ -68,9 +68,14 @@ const BINARY_EXT  = new Set(["xlsx", "xlsm", "xls", "pdf"]);
  *  Deal Setup — is byte-identical without passing anything new.
  */
 const RENT_ROLL_SHAPES = Object.freeze(["csv", "tsv", "txt", "xlsx", "xlsm", "xls"]);
+//  `other` is deliberately generic. It preserves every shape the historical
+//  fallback accepted and additionally permits opaque PDF retention. A domain
+//  adapter may later propose what the bytes appear to be; storage does not.
+const OTHER_SHAPES = Object.freeze([...RENT_ROLL_SHAPES, "pdf"]);
 
 const KIND_SHAPES = Object.freeze({
   rent_roll:                     RENT_ROLL_SHAPES,
+  other:                         OTHER_SHAPES,
   //  A policy and a binder are issued as PDFs. Narrow on purpose: adding
   //  a kind here is a deliberate act, not a side effect of some other
   //  workflow needing a file.
@@ -107,6 +112,9 @@ const KIND_REFUSAL = Object.freeze({
   rent_roll: (filename) =>
     `Spine reads rent rolls as .xlsx, .xls, .csv or .tsv. "${filename}" is none of those. ` +
     `If it is a PDF, export or save it as a spreadsheet first.`,
+  other: (filename) =>
+    `Spine retains a generic source as a PDF, spreadsheet or text file. ` +
+    `"${filename}" is none of those. Upload the source in its original format.`,
   insurance_policy: (filename) =>
     `Spine reads an insurance policy as a PDF. "${filename}" is not one. ` +
     `Upload the policy document your broker or carrier issued.`,
