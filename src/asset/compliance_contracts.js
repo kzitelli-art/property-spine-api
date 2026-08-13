@@ -5,6 +5,7 @@ const readerCapabilities = require("../shared/reader_capability_contract.js");
 
 const VERSIONS = Object.freeze({
   proposal: "compliance.rental_license.proposal.v2",
+  item_relationship_proposal: "compliance.item_relationship_proposal.v1",
   intake: "compliance.evidence_intake.v2",
   confirmation: "compliance.confirmation_request.v1",
   write_receipt: "compliance.write_receipt.v1",
@@ -56,6 +57,25 @@ const FAILURE_CODES = Object.freeze([
 ]);
 
 const CAPABILITY_NAMES = readerCapabilities.CAPABILITY_NAMES;
+
+const V1_OPERATOR_AUTHORITY = Object.freeze({
+  establish: "server_property_and_asset_compliance_entitlement",
+  correct: "server_property_and_asset_compliance_entitlement",
+  actor_attribution: "server_authenticated_operator",
+  special_compliance_role_required: false,
+});
+
+const V1_WORK_BOUNDARY = Object.freeze({
+  action_condition_owner: "compliance",
+  assignment_owner: "existing_obligation_engine",
+  compliance_assignment_fields: Object.freeze([]),
+});
+
+const ITEM_RELATIONSHIP_DOES_NOT_ESTABLISH = Object.freeze([
+  "canonical_item_resolution",
+  "canonical_compliance_truth",
+  "credential_standing",
+]);
 
 function exact(value, keys, path) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -221,6 +241,41 @@ function validateConfirmationRequest(value) {
   return value;
 }
 
+function validateItemRelationshipProposal(value) {
+  exact(value, ["contract_version", "state", "candidate", "basis", "does_not_establish"],
+    "item_relationship_proposal");
+  if (value.contract_version !== VERSIONS.item_relationship_proposal) {
+    throw new TypeError("item relationship proposal version mismatch");
+  }
+  if (value.state !== "proposed") {
+    throw new TypeError("item relationship remains a proposal until server-validated confirmation");
+  }
+  exact(value.candidate, ["item_id", "item_kind", "compliance_type", "label"],
+    "item_relationship_proposal.candidate");
+  requiredString(value.candidate.item_id, "item_relationship_proposal.candidate.item_id");
+  oneOf(value.candidate.item_kind, ["credential", "finding"],
+    "item_relationship_proposal.candidate.item_kind");
+  requiredString(value.candidate.compliance_type,
+    "item_relationship_proposal.candidate.compliance_type");
+  requiredString(value.candidate.label, "item_relationship_proposal.candidate.label");
+  exact(value.basis,
+    ["subject_match", "authority_match", "item_kind_match", "external_identifier_match"],
+    "item_relationship_proposal.basis");
+  for (const key of Object.keys(value.basis)) {
+    if (typeof value.basis[key] !== "boolean") {
+      throw new TypeError(`item_relationship_proposal.basis.${key} must be boolean`);
+    }
+  }
+  if (!value.basis.subject_match || !value.basis.authority_match || !value.basis.item_kind_match) {
+    throw new TypeError("an existing-item proposal requires matching subject, authority and item kind");
+  }
+  if (JSON.stringify(value.does_not_establish) !==
+      JSON.stringify(ITEM_RELATIONSHIP_DOES_NOT_ESTABLISH)) {
+    throw new TypeError("item relationship proposal authority boundary mismatch");
+  }
+  return value;
+}
+
 function validateWriteReceipt(value) {
   exact(value, ["contract_version", "outcome", "record", "established", "next"], "write_receipt");
   if (value.contract_version !== VERSIONS.write_receipt) throw new TypeError("write receipt version mismatch");
@@ -350,8 +405,11 @@ function proposalFingerprint(artifactSha256, proposal) {
 
 module.exports = {
   VERSIONS, WIRE_CONTRACTS, DOES_NOT_ESTABLISH, PROPOSED_KEYS, UNKNOWN_FIELDS,
-  FAILURE_CODES, CAPABILITY_NAMES, retrievalCapabilityReceipt, validateCapabilityClasses,
+  FAILURE_CODES, CAPABILITY_NAMES, V1_OPERATOR_AUTHORITY, V1_WORK_BOUNDARY,
+  ITEM_RELATIONSHIP_DOES_NOT_ESTABLISH,
+  retrievalCapabilityReceipt, validateCapabilityClasses,
   validateProposal, validateIntake, validateConfirmationRequest, validateWriteReceipt,
+  validateItemRelationshipProposal,
   validateStanding, validateDetail, validateReference, validateFailure,
   proposalFingerprint,
 };

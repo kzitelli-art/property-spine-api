@@ -9,7 +9,7 @@ const semantics = require("../src/asset/compliance_semantics.js");
 const projection = require("../src/asset/compliance_projection.js");
 const solo = require("./fixtures/compliance/solo_license_periods.js");
 
-const EXPECTED_ASSERTIONS = 75;
+const EXPECTED_ASSERTIONS = 78;
 let pass = 0, fail = 0;
 function ok(label, condition, detail) {
   if (condition) { pass++; console.log("  ok    " + label); }
@@ -108,17 +108,26 @@ rejects("canonical facts require evidence", () => factContracts.validateFact({
 }));
 
 const twoPeriods = semantics.buildEffectiveHistory([solo.priorPeriod, solo.successorPeriod]);
+ok("the prior source-backed period is exact",
+  solo.priorPeriod.value.effective_from === "2025-05-02" &&
+  solo.priorPeriod.value.effective_through === "2026-05-01");
+ok("the successor source-backed period is exact",
+  solo.successorPeriod.value.effective_from === "2026-04-30" &&
+  solo.successorPeriod.value.effective_through === "2027-05-01");
 ok("both real Solo periods remain in readable history", twoPeriods.entries.length === 2);
 ok("a successor period is an establishment, not a correction",
   twoPeriods.entries.every((entry) => entry.change === "establishment"));
 ok("a successor period does not supersede the prior period", twoPeriods.effective_facts.length === 2);
 ok("the historical Solo period remains readable",
-  twoPeriods.entries.some((entry) => entry.fact.value.effective_through === "2025-05-01"));
+  twoPeriods.entries.some((entry) => entry.fact.value.effective_through === "2026-05-01"));
+ok("the source-backed overlap is surfaced as conflicted",
+  semantics.deriveCredentialStanding(
+    [solo.priorPeriod, solo.successorPeriod], "2026-05-01").code === "conflicted");
 
 const mistakenPeriod = {
   ...solo.priorPeriod,
   fact_id: "mistaken-period",
-  value: { effective_from: "2025-02-13", effective_through: "2025-05-01" },
+  value: { effective_from: "2025-05-01", effective_through: "2026-05-01" },
 };
 const correctedPeriod = {
   ...solo.priorPeriod,
@@ -145,30 +154,30 @@ const correctionBranch = {
   ...correctedPeriod,
   fact_id: "second-correction-branch",
   established_at: "2026-08-13T14:03:00Z",
-  value: { effective_from: "2025-02-15", effective_through: "2025-05-01" },
+  value: { effective_from: "2025-05-03", effective_through: "2026-05-01" },
 };
 ok("branched live corrections derive conflicted",
   semantics.deriveCredentialStanding(
-    [mistakenPeriod, correctedPeriod, correctionBranch], "2025-02-20").code === "conflicted");
+    [mistakenPeriod, correctedPeriod, correctionBranch], "2025-05-10").code === "conflicted");
 
 const current = semantics.deriveCredentialStanding([solo.priorPeriod, solo.successorPeriod], "2025-07-01");
 ok("a covering established period derives current", current.code === "current");
 ok("current names the exact as-of date", current.as_of === "2025-07-01");
 ok("current is based on the covering period", current.why.effective_from === "2025-05-02");
-const future = semantics.deriveCredentialStanding([solo.successorPeriod], "2025-05-01");
+const future = semantics.deriveCredentialStanding([solo.successorPeriod], "2026-04-29");
 ok("a future-only established period derives not_yet_effective", future.code === "not_yet_effective");
-const ended = semantics.deriveCredentialStanding([solo.priorPeriod, solo.successorPeriod], "2026-06-01");
+const ended = semantics.deriveCredentialStanding([solo.priorPeriod, solo.successorPeriod], "2027-06-01");
 ok("ended history derives no_current_period_established", ended.code === "no_current_period_established");
 ok("ended history does not state that no valid license exists",
   !JSON.stringify(ended).toLowerCase().includes("no valid license"));
 const absent = semantics.deriveCredentialStanding([], "2026-06-01");
 ok("insufficient canonical facts derive not_established", absent.code === "not_established");
 const overlap = fact("credential_period", "overlap", "2026-08-13T14:03:00Z", {
-  effective_from: "2025-04-01", effective_through: "2025-06-01",
+  effective_from: "2025-05-01", effective_through: "2025-06-01",
 }, "issuance");
-const conflict = semantics.deriveCredentialStanding([solo.priorPeriod, overlap], "2025-04-15");
+const conflict = semantics.deriveCredentialStanding([solo.priorPeriod, overlap], "2025-05-15");
 ok("contradictory covering facts derive conflicted", conflict.code === "conflicted");
-const correctedStanding = semantics.deriveCredentialStanding([mistakenPeriod, correctedPeriod], "2025-02-13");
+const correctedStanding = semantics.deriveCredentialStanding([mistakenPeriod, correctedPeriod], "2025-05-01");
 ok("a superseded period cannot produce current standing", correctedStanding.code === "not_yet_effective");
 const semanticsSource = fs.readFileSync(path.join(__dirname, "../src/asset/compliance_semantics.js"), "utf8");
 ok("standing derivation has no implicit clock", !/Date\.now|new Date\s*\(\s*\)/.test(semanticsSource));
@@ -243,7 +252,7 @@ ok("an expiration date remains a date-only next event",
   standingProjection.items[0].next.state === "date_only");
 ok("an ended credential period still has no action",
   projection.buildStandingProjection({
-    as_of: "2026-06-01", coverage: unknownCoverage, items: [credentialSpec],
+    as_of: "2027-06-01", coverage: unknownCoverage, items: [credentialSpec],
   }).items[0].attention.state === "none_established");
 
 const actionProjection = projection.buildStandingProjection({
@@ -272,7 +281,7 @@ ok("detail retains both real license periods", detail.history.length === 2);
 ok("detail does not rewrite a new period as a correction",
   detail.history.every((event) => event.event === "period_established"));
 const correctionDetail = projection.buildDetailProjection({
-  as_of: "2025-02-14", coverage: unknownCoverage,
+  as_of: "2025-05-02", coverage: unknownCoverage,
   item: { ...credentialSpec, facts: [mistakenPeriod, correctedPeriod] },
 });
 ok("detail retains a superseded historical fact", correctionDetail.history.length === 2);
