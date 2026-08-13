@@ -47,7 +47,7 @@ const MIGRATION = path.join(__dirname, "..", "migrations", "168_debt_instruments
 const NE = read.NOT_ESTABLISHED;
 
 const url = receipt.harnessConnectionString();
-receipt.begin(__filename, { url, expected: 30 });
+receipt.begin(__filename, { url, expected: 35 });
 
 let pass = 0, fail = 0, ran = 0;
 function ok(label, cond, detail) {
@@ -61,29 +61,20 @@ const P = "22222222-2222-2222-2222-222222222222";
 const E = "33333333-3333-3333-3333-333333333333";
 const ART = "44444444-4444-4444-4444-444444444444";
 
-/*  ── THE SERVICER'S PUBLISHED SCHEDULE, PINNED ──────────────────────
- *  Lument's amortization schedule for loan 480010465. Pinned in code on
- *  the tax precedent — philadelphia_tax_rules.js pins the City's U&O
- *  calendar rather than trusting a derivation to be self-evidently right,
- *  and the reason is on the record: a published value must never be able
- *  to mask a broken rule.
+/*  ── THE SERVICER'S PUBLISHED SCHEDULE, ALL 120 ROWS ────────────────
+ *  Pinned on the tax precedent — philadelphia_tax_rules.js pins the
+ *  City's U&O calendar rather than trusting a derivation to be
+ *  self-evidently right, because a published value must never be able to
+ *  mask a broken rule.
  *
- *  [payment#, due, days, interest$, principal$, balance-after$]          */
-const PUBLISHED = [
-  [1,   "2020-09-01", 31, 79790.56, 0,           28250000.00],
-  [2,   "2020-10-01", 30, 77216.67, 0,           28250000.00],
-  [7,   "2021-03-01", 28, 72068.89, 0,           28250000.00],
-  [43,  "2024-03-01", 29, 74642.78, 0,           28250000.00],
-  [49,  "2024-09-01", 31, 79790.56, 43620.84,    28206379.16],
-  [50,  "2024-10-01", 30, 77097.44, 46313.96,    28160065.20],
-  [53,  "2025-01-01", 31, 79281.11, 44130.29,    28025499.57],
-  [55,  "2025-03-01", 28, 71383.26, 52028.14,    27929216.50],
-  [59,  "2025-07-01", 30, 75966.74, 47444.66,    27745265.77],
-  [64,  "2025-12-01", 30, 75335.55, 48075.85,    27513712.54],
-  [70,  "2026-06-01", 31, 77033.58, 46377.82,    27227510.84],
-  [72,  "2026-08-01", 31, 76764.22, 46647.18,    27131874.12],
-  [120, "2030-08-01", 31, 69809.48, 24716182.48, 0],
-];
+ *  ⚠ ALL 120, NOT A SAMPLE. An earlier revision pinned thirteen
+ *  well-chosen rows and called the result "the 120-row proof". It was a
+ *  thirteen-row sample wearing a larger claim. The derivation COMPOUNDS —
+ *  each row's interest is a function of the balance the previous row left
+ *  — so a defect at row 67 survives a sample checking rows 1, 49 and 120,
+ *  and the endpoints still agree. Sampling a compounding series proves
+ *  precisely the thing a broken middle can also do.                     */
+const { PUBLISHED, PUBLISHED_TOTALS } = require("./fixtures/lument_480010465_published_schedule.js");
 const c = (d) => Math.round(d * 100);
 
 (async () => {
@@ -209,8 +200,34 @@ const c = (d) => Math.round(d * 100);
 
     ok("the derivation produces exactly 120 payments", sched.length === 120,
        `produced ${sched.length}`);
+    //  The oracle must actually BE the whole schedule. A fixture that
+    //  quietly shrinks turns this back into a sample without the claim
+    //  changing, which is the failure this assertion exists to catch.
+    ok("the pinned oracle contains all 120 published rows",
+       PUBLISHED.length === 120, `oracle holds ${PUBLISHED.length}`);
 
-    let matched = 0, mismatch = [];
+    //  ── THE TRANSCRIPTION ITSELF IS CROSS-CHECKED ────────────────
+    //  These sums are published on the servicer's schedule independently
+    //  of the individual rows, so a typo in any single transcribed row
+    //  fails here. Without this, the oracle could be wrong in exactly the
+    //  way the derivation is wrong and both would agree.
+    const oracleInt = PUBLISHED.reduce((s, r) => s + c(r[3]), 0);
+    const oraclePrin = PUBLISHED.reduce((s, r) => s + c(r[4]), 0);
+    ok("transcribed interest sums to the published grand total",
+       oracleInt === c(PUBLISHED_TOTALS.grand_total_interest),
+       `${oracleInt} ≠ ${c(PUBLISHED_TOTALS.grand_total_interest)}`);
+    ok("transcribed principal sums to the published grand total",
+       oraclePrin === c(PUBLISHED_TOTALS.grand_total_principal),
+       `${oraclePrin} ≠ ${c(PUBLISHED_TOTALS.grand_total_principal)}`);
+    //  Every amortizing row except the balloon must sum to the level P&I.
+    const lvl = c(PUBLISHED_TOTALS.level_payment_p_and_i);
+    const offLevel = PUBLISHED.filter((r) => r[0] >= 49 && r[0] <= 119)
+      .filter((r) => c(r[3]) + c(r[4]) !== lvl).map((r) => `#${r[0]}`);
+    ok("every amortizing published row splits the level P&I exactly",
+       offLevel.length === 0, offLevel.join(", "));
+
+    //  ── ALL 120, FIELD BY FIELD, IN INTEGER CENTS ────────────────
+    let matched = 0; const mismatch = [];
     for (const [n, due, days, int$, prin$, bal$] of PUBLISHED) {
       const row = sched[n - 1];
       if (!row) { mismatch.push(`#${n} missing`); continue; }
@@ -220,10 +237,27 @@ const c = (d) => Math.round(d * 100);
       if (row.interest_cents !== c(int$)) bad.push(`int ${row.interest_cents}≠${c(int$)}`);
       if (row.principal_cents !== c(prin$)) bad.push(`prin ${row.principal_cents}≠${c(prin$)}`);
       if (row.balance_after_cents !== c(bal$)) bad.push(`bal ${row.balance_after_cents}≠${c(bal$)}`);
+      //  P&I is compared as its own field, not inferred from the two
+      //  components agreeing — the published schedule authorises the split.
+      if (row.interest_cents + row.principal_cents !== c(int$) + c(prin$)) bad.push("p&i");
       if (bad.length) mismatch.push(`#${n} ${bad.join(" ")}`); else matched++;
     }
-    ok(`all ${PUBLISHED.length} pinned published rows reproduced to the cent`,
-       matched === PUBLISHED.length, mismatch.join(" | "));
+    ok(`ALL 120 published rows reproduced to the cent (${matched}/120)`,
+       matched === 120,
+       mismatch.length > 8
+         ? `${mismatch.length} rows differ — first 8: ${mismatch.slice(0, 8).join(" | ")}`
+         : mismatch.join(" | "));
+
+    //  The opening balance of each row must be the previous row's close.
+    //  This is what makes the series a chain rather than 120 independent
+    //  calculations that happen to be checked.
+    const chainBreaks = [];
+    for (let i = 1; i < sched.length; i++) {
+      const opening = sched[i].balance_after_cents + sched[i].principal_cents;
+      if (opening !== sched[i - 1].balance_after_cents) chainBreaks.push(`#${i + 1}`);
+    }
+    ok("each row opens on the previous row's closing balance",
+       chainBreaks.length === 0, chainBreaks.slice(0, 8).join(", "));
     ok("the interest-only regime pays down no principal (payments 1–48)",
        sched.slice(0, 48).every((r) => r.principal_cents === 0));
     ok("amortization begins at payment 49, on 2024-09-01",
@@ -342,5 +376,5 @@ const c = (d) => Math.round(d * 100);
   }
   db.release();
   await pool.end();
-  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 30 }));
+  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 35 }));
 })();
