@@ -1,6 +1,58 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  ⚠ MIGRATION 168 IS CLAIMED BY DEBT. TWO BRANCHES WROTE ONE NUMBER.
+##  2026-08-13. READ BEFORE MERGING EITHER BRANCH.
+## ══════════════════════════════════════════════════════════════════
+
+Two parallel sessions each authored a **different** migration 168. Both are
+branch-only, so nothing is broken in production — and a release applies EVERY
+pending file, so merging both is a duplicate version against the ledger.
+
+```text
+migrations/168_debt_instruments.sql            claude/philosophy-doctrine-essence-ae6xni
+migrations/168_meeting_transcript_segments.sql claude/philosophy-doctrine-essence-tt6uoz
+main                                           no 168 — ceiling is 167
+```
+
+**RULED 2026-08-13: DEBT KEEPS 168.** It is the current, heavily proven build —
+426 lines of schema with canonical writers, `position(instrument, as_of)`, W1–W9
+hostile read proofs and a 120/120 published-schedule derivation proof standing on
+it. An unrelated parallel session does not get to renumber that.
+
+**The meeting-transcript branch is PARKED.** When that work resumes it must:
+
+```text
+1  rebase onto the then-current main
+2  resolve its DOCTRINE collision (below) — not just the migration number
+3  take the next available migration number, read from the ledger
+```
+
+### ⚠ AND IT COLLIDES ON DOCTRINE, WHICH IS EASIER TO MISS
+
+`tt6uoz` branched **before** the Ask Spine doctrine landed and does not contain
+current `main` (`git merge-base` confirms). It writes:
+
+```text
+tt6uoz    ## 40. Recorded Speech Is Quoted, Never Paraphrased
+          ## 41. Evidence Sources Beneath Governed Truth
+
+main      ## 40. Ask Spine Is a Governed Interface, Not an AI Layer
+          §40.1 … §40.11
+```
+
+**§40's subsections are cited by number** in `CLAUDE.md`, in
+`tests/gate_ask_spine_readers.js`, and throughout the Debt build. Merging tt6uoz
+as written would either conflict or silently renumber the doctrine everything
+else references. Its two rulings are good and should land as **§42/§43**.
+
+Its §41 also overlaps `§40.4` on purpose rather than by accident: `source_authority`
+already ranks `transcript_claim` **below** `governed_read`, and migration 168
+ships that hierarchy as a real column with those exact four values. A second
+vocabulary for the same ranking is how the two diverge — extend §40.4, do not
+parallel it.
+
+## ══════════════════════════════════════════════════════════════════
 ##  ASK SPINE IS NOW AN INTERFACE CONTRACT, NOT A FEATURE.
 ##  2026-08-12 (latest). THIS SECTION WINS ON DOCTRINE AND ON
 ##  WHAT "DONE" MEANS FOR A DOMAIN. DOCS + ONE GATE. NO PRODUCT CODE.
