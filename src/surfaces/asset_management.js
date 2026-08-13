@@ -305,6 +305,7 @@ module.exports = function assetManagement(deps) {
   //  mounted here because this is the door an operator is standing in when
   //  BIRT asks them for an entity that does not exist yet.
   const legalEntityRoutes = require("../entity/legal_entity_routes.js");
+  const complianceHttp = require("../asset/compliance_http.js");
 
   const { pool, fileToText } = deps || {};
   if (!pool) throw new Error("asset_management requires a pool");
@@ -1314,6 +1315,10 @@ module.exports = function assetManagement(deps) {
 
   router.use(legalEntityRoutes({
     pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
+  }));
+
+  router.use(complianceHttp({
+    pool, fileToText, requireOperator, refuseClientAuthority, requireAssetManagementModule,
   }));
 
   return router;

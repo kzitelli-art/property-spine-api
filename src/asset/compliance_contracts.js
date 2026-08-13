@@ -22,7 +22,7 @@ const WIRE_CONTRACTS = Object.freeze({
   write_receipt: Object.freeze({ version: VERSIONS.write_receipt, implementation: "implemented" }),
   standing: Object.freeze({ version: VERSIONS.standing, implementation: "implemented" }),
   detail: Object.freeze({ version: VERSIONS.detail, implementation: "implemented" }),
-  reference: Object.freeze({ version: VERSIONS.reference, implementation: "future_unimplemented" }),
+  reference: Object.freeze({ version: VERSIONS.reference, implementation: "implemented" }),
   failure: Object.freeze({ version: VERSIONS.failure, implementation: "implemented" }),
 });
 

@@ -23,8 +23,8 @@ ok("intake contract is implemented", contracts.WIRE_CONTRACTS.intake.implementat
 for (const name of ["confirmation", "write_receipt", "standing", "detail"]) {
   ok(`${name} is implemented`, contracts.WIRE_CONTRACTS[name].implementation === "implemented");
 }
-ok("HTTP reference opening remains explicitly future",
-  contracts.WIRE_CONTRACTS.reference.implementation === "future_unimplemented");
+ok("HTTP reference opening is implemented",
+  contracts.WIRE_CONTRACTS.reference.implementation === "implemented");
 
 const proposal = reader.propose("ordinary correspondence");
 ok("proposal validator accepts the live reader", contracts.validateProposal(proposal) === proposal);
