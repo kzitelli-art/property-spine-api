@@ -127,6 +127,24 @@ const REGISTRY = {
             "amounts, next milestone, filing and payment standing — with the " +
             "§40.5 walls preserved (escrow funded ≠ City paid, filed ≠ paid).",
   },
+  //  ⚠ DEBT DECLARED ITSELF. Nobody remembered to add this — the gate went
+  //  red the moment debt_position_read.js landed, which is the entire point
+  //  of discovering domains from disk rather than from a list. The rule
+  //  worked before anyone had to obey it.
+  //
+  //  `pending` is honest here and is NOT weakening the rule: Debt Build 1
+  //  deliberately stops at the canonical read, and W1–W9 are proven against
+  //  position() rather than against a conversation. Debt cannot claim
+  //  domain-level done until this reads `registered` and the gate proves an
+  //  actual gather. Do not wire Ask Spine early merely to improve this count.
+  debt: {
+    state: "pending",
+    owner: "asset management",
+    clears: "Ask Spine gathers the governed Debt standing projection with the " +
+            "Debt truth walls preserved (principal ≠ payoff, scheduled ≠ paid, " +
+            "maturity ≠ extension, observed ≠ projected, debt service ≠ total " +
+            "draft) and entitlement applied before model context.",
+  },
 };
 
 /*  ══ IS A DOMAIN ACTUALLY GATHERED? ═════════════════════════════════
