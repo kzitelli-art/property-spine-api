@@ -16,13 +16,15 @@ function rejects(label, fn) {
   ok(label, rejected);
 }
 
-console.log("COMPLIANCE CONTRACTS - exact wires, future surfaces marked");
+console.log("COMPLIANCE CONTRACTS - exact wires and implementation state");
 
 ok("proposal contract is implemented", contracts.WIRE_CONTRACTS.proposal.implementation === "implemented");
 ok("intake contract is implemented", contracts.WIRE_CONTRACTS.intake.implementation === "implemented");
-for (const name of ["confirmation", "write_receipt", "standing", "detail", "reference"]) {
-  ok(`${name} is explicitly future`, contracts.WIRE_CONTRACTS[name].implementation === "future_unimplemented");
+for (const name of ["confirmation", "write_receipt", "standing", "detail"]) {
+  ok(`${name} is implemented`, contracts.WIRE_CONTRACTS[name].implementation === "implemented");
 }
+ok("HTTP reference opening remains explicitly future",
+  contracts.WIRE_CONTRACTS.reference.implementation === "future_unimplemented");
 
 const proposal = reader.propose("ordinary correspondence");
 ok("proposal validator accepts the live reader", contracts.validateProposal(proposal) === proposal);

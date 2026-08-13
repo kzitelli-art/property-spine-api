@@ -18,10 +18,10 @@ const VERSIONS = Object.freeze({
 const WIRE_CONTRACTS = Object.freeze({
   proposal: Object.freeze({ version: VERSIONS.proposal, implementation: "implemented" }),
   intake: Object.freeze({ version: VERSIONS.intake, implementation: "implemented" }),
-  confirmation: Object.freeze({ version: VERSIONS.confirmation, implementation: "future_unimplemented" }),
-  write_receipt: Object.freeze({ version: VERSIONS.write_receipt, implementation: "future_unimplemented" }),
-  standing: Object.freeze({ version: VERSIONS.standing, implementation: "future_unimplemented" }),
-  detail: Object.freeze({ version: VERSIONS.detail, implementation: "future_unimplemented" }),
+  confirmation: Object.freeze({ version: VERSIONS.confirmation, implementation: "implemented" }),
+  write_receipt: Object.freeze({ version: VERSIONS.write_receipt, implementation: "implemented" }),
+  standing: Object.freeze({ version: VERSIONS.standing, implementation: "implemented" }),
+  detail: Object.freeze({ version: VERSIONS.detail, implementation: "implemented" }),
   reference: Object.freeze({ version: VERSIONS.reference, implementation: "future_unimplemented" }),
   failure: Object.freeze({ version: VERSIONS.failure, implementation: "implemented" }),
 });
