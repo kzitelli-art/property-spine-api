@@ -25,22 +25,43 @@ tests/fixtures/meeting_transcript_specimen.txt   structural fixture (see §6)
 
 ## 2. The Eight Questions (§31)
 
-1. **Real-world fact recorded** — a meeting happened on a date, and these
+1. **What will an authorized person ASK, and what must be recorded for that to
+   be answerable?** — *"What did Rob say about 527?"* · *"What did we decide
+   about the roommate share?"* · *"Did anyone raise the elevator?"* For those to
+   be answerable, Spine must hold the exact words, in order, with the speaker
+   label as written and a time within the meeting — which is precisely what this
+   slice records and nothing more.
+
+   **Capability classes claimed** (§40.10):
+
+   ```text
+   retrieval    CLAIMED as the target of the next slice — quote the
+                passages that answer a question about one meeting
+   comparison   NOT CLAIMED. "What do we usually decide about roommate
+                shares?" needs a basis across meetings that nobody recorded
+   causal       NOT CLAIMED. "Why did we approve the concession?" requires
+                recorded causal linkage this slice does not create
+   ```
+
+   Nothing is claimed today: **storage only.** A stored meeting is not
+   answerable, and the surface says so in words.
+
+2. **Real-world fact recorded** — a meeting happened on a date, and these
    people said these words in this order.
-2. **Canonical service** — `meeting_transcript_service.ingest`. It is the only
+3. **Canonical service** — `meeting_transcript_service.ingest`. It is the only
    writer of `meeting_transcript_segments`, and it writes nothing else.
-3. **Actor and scope** — a staff session. `property_id` and `uploaded_by_user_id`
+4. **Actor and scope** — a staff session. `property_id` and `uploaded_by_user_id`
    are both server-derived; neither is readable from the request.
-4. **Durable object** — one `source_artifacts` row (`artifact_kind =
+5. **Durable object** — one `source_artifacts` row (`artifact_kind =
    'meeting_transcript'`) and N `meeting_transcript_segments` rows.
-5. **Immutable history** — the segments *are* the history. UPDATE and DELETE are
+6. **Immutable history** — the segments *are* the history. UPDATE and DELETE are
    refused by a database trigger (`mts_immutable`), same mechanism as
    `lcoe_append_only` in 069.
-6. **What else reads it** — **nothing, deliberately.** No surface consumes this
+7. **What else reads it** — **nothing, deliberately.** No surface consumes this
    yet. That is the slice boundary, not an omission.
-7. **Missing data** — a transcript with no meeting date is refused. A file that
+8. **Missing data** — a transcript with no meeting date is refused. A file that
    cannot be fully parsed is refused whole and writes nothing.
-8. **Classification** — see §5.
+9. **Classification** — see §5.
 
 ## 3. What the storage model refuses
 
@@ -224,3 +245,41 @@ introduce that schema in the same commit, and pin it with an assertion that the
 model's reply has no text-bearing field. Shipping retrieval with the rule as a
 prompt instruction would be §42's own stated failure mode, and migration 092's
 lesson repeated: a contract at the read layer, unbacked at the storage layer.
+
+## 12. What the §40 doctrine update changes here
+
+**No code changes.** The parser, the service, the ingest door, the migration and
+the app surface are all unaffected — storage was already built to these rules.
+What changes is what the *retrieval* slice may assume, and three things are now
+pre-decided that were open before.
+
+**Transcript-only answers are safe. Mixed answers are the unsolved problem
+(§40.8).** The owner's ruling was to add one mechanically typed source to
+`gatherFacts`. That remains right for an answer built from a transcript alone.
+But the §40.4 worked example — *"Spine does not have a confirmed City payment.
+In Tuesday's meeting, John said he believed they had been"* — is a **composed**
+answer: a governed read and a transcript claim in one sentence. §40.8 now names
+composition as unsolved, so the retrieval slice must **say which of the two it
+does**, and must not drift from the first into the second because the plumbing
+allowed it.
+
+Meetings are the highest-risk composition case in the product: one passage can
+carry occupancy truth and a resident's hospitalisation in the same breath, so a
+composed answer inherits the most restrictive input or it discloses something no
+single domain would.
+
+**There is no "meeting agent" (§40.3).** A meeting is a *source*, not a role.
+Role profiles vary ranking and compression; they do not get their own retrieval
+paths, their own entitlement, or their own copy of the quote rule. If meeting
+retrieval ever needs logic the UI would not need, that logic is missing from the
+Spine, not owed to an agent.
+
+**The Tenant Agent gets zero access to meeting evidence.** It is now a reserved
+name and a different audience. Staff meeting transcripts discuss residents; a
+resident-facing surface reading them is the §13 surveillance record and the §43
+audience failure at once. Stated now, while it costs nothing.
+
+**Capability class, restated for the next slice.** Retrieval over ONE meeting is
+what the next slice may claim. Cross-meeting *comparison* — *"what do we usually
+decide about roommate shares?"* — is a different class under §40.10 and needs a
+basis nobody has recorded. Say which shipped.
