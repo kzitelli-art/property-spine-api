@@ -27,7 +27,7 @@ async function main() {
     utility_service_declarations: [{ id: "dec-electric", property_id: PROPERTY,
       service_id: "svc-electric", applicability: "present", effective_from: "2026-01-01",
       provenance_note: "confirmed" }],
-    utility_providers: [{ id: "provider-peco", property_id: PROPERTY, provider_name: "PECO" }],
+    utility_providers: [{ id: "provider-peco", provider_name: "PECO" }],
     utility_service_providers: [{ id: "sp-1", property_id: PROPERTY,
       service_id: "svc-electric", provider_id: "provider-peco", effective_from: "2026-01-01",
       provenance_note: "statement" }],
@@ -47,9 +47,15 @@ async function main() {
     assert.deepStrictEqual(calls.map((c) => c.table).sort(),
       Object.values(read.TABLES).sort());
   });
-  ok("every SELECT scopes property in SQL and binds only server property", () => {
+  ok("every SELECT derives provider or row scope in SQL and binds only server property", () => {
     for (const call of calls) {
-      assert(/where property_id = \$1/i.test(call.sql), call.sql);
+      if (call.table === "utility_providers") {
+        assert(/utility_service_providers[\s\S]*sp\.property_id = \$1/i.test(call.sql), call.sql);
+        assert(/utility_provider_accounts[\s\S]*a\.property_id = \$1/i.test(call.sql), call.sql);
+        assert(/utility_meters[\s\S]*m\.property_id = \$1/i.test(call.sql), call.sql);
+      } else {
+        assert(/where property_id = \$1/i.test(call.sql), call.sql);
+      }
       assert.deepStrictEqual(call.params, [PROPERTY]);
     }
   });
@@ -75,8 +81,20 @@ async function main() {
     assert(/requires property_id/.test(missing.message));
   });
 
+  const foreignRows = { ...rows,
+    utility_provider_accounts: [{ id: "foreign-account", property_id: "property-b",
+      provider_id: "provider-peco", external_account_identifier: "FOREIGN-9999",
+      effective_from: "2026-01-01" }] };
+  let foreign = null;
+  try {
+    await read.readDetail(fakeClient(foreignRows, []), { property_id: PROPERTY });
+  } catch (e) { foreign = e; }
+  ok("a foreign-property adapter row is refused rather than entering detail", () => {
+    assert(foreign);
+    assert.strictEqual(foreign.code, "PROPERTY_SCOPE_VIOLATION");
+  });
+
   console.log(`\n${pass} assertions passed\n`);
 }
 
 main().catch((error) => { console.error(error); process.exit(1); });
-

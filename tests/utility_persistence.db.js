@@ -3,14 +3,11 @@
 const fs = require("fs");
 const path = require("path");
 const { Pool } = require("pg");
+const receipt = require("./_run_receipt.js");
 const utility = require("../src/asset/utility_service.js");
-const projection = require("../src/asset/utility_projection.js");
+const positionRead = require("../src/asset/utility_position_read.js");
 
-const DB = process.env.DATABASE_URL;
-if (!DB) {
-  console.error("UTILITY PERSISTENCE NOT PROVEN: DATABASE_URL is required");
-  process.exit(2);
-}
+const DB = receipt.harnessConnectionString();
 
 let pass = 0;
 let fail = 0;
@@ -30,31 +27,8 @@ function sqlName(prefix) {
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
 }
 
-async function snapshot(client, propertyId) {
-  const tables = {
-    services: "utility_services",
-    declarations: "utility_service_declarations",
-    providers: "utility_providers",
-    service_providers: "utility_service_providers",
-    arrangements: "utility_arrangements",
-    accounts: "utility_provider_accounts",
-    account_services: "utility_account_services",
-    service_points: "utility_service_points",
-    meters: "utility_meters",
-    meter_service_points: "utility_meter_service_points",
-    account_service_points: "utility_account_service_points",
-    account_meters: "utility_account_meters",
-    statements: "utility_statements",
-    statement_usage: "utility_statement_usage",
-  };
-  const out = { property_id: propertyId };
-  for (const [key, table] of Object.entries(tables)) {
-    out[key] = (await client.query(`select * from ${table} where property_id = $1`, [propertyId])).rows;
-  }
-  return out;
-}
-
 async function main() {
+  receipt.begin(__filename, { url: DB });
   const pool = new Pool({ connectionString: DB });
   const admin = await pool.connect();
   const schema = sqlName("utility_proof");
@@ -87,6 +61,11 @@ async function main() {
         source_as_of_date date,
         constraint source_artifacts_artifact_kind_check
           check (artifact_kind in ('rent_roll','other'))
+      );
+      create table vendors (
+        id uuid primary key default gen_random_uuid(),
+        canonical_name text not null,
+        vendor_type text not null default 'vendor'
       );
     `);
 
@@ -148,17 +127,51 @@ async function main() {
       property_id: propertyA, provider_name: "PECO",
       provenance_note: "provider named on statement", user_id: userId,
     });
+    const electricB = await utility.declareService(admin, {
+      property_id: propertyB, service_class: "electricity", applicability: "present",
+      effective_from: "2026-01-01", provenance_note: "operator confirmed from account file",
+      user_id: userId,
+    });
+    const samePeco = await utility.establishProvider(admin, {
+      property_id: propertyB, provider_name: " peco ",
+      source_artifact_id: artifactB, user_id: userId,
+    });
+    ok("the same PECO name resolves to one portfolio provider identity",
+      samePeco.id === peco.id
+      && Number((await admin.query("select count(*) as n from utility_providers")).rows[0].n) === 1);
+    ok("provider establishment creates no Money vendor or payee assertion",
+      Number((await admin.query("select count(*) as n from vendors")).rows[0].n) === 0);
+
     await utility.relateProvider(admin, {
       property_id: propertyA, service_id: electric.service.id, provider_id: peco.id,
       effective_from: "2026-01-01", provenance_note: "provider named on statement", user_id: userId,
+    });
+    await utility.relateProvider(admin, {
+      property_id: propertyB, service_id: electricB.service.id, provider_id: peco.id,
+      effective_from: "2026-01-01", source_artifact_id: artifactB, user_id: userId,
+    });
+    await rejects("not-applicable service cannot acquire active provider topology", () =>
+      utility.relateProvider(admin, {
+        property_id: propertyA, service_id: gasInitial.service.id, provider_id: peco.id,
+        effective_from: "2026-01-01", provenance_note: "hostile topology",
+        user_id: userId,
+      }), /not-applicable|active topology/i);
+    await utility.recordArrangement(admin, {
+      property_id: propertyA, service_id: electric.service.id,
+      physical_arrangement: "mixed", provider_bill_recipient: "property",
+      provider_responsible_party: "property", economic_responsibility: "property",
+      resident_recovery_method: "none_property_absorbs",
+      resident_payment_recipient: "not_applicable", effective_from: "2026-01-01",
+      effective_to: "2026-07-01",
+      provenance_note: "operator confirmed from utility addendum", user_id: userId,
     });
     await utility.recordArrangement(admin, {
       property_id: propertyA, service_id: electric.service.id,
       physical_arrangement: "mixed", provider_bill_recipient: "property",
       provider_responsible_party: "property", economic_responsibility: "shared",
       resident_recovery_method: "rubs_allocation", billing_administrator_name: "Conservice",
-      resident_payment_recipient: "property", effective_from: "2026-01-01",
-      provenance_note: "operator confirmed from utility addendum", user_id: userId,
+      resident_payment_recipient: "property", effective_from: "2026-07-01",
+      provenance_note: "new resident recovery arrangement", user_id: userId,
     });
 
     const account = await utility.establishAccount(admin, {
@@ -167,10 +180,31 @@ async function main() {
       service_address: "Property A", effective_from: "2026-01-01",
       source_artifact_id: artifactA, user_id: userId,
     });
+    const accountB = await utility.establishAccount(admin, {
+      property_id: propertyB, provider_id: peco.id,
+      external_account_identifier: "4800104651234", billing_cadence: "monthly",
+      service_address: "Property B", effective_from: "2026-01-01",
+      source_artifact_id: artifactB, user_id: userId,
+    });
     await utility.link(admin, "account_service", {
       property_id: propertyA, left_id: account.id, right_id: electric.service.id,
       effective_from: "2026-01-01", source_artifact_id: artifactA, user_id: userId,
     });
+    await utility.link(admin, "account_service", {
+      property_id: propertyB, left_id: accountB.id, right_id: electricB.service.id,
+      effective_from: "2026-01-01", source_artifact_id: artifactB, user_id: userId,
+    });
+    await rejects("duplicate provider account identity is rejected within one property", () =>
+      utility.establishAccount(admin, {
+        property_id: propertyA, provider_id: peco.id,
+        external_account_identifier: "4800104651234", effective_from: "2026-02-01",
+        provenance_note: "hostile duplicate", user_id: userId,
+      }), /unique|duplicate/i);
+    await rejects("account cannot map to a service its provider does not supply", () =>
+      utility.link(admin, "account_service", {
+        property_id: propertyA, left_id: account.id, right_id: gasInitial.service.id,
+        effective_from: "2026-01-01", provenance_note: "hostile mismatch", user_id: userId,
+      }), /provider must supply|not-applicable/i);
 
     const commonPoint = await utility.recordServicePoint(admin, {
       property_id: propertyA, service_id: electric.service.id, point_kind: "common_area",
@@ -182,6 +216,15 @@ async function main() {
       unit_id: unitA, location_label: "Unit 506", effective_from: "2026-01-01",
       provenance_note: "operator confirmed meter schedule", user_id: userId,
     });
+    const pointB = await utility.recordServicePoint(admin, {
+      property_id: propertyB, service_id: electricB.service.id, point_kind: "unit",
+      unit_id: unitB, location_label: "Unit 101", effective_from: "2026-01-01",
+      source_artifact_id: artifactB, user_id: userId,
+    });
+    await utility.link(admin, "account_service_point", {
+      property_id: propertyB, left_id: accountB.id, right_id: pointB.id,
+      effective_from: "2026-01-01", source_artifact_id: artifactB, user_id: userId,
+    });
     const providerMeter = await utility.recordMeter(admin, {
       property_id: propertyA, provider_id: peco.id, meter_kind: "provider_meter",
       meter_identifier: "99887766", effective_from: "2026-01-01",
@@ -192,7 +235,13 @@ async function main() {
       meter_identifier: "SUB-506", effective_from: "2026-01-01",
       provenance_note: "submeter schedule", user_id: userId,
     });
-    for (const [meterId, pointId] of [[providerMeter.id, commonPoint.id], [submeter.id, unitPoint.id]]) {
+    const submeterTwo = await utility.recordMeter(admin, {
+      property_id: propertyA, meter_kind: "internal_submeter",
+      meter_identifier: "SUB-507", effective_from: "2026-01-01",
+      provenance_note: "submeter schedule", user_id: userId,
+    });
+    for (const [meterId, pointId] of [[providerMeter.id, commonPoint.id],
+      [submeter.id, unitPoint.id], [submeterTwo.id, unitPoint.id]]) {
       await utility.link(admin, "meter_service_point", {
         property_id: propertyA, left_id: meterId, right_id: pointId,
         effective_from: "2026-01-01", provenance_note: "operator confirmed topology",
@@ -207,9 +256,49 @@ async function main() {
       property_id: propertyA, left_id: account.id, right_id: commonPoint.id,
       effective_from: "2026-01-01", source_artifact_id: artifactA, user_id: userId,
     });
-    ok("provider account, service points, provider meter, and submeter persist separately",
+    ok("master provider account, service points, provider meter, and several submeters persist separately",
       account.id !== providerMeter.id && providerMeter.id !== submeter.id
-      && commonPoint.id !== providerMeter.id);
+      && submeter.id !== submeterTwo.id && commonPoint.id !== providerMeter.id);
+
+    const water = await utility.declareService(admin, {
+      property_id: propertyA, service_class: "water", applicability: "present",
+      effective_from: "2026-01-01", provenance_note: "combined municipal account",
+      user_id: userId,
+    });
+    const sewer = await utility.declareService(admin, {
+      property_id: propertyA, service_class: "sewer", applicability: "present",
+      effective_from: "2026-01-01", provenance_note: "combined municipal account",
+      user_id: userId,
+    });
+    const cityUtility = await utility.establishProvider(admin, {
+      property_id: propertyA, provider_name: "City Utility",
+      provenance_note: "combined water and sewer statement", user_id: userId,
+    });
+    for (const service of [water.service, sewer.service]) {
+      await utility.relateProvider(admin, {
+        property_id: propertyA, service_id: service.id, provider_id: cityUtility.id,
+        effective_from: "2026-01-01", provenance_note: "combined statement",
+        user_id: userId,
+      });
+    }
+    const combinedAccount = await utility.establishAccount(admin, {
+      property_id: propertyA, provider_id: cityUtility.id,
+      external_account_identifier: "CITY-7788", effective_from: "2026-01-01",
+      source_artifact_id: artifactA, user_id: userId,
+    });
+    for (const service of [water.service, sewer.service]) {
+      await utility.link(admin, "account_service", {
+        property_id: propertyA, left_id: combinedAccount.id, right_id: service.id,
+        effective_from: "2026-01-01", source_artifact_id: artifactA, user_id: userId,
+      });
+    }
+    ok("one provider account can map to combined water and sewer without a fake meter",
+      Number((await admin.query(
+        "select count(*) as n from utility_account_services where account_id=$1",
+        [combinedAccount.id])).rows[0].n) === 2
+      && Number((await admin.query(
+        "select count(*) as n from utility_account_meters where account_id=$1",
+        [combinedAccount.id])).rows[0].n) === 0);
 
     const bill = await utility.recordStatement(admin, {
       property_id: propertyA, account_id: account.id, statement_identifier: "2026-07-PECO",
@@ -275,23 +364,63 @@ async function main() {
       service_period_end: "2026-07-31", currency_code: "USD",
       amount_billed_cents: 1, source_artifact_id: artifactB, user_id: userId,
     }), /SOURCE_SCOPE_MISMATCH|same property/i);
+    await rejects("statement cannot attach to another property's account", () =>
+      utility.recordStatement(admin, {
+        property_id: propertyB, account_id: account.id, statement_identifier: "wrong-account",
+        bill_date: "2026-08-01", service_period_start: "2026-07-01",
+        service_period_end: "2026-07-31", currency_code: "USD",
+        amount_billed_cents: 1, source_artifact_id: artifactB, user_id: userId,
+      }), /NOT_FOUND|not found/i);
 
-    const state = projection.project(await snapshot(admin, propertyA), { as_of: "2026-08-13" });
+    const beforeRecovery = await positionRead.readPosition(admin,
+      { property_id: propertyA, as_of: "2026-06-30" });
+    const state = await positionRead.readPosition(admin,
+      { property_id: propertyA, as_of: "2026-08-13" });
+    const stateB = await positionRead.readPosition(admin,
+      { property_id: propertyB, as_of: "2026-08-13" });
     const electricView = state.detail.services.find((s) => s.service_class === "electricity");
+    const electricViewB = stateB.detail.services.find((s) => s.service_class === "electricity");
     const gasView = state.detail.services.find((s) => s.service_class === "natural_gas");
     ok("persisted correction reads natural gas as not applicable",
       gasView.applicability.value === "not_applicable");
+    ok("absence remains NOT_ESTABLISHED rather than a fake negative declaration",
+      state.detail.services.find((s) => s.service_class === "internet_data")
+        .applicability.truth_state === "NOT_ESTABLISHED");
+    ok("effective dating gives the correct arrangement at each as-of date",
+      beforeRecovery.detail.services.find((s) => s.service_class === "electricity")
+        .arrangement.resident_recovery_method === "none_property_absorbs"
+      && electricView.arrangement.resident_recovery_method === "rubs_allocation");
     ok("persisted account identifier leaves the projection masked",
       electricView.accounts[0].account_identifier_masked.endsWith("1234")
       && !JSON.stringify(state).includes("4800104651234"));
-    ok("persisted provider meter and internal submeter remain different kinds",
+    ok("persisted provider meter and several internal submeters remain different kinds",
       electricView.meters.some((m) => m.kind === "provider_meter")
-      && electricView.meters.some((m) => m.kind === "internal_submeter"));
+      && electricView.meters.filter((m) => m.kind === "internal_submeter").length === 2);
+    ok("a meter and service point may remain established while account mapping is unresolved",
+      electricView.meters.some((m) => m.kind === "internal_submeter"
+        && m.serves.some((point) => point.label === "Unit 506"))
+      && electricView.accounts[0].meters.every((m) => m.kind !== "internal_submeter"));
+    ok("the same provider has isolated accounts and points at each property",
+      electricView.providers[0].name === "PECO"
+      && electricViewB.providers[0].name === "PECO"
+      && electricView.accounts[0].serves.some((point) => point.label === "Common areas")
+      && electricViewB.accounts[0].serves.some((point) => point.label === "Unit 101")
+      && !JSON.stringify(state).includes("Unit 101")
+      && !JSON.stringify(stateB).includes("Common areas"));
+    ok("a provider account with no meter remains a valid independent account",
+      electricViewB.accounts.length === 1 && electricViewB.accounts[0].meters.length === 0);
+    ok("combined water and sewer read through the same account identity",
+      state.detail.services.find((s) => s.service_class === "water").accounts[0].id
+      === state.detail.services.find((s) => s.service_class === "sewer").accounts[0].id);
     ok("persisted provider statement does not establish payment",
       electricView.payment.truth_state === "NOT_ESTABLISHED");
     ok("resident recovery remains an arrangement, not a collection",
       electricView.arrangement.resident_recovery_method === "rubs_allocation"
       && !Object.prototype.hasOwnProperty.call(state.detail, "resident_collections"));
+    ok("source evidence remains attributable to the property account",
+      (await admin.query(
+        "select source_artifact_id from utility_provider_accounts where id=$1", [account.id]))
+        .rows[0].source_artifact_id === artifactA);
 
     const forbiddenColumns = (await admin.query(`
       select table_name,column_name from information_schema.columns
@@ -322,11 +451,11 @@ async function main() {
     await pool.end();
   }
 
-  console.log(`\n${pass + fail} assertions - ${pass} passed - ${fail} failed\n`);
-  process.exit(fail ? 1 : 0);
+  process.exit(receipt.complete({
+    harness: __filename, passed: pass, failed: fail, expectedAtLeast: 20,
+  }));
 }
 
 main().catch((error) => {
-  console.error(error);
-  process.exit(1);
+  process.exit(receipt.died(__filename, error, pass + fail));
 });

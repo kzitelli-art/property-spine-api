@@ -305,7 +305,12 @@ function project(snapshot = {}, { as_of = null } = {}) {
       })),
       meters: serviceMeters.map((m) => ({
         id: m.id, kind: m.meter_kind,
-        identifier_masked: maskIdentifier(m.meter_identifier), evidence: sourceOf(m),
+        identifier_masked: maskIdentifier(m.meter_identifier),
+        serves: linksFor(meterPoints, "meter_id", m.id)
+          .map((link) => pointById.get(link.service_point_id)).filter(Boolean)
+          .map((point) => ({ id: point.id, kind: point.point_kind,
+            label: point.location_label || null })),
+        evidence: sourceOf(m),
       })),
       latest_statement: latest,
       payment,
@@ -423,4 +428,3 @@ function statementView(row, usageRows, meterById) {
 }
 
 module.exports = { project, day, activeAt, heads, maskIdentifier };
-

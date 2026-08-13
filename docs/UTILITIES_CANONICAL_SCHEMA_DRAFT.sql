@@ -54,23 +54,27 @@ create unique index utility_service_declarations_one_successor
 create index utility_service_declarations_position
   on utility_service_declarations(property_id, service_id, effective_from);
 
--- Property-scoped provider role, not a second portfolio-wide vendor master.
--- `vendors` means a payee learned from accounting/bank evidence. A utility
--- provider exists even when residents pay it directly and the property never
--- has a payee relationship with it.
+-- Portfolio provider identity, owned by Utilities and deliberately narrower
+-- than either a legal entity or a Money vendor. `provider_name` is the name by
+-- which a source identifies the service provider. It does not assert a
+-- formation-document legal name, vendor status, payee status, or a payment
+-- relationship. Property truth begins in utility_service_providers below.
+--
+-- This table is portfolio-scoped because PECO does not become a second
+-- provider when it supplies another property. The relationship, accounts,
+-- service points, meters, statements, and evidence exposed by a property read
+-- remain property-scoped.
 create table utility_providers (
   id                    uuid primary key default gen_random_uuid(),
-  property_id           uuid not null references properties(id) on delete restrict,
   provider_name         text not null check (nullif(btrim(provider_name), '') is not null),
   source_artifact_id    uuid references source_artifacts(id),
   provenance_note       text,
   recorded_by_user_id   uuid not null references users(id),
   recorded_at           timestamptz not null default now(),
-  check (source_artifact_id is not null or nullif(btrim(provenance_note), '') is not null),
-  unique (id, property_id)
+  check (source_artifact_id is not null or nullif(btrim(provenance_note), '') is not null)
 );
-create unique index utility_providers_property_name
-  on utility_providers(property_id, lower(provider_name));
+create unique index utility_providers_normalized_name
+  on utility_providers(lower(btrim(provider_name)));
 
 create table utility_service_providers (
   id                    uuid primary key default gen_random_uuid(),
@@ -85,8 +89,8 @@ create table utility_service_providers (
   recorded_at           timestamptz not null default now(),
   foreign key (service_id, property_id)
     references utility_services(id, property_id) on delete restrict,
-  foreign key (provider_id, property_id)
-    references utility_providers(id, property_id) on delete restrict,
+  foreign key (provider_id)
+    references utility_providers(id) on delete restrict,
   check (effective_to is null or effective_to > effective_from),
   check (source_artifact_id is not null or nullif(btrim(provenance_note), '') is not null),
   unique (service_id, provider_id, effective_from),
@@ -177,8 +181,8 @@ create table utility_meters (
   provenance_note       text,
   recorded_by_user_id   uuid not null references users(id),
   recorded_at           timestamptz not null default now(),
-  foreign key (provider_id, property_id)
-    references utility_providers(id, property_id) on delete restrict,
+  foreign key (provider_id)
+    references utility_providers(id) on delete restrict,
   check (effective_to is null or effective_to > effective_from),
   check (source_artifact_id is not null or nullif(btrim(provenance_note), '') is not null),
   check (meter_kind <> 'provider_meter' or provider_id is not null),
@@ -201,11 +205,11 @@ create table utility_provider_accounts (
   provenance_note             text,
   recorded_by_user_id         uuid not null references users(id),
   recorded_at                 timestamptz not null default now(),
-  foreign key (provider_id, property_id)
-    references utility_providers(id, property_id) on delete restrict,
+  foreign key (provider_id)
+    references utility_providers(id) on delete restrict,
   check (effective_to is null or effective_to > effective_from),
   check (source_artifact_id is not null or nullif(btrim(provenance_note), '') is not null),
-  unique (property_id, provider_id, external_account_identifier, effective_from),
+  unique (property_id, provider_id, external_account_identifier),
   unique (id, property_id)
 );
 
@@ -350,6 +354,108 @@ create table utility_statement_usage (
     references utility_meters(id, property_id) on delete restrict
 );
 
+-- An account can cover several services, but only when its provider is also a
+-- provider of each service for the overlapping period. This keeps a PECO
+-- account from being attached to a water service merely because both records
+-- belong to the same property.
+create or replace function utility_account_service_provider_guard() returns trigger
+language plpgsql as $$
+declare
+  account_provider_id uuid;
+begin
+  select provider_id into account_provider_id
+    from utility_provider_accounts
+   where id = new.account_id and property_id = new.property_id;
+
+  if not exists (
+    select 1 from utility_service_providers
+     where property_id = new.property_id
+       and service_id = new.service_id
+       and provider_id = account_provider_id
+       and effective_from < coalesce(new.effective_to, 'infinity'::date)
+       and coalesce(effective_to, 'infinity'::date) > new.effective_from
+  ) then
+    raise exception 'utility account provider must supply the mapped service for the effective period';
+  end if;
+  return new;
+end $$;
+create trigger utility_account_service_provider_guard
+  before insert or update on utility_account_services
+  for each row execute function utility_account_service_provider_guard();
+
+-- NOT_APPLICABLE is explicit negative truth, not a display label. A current
+-- not-applicable declaration and active service topology cannot both be true
+-- over the same dates. Correcting the declaration to present preserves the old
+-- row but removes it from the current head set, after which topology may begin.
+create or replace function utility_topology_not_applicable_guard() returns trigger
+language plpgsql as $$
+begin
+  if exists (
+    select 1 from utility_service_declarations d
+     where d.property_id = new.property_id
+       and d.service_id = new.service_id
+       and d.applicability = 'not_applicable'
+       and not exists (select 1 from utility_service_declarations successor
+                        where successor.supersedes_id = d.id)
+       and d.effective_from < coalesce(new.effective_to, 'infinity'::date)
+       and coalesce(d.effective_to, 'infinity'::date) > new.effective_from
+  ) then
+    raise exception 'a not-applicable utility service cannot have active topology';
+  end if;
+  return new;
+end $$;
+
+do $$
+declare table_name text;
+begin
+  foreach table_name in array array[
+    'utility_service_providers', 'utility_arrangements',
+    'utility_service_points', 'utility_account_services'
+  ] loop
+    execute format('create trigger %I before insert or update on %I '
+      'for each row execute function utility_topology_not_applicable_guard()',
+      table_name || '_not_applicable_guard', table_name);
+  end loop;
+end $$;
+
+create or replace function utility_declaration_topology_guard() returns trigger
+language plpgsql as $$
+declare
+  topology_exists boolean;
+begin
+  if new.applicability <> 'not_applicable' then return new; end if;
+
+  select exists (
+    select 1 from utility_service_providers t
+     where t.property_id = new.property_id and t.service_id = new.service_id
+       and t.effective_from < coalesce(new.effective_to, 'infinity'::date)
+       and coalesce(t.effective_to, 'infinity'::date) > new.effective_from
+    union all
+    select 1 from utility_arrangements t
+     where t.property_id = new.property_id and t.service_id = new.service_id
+       and t.effective_from < coalesce(new.effective_to, 'infinity'::date)
+       and coalesce(t.effective_to, 'infinity'::date) > new.effective_from
+    union all
+    select 1 from utility_service_points t
+     where t.property_id = new.property_id and t.service_id = new.service_id
+       and t.effective_from < coalesce(new.effective_to, 'infinity'::date)
+       and coalesce(t.effective_to, 'infinity'::date) > new.effective_from
+    union all
+    select 1 from utility_account_services t
+     where t.property_id = new.property_id and t.service_id = new.service_id
+       and t.effective_from < coalesce(new.effective_to, 'infinity'::date)
+       and coalesce(t.effective_to, 'infinity'::date) > new.effective_from
+  ) into topology_exists;
+
+  if topology_exists then
+    raise exception 'a not-applicable utility service cannot have active topology';
+  end if;
+  return new;
+end $$;
+create trigger utility_declaration_topology_guard
+  before insert or update on utility_service_declarations
+  for each row execute function utility_declaration_topology_guard();
+
 -- Usage belongs to a statement's account map. A statement may carry usage
 -- without a meter when that association is not established; when it names a
 -- meter, that meter must overlap the account during the service period.
@@ -437,7 +543,7 @@ do $$
 declare table_name text;
 begin
   foreach table_name in array array[
-    'utility_service_declarations', 'utility_providers', 'utility_service_providers',
+    'utility_service_declarations', 'utility_service_providers',
     'utility_arrangements', 'utility_service_points', 'utility_meters',
     'utility_provider_accounts', 'utility_account_services',
     'utility_meter_service_points', 'utility_account_service_points',

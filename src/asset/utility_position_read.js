@@ -27,11 +27,32 @@ async function readSnapshot(client, { property_id } = {}) {
   requireProperty(property_id);
   const snapshot = { property_id };
 
-  // Every table carries property_id by construction. The reader never loads a
-  // portfolio bag and filters in JavaScript; authority stays in each SELECT.
+  // Provider identity is portfolio-wide, but the reader admits only providers
+  // referenced by this property's service relationships, accounts, or meters.
+  // Every other table carries property_id directly. No portfolio bag is ever
+  // loaded and filtered in JavaScript.
   for (const [key, table] of Object.entries(TABLES)) {
-    snapshot[key] = (await client.query(
+    if (key === "providers") {
+      snapshot[key] = (await client.query(
+        `select p.id, p.provider_name
+           from utility_providers p
+          where exists (select 1 from utility_service_providers sp
+                         where sp.provider_id = p.id and sp.property_id = $1)
+             or exists (select 1 from utility_provider_accounts a
+                         where a.provider_id = p.id and a.property_id = $1)
+             or exists (select 1 from utility_meters m
+                         where m.provider_id = p.id and m.property_id = $1)`,
+        [property_id])).rows;
+      continue;
+    }
+    const rows = (await client.query(
       `select * from ${table} where property_id = $1`, [property_id])).rows;
+    if (rows.some((row) => String(row.property_id) !== String(property_id))) {
+      const error = new Error(`utility_position_read received a foreign-property row from ${table}`);
+      error.code = "PROPERTY_SCOPE_VIOLATION";
+      throw error;
+    }
+    snapshot[key] = rows;
   }
   return snapshot;
 }
@@ -61,4 +82,3 @@ module.exports = {
   readStanding,
   readDetail,
 };
-

@@ -59,13 +59,20 @@ async function assertArtifact(client, propertyId, artifactId) {
 
 async function assertOwned(client, table, id, propertyId, label) {
   const allowed = new Set([
-    "utility_services", "utility_providers", "utility_provider_accounts",
+    "utility_services", "utility_provider_accounts",
     "utility_service_points", "utility_meters", "utility_statements",
   ]);
   if (!allowed.has(table)) throw new Error("utility_service assertOwned table is not allowlisted");
   const row = (await client.query(
     `select * from ${table} where id = $1 and property_id = $2`, [id, propertyId])).rows[0];
   if (!row) throw utilityError("NOT_FOUND", `${label} not found for this property`);
+  return row;
+}
+
+async function assertProvider(client, providerId) {
+  const row = (await client.query(
+    "select id, provider_name from utility_providers where id = $1", [providerId])).rows[0];
+  if (!row) throw utilityError("NOT_FOUND", "utility provider not found");
   return row;
 }
 
@@ -146,14 +153,17 @@ async function establishProvider(client, {
   await assertArtifact(client, property_id, source_artifact_id);
   const inserted = await client.query(
     `insert into utility_providers
-       (property_id, provider_name, source_artifact_id, provenance_note, recorded_by_user_id)
-     values ($1,$2,$3,$4,$5)
+       (provider_name, source_artifact_id, provenance_note, recorded_by_user_id)
+     values ($1,$2,$3,$4)
      on conflict do nothing returning *`,
-    [property_id, String(provider_name).trim(), source_artifact_id, provenance_note, user_id]);
-  if (inserted.rows[0]) return inserted.rows[0];
-  return (await client.query(
-    `select * from utility_providers where property_id = $1 and lower(provider_name) = lower($2)`,
-    [property_id, String(provider_name).trim()])).rows[0];
+    [String(provider_name).trim(), source_artifact_id, provenance_note, user_id]);
+  const row = inserted.rows[0] || (await client.query(
+    `select * from utility_providers where lower(btrim(provider_name)) = lower(btrim($1))`,
+    [String(provider_name).trim()])).rows[0];
+
+  // Identity provenance can originate at another property. Callers receive
+  // only the provider identity, never another property's source reference.
+  return row ? { id: row.id, provider_name: row.provider_name } : null;
 }
 
 async function relateProvider(client, {
@@ -163,7 +173,7 @@ async function relateProvider(client, {
   requireProperty(property_id); requireUser(user_id); requireDate("effective_from", effective_from);
   requireProvenance(source_artifact_id, provenance_note, "a utility provider relationship");
   await assertOwned(client, "utility_services", service_id, property_id, "utility service");
-  await assertOwned(client, "utility_providers", provider_id, property_id, "utility provider");
+  await assertProvider(client, provider_id);
   await assertArtifact(client, property_id, source_artifact_id);
   return (await client.query(
     `insert into utility_service_providers
@@ -237,7 +247,7 @@ async function establishAccount(client, {
     throw utilityError("BAD_INPUT", "external_account_identifier is required");
   }
   requireProvenance(source_artifact_id, provenance_note, "a provider account");
-  await assertOwned(client, "utility_providers", provider_id, property_id, "utility provider");
+  await assertProvider(client, provider_id);
   await assertArtifact(client, property_id, source_artifact_id);
   return (await client.query(
     `insert into utility_provider_accounts
@@ -289,7 +299,7 @@ async function recordMeter(client, {
   requireProvenance(source_artifact_id, provenance_note, "a utility meter");
   await assertProperty(client, property_id);
   if (provider_id) {
-    await assertOwned(client, "utility_providers", provider_id, property_id, "utility provider");
+    await assertProvider(client, provider_id);
   }
   await assertArtifact(client, property_id, source_artifact_id);
   return (await client.query(

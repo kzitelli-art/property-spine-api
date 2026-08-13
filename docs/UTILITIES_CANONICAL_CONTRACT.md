@@ -34,10 +34,13 @@ trash, and recycling. A custom class may be added without changing the domain.
 `service declaration` is effective-dated and explicitly says `present` or
 `not_applicable`. No declaration means `NOT_ESTABLISHED`; it never means no.
 
-`provider` is the party supplying a utility service in this property context.
-It is not the existing `vendors` primitive, whose canonical meaning is a payee
-learned from bank and accounting evidence. A provider may exist even when every
-resident pays it directly and the property has never paid it.
+`provider` is a Utilities-owned portfolio identity for the party named as
+supplying a utility service. The provider is related to each property through
+an effective-dated service relationship; PECO is not duplicated merely because
+it serves two properties. It is not the existing `vendors` primitive, whose
+canonical meaning is a payee learned from bank and accounting evidence, and it
+does not assert a formation-document legal identity. A provider may exist even
+when every resident pays it directly and the property has never paid it.
 
 `service point` says what and where service is delivered: whole building,
 common area, unit, space, shared equipment, or another stated location. A
@@ -126,4 +129,3 @@ where the compared statement dates, periods, amounts, and usage are all recorded
 It does not claim portfolio normalization, anomaly attribution, or causal
 explanation. A change in two bills may be described; its cause may not be
 invented.
-
