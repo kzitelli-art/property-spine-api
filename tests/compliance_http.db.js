@@ -12,7 +12,7 @@ const contracts = require("../src/asset/compliance_contracts.js");
 const documentRead = require("../src/asset/compliance_document_read.js");
 
 const URL = receipt.harnessConnectionString();
-const EXPECTED = 42;
+const EXPECTED = 52;
 let passed = 0;
 let failed = 0;
 
@@ -178,12 +178,21 @@ async function main() {
     const scopedUrl = new globalThis.URL(URL);
     scopedUrl.searchParams.set("options", `-c search_path=${schema}`);
     pool = new Pool({ connectionString: scopedUrl.toString() });
+    let askModelRequest = null;
+    const anthropic = { messages: { create: async (input) => {
+      askModelRequest = input;
+      return { content: [{ type: "text", text: JSON.stringify({
+        outcome: "answered",
+        answer: "The rental license is current through May 1, 2027, based on the established period.",
+      }) }] };
+    } } };
     const app = express();
     app.use(express.json({ limit: "1mb" }));
     app.use(require("../src/surfaces/asset_management.js")({
       pool,
       fileToText: async (file) => file.buffer.toString("utf8"),
     }));
+    app.use(require("../src/agent/ask_spine.js")({ pool, anthropic }));
     server = await new Promise((resolve) => {
       const listening = app.listen(0, "127.0.0.1", () => resolve(listening));
     });
@@ -267,6 +276,67 @@ async function main() {
       sourceRef.opener.kind === "server_minted");
     ok("source identity remains opaque in the reader wire response",
       !JSON.stringify(standing.body).includes(String(artifactA.id)));
+
+    askModelRequest = null;
+    const claimedAskProperty = await request(port, "POST", "/operator/ask-spine/ask", {
+      token: tokenA, body: { property_id: propertyB.id, question: "Is our rental license current?" },
+    });
+    ok("Ask Spine refuses a client property claim before reading Compliance",
+      claimedAskProperty.status === 403 && askModelRequest === null);
+    const unentitledAsk = await request(port, "POST", "/operator/ask-spine/ask", {
+      token: tokenNoEntitlement, body: { question: "Is our rental license current?" },
+    });
+    ok("Ask Spine distinguishes missing Compliance entitlement",
+      unentitledAsk.status === 200 && unentitledAsk.body.outcome === "not_authorized" &&
+      askModelRequest === null);
+    const composedAsk = await request(port, "POST", "/operator/ask-spine/ask", {
+      token: tokenA,
+      body: { question: "Is the rental license current and who has the work order?" },
+    });
+    ok("Ask Spine refuses unresolved cross-domain composition",
+      composedAsk.status === 200 && composedAsk.body.outcome === "composition_unavailable" &&
+      askModelRequest === null);
+
+    const complianceAsk = await request(port, "POST", "/operator/ask-spine/ask", {
+      token: tokenA, body: { question: "Is our rental license current and why?" },
+    });
+    ok("authorized Ask Spine request answers from canonical Compliance standing",
+      complianceAsk.status === 200 && complianceAsk.body.outcome === "answered" &&
+      /current through May 1, 2027/.test(complianceAsk.body.answer));
+    const askFacts = askModelRequest.messages[0].content;
+    const askFactsPayload = JSON.parse(askFacts
+      .replace(/^QUESTION SUBJECT:[^\n]+\nFACTS:\n/, "")
+      .replace(/\n\nOPERATOR ASKED:[\s\S]*$/, ""));
+    ok("the model receives only the session property's Compliance subject",
+      askFacts.includes(String(propertyA.id)) && /QUESTION SUBJECT: compliance/.test(askFacts) &&
+      !("attention" in askFactsPayload) && !("work_orders" in askFactsPayload));
+    ok("the model receives no canonical ids or opener tokens",
+      !askFacts.includes(String(itemId)) && !askFacts.includes(String(artifactA.id)) &&
+      !/server_minted|opener|opaque/.test(askFacts));
+    const askReferenceKinds = complianceAsk.body.references
+      .map((entry) => entry.open.kind).sort().join(",");
+    ok("Ask Spine returns both server-resolved Compliance opener classes",
+      askReferenceKinds === "compliance_record,compliance_source" &&
+      complianceAsk.body.references.every((entry) => !!entry.open.token));
+    ok("Ask Spine receipt names its governed read and unsolved composition state",
+      complianceAsk.body.grounded_on.compliance_items === 1 &&
+      complianceAsk.body.grounded_on.composition_authorization === "unsolved_cross_domain" &&
+      complianceAsk.body.grounded_on.open_items === null);
+    const askRecord = complianceAsk.body.references.find(
+      (entry) => entry.open.kind === "compliance_record");
+    const openedAskRecord = await request(port, "GET",
+      `${base}/open/record/${encodeURIComponent(askRecord.open.token)}?as_of=2026-08-13`,
+      { token: tokenA });
+    ok("Ask Spine's record reference opens through the canonical Compliance route",
+      openedAskRecord.status === 200 &&
+      openedAskRecord.body.item.entity.record_id === String(itemId));
+    const askSource = complianceAsk.body.references.find(
+      (entry) => entry.open.kind === "compliance_source");
+    const openedAskSource = await request(port, "GET",
+      `${base}/open/source/${encodeURIComponent(askSource.open.token)}`, { token: tokenA });
+    ok("Ask Spine's source reference opens the exact retained bytes",
+      openedAskSource.status === 200 && openedAskSource.buffer.equals(sourceBytes));
+
     const overview = await request(port, "GET", "/operator/asset-management/overview", {
       token: tokenA,
     });

@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("crypto");
+const PROCESS_LOCAL_KEY = crypto.randomBytes(32);
 
 class ComplianceReferenceError extends Error {
   constructor(code, message) {
@@ -25,7 +26,10 @@ function keyBytes(secret) {
   if (typeof secret === "string" && secret.length > 0) {
     return crypto.createHash("sha256").update(secret, "utf8").digest();
   }
-  return crypto.randomBytes(32);
+  // Every Compliance surface in one process must be able to open references
+  // minted by another. A configured secret remains the deployment contract;
+  // this fallback is intentionally process-local and dies on restart.
+  return Buffer.from(PROCESS_LOCAL_KEY);
 }
 
 function createComplianceReferenceService({ secret, ttlSeconds = 300, now = Date.now } = {}) {

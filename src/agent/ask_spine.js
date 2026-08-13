@@ -29,9 +29,16 @@ module.exports = function askSpine(deps) {
   const staffSessions = require("../identity/staff_session_service");
   const askSpineService = require("./ask_spine_service");
   const askSpineAnswer = require("./ask_spine_answer");
+  const { createComplianceReferenceService } =
+    require("../asset/compliance_references");
 
-  const { pool } = deps || {};
+  const options = deps || {};
+  const { pool } = options;
   if (!pool) throw new Error("ask_spine module requires a pool");
+  const complianceReferences = options.complianceReferenceService ||
+    createComplianceReferenceService({
+      secret: options.complianceReferenceSecret || process.env.COMPLIANCE_REFERENCE_SECRET,
+    });
 
   //  Identical to the staff-agent gate. Copied rather than shared so this
   //  door carries no dependency on the proposal machinery next to it.
@@ -98,10 +105,11 @@ module.exports = function askSpine(deps) {
   //  client-supplied property_id is refused, not ignored.
   router.post("/operator/ask-spine/ask", ...gate, async (req, res) => {
     try {
-      const out = await askSpineAnswer.answer(pool, deps.anthropic, {
+      const out = await askSpineAnswer.answer(pool, options.anthropic, {
         property_id: req.operator.property_id,
         allowed_modules: req.operator.allowed_modules,
         question: (req.body && req.body.question) || "",
+        mintComplianceReference: complianceReferences.mintReference,
       });
 
       //  200 for every OUTCOME, including `unavailable`. The request was
