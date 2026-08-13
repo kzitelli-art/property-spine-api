@@ -4,7 +4,7 @@
 const contracts = require("../src/asset/compliance_contracts.js");
 const reader = require("../src/asset/compliance_document_read.js");
 
-const EXPECTED_ASSERTIONS = 28;
+const EXPECTED_ASSERTIONS = 34;
 let pass = 0, fail = 0;
 function ok(label, condition, detail) {
   if (condition) { pass++; console.log("  ok    " + label); }
@@ -26,6 +26,21 @@ for (const name of ["confirmation", "write_receipt", "standing", "detail", "refe
 
 const proposal = reader.propose("ordinary correspondence");
 ok("proposal validator accepts the live reader", contracts.validateProposal(proposal) === proposal);
+ok("proposal names its retrieval basis", /document labels/i.test(proposal.capability_classes.retrieval.basis));
+rejects("proposal cannot claim comparison without a basis", () => contracts.validateProposal({
+  ...proposal,
+  capability_classes: {
+    ...proposal.capability_classes,
+    comparison: { claim: "claimed", basis: null },
+  },
+}));
+rejects("an unclaimed class cannot smuggle a basis", () => contracts.validateProposal({
+  ...proposal,
+  capability_classes: {
+    ...proposal.capability_classes,
+    comparison: { claim: "not_claimed", basis: "per unit" },
+  },
+}));
 rejects("proposal refuses arbitrary fact JSON", () => contracts.validateProposal({
   ...proposal, proposed: { ...proposal.proposed, fact_type: "anything" },
 }));
@@ -96,6 +111,8 @@ const item = {
 };
 const standing = {
   contract_version: contracts.VERSIONS.standing,
+  capability_classes: contracts.retrievalCapabilityReceipt(
+    "canonical Compliance standing and its recorded derivation basis"),
   as_of: "2026-08-13",
   coverage: { state: "unknown", meaning: "No requirement census has been established." },
   items: [item],
@@ -105,12 +122,17 @@ ok("standing separates coverage from credential standing", contracts.validateSta
 ok("unknown census is represented without an empty-good inference", standing.coverage.state === "unknown");
 ok("standing separates date from action", standing.items[0].next.state === "date_only");
 ok("standing separates attention from standing", standing.items[0].attention.state === "none_established");
+ok("standing claims retrieval only", standing.capability_classes.retrieval.claim === "claimed" &&
+  standing.capability_classes.comparison.claim === "not_claimed" &&
+  standing.capability_classes.causal_explanation.claim === "not_claimed");
 rejects("standing refuses arbitrary why inputs", () => contracts.validateStanding({
   ...standing, items: [{ ...item, why: { ...item.why, inputs: { guessed: true } } }],
 }));
 
 const detail = {
   contract_version: contracts.VERSIONS.detail,
+  capability_classes: contracts.retrievalCapabilityReceipt(
+    "canonical Compliance record, evidence and correction history"),
   as_of: "2026-08-13",
   item,
   history: [{
@@ -120,6 +142,11 @@ const detail = {
   references: [reference],
 };
 ok("detail contract carries typed history", contracts.validateDetail(detail) === detail);
+rejects("detail refuses an undeclared capability class", () => contracts.validateDetail({
+  ...detail,
+  capability_classes: { ...detail.capability_classes, forecasting: { claim: "claimed", basis: "trend" } },
+}));
+ok("comparison remains absent rather than silently inferred", detail.capability_classes.comparison.claim === "not_claimed");
 
 const failure = {
   contract_version: contracts.VERSIONS.failure,

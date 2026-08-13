@@ -6,7 +6,7 @@ const path = require("path");
 const reader = require("../src/asset/compliance_document_read.js");
 const contracts = require("../src/asset/compliance_contracts.js");
 
-const EXPECTED_ASSERTIONS = 34;
+const EXPECTED_ASSERTIONS = 37;
 let pass = 0, fail = 0;
 function ok(label, condition, detail) {
   if (condition) { pass++; console.log("  ok    " + label); }
@@ -33,6 +33,9 @@ ok("unambiguous effective date is ISO", proposal.proposed.effective_from === "20
 ok("ambiguous expiration stays blank", proposal.proposed.effective_through === null);
 ok("ambiguous expiration is named", proposal.unknowns.some((u) => u.field === "effective_through" && u.reason === "ambiguous"));
 ok("proposal satisfies the governed contract", contracts.validateProposal(proposal) === proposal);
+ok("reader explicitly claims retrieval", proposal.capability_classes.retrieval.claim === "claimed");
+ok("reader does not claim comparison", proposal.capability_classes.comparison.claim === "not_claimed");
+ok("reader does not claim causal explanation", proposal.capability_classes.causal_explanation.claim === "not_claimed");
 
 const misleadingMetadata = reader.propose(fixture, {
   filename: "totally-not-a-license.txt", folder: "99. Wrong Folder",

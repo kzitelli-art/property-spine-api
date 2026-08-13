@@ -1,7 +1,8 @@
 "use strict";
 
 const {
-  VERSIONS, DOES_NOT_ESTABLISH, PROPOSED_KEYS, validateProposal,
+  VERSIONS, DOES_NOT_ESTABLISH, PROPOSED_KEYS, retrievalCapabilityReceipt,
+  validateProposal,
 } = require("./compliance_contracts.js");
 
 const ADAPTER = "philadelphia_rental_license_label_scan";
@@ -37,6 +38,9 @@ function result(recognition_state, source_classification, proposed, reasons, rea
     contract_version: VERSIONS.proposal,
     recognition_state,
     source_classification,
+    capability_classes: retrievalCapabilityReceipt(
+      "explicit document labels and authority-issued form signature"
+    ),
     proposed,
     unknowns: unknownsFor(proposed, reasons),
     does_not_establish: [...DOES_NOT_ESTABLISH],

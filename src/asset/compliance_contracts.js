@@ -3,12 +3,12 @@
 const crypto = require("crypto");
 
 const VERSIONS = Object.freeze({
-  proposal: "compliance.rental_license.proposal.v1",
-  intake: "compliance.evidence_intake.v1",
+  proposal: "compliance.rental_license.proposal.v2",
+  intake: "compliance.evidence_intake.v2",
   confirmation: "compliance.confirmation_request.v1",
   write_receipt: "compliance.write_receipt.v1",
-  standing: "compliance.standing.v1",
-  detail: "compliance.detail.v1",
+  standing: "compliance.standing.v2",
+  detail: "compliance.detail.v2",
   reference: "compliance.reference.v1",
   failure: "compliance.failure.v1",
 });
@@ -54,6 +54,10 @@ const FAILURE_CODES = Object.freeze([
   "reference_unavailable",
 ]);
 
+const CAPABILITY_NAMES = Object.freeze([
+  "retrieval", "comparison", "causal_explanation",
+]);
+
 function exact(value, keys, path) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError(`${path} must be an object`);
@@ -88,6 +92,26 @@ function isoDate(value, path, nullable = true) {
   }
 }
 
+function retrievalCapabilityReceipt(basis) {
+  requiredString(basis, "capability retrieval basis");
+  return {
+    retrieval: { claim: "claimed", basis },
+    comparison: { claim: "not_claimed", basis: null },
+    causal_explanation: { claim: "not_claimed", basis: null },
+  };
+}
+
+function validateCapabilityClasses(value, path) {
+  exact(value, CAPABILITY_NAMES, path);
+  for (const name of CAPABILITY_NAMES) {
+    exact(value[name], ["claim", "basis"], `${path}.${name}`);
+    oneOf(value[name].claim, ["claimed", "not_claimed"], `${path}.${name}.claim`);
+    if (value[name].claim === "claimed") requiredString(value[name].basis, `${path}.${name}.basis`);
+    else if (value[name].basis !== null) throw new TypeError(`${path}.${name}.basis must be null when unclaimed`);
+  }
+  return value;
+}
+
 function validateUnknown(item, index) {
   exact(item, ["concept", "field", "reason"], `proposal.unknowns[${index}]`);
   oneOf(item.concept, Object.keys(UNKNOWN_FIELDS), `proposal.unknowns[${index}].concept`);
@@ -98,7 +122,7 @@ function validateUnknown(item, index) {
 function validateProposal(value) {
   exact(value, [
     "contract_version", "recognition_state", "source_classification",
-    "proposed", "unknowns", "does_not_establish", "reason",
+    "capability_classes", "proposed", "unknowns", "does_not_establish", "reason",
   ], "proposal");
   if (value.contract_version !== VERSIONS.proposal) throw new TypeError("proposal version mismatch");
   oneOf(value.recognition_state,
@@ -106,6 +130,7 @@ function validateProposal(value) {
   oneOf(value.source_classification,
     ["authority_issued_credential", "payment_evidence", "unclassified"],
     "proposal.source_classification");
+  validateCapabilityClasses(value.capability_classes, "proposal.capability_classes");
   exact(value.proposed, PROPOSED_KEYS, "proposal.proposed");
   for (const key of PROPOSED_KEYS) {
     if (key === "unit_count") {
@@ -255,9 +280,10 @@ function validateStandingItem(value, path = "standing.items[]") {
 }
 
 function validateStanding(value) {
-  exact(value, ["contract_version", "as_of", "coverage", "items", "references"], "standing");
+  exact(value, ["contract_version", "capability_classes", "as_of", "coverage", "items", "references"], "standing");
   if (value.contract_version !== VERSIONS.standing) throw new TypeError("standing version mismatch");
   isoDate(value.as_of, "standing.as_of", false);
+  validateCapabilityClasses(value.capability_classes, "standing.capability_classes");
   exact(value.coverage, ["state", "meaning"], "standing.coverage");
   oneOf(value.coverage.state, ["unknown", "partial", "established"], "standing.coverage.state");
   requiredString(value.coverage.meaning, "standing.coverage.meaning");
@@ -268,9 +294,10 @@ function validateStanding(value) {
 }
 
 function validateDetail(value) {
-  exact(value, ["contract_version", "as_of", "item", "history", "references"], "detail");
+  exact(value, ["contract_version", "capability_classes", "as_of", "item", "history", "references"], "detail");
   if (value.contract_version !== VERSIONS.detail) throw new TypeError("detail version mismatch");
   isoDate(value.as_of, "detail.as_of", false);
+  validateCapabilityClasses(value.capability_classes, "detail.capability_classes");
   validateStandingItem(value.item, "detail.item");
   if (!Array.isArray(value.history) || !Array.isArray(value.references)) throw new TypeError("detail lists required");
   value.history.forEach((event, i) => {
@@ -296,7 +323,8 @@ function proposalFingerprint(artifactSha256, proposal) {
 
 module.exports = {
   VERSIONS, WIRE_CONTRACTS, DOES_NOT_ESTABLISH, PROPOSED_KEYS, UNKNOWN_FIELDS,
-  FAILURE_CODES, validateProposal, validateIntake, validateConfirmationRequest, validateWriteReceipt,
+  FAILURE_CODES, CAPABILITY_NAMES, retrievalCapabilityReceipt, validateCapabilityClasses,
+  validateProposal, validateIntake, validateConfirmationRequest, validateWriteReceipt,
   validateStanding, validateDetail, validateReference, validateFailure,
   proposalFingerprint,
 };
