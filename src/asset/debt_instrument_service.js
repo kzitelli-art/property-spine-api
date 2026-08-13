@@ -230,6 +230,34 @@ async function recordPaymentObservation(db, opts) {
   return r.rows[0];
 }
 
+/*  Which instruments does this PROPERTY secure?
+ *
+ *  Route authority is a property; `position()` takes an instrument. This is
+ *  the join between them and it is the whole of it — a query, not a
+ *  derivation. It composes nothing and decides nothing.
+ *
+ *  ⚠ COLLATERAL, NOT OWNERSHIP. An instrument reaches a property through
+ *  debt_instrument_properties, so a cross-collateralised loan legitimately
+ *  appears for several properties and each one sees the same instrument.
+ *  That is the model working, not a leak: the operator is entitled to the
+ *  property, and this loan is secured by it.
+ *
+ *  Effective-dated like everything else, so a released collateral position
+ *  stops appearing without any row being rewritten.                        */
+async function listInstrumentsForProperty(db, propertyId, asOf) {
+  const at = asOf || new Date().toISOString().slice(0, 10);
+  const r = await db.query(
+    `select distinct i.id
+       from debt_instruments i
+       join debt_instrument_properties p on p.instrument_id = i.id
+      where p.property_id = $1
+        and p.effective_from <= $2
+        and (p.effective_to is null or p.effective_to >= $2)
+      order by i.id`,
+    [propertyId, at]);
+  return r.rows.map((row) => row.id);
+}
+
 //  Fetches the governed history for one instrument. It composes NOTHING —
 //  it hands rows to debt_position_read.position(), which is pure and
 //  imports nothing so the economic derivation cannot reach funding.
@@ -250,6 +278,7 @@ async function loadHistory(db, instrumentId) {
 
 module.exports = {
   establishInstrument, addParty, addCollateral, addTerm,
+  listInstrumentsForProperty,
   addReserveRequirement, recordBalanceObservation, recordPaymentObservation,
   loadHistory,
 };
