@@ -64,19 +64,63 @@ in_ledger_but_not_in_build  (empty)    ← anything here means code and schema d
 
 ## THE RELEASE
 
+### ⚠ THIS CARD PINS NO SHA, DELIBERATELY
+
+An earlier revision hardcoded `EXPECTED_SHA=9c552dc`. That was wrong twice over:
+the card was itself committed later, so the literal was already stale when
+written — **and editing the card changes the sha again**, so any literal here is
+stale by construction. The sha that matters is the **build actually running**,
+not this document's commit.
+
+`migrate.js:342` only consults `EXPECTED_SHA` when `RENDER_GIT_COMMIT` is set:
+
+```text
+RENDER_GIT_COMMIT set        EXPECTED_SHA is REQUIRED, and must prefix-match
+                             the running build, or the release is REFUSED
+RENDER_GIT_COMMIT unset      EXPECTED_SHA is ignored entirely
+```
+
+### Path A — from a checkout of the release branch (recommended)
+
+The branch contains 168; `main` does not. Releasing here is what makes
+release-before-merge possible, and there is no `RENDER_GIT_COMMIT`, so no sha
+pin applies.
+
 ```bash
 MIGRATION_RELEASE=1 \
 EXPECTED_LEDGER_CEILING=<what step 1 PRINTED — never from this document> \
-EXPECTED_SHA=9c552dc \
+  node migrations/migrate.js --apply
+```
+
+### Path B — from a Render shell
+
+Only valid if the **running instance is a build that contains 168**. A shell on
+the current `main` instance cannot release it — that build has no 168 file to
+apply, and `migrate.js` would correctly report nothing pending.
+
+```bash
+MIGRATION_RELEASE=1 \
+EXPECTED_LEDGER_CEILING=<what step 1 PRINTED> \
+EXPECTED_SHA=<read $RENDER_GIT_COMMIT ON THAT INSTANCE — not from here> \
   node migrations/migrate.js --apply
 ```
 
 `EXPECTED_LEDGER_CEILING` exists so a release cannot be run by someone who has
 not looked. Typing `167` because this card says so defeats the only control on
-the operation.
+the operation — and the same reasoning is why no sha is written above.
 
 **Then re-run the query above.** Expect `ledger_ceiling 168` and `pending`
 empty.
+
+### Already protected, so do not add a gate for it
+
+`migrate.js:135` hard-stops on two files sharing a migration number, naming both
+and refusing to run — because the ledger is keyed on the three-digit prefix
+alone, so the second file would be silently skipped forever. That is not
+theoretical: two `094`s were merged from parallel branches on 2026-07-26. It runs
+during ordinary verification, not only at release, so the parked
+meeting-transcript 168 cannot slip past unnoticed. **No duplicate-number gate is
+needed.**
 
 ---
 
