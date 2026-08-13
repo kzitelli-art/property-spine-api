@@ -144,6 +144,30 @@ MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=<read from the ledger> \
   EXPECTED_SHA=<deployed sha> node migrations/migrate.js --apply
 ```
 
+### The number is provisional — settle it at rebase, not now
+
+This file was written as 168 and moved: **Debt keeps 168** (a 426-line payload
+with harnesses and a proof built on it), and this migration is the cheap one to
+move. But **169 is claimed against a ceiling that is still moving** — main was
+at 167 when this was renumbered, Debt's 168 is unreleased, and anything else in
+flight lands in between.
+
+A duplicate number is not a merge conflict. Git takes both files happily. It
+surfaces as a **failed production deploy**, because a release applies every
+pending file and the ledger refuses the collision.
+
+**Pre-merge step, every time this branch is rebased:**
+
+```bash
+git fetch origin
+git ls-tree --name-only origin/main migrations/ | tail -3
+# this file must be strictly greater than that ceiling, AND greater than
+# any unreleased migration on a branch that merges before this one
+```
+
+This branch is **parked** on that number until then. Do not treat 169 as
+settled, and do not release from this branch before the check above.
+
 ## 8. A defect this build found in itself
 
 `refuseClientProperty` was copied from `ask_spine.js`, where it sits in front of

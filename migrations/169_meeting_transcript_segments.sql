@@ -1,6 +1,25 @@
 -- ════════════════════════════════════════════════════════════════════
 --  169 — MEETING TRANSCRIPT SEGMENTS
 --
+--  ⚠ THIS NUMBER IS PROVISIONAL. RE-CHECK IT IMMEDIATELY BEFORE MERGE.
+--
+--  This file was written as 168 and moved. Debt keeps 168 — a 426-line
+--  payload with harnesses and a proof built on it — and this one is the
+--  cheap one to move. But 169 is a number claimed against a ceiling that
+--  is still moving: main was at 167 when this was renumbered, Debt's 168
+--  is unreleased, and anything else in flight lands in between.
+--
+--  A duplicate number is not a merge conflict. Git takes both files
+--  happily. It surfaces as a FAILED PRODUCTION DEPLOY, because a release
+--  applies every pending file and the ledger refuses the collision.
+--
+--  So the number is settled at rebase time, not now:
+--
+--      git fetch origin
+--      git ls-tree --name-only origin/main migrations/ | tail -3
+--      # this file must be strictly greater than that ceiling AND than
+--      # any unreleased migration on a branch that will merge first
+--
 --  A meeting becomes citable evidence: the file itself, retained, plus
 --  the ordered turns inside it, each addressable on its own.
 --
