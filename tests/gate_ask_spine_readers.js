@@ -121,11 +121,13 @@ const REGISTRY = {
     capability_classes: readerCapabilities.retrievalOnly(
       "canonical Compliance standing and recorded derivation basis"),
     composition_authorization: "unsolved_cross_domain",
+  },
   utility: {
     state: "registered",
     capability_classes: readerCapabilities.retrievalOnly(
       "canonical Utility standing and recorded derivation basis"),
     composition_authorization: "unsolved_cross_domain",
+    governed_detail: true,
   },
   insurance: {
     state: "pending",
@@ -169,6 +171,14 @@ function gathersDomain(gatherSrc, domain) {
   return required && assigned;
 }
 
+function gathersGovernedDetail(gatherSrc, domain) {
+  const code = stripComments(gatherSrc);
+  const required = new RegExp(`require\\([^)]*${domain}[^)]*\\)`).test(code);
+  const invoked = /\.readForQuestion\s*\(/.test(code);
+  const questionBound = /readForQuestion\s*\([^)]*\{[\s\S]*?question[\s\S]*?\}\s*\)/.test(code);
+  return required && invoked && questionBound;
+}
+
 console.log("\n════════════════════════════════════════════════════════════════");
 console.log("  ASK SPINE READER REGISTRATION — §40.2 / §40.11");
 console.log("════════════════════════════════════════════════════════════════\n");
@@ -202,6 +212,14 @@ console.log("  ── detector self-test ──");
      !gathersDomain(`// TODO: require debt_position_read and set facts.debt = ...`, "debt"));
   ok("gathersDomain is not satisfied by a block comment",
      !gathersDomain(`/* facts.debt = require("../asset/debt_position_read.js") */`, "debt"));
+  ok("gathersGovernedDetail detects a question-bound canonical detail read",
+     gathersGovernedDetail(
+       `const r=require("../asset/utility_ask_detail.js"); r.readForQuestion(db,{question});`,
+       "utility"));
+  ok("gathersGovernedDetail rejects a detail reader mentioned only in a comment",
+     !gathersGovernedDetail(
+       `const r=require("../asset/utility_ask_detail.js"); // r.readForQuestion(db,{question})`,
+       "utility"));
 }
 
 /*  ── 1. DISCOVER, THEN DEMAND A DECLARATION ───────────────────────── */
@@ -250,6 +268,11 @@ if (gatherSrc === null) {
     ok(`${d} declared registered AND gathered in ${GATHER}`,
        gathersDomain(gatherSrc, d),
        `${d} claims registration the composer does not implement`);
+  }
+  for (const [d, declaration] of registered.filter(([, v]) => v.governed_detail)) {
+    ok(`${d} declared governed detail AND question-bound in ${GATHER}`,
+       gathersGovernedDetail(gatherSrc, d),
+       `${d} claims governed detail but the composer does not invoke its question-bound reader`);
   }
 }
 

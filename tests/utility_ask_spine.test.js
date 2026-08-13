@@ -85,7 +85,7 @@ const TABLE_ROWS = {
   ],
 };
 
-function database({ failUtility = false } = {}) {
+function database({ failUtility = false, timeoutUtility = false } = {}) {
   const queries = [];
   return {
     queries,
@@ -94,6 +94,11 @@ function database({ failUtility = false } = {}) {
       queries.push({ text, params });
       const match = text.match(/from\s+(utility_[a-z_]+)/i);
       if (match) {
+        if (timeoutUtility) {
+          const error = new Error("Utility read exceeded its bound");
+          error.code = "READ_TIMED_OUT";
+          throw error;
+        }
         if (failUtility) throw new Error("Utility read unavailable");
         return { rows: TABLE_ROWS[match[1]] || [] };
       }
@@ -148,6 +153,11 @@ async function main() {
     assert(gathered.utility.unresolved_services > 0);
     const gas = gathered.utility.services.find((service) => service.service_class === "natural_gas");
     assert.strictEqual(gas.applicability.truth_state, "NOT_ESTABLISHED");
+  });
+  ok("broad questions keep the conversational Utility read on standing", () => {
+    assert.strictEqual(gathered.utility.detail_mode, "standing");
+    assert.strictEqual(gathered.utility.detail, null);
+    assert.strictEqual(gathered.utility.read_state, "READ_SUCCEEDED");
   });
   ok("provider, billing administrator, and recovery remain separate", () => {
     const electric = gathered.utility.services.find((service) => service.service_class === "electricity");
@@ -204,6 +214,29 @@ async function main() {
   ok("grounding names the Utility setup used for the answer", () => {
     assert.strictEqual(answer.grounded_on.utility_setup_state, "partially_established");
     assert.strictEqual(answer.grounded_on.utility_services, 1);
+    assert.strictEqual(answer.grounded_on.utility_read_state, "READ_SUCCEEDED");
+  });
+
+  const detailSpy = {};
+  await ask.answer(database(), model(
+    "Account ending 6789 serves the Building and has provider meter ending 8877.", detailSpy), {
+    property_id: PROPERTY,
+    allowed_modules: ["asset_management"],
+    question: "What does account ending 6789 serve?",
+  });
+  const detailFacts = factsFrom(detailSpy);
+  ok("an account-specific question receives bounded governed detail", () => {
+    assert.strictEqual(detailFacts.utility.detail_mode, "account_detail");
+    assert.strictEqual(detailFacts.utility.detail.selector.account_ending, "6789");
+    assert.strictEqual(detailFacts.utility.detail.accounts.length, 1);
+    assert.strictEqual(detailFacts.utility.detail.accounts[0].reference, "UTILITY-ACCOUNT-1");
+  });
+  ok("governed detail gives the model masked identifiers and no database IDs", () => {
+    const content = detailSpy.request.messages[0].content;
+    assert(content.includes("*****6789"));
+    assert(!content.includes("PECO-123456789"));
+    for (const secret of ["account-db-secret", "meter-db-secret", "statement-db-secret"])
+      assert(!content.includes(secret), secret);
   });
 
   const failedSpy = {};
@@ -216,7 +249,28 @@ async function main() {
   const failedFacts = factsFrom(failedSpy);
   ok("a failed Utility read is named and never becomes an empty position", () => {
     assert(failedFacts.reads_that_failed.includes("utility"));
-    assert.strictEqual(failedFacts.utility, undefined);
+    assert.strictEqual(failedFacts.utility.read_state, "READ_FAILED");
+    assert.strictEqual(failedFacts.utility.detail, null);
+  });
+
+  const timeoutSpy = {};
+  await ask.answer(database({ timeoutUtility: true }), model(
+    "The Utility read timed out, so I cannot report an empty account roster.", timeoutSpy), {
+    property_id: PROPERTY,
+    allowed_modules: ["asset_management"],
+    question: "How many PECO accounts do we have?",
+  });
+  const timeoutFacts = factsFrom(timeoutSpy);
+  ok("a timed-out Utility detail read remains distinct from no accounts", () => {
+    assert.strictEqual(timeoutFacts.utility.read_state, "READ_TIMED_OUT");
+    assert(timeoutFacts.reads_that_failed.includes("utility_timed_out"));
+    assert.strictEqual(timeoutFacts.utility.detail, null);
+  });
+  ok("the composer teaches the model all four silence meanings", () => {
+    assert(/READ_FAILED means Spine could not read it/i.test(timeoutSpy.request.system));
+    assert(/READ_TIMED_OUT/.test(timeoutSpy.request.system));
+    assert(/QUIET means the read succeeded/i.test(timeoutSpy.request.system));
+    assert(/NOT_ESTABLISHED exactly as unknown/i.test(timeoutSpy.request.system));
   });
 
   const causeSpy = {};

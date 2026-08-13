@@ -3,6 +3,32 @@
 const utilityPosition = require("./utility_position_read.js");
 
 const ASSET_MODULE = "asset_management";
+const DEFAULT_TIMEOUT_MS = 5000;
+
+function readTimeout(timeoutMs) {
+  const error = new Error(`Utilities governed read timed out after ${timeoutMs}ms`);
+  error.code = "READ_TIMED_OUT";
+  return error;
+}
+
+async function withinTimeout(read, timeoutMs) {
+  const ms = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
+  let timer = null;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(read),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(readTimeout(ms)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function attentionState(standing) {
+  return standing && standing.unresolved_count === 0 ? "QUIET" : "ATTENTION_REQUIRED";
+}
 
 function detailRequest(question) {
   const text = String(question || "").trim();
@@ -166,6 +192,7 @@ function detailForModel(detail, request) {
 
 async function readForQuestion(client, {
   property_id, allowed_modules, question, as_of = null,
+  timeout_ms = DEFAULT_TIMEOUT_MS,
 } = {}) {
   const request = detailRequest(question);
   if (!(allowed_modules || []).includes(ASSET_MODULE)) {
@@ -174,20 +201,24 @@ async function readForQuestion(client, {
   }
 
   if (request.mode === "standing") {
-    const standing = await utilityPosition.readStanding(client, { property_id, as_of });
+    const standing = await withinTimeout(
+      () => utilityPosition.readStanding(client, { property_id, as_of }), timeout_ms);
     return {
       mode: request.mode,
       read_state: "READ_SUCCEEDED",
+      attention_state: attentionState(standing),
       standing: standingForModel(standing),
       detail: null,
       references: sourceReferences(standing.services || []),
     };
   }
 
-  const position = await utilityPosition.readPosition(client, { property_id, as_of });
+  const position = await withinTimeout(
+    () => utilityPosition.readPosition(client, { property_id, as_of }), timeout_ms);
   return {
     mode: request.mode,
     read_state: "READ_SUCCEEDED",
+    attention_state: attentionState(position.standing),
     standing: standingForModel(position.standing),
     detail: detailForModel(position.detail, request),
     references: sourceReferences(position.detail),
@@ -201,5 +232,7 @@ module.exports = {
   standingForModel,
   detailForModel,
   sourceReferences,
+  withinTimeout,
+  attentionState,
   readForQuestion,
 };

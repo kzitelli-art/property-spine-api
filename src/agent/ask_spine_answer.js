@@ -47,7 +47,7 @@
 const askSpineService = require("./ask_spine_service");
 const workOrderRead = require("../surfaces/work_order_status_read");
 const complianceRead = require("../asset/compliance_read");
-const utilityPosition = require("../asset/utility_position_read.js");
+const utilityAskRead = require("../asset/utility_ask_detail.js");
 
 const MODEL = process.env.ASK_SPINE_MODEL || "claude-opus-5";
 /*  THINKING AND THE ANSWER SHARE THIS CEILING. On this model family
@@ -207,7 +207,7 @@ function utilityEvidenceReferences(standing) {
  *  they both show.  */
 async function gatherFacts(db, {
   property_id, allowed_modules, subject = "work", mintComplianceReference,
-  complianceReader = complianceRead,
+  complianceReader = complianceRead, question = "",
 }) {
   const facts = {
     property_id,
@@ -317,10 +317,29 @@ async function gatherFacts(db, {
   // Entitlement excludes the facts themselves, not merely their links.
   if (subject === "utility" && (allowed_modules || []).includes("asset_management")) {
     try {
-      const standing = await utilityPosition.readStanding(db, { property_id });
-      facts.utility = utilityFactsForModel(standing);
-      facts.__refs = (facts.__refs || []).concat(utilityEvidenceReferences(standing));
-    } catch (e) { failures.push("utility"); }
+      const governed = await utilityAskRead.readForQuestion(db, {
+        property_id,
+        allowed_modules,
+        question,
+      });
+      facts.utility = {
+        ...governed.standing,
+        read_state: governed.read_state,
+        attention_state: governed.attention_state,
+        detail_mode: governed.mode,
+        detail: governed.detail,
+      };
+      facts.__refs = (facts.__refs || []).concat(governed.references || []);
+    } catch (e) {
+      const state = e && e.code === "READ_TIMED_OUT" ? "READ_TIMED_OUT" : "READ_FAILED";
+      facts.utility = {
+        read_state: state,
+        attention_state: null,
+        detail_mode: utilityAskRead.detailRequest(question).mode,
+        detail: null,
+      };
+      failures.push(state === "READ_TIMED_OUT" ? "utility_timed_out" : "utility");
+    }
   }
 
   facts.reads_that_failed = failures;
@@ -404,6 +423,9 @@ function systemPrompt(subject = "work") {
     "3. If `reads_that_failed` is non-empty, say that part of the picture could",
     "   not be read. Do not report a failed read as 'nothing to report' — those",
     "   are different facts and confusing them is the worst thing you can do.",
+    "   For Utilities, READ_FAILED means Spine could not read it; READ_TIMED_OUT",
+    "   means the read exceeded its bound; QUIET means the read succeeded and",
+    "   nothing requires attention. None of those means there are no accounts.",
     "4. Nothing being open is a real, good answer. Say it plainly and stop.",
     "   Do not manufacture concerns to seem useful.",
     "5. The FACTS contain only one authorized subject. Never combine Compliance",
@@ -488,7 +510,7 @@ async function answer(db, anthropic, {
 
   const facts = await gatherFacts(db, {
     property_id, allowed_modules: modules, subject,
-    mintComplianceReference, complianceReader,
+    mintComplianceReference, complianceReader, question: q,
   });
 
   let text = "";
@@ -577,6 +599,8 @@ async function answer(db, anthropic, {
         ? facts.compliance.composition_authorization : null,
       utility_setup_state: facts.utility ? facts.utility.setup_state : null,
       utility_services: facts.utility ? facts.utility.established_services : null,
+      utility_read_state: facts.utility ? facts.utility.read_state : null,
+      utility_detail_mode: facts.utility ? facts.utility.detail_mode : null,
       reads_that_failed: facts.reads_that_failed,
       gathered_at: facts.gathered_at,
     },

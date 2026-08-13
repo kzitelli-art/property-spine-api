@@ -1,9 +1,9 @@
--- UTILITIES CANONICAL SCHEMA DRAFT - DELIBERATELY UNNUMBERED
+-- 169_utilities_canonical_truth.sql
 --
--- Compliance now owns release migration 168. Utilities will claim the actual
--- next free number only after Compliance lands and this branch is rebased.
--- These bytes have been executed and hostile-tested against regular isolated
--- PostgreSQL, but remain outside the migration ledger until then.
+-- Owner-reserved after refreshing main at ceiling 167. Debt keeps 168 and
+-- must land first; Utilities owns 169; Compliance follows on 170. Numbering
+-- this file prepares that order but does not claim Debt has landed or that
+-- this migration has passed its required isolated-PostgreSQL release gate.
 --
 -- The schema records setup before observations:
 --   service -> provider/account/service-point/meter/arrangement -> statement

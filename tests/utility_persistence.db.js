@@ -69,9 +69,9 @@ async function main() {
       );
     `);
 
-    const draft = fs.readFileSync(path.join(__dirname, "..", "docs",
-      "UTILITIES_CANONICAL_SCHEMA_DRAFT.sql"), "utf8");
-    await admin.query(draft);
+    const migration = fs.readFileSync(path.join(__dirname, "..", "migrations",
+      "169_utilities_canonical_truth.sql"), "utf8");
+    await admin.query(migration);
 
     const userId = (await admin.query(
       "insert into users(name) values ('Utilities Operator') returning id")).rows[0].id;

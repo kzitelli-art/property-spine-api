@@ -173,6 +173,24 @@ async function main() {
     assert(error);
   });
 
+  await ok("a timed-out detail read remains distinct from empty truth", async () => {
+    const db = { query: async () => new Promise(() => {}) };
+    let error = null;
+    try {
+      await detailRead.readForQuestion(db, {
+        property_id: PROPERTY_A, allowed_modules: ["asset_management"],
+        question: "How many PECO accounts do we have?", timeout_ms: 5,
+      });
+    } catch (caught) { error = caught; }
+    assert(error);
+    assert.strictEqual(error.code, "READ_TIMED_OUT");
+  });
+
+  await ok("a successful complete standing read can report QUIET", async () => {
+    assert.strictEqual(detailRead.attentionState({ unresolved_count: 0 }), "QUIET");
+    assert.strictEqual(detailRead.attentionState({ unresolved_count: 1 }), "ATTENTION_REQUIRED");
+  });
+
   console.log(`\n${passed} assertions passed\n`);
 }
 

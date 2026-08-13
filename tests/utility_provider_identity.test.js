@@ -127,8 +127,8 @@ async function main() {
     assert.deepStrictEqual(waterCandidates.map((provider) => provider.id), [waterA.id, waterB.id]);
   });
 
-  const ddl = fs.readFileSync(path.join(__dirname, "..", "docs",
-    "UTILITIES_CANONICAL_SCHEMA_DRAFT.sql"), "utf8");
+  const ddl = fs.readFileSync(path.join(__dirname, "..", "migrations",
+    "169_utilities_canonical_truth.sql"), "utf8");
   const providerBlock = ddl.match(/create table utility_providers \([\s\S]*?\n\);/i)[0];
   ok("provider identity carries neither property nor vendor/payee semantics", () => {
     assert(!/property_id|vendor_id|payee/i.test(providerBlock));
