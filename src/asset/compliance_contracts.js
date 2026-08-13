@@ -244,20 +244,33 @@ function validateWriteReceipt(value) {
 function validateStandingItem(value, path = "standing.items[]") {
   exact(value, ["entity", "standing", "why", "evidence", "unresolved", "next", "attention", "references"], path);
   exact(value.entity, ["type", "compliance_type", "record_id", "label"], `${path}.entity`);
-  if (value.entity.type !== "credential") throw new TypeError(`${path}.entity.type mismatch`);
+  oneOf(value.entity.type, ["credential", "finding"], `${path}.entity.type`);
   for (const key of ["compliance_type", "record_id", "label"]) requiredString(value.entity[key], `${path}.entity.${key}`);
   exact(value.standing, ["code", "as_of"], `${path}.standing`);
-  oneOf(value.standing.code, ["current", "expired", "no_current_period_established", "conflicted", "unknown"], `${path}.standing.code`);
+  oneOf(value.standing.code, [
+    "current", "expired", "not_yet_effective", "no_current_period_established", "not_established",
+    "open", "cure_recorded_awaiting_authority", "authority_closed", "conflicted",
+    "unknown",
+  ], `${path}.standing.code`);
   isoDate(value.standing.as_of, `${path}.standing.as_of`, false);
   exact(value.why, ["basis", "effective_from", "effective_through"], `${path}.why`);
-  oneOf(value.why.basis, ["established_credential_period", "no_established_period", "conflicting_established_periods", "standing_unavailable"], `${path}.why.basis`);
+  oneOf(value.why.basis, [
+    "established_credential_period", "future_credential_period",
+    "credential_history_without_covering_period", "conflicting_established_periods",
+    "insufficient_canonical_facts", "finding_issued_without_closure",
+    "cure_without_authority_closure", "authority_disposition_closed",
+    "authority_disposition_remains_open", "conflicting_finding_facts",
+    "conflicting_authority_dispositions", "no_established_period", "standing_unavailable",
+  ], `${path}.why.basis`);
   isoDate(value.why.effective_from, `${path}.why.effective_from`);
   isoDate(value.why.effective_through, `${path}.why.effective_through`);
   if (!Array.isArray(value.evidence) || !Array.isArray(value.unresolved) || !Array.isArray(value.references))
     throw new TypeError(`${path} evidence, unresolved and references must be arrays`);
   value.evidence.forEach((e, i) => {
     exact(e, ["role", "label", "reference"], `${path}.evidence[${i}]`);
-    oneOf(e.role, ["issuance", "supporting"], `${path}.evidence[${i}].role`);
+    oneOf(e.role, [
+      "issuance", "finding", "payment", "cure", "authority_disposition", "supporting",
+    ], `${path}.evidence[${i}].role`);
     requiredString(e.label, `${path}.evidence[${i}].label`);
     validateReference(e.reference);
   });
@@ -273,8 +286,16 @@ function validateStandingItem(value, path = "standing.items[]") {
     oneOf(value.next.state, ["date_only", "action_established"], `${path}.next.state`);
   }
   exact(value.attention, ["state", "obligation_id"], `${path}.attention`);
-  oneOf(value.attention.state, ["none_established", "action_established"], `${path}.attention.state`);
+  oneOf(value.attention.state,
+    ["none_established", "action_established", "upcoming", "action_required", "overdue"],
+    `${path}.attention.state`);
   nullableString(value.attention.obligation_id, `${path}.attention.obligation_id`);
+  if (value.attention.state === "none_established" && value.attention.obligation_id !== null) {
+    throw new TypeError(`${path}.attention cannot carry an obligation without established attention`);
+  }
+  if (value.attention.state !== "none_established" && value.attention.obligation_id === null) {
+    throw new TypeError(`${path}.attention requires a linked obligation`);
+  }
   value.references.forEach(validateReference);
 }
 
@@ -305,7 +326,10 @@ function validateDetail(value) {
   if (!Array.isArray(value.history) || !Array.isArray(value.references)) throw new TypeError("detail lists required");
   value.history.forEach((event, i) => {
     exact(event, ["event", "effective_from", "effective_through", "supersedes_fact_id", "reason", "evidence"], `detail.history[${i}]`);
-    oneOf(event.event, ["period_established", "fact_corrected"], `detail.history[${i}].event`);
+    oneOf(event.event, [
+      "period_established", "finding_issued", "payment_observed", "cure_performed",
+      "authority_disposition", "fact_corrected",
+    ], `detail.history[${i}].event`);
     isoDate(event.effective_from, `detail.history[${i}].effective_from`);
     isoDate(event.effective_through, `detail.history[${i}].effective_through`);
     nullableString(event.supersedes_fact_id, `detail.history[${i}].supersedes_fact_id`);
