@@ -41,6 +41,8 @@
    ════════════════════════════════════════════════════════════════════ */
 "use strict";
 
+const { retrievalOnly } = require("../shared/reader_capability_contract.js");
+
 //  Every field this adapter is willing to propose, and the labels that
 //  license it. Order matters only in that the first match wins.
 const FIELDS = Object.freeze([
@@ -178,6 +180,7 @@ function propose(text) {
     //  Named so the surface can say where a suggestion came from. §38:
     //  a proposal is not a recorded fact and must not look like one.
     source: "document_scan",
+    capability_classes: retrievalOnly("explicit labels in retained insurance document text"),
     found_count: found.length,
     //  THE SHARE IS NEVER PROPOSED. Stated here so the absence is a
     //  decision on the record rather than something nobody got to.

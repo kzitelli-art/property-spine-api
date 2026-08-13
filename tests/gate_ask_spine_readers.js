@@ -61,6 +61,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const readerCapabilities = require("../src/shared/reader_capability_contract.js");
 const ROOT = path.join(__dirname, "..");
 
 let pass = 0, fail = 0;
@@ -116,16 +117,24 @@ const REGISTRY = {
   insurance: {
     state: "pending",
     owner: "asset management",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "canonical insurance standing and recorded derivation basis"),
+    composition_authorization: "unsolved_cross_domain",
     clears: "Ask Spine gathers the insurance standing projection — coverage " +
             "standing, annual cost, renewal, funding mechanism, known gaps — " +
-            "with the §40.5 walls preserved (financed ≠ paid, payment ≠ coverage).",
+            "with the §40.5 walls preserved (financed ≠ paid, payment ≠ coverage), " +
+            "after §40.8 cross-domain composition authorization is governed.",
   },
   tax: {
     state: "pending",
     owner: "asset management",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "canonical tax standing and recorded derivation basis"),
+    composition_authorization: "unsolved_cross_domain",
     clears: "Ask Spine gathers the tax standing projection — obligation set, " +
             "amounts, next milestone, filing and payment standing — with the " +
-            "§40.5 walls preserved (escrow funded ≠ City paid, filed ≠ paid).",
+            "§40.5 walls preserved (escrow funded ≠ City paid, filed ≠ paid), " +
+            "after §40.8 cross-domain composition authorization is governed.",
   },
 };
 
@@ -237,6 +246,15 @@ for (const [d, v] of Object.entries(REGISTRY)) {
     ok(`${d} pending names the condition that clears it`,
        !!(v.clears && v.clears.trim().length > 20),
        "convenience is not a replacement condition (§18)");
+    let capabilityValid = true;
+    try { readerCapabilities.validate(v.capability_classes, `${d}.capability_classes`); }
+    catch (_) { capabilityValid = false; }
+    ok(`${d} declares retrieval without claiming comparison or cause`,
+       capabilityValid && v.capability_classes.retrieval.claim === "claimed"
+       && v.capability_classes.comparison.claim === "not_claimed"
+       && v.capability_classes.causal_explanation.claim === "not_claimed");
+    ok(`${d} records cross-domain composition authorization as unsolved`,
+       v.composition_authorization === "unsolved_cross_domain");
   }
   if (v.state === "waived") {
     ok(`${d} waived names a reason`,

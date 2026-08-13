@@ -58,6 +58,8 @@
    ════════════════════════════════════════════════════════════════════ */
 "use strict";
 
+const { retrievalOnly } = require("../shared/reader_capability_contract.js");
+
 const MONTHS = {
   jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
   jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
@@ -240,10 +242,12 @@ function fromPattern(body, pattern, parse) {
 function propose(text, artifact_kind) {
   const body = String(text == null ? "" : text);
   const spec = KIND_FIELDS[artifact_kind];
+  const capability_classes = retrievalOnly(
+    "explicit labels and named patterns in retained tax document text");
 
   if (!spec) {
     //  NEVER OPENED. Spine does not read this kind of document at all.
-    return { available: false, found_count: 0, fields: {}, unknown: [],
+    return { available: false, found_count: 0, fields: {}, unknown: [], capability_classes,
              source: "label_scan",
              reason: NO_PROPOSAL[artifact_kind]
                || "Spine does not read this kind of document. Enter what it says — " +
@@ -251,7 +255,7 @@ function propose(text, artifact_kind) {
   }
   if (!body.trim()) {
     //  NOTHING TO READ. No text came out of the file at all.
-    return { available: false, found_count: 0, fields: {},
+    return { available: false, found_count: 0, fields: {}, capability_classes,
              unknown: spec.map((f) => f.key), source: "label_scan",
              reason: "Spine could not read any text out of this document. Enter what " +
                      "it says — your answers are recorded against the file you uploaded." };
@@ -280,6 +284,7 @@ function propose(text, artifact_kind) {
     available: true,
     found_count: found,
     fields, unknown, source: "label_scan",
+    capability_classes,
     reason: found
       ? `Spine read ${found} field${found === 1 ? "" : "s"} off this document. Check ` +
         `every one before confirming — what gets recorded is what the form holds when ` +

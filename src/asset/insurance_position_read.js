@@ -37,6 +37,16 @@
    ════════════════════════════════════════════════════════════════════ */
 "use strict";
 
+// This canonical economic read is intentionally import-free. The shared
+// capability validator proves this exact output shape without becoming a
+// dependency path into the economic chain.
+const POSITION_CAPABILITIES = () => Object.freeze({
+  retrieval: Object.freeze({ claim: "claimed",
+    basis: "canonical insurance facts, recorded allocation bases and requested period" }),
+  comparison: Object.freeze({ claim: "not_claimed", basis: null }),
+  causal_explanation: Object.freeze({ claim: "not_claimed", basis: null }),
+});
+
 /*  Whole months between two dates. 2026-03-01 → 2027-03-01 is 12.
  *  Deliberately calendar months rather than days: the recognition policy
  *  is equal monthly, so the divisor is the count of months the term
@@ -112,7 +122,8 @@ async function readPosition(client, { property_id, period }) {
     [property_id, start, next]);
 
   if (!rows.length) {
-    return { established: false, period, currency_code: null, coverages: [],
+    return { capability_classes: POSITION_CAPABILITIES(),
+             established: false, period, currency_code: null, coverages: [],
              annual_cost_cents: null, period_accrual_cents: null, next_renewal: null };
   }
 
@@ -166,6 +177,7 @@ async function readPosition(client, { property_id, period }) {
     .map((c) => c.coverage_period_end).sort()[0] || null;
 
   return {
+    capability_classes: POSITION_CAPABILITIES(),
     established: true,
     period,
     currency_code: mixed ? null : currencies[0],
@@ -368,6 +380,7 @@ async function readParticipation(client, { property_id, period }) {
     .map((c) => c.coverage_period_end).filter(Boolean).sort()[0] || null;
 
   return {
+    capability_classes: POSITION_CAPABILITIES(),
     period,
     participates: coverages.length > 0,
     coverages,

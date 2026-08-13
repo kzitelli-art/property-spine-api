@@ -41,6 +41,8 @@
    ════════════════════════════════════════════════════════════════════ */
 "use strict";
 
+const { retrievalOnly } = require("../shared/reader_capability_contract.js");
+
 //  The operating milestones. Renewal work begins well before expiry, so
 //  the bands are what an operator plans against — not a countdown.
 const MILESTONES = Object.freeze([90, 60, 45, 30]);
@@ -106,7 +108,9 @@ function standingOf({ coverages, asOf } = {}) {
     }))
     .filter((c) => c.start && c.end);
 
-  const base = { as_of: today, milestone: null, days_to_expiry: null,
+  const base = { capability_classes: retrievalOnly(
+                   "canonical insurance coverage periods and the requested as-of date"),
+                 as_of: today, milestone: null, days_to_expiry: null,
                  in_force: [], next_expiry: null, bound_next_term: null };
 
   if (!rows.length) {

@@ -49,6 +49,16 @@
    ════════════════════════════════════════════════════════════════════ */
 "use strict";
 
+// This canonical economic read is intentionally import-free. The shared
+// capability validator proves this exact output shape without becoming a
+// dependency path into the economic chain.
+const POSITION_CAPABILITIES = () => Object.freeze({
+  retrieval: Object.freeze({ claim: "claimed",
+    basis: "canonical tax facts, governed jurisdiction rules and requested as-of date" }),
+  comparison: Object.freeze({ claim: "not_claimed", basis: null }),
+  causal_explanation: Object.freeze({ claim: "not_claimed", basis: null }),
+});
+
 //  ⚠ NO require() HERE, EVER. The boundary gate asserts this file imports
 //  nothing, so it cannot reach funding by any path. The jurisdiction rules
 //  are passed in by the caller instead.
@@ -501,6 +511,7 @@ async function readTaxPosition(client, { property_id, as_of = null, rules } = {}
   }
 
   return {
+    capability_classes: POSITION_CAPABILITIES(),
     as_of: today,
     jurisdiction: rules.JURISDICTION,
     overall,

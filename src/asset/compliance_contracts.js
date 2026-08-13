@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("crypto");
+const readerCapabilities = require("../shared/reader_capability_contract.js");
 
 const VERSIONS = Object.freeze({
   proposal: "compliance.rental_license.proposal.v2",
@@ -54,9 +55,7 @@ const FAILURE_CODES = Object.freeze([
   "reference_unavailable",
 ]);
 
-const CAPABILITY_NAMES = Object.freeze([
-  "retrieval", "comparison", "causal_explanation",
-]);
+const CAPABILITY_NAMES = readerCapabilities.CAPABILITY_NAMES;
 
 function exact(value, keys, path) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -93,23 +92,11 @@ function isoDate(value, path, nullable = true) {
 }
 
 function retrievalCapabilityReceipt(basis) {
-  requiredString(basis, "capability retrieval basis");
-  return {
-    retrieval: { claim: "claimed", basis },
-    comparison: { claim: "not_claimed", basis: null },
-    causal_explanation: { claim: "not_claimed", basis: null },
-  };
+  return readerCapabilities.retrievalOnly(basis);
 }
 
 function validateCapabilityClasses(value, path) {
-  exact(value, CAPABILITY_NAMES, path);
-  for (const name of CAPABILITY_NAMES) {
-    exact(value[name], ["claim", "basis"], `${path}.${name}`);
-    oneOf(value[name].claim, ["claimed", "not_claimed"], `${path}.${name}.claim`);
-    if (value[name].claim === "claimed") requiredString(value[name].basis, `${path}.${name}.basis`);
-    else if (value[name].basis !== null) throw new TypeError(`${path}.${name}.basis must be null when unclaimed`);
-  }
-  return value;
+  return readerCapabilities.validate(value, path);
 }
 
 function validateUnknown(item, index) {

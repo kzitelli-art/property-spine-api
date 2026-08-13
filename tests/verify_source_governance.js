@@ -126,6 +126,8 @@ const GATES = [
     what: "Compliance intake: generic PDF retention, dedupe, retain-before-recognition failure" },
   { file: "compliance_contracts.test.js",
     what: "Compliance contracts: exact proposal and frozen future writer/read/reference wires" },
+  { file: "asset_reader_capabilities.test.js",
+    what: "Insurance + Tax readers: retrieval declared; comparison and cause not claimed" },
 ];
 
 const bar = "════════════════════════════════════════════════════════════════";
