@@ -68,7 +68,8 @@ console.log("  ASSERTIONS STARTED\n");
 // ── 1. THE PAYLOAD IS STILL THE MEASURED ARTIFACT ─────────────────────
 if (!ok("P1  the proven payload exists", fs.existsSync(PAYLOAD), PAYLOAD)) process.exit(1);
 const payloadRaw = fs.readFileSync(PAYLOAD, "utf8");
-const payloadDigest = crypto.createHash("sha256").update(payloadRaw).digest("hex");
+const payloadDigest = crypto.createHash("sha256")
+  .update(payloadRaw.replace(/\r\n/g, "\n")).digest("hex");
 ok("P2  the payload still carries the digest the scale proof measured",
    payloadDigest === PROVEN_DIGEST,
    "expected " + PROVEN_DIGEST + "\n        got      " + payloadDigest +
