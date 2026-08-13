@@ -12,8 +12,9 @@ function ok(label, condition, detail = "") {
 }
 
 async function main() {
-  const calls = { reads: [], providers: [], queries: [] };
+  const calls = { reads: [], providers: [], setup: [], queries: [] };
   let readFailure = false;
+  let failMeter = false;
   const client = {
     async query(sql) { calls.queries.push(String(sql)); return { rows: [] }; },
     release() {},
@@ -43,6 +44,26 @@ async function main() {
       calls.providers.push(input);
       return { id: "provider-a", property_id: input.property_id, provider_name: input.provider_name };
     },
+    utilityError(code, message) { const error = new Error(message); error.code = code; return error; },
+    async declareService(_client, input) {
+      calls.setup.push(["declareService", input]);
+      return { service: { id: "service-a", service_class: input.service_class },
+        declaration: { id: "declaration-a", applicability: input.applicability } };
+    },
+    async ensureService(_client, input) {
+      calls.setup.push(["ensureService", input]);
+      return { id: "service-a", service_class: input.service_class };
+    },
+    async relateProvider(_client, input) { calls.setup.push(["relateProvider", input]); return { id: "rel-a" }; },
+    async recordArrangement(_client, input) { calls.setup.push(["recordArrangement", input]); return { id: "arr-a" }; },
+    async establishAccount(_client, input) { calls.setup.push(["establishAccount", input]); return { id: "account-a" }; },
+    async recordServicePoint(_client, input) { calls.setup.push(["recordServicePoint", input]); return { id: "point-a" }; },
+    async recordMeter(_client, input) {
+      calls.setup.push(["recordMeter", input]);
+      if (failMeter) throw this.utilityError("BAD_INPUT", "meter rejected for atomicity proof");
+      return { id: "meter-a" };
+    },
+    async link(_client, kind, input) { calls.setup.push([`link:${kind}`, input]); return { id: `link-${kind}` }; },
   };
   const artifacts = {
     MAX_BYTES: 25 * 1024 * 1024,
@@ -142,6 +163,48 @@ async function main() {
     ok("writer authority is server-derived actor and property",
       calls.providers[0].property_id === "property-a"
         && calls.providers[0].user_id === "operator-a");
+
+    const setup = await request(`${path}/setup`, {
+      token: "entitled", method: "POST",
+      body: {
+        service_class: "electricity", applicability: "present", effective_from: "2026-01-01",
+        provenance_note: "operator confirmed",
+        provider: { provider_name: "PECO" },
+        arrangement: { property_id: "property-b", user_id: "other-user",
+          physical_arrangement: "whole_building_master_meter" },
+        account: { property_id: "property-b", external_account_identifier: "E-1234" },
+        service_point: { point_kind: "whole_building", location_label: "Building" },
+        meter: { meter_kind: "provider_meter", meter_identifier: "M-1" },
+      },
+    });
+    ok("one confirmed Utility topology commits through the canonical writers", setup.status === 201);
+    ok("setup composes service, provider, arrangement, account, point, meter and map writes",
+      ["declareService", "relateProvider", "recordArrangement", "establishAccount",
+        "recordServicePoint", "recordMeter", "link:account_service",
+        "link:account_service_point", "link:meter_service_point", "link:account_meter"]
+        .every((name) => calls.setup.some((call) => call[0] === name)));
+    ok("nested client authority cannot override the session actor or property",
+      calls.setup.every((call) => call[1].property_id === "property-a"
+        && call[1].user_id === "operator-a"));
+    ok("the setup orchestration is transaction-bounded",
+      calls.queries.includes("begin") && calls.queries.includes("commit"));
+
+    const transactionStart = calls.queries.length;
+    failMeter = true;
+    const failedSetup = await request(`${path}/setup`, {
+      token: "entitled", method: "POST",
+      body: {
+        service_class: "electricity", effective_from: "2026-01-01",
+        provenance_note: "operator confirmed", provider_id: "provider-a",
+        meter: { meter_kind: "provider_meter", meter_identifier: "bad-meter" },
+      },
+    });
+    failMeter = false;
+    const failedTransaction = calls.queries.slice(transactionStart);
+    ok("a failed topology confirmation returns a governed refusal", failedSetup.status === 422);
+    ok("a failed topology confirmation rolls back and never commits",
+      failedTransaction.includes("begin") && failedTransaction.includes("rollback")
+        && !failedTransaction.includes("commit"));
 
     const foreignEvidence = await request(`${path}/evidence/artifact-b`, { token: "entitled" });
     ok("cross-property Utility evidence is indistinguishable from missing", foreignEvidence.status === 404);

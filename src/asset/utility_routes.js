@@ -195,6 +195,147 @@ module.exports = function utilityRoutes(deps = {}) {
     });
   }
 
+  /*
+   * One human confirmation of one service topology. This is orchestration,
+   * not a second writer: every durable fact still passes through the same
+   * canonical service functions, inside one transaction.
+   */
+  router.post("/operator/asset-management/utilities/setup", ...gate,
+    async (req, res) => {
+      const body = req.body || {};
+      try {
+        const records = await inTransaction(async (client) => {
+          const base = {
+            property_id: req.operator.property_id,
+            user_id: req.operator.id,
+            source_artifact_id: body.source_artifact_id || null,
+            provenance_note: body.provenance_note || null,
+          };
+          let service;
+          let declaration = null;
+          if (body.applicability) {
+            const declared = await utilities.declareService(client, {
+              ...base,
+              service_class: body.service_class,
+              service_label: body.service_label || null,
+              applicability: body.applicability,
+              effective_from: body.effective_from,
+              supersedes_id: body.supersedes_id || null,
+              revision_reason: body.revision_reason || null,
+            });
+            service = declared.service;
+            declaration = declared.declaration;
+          } else {
+            service = await utilities.ensureService(client, {
+              property_id: base.property_id,
+              user_id: base.user_id,
+              service_class: body.service_class,
+              service_label: body.service_label || null,
+            });
+          }
+
+          const hasTopology = body.provider || body.arrangement || body.account
+            || body.service_point || body.meter;
+          if (body.applicability === "not_applicable" && hasTopology) {
+            throw utilities.utilityError("BAD_INPUT",
+              "a service established as not applicable cannot carry a provider, arrangement, account, service point, or meter");
+          }
+
+          let provider = null;
+          if (body.provider && body.provider.provider_name) {
+            provider = await utilities.establishProvider(client, {
+              ...base,
+              provider_name: body.provider.provider_name,
+            });
+            await utilities.relateProvider(client, {
+              ...base,
+              service_id: service.id,
+              provider_id: provider.id,
+              effective_from: body.effective_from,
+            });
+          } else if (body.provider_id) {
+            provider = { id: body.provider_id };
+            await utilities.relateProvider(client, {
+              ...base,
+              service_id: service.id,
+              provider_id: provider.id,
+              effective_from: body.effective_from,
+            });
+          }
+
+          const arrangement = body.arrangement
+            ? await utilities.recordArrangement(client, {
+                ...body.arrangement,
+                ...base,
+                service_id: service.id,
+                effective_from: body.effective_from,
+              })
+            : null;
+
+          let account = null;
+          if (body.account) {
+            const providerId = body.account.provider_id || (provider && provider.id);
+            if (!providerId) {
+              throw utilities.utilityError("BAD_INPUT",
+                "a provider must be selected before a provider account can be recorded");
+            }
+            account = await utilities.establishAccount(client, {
+              ...body.account,
+              ...base,
+              provider_id: providerId,
+              effective_from: body.effective_from,
+            });
+            await utilities.link(client, "account_service", {
+              ...base,
+              left_id: account.id,
+              right_id: service.id,
+              effective_from: body.effective_from,
+            });
+          }
+
+          const servicePoint = body.service_point
+            ? await utilities.recordServicePoint(client, {
+                ...body.service_point,
+                ...base,
+                service_id: service.id,
+                effective_from: body.effective_from,
+              })
+            : null;
+
+          let meter = null;
+          if (body.meter) {
+            meter = await utilities.recordMeter(client, {
+              ...body.meter,
+              ...base,
+              provider_id: body.meter.provider_id || (provider && provider.id) || null,
+              effective_from: body.effective_from,
+            });
+          }
+
+          const links = [];
+          async function map(kind, leftId, rightId) {
+            if (!leftId || !rightId) return;
+            links.push(await utilities.link(client, kind, {
+              ...base, left_id: leftId, right_id: rightId,
+              effective_from: body.effective_from,
+            }));
+          }
+          await map("account_service_point", account && account.id, servicePoint && servicePoint.id);
+          await map("meter_service_point", meter && meter.id, servicePoint && servicePoint.id);
+          await map("account_meter", account && account.id, meter && meter.id);
+
+          return { service, declaration, provider, arrangement, account, service_point: servicePoint,
+            meter, links: links.filter(Boolean) };
+        });
+        return res.status(201).json({
+          records,
+          receipt: "Utility setup recorded from the confirmed service, responsibility, account, and meter facts.",
+        });
+      } catch (error) {
+        return fail(res, error);
+      }
+    });
+
   write("/operator/asset-management/utilities/services", "declareService",
     "Utility service applicability recorded from the confirmed evidence.");
   write("/operator/asset-management/utilities/providers", "establishProvider",
