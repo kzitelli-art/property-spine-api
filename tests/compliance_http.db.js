@@ -12,7 +12,7 @@ const contracts = require("../src/asset/compliance_contracts.js");
 const documentRead = require("../src/asset/compliance_document_read.js");
 
 const URL = receipt.harnessConnectionString();
-const EXPECTED = 33;
+const EXPECTED = 42;
 let passed = 0;
 let failed = 0;
 
@@ -42,15 +42,16 @@ function confirmation(artifact, proposal, key, override = {}, correction = null)
   };
 }
 
-function request(port, method, route, { token, body } = {}) {
+function request(port, method, route, { token, body, raw, headers: extraHeaders } = {}) {
   return new Promise((resolve, reject) => {
-    const bytes = body === undefined ? null : Buffer.from(JSON.stringify(body));
-    const headers = {};
+    const bytes = raw !== undefined ? raw
+      : body === undefined ? null : Buffer.from(JSON.stringify(body));
+    const headers = { ...(extraHeaders || {}) };
     if (token) headers["x-staff-session"] = token;
-    if (bytes) {
+    if (bytes && raw === undefined) {
       headers["content-type"] = "application/json";
-      headers["content-length"] = String(bytes.length);
     }
+    if (bytes) headers["content-length"] = String(bytes.length);
     const req = http.request({ host: "127.0.0.1", port, method, path: route, headers }, (res) => {
       const chunks = [];
       res.on("data", (chunk) => chunks.push(chunk));
@@ -67,6 +68,20 @@ function request(port, method, route, { token, body } = {}) {
     if (bytes) req.write(bytes);
     req.end();
   });
+}
+
+function multipart(filename, contentType, buffer, fields = {}) {
+  const boundary = "----spine-compliance-" + crypto.randomBytes(8).toString("hex");
+  const parts = [];
+  for (const [key, value] of Object.entries(fields)) {
+    parts.push(Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`));
+  }
+  parts.push(Buffer.from(
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
+    `Content-Type: ${contentType}\r\n\r\n`));
+  parts.push(buffer, Buffer.from(`\r\n--${boundary}--\r\n`));
+  return { raw: Buffer.concat(parts), headers: { "content-type": `multipart/form-data; boundary=${boundary}` } };
 }
 
 async function main() {
@@ -103,8 +118,9 @@ async function main() {
       create table source_artifacts (
         id uuid primary key default gen_random_uuid(), scope_type text not null, scope_id uuid not null,
         original_filename text not null, mime_type text, artifact_kind text not null default 'other',
-        byte_size integer, sha256 text, content bytea, uploaded_at timestamptz default now(),
-        source_as_of_date date, uploaded_by_user_id uuid references users(id)
+        byte_size integer, sha256 text, content bytea, stored_at timestamptz default now(),
+        uploaded_at timestamptz default now(), source_as_of_date date,
+        uploaded_by_user_id uuid references users(id), uploaded_by_basis text
       );
     `);
     await client.query(fs.readFileSync(
@@ -142,8 +158,8 @@ async function main() {
     const tokenNoEntitlement = await session(
       userNoEntitlement.id, propertyA.id, ["management"]);
 
-    const sourceBytes = fs.readFileSync(
-      path.join(__dirname, "fixtures/compliance/solo_4233_rental_license.txt"));
+    const sourceBytes = Buffer.concat([Buffer.from("%PDF-1.4\n"), fs.readFileSync(
+      path.join(__dirname, "fixtures/compliance/solo_4233_rental_license.txt"))]);
     async function retain(propertyId, userId, filename) {
       return (await client.query(
         `insert into source_artifacts
@@ -153,12 +169,8 @@ async function main() {
          returning id,sha256`,
         [propertyId, filename, sourceBytes.length, digest(sourceBytes), sourceBytes, userId])).rows[0];
     }
-    const artifactA = await retain(propertyA.id, userA.id, "Rental License 922616.pdf");
     const artifactB = await retain(propertyB.id, userB.id, "Foreign Rental License.pdf");
     const proposal = documentRead.propose(sourceBytes.toString("utf8"));
-    const confirmedA = confirmation(artifactA, proposal, "http-confirm-a", {
-      effective_from: "2026-04-30", effective_through: "2027-05-01",
-    });
     const confirmedB = confirmation(artifactB, proposal, "http-confirm-foreign", {
       effective_from: "2026-04-30", effective_through: "2027-05-01",
     });
@@ -193,6 +205,22 @@ async function main() {
       empty.body.items.length === 0 && empty.body.coverage.state === "unknown");
     const badDate = await request(port, "GET", `${base}?as_of=8%2F13%2F2026`, { token: tokenA });
     ok("ambiguous read date is refused", badDate.status === 422);
+
+    const uploaded = await request(port, "POST", `${base}/evidence`, {
+      token: tokenA, ...multipart("Rental License 922616.pdf", "application/pdf", sourceBytes),
+    });
+    ok("governed HTTP intake retains and reads a generic Compliance PDF",
+      uploaded.status === 201 && uploaded.body.intake.proposal.recognition_state === "recognized");
+    ok("retained source stays generically classified",
+      uploaded.body.intake.artifact.artifact_kind === "other");
+    ok("first source proposes no existing-item relationship",
+      uploaded.body.item_relationship === null);
+    ok("source intake cannot establish canonical truth",
+      (await client.query("select count(*)::int n from compliance_facts")).rows[0].n === 0);
+    const artifactA = uploaded.body.intake.artifact;
+    const confirmedA = confirmation(artifactA, proposal, "http-confirm-a", {
+      effective_from: "2026-04-30", effective_through: "2027-05-01",
+    });
 
     const foreignArtifact = await request(port, "POST", `${base}/confirm`, {
       token: tokenA, body: confirmedB,
@@ -239,6 +267,30 @@ async function main() {
       sourceRef.opener.kind === "server_minted");
     ok("source identity remains opaque in the reader wire response",
       !JSON.stringify(standing.body).includes(String(artifactA.id)));
+    const overview = await request(port, "GET", "/operator/asset-management/overview", {
+      token: tokenA,
+    });
+    const complianceRoom = overview.body.rooms.find((room) => room.key === "compliance");
+    ok("Asset Management overview asks Compliance for establishment",
+      overview.status === 200 && complianceRoom.establishment === "partially_established");
+    ok("credential truth establishes only the license compartment",
+      complianceRoom.compartments.find((entry) => entry.key === "licenses_registrations")
+        .establishment === "established" &&
+      complianceRoom.compartments.find((entry) => entry.key === "violations_cure")
+        .establishment === "not_established");
+    ok("overview preserves the unknown requirement census",
+      /requirement census remains unknown/i.test(complianceRoom.establishment_summary));
+
+    const recognizedAgain = await request(port, "POST", `${base}/evidence`, {
+      token: tokenA, ...multipart("Renewed Rental License.pdf", "application/pdf", sourceBytes),
+    });
+    ok("new evidence may propose continuity with an existing canonical item",
+      recognizedAgain.status === 201 && recognizedAgain.body.item_relationship &&
+      recognizedAgain.body.item_relationship.candidate.item_id === String(itemId));
+    ok("continuity remains explicitly unestablished",
+      recognizedAgain.body.item_relationship.state === "proposed" &&
+      recognizedAgain.body.item_relationship.does_not_establish.includes("canonical_item_resolution") &&
+      (await client.query("select count(*)::int n from compliance_facts")).rows[0].n === 1);
 
     const detail = await request(port, "GET", `${base}/items/${itemId}?as_of=2026-08-13`, {
       token: tokenA,

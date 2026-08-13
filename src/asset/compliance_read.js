@@ -25,6 +25,12 @@ function timestampValue(value) {
   return typeof value === "string" ? new Date(value).toISOString() : value.toISOString();
 }
 
+function normalized(value) {
+  return value === null || value === undefined
+    ? null
+    : String(value).trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 function factValue(row) {
   if (row.fact_type === "credential_period") {
     return {
@@ -177,8 +183,82 @@ async function readComplianceDetail(client, input = {}) {
   });
 }
 
+async function readComplianceEstablishment(client, input = {}) {
+  const propertyId = required(input.property_id, "server-derived property_id");
+  const row = (await client.query(
+    `select count(*)::int as item_count,
+            count(*) filter (where item_kind = 'credential')::int as credential_count
+       from compliance_items where property_id = $1`, [propertyId])).rows[0];
+  const count = Number(row && row.item_count || 0);
+  const credentialCount = Number(row && row.credential_count || 0);
+  return {
+    established: count > 0,
+    item_count: count,
+    credential_count: credentialCount,
+    note: count > 0
+      ? `${count} governed Compliance item${count === 1 ? "" : "s"}`
+      : "No governed Compliance items yet",
+  };
+}
+
+async function proposeExistingItemRelationship(client, input = {}) {
+  const propertyId = required(input.property_id, "server-derived property_id");
+  const proposal = contracts.validateProposal(input.proposal);
+  const p = proposal.proposed;
+  if (proposal.recognition_state !== "recognized" ||
+      proposal.source_classification !== "authority_issued_credential" ||
+      p.compliance_type === null || p.issuing_authority === null ||
+      p.legal_entity_name === null || p.property_address === null) return null;
+
+  const rows = (await client.query(
+    `select i.id, i.item_kind, i.compliance_type,
+            f.credential_issuing_authority, f.credential_external_number,
+            f.credential_legal_entity_name, f.credential_property_address,
+            f.credential_effective_through
+       from compliance_items i
+       join compliance_facts f on f.item_id = i.id and f.fact_type = 'credential_period'
+      where i.property_id = $1
+        and i.item_kind = 'credential'
+        and i.compliance_type = $2
+        and not exists (
+          select 1 from compliance_facts correction where correction.supersedes_fact_id = f.id
+        )
+      order by f.credential_effective_through desc, f.established_at desc, f.id desc`,
+    [propertyId, p.compliance_type])).rows;
+
+  const matches = rows.filter((row) =>
+    normalized(row.credential_issuing_authority) === normalized(p.issuing_authority) &&
+    normalized(row.credential_legal_entity_name) === normalized(p.legal_entity_name) &&
+    normalized(row.credential_property_address) === normalized(p.property_address));
+  const itemIds = [...new Set(matches.map((row) => String(row.id)))];
+  if (itemIds.length !== 1) return null;
+  const row = matches.find((candidate) => String(candidate.id) === itemIds[0]);
+  const suffix = row.credential_external_number ? ` #${row.credential_external_number}` : "";
+  return contracts.validateItemRelationshipProposal({
+    contract_version: contracts.VERSIONS.item_relationship_proposal,
+    state: "proposed",
+    candidate: {
+      item_id: String(row.id),
+      item_kind: row.item_kind,
+      compliance_type: row.compliance_type,
+      label: row.compliance_type === "rental_license"
+        ? `Rental License${suffix}` : `${row.compliance_type}${suffix}`,
+    },
+    basis: {
+      subject_match: true,
+      authority_match: true,
+      item_kind_match: true,
+      external_identifier_match: normalized(row.credential_external_number) ===
+        normalized(p.external_credential_number),
+    },
+    does_not_establish: [...contracts.ITEM_RELATIONSHIP_DOES_NOT_ESTABLISH],
+  });
+}
+
 module.exports = {
   COVERAGE_UNKNOWN,
   readComplianceStanding,
   readComplianceDetail,
+  readComplianceEstablishment,
+  proposeExistingItemRelationship,
 };

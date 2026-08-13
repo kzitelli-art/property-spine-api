@@ -1,6 +1,7 @@
 "use strict";
 
 const artifacts = require("../onboarding/source_artifact_service.js");
+const evidenceIntake = require("./compliance_evidence_intake.js");
 const documentRead = require("./compliance_document_read.js");
 const reads = require("./compliance_read.js");
 const { createComplianceWriter, CompliancePersistenceError } =
@@ -28,6 +29,7 @@ function safeFilename(value) {
 
 module.exports = function complianceHttp(deps = {}) {
   const express = require("express");
+  const multer = require("multer");
   const router = express.Router();
   const {
     pool, fileToText, requireOperator, refuseClientAuthority, requireAssetManagementModule,
@@ -59,6 +61,23 @@ module.exports = function complianceHttp(deps = {}) {
     },
   });
   const gate = [requireOperator, refuseClientAuthority, requireAssetManagementModule];
+  const uploadOne = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: artifacts.MAX_BYTES, files: 1 },
+  }).single("file");
+
+  function acceptEvidenceFile(req, res, next) {
+    uploadOne(req, res, (error) => {
+      if (!error) return next();
+      if (error.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({ error: "file_too_large", receipt: "That file is over 25 MB." });
+      }
+      return res.status(400).json({ error: "upload_failed", receipt: error.message });
+    });
+  }
+  const multipartGate = [
+    requireOperator, acceptEvidenceFile, refuseClientAuthority, requireAssetManagementModule,
+  ];
 
   function authority(req) {
     return {
@@ -101,6 +120,36 @@ module.exports = function complianceHttp(deps = {}) {
 
   router.post("/operator/asset-management/compliance/confirm", ...gate, confirm);
   router.post("/operator/asset-management/compliance/items/:itemId/confirm", ...gate, confirm);
+
+  router.post("/operator/asset-management/compliance/evidence", ...multipartGate,
+    async (req, res) => {
+      if (!req.file) {
+        return res.status(400).json({ error: "no_file", receipt: "Choose a Compliance document." });
+      }
+      try {
+        const intake = await evidenceIntake.retainAndRecognize(pool, {
+          authorized_property_id: String(req.operator.property_id),
+          authenticated_user_id: String(req.operator.id),
+          authority_basis: "asset_management_module",
+          filename: req.file.originalname,
+          mimetype: req.file.mimetype,
+          buffer: req.file.buffer,
+          extractText: async (buffer) => fileToText({
+            originalname: req.file.originalname,
+            mimetype: req.file.mimetype,
+            buffer,
+          }),
+        });
+        const item_relationship = intake.proposal
+          ? await reads.proposeExistingItemRelationship(pool, {
+              property_id: String(req.operator.property_id), proposal: intake.proposal,
+            })
+          : null;
+        return res.status(201).json({ intake, item_relationship });
+      } catch (error) {
+        return unavailable(res, error, "evidence intake");
+      }
+    });
 
   router.get("/operator/asset-management/compliance", ...gate, async (req, res) => {
     try {
