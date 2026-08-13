@@ -227,6 +227,38 @@ async function main() {
       && Number(bill.statement.amount_billed_cents) === 1844217
       && bill.usage[0].usage_basis === "observed");
 
+    const unmappedMeter = await utility.recordMeter(admin, {
+      property_id: propertyA, provider_id: peco.id, meter_kind: "provider_meter",
+      meter_identifier: "UNMAPPED-100", effective_from: "2026-01-01",
+      provenance_note: "hostile statement-map proof", user_id: userId,
+    });
+    await rejects("statement usage cannot borrow a meter outside its account map", () =>
+      utility.recordStatement(admin, {
+        property_id: propertyA, account_id: account.id, statement_identifier: "wrong-meter",
+        bill_date: "2026-08-01", service_period_start: "2026-07-01",
+        service_period_end: "2026-07-31", currency_code: "USD",
+        amount_billed_cents: 1, source_artifact_id: artifactA,
+        usage: [{ service_id: electric.service.id, meter_id: unmappedMeter.id,
+          quantity: 1, usage_unit: "kWh", usage_basis: "observed" }], user_id: userId,
+      }), /BAD_INPUT|not mapped/i);
+    await rejects("database rejects direct statement usage for an unmapped service", () =>
+      admin.query(
+        `insert into utility_statement_usage
+           (property_id,statement_id,account_id,service_id,quantity,usage_unit,
+            usage_basis,source_artifact_id,recorded_by_user_id)
+         values ($1,$2,$3,$4,1,'therms','observed',$5,$6)`,
+        [propertyA, bill.statement.id, account.id, gasInitial.service.id, artifactA, userId]),
+      /service must be mapped/i);
+    await rejects("database rejects direct statement usage for an unmapped meter", () =>
+      admin.query(
+        `insert into utility_statement_usage
+           (property_id,statement_id,account_id,service_id,meter_id,quantity,usage_unit,
+            usage_basis,source_artifact_id,recorded_by_user_id)
+         values ($1,$2,$3,$4,$5,1,'kWh','observed',$6,$7)`,
+        [propertyA, bill.statement.id, account.id, electric.service.id,
+         unmappedMeter.id, artifactA, userId]),
+      /meter must be mapped/i);
+
     await rejects("cross-property provider association is refused", () => utility.relateProvider(admin, {
       property_id: propertyB, service_id: electric.service.id, provider_id: peco.id,
       effective_from: "2026-01-01", provenance_note: "illegal association", user_id: userId,

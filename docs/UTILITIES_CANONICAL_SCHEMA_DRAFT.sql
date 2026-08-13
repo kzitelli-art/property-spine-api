@@ -350,6 +350,45 @@ create table utility_statement_usage (
     references utility_meters(id, property_id) on delete restrict
 );
 
+-- Usage belongs to a statement's account map. A statement may carry usage
+-- without a meter when that association is not established; when it names a
+-- meter, that meter must overlap the account during the service period.
+create or replace function utility_statement_usage_map_guard() returns trigger
+language plpgsql as $$
+declare
+  period_start date;
+  period_end date;
+begin
+  select service_period_start, service_period_end into period_start, period_end
+    from utility_statements
+   where id = new.statement_id and account_id = new.account_id
+     and property_id = new.property_id;
+
+  if not exists (
+    select 1 from utility_account_services
+     where account_id = new.account_id and service_id = new.service_id
+       and property_id = new.property_id
+       and effective_from <= period_end
+       and (effective_to is null or effective_to > period_start)
+  ) then
+    raise exception 'utility statement service must be mapped to its provider account for the service period';
+  end if;
+
+  if new.meter_id is not null and not exists (
+    select 1 from utility_account_meters
+     where account_id = new.account_id and meter_id = new.meter_id
+       and property_id = new.property_id
+       and effective_from <= period_end
+       and (effective_to is null or effective_to > period_start)
+  ) then
+    raise exception 'utility statement meter must be mapped to its provider account for the service period';
+  end if;
+  return new;
+end $$;
+create trigger utility_statement_usage_map_guard
+  before insert or update on utility_statement_usage
+  for each row execute function utility_statement_usage_map_guard();
+
 -- Unit/space links must belong to the same property as the service point.
 create or replace function utility_service_point_scope_guard() returns trigger
 language plpgsql as $$

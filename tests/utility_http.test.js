@@ -206,6 +206,20 @@ async function main() {
       failedTransaction.includes("begin") && failedTransaction.includes("rollback")
         && !failedTransaction.includes("commit"));
 
+    const impossibleStart = calls.queries.length;
+    const impossible = await request(`${path}/setup`, {
+      token: "entitled", method: "POST",
+      body: {
+        service_class: "natural_gas", applicability: "not_applicable",
+        effective_from: "2026-01-01", provenance_note: "operator confirmed",
+        provider_id: "provider-a",
+      },
+    });
+    const impossibleTransaction = calls.queries.slice(impossibleStart);
+    ok("not-applicable refuses even an existing provider relationship", impossible.status === 422);
+    ok("the contradictory topology is rolled back",
+      impossibleTransaction.includes("rollback") && !impossibleTransaction.includes("commit"));
+
     const foreignEvidence = await request(`${path}/evidence/artifact-b`, { token: "entitled" });
     ok("cross-property Utility evidence is indistinguishable from missing", foreignEvidence.status === 404);
     const ownEvidence = await request(`${path}/evidence/artifact-a`, { token: "entitled" });

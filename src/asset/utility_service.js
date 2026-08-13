@@ -69,6 +69,23 @@ async function assertOwned(client, table, id, propertyId, label) {
   return row;
 }
 
+async function assertStatementMap(client, table, leftColumn, leftId, rightColumn, rightId,
+  propertyId, periodStart, periodEnd, label) {
+  const allowed = new Set(["utility_account_services", "utility_account_meters"]);
+  if (!allowed.has(table)) throw new Error("utility_service statement map table is not allowlisted");
+  const row = (await client.query(
+    `select id from ${table}
+      where ${leftColumn} = $1 and ${rightColumn} = $2 and property_id = $3
+        and effective_from <= $5 and (effective_to is null or effective_to > $4)
+      order by effective_from desc limit 1`,
+    [leftId, rightId, propertyId, periodStart, periodEnd])).rows[0];
+  if (!row) {
+    throw utilityError("BAD_INPUT",
+      `${label} is not mapped to this provider account for the statement service period`);
+  }
+  return row;
+}
+
 async function ensureService(client, {
   property_id, service_class, service_label = null, user_id,
 } = {}) {
@@ -360,6 +377,27 @@ async function recordStatement(client, {
     "provider account");
   await assertArtifact(client, property_id, source_artifact_id);
 
+  const usageItems = usage || [];
+  for (const item of usageItems) {
+    contract.enumValue("usage_basis", item.usage_basis, contract.USAGE_BASES);
+    if (!Number.isFinite(item.quantity) || item.quantity < 0) {
+      throw utilityError("BAD_INPUT", "usage quantity must be a non-negative number");
+    }
+    if (!String(item.usage_unit || "").trim()) {
+      throw utilityError("BAD_INPUT", "usage_unit is required when usage is recorded");
+    }
+    await assertOwned(client, "utility_services", item.service_id, property_id, "utility service");
+    await assertStatementMap(client, "utility_account_services", "account_id", account_id,
+      "service_id", item.service_id, property_id, service_period_start, service_period_end,
+      "utility service");
+    if (item.meter_id) {
+      await assertOwned(client, "utility_meters", item.meter_id, property_id, "utility meter");
+      await assertStatementMap(client, "utility_account_meters", "account_id", account_id,
+        "meter_id", item.meter_id, property_id, service_period_start, service_period_end,
+        "utility meter");
+    }
+  }
+
   const statement = (await client.query(
     `insert into utility_statements
        (property_id, account_id, statement_identifier, bill_date,
@@ -375,18 +413,7 @@ async function recordStatement(client, {
      source_artifact_id, provenance_note, supersedes_id, revision_reason, user_id])).rows[0];
 
   const recordedUsage = [];
-  for (const item of usage || []) {
-    contract.enumValue("usage_basis", item.usage_basis, contract.USAGE_BASES);
-    if (!Number.isFinite(item.quantity) || item.quantity < 0) {
-      throw utilityError("BAD_INPUT", "usage quantity must be a non-negative number");
-    }
-    if (!String(item.usage_unit || "").trim()) {
-      throw utilityError("BAD_INPUT", "usage_unit is required when usage is recorded");
-    }
-    await assertOwned(client, "utility_services", item.service_id, property_id, "utility service");
-    if (item.meter_id) {
-      await assertOwned(client, "utility_meters", item.meter_id, property_id, "utility meter");
-    }
+  for (const item of usageItems) {
     recordedUsage.push((await client.query(
       `insert into utility_statement_usage
          (property_id, statement_id, account_id, service_id, meter_id,
@@ -412,4 +439,3 @@ module.exports = {
   link,
   recordStatement,
 };
-

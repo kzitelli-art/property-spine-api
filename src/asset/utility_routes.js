@@ -234,7 +234,7 @@ module.exports = function utilityRoutes(deps = {}) {
             });
           }
 
-          const hasTopology = body.provider || body.arrangement || body.account
+          const hasTopology = body.provider || body.provider_id || body.arrangement || body.account
             || body.service_point || body.meter;
           if (body.applicability === "not_applicable" && hasTopology) {
             throw utilities.utilityError("BAD_INPUT",
