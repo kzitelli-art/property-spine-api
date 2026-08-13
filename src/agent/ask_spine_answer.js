@@ -47,6 +47,7 @@
 const askSpineService = require("./ask_spine_service");
 const workOrderRead = require("../surfaces/work_order_status_read");
 const complianceRead = require("../asset/compliance_read");
+const utilityPosition = require("../asset/utility_position_read.js");
 
 const MODEL = process.env.ASK_SPINE_MODEL || "claude-opus-5";
 /*  THINKING AND THE ANSWER SHARE THIS CEILING. On this model family
@@ -115,9 +116,11 @@ const DECISION_SCHEMA = {
  *  Widening it is a product decision with its own facts to gather. It is
  *  not something a prompt edit should be able to do quietly.  */
 const SUPPORTED_SCOPE =
-  "the current open work and governed Compliance records at this property — " +
+  "the current open work and governed Compliance or Utility records at this property — " +
   "what work is open and who has it, or whether a recorded Compliance item is " +
-  "current, why, its evidence, expiration, unresolved facts, and next established action";
+  "current and why, or this property's governed Utility setup, providers, account and meter map, " +
+  "responsibility and recovery arrangement, statement history, known gaps, and " +
+  "same-account statement comparisons";
 
 //  The refusal is OWNED BY THE SERVER, not written by the model. A model
 //  that composes its own decline can talk itself into being helpful, and
@@ -125,19 +128,76 @@ const SUPPORTED_SCOPE =
 //  outcome exists to prevent.
 const OUT_OF_SCOPE_ANSWER =
   "I can only answer about " + SUPPORTED_SCOPE + ". " +
-  "Ask me what needs attention, what is open, or about a recorded license or Compliance item.";
+  "Ask me what needs attention, about a recorded Compliance item, or how a Utility works here.";
 
 const COMPLIANCE_TERMS =
   /\b(compliance|licen[cs]e|registration|inspection|certificate|violation|cure|renewal|expire[sd]?|expiration)\b/i;
+const UTILITY_TERMS =
+  /\b(utilit(?:y|ies)|electric(?:ity)?|gas|water|sewer|meter(?:ed|s|ing)?|submeter(?:ed|s|ing)?|provider account|utility account|peco|bills? residents)\b/i;
 const EXPLICIT_WORK_TERMS =
   /\b(work[ -]?order|repair|maintenance|technician|task|job|assigned|assignment)\b/i;
 
 function questionSubject(question) {
   const text = String(question || "");
   const compliance = COMPLIANCE_TERMS.test(text);
+  const utility = UTILITY_TERMS.test(text);
   const work = EXPLICIT_WORK_TERMS.test(text);
-  if (compliance && work) return "composition_unavailable";
-  return compliance ? "compliance" : "work";
+  if ([compliance, utility, work].filter(Boolean).length > 1) return "composition_unavailable";
+  if (compliance) return "compliance";
+  if (utility) return "utility";
+  return "work";
+}
+
+function withoutDatabaseIds(value) {
+  if (Array.isArray(value)) return value.map(withoutDatabaseIds);
+  if (!value || typeof value !== "object") return value;
+  const clean = {};
+  for (const [key, child] of Object.entries(value)) {
+    if (key === "id" || /_id$/.test(key) || (/_identifier$/.test(key) && !/_masked$/.test(key))) {
+      continue;
+    }
+    clean[key] = withoutDatabaseIds(child);
+  }
+  return clean;
+}
+
+function utilityFactsForModel(standing) {
+  return withoutDatabaseIds({
+    contract_version: standing.contract_version,
+    as_of: standing.as_of,
+    setup_state: standing.setup_state,
+    established_services: standing.established_services,
+    not_applicable_services: standing.not_applicable_services,
+    unresolved_services: standing.unresolved_services,
+    unresolved_count: standing.unresolved_count,
+    services: standing.services,
+    next_due_statement: standing.next_due_statement,
+    unresolved: standing.unresolved,
+    does_not_establish: standing.does_not_establish,
+    capabilities: standing.capabilities,
+  });
+}
+
+function utilityEvidenceReferences(standing) {
+  const found = new Map();
+  function visit(value, label) {
+    if (Array.isArray(value)) {
+      for (const child of value) visit(child, label);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    const nextLabel = value.label ? `${value.label} Utility evidence` : label;
+    if (value.source_artifact_id && !found.has(String(value.source_artifact_id))) {
+      found.set(String(value.source_artifact_id), {
+        label: nextLabel,
+        module: "asset_management",
+        open: { kind: "utility_evidence", id: value.source_artifact_id },
+      });
+    }
+    for (const child of Object.values(value)) visit(child, nextLabel);
+  }
+  visit(standing.services || [], "Utility evidence");
+  return [...found.values()];
 }
 
 /*  The bundle. Bounded on purpose: every field here is something the
@@ -254,6 +314,15 @@ async function gatherFacts(db, {
     } catch (e) { failures.push("compliance"); }
   }
 
+  // Entitlement excludes the facts themselves, not merely their links.
+  if (subject === "utility" && (allowed_modules || []).includes("asset_management")) {
+    try {
+      const standing = await utilityPosition.readStanding(db, { property_id });
+      facts.utility = utilityFactsForModel(standing);
+      facts.__refs = (facts.__refs || []).concat(utilityEvidenceReferences(standing));
+    } catch (e) { failures.push("utility"); }
+  }
+
   facts.reads_that_failed = failures;
   return facts;
 }
@@ -338,11 +407,19 @@ function systemPrompt(subject = "work") {
     "4. Nothing being open is a real, good answer. Say it plainly and stop.",
     "   Do not manufacture concerns to seem useful.",
     "5. The FACTS contain only one authorized subject. Never combine Compliance",
-    "   with work, residents, finances or any absent domain. Composition authority",
+    "   or Utilities with work, residents, finances or any absent domain. Composition authority",
     "   is not established merely because each domain could be read separately.",
     "6. For Compliance, item standing is not a property-wide legal conclusion.",
     "   An expiration date is not a renewal obligation, and a date-only next event",
     "   is not work that needs action. Preserve those distinctions exactly.",
+    "7. For Utilities, a statement is not a provider payment; a resident recovery",
+    "   method is not a resident collection; a collection is not a provider payment;",
+    "   a provider is not a billing administrator; and a submeter is not a provider",
+    "   account. Preserve NOT_ESTABLISHED exactly as unknown, never as none or no.",
+    "8. Utility statement comparison is allowed only from the governed statement facts.",
+    "   Do not invent weather, occupancy, rates, leaks, equipment behavior, or any",
+    "   causal explanation. If no governed causal fact exists, say the cause is not",
+    "   established even when the amounts changed.",
     "",
     "HOW TO SOUND:",
     "· Talk like a competent colleague, not a database. Short sentences.",
@@ -385,16 +462,16 @@ async function answer(db, anthropic, {
   if (subject === "composition_unavailable") {
     return {
       outcome: "composition_unavailable",
-      answer: "I can answer about Compliance or open work separately, but I can't combine them in one answer yet.",
+      answer: "I can answer about Compliance, Utilities, or open work separately, but I can't combine them in one answer yet.",
       grounded_on: null,
       references: [],
     };
   }
   const modules = Array.isArray(allowed_modules) ? allowed_modules.map(String) : [];
-  if (subject === "compliance" && !modules.includes("asset_management")) {
+  if ((subject === "compliance" || subject === "utility") && !modules.includes("asset_management")) {
     return {
       outcome: "not_authorized",
-      answer: "Compliance is not available in your current access for this property.",
+      answer: `${subject === "compliance" ? "Compliance" : "Utilities"} is not available in your current access for this property.`,
       grounded_on: null,
       references: [],
     };
@@ -498,6 +575,8 @@ async function answer(db, anthropic, {
       compliance_as_of: facts.compliance ? facts.compliance.as_of : null,
       composition_authorization: facts.compliance
         ? facts.compliance.composition_authorization : null,
+      utility_setup_state: facts.utility ? facts.utility.setup_state : null,
+      utility_services: facts.utility ? facts.utility.established_services : null,
       reads_that_failed: facts.reads_that_failed,
       gathered_at: facts.gathered_at,
     },

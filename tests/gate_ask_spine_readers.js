@@ -112,7 +112,7 @@ function domainsFromFilenames(filenames) {
  *    pending     Eligible, not yet wired. Requires `owner` and `clears`.
  *    waived      Deliberately not conversational. Requires `reason`.
  *
- *  Compliance is registered through its governed reader. Insurance and
+ *  Compliance and Utilities are registered through governed readers. Insurance and
  *  Tax remain pending until cross-domain composition authorization is
  *  governed. A green gate reports this split; it does not erase it.  */
 const REGISTRY = {
@@ -120,6 +120,11 @@ const REGISTRY = {
     state: "registered",
     capability_classes: readerCapabilities.retrievalOnly(
       "canonical Compliance standing and recorded derivation basis"),
+    composition_authorization: "unsolved_cross_domain",
+  utility: {
+    state: "registered",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "canonical Utility standing and recorded derivation basis"),
     composition_authorization: "unsolved_cross_domain",
   },
   insurance: {
