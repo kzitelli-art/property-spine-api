@@ -420,4 +420,87 @@ function position(input, asOfInput) {
   };
 }
 
-module.exports = { position, deriveSchedule, NOT_ESTABLISHED, STALE_AFTER_DAYS };
+/*  ── PRINCIPAL AND INTEREST PAID OVER A PERIOD ──────────────────────
+ *  The institutional question `position()` cannot answer, because it is a
+ *  POINT reading and this is a PERIOD one. Forcing a period aggregate into
+ *  position(as_of) would have been the wrong shape.
+ *
+ *  ⚠ NO SCHEMA WAS ADDED FOR THIS. The acceptance test first read it as a
+ *  missing-column gap and proposed YTD fields. It is not: a lender's
+ *  published year-to-date figure is just another period-range observation,
+ *  and `period_start · period_end · applied_principal · applied_interest`
+ *  already carries it. That generality is the point — monthly, quarterly,
+ *  YTD, trailing and custom statement periods are all the same fact shape.
+ *
+ *  THE RULE, IN PRIORITY ORDER:
+ *
+ *    1  a lender-published aggregate covering exactly the requested period
+ *       → use that governed observation
+ *    2  otherwise, individual observations that COMPLETELY tile the period
+ *       → sum them
+ *    3  otherwise → NOT_ESTABLISHED
+ *
+ *  Branch 3 is the one that matters. Summing whatever observations happen
+ *  to exist would silently report "actual interest paid" from an incomplete
+ *  payment history — a confident wrong assembled from true parts, which is
+ *  worse than a blank because every component is defensible (§5).            */
+function paidOverPeriod(paymentObservations, periodStartISO, periodEndISO) {
+  const from = ymd(periodStartISO), to = ymd(periodEndISO);
+  const withPeriod = (paymentObservations || []).filter(
+    (p) => ymd(p.period_start) && ymd(p.period_end));
+
+  //  1 — an exact governed aggregate for this period.
+  const exact = withPeriod.find(
+    (p) => ymd(p.period_start) === from && ymd(p.period_end) === to);
+  if (exact) {
+    return {
+      principal_cents: exact.applied_principal_cents == null ? null : Number(exact.applied_principal_cents),
+      interest_cents: exact.applied_interest_cents == null ? null : Number(exact.applied_interest_cents),
+      period_start: from, period_end: to,
+      basis: "lender_published_aggregate",
+      observation_source: exact.observation_source,
+      source_authority: exact.source_authority,
+    };
+  }
+
+  //  2 — complete tiling by individual observations. Any aggregate that
+  //  merely OVERLAPS the window is excluded, because summing an aggregate
+  //  alongside the individual rows it already contains double-counts.
+  const inside = withPeriod
+    .filter((p) => ymd(p.period_start) >= from && ymd(p.period_end) <= to)
+    .sort((a, b) => (ymd(a.period_start) < ymd(b.period_start) ? -1 : 1));
+
+  if (inside.length) {
+    let cursor = from, complete = true;
+    for (const p of inside) {
+      //  A gap anywhere means the period is not covered. Overlap is treated
+      //  as incomplete too rather than silently summed.
+      if (ymd(p.period_start) > cursor) { complete = false; break; }
+      const nextDay = new Date(Date.parse(ymd(p.period_end) + "T00:00:00Z") + 86400000)
+        .toISOString().slice(0, 10);
+      if (nextDay > cursor) cursor = nextDay;
+    }
+    if (complete && cursor > to) {
+      return {
+        principal_cents: inside.reduce((s, p) => s + Number(p.applied_principal_cents || 0), 0),
+        interest_cents: inside.reduce((s, p) => s + Number(p.applied_interest_cents || 0), 0),
+        period_start: from, period_end: to,
+        basis: "summed_complete_observations",
+        observation_count: inside.length,
+        source_authority: "governed_read",
+      };
+    }
+  }
+
+  //  3 — say so, and say why.
+  return {
+    truth_state: NOT_ESTABLISHED,
+    period_start: from, period_end: to,
+    why: inside.length
+      ? `payment observations do not completely cover ${from}..${to} ` +
+        `(${inside.length} observation(s) found, coverage incomplete)`
+      : `no lender-published aggregate for ${from}..${to} and no payment observations within it`,
+  };
+}
+
+module.exports = { position, deriveSchedule, paidOverPeriod, NOT_ESTABLISHED, STALE_AFTER_DAYS };

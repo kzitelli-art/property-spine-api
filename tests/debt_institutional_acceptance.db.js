@@ -133,6 +133,17 @@ const $ = (cents) => cents == null ? "—" : "$" + (cents / 100).toLocaleString(
       applied_escrow_cents: 885831, observation_source: "servicer_transaction_history",
       source_artifact_id: ART, recorded_by_user_id: U });
 
+    //  The lender's published year-to-date figures from the same 2025-08-01
+    //  statement, established through the EXISTING writer with no schema
+    //  change: a period-range observation is a period-range observation
+    //  whether the servicer calls it a month, a quarter or a YTD.
+    await svc.recordPaymentObservation(db, { instrument_id: inst.id,
+      observed_as_of: "2025-08-01", period_start: "2025-01-01", period_end: "2025-07-31",
+      applied_principal_cents: 32436409, applied_interest_cents: 53951571,
+      observation_source: "lender_statement",
+      provenance_note: "Lument statement 2025-08-01: PRINCIPAL PAID YTD / INTEREST PAID YTD",
+      source_artifact_id: ART, recorded_by_user_id: U });
+
     const hist = await svc.loadHistory(db, inst.id);
     const pos = read.position(hist, "2026-08-12");
     const sched = read.deriveSchedule(hist.terms, hist.instrument);
@@ -148,21 +159,18 @@ const $ = (cents) => cents == null ? "—" : "$" + (cents / 100).toLocaleString(
        pos.instrument.original_principal_cents != null && ob.value_cents != null,
        `original ${$(pos.instrument.original_principal_cents)} · observed ${$(ob.value_cents)}`);
 
-    //  Per-payment split is contractual and present. The CUMULATIVE split
-    //  over a reporting period is the institutional question, and it is a
-    //  different one — see the gap note.
-    const nr = pos.next_requirement;
-    const haveCumulative = false;
+    //  ── Q3, CLOSED WITH ZERO SCHEMA EXPANSION ────────────────────
+    //  The first run of this harness called Q3 a missing-column gap and
+    //  proposed YTD fields. That was wrong. A lender's published
+    //  year-to-date figure is just another period-range observation, and
+    //  period_start · period_end · applied_principal · applied_interest
+    //  already carries it. Establishing it needs no migration and no new
+    //  writer — the existing recordPaymentObservation takes it as-is.
+    const ytd = read.paidOverPeriod(hist.payment_observations, "2025-01-01", "2025-07-31");
     q(3, "principal vs interest — for a reporting period",
-       haveCumulative,
-       null,
-       "per-payment split is available (next requirement " +
-       `${$(nr.interest_cents)} interest / ${$(nr.principal_cents)} principal), and each ` +
-       "payment observation carries its applied split. What is NOT derivable is " +
-       "interest-and-principal PAID across a period: that needs either every payment " +
-       "observation in the period, or the servicer's published period-to-date figures. " +
-       "The Lument statement publishes both (PRINCIPAL PAID YTD, INTEREST PAID YTD) and " +
-       "debt_payment_observations has no column for them.");
+       ytd.principal_cents === 32436409 && ytd.interest_cents === 53951571,
+       `2025 YTD principal ${$(ytd.principal_cents)} · interest ${$(ytd.interest_cents)} ` +
+       `· basis ${ytd.basis}`);
 
     q(4, "scheduled debt service",
        pos.debt_service.principal_and_interest_cents != null,
@@ -204,6 +212,41 @@ const $ = (cents) => cents == null ? "—" : "$" + (cents / 100).toLocaleString(
     q(10, "source and freshness behind the number",
        !!ob.observation_source && !!ob.source_authority && ob.stale === true,
        `${ob.observation_source} · ${ob.source_authority} · ${ob.age_days} days old · stale=${ob.stale}`);
+
+    /*  ── THE GUARD THAT MAKES Q3 SAFE ─────────────────────────────
+     *  Answering Q3 is only useful if the read REFUSES when it cannot
+     *  answer honestly. Summing whatever observations happen to exist
+     *  would report "actual interest paid" from an incomplete payment
+     *  history — every component true, the total wrong, and nothing to
+     *  see. That is worse than a blank precisely because it is
+     *  defensible line by line.                                        */
+    console.log("\n  ── the refusal that makes Q3 safe ──");
+
+    const noCoverage = read.paidOverPeriod(hist.payment_observations, "2024-01-01", "2024-12-31");
+    q(11, "a period with NO published aggregate and no coverage refuses",
+       noCoverage.truth_state === NE,
+       `2024 → ${noCoverage.truth_state} · ${noCoverage.why}`);
+
+    //  2025 full-year: the YTD aggregate covers only Jan–Jul, and the one
+    //  monthly observation sits inside it. Neither exactly matches the
+    //  request, so this must NOT sum them into a full-year figure.
+    const partial = read.paidOverPeriod(hist.payment_observations, "2025-01-01", "2025-12-31");
+    q(12, "a partially-covered period refuses rather than summing",
+       partial.truth_state === NE,
+       `2025 full year → ${partial.truth_state} (the YTD aggregate stops at 2025-07-31)`);
+
+    //  Independent corroboration, kept as TWO authorities rather than one.
+    //  The lender's published YTD and the contractual derivation agree to
+    //  the cent — which is evidence the transcription and the arithmetic
+    //  are both right, and is NOT licence to treat the schedule as payment
+    //  evidence. The schedule proves the calculation; the statement proves
+    //  the world.
+    const derived = sched.filter((r) => r.due_date >= "2025-01-01" && r.due_date <= "2025-07-01");
+    const dP = derived.reduce((s, r) => s + r.principal_cents, 0);
+    const dI = derived.reduce((s, r) => s + r.interest_cents, 0);
+    q(13, "published YTD and derived schedule agree — two authorities, one answer",
+       dP === ytd.principal_cents && dI === ytd.interest_cents,
+       `derived ${$(dP)} / ${$(dI)} = published ${$(ytd.principal_cents)} / ${$(ytd.interest_cents)}`);
 
     console.log("\n════════════════════════════════════════════════════════════════");
     console.log(`  INSTITUTIONAL SUFFICIENCY · ${sufficient}/${ran} answerable from governed truth`);
