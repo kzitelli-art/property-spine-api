@@ -132,13 +132,23 @@ async function main() {
       effective_from: "2026-01-01", provenance_note: "operator confirmed from account file",
       user_id: userId,
     });
-    const samePeco = await utility.establishProvider(admin, {
-      property_id: propertyB, provider_name: " peco ",
+    const pecoCandidates = await utility.findProviderCandidates(admin,
+      { provider_name: " peco " });
+    ok("the same PECO name proposes the existing portfolio provider identity",
+      pecoCandidates.length === 1 && pecoCandidates[0].id === peco.id
+      && Number((await admin.query("select count(*) as n from utility_providers")).rows[0].n) === 1);
+    const waterDepartmentA = await utility.establishProvider(admin, {
+      property_id: propertyA, provider_name: "Water Department",
+      provenance_note: "municipal provider A", user_id: userId,
+    });
+    const waterDepartmentB = await utility.establishProvider(admin, {
+      property_id: propertyB, provider_name: " water department ",
       source_artifact_id: artifactB, user_id: userId,
     });
-    ok("the same PECO name resolves to one portfolio provider identity",
-      samePeco.id === peco.id
-      && Number((await admin.query("select count(*) as n from utility_providers")).rows[0].n) === 1);
+    ok("same normalized names can remain separate canonical provider identities",
+      waterDepartmentA.id !== waterDepartmentB.id
+      && (await utility.findProviderCandidates(admin,
+        { provider_name: "WATER DEPARTMENT" })).length === 2);
     ok("provider establishment creates no Money vendor or payee assertion",
       Number((await admin.query("select count(*) as n from vendors")).rows[0].n) === 0);
 

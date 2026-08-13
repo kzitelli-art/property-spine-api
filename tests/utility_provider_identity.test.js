@@ -20,16 +20,12 @@ function providerClient() {
         return { rows: [PROPERTY_A, PROPERTY_B].includes(params[0]) ? [{ id: params[0] }] : [] };
       }
       if (/insert into utility_providers/i.test(text)) {
-        const normalized = String(params[0]).trim().toLowerCase();
-        if (providers.some((provider) => provider.provider_name.toLowerCase() === normalized)) {
-          return { rows: [] };
-        }
         const row = { id: `provider-${providers.length + 1}`, provider_name: String(params[0]).trim(),
           source_artifact_id: params[1], provenance_note: params[2] };
         providers.push(row);
         return { rows: [row] };
       }
-      if (/select \* from utility_providers/i.test(text)) {
+      if (/select id, provider_name[\s\S]*from utility_providers/i.test(text)) {
         const normalized = String(params[0]).trim().toLowerCase();
         return { rows: providers.filter((provider) =>
           provider.provider_name.toLowerCase() === normalized) };
@@ -85,17 +81,12 @@ async function main() {
     property_id: PROPERTY_A, provider_name: "PECO",
     provenance_note: "named on Property A statement", user_id: USER,
   });
-  const providerB = await utility.establishProvider(db, {
-    property_id: PROPERTY_B, provider_name: " peco ",
-    provenance_note: "named on Property B statement", user_id: USER,
+  const candidates = await utility.findProviderCandidates(db, { provider_name: " peco " });
+  ok("the normalized PECO name is recognition evidence for the existing identity", () => {
+    assert.deepStrictEqual(candidates, [{ id: providerA.id, provider_name: "PECO" }]);
   });
-
-  ok("the same normalized PECO name resolves to one provider identity", () => {
-    assert.strictEqual(providerA.id, providerB.id);
-    assert.strictEqual(db.providers.length, 1);
-  });
-  ok("the writer does not return another property's identity provenance", () => {
-    assert.deepStrictEqual(Object.keys(providerB).sort(), ["id", "provider_name"]);
+  ok("provider recognition exposes identity without another property's provenance", () => {
+    assert.deepStrictEqual(Object.keys(candidates[0]).sort(), ["id", "provider_name"]);
   });
 
   const positionA = projection.project(snapshot(PROPERTY_A, providerA.id, "1111", "A common area"),
@@ -118,12 +109,34 @@ async function main() {
     assert(!JSON.stringify(positionB).includes("1111"));
   });
 
+  const waterA = await utility.establishProvider(db, {
+    property_id: PROPERTY_A, provider_name: "Water Department",
+    provenance_note: "municipal statement A", user_id: USER,
+  });
+  const waterB = await utility.establishProvider(db, {
+    property_id: PROPERTY_B, provider_name: " water department ",
+    provenance_note: "municipal statement B", user_id: USER,
+  });
+  ok("two real providers with the same normalized name remain distinct identities", () => {
+    assert.notStrictEqual(waterA.id, waterB.id);
+    assert.strictEqual(db.providers.length, 3);
+  });
+  const waterCandidates = await utility.findProviderCandidates(db,
+    { provider_name: "WATER DEPARTMENT" });
+  ok("recognition returns every same-name candidate without choosing one", () => {
+    assert.deepStrictEqual(waterCandidates.map((provider) => provider.id), [waterA.id, waterB.id]);
+  });
+
   const ddl = fs.readFileSync(path.join(__dirname, "..", "docs",
     "UTILITIES_CANONICAL_SCHEMA_DRAFT.sql"), "utf8");
   const providerBlock = ddl.match(/create table utility_providers \([\s\S]*?\n\);/i)[0];
   ok("provider identity carries neither property nor vendor/payee semantics", () => {
     assert(!/property_id|vendor_id|payee/i.test(providerBlock));
     assert(/provider_name/i.test(providerBlock));
+  });
+  ok("normalized provider name is indexed for recognition but is not unique", () => {
+    assert(/create index utility_providers_normalized_name/i.test(ddl));
+    assert(!/create unique index utility_providers_normalized_name/i.test(ddl));
   });
 
   console.log(`\n${passed} assertions passed\n`);

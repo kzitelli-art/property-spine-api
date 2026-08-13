@@ -4,6 +4,7 @@ const contract = require("./utility_contract.js");
 
 function day(value) {
   if (!value) return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
   return String(value).slice(0, 10);
 }
 

@@ -31,6 +31,13 @@ function requireCents(name, value, { nullable = false } = {}) {
   return value;
 }
 
+function dateOnly(value) {
+  if (!value) return null;
+  return value instanceof Date
+    ? value.toISOString().slice(0, 10)
+    : String(value).slice(0, 10);
+}
+
 function requireProvenance(sourceArtifactId, note, what, { artifactRequired = false } = {}) {
   if (artifactRequired && !sourceArtifactId) {
     throw utilityError("SOURCE_REQUIRED", `${what} requires a retained source artifact`);
@@ -151,19 +158,26 @@ async function establishProvider(client, {
   requireProvenance(source_artifact_id, provenance_note, "a utility provider");
   await assertProperty(client, property_id);
   await assertArtifact(client, property_id, source_artifact_id);
-  const inserted = await client.query(
+  const row = (await client.query(
     `insert into utility_providers
        (provider_name, source_artifact_id, provenance_note, recorded_by_user_id)
-     values ($1,$2,$3,$4)
-     on conflict do nothing returning *`,
-    [String(provider_name).trim(), source_artifact_id, provenance_note, user_id]);
-  const row = inserted.rows[0] || (await client.query(
-    `select * from utility_providers where lower(btrim(provider_name)) = lower(btrim($1))`,
-    [String(provider_name).trim()])).rows[0];
+     values ($1,$2,$3,$4) returning *`,
+    [String(provider_name).trim(), source_artifact_id, provenance_note, user_id])).rows[0];
 
   // Identity provenance can originate at another property. Callers receive
   // only the provider identity, never another property's source reference.
   return row ? { id: row.id, provider_name: row.provider_name } : null;
+}
+
+async function findProviderCandidates(client, { provider_name } = {}) {
+  const name = String(provider_name || "").trim();
+  if (!name) throw utilityError("BAD_INPUT", "provider_name is required");
+  const rows = (await client.query(
+    `select id, provider_name
+       from utility_providers
+      where lower(btrim(provider_name)) = lower(btrim($1))
+      order by provider_name, id`, [name])).rows;
+  return rows.map((row) => ({ id: row.id, provider_name: row.provider_name }));
 }
 
 async function relateProvider(client, {
@@ -433,7 +447,16 @@ async function recordStatement(client, {
        item.quantity, String(item.usage_unit).trim(), item.usage_basis,
        source_artifact_id, user_id])).rows[0]);
   }
-  return { statement, usage: recordedUsage };
+  return {
+    statement: {
+      ...statement,
+      bill_date: dateOnly(statement.bill_date),
+      service_period_start: dateOnly(statement.service_period_start),
+      service_period_end: dateOnly(statement.service_period_end),
+      due_date: dateOnly(statement.due_date),
+    },
+    usage: recordedUsage,
+  };
 }
 
 module.exports = {
@@ -441,6 +464,7 @@ module.exports = {
   ensureService,
   declareService,
   establishProvider,
+  findProviderCandidates,
   relateProvider,
   recordArrangement,
   establishAccount,

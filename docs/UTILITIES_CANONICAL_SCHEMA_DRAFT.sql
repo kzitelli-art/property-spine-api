@@ -1,10 +1,9 @@
 -- UTILITIES CANONICAL SCHEMA DRAFT - DELIBERATELY UNNUMBERED
 --
--- Migration 168 belongs to Debt. Compliance owns branch-only 169, while a
--- parked meeting branch also visibly collides on 169. This file is executable
--- design evidence and real-Postgres proof input. It MUST NOT be moved into
--- migrations/ or given a ledger number until the active lanes are reconciled
--- and the owner assigns the next number.
+-- Compliance now owns release migration 168. Utilities will claim the actual
+-- next free number only after Compliance lands and this branch is rebased.
+-- These bytes have been executed and hostile-tested against regular isolated
+-- PostgreSQL, but remain outside the migration ledger until then.
 --
 -- The schema records setup before observations:
 --   service -> provider/account/service-point/meter/arrangement -> statement
@@ -12,8 +11,6 @@
 -- No payment table exists here. The repository has no governed provider-bill
 -- settlement association, and a resident collection or bank line must never
 -- become one by proximity.
-
-begin;
 
 create table utility_services (
   id                   uuid primary key default gen_random_uuid(),
@@ -73,7 +70,10 @@ create table utility_providers (
   recorded_at           timestamptz not null default now(),
   check (source_artifact_id is not null or nullif(btrim(provenance_note), '') is not null)
 );
-create unique index utility_providers_normalized_name
+-- A normalized name supports recognition. It is deliberately non-unique:
+-- similarly named municipal providers must remain representable as distinct
+-- canonical identities until a governed relationship establishes otherwise.
+create index utility_providers_normalized_name
   on utility_providers(lower(btrim(provider_name)));
 
 create table utility_service_providers (
@@ -571,5 +571,3 @@ alter table source_artifacts add constraint source_artifacts_artifact_kind_check
     'utility_statement','utility_service_agreement','utility_addendum',
     'utility_meter_schedule','utility_account_confirmation'
   ));
-
-commit;
