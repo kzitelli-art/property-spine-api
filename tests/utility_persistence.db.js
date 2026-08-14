@@ -117,6 +117,13 @@ async function main() {
       [gasInitial.service.id])).rows;
     ok("correction preserves both declarations and names its predecessor",
       gasRows.length === 2 && gasCorrection.declaration.supersedes_id === gasInitial.declaration.id);
+    await rejects("a declaration correction cannot move the earlier fact to a new period", () =>
+      utility.declareService(admin, {
+        property_id: propertyA, service_class: "natural_gas", applicability: "present",
+        effective_from: "2026-08-13", provenance_note: "conflicting later date",
+        supersedes_id: gasCorrection.declaration.id,
+        revision_reason: "Initial correction used the wrong period", user_id: userId,
+      }), /retain.*effective_from/i);
     await rejects("a declaration can have only one correction", () => utility.declareService(admin, {
       property_id: propertyA, service_class: "natural_gas", applicability: "present",
       effective_from: "2026-01-01", provenance_note: "conflicting retry",
@@ -166,7 +173,7 @@ async function main() {
         effective_from: "2026-01-01", provenance_note: "hostile topology",
         user_id: userId,
       }), /not-applicable|active topology/i);
-    await utility.recordArrangement(admin, {
+    const currentArrangement = await utility.recordArrangement(admin, {
       property_id: propertyA, service_id: electric.service.id,
       physical_arrangement: "mixed", provider_bill_recipient: "property",
       provider_responsible_party: "property", economic_responsibility: "property",
@@ -183,6 +190,16 @@ async function main() {
       resident_payment_recipient: "property", effective_from: "2026-07-01",
       provenance_note: "new resident recovery arrangement", user_id: userId,
     });
+    await rejects("an arrangement correction cannot move the earlier fact to a new period", () =>
+      utility.recordArrangement(admin, {
+        property_id: propertyA, service_id: electric.service.id,
+        physical_arrangement: "mixed", provider_bill_recipient: "property",
+        provider_responsible_party: "property", economic_responsibility: "shared",
+        resident_recovery_method: "rubs_allocation", billing_administrator_name: "Conservice",
+        resident_payment_recipient: "property", effective_from: "2026-08-13",
+        provenance_note: "operator correction", supersedes_id: currentArrangement.id,
+        revision_reason: "Earlier arrangement was transcribed incorrectly", user_id: userId,
+      }), /retain.*effective_from/i);
 
     const account = await utility.establishAccount(admin, {
       property_id: propertyA, provider_id: peco.id,

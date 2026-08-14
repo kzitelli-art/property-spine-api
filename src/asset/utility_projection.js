@@ -289,6 +289,8 @@ function project(snapshot = {}, { as_of = null } = {}) {
       applicability: { truth_state: "ESTABLISHED", value: "present" },
       providers: providerViews,
       arrangement: arrangement ? {
+        revision_id: arrangement.id || null,
+        effective_from: day(arrangement.effective_from),
         physical_arrangement: arrangement.physical_arrangement || null,
         provider_bill_recipient: arrangement.provider_bill_recipient || null,
         provider_responsible_party: arrangement.provider_responsible_party || null,

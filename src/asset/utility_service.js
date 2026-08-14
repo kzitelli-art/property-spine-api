@@ -76,6 +76,22 @@ async function assertOwned(client, table, id, propertyId, label) {
   return row;
 }
 
+async function assertCorrectionPeriod(client, table, supersedesId,
+  propertyId, serviceId, effectiveFrom, label) {
+  if (!supersedesId) return;
+  const allowed = new Set(["utility_service_declarations", "utility_arrangements"]);
+  if (!allowed.has(table)) throw new Error("utility_service correction table is not allowlisted");
+  const prior = (await client.query(
+    `select effective_from from ${table}
+      where id = $1 and property_id = $2 and service_id = $3`,
+    [supersedesId, propertyId, serviceId])).rows[0];
+  if (!prior) throw utilityError("NOT_FOUND", `${label} to correct was not found for this service`);
+  if (dateOnly(prior.effective_from) !== effectiveFrom) {
+    throw utilityError("BAD_INPUT",
+      `a corrected ${label} must retain the earlier fact's effective_from date`);
+  }
+}
+
 async function assertProvider(client, providerId) {
   const row = (await client.query(
     "select id, provider_name from utility_providers where id = $1", [providerId])).rows[0];
@@ -137,6 +153,8 @@ async function declareService(client, {
   if (supersedes_id && !String(revision_reason || "").trim()) {
     throw utilityError("REVISION_REASON_REQUIRED", "a corrected service declaration requires a reason");
   }
+  await assertCorrectionPeriod(client, "utility_service_declarations", supersedes_id,
+    property_id, service.id, effective_from, "service declaration");
   const row = (await client.query(
     `insert into utility_service_declarations
        (property_id, service_id, applicability, effective_from, effective_to,
@@ -234,6 +252,8 @@ async function recordArrangement(client, {
   }
   await assertOwned(client, "utility_services", service_id, property_id, "utility service");
   await assertArtifact(client, property_id, source_artifact_id);
+  await assertCorrectionPeriod(client, "utility_arrangements", supersedes_id,
+    property_id, service_id, effective_from, "utility arrangement");
   return (await client.query(
     `insert into utility_arrangements
        (property_id, service_id, physical_arrangement, provider_bill_recipient,

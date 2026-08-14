@@ -134,7 +134,7 @@ ok("2. resident-direct electric does not require a property account", () => {
 ok("3. property-paid RUBS remains separate from provider payment", () => {
   const s = base(); const w = present(s, "water_sewer_combined");
   const p = provider(s, w, "Philadelphia Water");
-  arrange(s, w, { physical_arrangement: "whole_building_master_meter",
+  const arrangement = arrange(s, w, { physical_arrangement: "whole_building_master_meter",
     resident_recovery_method: "rubs_allocation", resident_payment_recipient: "property" });
   const a = account(s, w, p, "WATER-1234"); const pt = point(s, w, "whole_building", "Building");
   const m = meter(s, pt, "provider_meter", "WM-1");
@@ -142,8 +142,18 @@ ok("3. property-paid RUBS remains separate from provider payment", () => {
     effective_from: "2026-01-01" });
   statement(s, a);
   const v = service(view(s), "water_sewer_combined");
+  assert.strictEqual(v.arrangement.revision_id, arrangement.id);
+  assert.strictEqual(v.arrangement.effective_from, "2026-01-01");
   assert.strictEqual(v.arrangement.resident_recovery_method, "rubs_allocation");
   assert.strictEqual(v.payment.truth_state, "NOT_ESTABLISHED");
+});
+
+ok("operator correction identity stays out of standing truth", () => {
+  const s = base(); const e = present(s, "electricity"); provider(s, e, "PECO");
+  const arrangement = arrange(s, e);
+  const v = view(s);
+  assert.strictEqual(service(v, "electricity").arrangement.revision_id, arrangement.id);
+  assert(!JSON.stringify(v.standing).includes(arrangement.id));
 });
 
 ok("4. internal submeters never become provider accounts", () => {
