@@ -231,10 +231,25 @@ async function main() {
       unit_id: unitB, location_label: "Unit 101", effective_from: "2026-01-01",
       source_artifact_id: artifactB, user_id: userId,
     });
+    const meterB = await utility.recordMeter(admin, {
+      property_id: propertyB, provider_id: peco.id, meter_kind: "provider_meter",
+      meter_identifier: "PROPERTY-B-METER", effective_from: "2026-01-01",
+      source_artifact_id: artifactB, user_id: userId,
+    });
     await utility.link(admin, "account_service_point", {
       property_id: propertyB, left_id: accountB.id, right_id: pointB.id,
       effective_from: "2026-01-01", source_artifact_id: artifactB, user_id: userId,
     });
+    await rejects("account cannot attach to another property's service point", () =>
+      utility.link(admin, "account_service_point", {
+        property_id: propertyA, left_id: account.id, right_id: pointB.id,
+        effective_from: "2026-01-01", source_artifact_id: artifactA, user_id: userId,
+      }), /NOT_FOUND|not found/i);
+    await rejects("account cannot attach to another property's meter", () =>
+      utility.link(admin, "account_meter", {
+        property_id: propertyA, left_id: account.id, right_id: meterB.id,
+        effective_from: "2026-01-01", source_artifact_id: artifactA, user_id: userId,
+      }), /NOT_FOUND|not found/i);
     const providerMeter = await utility.recordMeter(admin, {
       property_id: propertyA, provider_id: peco.id, meter_kind: "provider_meter",
       meter_identifier: "99887766", effective_from: "2026-01-01",
