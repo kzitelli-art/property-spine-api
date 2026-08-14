@@ -247,7 +247,7 @@ const ROOMS = Object.freeze([
     eyebrow: ["Licenses", "Inspections", "Certificates"],
     belongs: "Whether this property is legally and regulatorily in good standing.",
     compartments: [
-      { key: "licenses_registrations", label: "Licenses & Registrations",
+      { key: "licenses_registrations", label: "Licenses & Registrations", derived: "licenses_registrations",
         note: "No governed licences or registrations yet" },
       { key: "inspections", label: "Inspections",
         note: "No governed inspection schedule yet" },
@@ -305,6 +305,8 @@ module.exports = function assetManagement(deps) {
   //  mounted here because this is the door an operator is standing in when
   //  BIRT asks them for an entity that does not exist yet.
   const legalEntityRoutes = require("../entity/legal_entity_routes.js");
+  const complianceHttp = require("../asset/compliance_http.js");
+  const complianceRead = require("../asset/compliance_read.js");
 
   const { pool, fileToText } = deps || {};
   if (!pool) throw new Error("asset_management requires a pool");
@@ -493,16 +495,40 @@ module.exports = function assetManagement(deps) {
       //  established" there is a statement the server can defend rather
       //  than a placeholder.
       const expenses = await propertyExpensesEstablishment(client, propertyId);
+      let compliance = UNBUILT.compliance;
+      try {
+        const found = await complianceRead.readComplianceEstablishment(client,
+          { property_id: propertyId });
+        compliance = found.established
+          ? {
+              state: "partially_established",
+              summary: `${found.item_count} governed Compliance item${found.item_count === 1 ? "" : "s"} established. The property-wide requirement census remains unknown.`,
+              why: "Spine holds source-backed Compliance truth for this property, but no complete requirement census has been established.",
+              establishes: "Additional governed Compliance items and, later, an explicit requirement census.",
+              byKey: {
+                licenses_registrations: {
+                  established: found.credential_count > 0,
+                  note: found.credential_count > 0
+                    ? `${found.credential_count} governed license or registration item${found.credential_count === 1 ? "" : "s"}`
+                    : "No governed licences or registrations yet",
+                },
+              },
+            }
+          : UNBUILT.compliance;
+      } catch (e) {
+        console.error("asset-management overview: Compliance establishment probe failed", e);
+      }
 
       const rooms = ROOMS.map((room) => {
-        const found = room.key === "property_expenses" ? expenses : UNBUILT[room.key];
+        const found = room.key === "property_expenses" ? expenses
+          : room.key === "compliance" ? compliance : UNBUILT[room.key];
 
         //  A compartment marked `derived` names the module that answers
         //  for it; every other compartment is honestly not established and
         //  says which KIND of thing is missing rather than repeating one
         //  generic line.
         const compartments = (room.compartments || []).map((c) => {
-          const answer = c.derived ? expenses.byKey[c.derived] : null;
+          const answer = c.derived && found.byKey ? found.byKey[c.derived] : null;
           return answer
             ? { key: c.key, label: c.label,
                 establishment: answer.established ? "established" : "not_established",
@@ -1314,6 +1340,10 @@ module.exports = function assetManagement(deps) {
 
   router.use(legalEntityRoutes({
     pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
+  }));
+
+  router.use(complianceHttp({
+    pool, fileToText, requireOperator, refuseClientAuthority, requireAssetManagementModule,
   }));
 
   return router;

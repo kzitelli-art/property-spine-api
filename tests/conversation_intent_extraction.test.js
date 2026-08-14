@@ -99,7 +99,7 @@ try {
       //  tenantlink source, de-indented. That proves nothing was rewritten
       //  without depending on finding exact start and end markers.
       const priorLines = new Set(prior.split("\n").map((l) => l.trim()).filter(Boolean));
-      const now = fs.readFileSync(INTENT_SRC, "utf8");
+      const now = fs.readFileSync(INTENT_SRC, "utf8").replace(/\r\n/g, "\n");
       const inner = now.slice(now.indexOf("const FIELD_CATEGORIES"), now.indexOf("\n\n  return {\n    classifyMessage"));
       const substantive = inner.split("\n").map((l) => l.trim())
         .filter((l) => l && !l.startsWith("//") && !l.startsWith("*") && !l.startsWith("/*"));

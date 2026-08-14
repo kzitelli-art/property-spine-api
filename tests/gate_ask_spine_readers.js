@@ -61,6 +61,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const readerCapabilities = require("../src/shared/reader_capability_contract.js");
 const ROOT = path.join(__dirname, "..");
 
 let pass = 0, fail = 0;
@@ -76,22 +77,27 @@ function readIf(rel) {
 
 /*  ══ WHERE STANDING TRUTH LIVES ════════════════════════════════════
  *  A domain becomes conversationally eligible when it grows a canonical
- *  standing read. These are the two suffixes this repo uses for that —
- *  `tax_position_read.js`, `insurance_establishment.js` — and a domain
- *  is the filename with the suffix removed.
+ *  standing read. The repo uses position, establishment and direct read
+ *  suffixes for that. Document adapters and funding-chain reads are
+ *  explicitly excluded because neither is domain standing.
  *
  *  Funding reads are deliberately NOT in this list. `tax_funding_read.js`
  *  is the same DOMAIN reached through its other chain, not a second
  *  domain, and counting it would report a coverage number twice the
  *  real one. The funding boundary itself is gate_funding_boundary.js.  */
 const STANDING_READ_DIRS = ["src/asset"];
-const STANDING_READ_SUFFIXES = ["_position_read.js", "_establishment.js"];
+const STANDING_READ_SUFFIXES = ["_position_read.js", "_establishment.js", "_read.js"];
+const NON_STANDING_READ_SUFFIXES = ["_document_read.js", "_funding_read.js"];
 
 function domainsFromFilenames(filenames) {
   const found = new Set();
   for (const f of filenames) {
+    if (NON_STANDING_READ_SUFFIXES.some((suffix) => f.endsWith(suffix))) continue;
     for (const suffix of STANDING_READ_SUFFIXES) {
-      if (f.endsWith(suffix)) found.add(f.slice(0, -suffix.length));
+      if (f.endsWith(suffix)) {
+        found.add(f.slice(0, -suffix.length));
+        break;
+      }
     }
   }
   return [...found].sort();
@@ -106,26 +112,37 @@ function domainsFromFilenames(filenames) {
  *    pending     Eligible, not yet wired. Requires `owner` and `clears`.
  *    waived      Deliberately not conversational. Requires `reason`.
  *
- *  ⚠ TODAY EVERY ENTRY IS `pending`, AND THAT IS THE HONEST STATE.
- *  Ask Spine currently gathers `attention` and `work_orders` only. The
- *  Asset Management domains are built, browser-verified and NOT
- *  readable by Ask Spine — which is exactly the gap §40.2 was written
- *  to make visible. This gate is green because the gap is DECLARED,
- *  not because it is closed. Do not read the exit code as coverage.  */
+ *  Compliance is registered through its governed reader. Insurance and
+ *  Tax remain pending until cross-domain composition authorization is
+ *  governed. A green gate reports this split; it does not erase it.  */
 const REGISTRY = {
+  compliance: {
+    state: "registered",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "canonical Compliance standing and recorded derivation basis"),
+    composition_authorization: "unsolved_cross_domain",
+  },
   insurance: {
     state: "pending",
     owner: "asset management",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "canonical insurance standing and recorded derivation basis"),
+    composition_authorization: "unsolved_cross_domain",
     clears: "Ask Spine gathers the insurance standing projection — coverage " +
             "standing, annual cost, renewal, funding mechanism, known gaps — " +
-            "with the §40.5 walls preserved (financed ≠ paid, payment ≠ coverage).",
+            "with the §40.5 walls preserved (financed ≠ paid, payment ≠ coverage), " +
+            "after §40.8 cross-domain composition authorization is governed.",
   },
   tax: {
     state: "pending",
     owner: "asset management",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "canonical tax standing and recorded derivation basis"),
+    composition_authorization: "unsolved_cross_domain",
     clears: "Ask Spine gathers the tax standing projection — obligation set, " +
             "amounts, next milestone, filing and payment standing — with the " +
-            "§40.5 walls preserved (escrow funded ≠ City paid, filed ≠ paid).",
+            "§40.5 walls preserved (escrow funded ≠ City paid, filed ≠ paid), " +
+            "after §40.8 cross-domain composition authorization is governed.",
   },
 };
 
@@ -162,6 +179,10 @@ console.log("  ── detector self-test ──");
      domainsFromFilenames(["tax_position_read.js", "tax_establishment.js"]).join() === "tax");
   ok("domainsFromFilenames ignores a funding read",
      domainsFromFilenames(["tax_funding_read.js"]).length === 0);
+  ok("domainsFromFilenames finds a direct canonical read",
+     domainsFromFilenames(["compliance_read.js"]).join() === "compliance");
+  ok("domainsFromFilenames ignores a document adapter",
+     domainsFromFilenames(["compliance_document_read.js"]).length === 0);
   ok("domainsFromFilenames ignores an unrelated file",
      domainsFromFilenames(["philadelphia_tax_rules.js"]).length === 0);
 
@@ -232,6 +253,17 @@ console.log("\n  ── waivers must name an owner and an exit ──");
 for (const [d, v] of Object.entries(REGISTRY)) {
   ok(`${d} has a valid state`,
      ["registered", "pending", "waived"].includes(v.state), `state=${v.state}`);
+  if (v.state === "registered" || v.state === "pending") {
+    let capabilityValid = true;
+    try { readerCapabilities.validate(v.capability_classes, `${d}.capability_classes`); }
+    catch (_) { capabilityValid = false; }
+    ok(`${d} declares retrieval without claiming comparison or cause`,
+       capabilityValid && v.capability_classes.retrieval.claim === "claimed"
+       && v.capability_classes.comparison.claim === "not_claimed"
+       && v.capability_classes.causal_explanation.claim === "not_claimed");
+    ok(`${d} records cross-domain composition authorization as unsolved`,
+       v.composition_authorization === "unsolved_cross_domain");
+  }
   if (v.state === "pending") {
     ok(`${d} pending names an owner`, !!(v.owner && v.owner.trim()));
     ok(`${d} pending names the condition that clears it`,

@@ -19,6 +19,8 @@
 
 const path = require("path");
 const answerModule = require(path.join(__dirname, "..", "src/agent/ask_spine_answer.js"));
+const complianceContracts = require(
+  path.join(__dirname, "..", "src/asset/compliance_contracts.js"));
 
 let pass = 0, fail = 0;
 const ok = (l, c, d) => {
@@ -68,6 +70,48 @@ const stubAI = (behaviour) => ({
 
 const PROP = "11111111-1111-4111-8111-111111111111";
 const base = { property_id: PROP, allowed_modules: ["maintenance"] };
+
+const complianceSourceReference = {
+  contract_version: complianceContracts.VERSIONS.reference,
+  role: "source_artifact",
+  label: "Rental License 922616.pdf",
+  opener: { kind: "server_minted", token: "opaque-source-token" },
+};
+const complianceRecordReference = {
+  contract_version: complianceContracts.VERSIONS.reference,
+  role: "canonical_record",
+  label: "Rental License #922616",
+  opener: { kind: "server_minted", token: "opaque-record-token" },
+};
+const complianceStanding = {
+  contract_version: complianceContracts.VERSIONS.standing,
+  capability_classes: complianceContracts.retrievalCapabilityReceipt(
+    "canonical Compliance standing and recorded derivation basis"),
+  composition_authorization: "unsolved_cross_domain",
+  as_of: "2026-08-13",
+  coverage: { state: "unknown", meaning: "The requirement census is unknown." },
+  items: [{
+    entity: { type: "credential", compliance_type: "rental_license",
+      record_id: "canonical-item-id", label: "Rental License #922616" },
+    standing: { code: "current", as_of: "2026-08-13" },
+    why: { basis: "established_credential_period",
+      effective_from: "2026-04-30", effective_through: "2027-05-01" },
+    evidence: [{ role: "issuance", label: "Rental License 922616.pdf",
+      reference: complianceSourceReference }],
+    unresolved: [{ code: "renewal_not_established",
+      detail: "An expiration date is not an established renewal obligation." }],
+    next: { date: "2027-05-01", action: "Credential period ends", state: "date_only" },
+    attention: { state: "none_established", obligation_id: null },
+    references: [complianceRecordReference, complianceSourceReference],
+  }],
+  references: [complianceRecordReference, complianceSourceReference],
+};
+
+function modelFacts(spy) {
+  return JSON.parse(spy.lastRequest.messages[0].content
+    .replace(/^QUESTION SUBJECT:[^\n]+\nFACTS:\n/, "")
+    .replace(/\n\nOPERATOR ASKED:[\s\S]*$/, ""));
+}
 
 (async function main() {
   console.log("\n" + "═".repeat(66));
@@ -173,6 +217,96 @@ const base = { property_id: PROP, allowed_modules: ["maintenance"] };
      /Assigned and accepted are different/.test(sys) &&
      /waiting for X to accept/.test(sys),
      "the distinction the whole work-order rail is built on is missing from the voice");
+
+  // ── C · COMPLIANCE IS A GOVERNED READER, NOT A BIGGER FACT BUNDLE ──
+  ok("C1  a rental-license question selects the Compliance reader",
+     answerModule.questionSubject("Is our rental license current?") === "compliance");
+  ok("C2  a work-order plus Compliance question refuses composition",
+     answerModule.questionSubject("Is the rental license current and who has the work order?")
+       === "composition_unavailable");
+
+  const unauthorizedSpy = {};
+  const unauthorized = await answerModule.answer(stubDb(), stubAI(unauthorizedSpy), {
+    ...base, question: "Is our rental license current?",
+  });
+  ok("C3  Compliance without Asset Management entitlement is distinct",
+     unauthorized.outcome === "not_authorized" && unauthorized.grounded_on === null,
+     JSON.stringify(unauthorized));
+  ok("C4  an unauthorized Compliance question reaches neither reader nor model",
+     !unauthorizedSpy.lastRequest);
+
+  const composition = await answerModule.answer(stubDb(), stubAI({}), {
+    property_id: PROP,
+    allowed_modules: ["maintenance", "asset_management"],
+    question: "Is the rental license current and who has the work order?",
+  });
+  ok("C5  unsolved cross-domain composition has its own outcome",
+     composition.outcome === "composition_unavailable" &&
+       /separately/.test(composition.answer), JSON.stringify(composition));
+
+  let complianceReadInput = null;
+  const complianceSpy = {};
+  const complianceAnswer = await answerModule.answer(
+    { async query() { throw new Error("work reader must not run"); } },
+    stubAI(Object.assign(complianceSpy, {
+      text: "The rental license is current through May 1, 2027, based on the established period.",
+    })),
+    {
+      property_id: PROP,
+      allowed_modules: ["asset_management"],
+      question: "Is our rental license current and why?",
+      mintComplianceReference: async () => "unused-test-mint",
+      complianceReader: {
+        async readComplianceStanding(_db, input) {
+          complianceReadInput = input;
+          return complianceStanding;
+        },
+      },
+    });
+  const complianceFacts = modelFacts(complianceSpy);
+  ok("C6  the reader receives only server-derived property authority",
+     complianceReadInput.property_id === PROP &&
+       typeof complianceReadInput.mintReference === "function" &&
+       !("actor_user_id" in complianceReadInput), JSON.stringify(complianceReadInput));
+  ok("C7  Compliance questions gather no work or resident facts",
+     complianceFacts.question_subject === "compliance" &&
+       !("attention" in complianceFacts) && !("work_orders" in complianceFacts));
+  ok("C8  the model receives standing, why, evidence, unresolved and next",
+     complianceFacts.compliance.items[0].standing.code === "current" &&
+       complianceFacts.compliance.items[0].why.basis === "established_credential_period" &&
+       complianceFacts.compliance.items[0].evidence.length === 1 &&
+       complianceFacts.compliance.items[0].unresolved.length === 1 &&
+       complianceFacts.compliance.items[0].next.state === "date_only");
+  ok("C9  opaque record ids and opener tokens never reach the model",
+     !JSON.stringify(complianceFacts).includes("canonical-item-id") &&
+       !JSON.stringify(complianceFacts).includes("opaque-record-token") &&
+       !JSON.stringify(complianceFacts).includes("opaque-source-token"));
+  ok("C10 the answer returns both server-minted Compliance opener classes",
+     complianceAnswer.references.map((ref) => ref.open.kind).sort().join(",") ===
+       "compliance_record,compliance_source" &&
+       complianceAnswer.references.every((ref) => !!ref.open.token));
+  ok("C11 grounding names the governed reader and unsolved composition state",
+     complianceAnswer.grounded_on.compliance_items === 1 &&
+       complianceAnswer.grounded_on.compliance_as_of === "2026-08-13" &&
+       complianceAnswer.grounded_on.composition_authorization === "unsolved_cross_domain" &&
+       complianceAnswer.grounded_on.open_items === null);
+  ok("C12 the prompt preserves standing, attention and renewal distinctions",
+     /item standing is not a property-wide/i.test(complianceSpy.lastRequest.system) &&
+       /expiration date is not a renewal obligation/i.test(complianceSpy.lastRequest.system) &&
+       /date-only next event/.test(complianceSpy.lastRequest.system));
+
+  const failedComplianceSpy = {};
+  await answerModule.answer(stubDb(), stubAI(failedComplianceSpy), {
+    property_id: PROP,
+    allowed_modules: ["asset_management"],
+    question: "Is the rental license current?",
+    mintComplianceReference: async () => "unused",
+    complianceReader: { async readComplianceStanding() { throw new Error("reader down"); } },
+  });
+  const failedComplianceFacts = modelFacts(failedComplianceSpy);
+  ok("C13 a failed Compliance read is named, never shaped as not established",
+     failedComplianceFacts.reads_that_failed.join(",") === "compliance" &&
+       !("compliance" in failedComplianceFacts));
 
   // ── B · THE BOUNDARY · scope is enforced, not hoped for ───────────
   //  The defect this section exists for: the first version of this slice
@@ -285,7 +419,8 @@ const base = { property_id: PROP, allowed_modules: ["maintenance"] };
   await answerModule.answer(stubDb({ throwOn: "from obligations" }), stubAI(spy2),
     { ...base, question: "what's open?" });
   const facts2 = JSON.parse(spy2.lastRequest.messages[0].content
-    .replace(/^FACTS:\n/, "").replace(/\n\nOPERATOR ASKED:[\s\S]*$/, ""));
+    .replace(/^QUESTION SUBJECT:[^\n]+\nFACTS:\n/, "")
+    .replace(/\n\nOPERATOR ASKED:[\s\S]*$/, ""));
   ok("F1  a read that failed is NAMED in the facts given to the model",
      Array.isArray(facts2.reads_that_failed) && facts2.reads_that_failed.includes("attention"),
      JSON.stringify(facts2.reads_that_failed));

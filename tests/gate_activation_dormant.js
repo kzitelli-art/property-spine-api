@@ -52,7 +52,9 @@ function walk(dir, out) {
     if (e.name === "node_modules" || e.name === ".git") continue;
     const p = path.join(dir, e.name);
     if (e.isDirectory()) walk(p, out);
-    else if (e.name.endsWith(".js")) out.push(path.relative(ROOT, p));
+    else if (e.name.endsWith(".js")) {
+      out.push(path.relative(ROOT, p).replace(/\\/g, "/"));
+    }
   }
   return out;
 }

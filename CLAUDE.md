@@ -192,6 +192,40 @@ verbs over the *same* Spine truth. What varies is entitlement and compression
 (§37) — never the source. Do not build a per-role assistant; that is "a nicer
 module per user" in a new medium.
 
+**ONE AGENT · N ROLE PROFILES** (§40.3). "Role-specific agents" is the right
+product intuition and the wrong structure. Of the eight things a role seems to
+need its own rules for, six already have homes — access and actions are
+entitlement (§40.8, §40.9), confirmation belongs to the canonical writer,
+disclosure is audience (§43), escalation is the obligation engine (§11),
+uncertainty is the four silences (§40.7). Only **ranking** and **compression**
+vary. One engine, a small declarative profile per role. Six implementations of
+entitlement diverge six ways, and they diverge silently.
+
+**A screen is a pre-answered question** (§40.3). Screens are right for questions
+asked often enough that pre-answering is a service. Conversation carries the
+unbounded ones that emerge from actual work — and serves four audiences
+**without pre-building four interpretations of the truth**, because a screen must
+commit to an altitude and a sentence need not.
+
+**The agent layer is a meter** (§40.3). *If an agent needs logic the UI does not
+need, that logic is missing from the Spine.* Thickness is a measurement, not a
+design choice.
+
+**Authorization must survive COMPOSITION** (§40.8). Endpoint- and screen-level
+authorization do not compose. One question can pull debt + insurance + payroll +
+maintenance + resident history into a single answer, where every domain is
+individually entitled and the composed result still discloses what none would
+alone. Entitlement rides on each fact, into the composer, and holds inside the
+assembled answer; anything derived from mixed sources inherits the most
+restrictive input. **Unsolved — design it deliberately at the first genuinely
+cross-domain answer.**
+
+**Retrieval ≠ comparison ≠ causal explanation** (§40.10). Three capability
+classes, each claimed explicitly or not at all. Comparing requires a basis — per
+unit, per SF, per coverage limit — and the basis is a model nobody recorded.
+*"4125 is an outlier"* is not a fact about 4125; it is a visibly different class
+from a recorded figure (§38) and must name the basis that produced it.
+
 The rule that governs every implementation:
 
 ```text
@@ -294,6 +328,15 @@ Opening Tenancy Position    lease and occupancy, from a rent roll, as of a date
 Opening Operating Position  RESERVED — the composed opening state: tenancy +
                             bank + debt + taxes + insurance + contracts
 Opening Accounting Truth    RESERVED — opening GL and subledger balances
+Tenant Agent                RESERVED — a resident-facing conversational
+                            surface. NOT the sixth staff agent. A resident is
+                            not staff, is entitled to their own relationship
+                            and not to property truth, carries different legal
+                            obligations (fair housing, disclosure,
+                            collections), and is the one counterparty who may
+                            probe or misquote. Different identity model,
+                            different audience, likely different login. Do not
+                            design it beside the staff altitudes.
 ```
 
 **A name is reserved in the source or it is not reserved.** Renaming rendered
@@ -332,13 +375,32 @@ Storage stays domain-specific. The owner layer consumes the contract.
 
 ## Before any feature — the Eight Questions (§31)
 
-1. What real-world fact is recorded? 2. What canonical service records it? 3. Who is the authenticated actor, and what property can they operate? 4. What durable object changes? 5. What immutable history remains? 6. What other surfaces read it automatically, **including Ask Spine** — what is the compact standing projection? 7. What happens when ownership/proof/live data is missing? 8. What class is every new component, and what removes any temporary part?
+**1. What will an authorized person ASK about this, and what must be recorded for
+that to be answerable?** — the compact standing projection, plus which capability
+class is claimed (retrieval · comparison · causal explanation, §40.10) and which
+are not. 2. What real-world fact is recorded? 3. What canonical service records
+it? 4. Who is the authenticated actor, and what property can they operate?
+5. What durable object changes? 6. What immutable history remains? 7. What other
+surfaces read it automatically — the screen **and** Ask Spine? 8. What happens
+when ownership/proof/live data is missing? 9. What class is every new component,
+and what removes any temporary part?
 
-Question 6 is where domains get forgotten. The concrete form, asked at the **first
-schema conversation** and not after the UI ships: *"what must this domain expose so
-an entitled person can text Spine from a meeting and get its current position, what
-is unknown, and what needs their attention?"* If the schema cannot answer that
-cheaply, the schema is not finished (§40.6).
+**Question 1 moved from sixth.** A question asked sixth is answered by whatever
+the schema already happens to support; asked first, it is a specification. The
+concrete form, at the **first schema conversation**: *"what must this domain
+expose so an entitled person can text Spine from a meeting and get its current
+position, what is unknown, and what needs their attention?"* If the schema cannot
+answer that cheaply, the schema is not finished (§40.6).
+
+The build question inverts with it:
+
+```text
+WAS   what screen does Debt need?
+IS    what truth must Debt record so that every authorized person can ask
+      the natural questions they will have and get a governed answer?
+```
+
+The screen is one projection of that truth; the conversational reader is another.
 
 ## Definition of Done (§33)
 

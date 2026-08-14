@@ -26,13 +26,16 @@
 //
 //  ── WHAT HAPPENS WHEN IT CANNOT ANSWER ──────────────────────────────
 //
-//  It says so. Three failure shapes, all distinguishable by the caller:
+//  It says so. Failure and refusal shapes remain distinguishable by the caller:
 //
 //    unavailable   the model could not be reached, or no key is set.
 //                  NOT an empty answer — the operator is told the
 //                  assistant is down, not that nothing is happening.
 //    out_of_scope  a real question this slice cannot answer from the
 //                  facts it is allowed to read.
+//    not_authorized the session lacks the governed domain entitlement.
+//    composition_unavailable the requested cross-domain disclosure has
+//                  no established composition authority.
 //    answered      grounded in the bundle.
 //
 //  A read failure NEVER arrives shaped like "nothing to report". That
@@ -43,6 +46,7 @@
 
 const askSpineService = require("./ask_spine_service");
 const workOrderRead = require("../surfaces/work_order_status_read");
+const complianceRead = require("../asset/compliance_read");
 
 const MODEL = process.env.ASK_SPINE_MODEL || "claude-opus-5";
 /*  THINKING AND THE ANSWER SHARE THIS CEILING. On this model family
@@ -111,8 +115,9 @@ const DECISION_SCHEMA = {
  *  Widening it is a product decision with its own facts to gather. It is
  *  not something a prompt edit should be able to do quietly.  */
 const SUPPORTED_SCOPE =
-  "the current open work and work orders at this property — what is open, " +
-  "who has it, what is waiting, what is overdue, what is blocked, and what is next";
+  "the current open work and governed Compliance records at this property — " +
+  "what work is open and who has it, or whether a recorded Compliance item is " +
+  "current, why, its evidence, expiration, unresolved facts, and next established action";
 
 //  The refusal is OWNED BY THE SERVER, not written by the model. A model
 //  that composes its own decline can talk itself into being helpful, and
@@ -120,27 +125,49 @@ const SUPPORTED_SCOPE =
 //  outcome exists to prevent.
 const OUT_OF_SCOPE_ANSWER =
   "I can only answer about " + SUPPORTED_SCOPE + ". " +
-  "Ask me what needs attention, what is open, or who has a job.";
+  "Ask me what needs attention, what is open, or about a recorded license or Compliance item.";
+
+const COMPLIANCE_TERMS =
+  /\b(compliance|licen[cs]e|registration|inspection|certificate|violation|cure|renewal|expire[sd]?|expiration)\b/i;
+const EXPLICIT_WORK_TERMS =
+  /\b(work[ -]?order|repair|maintenance|technician|task|job|assigned|assignment)\b/i;
+
+function questionSubject(question) {
+  const text = String(question || "");
+  const compliance = COMPLIANCE_TERMS.test(text);
+  const work = EXPLICIT_WORK_TERMS.test(text);
+  if (compliance && work) return "composition_unavailable";
+  return compliance ? "compliance" : "work";
+}
 
 /*  The bundle. Bounded on purpose: every field here is something the
  *  operator could already see on a surface they are entitled to, read
  *  through the same services those surfaces use. Nothing is derived a
  *  second time, so Ask Spine cannot disagree with the board about a fact
  *  they both show.  */
-async function gatherFacts(db, { property_id, allowed_modules }) {
-  const facts = { property_id, gathered_at: new Date().toISOString() };
+async function gatherFacts(db, {
+  property_id, allowed_modules, subject = "work", mintComplianceReference,
+  complianceReader = complianceRead,
+}) {
+  const facts = {
+    property_id,
+    gathered_at: new Date().toISOString(),
+    question_subject: subject,
+    __refs: [],
+  };
   const failures = [];
 
-  try {
-    const a = await askSpineService.attention(db, { property_id, allowed_modules });
-    facts.attention = {
-      total_open: a.total_open,
-      scope_note: a.scope_note,
-      items: (a.items || []).map((i) => ({
-        label: i.label, module: i.module, type: i.type,
-        due_at: i.due_at, is_overdue: i.is_overdue, is_unassigned: i.is_unassigned,
-      })),
-    };
+  if (subject === "work") {
+    try {
+      const a = await askSpineService.attention(db, { property_id, allowed_modules });
+      facts.attention = {
+        total_open: a.total_open,
+        scope_note: a.scope_note,
+        items: (a.items || []).map((i) => ({
+          label: i.label, module: i.module, type: i.type,
+          due_at: i.due_at, is_overdue: i.is_overdue, is_unassigned: i.is_unassigned,
+        })),
+      };
     /*  ── WHAT THE ANSWER REFERS TO, AS RECORDS ──────────────────────
      *  The prose above is the model's. These are not: each is an item
      *  the attention service already resolved to a durable target
@@ -154,37 +181,78 @@ async function gatherFacts(db, { property_id, allowed_modules }) {
      *  resolved. The two are different epistemic classes (§38) and only
      *  one of them is safe to click. The key is stripped explicitly
      *  when the facts are serialised for the model; see `answer`.  */
-    facts.__refs = (a.items || [])
-      .filter((i) => i.open && i.open.kind && i.open.id)
-      .map((i) => ({
-        label: i.label,
-        module: i.module,
-        due_at: i.due_at,
-        is_overdue: !!i.is_overdue,
-        is_unassigned: !!i.is_unassigned,
-        open: { kind: i.open.kind, id: i.open.id },
-      }));
-  } catch (e) { failures.push("attention"); }
+      facts.__refs = (a.items || [])
+        .filter((i) => i.open && i.open.kind && i.open.id)
+        .map((i) => ({
+          label: i.label,
+          module: i.module,
+          due_at: i.due_at,
+          is_overdue: !!i.is_overdue,
+          is_unassigned: !!i.is_unassigned,
+          open: { kind: i.open.kind, id: i.open.id },
+        }));
+    } catch (e) { failures.push("attention"); }
 
-  try {
-    const wo = await workOrderRead.readPropertyWorkOrderStatuses(db, { propertyId: property_id, limit: 50 });
-    const list = (wo && wo.work_orders) || [];
-    facts.work_orders = {
-      count: list.length,
-      items: list.map((w) => ({
-        reference: w.work_order && w.work_order.reference,
-        unit: (w.work_order && w.work_order.unit_number) || "common area",
-        title: w.work_order && w.work_order.title,
-        state: w.current && w.current.state,
-        accountable: w.current && w.current.accountable === "UNASSIGNED"
-          ? "UNASSIGNED"
-          : (w.current && w.current.accountable && w.current.accountable.name) || null,
-        assigned_to: w.current && w.current.assigned_to ? w.current.assigned_to.name : null,
-        next_action: w.next_action || null,
-        opened_at: w.work_order && w.work_order.opened_at,
-      })),
-    };
-  } catch (e) { failures.push("work_orders"); }
+    try {
+      const wo = await workOrderRead.readPropertyWorkOrderStatuses(db,
+        { propertyId: property_id, limit: 50 });
+      const list = (wo && wo.work_orders) || [];
+      facts.work_orders = {
+        count: list.length,
+        items: list.map((w) => ({
+          reference: w.work_order && w.work_order.reference,
+          unit: (w.work_order && w.work_order.unit_number) || "common area",
+          title: w.work_order && w.work_order.title,
+          state: w.current && w.current.state,
+          accountable: w.current && w.current.accountable === "UNASSIGNED"
+            ? "UNASSIGNED"
+            : (w.current && w.current.accountable && w.current.accountable.name) || null,
+          assigned_to: w.current && w.current.assigned_to ? w.current.assigned_to.name : null,
+          next_action: w.next_action || null,
+          opened_at: w.work_order && w.work_order.opened_at,
+        })),
+      };
+    } catch (e) { failures.push("work_orders"); }
+  }
+
+  if (subject === "compliance") {
+    try {
+      const standing = await complianceReader.readComplianceStanding(db, {
+        property_id,
+        as_of: new Date().toISOString().slice(0, 10),
+        mintReference: mintComplianceReference,
+      });
+      facts.compliance = {
+        contract_version: standing.contract_version,
+        capability_classes: standing.capability_classes,
+        composition_authorization: standing.composition_authorization,
+        as_of: standing.as_of,
+        coverage: standing.coverage,
+        items: standing.items.map((item) => ({
+          entity: {
+            type: item.entity.type,
+            compliance_type: item.entity.compliance_type,
+            label: item.entity.label,
+          },
+          standing: item.standing,
+          why: item.why,
+          evidence: item.evidence.map((entry) => ({ role: entry.role, label: entry.label })),
+          unresolved: item.unresolved,
+          next: item.next,
+          attention: item.attention,
+        })),
+      };
+      facts.__refs = standing.references.map((reference) => ({
+        label: reference.label,
+        module: "compliance",
+        open: {
+          kind: reference.role === "canonical_record"
+            ? "compliance_record" : "compliance_source",
+          token: reference.opener.token,
+        },
+      }));
+    } catch (e) { failures.push("compliance"); }
+  }
 
   facts.reads_that_failed = failures;
   return facts;
@@ -200,15 +268,16 @@ async function gatherFacts(db, { property_id, allowed_modules }) {
  *    · turning "I don't have that" into a plausible guess
  *    · describing what it would do, as though it had done it
  *    · reciting internal vocabulary at a person who wanted a sentence  */
-function systemPrompt() {
+function systemPrompt(subject = "work") {
   return [
     "You are Spine, the assistant inside a property-management system.",
     "You are answering a signed-in operator about ONE property.",
+    "The server selected exactly one authorized question subject: " + subject + ".",
     "",
     "YOU ANSWER ABOUT EXACTLY ONE SUBJECT:",
     "  " + SUPPORTED_SCOPE + ".",
     "",
-    "Anything else is out of scope — rent strategy, pricing, legal or tax",
+    "Anything else is out of scope — rent strategy, pricing, legal or tax advice",
     "questions, meetings and what was said in them, market conditions, vendors",
     "you were not given, people you were not given, other properties, anything",
     "historical you cannot see, and any general knowledge question. Being able",
@@ -268,6 +337,12 @@ function systemPrompt() {
     "   are different facts and confusing them is the worst thing you can do.",
     "4. Nothing being open is a real, good answer. Say it plainly and stop.",
     "   Do not manufacture concerns to seem useful.",
+    "5. The FACTS contain only one authorized subject. Never combine Compliance",
+    "   with work, residents, finances or any absent domain. Composition authority",
+    "   is not established merely because each domain could be read separately.",
+    "6. For Compliance, item standing is not a property-wide legal conclusion.",
+    "   An expiration date is not a renewal obligation, and a date-only next event",
+    "   is not work that needs action. Preserve those distinctions exactly.",
     "",
     "HOW TO SOUND:",
     "· Talk like a competent colleague, not a database. Short sentences.",
@@ -290,7 +365,9 @@ function systemPrompt() {
  * @param anthropic  the shared SDK client (injected — this module holds no key)
  * @returns { outcome, answer, grounded_on, model }
  */
-async function answer(db, anthropic, { property_id, allowed_modules, question }) {
+async function answer(db, anthropic, {
+  property_id, allowed_modules, question, mintComplianceReference, complianceReader,
+}) {
   if (!property_id) throw new Error("ask_spine.answer requires a server-derived property_id");
 
   const q = String(question || "").trim();
@@ -304,6 +381,25 @@ async function answer(db, anthropic, { property_id, allowed_modules, question })
              grounded_on: null };
   }
 
+  const subject = questionSubject(q);
+  if (subject === "composition_unavailable") {
+    return {
+      outcome: "composition_unavailable",
+      answer: "I can answer about Compliance or open work separately, but I can't combine them in one answer yet.",
+      grounded_on: null,
+      references: [],
+    };
+  }
+  const modules = Array.isArray(allowed_modules) ? allowed_modules.map(String) : [];
+  if (subject === "compliance" && !modules.includes("asset_management")) {
+    return {
+      outcome: "not_authorized",
+      answer: "Compliance is not available in your current access for this property.",
+      grounded_on: null,
+      references: [],
+    };
+  }
+
   //  NO KEY IS NOT AN EMPTY ANSWER. Without this the operator would ask a
   //  question and get silence, which reads as "nothing is happening here".
   if (!anthropic) {
@@ -313,14 +409,17 @@ async function answer(db, anthropic, { property_id, allowed_modules, question })
              grounded_on: null };
   }
 
-  const facts = await gatherFacts(db, { property_id, allowed_modules });
+  const facts = await gatherFacts(db, {
+    property_id, allowed_modules: modules, subject,
+    mintComplianceReference, complianceReader,
+  });
 
   let text = "";
   try {
     const ai = await anthropic.messages.create({
       model: MODEL,
       max_tokens: MAX_TOKENS,
-      system: systemPrompt(),
+      system: systemPrompt(subject),
       //  The shape is enforced here, not coaxed. See DECISION_SCHEMA.
       output_config: { format: { type: "json_schema", schema: DECISION_SCHEMA }, effort: EFFORT },
       //  ENDS ON THE USER TURN. Nothing may follow it — see DECISION_SCHEMA
@@ -330,7 +429,8 @@ async function answer(db, anthropic, { property_id, allowed_modules, question })
         //  never a record id — see gatherFacts for why a model holding ids
         //  is a model that can compose a link Spine did not resolve.
         { role: "user",
-          content: `FACTS:\n${JSON.stringify(facts, (k, v) => (k === "__refs" ? undefined : v), 2)}`
+          content: `QUESTION SUBJECT: ${subject}\nFACTS:\n`
+                   + `${JSON.stringify(facts, (k, v) => (k === "__refs" ? undefined : v), 2)}`
                    + `\n\nOPERATOR ASKED: ${q}` },
       ],
     });
@@ -394,10 +494,16 @@ async function answer(db, anthropic, { property_id, allowed_modules, question })
     grounded_on: {
       open_items: facts.attention ? facts.attention.total_open : null,
       work_orders: facts.work_orders ? facts.work_orders.count : null,
+      compliance_items: facts.compliance ? facts.compliance.items.length : null,
+      compliance_as_of: facts.compliance ? facts.compliance.as_of : null,
+      composition_authorization: facts.compliance
+        ? facts.compliance.composition_authorization : null,
       reads_that_failed: facts.reads_that_failed,
       gathered_at: facts.gathered_at,
     },
   };
 }
 
-module.exports = { answer, gatherFacts, systemPrompt, MODEL, SUPPORTED_SCOPE, OUT_OF_SCOPE_ANSWER };
+module.exports = {
+  answer, gatherFacts, questionSubject, systemPrompt, MODEL, SUPPORTED_SCOPE, OUT_OF_SCOPE_ANSWER,
+};
