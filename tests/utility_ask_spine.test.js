@@ -193,7 +193,7 @@ async function main() {
   ok("database and external statement identifiers never enter model context", () => {
     const content = spy.request.messages[0].content;
     for (const secret of [
-      "account-db-secret", "meter-db-secret", "statement-db-secret",
+      "account-db-secret", "meter-db-secret", "statement-db-secret", "arrangement-secret",
       "artifact-a", "BILL-PRIVATE-777", "PECO-123456789", "METER-998877",
     ]) assert(!content.includes(secret), secret);
   });

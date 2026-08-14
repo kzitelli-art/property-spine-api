@@ -268,7 +268,12 @@ module.exports = function utilityRoutes(deps = {}) {
                 ...body.arrangement,
                 ...base,
                 service_id: service.id,
-                effective_from: body.effective_from,
+                supersedes_id: body.arrangement.supersedes_id
+                  || (!body.applicability ? body.supersedes_id : null),
+                revision_reason: body.arrangement.revision_reason
+                  || (!body.applicability ? body.revision_reason : null),
+                effective_from: body.arrangement.supersedes_id && body.arrangement.effective_from
+                  ? body.arrangement.effective_from : body.effective_from,
               })
             : null;
 

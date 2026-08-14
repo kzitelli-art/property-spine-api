@@ -189,6 +189,26 @@ async function main() {
     ok("the setup orchestration is transaction-bounded",
       calls.queries.includes("begin") && calls.queries.includes("commit"));
 
+    const correction = await request(`${path}/setup`, {
+      token: "entitled", method: "POST",
+      body: {
+        service_class: "electricity", effective_from: "2026-01-01",
+        provenance_note: "operator corrected the established setup",
+        supersedes_id: "arrangement-current",
+        revision_reason: "Earlier topology was recorded incorrectly",
+        arrangement: {
+          physical_arrangement: "individual_provider_meters",
+        },
+      },
+    });
+    const correctedArrangement = [...calls.setup].reverse()
+      .find((call) => call[0] === "recordArrangement")[1];
+    ok("an arrangement correction retains the corrected fact's effective date",
+      correction.status === 201 && correctedArrangement.effective_from === "2026-01-01");
+    ok("the correction lineage reaches the canonical arrangement writer",
+      correctedArrangement.supersedes_id === "arrangement-current"
+        && correctedArrangement.revision_reason === "Earlier topology was recorded incorrectly");
+
     const transactionStart = calls.queries.length;
     failMeter = true;
     const failedSetup = await request(`${path}/setup`, {
