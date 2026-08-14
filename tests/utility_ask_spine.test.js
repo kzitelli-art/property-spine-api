@@ -122,7 +122,8 @@ function model(answerText, spy) {
 
 function factsFrom(spy) {
   return JSON.parse(spy.request.messages[0].content
-    .replace(/^FACTS:\n/, "").replace(/\n\nOPERATOR ASKED:[\s\S]*$/, ""));
+    .replace(/^QUESTION SUBJECT:[^\n]+\nFACTS:\n/, "")
+    .replace(/\n\nOPERATOR ASKED:[\s\S]*$/, ""));
 }
 
 async function main() {
@@ -130,7 +131,7 @@ async function main() {
 
   const noEntitlementDb = database();
   const noEntitlement = await ask.gatherFacts(noEntitlementDb, {
-    property_id: PROPERTY, allowed_modules: ["maintenance"],
+    property_id: PROPERTY, allowed_modules: ["maintenance"], subject: "utility",
   });
   ok("unentitled operators do not receive a Utility fact key", () => {
     assert.strictEqual(noEntitlement.utility, undefined);
@@ -141,7 +142,7 @@ async function main() {
 
   const entitledDb = database();
   const gathered = await ask.gatherFacts(entitledDb, {
-    property_id: PROPERTY, allowed_modules: ["asset_management"],
+    property_id: PROPERTY, allowed_modules: ["asset_management"], subject: "utility",
   });
   ok("entitled Utility facts come from every property-scoped canonical read", () => {
     const utilityQueries = entitledDb.queries.filter((query) => /from\s+utility_/i.test(query.text));
