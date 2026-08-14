@@ -11,7 +11,7 @@ const { createComplianceFactWriter } = require("../src/asset/compliance_fact_per
 const reads = require("../src/asset/compliance_read.js");
 
 const URL = receipt.harnessConnectionString();
-const EXPECTED = 32;
+const EXPECTED = 33;
 let passed = 0;
 let failed = 0;
 function ok(label, condition, detail) {
@@ -232,6 +232,15 @@ async function main() {
 
     const replay = await writer.establishFact(pool, { authority, confirmation: inspection });
     ok("typed writer is idempotent", replay.outcome === "idempotent_replay");
+    const freshKeyReplay = await writer.establishFact(pool, { authority, confirmation: {
+      ...inspection, idempotency_key: "facade-2023-response-loss-retry",
+    } });
+    const inspectionFactCount = (await client.query(
+      `select count(*)::int n from compliance_facts
+        where item_id = $1 and fact_type = 'inspection_result'`,
+      [inspectionReceipt.record.id])).rows[0].n;
+    ok("response-loss retry with a fresh HTTP key preserves one typed fact",
+      freshKeyReplay.outcome === "idempotent_replay" && inspectionFactCount === 1);
     await refuses("idempotency key cannot be reused for different truth", () =>
       writer.establishFact(pool, { authority, confirmation: {
         ...inspection,

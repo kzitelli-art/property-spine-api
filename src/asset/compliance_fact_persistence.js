@@ -20,6 +20,11 @@ function normalized(value) {
     : String(value).trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+function semanticConfirmation(confirmation) {
+  const { idempotency_key: _idempotencyKey, ...establishment } = confirmation;
+  return establishment;
+}
+
 function receipt(outcome, itemId, confirmation) {
   return writeContracts.validateReceipt({
     contract_version: writeContracts.RECEIPT_VERSION,
@@ -126,7 +131,8 @@ function createComplianceFactWriter() {
       idempotencyKey: confirmation.idempotency_key,
     });
     const establishmentFingerprint = digest({
-      version: "compliance.fact_establishment.v1", propertyId, confirmation,
+      version: "compliance.fact_establishment.v1", propertyId,
+      confirmation: semanticConfirmation(confirmation),
     });
     const client = await pool.connect();
     try {
