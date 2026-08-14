@@ -32,6 +32,15 @@ function requireDate(name, value, { nullable = false } = {}) {
   return text;
 }
 
+function dateOnly(value) {
+  if (value instanceof Date && !Number.isNaN(value.valueOf())) {
+    return value.toISOString().slice(0, 10);
+  }
+  const text = String(value || "");
+  const match = /^(\d{4}-\d{2}-\d{2})/.exec(text);
+  return match ? match[1] : text.slice(0, 10);
+}
+
 function requireRange(startName, start, endName, end) {
   if (start && end && String(end) <= String(start)) {
     throw contractedServiceError("BAD_INPUT", `${endName} must be after ${startName}`);
@@ -134,7 +143,7 @@ async function assertCorrectionDate(client, table, supersedesId, propertyId, dat
   effectiveDate, label) {
   if (!supersedesId) return null;
   const prior = await assertOwned(client, table, supersedesId, propertyId, label);
-  if (String(prior[dateColumn] || "").slice(0, 10) !== String(effectiveDate || "").slice(0, 10)) {
+  if (dateOnly(prior[dateColumn]) !== dateOnly(effectiveDate)) {
     throw contractedServiceError("BAD_INPUT",
       `a corrected ${label} must retain the earlier fact's ${dateColumn} date`);
   }

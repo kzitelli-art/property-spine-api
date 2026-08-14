@@ -97,8 +97,8 @@ function sourceReferences(value, label = "Contracted Services evidence") {
       return;
     }
     if (!node || typeof node !== "object") return;
-    const nextLabel = node.label || (node.provider && node.provider.name)
-      ? `${node.label || node.provider.name} evidence` : currentLabel;
+    const sourceLabel = node.label || (node.provider && node.provider.name);
+    const nextLabel = sourceLabel ? `${sourceLabel} evidence` : currentLabel;
     if (node.source_artifact_id && !found.has(String(node.source_artifact_id))) {
       found.set(String(node.source_artifact_id), {
         label: nextLabel,
@@ -122,6 +122,7 @@ function standingForModel(standing) {
     engagement_count: standing.engagement_count,
     governed_engagement_count: standing.governed_engagement_count,
     attention_count: standing.attention_count,
+    unmatched_document_count: standing.unmatched_document_count,
     unmatched_financial_observation_count: standing.unmatched_financial_observation_count,
     next_milestone: standing.next_milestone,
     engagements: standing.engagements,

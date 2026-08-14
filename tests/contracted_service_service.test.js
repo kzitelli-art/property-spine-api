@@ -172,7 +172,7 @@ async function main() {
       },
       priorTerm: {
         id: "prior-term", property_id: PROPERTY, engagement_id: ENGAGEMENT,
-        commencement_date: "2026-01-01",
+        commencement_date: new Date("2026-01-01T00:00:00.000Z"),
       },
     });
     await rejects(() => service.recordTerm(db, termInput({

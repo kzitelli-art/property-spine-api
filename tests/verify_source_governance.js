@@ -118,6 +118,12 @@ const GATES = [
   //  confident lie, so the honesty properties are on the standard path.
   { file: "ask_spine_answer.test.js",
     what: "Ask Spine: answers only from reads, names them, and an outage never reads as good news" },
+  { file: "gate_ask_spine_readers.js",
+    what: "Ask Spine: every canonical standing domain is registered, pending, or explicitly waived" },
+  { file: "contracted_service_source_artifact.test.js",
+    what: "Contracted Services evidence: accepted shapes and product-specific refusals" },
+  { file: "contracted_service_ask_spine.test.js",
+    what: "Contracted Services Ask Spine: entitlement, question-bound facts, failures, and references" },
   { file: "technician_language.test.js",
     what: "technician language: plain phrases read correctly, nothing guessed into an action" },
   { file: "compliance_document_read.test.js",

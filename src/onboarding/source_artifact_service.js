@@ -72,6 +72,8 @@ const RENT_ROLL_SHAPES = Object.freeze(["csv", "tsv", "txt", "xlsx", "xlsm", "xl
 //  fallback accepted and additionally permits opaque PDF retention. A domain
 //  adapter may later propose what the bytes appear to be; storage does not.
 const OTHER_SHAPES = Object.freeze([...RENT_ROLL_SHAPES, "pdf"]);
+const CONTRACTED_SERVICE_PDF_SHAPES = Object.freeze(["pdf"]);
+const CONTRACTED_SERVICE_ACCOUNTING_SHAPES = Object.freeze(["pdf", "xlsx", "xls", "csv"]);
 
 const KIND_SHAPES = Object.freeze({
   rent_roll:                     RENT_ROLL_SHAPES,
@@ -110,12 +112,29 @@ const KIND_SHAPES = Object.freeze({
   utility_addendum:              Object.freeze(["pdf"]),
   utility_meter_schedule:        Object.freeze(["pdf", "xlsx", "xls", "csv"]),
   utility_account_confirmation:  Object.freeze(["pdf", "xlsx", "xls", "csv"]),
+  contracted_service_proposal:   CONTRACTED_SERVICE_PDF_SHAPES,
+  contracted_service_agreement:  CONTRACTED_SERVICE_PDF_SHAPES,
+  contracted_service_statement_of_work: CONTRACTED_SERVICE_PDF_SHAPES,
+  contracted_service_amendment:  CONTRACTED_SERVICE_PDF_SHAPES,
+  contracted_service_addendum:   CONTRACTED_SERVICE_PDF_SHAPES,
+  contracted_service_renewal_notice: CONTRACTED_SERVICE_PDF_SHAPES,
+  contracted_service_termination_notice: CONTRACTED_SERVICE_PDF_SHAPES,
+  contracted_service_invoice:    CONTRACTED_SERVICE_PDF_SHAPES,
+  contracted_service_certificate_of_insurance: CONTRACTED_SERVICE_PDF_SHAPES,
+  contracted_service_service_report: CONTRACTED_SERVICE_PDF_SHAPES,
+  contracted_service_accounting_report: CONTRACTED_SERVICE_ACCOUNTING_SHAPES,
+  contracted_service_other:      OTHER_SHAPES,
 });
 
 //  Per-kind refusal copy. §5 and the repo's rule that a refusal a user
 //  can see is PRODUCT COPY — it must be sayable, and must name the next
 //  step. Telling someone holding an insurance binder to "export the rent
 //  roll sheet" is our machinery leaking into their day.
+function contractedServicePdfRefusal(filename) {
+  return `Spine reads this Contracted Services document as a PDF. "${filename}" is not one. ` +
+    `Upload the proposal, agreement, notice, invoice, or service document as issued.`;
+}
+
 const KIND_REFUSAL = Object.freeze({
   rent_roll: (filename) =>
     `Spine reads rent rolls as .xlsx, .xls, .csv or .tsv. "${filename}" is none of those. ` +
@@ -177,6 +196,22 @@ const KIND_REFUSAL = Object.freeze({
   utility_account_confirmation: (filename) =>
     `Spine reads a Utility account confirmation as a PDF or a spreadsheet. "${filename}" is neither. ` +
     `Upload the provider confirmation or account export.`,
+  contracted_service_proposal: contractedServicePdfRefusal,
+  contracted_service_agreement: contractedServicePdfRefusal,
+  contracted_service_statement_of_work: contractedServicePdfRefusal,
+  contracted_service_amendment: contractedServicePdfRefusal,
+  contracted_service_addendum: contractedServicePdfRefusal,
+  contracted_service_renewal_notice: contractedServicePdfRefusal,
+  contracted_service_termination_notice: contractedServicePdfRefusal,
+  contracted_service_invoice: contractedServicePdfRefusal,
+  contracted_service_certificate_of_insurance: contractedServicePdfRefusal,
+  contracted_service_service_report: contractedServicePdfRefusal,
+  contracted_service_accounting_report: (filename) =>
+    `Spine reads Contracted Services accounting evidence as a PDF or spreadsheet. ` +
+    `"${filename}" is neither. Upload the original report or export.`,
+  contracted_service_other: (filename) =>
+    `Spine retains other Contracted Services evidence as a PDF, spreadsheet or text file. ` +
+    `"${filename}" is none of those. Upload the source in its original format.`,
 });
 
 function shapesFor(artifact_kind) {
