@@ -87,9 +87,9 @@ function hasRentalLicenseSignature(body) {
   const signatures = [
     /City of Philadelphia/i,
     /Department of\s+Licenses\s*&\s*Inspections/i,
-    /3202\s+Rental\s*\(Residential Dwellings\)/i,
+    /3202\s*Rental\s*\(Residential Dwellings\)/i,
     /THIS LICENSE IS GRANTED TO THE PERSON AND LOCATION/i,
-    /LICENSE CODE\s+LICENSE NO\./i,
+    /LICENSE CODE\s*LICENSE NO\./i,
   ];
   return signatures.filter((pattern) => pattern.test(body)).length >= 4;
 }
@@ -117,12 +117,13 @@ function propose(text) {
 
   proposed.compliance_type = "rental_license";
   proposed.issuing_authority = "City of Philadelphia Department of Licenses & Inspections";
-  proposed.credential_code = first(body, /\b(3202)\s+Rental\s*\(Residential Dwellings\)/i);
+  proposed.credential_code = first(body, /\b(3202)\s*Rental\s*\(Residential Dwellings\)/i);
   proposed.external_credential_number =
     first(body, /License Number:\s*\r?\n\s*(\d{6,})\b/i) ||
     first(body, /\b3202\s+(\d{6,})\s+\d{6,}\s+\d{1,2}\//i);
   proposed.commercial_activity_number =
-    first(body, /\b3202\s+\d{6,}\s+(\d{6,})\s+\d{1,2}\//i);
+    first(body, /\b3202\s+\d{6,}\s+(\d{6,})\s+\d{1,2}\//i) ||
+    first(body, /\b3202\s*\d{6}\s*\r?\n\s*(\d{6})\s*\r?\n\s*\d{1,2}\//i);
   proposed.legal_entity_name =
     first(body, /DISPLAY PROMINENTLY\s*(?:\r?\nif required by law)?\s*\r?\n([^\r\n]{1,120}\bLLC)\s*$/im) ||
     first(body, /^([^\r\n]{1,120}\bLLC)\s*\r?\nBusiness Name:/im);
@@ -132,7 +133,9 @@ function propose(text) {
   );
   proposed.unit_count = parsePositiveInteger(first(body, /Number of Units:\s*(\d+)\b/i));
 
-  const periodRow = body.match(/\b3202\s+\d{6,}\s+\d{6,}\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d{1,2}\/\d{1,2}\/\d{4})\b/i);
+  const periodRow =
+    body.match(/\b3202\s+\d{6,}\s+\d{6,}\s+(\d{1,2}\/\d{1,2}\/\d{4})\s+(\d{1,2}\/\d{1,2}\/\d{4})\b/i) ||
+    body.match(/\b3202\s*\d{6}\s*\r?\n\s*\d{6}\s*\r?\n\s*(\d{1,2}\/\d{1,2}\/\d{4})\s*(\d{1,2}\/\d{1,2}\/\d{4})\b/i);
   const effectiveThroughRaw = periodRow ? periodRow[1] : null;
   const effectiveFromRaw = periodRow ? periodRow[2] : null;
   proposed.effective_from = parseUnambiguousDate(effectiveFromRaw);

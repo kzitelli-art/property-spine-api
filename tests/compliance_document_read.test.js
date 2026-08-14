@@ -6,7 +6,7 @@ const path = require("path");
 const reader = require("../src/asset/compliance_document_read.js");
 const contracts = require("../src/asset/compliance_contracts.js");
 
-const EXPECTED_ASSERTIONS = 37;
+const EXPECTED_ASSERTIONS = 43;
 let pass = 0, fail = 0;
 function ok(label, condition, detail) {
   if (condition) { pass++; console.log("  ok    " + label); }
@@ -50,6 +50,38 @@ const filenameOnly = reader.propose("ordinary correspondence", {
 });
 ok("a convincing filename cannot classify content", filenameOnly.recognition_state === "read_no_match");
 ok("filename-only input remains unclassified", filenameOnly.source_classification === "unclassified");
+
+const productionPdfParseLayout = reader.propose(`City of Philadelphia
+Department of
+Licenses & Inspections
+DISPLAY PROMINENTLY
+if required by law
+4233 Chestnut LLC
+3202Rental (Residential Dwellings)
+4233 Chestnut LLC
+4233 CHESTNUT ST, Philadelphia, PA 19104-3094
+Owner is Managing Agent: YesNumber of Units: 281
+THIS LICENSE IS GRANTED TO THE PERSON AND LOCATION FOR THE PURPOSE STATED ABOVE.
+LICENSE CODELICENSE NO.
+3202922616
+920786
+5/1/20274/30/2026
+License Number:
+922616`);
+ok("production PDF extraction layout is recognized",
+  productionPdfParseLayout.recognition_state === "recognized");
+ok("collapsed code and label spacing preserves the credential code",
+  productionPdfParseLayout.proposed.credential_code === "3202");
+ok("the explicit license-number label survives collapsed table columns",
+  productionPdfParseLayout.proposed.external_credential_number === "922616");
+ok("the compact table preserves the commercial activity number",
+  productionPdfParseLayout.proposed.commercial_activity_number === "920786");
+ok("the compact table preserves the unambiguous effective date",
+  productionPdfParseLayout.proposed.effective_from === "2026-04-30");
+ok("the compact table still leaves the ambiguous expiration unknown",
+  productionPdfParseLayout.proposed.effective_through === null &&
+  productionPdfParseLayout.unknowns.some((u) =>
+    u.field === "effective_through" && u.reason === "ambiguous"));
 
 const payment = reader.propose(`City of Philadelphia\nRental License 922616\nPAYMENT RECEIPT\nAmount Paid: $250.00\nTransaction ID: A1`);
 ok("payment is identified as payment evidence", payment.source_classification === "payment_evidence");
