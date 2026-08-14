@@ -51,6 +51,20 @@ function factValue(row) {
   if (row.fact_type === "cure_performed") {
     return { performed_on: dateValue(row.cure_performed_on), summary: row.cure_summary };
   }
+  if (row.fact_type === "inspection_result") {
+    return {
+      performed_on: dateValue(row.inspection_performed_on),
+      outcome: row.inspection_outcome,
+      summary: row.inspection_summary,
+    };
+  }
+  if (row.fact_type === "requirement_applicability") {
+    return {
+      decided_on: dateValue(row.requirement_decided_on),
+      applicability: row.requirement_applicability,
+      summary: row.requirement_summary,
+    };
+  }
   return {
     decided_on: dateValue(row.authority_decided_on),
     disposition: row.authority_disposition,
@@ -90,11 +104,15 @@ async function loadSpecs(client, { property_id: propertyId, item_id: itemId, min
             f.supersedes_fact_id, f.correction_reason,
             f.credential_issuing_authority, f.credential_external_number,
             f.credential_legal_entity_name, f.credential_property_address,
+            f.credential_subject_identifier,
             f.credential_effective_from, f.credential_effective_through,
-            f.finding_issued_on, f.finding_summary,
+            f.finding_issued_on, f.finding_external_reference, f.finding_summary,
             f.payment_observed_on, f.payment_amount_cents, f.payment_currency_code,
+            f.payment_reference,
             f.cure_performed_on, f.cure_summary,
-            f.authority_decided_on, f.authority_disposition, f.authority_summary
+            f.authority_decided_on, f.authority_disposition, f.authority_summary,
+            f.inspection_performed_on, f.inspection_outcome, f.inspection_summary,
+            f.requirement_decided_on, f.requirement_applicability, f.requirement_summary
        from compliance_facts f
       where f.item_id = any($1::uuid[])
       order by f.established_at, f.id`, [ids])).rows;
@@ -143,8 +161,17 @@ async function loadSpecs(client, { property_id: propertyId, item_id: itemId, min
         timestampValue(right.established_at).localeCompare(timestampValue(left.established_at)))[0] || null;
     const suffix = identityRow && identityRow.credential_external_number
       ? ` #${identityRow.credential_external_number}` : "";
-    const label = item.compliance_type === "rental_license"
-      ? `Rental License${suffix}` : `${item.compliance_type}${suffix}`;
+    const labels = {
+      rental_license: "Rental License",
+      rental_suitability_certificate: "Certificate of Rental Suitability",
+      elevator_certificate_of_operation: "Elevator Certificate of Operation",
+      facade_inspection: "Facade Inspection",
+      code_violation: "Code Violation",
+      lead_certification_requirement: "Lead Certification Requirement",
+    };
+    const baseLabel = labels[item.compliance_type] || item.compliance_type
+      .split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+    const label = `${baseLabel}${suffix}`;
     const recordToken = await mintReference({
       role: "canonical_record", property_id: propertyId, item_id: item.id, label,
     });
@@ -187,14 +214,33 @@ async function readComplianceEstablishment(client, input = {}) {
   const propertyId = required(input.property_id, "server-derived property_id");
   const row = (await client.query(
     `select count(*)::int as item_count,
-            count(*) filter (where item_kind = 'credential')::int as credential_count
+            count(*) filter (where item_kind = 'credential')::int as credential_count,
+            count(*) filter (where item_kind = 'inspection')::int as inspection_count,
+            count(*) filter (where item_kind = 'finding')::int as finding_count,
+            count(*) filter (where item_kind = 'requirement')::int as requirement_count,
+            count(*) filter (where item_kind = 'credential' and compliance_type in
+              ('rental_suitability_certificate', 'elevator_certificate_of_operation'))::int
+              as certificate_count,
+            count(*) filter (where item_kind = 'credential' and compliance_type not in
+              ('rental_suitability_certificate', 'elevator_certificate_of_operation'))::int
+              as license_count
        from compliance_items where property_id = $1`, [propertyId])).rows[0];
   const count = Number(row && row.item_count || 0);
   const credentialCount = Number(row && row.credential_count || 0);
+  const inspectionCount = Number(row && row.inspection_count || 0);
+  const findingCount = Number(row && row.finding_count || 0);
+  const requirementCount = Number(row && row.requirement_count || 0);
+  const certificateCount = Number(row && row.certificate_count || 0);
+  const licenseCount = Number(row && row.license_count || 0);
   return {
     established: count > 0,
     item_count: count,
     credential_count: credentialCount,
+    inspection_count: inspectionCount,
+    finding_count: findingCount,
+    requirement_count: requirementCount,
+    certificate_count: certificateCount,
+    license_count: licenseCount,
     note: count > 0
       ? `${count} governed Compliance item${count === 1 ? "" : "s"}`
       : "No governed Compliance items yet",

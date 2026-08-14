@@ -9,9 +9,12 @@ const FACT_TYPES = Object.freeze([
   "payment_observed",
   "cure_performed",
   "authority_disposition",
+  "inspection_result",
+  "requirement_applicability",
 ]);
 const EVIDENCE_ROLES = Object.freeze([
-  "issuance", "finding", "payment", "cure", "authority_disposition", "supporting",
+  "issuance", "finding", "payment", "cure", "authority_disposition",
+  "inspection", "applicability", "supporting",
 ]);
 
 function exact(value, keys, path) {
@@ -102,6 +105,22 @@ const VALUE_VALIDATORS = Object.freeze({
     isoDate(value.decided_on, `${path}.decided_on`);
     if (!["closed", "remains_open"].includes(value.disposition)) {
       throw new TypeError(`${path}.disposition is not allowed`);
+    }
+    requiredString(value.summary, `${path}.summary`);
+  },
+  inspection_result(value, path) {
+    exact(value, ["performed_on", "outcome", "summary"], path);
+    isoDate(value.performed_on, `${path}.performed_on`);
+    if (!["passed", "passed_with_conditions", "failed", "inconclusive"].includes(value.outcome)) {
+      throw new TypeError(`${path}.outcome is not allowed`);
+    }
+    requiredString(value.summary, `${path}.summary`);
+  },
+  requirement_applicability(value, path) {
+    exact(value, ["decided_on", "applicability", "summary"], path);
+    isoDate(value.decided_on, `${path}.decided_on`);
+    if (!["applicable", "exempt", "not_applicable"].includes(value.applicability)) {
+      throw new TypeError(`${path}.applicability is not allowed`);
     }
     requiredString(value.summary, `${path}.summary`);
   },

@@ -43,7 +43,9 @@ function coverageUnresolved(coverage) {
 function derive(spec, asOf) {
   if (spec.kind === "credential") return semantics.deriveCredentialStanding(spec.facts, asOf);
   if (spec.kind === "finding") return semantics.deriveFindingStanding(spec.facts, asOf);
-  throw new TypeError("Compliance projection kind must be credential or finding");
+  if (spec.kind === "inspection") return semantics.deriveInspectionStanding(spec.facts, asOf);
+  if (spec.kind === "requirement") return semantics.deriveRequirementStanding(spec.facts, asOf);
+  throw new TypeError("Compliance projection kind is not supported");
 }
 
 function projectItem(spec, asOf, coverage) {
@@ -96,6 +98,8 @@ function historyDates(fact) {
   if (fact.fact_type === "finding_issued") return [fact.value.issued_on, null];
   if (fact.fact_type === "payment_observed") return [fact.value.observed_on, null];
   if (fact.fact_type === "cure_performed") return [fact.value.performed_on, null];
+  if (fact.fact_type === "inspection_result") return [fact.value.performed_on, null];
+  if (fact.fact_type === "requirement_applicability") return [fact.value.decided_on, null];
   return [fact.value.decided_on, null];
 }
 

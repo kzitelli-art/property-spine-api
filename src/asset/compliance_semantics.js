@@ -233,6 +233,88 @@ function deriveFindingStanding(facts, asOf) {
     [unresolved("cure_not_established", "No cure or authority closure has been established.")]);
 }
 
+function datedResult(code, asOf, basis, facts, unresolvedItems) {
+  const dates = facts.map((fact) => fact.fact_type === "inspection_result"
+    ? fact.value.performed_on : fact.value.decided_on).sort();
+  return Object.freeze({
+    code,
+    as_of: asOf,
+    why: Object.freeze({
+      basis,
+      effective_from: dates.length > 0 ? dates[dates.length - 1] : null,
+      effective_through: null,
+    }),
+    decisive_fact_ids: Object.freeze(facts.map((fact) => fact.fact_id)),
+    unresolved: Object.freeze(unresolvedItems),
+    next: null,
+  });
+}
+
+function deriveInspectionStanding(facts, asOf) {
+  validateAsOf(asOf);
+  const history = buildEffectiveHistory(facts);
+  const effective = history.effective_facts
+    .filter((fact) => fact.fact_type === "inspection_result" && fact.value.performed_on <= asOf)
+    .sort((left, right) => left.value.performed_on.localeCompare(right.value.performed_on) ||
+      left.established_at.localeCompare(right.established_at));
+  if (history.correction_conflicts.length > 0) {
+    return datedResult("conflicted", asOf, "conflicting_inspection_results",
+      effective.filter((fact) => history.correction_conflicts.includes(fact.fact_id)),
+      [unresolved("inspection_correction_conflict",
+        "Multiple effective corrections branch from one inspection result.")]);
+  }
+  if (effective.length === 0) {
+    return datedResult("not_established", asOf, "insufficient_canonical_facts", [],
+      [unresolved("inspection_result_not_established",
+        "No completed inspection result has been established as of this date.")]);
+  }
+  const latestDate = effective[effective.length - 1].value.performed_on;
+  const latest = effective.filter((fact) => fact.value.performed_on === latestDate);
+  if (new Set(latest.map((fact) => fact.value.outcome)).size > 1) {
+    return datedResult("conflicted", asOf, "conflicting_inspection_results", latest,
+      [unresolved("inspection_result_conflict",
+        "Conflicting inspection outcomes share the latest inspection date.")]);
+  }
+  const outcome = latest[latest.length - 1].value.outcome;
+  const unresolvedItems = outcome === "failed"
+    ? [unresolved("inspection_resolution_not_established",
+      "The inspection failed; cure and authority closure are separate truths.")]
+    : [unresolved("next_inspection_not_established",
+      "A completed inspection does not establish the next inspection obligation or date.")];
+  return datedResult(outcome, asOf, "established_inspection_result", latest, unresolvedItems);
+}
+
+function deriveRequirementStanding(facts, asOf) {
+  validateAsOf(asOf);
+  const history = buildEffectiveHistory(facts);
+  const effective = history.effective_facts
+    .filter((fact) => fact.fact_type === "requirement_applicability" && fact.value.decided_on <= asOf)
+    .sort((left, right) => left.value.decided_on.localeCompare(right.value.decided_on) ||
+      left.established_at.localeCompare(right.established_at));
+  if (history.correction_conflicts.length > 0) {
+    return datedResult("conflicted", asOf, "conflicting_requirement_applicability",
+      effective.filter((fact) => history.correction_conflicts.includes(fact.fact_id)),
+      [unresolved("requirement_correction_conflict",
+        "Multiple effective corrections branch from one applicability decision.")]);
+  }
+  if (effective.length === 0) {
+    return datedResult("not_established", asOf, "insufficient_canonical_facts", [],
+      [unresolved("requirement_applicability_not_established",
+        "No applicability decision has been established as of this date.")]);
+  }
+  const latestDate = effective[effective.length - 1].value.decided_on;
+  const latest = effective.filter((fact) => fact.value.decided_on === latestDate);
+  if (new Set(latest.map((fact) => fact.value.applicability)).size > 1) {
+    return datedResult("conflicted", asOf, "conflicting_requirement_applicability", latest,
+      [unresolved("requirement_applicability_conflict",
+        "Conflicting applicability decisions share the latest decision date.")]);
+  }
+  const applicability = latest[latest.length - 1].value.applicability;
+  return datedResult(applicability, asOf, "established_requirement_applicability", latest,
+    [unresolved("requirement_cadence_not_established",
+      "Applicability does not establish a recurring cadence, deadline, or obligation.")]);
+}
+
 function deriveAttention(actionCondition, asOf) {
   validateAsOf(asOf);
   if (actionCondition === null || actionCondition === undefined) {
@@ -249,5 +331,7 @@ module.exports = {
   buildEffectiveHistory,
   deriveCredentialStanding,
   deriveFindingStanding,
+  deriveInspectionStanding,
+  deriveRequirementStanding,
   deriveAttention,
 };

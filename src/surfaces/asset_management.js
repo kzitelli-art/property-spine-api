@@ -248,13 +248,13 @@ const ROOMS = Object.freeze([
     compartments: [
       { key: "licenses_registrations", label: "Licenses & Registrations", derived: "licenses_registrations",
         note: "No governed licences or registrations yet" },
-      { key: "inspections", label: "Inspections",
+      { key: "inspections", label: "Inspections", derived: "inspections",
         note: "No governed inspection schedule yet" },
-      { key: "certificates", label: "Certificates",
+      { key: "certificates", label: "Certificates", derived: "certificates",
         note: "No governed certificates yet" },
-      { key: "violations_cure", label: "Violations & Cure",
+      { key: "violations_cure", label: "Violations & Cure", derived: "violations_cure",
         note: "No governed violations or cure deadlines yet" },
-      { key: "recurring_requirements", label: "Recurring Requirements",
+      { key: "recurring_requirements", label: "Recurring Requirements", derived: "recurring_requirements",
         note: "No governed recurring requirements yet" },
     ],
   }),
@@ -532,10 +532,34 @@ module.exports = function assetManagement(deps) {
               establishes: "Additional governed Compliance items and, later, an explicit requirement census.",
               byKey: {
                 licenses_registrations: {
-                  established: found.credential_count > 0,
-                  note: found.credential_count > 0
-                    ? `${found.credential_count} governed license or registration item${found.credential_count === 1 ? "" : "s"}`
+                  established: found.license_count > 0,
+                  note: found.license_count > 0
+                    ? `${found.license_count} governed license or registration item${found.license_count === 1 ? "" : "s"}`
                     : "No governed licences or registrations yet",
+                },
+                inspections: {
+                  established: found.inspection_count > 0,
+                  note: found.inspection_count > 0
+                    ? `${found.inspection_count} governed inspection item${found.inspection_count === 1 ? "" : "s"}`
+                    : "No governed inspections yet",
+                },
+                certificates: {
+                  established: found.certificate_count > 0,
+                  note: found.certificate_count > 0
+                    ? `${found.certificate_count} governed certificate item${found.certificate_count === 1 ? "" : "s"}`
+                    : "No governed certificates yet",
+                },
+                violations_cure: {
+                  established: found.finding_count > 0,
+                  note: found.finding_count > 0
+                    ? `${found.finding_count} governed violation item${found.finding_count === 1 ? "" : "s"}`
+                    : "No governed violations or cures yet",
+                },
+                recurring_requirements: {
+                  established: found.requirement_count > 0,
+                  note: found.requirement_count > 0
+                    ? `${found.requirement_count} governed applicability item${found.requirement_count === 1 ? "" : "s"}`
+                    : "No governed recurring requirements yet",
                 },
               },
             }

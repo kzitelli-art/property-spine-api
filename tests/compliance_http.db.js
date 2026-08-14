@@ -9,10 +9,11 @@ const express = require("express");
 const { Pool } = require("pg");
 const receipt = require("./_run_receipt.js");
 const contracts = require("../src/asset/compliance_contracts.js");
+const factWriteContracts = require("../src/asset/compliance_fact_write_contracts.js");
 const documentRead = require("../src/asset/compliance_document_read.js");
 
 const URL = receipt.harnessConnectionString();
-const EXPECTED = 52;
+const EXPECTED = 64;
 let passed = 0;
 let failed = 0;
 
@@ -125,6 +126,8 @@ async function main() {
     `);
     await client.query(fs.readFileSync(
       path.join(__dirname, "../migrations/168_compliance_canonical_truth.sql"), "utf8"));
+    await client.query(fs.readFileSync(
+      path.join(__dirname, "../migrations/170_compliance_extended_truth.sql"), "utf8"));
 
     const propertyA = (await client.query(
       "insert into properties(name) values ('Authority A') returning id")).rows[0];
@@ -181,9 +184,12 @@ async function main() {
     let askModelRequest = null;
     const anthropic = { messages: { create: async (input) => {
       askModelRequest = input;
+      const prompt = String(input.messages[0].content || "");
       return { content: [{ type: "text", text: JSON.stringify({
         outcome: "answered",
-        answer: "The rental license is current through May 1, 2027, based on the established period.",
+        answer: /facade inspection/i.test(prompt)
+          ? "The established facade inspection result is passed, based on the retained inspection source."
+          : "The rental license is current through May 1, 2027, based on the established period.",
       }) }] };
     } } };
     const app = express();
@@ -442,6 +448,80 @@ async function main() {
       history.length === 2 && String(history[1].supersedes_fact_id) === String(attribution.id) &&
       history[1].correction_reason === "Corrected from source review." &&
       String(history[1].established_by_user_id) === String(userA.id));
+
+    const inspectionConfirmation = {
+      contract_version: factWriteContracts.VERSION,
+      artifact_id: artifactA.id,
+      artifact_sha256: artifactA.sha256,
+      idempotency_key: "http-facade-inspection",
+      source_reviewed: true,
+      item: { existing_item_id: null, item_kind: "inspection",
+        compliance_type: "facade_inspection" },
+      fact: { fact_type: "inspection_result", value: {
+        performed_on: "2023-10-16", outcome: "passed",
+        summary: "Professional engineer recorded the exterior walls and appurtenances as SAFE.",
+      } },
+      correction: null,
+    };
+    const unauthenticatedFact = await request(port, "POST", `${base}/facts`, {
+      body: inspectionConfirmation,
+    });
+    ok("unauthenticated typed fact write is refused", unauthenticatedFact.status === 401);
+    const unentitledFact = await request(port, "POST", `${base}/facts`, {
+      token: tokenNoEntitlement, body: inspectionConfirmation,
+    });
+    ok("unentitled typed fact write is refused", unentitledFact.status === 403);
+    const factActorInjection = await request(port, "POST", `${base}/facts`, {
+      token: tokenA, body: { ...inspectionConfirmation, actor_user_id: userB.id },
+    });
+    ok("typed fact writer refuses client actor authority", factActorInjection.status === 422);
+    const factPropertyInjection = await request(port, "POST", `${base}/facts`, {
+      token: tokenA, body: { ...inspectionConfirmation, property_id: propertyA.id },
+    });
+    ok("typed fact writer refuses client property authority", factPropertyInjection.status === 422);
+    const establishedInspection = await request(port, "POST", `${base}/facts`, {
+      token: tokenA, body: inspectionConfirmation,
+    });
+    ok("authorized typed confirmation terminates in canonical truth",
+      establishedInspection.status === 201 && establishedInspection.body.outcome === "established");
+    const inspectionItemId = establishedInspection.body.record.id;
+    const inspectionAttribution = (await client.query(
+      "select established_by_user_id from compliance_facts where item_id=$1",
+      [inspectionItemId])).rows[0];
+    ok("typed canonical attribution comes from the authenticated session",
+      String(inspectionAttribution.established_by_user_id) === String(userA.id));
+    const expandedStanding = await request(port, "GET", `${base}?as_of=2026-08-13`, { token: tokenA });
+    ok("typed HTTP reread returns the inspection standing",
+      expandedStanding.status === 200 && expandedStanding.body.items.some((entry) =>
+        entry.entity.record_id === inspectionItemId && entry.standing.code === "passed"));
+    askModelRequest = null;
+    const inspectionAsk = await request(port, "POST", "/operator/ask-spine/ask", {
+      token: tokenA, body: { question: "Did the facade inspection pass, and what evidence supports it?" },
+    });
+    ok("Ask Spine answers inspection questions through the governed Compliance reader",
+      inspectionAsk.status === 200 && inspectionAsk.body.outcome === "answered" &&
+      /inspection result is passed/.test(inspectionAsk.body.answer));
+    ok("Ask Spine receives the inspection standing and unresolved cadence",
+      /facade_inspection/.test(askModelRequest.messages[0].content) &&
+      /next_inspection_not_established/.test(askModelRequest.messages[0].content));
+    ok("Ask Spine still receives no canonical inspection id or opener token",
+      !askModelRequest.messages[0].content.includes(inspectionItemId) &&
+      !/server_minted|opener/.test(askModelRequest.messages[0].content));
+    const foreignFactArtifact = await request(port, "POST", `${base}/facts`, {
+      token: tokenA, body: { ...inspectionConfirmation,
+        artifact_id: String(artifactB.id), artifact_sha256: artifactB.sha256,
+        idempotency_key: "http-foreign-fact-artifact" },
+    });
+    ok("typed fact cannot use another property's artifact without disclosure",
+      foreignFactArtifact.status === 404 && foreignFactArtifact.body.error === "not_found");
+    const foreignFactItem = await request(port, "POST", `${base}/facts`, {
+      token: tokenB, body: { ...inspectionConfirmation,
+        artifact_id: String(artifactB.id), artifact_sha256: artifactB.sha256,
+        idempotency_key: "http-foreign-fact-item",
+        item: { ...inspectionConfirmation.item, existing_item_id: inspectionItemId } },
+    });
+    ok("typed fact cannot attach to another property's item without disclosure",
+      foreignFactItem.status === 404 && foreignFactItem.body.error === "not_found");
 
     await client.query("update source_artifacts set content=null where id=$1", [artifactA.id]);
     const unavailableSource = await request(port, "GET", sourcePath, { token: tokenA });
