@@ -253,7 +253,7 @@ function validateItemRelationshipProposal(value) {
   exact(value.candidate, ["item_id", "item_kind", "compliance_type", "label"],
     "item_relationship_proposal.candidate");
   requiredString(value.candidate.item_id, "item_relationship_proposal.candidate.item_id");
-  oneOf(value.candidate.item_kind, ["credential", "finding"],
+  oneOf(value.candidate.item_kind, ["credential", "finding", "inspection", "requirement"],
     "item_relationship_proposal.candidate.item_kind");
   requiredString(value.candidate.compliance_type,
     "item_relationship_proposal.candidate.compliance_type");
@@ -299,13 +299,14 @@ function validateWriteReceipt(value) {
 function validateStandingItem(value, path = "standing.items[]") {
   exact(value, ["entity", "standing", "why", "evidence", "unresolved", "next", "attention", "references"], path);
   exact(value.entity, ["type", "compliance_type", "record_id", "label"], `${path}.entity`);
-  oneOf(value.entity.type, ["credential", "finding"], `${path}.entity.type`);
+  oneOf(value.entity.type, ["credential", "finding", "inspection", "requirement"], `${path}.entity.type`);
   for (const key of ["compliance_type", "record_id", "label"]) requiredString(value.entity[key], `${path}.entity.${key}`);
   exact(value.standing, ["code", "as_of"], `${path}.standing`);
   oneOf(value.standing.code, [
     "current", "expired", "not_yet_effective", "no_current_period_established", "not_established",
     "open", "cure_recorded_awaiting_authority", "authority_closed", "conflicted",
-    "unknown",
+    "passed", "passed_with_conditions", "failed", "inconclusive",
+    "applicable", "exempt", "not_applicable", "unknown",
   ], `${path}.standing.code`);
   isoDate(value.standing.as_of, `${path}.standing.as_of`, false);
   exact(value.why, ["basis", "effective_from", "effective_through"], `${path}.why`);
@@ -315,7 +316,9 @@ function validateStandingItem(value, path = "standing.items[]") {
     "insufficient_canonical_facts", "finding_issued_without_closure",
     "cure_without_authority_closure", "authority_disposition_closed",
     "authority_disposition_remains_open", "conflicting_finding_facts",
-    "conflicting_authority_dispositions", "no_established_period", "standing_unavailable",
+    "conflicting_authority_dispositions", "established_inspection_result",
+    "conflicting_inspection_results", "established_requirement_applicability",
+    "conflicting_requirement_applicability", "no_established_period", "standing_unavailable",
   ], `${path}.why.basis`);
   isoDate(value.why.effective_from, `${path}.why.effective_from`);
   isoDate(value.why.effective_through, `${path}.why.effective_through`);
@@ -325,6 +328,7 @@ function validateStandingItem(value, path = "standing.items[]") {
     exact(e, ["role", "label", "reference"], `${path}.evidence[${i}]`);
     oneOf(e.role, [
       "issuance", "finding", "payment", "cure", "authority_disposition", "supporting",
+      "inspection", "applicability",
     ], `${path}.evidence[${i}].role`);
     requiredString(e.label, `${path}.evidence[${i}].label`);
     validateReference(e.reference);
@@ -383,7 +387,8 @@ function validateDetail(value) {
     exact(event, ["event", "effective_from", "effective_through", "supersedes_fact_id", "reason", "evidence"], `detail.history[${i}]`);
     oneOf(event.event, [
       "period_established", "finding_issued", "payment_observed", "cure_performed",
-      "authority_disposition", "fact_corrected",
+      "authority_disposition", "inspection_result", "requirement_applicability",
+      "fact_corrected",
     ], `detail.history[${i}].event`);
     isoDate(event.effective_from, `detail.history[${i}].effective_from`);
     isoDate(event.effective_through, `detail.history[${i}].effective_through`);

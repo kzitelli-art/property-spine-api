@@ -58,6 +58,8 @@ async function main() {
     `);
     await c.query(fs.readFileSync(
       path.join(__dirname, "../migrations/168_compliance_canonical_truth.sql"), "utf8"));
+    await c.query(fs.readFileSync(
+      path.join(__dirname, "../migrations/170_compliance_extended_truth.sql"), "utf8"));
 
     const tables = (await c.query(
       `select table_name from information_schema.tables

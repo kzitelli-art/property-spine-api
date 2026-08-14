@@ -6,6 +6,7 @@ const documentRead = require("./compliance_document_read.js");
 const reads = require("./compliance_read.js");
 const { createComplianceWriter, CompliancePersistenceError } =
   require("./compliance_persistence.js");
+const { createComplianceFactWriter } = require("./compliance_fact_persistence.js");
 const { createComplianceReferenceService, ComplianceReferenceError } =
   require("./compliance_references.js");
 
@@ -60,6 +61,7 @@ module.exports = function complianceHttp(deps = {}) {
       return documentRead.propose(text);
     },
   });
+  const factWriter = createComplianceFactWriter();
   const gate = [requireOperator, refuseClientAuthority, requireAssetManagementModule];
   const uploadOne = multer({
     storage: multer.memoryStorage(),
@@ -120,6 +122,18 @@ module.exports = function complianceHttp(deps = {}) {
 
   router.post("/operator/asset-management/compliance/confirm", ...gate, confirm);
   router.post("/operator/asset-management/compliance/items/:itemId/confirm", ...gate, confirm);
+
+  router.post("/operator/asset-management/compliance/facts", ...gate, async (req, res) => {
+    try {
+      const receipt = await factWriter.establishFact(pool, {
+        authority: authority(req),
+        confirmation: req.body,
+      });
+      return res.status(receipt.outcome === "established" ? 201 : 200).json(receipt);
+    } catch (error) {
+      return unavailable(res, error, "fact confirmation");
+    }
+  });
 
   router.post("/operator/asset-management/compliance/evidence", ...multipartGate,
     async (req, res) => {
