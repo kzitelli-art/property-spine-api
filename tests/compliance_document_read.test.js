@@ -14,7 +14,8 @@ function ok(label, condition, detail) {
 }
 
 const fixture = fs.readFileSync(
-  path.join(__dirname, "fixtures", "compliance", "solo_4233_rental_license.txt"), "utf8");
+  path.join(__dirname, "fixtures", "compliance", "solo_4233_rental_license.txt"), "utf8")
+  .replace(/\r\n/g, "\n");
 
 console.log("COMPLIANCE DOCUMENT READER - real City specimen, no database");
 
