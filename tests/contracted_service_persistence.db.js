@@ -69,8 +69,10 @@ async function run() {
   try {
     await client.query("begin");
     try {
-      const ddl = fs.readFileSync(path.join(__dirname, "..", "migrations",
+      const canonicalDdl = fs.readFileSync(path.join(__dirname, "..", "migrations",
         "171_contracted_services_canonical_truth.sql"), "utf8");
+      const nullableTriggerDdl = fs.readFileSync(path.join(__dirname, "..", "migrations",
+        "172_contracted_service_nullable_commencement_trigger.sql"), "utf8");
       const installedTables = (await client.query(
         `select table_name from information_schema.tables
           where table_schema = 'public' and table_name = any($1::text[])
@@ -79,7 +81,8 @@ async function run() {
         installedTables.length === 0 || installedTables.length === REQUIRED_TABLES.length,
         `partial Contracted Services schema: found ${installedTables.length}/${REQUIRED_TABLES.length} tables`
       );
-      if (installedTables.length === 0) await client.query(ddl);
+      if (installedTables.length === 0) await client.query(canonicalDdl);
+      await client.query(nullableTriggerDdl);
 
       const properties = (await client.query(
         "select id from properties order by created_at, id limit 2")).rows;
@@ -172,6 +175,21 @@ async function run() {
         renewal_period_months: 12, notice_days: 90, source_artifact_id: unsignedA.id,
         user_id: userId,
       }));
+
+      const offeredMonthToMonthTerm = await service.recordTerm(client, {
+        property_id: propertyA, engagement_id: engagementA.id, document_id: unsignedDocument.id,
+        term_authority: "offered", commencement_date: "2026-01-01",
+        term_kind: "month_to_month", notice_days: 30, source_artifact_id: unsignedA.id,
+        user_id: userId,
+      });
+      assert.strictEqual(offeredMonthToMonthTerm.commencement_trigger, null,
+        "offered month-to-month terms do not require an invented event trigger");
+      await expectDatabaseRefusal(client, /commencement_trigger/i, () => client.query(
+        `insert into contracted_service_terms
+          (property_id, engagement_id, document_id, term_authority, commencement_trigger,
+           initial_term_months, term_kind, source_artifact_id, provenance_note, recorded_by_user_id)
+         values ($1,$2,$3,'offered','',12,'fixed',$4,'proof',$5)`,
+        [propertyA, engagementA.id, unsignedDocument.id, unsignedA.id, userId]));
 
       const term = await service.recordTerm(client, {
         property_id: propertyA, engagement_id: engagementA.id, document_id: executedDocument.id,
