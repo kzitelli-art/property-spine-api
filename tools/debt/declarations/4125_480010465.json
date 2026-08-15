@@ -1,0 +1,208 @@
+{
+  "_": [
+    "4125 Chestnut — Freddie Mac first mortgage, loan 480010465, serviced by Lument.",
+    "",
+    "THIS IS DATA, NOT CODE. establish_instrument.js contains nothing about 4125;",
+    "a second loan is a second declaration.",
+    "",
+    "Every source_sha256 below names bytes retained for this property in production.",
+    "The establishment tool still refuses any hash it cannot resolve in source_artifacts.",
+    "A fact may not be established from a document Spine does not hold.",
+    "",
+    "ONE RETAINED ARTIFACT SUPPORTS EACH WHOLE ROW. Where facts genuinely come from",
+    "different documents they are different rows — never one row assembled from",
+    "several documents with whichever artifact id was convenient.",
+    "",
+    "FIVE RETAINED SOURCES. The dated insurance history requires the December 2025",
+    "and March 2026 statements in addition to the amortization schedule, August 2025",
+    "statement, and financing packet. The org chart is not referenced: the Loan",
+    "Agreement defines Borrower, so the tool does not demand an unrelated source.",
+    "The 1,960-page closing binder exceeds the source-artifact limit. The retained",
+    "Debt Closing Packet preserves the cover/index and every cited financing section",
+    "(rate lock, Loan Agreement, mortgage, guaranty, and assignment); its PDF metadata",
+    "records the original binder sha256 and original page ranges.",
+    "",
+    "WHY THE SCHEDULE CARRIES INSTRUMENT AND TERMS. Lument's amortization schedule",
+    "states loan number, loan amount, first payment, maturity, rate and interest",
+    "basis on one page — it supports those whole rows by itself. The financing packet",
+    "is the higher authority for terms but was reviewed structurally rather than",
+    "extracted, so citing it for figures it was not read for would be a provenance",
+    "claim nobody can walk back.",
+    "",
+    "origination_date is deliberately ABSENT. The schedule states first payment, not",
+    "origination, and no retained document read so far establishes it. Unknown stays",
+    "unknown rather than being borrowed from another document."
+  ],
+
+  "declaration_version": 1,
+
+  "instrument": {
+    "row": {
+      "instrument_kind": "first_mortgage",
+      "loan_number": "480010465",
+      "original_principal_cents": 2825000000,
+      "currency": "USD",
+      "first_payment_date": "2020-09-01"
+    },
+    "source_sha256": "1f146fe73fb0b2bc673e0e413f0a3ba9a29b32317bb1b839518efc0f6e9113c3",
+    "locator": "Lument Capital amortization schedule, header block (Loan Number, Loan Amount, First Payment)"
+  },
+
+  "parties": [
+    {
+      "row": { "party_role": "borrower", "legal_entity_id": null, "party_name_text": "4125 Chestnut LLC", "effective_from": "2020-08-01" },
+      "source_sha256": "8aa80192cc4563533d1be212dcdcd0f359bda8874ca797ec5d1e6a22a11d18eb",
+      "locator": "Loan Agreement, Borrower definition"
+    },
+    {
+      "row": { "party_role": "originator_lender", "party_name_text": "ORIX Real Estate Capital, LLC", "effective_from": "2020-08-01" },
+      "source_sha256": "8aa80192cc4563533d1be212dcdcd0f359bda8874ca797ec5d1e6a22a11d18eb",
+      "locator": "Loan Agreement, Lender definition"
+    },
+    {
+      "row": { "party_role": "holder_assignee", "party_name_text": "Freddie Mac", "effective_from": "2020-08-01" },
+      "source_sha256": "8aa80192cc4563533d1be212dcdcd0f359bda8874ca797ec5d1e6a22a11d18eb",
+      "locator": "Assignment of Security Instrument, ORIX to Freddie Mac"
+    },
+    {
+      "row": { "party_role": "guarantor", "party_name_text": "Kameron Zitelli", "effective_from": "2020-08-01" },
+      "source_sha256": "8aa80192cc4563533d1be212dcdcd0f359bda8874ca797ec5d1e6a22a11d18eb",
+      "locator": "Guaranty, signature page"
+    },
+    {
+      "row": { "party_role": "guarantor", "party_name_text": "Lee Silpe", "effective_from": "2020-08-01" },
+      "source_sha256": "8aa80192cc4563533d1be212dcdcd0f359bda8874ca797ec5d1e6a22a11d18eb",
+      "locator": "Guaranty, signature page"
+    },
+    {
+      "row": { "party_role": "guarantor", "party_name_text": "Asher Shafran", "effective_from": "2020-08-01" },
+      "source_sha256": "8aa80192cc4563533d1be212dcdcd0f359bda8874ca797ec5d1e6a22a11d18eb",
+      "locator": "Guaranty, signature page"
+    },
+    {
+      "row": { "party_role": "guarantor", "party_name_text": "Joseph Rigazio", "effective_from": "2020-08-01" },
+      "source_sha256": "8aa80192cc4563533d1be212dcdcd0f359bda8874ca797ec5d1e6a22a11d18eb",
+      "locator": "Guaranty, signature page"
+    },
+    {
+      "row": { "party_role": "guarantor", "party_name_text": "Robert Vernicek", "effective_from": "2020-08-01" },
+      "source_sha256": "8aa80192cc4563533d1be212dcdcd0f359bda8874ca797ec5d1e6a22a11d18eb",
+      "locator": "Guaranty, signature page"
+    },
+    {
+      "row": { "party_role": "servicer", "party_name_text": "Lument Real Estate Capital, LLC", "effective_from": "2020-09-01" },
+      "source_sha256": "136f595d11b4c51c26d0087f5d0bfb94c58f4901a383c91392c4b3721cd37a34",
+      "locator": "Mortgage loan statement, payee and remittance block"
+    }
+  ],
+
+  "collateral": [
+    {
+      "row": { "lien_position": 1, "effective_from": "2020-08-01" },
+      "source_sha256": "8aa80192cc4563533d1be212dcdcd0f359bda8874ca797ec5d1e6a22a11d18eb",
+      "locator": "Mortgage / Security Instrument, granting clause and Exhibit A legal description"
+    }
+  ],
+
+  "terms": [
+    {
+      "row": {
+        "effective_from": "2020-09-01",
+        "effective_to": "2024-08-01",
+        "term_source": "original",
+        "rate_kind": "fixed",
+        "fixed_rate_bp": 328,
+        "day_count_convention": "actual_360",
+        "payment_frequency": "monthly",
+        "amortization_kind": "interest_only",
+        "maturity_date": "2030-08-01"
+      },
+      "source_sha256": "1f146fe73fb0b2bc673e0e413f0a3ba9a29b32317bb1b839518efc0f6e9113c3",
+      "locator": "Amortization schedule, header plus payments 1–48 (no principal applied)"
+    },
+    {
+      "row": {
+        "effective_from": "2024-09-01",
+        "term_source": "original",
+        "rate_kind": "fixed",
+        "fixed_rate_bp": 328,
+        "day_count_convention": "actual_360",
+        "payment_frequency": "monthly",
+        "amortization_kind": "level_payment",
+        "level_payment_cents": 12341140,
+        "fully_amortizing": false,
+        "maturity_date": "2030-08-01"
+      },
+      "source_sha256": "1f146fe73fb0b2bc673e0e413f0a3ba9a29b32317bb1b839518efc0f6e9113c3",
+      "locator": "Amortization schedule, payments 49–120 (level P&I, balance not retired before maturity)"
+    }
+  ],
+
+  "reserve_requirements": [
+    {
+      "row": { "reserve_kind": "tax_imposition", "amount_cents": 407624, "amount_basis": "monthly", "effective_from": "2020-08-01" },
+      "source_sha256": "136f595d11b4c51c26d0087f5d0bfb94c58f4901a383c91392c4b3721cd37a34",
+      "locator": "Mortgage loan statement, amount-due detail, Tax line"
+    },
+    {
+      "row": { "reserve_kind": "insurance_imposition", "amount_cents": 301907, "amount_basis": "monthly",
+               "effective_from": "2020-08-01", "effective_to": "2025-11-30" },
+      "source_sha256": "136f595d11b4c51c26d0087f5d0bfb94c58f4901a383c91392c4b3721cd37a34",
+      "locator": "Mortgage loan statement, amount-due detail, Insurance line",
+      "_note": "Confirmed unchanged at $3,019.07 through the 2025-11-01 statement; superseded by the row below."
+    },
+    {
+      "row": { "reserve_kind": "insurance_imposition", "amount_cents": 466649, "amount_basis": "monthly",
+               "effective_from": "2025-12-01", "effective_to": "2026-02-28" },
+      "source_sha256": "148ec36181e26f54c0d14f019cf4e6d4f22383700122c31aba62f57208a48d0e",
+      "locator": "Mortgage loan statement, amount-due detail, Insurance line (amount and start date evidenced; end date 2026-02-28 is INFERRED from the next retained statement, 2026-03-01 — no 2026-02-01 statement is retained)",
+      "_note": "First annual escrow reanalysis after the 7/28/2025 annual premium payment. First evidenced on the 2025-12-01 statement (jumped from $3,019.07); still in force on the 2026-01-01 statement. No 2026-02-01 statement retained yet, so effective_to is bounded by the next confirmed statement (2026-03-01), not by direct evidence of a February change."
+    },
+    {
+      "row": { "reserve_kind": "insurance_imposition", "amount_cents": 361429, "amount_basis": "monthly",
+               "effective_from": "2026-03-01" },
+      "source_sha256": "50c3a3c0a581147ccddf6b7d5afd603fe39fc42ac6869c592749261a534e620b",
+      "locator": "Mortgage loan statement, amount-due detail, Insurance line",
+      "_note": "Second reanalysis, evidenced on the 2026-03-01 statement; confirmed unchanged through the 2026-08-01 statement (the property's current position() as_of today reads this row)."
+    },
+    {
+      "row": { "reserve_kind": "replacement", "amount_cents": 176300, "amount_basis": "monthly", "effective_from": "2020-08-01" },
+      "source_sha256": "136f595d11b4c51c26d0087f5d0bfb94c58f4901a383c91392c4b3721cd37a34",
+      "locator": "Mortgage loan statement, amount-due detail, Replacement Reserve line"
+    },
+    {
+      "row": { "reserve_kind": "debt_service", "amount_cents": 111070300, "amount_basis": "one_time", "effective_from": "2020-08-01" },
+      "source_sha256": "8aa80192cc4563533d1be212dcdcd0f359bda8874ca797ec5d1e6a22a11d18eb",
+      "locator": "Loan Agreement summary, COVID-19 Debt Service Reserve"
+    }
+  ],
+
+  "balance_observations": [
+    {
+      "row": {
+        "observed_balance_cents": 2774526577,
+        "as_of_date": "2025-08-01",
+        "observation_source": "lender_statement",
+        "source_authority": "governed_read"
+      },
+      "source_sha256": "136f595d11b4c51c26d0087f5d0bfb94c58f4901a383c91392c4b3721cd37a34",
+      "locator": "Mortgage loan statement, PRINCIPAL BALANCE"
+    }
+  ],
+
+  "payment_observations": [
+    {
+      "row": {
+        "observed_as_of": "2025-08-01",
+        "period_start": "2025-01-01",
+        "period_end": "2025-07-31",
+        "applied_principal_cents": 32436409,
+        "applied_interest_cents": 53951571,
+        "observation_source": "lender_statement",
+        "source_authority": "governed_read"
+      },
+      "source_sha256": "136f595d11b4c51c26d0087f5d0bfb94c58f4901a383c91392c4b3721cd37a34",
+      "locator": "Mortgage loan statement, PRINCIPAL PAID YTD and INTEREST PAID YTD"
+    }
+  ]
+}

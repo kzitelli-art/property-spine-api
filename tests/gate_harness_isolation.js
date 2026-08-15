@@ -140,6 +140,30 @@ const PRODUCTION_APPROVED = [
     reason: "Release 0 Gate 1 — must read the PRODUCTION ledger to answer whether the deployed schema can boot this build at all; the question is about production's schema, so no harness target can answer it. Reuses migrations/ledger_verdict.js, the same classifier prestart runs, so it cannot hold a second opinion the deploy disagrees with. Proven read-only via _readonly.js before any read; connection errors are sanitised because the output is meant to be pasted" },
   { file: "tools/activation/supersede_operations_line.js",
     reason: "Release 0 Gate 9 rollback — WRITE-CAPABLE BY DESIGN: it is the prepared status-supersession command that retires the operations line (status='retired' + superseded_at, the schema's vocabulary for the spec's 'superseded') and proves via resolveInboundLine, pre-commit, that the rail stopped resolving; targets one row by primary key, requires LINE_ID and CONFIRM_SUPERSEDE=yes, --dry-run always rolls back; falsified 23/23 by tools/activation/gate_tools_falsify.sh on the isolated baseline" },
+  /*  ── THE SECOND WRITE-CAPABLE ENTRY, AND THE BROADEST SO FAR ───────
+   *  supersede_operations_line.js above is the precedent: write-capable
+   *  by design, tightly bounded. This one is the same KIND of exception
+   *  and a wider one — it CREATES rows across seven tables rather than
+   *  updating one row by primary key. Saying that plainly here is the
+   *  point of the register; the next entry should have to argue against
+   *  a scope that is stated, not one that was quietly normalised. */
+  { file: "tools/debt/establish_instrument.js",
+    reason: "The controlled Debt establishment step — WRITE-CAPABLE BY DESIGN, and broader " +
+            "than supersede_operations_line.js: it inserts across debt_instruments, parties, " +
+            "collateral, terms, reserve requirements and both observation tables. Approved " +
+            "because production is the subject — a loan established anywhere else establishes " +
+            "nothing — and because the write is tightly governed: dry-run by default with " +
+            "--apply required, ONE transaction so no partial establishment can survive to be " +
+            "re-run into, the existing canonical Debt writers only and no SQL of its own, and " +
+            "EVERY canonical row refused unless the declaration cites a retained source " +
+            "artifact by sha256 plus a locator inside it — so a fact cannot enter production " +
+            "as an unexplained literal. A second run refuses rather than appending a duplicate " +
+            "history. It is generic: the instrument is a reviewed declaration file handed in as " +
+            "input, so there is no per-loan code path. CLASS 4 — deleted when governed document " +
+            "establishment produces these same proposals from the same retained artifacts and a " +
+            "human confirms them through the product. Proven by tests/debt_establishment_tool.db.js, " +
+            "which spawns it as a real process and asserts every refusal above",
+    until: "governed document establishment owns the Debt write workflow" },
 ];
 
 /*  DEAD — retained but not to be run. Not safe, not active. */

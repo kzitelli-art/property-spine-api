@@ -124,7 +124,13 @@ async function main() {
     // search_path so the door's queries hit the scoped schema
     const scopedPool = new Pool({ connectionString: URL_ });
     scopedPool.on("connect", (c) => c.query(`set search_path to ${schema}`));
-    app.use("/", require("../src/surfaces/asset_management.js")({ pool: scopedPool }));
+    //  fileToText: Compliance's document-read seam now requires it at
+    //  construction. The same injected stub the Taxes/Debt HTTP proofs use
+    //  — not what this harness is testing, so it stays a one-line stub.
+    app.use("/", require("../src/surfaces/asset_management.js")({
+      pool: scopedPool,
+      fileToText: async ({ buffer }) => buffer.toString("utf8"),
+    }));
 
     server = http.createServer(app);
     await new Promise((r) => server.listen(0, "127.0.0.1", r));

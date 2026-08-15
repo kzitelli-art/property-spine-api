@@ -158,6 +158,39 @@ const REGISTRY = {
             "§40.5 walls preserved (escrow funded ≠ City paid, filed ≠ paid), " +
             "after §40.8 cross-domain composition authorization is governed.",
   },
+  //  ⚠ DEBT DECLARED ITSELF. Nobody remembered to add this — the gate went
+  //  red the moment debt_position_read.js landed, which is the entire point
+  //  of discovering domains from disk rather than from a list. The rule
+  //  worked before anyone had to obey it.
+  //
+  //  `pending` is honest here and is NOT weakening the rule: Debt Build 1
+  //  deliberately stops at the canonical read, and W1–W9 are proven against
+  //  position() rather than against a conversation. Debt cannot claim
+  //  domain-level done until this reads `registered` and the gate proves an
+  //  actual gather. Do not wire Ask Spine early merely to improve this count.
+  debt: {
+    state: "pending",
+    owner: "asset management",
+    //  Matches docs/DEBT_READ_CONTRACT_AND_SCHEMA.md and the header of
+    //  debt_routes.js exactly: retrieval claimed, comparison and causal
+    //  explanation explicitly not — a portfolio comparison needs a basis
+    //  (per unit, per SF, per dollar of value) that is a model nobody
+    //  recorded, and §38 forbids rendering it as a recorded fact.
+    capability_classes: readerCapabilities.retrievalOnly(
+      "canonical Debt standing — position(instrument, as_of) over governed history"),
+    //  Not solved locally, per ruling. /operator/debt/standing is scoped to
+    //  one property so there is no cross-property surface to aggregate over
+    //  today, but Debt is one of the domains a composed conversational
+    //  answer (debt + insurance + payroll + maintenance + resident history
+    //  in one answer) will pull, and the read seam does nothing to prevent
+    //  that once composition exists.
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine gathers the governed Debt standing projection with the " +
+            "Debt truth walls preserved (principal ≠ payoff, scheduled ≠ paid, " +
+            "maturity ≠ extension, observed ≠ projected, debt service ≠ total " +
+            "draft) and entitlement applied before model context, after §40.8 " +
+            "cross-domain composition authorization is governed.",
+  },
 };
 
 /*  ══ IS A DOMAIN ACTUALLY GATHERED? ═════════════════════════════════

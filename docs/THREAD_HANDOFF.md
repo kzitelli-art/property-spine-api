@@ -1,6 +1,131 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  DEBT 173 IS RELEASED AND 4125 CANONICAL TRUTH IS ESTABLISHED.
+##  2026-08-15. MERGE/DEPLOY/PRODUCTION-BROWSER PROOF REMAIN. THIS
+##  SUPERSEDES THE "MIGRATION 168" BANNER BELOW ON
+##  DEBT'S MIGRATION NUMBER — NOT ON THE MEETING-TRANSCRIPT BRANCH'S
+##  OWN STATUS, WHICH THIS SESSION HAS NO UPDATE ON. READ THIS FIRST
+##  IF YOU ARE PICKING UP DEBT.
+## ══════════════════════════════════════════════════════════════════
+
+**Release branch:** `codex/debt-release-20260815`, based on current API
+`origin/main` `0afa19fc57b171e4ddd83c71b76eab005930a419` plus the Debt history.
+
+### Production receipt (2026-08-15)
+
+```text
+source artifacts retained                         5/5
+regular isolated PostgreSQL proofs                green
+source-governance chain                           25/25 gates
+production ledger                                 172 -> 173
+canonical instrument                              ac44a135-4eb5-462d-bdd5-f521955d2615
+canonical rows                                    21, all source-backed
+merge / deploy / authenticated browser proof      pending
+```
+
+The executable declaration needed five sources after the insurance-history
+correction, not the stale three-source list previously written here. The
+1,960-page closing binder exceeded the existing 25 MB retained-source limit.
+Spine therefore retained an 11.7 MB, 268-page Debt Closing Packet containing
+the cover/index and every cited financing section. Its PDF metadata records
+the original binder SHA-256 and exact original page ranges.
+
+### What Debt's migration number actually is now
+
+Debt has been renumbered **twice** since the "MIGRATION 168" banner below was
+written — both times because `main` kept moving while Debt's branch waited:
+
+```text
+168 → 171   Compliance and Utilities took 168–170 on main.
+171 → 173   Contracted Services then took 171 and 172 on main, after that.
+```
+
+**The file is `migrations/173_debt_instruments.sql`. Do not renumber it again
+without first re-checking `main`'s actual current migration listing** — this
+has now happened twice in a row and will happen again if another lane merges
+before Debt releases. If it has: renumber forward only, to the next free
+number after whatever `main` actually has. Never renumber backward to reclaim
+171/172/168 — those are real, merged, and belong to other lanes.
+
+### What is actually done
+
+```text
+schema (7 tables, additive-only)         DONE — migrations/173_debt_instruments.sql
+canonical writers                        DONE — src/asset/debt_instrument_service.js
+position(instrument, as_of) read         DONE — src/asset/debt_position_read.js
+HTTP seam (2 GETs, standing + detail)     DONE — src/asset/debt_routes.js
+Capital Stack room establishment badge    DONE — src/surfaces/asset_management.js
+browser UI (Debt compartment)             DONE — property-spine-app: asset-management-door.js
+  incl. floating-rate W4 render, multi-instrument layout, not-established
+  screen, room home card — all actually screenshotted, not just asserted
+real-document cross-check                DONE — see below
+release run card, safety-corrected       DONE — docs/release/DEBT_173_RUN_CARD.md
+```
+
+DB proofs, re-run at 173 against real Postgres 16, all green: schema
+falsification 17/17, position falsification 42/42, routes HTTP 23/23,
+institutional acceptance 13/13, funding-boundary gate 82/82,
+asset-management shell 54/54.
+
+**Real-document cross-check (2026-08-15):** the Lument amortization schedule
+and 8 monthly statements for loan 480010465 were actually read (SharePoint)
+and checked against `tools/debt/declarations/4125_480010465.json`:
+
+```text
+interest-only (2020-09 to 2024-08) -> amortizing transition   already correct
+rate 3.28% fixed, P&I $123,411.40, tax escrow, replacement    all match exactly
+insurance escrow                                              WAS STALE, FIXED —
+  declaration held one flat row since 2020; real statements show two later
+  reanalyses. Now three dated rows: $3,019.07/mo (2020-08-01 to 2025-11-30),
+  $4,666.49/mo (2025-12-01 to 2026-02-28, Feb boundary explicitly marked
+  INFERRED not evidenced), $3,614.29/mo (2026-03-01 to present).
+$1,110,703 one-time COVID-19 debt service reserve              looked
+  fabricated on first read; confirmed real, sourced to the closing binder.
+```
+
+`debt_establishment_tool.db.js` now passes `19/19` against regular PostgreSQL,
+using isolated fixture digests substituted for the declaration's five real
+retained hashes. Ask Spine registration is deliberately still `pending` in
+`tests/gate_ask_spine_readers.js` — Build 1 stops at the canonical read on
+purpose; do not wire Ask Spine early just to change that.
+
+### What is left — exact steps, in order
+
+Source retention, migration release, and canonical establishment are complete.
+Only integration and deployed proof remain.
+
+```text
+1  Push this release branch and merge it to current API main. Migration 173 is
+   already in the production ledger, so prestart must verify cleanly.
+
+2  Wait for the exact merged API SHA to deploy; do not infer deployment from
+   GitHub merge state.
+
+3  Prove it live:
+     GET /operator/debt/standing for 4125's property_id in production
+     -> confirm the real numbers come back
+     open the app -> Capital Stack -> Debt -> confirm it renders
+```
+
+### Guardrails for whoever executes this
+
+```text
+- The five source artifacts and canonical rows are production truth now. Do
+  not re-run establishment; the duplicate guard will and should refuse it.
+- Do not touch any other domain's migration file. The only file outside
+  Debt's own tree this session touched was one stale comment in
+  migrations/169_utilities_canonical_truth.sql (prose only, no logic,
+  no renumbering) — see commit 7905431.
+- Do not add a duplicate-number gate "just in case" — migrate.js:135
+  already hard-stops on that, which is what would have caught 171/172
+  colliding with Contracted Services had the renumbering not happened
+  first.
+- If step 3's ledger read doesn't match exactly, the fix is patience,
+  not a workaround. Re-read after the other lane releases.
+```
+
+## ══════════════════════════════════════════════════════════════════
 ##  ⚠ MIGRATION 168 IS CLAIMED BY DEBT. TWO BRANCHES WROTE ONE NUMBER.
 ##  2026-08-13. READ BEFORE MERGING EITHER BRANCH.
 ## ══════════════════════════════════════════════════════════════════
