@@ -150,16 +150,18 @@ async function rankTurnPriority(pool, property_id) {
       return dates.length ? dates[0] : null;
     };
 
-    let tier_key, deadline, reason;
+    let tier_key, deadline, priority_label, reason;
 
     if (conflicted.length) {
       tier_key = "conflicted_commitment";
       deadline = null;                              // unknowable, so unstated
+      priority_label = "Lease commitment conflict";
       reason = `Overlapping lease claims on ${conflicted.length === 1 ? "a space" : `${conflicted.length} spaces`} in this unit. `
              + "Which lease governs is unknown, so this turn cannot be planned from its commitment until that is resolved.";
     } else if (locked.length) {
       tier_key = "committed_start";
       deadline = earliest(locked);
+      priority_label = deadline ? `Committed move-in ${deadline}` : "Committed move-in — date unknown";
       const who = locked.length > 1 ? `${locked.length} spaces in this unit are` : "This unit is";
       reason = deadline
         ? `${who} committed to a future resident — executed and funded — starting ${deadline}. Finishing this releases a committed position.`
@@ -167,12 +169,14 @@ async function rankTurnPriority(pool, property_id) {
     } else if (pending.length) {
       tier_key = "pending_commitment";
       deadline = earliest(pending);
+      priority_label = deadline ? `Pending lease starts ${deadline}` : "Pending lease — start date unknown";
       reason = deadline
         ? `A future lease is attached, starting ${deadline}, but it is not yet both executed and funded. Plan for it; it is not a commitment yet.`
         : "A future lease is attached but it is not yet both executed and funded, and no start date is recorded.";
     } else {
       tier_key = "raw_vacancy";
       deadline = null;
+      priority_label = "No incoming lease attached";
       reason = "Turn frees available supply — no lease is attached to any space in this unit yet.";
     }
 
@@ -187,6 +191,7 @@ async function rankTurnPriority(pool, property_id) {
 
       demand_tier: TIER[tier_key],       // numeric ONLY for sort; never shown as a score
       demand_tier_key: tier_key,         // the machine label
+      priority_label,                    // compact operator language
 
       // ── THE DEADLINE, HONESTLY ──────────────────────────────────
       //  deadline_known is explicit so a null date reads as "nobody recorded

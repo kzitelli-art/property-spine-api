@@ -21,76 +21,16 @@
 // ════════════════════════════════════════════════════════════════════
 
 module.exports = function turnovers(deps) {
-  // Shared effective-possession writer (space_position.js). Records the effective
-  // move_out that ENDS possession, space_id-anchored. Optional for soft partial deploy.
-  const recordEffectivePossession = deps && deps.recordEffectivePossession;
-  // BUILD 1 — post-move-out initial triage. Injected and OPTIONAL, the same
-  // soft-deploy shape as recordEffectivePossession above: if it is not wired,
-  // move-out behaves exactly as before rather than failing to boot.
-  const unitTriageService = deps && deps.unitTriageService;
   const express = require("express");
   const { rankTurnPriority } = require("./turn_priority"); // ONE ranking source (shared w/ operator route)
   const router = express.Router();
 
-  const { pool, spawnObligationFromEvent, satisfyObligation, completeObligation } = deps;
+  const { pool, satisfyObligation, completeObligation, turnoverService } = deps;
   if (!pool) throw new Error("turnovers module requires a pool");
-
-  // The two proof gates a move-out must clear before the turn is done.
-  // These are BOTH the obligation's required_inputs AND boolean columns on
-  // the turnover row — kept in lockstep.
-  const GATES = ["moveout_photos", "deposit_review"];
-
-  // ── routing: who owns this property's move-out, via the org chart ──────
-  // Same pattern money uses: route to the property's accountable assignment's
-  // role; fall back to property_manager if there's no accountable owner.
-  // Returns { assigned_role, escalates_to_role } as role strings (role_name enum).
-  async function routeMoveOut(client, property_id) {
-    const prop = await client.query(
-      "select accountable_assignment_id from properties where id = $1",
-      [property_id]
-    );
-    const accId = prop.rows[0] ? prop.rows[0].accountable_assignment_id : null;
-
-    let assigned_role = "property_manager";   // sensible default owner
-    let escalates_to_role = "owner";          // PM escalates to owner
-
-    if (accId) {
-      const acc = await client.query(
-        "select role, escalates_to_assignment_id from assignments where id = $1 and is_active = true",
-        [accId]
-      );
-      if (acc.rows.length) {
-        // map org-chart role → obligation role_name enum. The org chart uses
-        // 'leasing'/'bookkeeper'; the obligation enum uses 'leasing_agent'/
-        // 'accountant'. property_manager/maintenance/asset_manager/owner match.
-        assigned_role = mapRole(acc.rows[0].role);
-        // escalation: resolve the escalation assignment's role if present
-        if (acc.rows[0].escalates_to_assignment_id) {
-          const esc = await client.query(
-            "select role from assignments where id = $1",
-            [acc.rows[0].escalates_to_assignment_id]
-          );
-          if (esc.rows.length) escalates_to_role = mapRole(esc.rows[0].role);
-        }
-      }
-    }
-    return { assigned_role, escalates_to_role };
+  if (!turnoverService || typeof turnoverService.openTurnover !== "function") {
+    throw new Error("turnovers module requires the canonical turnoverService");
   }
-
-  // org-chart role vocabulary → obligations.role_name enum vocabulary.
-  // (Logged drift: the two vocabularies don't fully line up. This bridges them
-  // so a move-out obligation always gets a VALID role_name enum value.)
-  function mapRole(orgRole) {
-    const map = {
-      property_manager: "property_manager",
-      maintenance: "maintenance",
-      leasing: "leasing_agent",
-      bookkeeper: "accountant",
-      asset_manager: "asset_manager",
-      owner: "owner",
-    };
-    return map[orgRole] || "property_manager";
-  }
+  const GATES = turnoverService.GATES;
 
   // ════════════════════════════════════════════════════════════════
   //  MOVE-OUT  —  POST /units/:id/move-out
@@ -105,191 +45,27 @@ module.exports = function turnovers(deps) {
   //    expected_ready_date — date the turn is targeted to be done
   // ════════════════════════════════════════════════════════════════
   router.post("/units/:id/move-out", async (req, res) => {
-    const unit_id = req.params.id;
     const { outgoing_lease_id = null, needs = [], expected_ready_date = null } = req.body || {};
-
     const client = await pool.connect();
     try {
       await client.query("begin");
-
-      // unit must exist; get its property
-      const uQ = await client.query(
-        "select id, property_id, unit_number, occupancy_status from units where id=$1 for update",
-        [unit_id]
-      );
-      if (uQ.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "unit not found" }); }
-      const unit = uQ.rows[0];
-
-      // if a lease was named, confirm it exists
-      if (outgoing_lease_id) {
-        const l = await client.query("select id from leases where id=$1", [outgoing_lease_id]);
-        if (l.rows.length === 0) { await client.query("rollback"); return res.status(404).json({ error: "outgoing_lease_id not found" }); }
-      }
-
-      // guard: don't open a second active turnover for the same unit
-      const existing = await client.query(
-        `select id from turnovers where unit_id=$1 and status in ('in_progress') order by created_at desc limit 1`,
-        [unit_id]
-      );
-      if (existing.rows.length) {
-        await client.query("rollback");
-        return res.status(409).json({ error: "this unit already has an in-progress turnover", turnover_id: existing.rows[0].id });
-      }
-
-      // 1) the turnover row — the operating record. defaults handle
-      //    status='in_progress', moveout_photos=false, deposit_review=false.
-      const needsArr = Array.isArray(needs) ? needs : [];
-      const tIns = await client.query(
-        `insert into turnovers (property_id, unit_id, outgoing_lease_id, needs, ready_date)
-         values ($1,$2,$3,$4,$5) returning *`,
-        [unit.property_id, unit_id, outgoing_lease_id, needsArr, expected_ready_date]
-      );
-      const turnover = tIns.rows[0];
-
-      // 2) the source event — obligation must be born from an event
-      const ev = await client.query(
-        `insert into events (property_id, unit_id, type, note)
-         values ($1,$2,'move_out',$3) returning *`,
-        [unit.property_id, unit_id,
-         JSON.stringify({ unit_id, turnover_id: turnover.id, outgoing_lease_id, needs: needsArr })]
-      );
-      const event = ev.rows[0];
-
-      // 3) route via org chart, then spawn ONE obligation with both gates
-      const route = await routeMoveOut(client, unit.property_id);
-      let obligation = null;
-      if (typeof spawnObligationFromEvent === "function") {
-        obligation = await spawnObligationFromEvent(client, {
-          property_id: unit.property_id,
-          unit_id,
-          source_event_id: event.id,
-          related_id: turnover.id,
-          related_type: "turnover",
-          module: "turnover",
-          type: "move_out",
-          label: `Move-out turn — unit ${unit.unit_number || ""}`.trim(),
-          owner_type: "human",
-          assigned_role: route.assigned_role,
-          escalates_to_role: route.escalates_to_role,
-          status: "open",
-          priority: "high",
-          severity: "high",
-          due_at: expected_ready_date ? new Date(expected_ready_date) : null,
-          required_inputs: GATES,
-        });
-        // link the obligation onto the turnover (reuse outgoing_lease_id? no —
-        // we don't have an obligation_id column on turnovers; the link lives on
-        // the obligation via related_id=turnover.id, and on the event note).
-      }
-
-      // ── 3b) THE INITIAL WALK (BUILD 1) ────────────────────────────────
-      //  Move-out confirmed is the operating trigger: somebody must now go
-      //  look at the unit. Born from the SAME move_out event, in the SAME
-      //  transaction, through the SAME shared engine — an obligation is never
-      //  born from anything but an event.
-      //
-      //  Born HIGH and due today because the operating expectation is
-      //  same-day inspection. If staffing prevents that it stays visibly
-      //  overdue; it never lapses, and the unit never becomes ready because
-      //  nobody walked it.
-      //
-      //  NOT excluding a preceding actor here: this route carries no operator
-      //  session (it is the older ungated door), so there is no confirmed-by
-      //  identity to exclude. The service supports the exclusion and it takes
-      //  effect wherever a session-scoped move-out door exists.
-      let initialWalk = null;
-      if (unitTriageService && typeof unitTriageService.spawnInitialWalk === "function") {
-        initialWalk = await unitTriageService.spawnInitialWalk(client, {
-          property_id: unit.property_id,
-          unit_id,
-          source_event_id: event.id,
-          unit_number: unit.unit_number,
-          exclude_user_id: null,
-        });
-      }
-
-      // 4) occupancy flips to vacant (tenant leaving). The unit is NOT yet
-      //    rentable — that's what the turn resolves. Occupancy and rentable
-      //    readiness are separate axes (the four-axis model).
-      // ── POSSESSION END — recorded ONLY on a genuine resident surrender ──────
-      // A turnover beginning is NOT automatically possession ending. This route
-      // records an effective move_out unit_event ONLY when the named lease was
-      // actually in possession (a live effective move_in exists for its space).
-      // A turn with no lease, or for a unit nobody currently possesses, records
-      // NO move_out — and that is CORRECT, not a failure. The possession writer
-      // refuses to encode a false surrender (NO_POSSESSION_TO_END). This route
-      // is the move-out TRANSACTION; it is not the sole authority that a
-      // possession ended — it only asserts it when it is true.
-      let moveOutNote = null;
-      if (recordEffectivePossession && outgoing_lease_id) {
-        // ── MOVE_OUT EVENT IS MANDATORY WHEN IT APPLIES ──────────────────
-        // unit_events is the possession source of truth. Two distinct outcomes:
-        //   · NO_POSSESSION_TO_END — the guard fired: this lease/space had no
-        //     live move_in, so this turn is NOT a resident surrender. That is
-        //     EXPECTED, not an error; the turn proceeds with no possession event.
-        //   · any OTHER error (schema/constraint) — a real failure. It is NOT
-        //     swallowed: it propagates and rolls back the whole move-out, so we
-        //     never vacate the cache + open a turn while the canonical move_out
-        //     event failed to write. (Symmetric with move-in's mandatory rule.)
-        // A savepoint isolates ONLY the expected NO_POSSESSION_TO_END refusal.
-        await client.query("savepoint sp_moveout");
-        let possessionEndApplies = true;
-        try {
-          const pr = await recordEffectivePossession(client, {
-            kind: "move_out",
-            lease_id: outgoing_lease_id,
-            unit_id,
-            property_id: unit.property_id,
-            effective_date: new Date().toISOString().slice(0, 10),
-            actor: null,
-            source: "move_out",
-          });
-          await client.query("release savepoint sp_moveout");
-          moveOutNote = pr.created ? "Effective move_out recorded (verified prior possession)." : "Move_out already recorded — idempotent no-op.";
-        } catch (e) {
-          if (e.code === "NO_POSSESSION_TO_END") {
-            // EXPECTED refusal — roll back only this event, proceed with the turn.
-            await client.query("rollback to savepoint sp_moveout");
-            possessionEndApplies = false;
-            moveOutNote = "Turn recorded; no possession-end event (this lease/space had no live move_in — not a resident surrender).";
-          } else {
-            // REAL failure — do NOT swallow. Let it propagate and roll back the
-            // whole move-out. (Release the savepoint name first is unnecessary;
-            // the throw aborts the outer transaction.)
-            throw e;
-          }
-        }
-      } else if (!outgoing_lease_id) {
-        moveOutNote = "No outgoing_lease_id — turn only; no possession-end event.";
-      }
-
-      // compatibility cache (downstream of the event, not the source of truth)
-      await client.query(
-        "update units set occupancy_status='vacant', updated_at=now() where id=$1",
-        [unit_id]
-      );
-
-      await client.query("commit");
-      const updatedUnit = await pool.query("select id, unit_number, occupancy_status, operating_use, is_down from units where id=$1", [unit_id]);
-      res.status(201).json({
-        turnover,
-        event,
-        move_out_note: moveOutNote,
-        obligation,
-        initial_walk_obligation: initialWalk,
-        unit: updatedUnit.rows[0],
-        routed_role: route.assigned_role,
-        note: "Move-out logged. Turnover opened (operating record); one obligation spawned with two proof gates (moveout_photos, deposit_review). Unit occupancy → vacant; rentable readiness pending turn.",
-        initial_walk_note: initialWalk
-          ? (initialWalk.assigned_user_id
-              ? "Initial walk assigned — same-day inspection expected."
-              : "Initial walk created but UNASSIGNED — no eligible onsite staff at this property. It stays visibly unresolved.")
-          : "Initial-walk capture is not wired in this deployment; no walk obligation created.",
+      const out = await turnoverService.openTurnover(client, {
+        unit_id: req.params.id,
+        outgoing_lease_id,
+        needs,
+        expected_ready_date,
+        actor_user_id: null,
       });
+      await client.query("commit");
+      res.status(201).json(out);
     } catch (e) {
       await client.query("rollback");
       console.error("move-out error", e);
-      res.status(500).json({ error: e.message });
+      res.status(e.httpStatus || 500).json({
+        error: e.message,
+        code: e.code || null,
+        turnover_id: e.turnover_id || null,
+      });
     } finally {
       client.release();
     }

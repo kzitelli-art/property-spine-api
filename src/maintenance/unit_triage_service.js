@@ -35,9 +35,7 @@ const {
   VACANCY_VALUES, CONDITION_VALUES, COMPLETENESS_VALUES, LONG_LEAD_VALUES,
 } = require("./unit_triage_interpreter");
 
-// Shared lease vocabulary — imported, never redefined. position_classifier
-// exports it with the note "so no caller redefines it".
-const { TERMINAL_LEASE_STATUSES } = require("../tenancy/position_classifier");
+const { readNextCommittedMoveIn } = require("./unit_move_in_read");
 
 // ── READINESS VOCABULARY ────────────────────────────────────────────
 //  `ready` is deliberately ABSENT. A first walk cannot prove a unit is
@@ -54,8 +52,6 @@ const OBLIGATION_TYPES = Object.freeze({
   PROTECT_MOVE_IN: "protect_next_move_in",
   POSSESSION_EXCEPTION: "unit_possession_exception",
 });
-
-const today = () => new Date().toISOString().slice(0, 10);
 
 // ── DERIVE READINESS — PURE, and never stored ───────────────────────
 //
@@ -180,40 +176,11 @@ function makeUnitTriageService(deps) {
   //  Spine already knows this. The contract forbids asking the operator to
   //  re-enter a date the system holds.
   //
-  //  A committed move-in is a non-terminal lease on a space in this unit whose
-  //  start_date is in the future. Terminal statuses are excluded using the
-  //  shared vocabulary, not a local copy.
+  //  "Committed" is the governed threshold: executed AND required move-in
+  //  funds cleared. Pending leases still affect the main planning order, but
+  //  they cannot create a committed-move-in obligation here.
   async function nextCommittedMoveIn(db, { unit_id, as_of = null }) {
-    const asOf = as_of || today();
-    const terminal = [...TERMINAL_LEASE_STATUSES];
-    const r = await db.query(
-      `select l.id, l.start_date, l.lease_status, l.tenant_ids
-         from leases l
-         join spaces s on s.id = l.space_id
-        where s.unit_id = $1
-          and l.start_date is not null
-          and l.start_date > $2
-          and lower(l.lease_status) <> all($3::text[])
-        order by l.start_date asc
-        limit 1`,
-      [unit_id, asOf, terminal]
-    );
-    if (r.rows.length === 0) return null;
-
-    const row = r.rows[0];
-    const startISO = String(row.start_date).slice(0, 10);
-    // Whole days between two calendar dates. No clock arithmetic beyond this —
-    // a "days remaining" that drifts with timezone would be a wrong number on
-    // a manager's risk screen.
-    const days_remaining = Math.round(
-      (Date.parse(startISO + "T00:00:00Z") - Date.parse(asOf + "T00:00:00Z")) / 86400000
-    );
-    return {
-      lease_id: row.id,
-      move_in_date: startISO,
-      days_remaining,
-      lease_status: row.lease_status,
-    };
+    return readNextCommittedMoveIn(db, { unit_id, as_of });
   }
 
   // ── THE INITIAL-WALK OBLIGATION ───────────────────────────────────

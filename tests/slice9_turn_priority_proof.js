@@ -21,6 +21,9 @@ const { Pool } = require("pg");
 const REPO = path.resolve(__dirname, "..");
 const { seedInventory } = require("./fixtures/slice9_inventory_fixture");
 const { rankTurnPriority } = require(path.join(REPO, "src/maintenance/turn_priority"));
+const { readNextCommittedMoveIn } = require(path.join(REPO, "src/maintenance/unit_move_in_read"));
+const { closeActiveTurnoversForReadiness } = require(path.join(REPO, "src/maintenance/readiness_service"));
+const { availabilityRead } = require(path.join(REPO, "src/surfaces/availability_read"));
 
 let pass = 0, fail = 0;
 const ok = (c, m, d) => {
@@ -86,10 +89,19 @@ const ssl = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || "")
     ok(locked.demand_tier > pending.demand_tier,
       `locked outranks pending (${locked.demand_tier} > ${pending.demand_tier})`);
     ok(/executed and funded/i.test(locked.reason), "the locked reason states the proof it rests on");
+    ok(/^Committed move-in /.test(locked.priority_label), "the locked row carries compact operator language");
     ok(/not yet both executed and funded/i.test(pending.reason),
       "the pending reason says explicitly that it is NOT yet a commitment");
+    ok(/^Pending lease starts /.test(pending.priority_label), "the pending row stays visibly pending");
     ok(!/committed/i.test(pending.reason.replace(/not a commitment yet/i, "")),
       "and never presents itself as committed");
+    const pendingMoveIn = await readNextCommittedMoveIn(c, { unit_id: U["I-future-pending"].unit_id });
+    const lockedMoveIn = await readNextCommittedMoveIn(c, { unit_id: U["J-future-locked"].unit_id });
+    ok(pendingMoveIn === null, "secondary maintenance reads do not promote a pending lease to committed");
+    ok(lockedMoveIn && lockedMoveIn.commitment_state === "locked",
+      "secondary maintenance reads recognize the same locked commitment");
+    ok(lockedMoveIn && lockedMoveIn.proof_basis === "native_verified",
+      "the committed move-in carries the canonical proof basis");
     ok(locked.commitment_start_date === future, `locked carries the canonical start date (${locked.commitment_start_date})`);
     ok(locked.deadline_known === true, "and marks the deadline known");
 
@@ -100,6 +112,7 @@ const ssl = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || "")
     ok(conflict.commitment_conflict === true, "the conflict flag is set");
     ok(conflict.commitment_start_date === null, "no deadline is invented from a contested position");
     ok(conflict.deadline_known === false, "and the deadline is explicitly not known");
+    ok(conflict.priority_label === "Lease commitment conflict", "the conflict label never invents a governing lease");
     ok(/unknown/i.test(conflict.reason), "the reason says which lease governs is unknown");
     ok(conflict.demand_tier === 4, "it ranks above every plannable turn");
 
@@ -166,6 +179,22 @@ const ssl = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || "")
       ok(out2.turns[i - 1].demand_tier >= out2.turns[i].demand_tier,
         `position ${i} is not ranked above position ${i - 1}`);
     }
+
+    console.log("\n── FINAL READINESS CLOSES THE PHYSICAL TURN ─────────────");
+    const closed = await closeActiveTurnoversForReadiness(c, {
+      property_id: P,
+      unit_id: U["A-marketable"].unit_id,
+    });
+    ok(closed.length === 1 && closed[0].status === "ready",
+      "the active operating record closes from readiness authority");
+    const afterReadyRank = await rankTurnPriority(c, P);
+    ok(!afterReadyRank.turns.some((t) => String(t.unit_id) === String(U["A-marketable"].unit_id)),
+      "the ready unit leaves the active maintenance queue");
+    const afterReadyAvailability = await availabilityRead(c, { property_id: P });
+    const readyPosition = afterReadyAvailability.rows.find(
+      (r) => String(r.unit_id) === String(U["A-marketable"].unit_id));
+    ok(readyPosition && readyPosition.marketing_state === "marketable_now",
+      "the closed physical turn no longer blocks canonical availability");
 
   } catch (e) {
     fail++; console.log("   FAIL  harness threw: " + e.message + "\n" + e.stack);
