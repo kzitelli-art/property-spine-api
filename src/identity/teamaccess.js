@@ -17,11 +17,10 @@
 //   GET  /properties/:id/my-access            current user's allowed modules + landing
 //   PATCH /property-team-assignments/:id      authorized manager edits access
 //
-// HONEST SMS DEGRADATION: if Twilio isn't wired (no creds / package), the
-// invite + start endpoints still WORK — they return the link and, in the
-// non-production fallback, the code itself — so the flow is testable before
-// the number is provisioned. Identical philosophy to tenant_link's
-// link-only pilot. A real send is attempted whenever transport is ready.
+// HONEST SMS DEGRADATION: if Twilio isn't wired (no creds / package), invite
+// creation can still return its link. The sign-in endpoint returns a code only
+// outside production so the flow remains testable. Production never claims a
+// code was sent unless the transport accepted it.
 //
 // SECURITY NOTE (high-risk actions): the spec lists role changes, user
 // add/remove, full-report export, final-report approval, and bank settings
@@ -298,14 +297,23 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
         // nothing to log into. Scope the login to a property they're active on.
         // (Single-session-per-verify is the schema's model; a stuck multi-
         // property picker is a later step — for now, land them on a property
-        // they own, preferring one where they can manage roles.)
+        // they own. A deliverable credential channel comes first; within that
+        // set, prefer one where they can manage roles.)
         const a = (await pool.query(
-          `select property_id from property_team_assignments
-            where user_id=$1 and active=true
-            order by can_manage_roles desc, updated_at desc
+          `select a.property_id,
+                  nullif(btrim(p.sms_number), '') is not null as sms_ready
+             from property_team_assignments a
+             join properties p on p.id = a.property_id
+            where a.user_id=$1 and a.active=true
+            order by (nullif(btrim(p.sms_number), '') is not null) desc,
+                     a.can_manage_roles desc, a.updated_at desc
             limit 1`, [u.id])).rows[0];
         if (!a) return res.status(403).json({
           receipt: "Your account exists but isn't assigned to a property yet. Ask a manager to add you.",
+        });
+        if (!a.sms_ready) return res.status(503).json({
+          receipt: "SMS sign-in is not configured for any property assigned to your account.",
+          delivery: "not_configured",
         });
 
         // resend floor for re-login: if a live login invite for this phone
@@ -370,9 +378,9 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
 
       // COMMUNICATIONS BOUNDARY: staff OTP is explicitly classified
       // credential transport (purpose='staff_otp') through the gate.
-      let delivery = "link_only";
+      let delivery = "link_only", wire = null;
       {
-        const wire = await commBoundary.sendPropertySms({
+        wire = await commBoundary.sendPropertySms({
           property_id: inviteRow.property_id, recipient: phone, body,
           purpose: "staff_otp",
         });
@@ -385,6 +393,24 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
       // back to call /verify. (For the invite-accept flow the client already
       // holds the token from its link, so we don't echo it there.)
       const isRelogin = !!inviteRow.accepted_user_id && (inviteRow.allowed_modules || []).length === 0;
+
+      // Production must never advance the browser to code entry when no code
+      // left the system. Undo the send marker and OTP material so the operator
+      // can retry immediately after the channel is corrected.
+      if (isProd() && delivery !== "sms_sent") {
+        await pool.query(
+          `update team_invites
+              set otp_hash=null, otp_expires_at=null, otp_sent_at=null
+            where id=$1`,
+          [inviteRow.id]
+        );
+        console.error(`sms/start delivery failed property=${inviteRow.property_id} reason=${wire && wire.reason || "unknown"}`);
+        return res.status(503).json({
+          receipt: "We couldn't send a sign-in code. Try again in a moment.",
+          delivery: delivery === "sms_failed" ? "failed" : "not_configured",
+          flow: isRelogin ? "relogin" : "invite_accept",
+        });
+      }
 
       const out = {
         receipt: delivery === "sms_sent" ? "Code sent by text." : "SMS transport not active.",

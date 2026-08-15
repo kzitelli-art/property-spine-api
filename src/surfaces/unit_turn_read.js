@@ -71,7 +71,9 @@ function makeUnitTurnRead(deps) {
   //  property_team_assignments row, never from the request. It arrives here so
   //  the SERVER decides which controls exist; the browser renders that decision
   //  and reproduces none of the rule.
-  async function readUnitTurn(db, { property_id, unit_id, user_id, allowed_modules = null }) {
+  async function readUnitTurn(db, {
+    property_id, unit_id, user_id, allowed_modules = null, turn_priority = null,
+  }) {
     const unit = (await db.query(
       "select id, unit_number, property_id from units where id=$1 and property_id=$2",
       [unit_id, property_id])).rows[0];
@@ -85,7 +87,28 @@ function makeUnitTurnRead(deps) {
     const scope = await unitTurnScopeService.readTurnFlow(db, { unit_id });
     const workFlow = await workAcceptanceService.readUnitFlow(db, { unit_id });
     const gate = await readinessService.readGateState(db, { unit_id });
-    const nextMoveIn = await unitTriageService.nextCommittedMoveIn(db, { unit_id });
+    // For an active turn, the shared Turn-Priority read is the authority on
+    // whether an attached future lease is pending, locked or conflicted. The
+    // older direct lease lookup remains only for diagnostic/direct reads that
+    // are not attached to an active turnover record.
+    let nextMoveIn = null;
+    if (turn_priority) {
+      if (turn_priority.deadline_known && turn_priority.commitment_start_date) {
+        const contributor = (turn_priority.contributing_commitments || [])
+          .find((c) => String(c.start_date || "") === String(turn_priority.commitment_start_date)) || null;
+        const asOf = new Date().toISOString().slice(0, 10);
+        const moveInDate = String(turn_priority.commitment_start_date).slice(0, 10);
+        nextMoveIn = {
+          lease_id: contributor ? contributor.lease_id : null,
+          move_in_date: moveInDate,
+          days_remaining: Math.round((Date.parse(moveInDate + "T00:00:00Z") - Date.parse(asOf + "T00:00:00Z")) / 86400000),
+          commitment_state: turn_priority.demand_tier_key,
+          proof_basis: contributor ? contributor.proof_basis : null,
+        };
+      }
+    } else {
+      nextMoveIn = await unitTriageService.nextCommittedMoveIn(db, { unit_id });
+    }
 
     // The sequence engine already decided which items are unplaced. Indexed,
     // never recomputed.
@@ -221,6 +244,16 @@ function makeUnitTurnRead(deps) {
               : `Physically ready but not currently marketable. Reason: ${availability ? availability.blocking_label : "unknown"}.`)
           : "Not ready. Readiness comes from a certified final walk, not from closed work.",
         next_move_in: nextMoveIn,
+        turn_priority: turn_priority ? {
+          turnover_id: turn_priority.turnover_id,
+          demand_tier_key: turn_priority.demand_tier_key,
+          priority_label: turn_priority.priority_label,
+          reason: turn_priority.reason,
+          commitment_start_date: turn_priority.commitment_start_date,
+          deadline_known: turn_priority.deadline_known,
+          commitment_conflict: turn_priority.commitment_conflict,
+          contributing_commitments: turn_priority.contributing_commitments || [],
+        } : null,
       },
 
       // 2. CONTROLLING NEXT ACTION — forwarded from the owning layer.
@@ -346,6 +379,7 @@ function makeUnitTurnRead(deps) {
         "workAcceptanceService.readUnitFlow + readWorkState",
         "readinessService.readGateState + resolveWalkAuthority",
         "availability_read.availabilityRead",
+        ...(turn_priority ? ["maintenance.turn_priority.rankTurnPriority"] : []),
         "staffAgentService.readThread",
       ],
     };

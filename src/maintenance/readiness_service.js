@@ -31,6 +31,7 @@
 const { readinessGate, missingConfirmations, CONFIRMATION_AREAS } = require("./readiness_gate");
 const { computeTurnFlow, STAGE } = require("./turn_sequence");
 const { interpretRepairs } = require("./turn_scope_interpreter");
+const { readNextCommittedMoveIn } = require("./unit_move_in_read");
 
 const OBLIGATION_TYPES = Object.freeze({
   FINAL_WALK: "final_readiness_walk",
@@ -57,6 +58,16 @@ const AUTHORITY_LADDER = [
   { re: /\b(assistant|asst\.?)\s+(property\s+)?manager\b/i, rank: 2, why: "assistant property manager (delegated)" },
   { re: /\b(property\s+)?manager\b/i, rank: 3, why: "property manager" },
 ];
+
+async function closeActiveTurnoversForReadiness(db, { property_id, unit_id, ready_date = null }) {
+  return (await db.query(
+    `update turnovers
+        set status='ready', ready_date=coalesce($3::date,current_date), updated_at=now()
+      where property_id=$1 and unit_id=$2 and status='in_progress'
+      returning id, property_id, unit_id, status, ready_date`,
+    [property_id, unit_id, ready_date]
+  )).rows;
+}
 
 function makeReadinessService(deps) {
   const { spawnObligationFromEvent, workAcceptanceService } = deps || {};
@@ -299,12 +310,21 @@ function makeReadinessService(deps) {
        senior.user_id, senior.basis, note, photos,
        JSON.stringify(relied), nextMoveIn ? nextMoveIn.move_in_date : null])).rows[0];
 
+    // The named human certification is the authority that closes the physical
+    // turn. Administrative move-out proof remains on its own obligation; it
+    // cannot keep a physically ready unit in the turn queue or block leasing.
+    const closedTurnovers = await closeActiveTurnoversForReadiness(client, {
+      property_id: walk.property_id,
+      unit_id: walk.unit_id,
+    });
+
     const ev = (await client.query(
       `insert into events (property_id, unit_id, type, note)
        values ($1,$2,'unit_certified_ready',$3) returning *`,
       [walk.property_id, walk.unit_id, JSON.stringify({
         walk_id: walk.id, certification_id: cert.id,
         certified_by: actor_user_id, walked_by: walk.walked_by_user_id,
+        closed_turnover_ids: closedTurnovers.map((t) => t.id),
       })])).rows[0];
 
     // Close the final-walk obligation if one is open. A SUCCESSFUL
@@ -317,6 +337,7 @@ function makeReadinessService(deps) {
 
     return {
       outcome: "ready", walk, certification: cert, event: ev,
+      closed_turnovers: closedTurnovers,
       next_move_in: nextMoveIn,
       authority: auth,
       senior_accountable: senior,
@@ -523,18 +544,7 @@ function makeReadinessService(deps) {
   }
 
   async function nextCommittedMoveIn(db, { unit_id }) {
-    const asOf = new Date().toISOString().slice(0, 10);
-    const r = await db.query(
-      `select l.id, l.start_date from leases l join spaces s on s.id = l.space_id
-        where s.unit_id=$1 and l.start_date is not null and l.start_date > $2
-          and lower(l.lease_status) not in ('cancelled','terminated','rescinded','void','expired','superseded')
-        order by l.start_date asc limit 1`, [unit_id, asOf]);
-    if (!r.rows.length) return null;
-    const d = String(r.rows[0].start_date).slice(0, 10);
-    return {
-      lease_id: r.rows[0].id, move_in_date: d,
-      days_remaining: Math.round((Date.parse(d + "T00:00:00Z") - Date.parse(asOf + "T00:00:00Z")) / 86400000),
-    };
+    return readNextCommittedMoveIn(db, { unit_id });
   }
 
   return {
@@ -544,4 +554,9 @@ function makeReadinessService(deps) {
   };
 }
 
-module.exports = { makeReadinessService, OBLIGATION_TYPES, AUTHORITY_LADDER };
+module.exports = {
+  makeReadinessService,
+  closeActiveTurnoversForReadiness,
+  OBLIGATION_TYPES,
+  AUTHORITY_LADDER,
+};
