@@ -2,7 +2,10 @@
 
 **2026-08-15. Round 4 — five structural rulings frozen, one deliberately not.**
 **Specimen: 4125 Chestnut — the same property Debt is established against.**
-**Schema and read contract only. No migration release, no route, no UI.**
+**Migration 174 is released to production. The HTTP route and the Capital**
+**Stack UI (split into Preferred Equity / Common Equity compartments) are**
+**live. Real establishment for any property is still blocked — see**
+**`docs/THREAD_HANDOFF.md`'s Equity banner for exactly why.**
 
 Everything here is forced by a 15-deal portfolio equity survey (two
 SharePoint sites, real executed agreements, real trial balances, real
@@ -470,10 +473,13 @@ separately authored).
 ```text
 NOT   the full recursive N-tier entity graph as a generalized structure —
       the chain is flat, position-by-position, not a graph database.
-NOT   UI · waterfall distribution CALCULATOR (recording the terms is in
-      scope; computing what a capital event pays out is not) · document
-      reader · reconciliation engine for E4/E6/E7's conflicts · Ask Spine
-      implementation · SOLO · a migration release · an HTTP route
+NOT   waterfall distribution CALCULATOR (recording the terms is in scope;
+      computing what a capital event pays out is not) · document reader ·
+      reconciliation engine for E4/E6/E7's conflicts · Ask Spine gathering
+      (registry entry exists; see docs/THREAD_HANDOFF.md) · SOLO
+NOT   real establishment for any property — the schema, route and UI are
+      live; establishing real data still requires real retained
+      governing documents, which do not exist in production yet
 ```
 
 ---
@@ -482,20 +488,24 @@ NOT   UI · waterfall distribution CALCULATOR (recording the terms is in
 
 ```text
 branch from clean main
-→ migration (schema, drafted, NOT released)
+→ migration (schema) — RELEASED to production
 → minimal canonical writers
 → real 4125 + Skyline establishment — proving all five Round-4 rulings
-  against real survey specimens
+  against real survey specimens (TEST fixtures only — no real 4125 data
+  has been established in production)
 → position(property_id, as_of)
 → E1–E10 hostile falsification proofs, against real survey specimens —
   46/46 against real Postgres
+→ HTTP route (GET /operator/equity/standing) — LIVE
+→ Capital Stack UI, split into Preferred Equity / Common Equity
+  compartments — LIVE, browser-verified
 ```
 
 ```text
 NOT   distribution waterfall calculation · document reader · reconciliation
       of any E4/E6/E7 conflict · covenant-style compliance engine ·
-      generalized entity graph · SOLO · Ask Spine implementation ·
-      migration release · HTTP route · UI
+      generalized entity graph · SOLO · Ask Spine gathering ·
+      real establishment for any property
 ```
 
 ### This document is now under Round 4's freeze — with one exception
@@ -504,5 +514,5 @@ Five structural rulings above are frozen and should not be re-litigated
 without new evidence. MSC's Minimum Dividend relationship is deliberately
 NOT frozen and stays `not_established` in both schema and every fixture
 until OA §1.49 itself — not the survey's paraphrase of it — has been read.
-Building the migration release, the HTTP route, and the UI is explicitly
-the next round's work, not this one's.
+The schema, route and UI are live; that is not permission to establish
+real data from anything short of the real governing documents.

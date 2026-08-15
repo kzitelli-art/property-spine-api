@@ -1,39 +1,41 @@
 # Release Run Card — Migration 174 (Equity & Preferred Equity)
 
-**Drafted 2026-08-15. NOT YET EXECUTED. This card cannot be run from this**
-**session — it requires production `DATABASE_URL`, which this environment**
-**does not have. Read `docs/THREAD_HANDOFF.md`'s Equity banner first.**
+**Drafted 2026-08-15 as a template. EXECUTED 2026-08-15 by the account owner**
+**directly through Neon's staged-migration tooling — not by this session,**
+**which never had production `DATABASE_URL`.** The staging/approval step
+below (Neon's own migration-branch workflow) substitutes for the
+`migrate.js --apply` path this card originally described; the ledger and
+safety outcomes are the same.
 
 ```text
-ledger (as of last main read)   174 is the next free number after Debt's 173
-Equity tables                   7
-retained declaration sources    0 — NO real Equity documents have been
-                                 confirmed as retained in production yet
-canonical positions             0 — nothing has been established for real
+ledger (production, confirmed)   174 — migration 174 present exactly once
+Equity tables                    7, all live in production, all empty
+Neon project                     RE Intelligence Spine
+production branch                br-old-math-aqvwd76d
+production database              neondb
+migration id                     7e4503ac-3e7a-40e0-9d96-4c2e448da469
+staging branch (temporary)       mcp-migration-2026-08-15T18-31-38
+                                  (br-winter-resonance-aqqm0oau) — staged,
+                                  verified, then committed to production
+retained declaration sources     0 — NO real Equity documents have been
+                                  confirmed as retained in production yet
+canonical positions               0 — nothing has been established for real,
+                                  and that is the correct, honest state
 ```
 
 ---
 
-## ⚠ THIS CARD IS A TEMPLATE, NOT A COMPLETED RELEASE
+## ⚠ THIS RELEASE WAS EXECUTED OUTSIDE THIS SESSION
 
-Unlike `DEBT_173_RUN_CARD.md`, which documents a release that actually
-happened, this card exists so whoever DOES have production access can
-execute the release correctly on the first try. Every step below is real
-procedure; the **numbers must be re-read live**, not copied from here.
-
-Two things must be true before this card is even attempted, and this
-session cannot confirm either of them:
-
-```text
-1  production DATABASE_URL (or Render shell access) — to read the ledger,
-   check for renumbering collisions, and run migrate.js --apply
-2  a decision on real establishment — does production already hold the
-   real Equity governing documents (Interest Holder LLC OA, Holdings LLC
-   OA, MSC's HoldCo Pay Schedule, etc.) as retained source_artifacts? If
-   not, releasing the schema is still safe (it is purely additive and
-   nothing reads it yet — same as Debt's 173), but real establishment
-   cannot follow until those documents are retained.
-```
+This session drafted the card, refreshed the branch, reran every proof, and
+merged the code that reads this schema — it did **not** run the migration.
+The account owner staged migration 174 on a temporary Neon branch, verified
+it there, and committed it to production directly through Neon's own
+tooling, which serves the same safety role the `EXPECTED_LEDGER_CEILING`
+check below describes (a release cannot be approved by someone who has not
+looked at what is staged). The renumbering-risk and release-procedure
+sections below are kept as real reference material for the next migration
+in this domain, not as an outstanding to-do for this one.
 
 ---
 

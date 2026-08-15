@@ -1,45 +1,60 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
-##  EQUITY — ROUTE + UI SHIP THIS ROUND. MIGRATION 174 STILL DRAFT.
-##  BLOCKED ON PRODUCTION ACCESS + REAL DOCUMENT RETENTION. 2026-08-15.
-##  READ THIS FIRST IF YOU ARE PICKING UP EQUITY, AND READ IT BEFORE
-##  THE DEBT BANNER BELOW IT.
+##  EQUITY IS LIVE. PRODUCTION DB AT 174. CAPITAL STACK NOW SHOWS
+##  PREFERRED EQUITY AND COMMON EQUITY AS SEPARATE COMPARTMENTS.
+##  4125 REAL ESTABLISHMENT REMAINS BLOCKED ON DOCUMENT RETENTION.
+##  2026-08-15. READ THIS FIRST IF YOU ARE PICKING UP EQUITY, AND READ
+##  IT BEFORE THE DEBT BANNER BELOW IT.
 ## ══════════════════════════════════════════════════════════════════
 
-**Branch:** `claude/philosophy-doctrine-essence-ae6xni`, on top of the merged
-Debt release (`a870056`, PR #108). Migration file is **174** but is DRAFT
-ONLY — not released, not numbered against a live ledger check. Re-verify
-against `main` before ever releasing it; the same collision that hit Debt
-twice (168→171→173) can hit 174 too if another lane merges first. See
-`docs/release/EQUITY_174_RUN_CARD.md` for the exact release procedure —
-it is a template, not a completed release, because this session has no
-production `DATABASE_URL`.
+**Branch:** `claude/philosophy-doctrine-essence-ae6xni`, refreshed against
+current `main` before release. Migration **174 is already applied to
+production** — staged and verified on a temporary Neon branch
+(`mcp-migration-2026-08-15T18-31-38`), then committed to production
+(`br-old-math-aqvwd76d`, database `neondb`) by the account owner directly
+through Neon's tooling. **This session did not run that release and never
+had production `DATABASE_URL`** — it verified everything short of the
+release itself, then stopped and handed off exactly the two things it
+could not do. Do not re-run migration 174 and do not renumber it; the
+ledger ceiling is 174 and it is meant to stay there until the next real
+migration.
 
-### What "get this live" turned into, and why it stopped where it did
+### Taxonomy correction shipped alongside the release
 
-Asked to take Equity all the way live, this session built everything that
-does NOT require production credentials or real retained documents: the
-HTTP read seam, the Capital Stack UI compartment (browser-verified against
-real Postgres + real Chromium, not just unit-tested), and a controlled
-establishment tool. It could not do three things, because none of them are
-possible from this environment or without a human decision:
+Capital Stack's Equity compartment was always going to blur two different
+questions if it stayed one screen — "what preferred position do we sit
+behind" and "who owns the common tier" are different questions an asset
+manager asks. This round split it: **Preferred Equity** and **Common
+Equity** are now two distinct Capital Stack compartments, both reading the
+SAME canonical `GET /operator/equity/standing` and filtering
+`position_class` — never two backend domains. See CLAUDE.md's Capital
+Stack room line and `docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md`.
+
+### What shipped this round, and what is still genuinely blocked
 
 ```text
-1  release migration 174 to production — needs production DATABASE_URL /
-   Render access, which this session does not have
-2  real establishment for any property — needs the real governing
-   documents (Interest Holder LLC OA, Holdings LLC OA, MSC's HoldCo Pay
-   Schedule, and specifically OA §1.49 for the Minimum Dividend question)
-   confirmed as retained in production as source_artifacts; this session
-   cannot check whether they already are
-3  read OA §1.49 itself to resolve MSC's Minimum Dividend relationship —
-   a real-document read only a human (or a session with document access)
-   can do; the survey's paraphrase is explicitly NOT sufficient evidence
+1  production migration release — DONE, by the account owner, outside
+   this session, verified on a Neon staging branch first
+2  real establishment for any property — STILL BLOCKED. Needs the real
+   governing documents (Interest Holder LLC OA, Holdings LLC OA, MSC's
+   HoldCo Pay Schedule, and specifically OA §1.49 for the Minimum
+   Dividend question) confirmed as retained in production as
+   source_artifacts. As of this round's own production inspection,
+   4125's retained source_artifacts include Debt material (the Debt
+   Closing Packet, amortization schedule, Lument statements) and NO
+   Equity governing documents. No legal_entities / legal_entity_
+   properties chain for 4125's capital structure exists in production
+   either.
+3  reading OA §1.49 itself to resolve MSC's Minimum Dividend
+   relationship — still needs the real document; the survey's
+   paraphrase is explicitly NOT sufficient evidence
 ```
 
-Everything else is real, proven, and ready for whoever has the missing
-access to pick up `docs/release/EQUITY_174_RUN_CARD.md` and finish it.
+Production Equity row counts are all zero, and that is the correct,
+honest state — not a bug, not a stub. Every Preferred Equity and Common
+Equity compartment in production today renders NOT_ESTABLISHED, exactly
+as it should until real documents land.
 
 ### The one thing to understand before touching this domain
 
@@ -92,34 +107,37 @@ reads.
 ### What is actually built and proven
 
 ```text
-migration 174 (7 tables, Round-4 shape)   DRAFT — migrations/174_equity_positions.sql
-                                           NOT RELEASED — needs prod DATABASE_URL
+migration 174 (7 tables, Round-4 shape)   RELEASED to production — ledger ceiling 174
 canonical writers                         DONE — src/asset/equity_position_service.js
 position(property, as_of) read            DONE — src/asset/equity_position_read.js
                                            (accrual is NEVER computed — see E3)
 HTTP read seam                            DONE — src/asset/equity_routes.js
                                            GET /operator/equity/standing, one read
 Capital Stack room probe                  DONE — src/surfaces/asset_management.js
-                                           probes both debt and equity again
-Equity UI compartment                     DONE — property-spine-app's
-                                           asset-management-door.js, browser-verified
-                                           (real Chromium, real API, real Postgres)
+                                           probes debt + preferred + common equity
+Preferred/Common Equity UI compartments   DONE — property-spine-app's
+                                           asset-management-door.js, TWO compartments
+                                           reading the ONE canonical read, browser-
+                                           verified (real Chromium, real API, real
+                                           Postgres, real click-through path)
 establishment tool                        DONE — tools/equity/establish_position.js,
                                            smoke-tested (dry-run, apply, dedupe
                                            refusal, MSC-deferral refusal all proven
                                            against real Postgres) — NO real
                                            declaration exists; see
                                            tools/equity/declarations/README.md
-release run card                          DONE (template) — docs/release/
-                                           EQUITY_174_RUN_CARD.md — not executed
-Ask Spine registry entry                  DONE, correctly `pending` —
-                                           tests/gate_ask_spine_readers.js
+release run card                          EXECUTED — docs/release/
+                                           EQUITY_174_RUN_CARD.md, by the account
+                                           owner, outside this session
+Ask Spine registry entry                  see the registration note below
 funding-boundary gate coverage            DONE — tests/gate_funding_boundary.js
                                            (table/file names updated to Round-4 shape)
 real 4125 establishment                   NOT BUILT — no retained documents
                                            confirmed for equity yet; every fixture
                                            below is a TEST fixture, not production
-                                           truth
+                                           truth. Production Equity row counts are
+                                           zero, and every compartment reads
+                                           NOT_ESTABLISHED honestly.
 ```
 
 DB and browser proofs, real Postgres 16 / real Chromium, all green:
@@ -128,14 +146,16 @@ DB and browser proofs, real Postgres 16 / real Chromium, all green:
 46/46   equity_position_falsification.db.js   E1–E10 AND the 5 Round-4 rulings
 14/14   equity_routes_http.db.js              real HTTP, real authority checks
 92/92   gate_funding_boundary.js              (Round-4 table/file names)
-62/62   gate_ask_spine_readers.js             (equity entry text updated)
-54/54   asset_management_shell.db.js          confirms the wiring is clean
+62/62   gate_ask_spine_readers.js             (registry coverage)
+54/54   asset_management_shell.db.js          confirms the taxonomy split is clean
 42/42   debt_position_falsification.db.js     confirms no cross-domain regression
 23/23   debt_routes_http.db.js                confirms no cross-domain regression
-5/5     ad hoc browser smoke (not committed)  real render, caught + fixed 2 bugs:
-                                               a raw-UUID leak on an unresolved
-                                               holder, and a dead-grey-box layout
-                                               bug from the wrong grid class
+19/19   ad hoc browser smoke (not committed)  real click-through path, real Postgres:
+                                               Preferred/Common Equity render as
+                                               distinct compartments, honest empty
+                                               state matches production truth, the
+                                               class split genuinely filters, no raw
+                                               UUID, no dead mobile overflow
 ```
 
 Every hostile fixture in the falsification suite is drawn from a real quote
@@ -150,9 +170,6 @@ debt-vs-equity characterization conflict on the same dollars.
 ### What is deliberately NOT built, and why each one is a real blocker
 
 ```text
-NOT   a production migration release — needs DATABASE_URL / Render access
-      this session does not have. docs/release/EQUITY_174_RUN_CARD.md is
-      ready to execute the moment someone with access picks it up.
 NOT   real establishment for any property — needs the real governing
       documents confirmed retained in production first; the tool that
       would perform it (tools/equity/establish_position.js) is built,
@@ -177,10 +194,11 @@ evidence forces a reopening. The MSC piece is NOT frozen and must stay
 `not_established` in schema, writers, reader and every fixture until §1.49
 is actually read — resist the temptation to "finish" it from the survey's
 own paraphrase, and do not weaken establish_position.js's refusal to make
-a declaration file "work." The next session picking this up should read
-`docs/release/EQUITY_174_RUN_CARD.md`, confirm production access, and
-execute the release as its own deliberate act — not assume the schema is
-already live because the route and UI that read it are.
+a declaration file "work." The schema is live and the UI reads it — do
+not read that as permission to establish 4125 (or any property) from the
+survey, fixtures, or memory. The next session picking this up should go
+straight to retaining the real governing documents; the mechanism to
+establish from them once retained already exists and is proven.
 
 ## ══════════════════════════════════════════════════════════════════
 ##  DEBT 173 IS RELEASED AND 4125 CANONICAL TRUTH IS ESTABLISHED.
