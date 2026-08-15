@@ -1,56 +1,140 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
-##  ⚠ MIGRATION 168 IS CLAIMED BY DEBT. TWO BRANCHES WROTE ONE NUMBER.
-##  2026-08-13. READ BEFORE MERGING EITHER BRANCH.
+##  CURRENT STATE — 2026-08-15. THIS SECTION WINS ON MIGRATION
+##  NUMBERING, RELEASE STATE, AND WHAT IS LIVE vs MERELY MERGED.
+##  IT REPLACES THE "MIGRATION 168 IS CLAIMED BY DEBT" BANNER, WHICH
+##  WAS OVERTURNED BY MAIN THE SAME DAY IT WAS WRITTEN.
 ## ══════════════════════════════════════════════════════════════════
 
-Two parallel sessions each authored a **different** migration 168. Both are
-branch-only, so nothing is broken in production — and a release applies EVERY
-pending file, so merging both is a duplicate version against the ledger.
+### ▶ NUMBERING IS SETTLED. DO NOT RE-LITIGATE 168.
 
 ```text
-migrations/168_debt_instruments.sql            claude/philosophy-doctrine-essence-ae6xni
-migrations/168_meeting_transcript_segments.sql claude/philosophy-doctrine-essence-tt6uoz
-main                                           no 168 — ceiling is 167
+168  compliance_canonical_truth            main
+169  utilities_canonical_truth             main
+170  compliance_extended_truth             main
+171  contracted_services_canonical_truth   main   PR #104, merged 2026-08-15
+172  RESERVED — DEBT                       unclaimed by any branch
 ```
 
-**RULED 2026-08-13: DEBT KEEPS 168.** It is the current, heavily proven build —
-426 lines of schema with canonical writers, `position(instrument, as_of)`, W1–W9
-hostile read proofs and a 120/120 published-schedule derivation proof standing on
-it. An unrelated parallel session does not get to renumber that.
+The 2026-08-13 ruling *"DEBT KEEPS 168"* was reversed within hours by `8c2b913`
+**Assign Compliance migration 168**, and main shipped Compliance as 168. That is
+the state on disk, verified against `git ls-tree origin/main migrations/`. The
+old banner is preserved in history; it is not current and must not be acted on.
 
-**The meeting-transcript branch is PARKED.** When that work resumes it must:
+**Debt takes 172.** Nothing else claims it — every remote branch was scanned.
+
+### ▶ DEBT IS STRANDED, AND IT IS THE MOST VALUABLE IDLE ASSET IN THE REPO
 
 ```text
-1  rebase onto the then-current main
-2  resolve its DOCTRINE collision (below) — not just the migration number
-3  take the next available migration number, read from the ledger
+branch      claude/philosophy-doctrine-essence-ae6xni  @ 08da760
+carries     168_debt_instruments.sql  ← number now spent
+            src/asset/debt_instrument_service.js
+            src/asset/debt_position_read.js
+            src/asset/debt_routes.js
+position    12 ahead of main · 41+ behind main
 ```
 
-### ⚠ AND IT COLLIDES ON DOCTRINE, WHICH IS EASIER TO MISS
+To land it: rebase onto current main, renumber the migration to **172**, re-prove.
+Until it lands, **Capital Stack is an empty room** and no lender-facing package
+can exist — debt service is not an optional line in that package.
 
-`tt6uoz` branched **before** the Ask Spine doctrine landed and does not contain
-current `main` (`git merge-base` confirms). It writes:
+The rebase cost rises every day the branch sits. Nothing in the numbering blocks
+it any more; only the rebase does.
+
+### ▶ RELEASE STATE — READ THE LEDGER, DO NOT TRUST THIS PARAGRAPH
 
 ```text
-tt6uoz    ## 40. Recorded Speech Is Quoted, Never Paraphrased
-          ## 41. Evidence Sources Beneath Governed Truth
-
-main      ## 40. Ask Spine Is a Governed Interface, Not an AI Layer
-          §40.1 … §40.11
+REPORTED   production ceiling 170        Codex build summary, 2026-08-15
+FACT       171 merged to main            2026-08-15, c7f4dc4
+EXPECTED   `pending` returns exactly 171
 ```
 
-**§40's subsections are cited by number** in `CLAUDE.md`, in
-`tests/gate_ask_spine_readers.js`, and throughout the Debt build. Merging tt6uoz
-as written would either conflict or silently renumber the doctrine everything
-else references. Its two rulings are good and should land as **§42/§43**.
+The ceiling above is **Reported** on the §33 ladder — claimed in a summary, not
+independently verified in this repo. Read it from the database before releasing:
 
-Its §41 also overlaps `§40.4` on purpose rather than by accident: `source_authority`
-already ranks `transcript_claim` **below** `governed_read`, and migration 168
-ships that hierarchy as a real column with those exact four values. A second
-vocabulary for the same ranking is how the two diverge — extend §40.4, do not
-parallel it.
+```text
+docs/release/ledger_read_before_release.sql
+```
+
+⚠ **That file was regenerated 2026-08-15 and had been stale at 167.** Against a
+ledger at 170 the stale version would have reported 168/169/170 under
+`in_ledger_but_not_in_build` — which its own footer defines as *"the code and the
+schema disagree"* — producing a false alarm on the eve of the 171 release. Same
+root cause as the 2026-08-12 regeneration and as migration 140: **a build list
+that describes fewer files than the repository contains.** Regenerate it with the
+command in its header whenever a migration lands. Never hand-edit it.
+
+### ▶ MERGED ≠ LIVE. THE APP AND THE API HAVE DRIFTED.
+
+```text
+Compliance register   merged app PR #65   NOT LIVE — Render serves the old screen
+Maintenance home      c230c95             NOT MERGED
+Contracted Services   merged API #104     release pending on 172-era ledger read
+```
+
+⚠ **Do not merge `40e4cf0`.** It duplicates the Maintenance home on a stale
+Compliance branch and would delete newer Utilities and Compliance assets.
+
+### ▶ TWO PRODUCTION DEFECTS ARE PRODUCING WRONG TRUTH RIGHT NOW
+
+These are the only open items writing false information in front of a real
+person. Everything else above is drift, which is static.
+
+```text
+1  propertyspine.com submits through /demo/intake and assigns real inbound
+   leads to the DEMO property.
+   §17 — "Demo data may exist. Demo paths may not." This is a demo PATH
+   carrying the live acquisition funnel, and it breaks §19 and §21 with it.
+
+2  SMS_SEND_MODE was moved proof_only → customer_care, so governed replies
+   now reach real people — while the Twilio delivery-status callback is
+   broken. A delivered message still reads `queued`.
+   §29 — intent and delivery are separate facts; the delivery fact never
+   arrives. The send switch was flipped before the gauge was repaired.
+```
+
+### ▶ STILL OPEN, CARRIED FORWARD FROM THE 168 BANNER
+
+`claude/philosophy-doctrine-essence-tt6uoz` remains **PARKED** and its doctrine
+collision is unresolved. It branched before Ask Spine doctrine landed and writes
+its own `## 40.` / `## 41.`, while main's §40.1–§40.11 are cited by number in
+`CLAUDE.md`, in `tests/gate_ask_spine_readers.js` and throughout the Debt build.
+Merging it as written would conflict or silently renumber doctrine that other
+files reference. **Its two rulings are good and should land as §42/§43.**
+
+Its §41 overlaps `§40.4` deliberately rather than accidentally: `source_authority`
+already ranks `transcript_claim` **below** `governed_read`. Extend §40.4; do not
+build a second vocabulary for the same ranking beside it.
+
+When that work resumes: rebase onto the then-current main, resolve the doctrine
+collision, and take the next free migration number **read from the ledger** —
+which is 173 or later, not 168.
+
+### ▶ ASK SPINE COVERAGE HAS MOVED. THE "ZERO DOMAINS" LINE BELOW IS STALE.
+
+```text
+discovered with a canonical standing read   compliance · utility · insurance · tax
+registered                                  compliance · utility
+pending                                     insurance · tax
+```
+
+The section below states *"ZERO domains are conversationally readable today."*
+That was true on 2026-08-12 and is **no longer true.** Two domains are registered
+and gathered in `src/agent/ask_spine_answer.js`; Contracted Services registered
+in the same PR that built it.
+
+⚠ **This means the §40.8 trigger has fired.** `ask_spine_answer.js` now composes
+`facts.compliance` and `facts.utility` into a single answer. §40.8 names
+cross-domain composition authorization as *"a major architectural problem, and it
+is unsolved,"* to be designed deliberately **at the first genuinely cross-domain
+answer**. That answer is being produced today. The code declares
+`composition_authorization: "unsolved_cross_domain"` and threads it into the
+receipt, so it is honest — but honest and shipping is still shipping.
+
+Insurance and Tax are `pending` **for this reason**, not for lack of effort. Any
+Tax/Insurance hardening build runs into this wall immediately; sequence the
+composition design with that work, not after it.
 
 ## ══════════════════════════════════════════════════════════════════
 ##  ASK SPINE IS NOW AN INTERFACE CONTRACT, NOT A FEATURE.
