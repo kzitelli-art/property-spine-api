@@ -1,6 +1,206 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  EQUITY IS LIVE. PRODUCTION DB AT 174. CAPITAL STACK NOW SHOWS
+##  PREFERRED EQUITY AND COMMON EQUITY AS SEPARATE COMPARTMENTS.
+##  4125 REAL ESTABLISHMENT REMAINS BLOCKED ON DOCUMENT RETENTION.
+##  2026-08-15. READ THIS FIRST IF YOU ARE PICKING UP EQUITY, AND READ
+##  IT BEFORE THE DEBT BANNER BELOW IT.
+## ══════════════════════════════════════════════════════════════════
+
+**Branch:** `claude/philosophy-doctrine-essence-ae6xni`, refreshed against
+current `main` before release. Migration **174 is already applied to
+production** — staged and verified on a temporary Neon branch
+(`mcp-migration-2026-08-15T18-31-38`), then committed to production
+(`br-old-math-aqvwd76d`, database `neondb`) by the account owner directly
+through Neon's tooling. **This session did not run that release and never
+had production `DATABASE_URL`** — it verified everything short of the
+release itself, then stopped and handed off exactly the two things it
+could not do. Do not re-run migration 174 and do not renumber it; the
+ledger ceiling is 174 and it is meant to stay there until the next real
+migration.
+
+### Taxonomy correction shipped alongside the release
+
+Capital Stack's Equity compartment was always going to blur two different
+questions if it stayed one screen — "what preferred position do we sit
+behind" and "who owns the common tier" are different questions an asset
+manager asks. This round split it: **Preferred Equity** and **Common
+Equity** are now two distinct Capital Stack compartments, both reading the
+SAME canonical `GET /operator/equity/standing` and filtering
+`position_class` — never two backend domains. See CLAUDE.md's Capital
+Stack room line and `docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md`.
+
+### What shipped this round, and what is still genuinely blocked
+
+```text
+1  production migration release — DONE, by the account owner, outside
+   this session, verified on a Neon staging branch first
+2  real establishment for any property — STILL BLOCKED. Needs the real
+   governing documents (Interest Holder LLC OA, Holdings LLC OA, MSC's
+   HoldCo Pay Schedule, and specifically OA §1.49 for the Minimum
+   Dividend question) confirmed as retained in production as
+   source_artifacts. As of this round's own production inspection,
+   4125's retained source_artifacts include Debt material (the Debt
+   Closing Packet, amortization schedule, Lument statements) and NO
+   Equity governing documents. No legal_entities / legal_entity_
+   properties chain for 4125's capital structure exists in production
+   either.
+3  reading OA §1.49 itself to resolve MSC's Minimum Dividend
+   relationship — still needs the real document; the survey's
+   paraphrase is explicitly NOT sufficient evidence
+```
+
+Production Equity row counts are all zero, and that is the correct,
+honest state — not a bug, not a stub. Every Preferred Equity and Common
+Equity compartment in production today renders NOT_ESTABLISHED, exactly
+as it should until real documents land.
+
+### The one thing to understand before touching this domain
+
+A 15-deal portfolio equity survey — real executed agreements, real trial
+balances, real trackers, **not committed to this repo** (real individual
+investors and guarantors, named, with real dollar amounts — a data-handling
+call for the deal's owner; ask for the survey directly if it's needed
+again) — found that **for no deal in the surveyed portfolio does a
+complete, self-consistent cap table exist as a document.** Every tracker
+disagrees with its own governing agreement. Nothing accrues in any general
+ledger, anywhere.
+
+The first pass at this domain (schema, writers, reader, HTTP route, UI
+wiring, Ask Spine registration) was built unattended in one session and then
+went through **four owner correction rounds** before anything froze —
+Debt's own contract took seven. Read
+`docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md` before changing anything: it
+documents all four rounds, the five rulings Round 4 froze, and the one
+piece (MSC's Minimum Dividend relationship) it deliberately left open.
+
+### The five frozen rulings, in one line each
+
+```text
+1  ONE shared capital_stack_positions identity for Common AND Preferred —
+   position_class is a tag, never a base-table split.
+2  A pro-rata preferred return AND a deal's default waterfall belong to
+   the ISSUER (common_equity_class_terms), never duplicated per holder.
+3  A side-letter override (common_equity_position_overrides) is surfaced
+   the moment it's written down, but APPLIED only when execution_status
+   = 'executed' — Lincoln's unexecuted override never reads as settled.
+4  preferred_equity_terms carries current_pay_rate_bp and accrued_rate_bp
+   as separate columns (Tower's SHAPE is real) — but no fixture or
+   migration writes Tower's own specific numbers (not yet governed).
+5  No capital_stack_evidence, no capital_stack_exposure table. Coverage
+   gaps are DERIVED by the reader from what's absent, never hand-authored.
+```
+
+### The one deliberately unfrozen piece
+
+MSC's 12.5% preferred return (4125) is well governed — OA §1.60/§1.42. A
+SEPARATE Minimum Dividend schedule (8%→9%→10%→11%→12%→12.5%) is only
+paraphrased by the survey, not quoted from source. Whether it is additive
+to, an offset against, or otherwise related to the 12.5% is unknown until
+OA **§1.49 itself** is read.
+`preferred_equity_terms.minimum_dividend_relationship_to_preferred_return`
+defaults to `'not_established'` in the schema and stays there in every
+fixture — never populated from the survey's paraphrase, however specific it
+reads.
+
+### What is actually built and proven
+
+```text
+migration 174 (7 tables, Round-4 shape)   RELEASED to production — ledger ceiling 174
+canonical writers                         DONE — src/asset/equity_position_service.js
+position(property, as_of) read            DONE — src/asset/equity_position_read.js
+                                           (accrual is NEVER computed — see E3)
+HTTP read seam                            DONE — src/asset/equity_routes.js
+                                           GET /operator/equity/standing, one read
+Capital Stack room probe                  DONE — src/surfaces/asset_management.js
+                                           probes debt + preferred + common equity
+Preferred/Common Equity UI compartments   DONE — property-spine-app's
+                                           asset-management-door.js, TWO compartments
+                                           reading the ONE canonical read, browser-
+                                           verified (real Chromium, real API, real
+                                           Postgres, real click-through path)
+establishment tool                        DONE — tools/equity/establish_position.js,
+                                           smoke-tested (dry-run, apply, dedupe
+                                           refusal, MSC-deferral refusal all proven
+                                           against real Postgres) — NO real
+                                           declaration exists; see
+                                           tools/equity/declarations/README.md
+release run card                          EXECUTED — docs/release/
+                                           EQUITY_174_RUN_CARD.md, by the account
+                                           owner, outside this session
+Ask Spine registry entry                  see the registration note below
+funding-boundary gate coverage            DONE — tests/gate_funding_boundary.js
+                                           (table/file names updated to Round-4 shape)
+real 4125 establishment                   NOT BUILT — no retained documents
+                                           confirmed for equity yet; every fixture
+                                           below is a TEST fixture, not production
+                                           truth. Production Equity row counts are
+                                           zero, and every compartment reads
+                                           NOT_ESTABLISHED honestly.
+```
+
+DB and browser proofs, real Postgres 16 / real Chromium, all green:
+
+```text
+46/46   equity_position_falsification.db.js   E1–E10 AND the 5 Round-4 rulings
+14/14   equity_routes_http.db.js              real HTTP, real authority checks
+92/92   gate_funding_boundary.js              (Round-4 table/file names)
+62/62   gate_ask_spine_readers.js             (registry coverage)
+54/54   asset_management_shell.db.js          confirms the taxonomy split is clean
+42/42   debt_position_falsification.db.js     confirms no cross-domain regression
+23/23   debt_routes_http.db.js                confirms no cross-domain regression
+19/19   ad hoc browser smoke (not committed)  real click-through path, real Postgres:
+                                               Preferred/Common Equity render as
+                                               distinct compartments, honest empty
+                                               state matches production truth, the
+                                               class split genuinely filters, no raw
+                                               UUID, no dead mobile overflow
+```
+
+Every hostile fixture in the falsification suite is drawn from a real quote
+in the survey, cited in code comments — MSC's actual 12.5% quarterly/
+actual-360 terms with its Make-Whole and 7th-anniversary redemption date,
+the real OA-vs-tracker compounding disagreement, the real Skyline 7.5%
+pro-rata preferred return and 65/35 waterfall, the real Lincoln side-letter
+(recorded as unexecuted, and proven NOT applied to the read), the real
+Skyline GP pledge, the real Lightstone/Shafran K-1 substitution, the real
+debt-vs-equity characterization conflict on the same dollars.
+
+### What is deliberately NOT built, and why each one is a real blocker
+
+```text
+NOT   real establishment for any property — needs the real governing
+      documents confirmed retained in production first; the tool that
+      would perform it (tools/equity/establish_position.js) is built,
+      smoke-tested, and refuses to run without them.
+NOT   MSC's actual Minimum Dividend mechanics — deliberately left
+      NOT_ESTABLISHED pending a real read of OA §1.49, and
+      establish_position.js REFUSES to establish anything else unless
+      that row's source_authority is 'governed_read' — not a default
+      left to good behavior, an executable guard.
+NOT   a waterfall distribution calculator — recording the terms is in scope,
+      computing what a capital event pays out is not
+NOT   a generalized N-tier entity-graph engine — the chain is positions,
+      flat and emergent, not a graph database
+NOT   reconciliation of any E4/E6/E7 conflict — recording a conflict is a
+      writer's job, resolving one is a human's
+```
+
+### The honest caveat this banner exists to carry
+
+Five structural rulings are frozen; treat them as settled unless new real
+evidence forces a reopening. The MSC piece is NOT frozen and must stay
+`not_established` in schema, writers, reader and every fixture until §1.49
+is actually read — resist the temptation to "finish" it from the survey's
+own paraphrase, and do not weaken establish_position.js's refusal to make
+a declaration file "work." The schema is live and the UI reads it — do
+not read that as permission to establish 4125 (or any property) from the
+survey, fixtures, or memory. The next session picking this up should go
+straight to retaining the real governing documents; the mechanism to
+establish from them once retained already exists and is proven.
+
+## ══════════════════════════════════════════════════════════════════
 ##  DEBT 173 IS RELEASED AND 4125 CANONICAL TRUTH IS ESTABLISHED.
 ##  2026-08-15. MERGE/DEPLOY/PRODUCTION-BROWSER PROOF REMAIN. THIS
 ##  SUPERSEDES THE "MIGRATION 168" BANNER BELOW ON

@@ -140,8 +140,17 @@ const ROOMS = Object.freeze([
   Object.freeze({
     key: "capital_stack",
     label: "Capital Stack",
-    covers: ["Debt", "Equity & Preferred Equity", "Reserves & Escrows"],
-    eyebrow: ["Debt", "Equity", "Reserves"],
+    //  ⚠ PREFERRED EQUITY AND COMMON EQUITY ARE A UI/NAVIGATION SPLIT,
+    //  NOT A SECOND BACKEND DOMAIN. Both compartments read the SAME
+    //  canonical GET /operator/equity/standing and filter position_class
+    //  client-side (or here, at the establishment-probe level) — there is
+    //  still one shared capital_stack_positions identity underneath.
+    //  Splitting the ROOM's navigation into two named compartments makes
+    //  the product taxonomy legible (an asset manager reads "Preferred
+    //  Equity" and "Common Equity" as two different questions) without
+    //  splitting the domain that answers them.
+    covers: ["Debt", "Preferred Equity", "Common Equity", "Reserves & Escrows"],
+    eyebrow: ["Debt", "Preferred Equity", "Common Equity", "Reserves"],
     belongs: "How this property is capitalised, and what it owes the people who capitalised it.",
     //  ⚠ RESERVES & ESCROWS IS A READER, NEVER A SECOND WRITER.
     //  Tax escrow truth is owned by the Tax module and insurance escrow
@@ -153,8 +162,10 @@ const ROOMS = Object.freeze([
     compartments: [
       { key: "debt", label: "Debt", derived: "debt",
         note: "No governed debt instruments yet" },
-      { key: "equity", label: "Equity & Preferred Equity",
-        note: "No governed equity or preferred terms yet" },
+      { key: "preferred_equity", label: "Preferred Equity", derived: "preferred_equity",
+        note: "No governed preferred equity terms yet" },
+      { key: "common_equity", label: "Common Equity", derived: "common_equity",
+        note: "No governed common equity terms yet" },
       { key: "reserves_escrows", label: "Reserves & Escrows",
         note: "No governed reserve accounts yet" },
     ],
@@ -315,6 +326,11 @@ module.exports = function assetManagement(deps) {
   //  For the Capital Stack home-card probe ONLY — establishmentForProperty
   //  is a cheap COUNT, never position() and never the schedule derivation.
   const debtSvc = require("../asset/debt_instrument_service.js");
+  //  Equity's governed READ seam. One GET — see src/asset/equity_routes.js
+  //  for why there is no standing/detail split the way Debt has one.
+  const equityRoutes = require("../asset/equity_routes.js");
+  //  Same probe discipline as debtSvc, immediately above.
+  const equitySvc = require("../asset/equity_position_service.js");
   const complianceHttp = require("../asset/compliance_http.js");
   const complianceRead = require("../asset/compliance_read.js");
 
@@ -596,28 +612,77 @@ module.exports = function assetManagement(deps) {
         console.error("asset-management overview: Compliance establishment probe failed", e);
       }
 
-      //  ONE compartment of three is live. capital_stack is capped at
-      //  partially_established for exactly the Property Expenses reason:
-      //  saying `established` would tell an operator that Equity and
-      //  Reserves & Escrows are accounted for too, and they are not.
+      //  THREE compartments of four can be live. capital_stack stays
+      //  capped at partially_established regardless of how many of
+      //  {debt, preferred equity, common equity} are established —
+      //  Reserves & Escrows remains unbuilt, and Equity's own portfolio
+      //  survey found that even a fully "established" equity position
+      //  routinely sits beside an unnamed tier one level up (see docs/
+      //  EQUITY_READ_CONTRACT_AND_SCHEMA.md, coverage gaps), so
+      //  `established` here still could not mean the capital structure
+      //  is fully accounted for.
+      //
+      //  ⚠ ONE equity probe, TWO compartment readings. Preferred and
+      //  Common Equity are read out of the SAME establishmentForProperty
+      //  call (preferred_count / common_count) — never a second query
+      //  against a second domain. See the ROOMS.capital_stack comment
+      //  above for why this is a navigation split, not a backend one.
       let capitalStack = UNBUILT.capital_stack;
       try {
-        const debtFound = await debtSvc.establishmentForProperty(client, propertyId);
-        if (debtFound.established) {
+        const [debtFound, equityFound] = await Promise.all([
+          debtSvc.establishmentForProperty(client, propertyId),
+          equitySvc.establishmentForProperty(client, propertyId),
+        ]);
+        const preferredEstablished = equityFound.preferred_count > 0;
+        const commonEstablished = equityFound.common_count > 0;
+        if (debtFound.established || preferredEstablished || commonEstablished) {
+          const establishedNotes = [
+            debtFound.established ? debtFound.note : null,
+            preferredEstablished
+              ? `${equityFound.preferred_count} governed preferred equity ` +
+                `${equityFound.preferred_count === 1 ? "position" : "positions"}`
+              : null,
+            commonEstablished
+              ? `${equityFound.common_count} governed common equity ` +
+                `${equityFound.common_count === 1 ? "position" : "positions"}`
+              : null,
+          ].filter(Boolean);
+          const missing = [
+            !debtFound.established ? "Debt" : null,
+            !preferredEstablished ? "Preferred Equity" : null,
+            !commonEstablished ? "Common Equity" : null,
+            "Reserves & Escrows",
+          ].filter(Boolean);
           capitalStack = {
             state: "partially_established",
-            summary: `${debtFound.note}. Equity and Reserves & Escrows are not established.`,
-            why: `Spine holds governed debt truth for this property — instrument, terms, ` +
-                 `party roles and balance observations, each with its source document. ` +
-                 `Equity, preferred equity and reserve accounts have no governed terms yet, ` +
-                 `so this room cannot yet state the full capital structure.`,
-            establishes: "Governed equity and preferred-equity terms, and reserve account " +
+            summary: `${establishedNotes.join(". ")}. ${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} not established.`,
+            why: `Spine holds governed capital-stack truth for this property where it has been ` +
+                 `established, each fact with its source document. Some of Debt, Preferred Equity, ` +
+                 `Common Equity and Reserves & Escrows have no governed terms yet, so this room ` +
+                 `cannot yet state the full capital structure.`,
+            establishes: "Governed debt, preferred-equity, common-equity and reserve account " +
                          "positions, each with its own evidence.",
-            byKey: { debt: { established: true, note: debtFound.note } },
+            byKey: {
+              debt: { established: debtFound.established, note: debtFound.note },
+              preferred_equity: {
+                established: preferredEstablished,
+                note: preferredEstablished
+                  ? `${equityFound.preferred_count} governed preferred equity ` +
+                    `${equityFound.preferred_count === 1 ? "position" : "positions"}`
+                  : "No governed preferred equity terms yet",
+              },
+              common_equity: {
+                established: commonEstablished,
+                note: commonEstablished
+                  ? `${equityFound.common_count} governed common equity ` +
+                    `${equityFound.common_count === 1 ? "position" : "positions"}`
+                  : "No governed common equity terms yet",
+              },
+            },
           };
         }
       } catch (e) {
-        console.error("asset-management overview: Debt establishment probe failed", e);
+        console.error("asset-management overview: Capital Stack establishment probe failed", e);
       }
 
       const rooms = ROOMS.map((room) => {
@@ -1455,6 +1520,10 @@ module.exports = function assetManagement(deps) {
   }));
 
   router.use(debtRoutes({
+    pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
+  }));
+
+  router.use(equityRoutes({
     pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
   }));
 

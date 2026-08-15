@@ -50,9 +50,12 @@ later budgets and variances.
 Inside it are **four rooms**:
 
 ```text
-CAPITAL STACK       Debt · Equity · Reserves & Escrows
+CAPITAL STACK       Debt · Preferred Equity · Common Equity · Reserves & Escrows
                     ↑ how this property is capitalised, and what it owes the
-                      people who capitalised it
+                      people who capitalised it. Preferred and Common Equity
+                      are a navigation split over ONE canonical Equity
+                      domain (capital_stack_positions), never two backend
+                      domains — see docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md.
 PROPERTY EXPENSES   Taxes · Insurance · Payroll & Staffing · Utilities ·
                     Contracted Services · Repairs & Maintenance ·
                     Management & Administration · Marketing & Leasing Costs ·
