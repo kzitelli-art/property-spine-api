@@ -310,6 +310,7 @@ async function gatherFacts(db, {
           unresolved: item.unresolved,
           next: item.next,
           attention: item.attention,
+          reference_roles: (item.references || []).map((reference) => reference.role),
         })),
       };
       facts.__refs = standing.references.map((reference) => ({
@@ -474,6 +475,10 @@ function systemPrompt(subject = "work") {
     "6. For Compliance, item standing is not a property-wide legal conclusion.",
     "   An expiration date is not a renewal obligation, and a date-only next event",
     "   is not work that needs action. Preserve those distinctions exactly.",
+    "   If a Compliance item has `source_artifact` in `reference_roles`, the interface",
+    "   will show an Open source control below your answer. When asked to show the",
+    "   document, say to use that source link below. Never say the source cannot be",
+    "   opened or sent from here, and never claim that you personally opened it.",
     "7. For Utilities, a statement is not a provider payment; a resident recovery",
     "   method is not a resident collection; a collection is not a provider payment;",
     "   a provider is not a billing administrator; and a submeter is not a provider",

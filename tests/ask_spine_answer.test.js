@@ -281,19 +281,24 @@ function modelFacts(spy) {
      !JSON.stringify(complianceFacts).includes("canonical-item-id") &&
        !JSON.stringify(complianceFacts).includes("opaque-record-token") &&
        !JSON.stringify(complianceFacts).includes("opaque-source-token"));
-  ok("C10 the answer returns both server-minted Compliance opener classes",
+  ok("C10 the model knows which opener roles the interface will render",
+     complianceFacts.compliance.items[0].reference_roles.sort().join(",") ===
+       "canonical_record,source_artifact");
+  ok("C11 the answer returns both server-minted Compliance opener classes",
      complianceAnswer.references.map((ref) => ref.open.kind).sort().join(",") ===
        "compliance_record,compliance_source" &&
        complianceAnswer.references.every((ref) => !!ref.open.token));
-  ok("C11 grounding names the governed reader and unsolved composition state",
+  ok("C12 grounding names the governed reader and unsolved composition state",
      complianceAnswer.grounded_on.compliance_items === 1 &&
        complianceAnswer.grounded_on.compliance_as_of === "2026-08-13" &&
        complianceAnswer.grounded_on.composition_authorization === "unsolved_cross_domain" &&
        complianceAnswer.grounded_on.open_items === null);
-  ok("C12 the prompt preserves standing, attention and renewal distinctions",
+  ok("C13 the prompt preserves standing, attention and renewal distinctions",
      /item standing is not a property-wide/i.test(complianceSpy.lastRequest.system) &&
        /expiration date is not a renewal obligation/i.test(complianceSpy.lastRequest.system) &&
-       /date-only next event/.test(complianceSpy.lastRequest.system));
+       /date-only next event/.test(complianceSpy.lastRequest.system) &&
+       /use that source link below/i.test(complianceSpy.lastRequest.system) &&
+       /Never say the source cannot be/i.test(complianceSpy.lastRequest.system));
 
   const failedComplianceSpy = {};
   await answerModule.answer(stubDb(), stubAI(failedComplianceSpy), {
@@ -304,7 +309,7 @@ function modelFacts(spy) {
     complianceReader: { async readComplianceStanding() { throw new Error("reader down"); } },
   });
   const failedComplianceFacts = modelFacts(failedComplianceSpy);
-  ok("C13 a failed Compliance read is named, never shaped as not established",
+  ok("C14 a failed Compliance read is named, never shaped as not established",
      failedComplianceFacts.reads_that_failed.join(",") === "compliance" &&
        !("compliance" in failedComplianceFacts));
 
