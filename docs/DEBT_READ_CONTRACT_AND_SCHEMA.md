@@ -410,7 +410,7 @@ cross-collateral / supplemental affirmatively excluded by the Loan Agreement
 
 ```text
 branch from clean main
-→ migration 171
+→ migration 173
 → minimal canonical writers
 → real 4125 establishment
 → position(instrument, as_of)
@@ -423,10 +423,15 @@ NOT   UI · document reader · generic proposal router · covenant engine ·
       reserve module · SOLO · Ask Spine implementation
 ```
 
-### ⚠ Migration 171 cannot merge to `main`
+### ⚠ Migration 173 cannot merge to `main`
 
-Production ledger ceiling is **167**, and `prestart` verifies rather than applies.
+`main` has migrated past this document twice already — Debt's own migration
+was renumbered 168 → 171 → 173 as other lanes (Compliance, Utilities,
+Contracted Services) landed on `main` first. The production ledger's actual
+ceiling is read live at release time, never typed here — see
+`docs/release/DEBT_173_RUN_CARD.md` for the current number and the branching
+logic around it. `prestart` verifies rather than applies.
 **Merging a pending migration to `main` is a failed production deploy** — the trap
-that has already cost time twice. 171 lands on a branch and stays there until a
+that has already cost time twice. 173 lands on a branch and stays there until a
 deliberate release runs, with `EXPECTED_LEDGER_CEILING` read from the ledger
 rather than typed from this document.

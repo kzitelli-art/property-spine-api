@@ -1,9 +1,11 @@
 -- 169_utilities_canonical_truth.sql
 --
--- Owner-reserved after refreshing main at ceiling 167. Debt keeps 168 and
--- must land first; Utilities owns 169; Compliance follows on 170. Numbering
--- this file prepares that order but does not claim Debt has landed or that
--- this migration has passed its required isolated-PostgreSQL release gate.
+-- Owner-reserved after refreshing main at ceiling 167. Utilities owns 169.
+-- Stale as of this correction: Debt did not keep 168 — Compliance landed
+-- there first and Debt was renumbered off it (now 173; see
+-- migrations/173_debt_instruments.sql). Numbering this file prepared an
+-- order that did not hold; it does not claim this migration has passed its
+-- required isolated-PostgreSQL release gate.
 --
 -- The schema records setup before observations:
 --   service -> provider/account/service-point/meter/arrangement -> statement

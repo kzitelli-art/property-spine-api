@@ -46,7 +46,7 @@ const receipt = require("./_run_receipt.js");
 const svc = require("../src/asset/debt_instrument_service.js");
 
 const SCHEMA = "debt_routes_proof";
-const MIGRATION = path.join(__dirname, "..", "migrations", "171_debt_instruments.sql");
+const MIGRATION = path.join(__dirname, "..", "migrations", "173_debt_instruments.sql");
 
 const URL_ = receipt.harnessConnectionString();
 receipt.begin(__filename, { url: URL_, expected: 22 });

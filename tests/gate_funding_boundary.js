@@ -186,7 +186,7 @@ const TAX_FUNDING_TABLES = [
  *  Debt's own funding chain is how debt service is PAID (the loan is on
  *  ACH auto-draft), as distinct from what the instrument ACCRUES.  */
 const DEBT_ECONOMIC = [
-  "migrations/171_debt_instruments.sql",
+  "migrations/173_debt_instruments.sql",
   "src/asset/debt_instrument_service.js",
   "src/asset/debt_position_read.js",
   "src/asset/debt_establishment.js",

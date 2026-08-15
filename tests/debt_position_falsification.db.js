@@ -43,7 +43,7 @@ const svc = require("../src/asset/debt_instrument_service.js");
 const read = require("../src/asset/debt_position_read.js");
 
 const SCHEMA = "debt_position_proof";
-const MIGRATION = path.join(__dirname, "..", "migrations", "171_debt_instruments.sql");
+const MIGRATION = path.join(__dirname, "..", "migrations", "173_debt_instruments.sql");
 const NE = read.NOT_ESTABLISHED;
 
 const url = receipt.harnessConnectionString();
