@@ -2675,6 +2675,11 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   // ONE canonical completion service, exposed for the staff-session door
   // in operator.js — the same no-fork handoff as agentApp._service.
   router._service = {
+    //  The ONE canonical intake. Exposed so a door that cannot live in this
+    //  file — the public site door, which a browser reaches with no secret —
+    //  calls this service rather than building a second one. Same no-fork
+    //  handoff as the entries below it.
+    intakeProspect,
     completeTour: completeTourService,
     bookTourIntoSlot,          // the ONE canonical booking transaction
     readOfferableSlots,        // slots the agent may offer this turn (property tz; null if tz unconfigured)

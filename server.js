@@ -3341,6 +3341,17 @@ app.use("/", __commitmentLedger);
 const __leasingLeads = leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices: __leasingConversion.services, commitmentLedger: __commitmentLedger._service, commBoundary });
 app.use("/", __leasingLeads); // instance captured: its ONE tour-completion service is handed to the operator door below (no fork)
 
+// ── PUBLIC SITE INTAKE — a property's own website, which can hold no secret.
+//    Third door onto the SAME intakeProspect service above (not a second
+//    implementation): /leasing/intake is server-to-server behind a shared
+//    secret, /demo/intake is DEMO_MODE-gated and pinned to the Demo Building,
+//    and this one resolves property AND source server-side from a site token
+//    bound in PUBLIC_SITE_INTAKE_TOKENS. Unset env → the door refuses (503).
+//    Standing this up does NOT make a property's leads textable or reportable:
+//    that still requires the property on PROSPECT_ACTIVATION_PROPERTY_IDS. ──
+const publicSiteIntakeModule = require("./src/leasing/public_site_intake");
+app.use("/", publicSiteIntakeModule({ intakeProspect: __leasingLeads._service.intakeProspect }));
+
 // ── APPLICATION SUBMISSION SLICE (invitation front + shared submit service +
 //    deny + gated approval→signature). Shares the conversion rail's service layer. ──
 const applicationSubmissionModule = require("./src/applications/applicationSubmission");

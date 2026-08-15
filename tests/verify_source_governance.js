@@ -116,6 +116,14 @@ const GATES = [
   //  validation rebuilds come from ONE derivation and cannot drift apart.
   { file: "sms_delivery_status_callback.test.js",
     what: "delivery status: the callback is wired, and the signed URL cannot drift from the checked one" },
+  //  The public site door. It is the one intake a stranger can reach, so every
+  //  refusal is a refusal a stranger can provoke. The load-bearing pair: property
+  //  and source are server-derived from the site token (a website cannot claim
+  //  another property or claim to be Zillow), and consent is explicit only — the
+  //  demo door may treat an operator opening it as consent, a real prospect has
+  //  not agreed to be texted because someone set an env var.
+  { file: "public_site_intake.test.js",
+    what: "public site intake: server-derived property and source, consent never synthesised, guards before the service" },
   //  The technician work-selection decisions. Every one of them is a refusal,
   //  and a refusal that only fires against a provisioned database is a refusal
   //  nobody has seen fire. These run with no credentials.
