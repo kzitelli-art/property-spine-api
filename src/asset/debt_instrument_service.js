@@ -276,8 +276,30 @@ async function loadHistory(db, instrumentId) {
   };
 }
 
+/*  ── ROOM-LEVEL ESTABLISHMENT, FOR THE CAPITAL STACK HOME CARD ────────
+ *  Cheap by construction: one COUNT, never position() and never the
+ *  120-row schedule derivation. The Property Expenses / Compliance rooms
+ *  probe their children the same way — a presence check, not a detail read.
+ *
+ *  This answers ONLY "does this property have a governed debt instrument
+ *  established" — never "is the loan current", never a dollar amount. The
+ *  room's own establishment badge stays capped at partially_established by
+ *  the caller regardless of what this returns, because Equity and Reserves
+ *  & Escrows remain unbuilt — the same discipline Property Expenses uses
+ *  to refuse claiming `established` with seven of nine modules dark.        */
+async function establishmentForProperty(db, propertyId, asOf) {
+  const ids = await listInstrumentsForProperty(db, propertyId, asOf);
+  return {
+    established: ids.length > 0,
+    instrument_count: ids.length,
+    note: ids.length > 0
+      ? `${ids.length} governed debt instrument${ids.length === 1 ? "" : "s"}`
+      : "No governed debt instruments yet",
+  };
+}
+
 module.exports = {
-  establishInstrument, addParty, addCollateral, addTerm,
+  establishInstrument, addParty, addCollateral, addTerm, establishmentForProperty,
   listInstrumentsForProperty,
   addReserveRequirement, recordBalanceObservation, recordPaymentObservation,
   loadHistory,

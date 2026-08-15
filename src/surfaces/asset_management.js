@@ -151,7 +151,7 @@ const ROOMS = Object.freeze([
     //  that started writing escrow would reopen the exact seam the wall
     //  exists to keep shut.
     compartments: [
-      { key: "debt", label: "Debt",
+      { key: "debt", label: "Debt", derived: "debt",
         note: "No governed debt instruments yet" },
       { key: "equity", label: "Equity & Preferred Equity",
         note: "No governed equity or preferred terms yet" },
@@ -310,6 +310,9 @@ module.exports = function assetManagement(deps) {
   //  durable write path belongs to document establishment, not to a
   //  public door per canonical writer. See src/asset/debt_routes.js.
   const debtRoutes = require("../asset/debt_routes.js");
+  //  For the Capital Stack home-card probe ONLY — establishmentForProperty
+  //  is a cheap COUNT, never position() and never the schedule derivation.
+  const debtSvc = require("../asset/debt_instrument_service.js");
   const complianceHttp = require("../asset/compliance_http.js");
   const complianceRead = require("../asset/compliance_read.js");
 
@@ -572,9 +575,34 @@ module.exports = function assetManagement(deps) {
         console.error("asset-management overview: Compliance establishment probe failed", e);
       }
 
+      //  ONE compartment of three is live. capital_stack is capped at
+      //  partially_established for exactly the Property Expenses reason:
+      //  saying `established` would tell an operator that Equity and
+      //  Reserves & Escrows are accounted for too, and they are not.
+      let capitalStack = UNBUILT.capital_stack;
+      try {
+        const debtFound = await debtSvc.establishmentForProperty(client, propertyId);
+        if (debtFound.established) {
+          capitalStack = {
+            state: "partially_established",
+            summary: `${debtFound.note}. Equity and Reserves & Escrows are not established.`,
+            why: `Spine holds governed debt truth for this property — instrument, terms, ` +
+                 `party roles and balance observations, each with its source document. ` +
+                 `Equity, preferred equity and reserve accounts have no governed terms yet, ` +
+                 `so this room cannot yet state the full capital structure.`,
+            establishes: "Governed equity and preferred-equity terms, and reserve account " +
+                         "positions, each with its own evidence.",
+            byKey: { debt: { established: true, note: debtFound.note } },
+          };
+        }
+      } catch (e) {
+        console.error("asset-management overview: Debt establishment probe failed", e);
+      }
+
       const rooms = ROOMS.map((room) => {
         const found = room.key === "property_expenses" ? expenses
-          : room.key === "compliance" ? compliance : UNBUILT[room.key];
+          : room.key === "compliance" ? compliance
+          : room.key === "capital_stack" ? capitalStack : UNBUILT[room.key];
 
         //  A compartment marked `derived` names the module that answers
         //  for it; every other compartment is honestly not established and
