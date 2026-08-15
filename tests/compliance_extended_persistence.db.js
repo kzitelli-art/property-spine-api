@@ -11,7 +11,7 @@ const { createComplianceFactWriter } = require("../src/asset/compliance_fact_per
 const reads = require("../src/asset/compliance_read.js");
 
 const URL = receipt.harnessConnectionString();
-const EXPECTED = 33;
+const EXPECTED = 34;
 let passed = 0;
 let failed = 0;
 function ok(label, condition, detail) {
@@ -178,6 +178,8 @@ async function main() {
       mintReference,
     });
     let findingStanding = standing.items.find((item) => item.entity.record_id === findingReceipt.record.id);
+    ok("finding label names the authority reference",
+      findingStanding.entity.label === "Code Violation #71334222");
     ok("payment cannot move finding standing", findingStanding.standing.code === "open");
     ok("payment is not decisive evidence for open standing",
       !findingStanding.evidence.some((entry) => entry.role === "payment"));
