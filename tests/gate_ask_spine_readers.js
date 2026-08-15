@@ -191,6 +191,35 @@ const REGISTRY = {
             "draft) and entitlement applied before model context, after §40.8 " +
             "cross-domain composition authorization is governed.",
   },
+  //  ⚠ EQUITY DECLARED ITSELF, same as Debt did — the gate went red the
+  //  moment equity_position_read.js landed. `pending` is honest, not a
+  //  weakening: Equity Build 1 stops at the canonical read, drafted
+  //  unattended from a 15-deal portfolio survey and not yet reviewed by
+  //  an owner (see docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md's own closing
+  //  section). Equity cannot claim domain-level done until this reads
+  //  `registered` AND the wall declaration itself has had its review
+  //  pass. Do not wire Ask Spine early merely to improve this count.
+  equity: {
+    state: "pending",
+    owner: "asset management",
+    //  Matches docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md and the header of
+    //  equity_routes.js: retrieval claimed narrowly, comparison and
+    //  causal explanation explicitly not. Equity claims LESS than Debt
+    //  did at the same build stage on purpose — the specimen property
+    //  itself shows a well-governed preferred position beside a
+    //  completely undocumented common tier, and claiming broad
+    //  retrieval would misrepresent that.
+    capability_classes: readerCapabilities.retrievalOnly(
+      "canonical Equity standing — position(property, as_of) over governed history, " +
+      "including recorded Exposure and open conflicts, never a synthesized cap table"),
+    composition_authorization: "unsolved_cross_domain",
+    clears: "Ask Spine gathers the governed Equity standing projection with the " +
+            "Equity truth walls preserved (E1 governing schedule ≠ actual holders, " +
+            "E2 tracker ≠ governing document, E3 accrued ≠ booked, E10 a redacted " +
+            "schedule is Exposure never a guess) and entitlement applied before " +
+            "model context, after §40.8 cross-domain composition authorization is " +
+            "governed.",
+  },
 };
 
 /*  ══ IS A DOMAIN ACTUALLY GATHERED? ═════════════════════════════════

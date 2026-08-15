@@ -209,7 +209,38 @@ const DEBT_FUNDING_TABLES = [
   "debt_payment_arrangements",
 ];
 
+//  ⚠ E5 — a member loan is DEBT, even when funded by equity holders.
+//  There is no equity_funding module: this domain has no analogue to
+//  "how debt service is paid" because nothing here is ever paid in the
+//  sense debt service, taxes or insurance premiums are. A capital call
+//  funding wire is Equity's own economic fact, not a separate funding
+//  chain — so funding/fundingTables stay empty rather than pointing at
+//  a module that would blur exactly the line E5 exists to hold.
+const EQUITY_ECONOMIC = [
+  "migrations/174_equity_positions.sql",
+  "src/asset/equity_position_service.js",
+  "src/asset/equity_position_read.js",
+];
+const EQUITY_ECONOMIC_TABLES = [
+  "equity_capital_entities",
+  "equity_positions",
+  "equity_position_pledges",
+  "equity_preferred_terms",
+  "equity_contribution_claims",
+  "equity_conflicts",
+  "equity_exposure",
+];
+
 const DOMAINS = [
+  { name: "equity",
+    economic: EQUITY_ECONOMIC, funding: [],
+    economicTables: EQUITY_ECONOMIC_TABLES, fundingTables: [],
+    //  What a position accrues (E3) must derive from its governed dated
+    //  terms — and Build 1 does not compute an accrual at all, so this
+    //  rule asserts the read file's own vocabulary rather than a
+    //  derivation, mirroring Debt's accrualRule shape.
+    accrualFile: "src/asset/equity_position_read.js",
+    accrualRule: /effective_from|source_authority|position_kind/ },
   { name: "insurance",
     economic: INSURANCE_ECONOMIC, funding: INSURANCE_FUNDING,
     economicTables: INSURANCE_ECONOMIC_TABLES, fundingTables: INSURANCE_FUNDING_TABLES,
