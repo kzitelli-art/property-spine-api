@@ -31,6 +31,24 @@ function normalized(value) {
     : String(value).trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+function entityLabel(complianceType, credentialNumber, findingReference) {
+  const labels = {
+    rental_license: "Rental License",
+    rental_suitability_certificate: "Certificate of Rental Suitability",
+    elevator_certificate_of_operation: "Elevator Certificate of Operation",
+    facade_inspection: "Facade Inspection",
+    code_violation: "Code Violation",
+    lead_certification_requirement: "Lead Certification Requirement",
+  };
+  const base = labels[complianceType] || complianceType
+    .split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
+  const findingNumber = findingReference
+    ? String(findingReference).replace(/^CVN\s*#?\s*/i, "") : null;
+  const suffix = credentialNumber ? ` #${credentialNumber}`
+    : (findingNumber ? ` #${findingNumber}` : "");
+  return `${base}${suffix}`;
+}
+
 function factValue(row) {
   if (row.fact_type === "credential_period") {
     return {
@@ -159,19 +177,16 @@ async function loadSpecs(client, { property_id: propertyId, item_id: itemId, min
         dateValue(right.credential_effective_through)
           .localeCompare(dateValue(left.credential_effective_through)) ||
         timestampValue(right.established_at).localeCompare(timestampValue(left.established_at)))[0] || null;
-    const suffix = identityRow && identityRow.credential_external_number
-      ? ` #${identityRow.credential_external_number}` : "";
-    const labels = {
-      rental_license: "Rental License",
-      rental_suitability_certificate: "Certificate of Rental Suitability",
-      elevator_certificate_of_operation: "Elevator Certificate of Operation",
-      facade_inspection: "Facade Inspection",
-      code_violation: "Code Violation",
-      lead_certification_requirement: "Lead Certification Requirement",
-    };
-    const baseLabel = labels[item.compliance_type] || item.compliance_type
-      .split("_").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
-    const label = `${baseLabel}${suffix}`;
+    const findingIdentityRow = rows
+      .filter((row) => row.fact_type === "finding_issued" && !supersededIds.has(String(row.id)))
+      .sort((left, right) =>
+        dateValue(right.finding_issued_on).localeCompare(dateValue(left.finding_issued_on)) ||
+        timestampValue(right.established_at).localeCompare(timestampValue(left.established_at)))[0] || null;
+    const label = entityLabel(
+      item.compliance_type,
+      identityRow && identityRow.credential_external_number,
+      findingIdentityRow && findingIdentityRow.finding_external_reference
+    );
     const recordToken = await mintReference({
       role: "canonical_record", property_id: propertyId, item_id: item.id, label,
     });
@@ -303,6 +318,7 @@ async function proposeExistingItemRelationship(client, input = {}) {
 
 module.exports = {
   COVERAGE_UNKNOWN,
+  entityLabel,
   readComplianceStanding,
   readComplianceDetail,
   readComplianceEstablishment,
