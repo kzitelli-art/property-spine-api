@@ -142,9 +142,25 @@
       "locator": "Mortgage loan statement, amount-due detail, Tax line"
     },
     {
-      "row": { "reserve_kind": "insurance_imposition", "amount_cents": 301907, "amount_basis": "monthly", "effective_from": "2020-08-01" },
+      "row": { "reserve_kind": "insurance_imposition", "amount_cents": 301907, "amount_basis": "monthly",
+               "effective_from": "2020-08-01", "effective_to": "2025-11-30" },
       "source_sha256": "FILL-with-sha256-of-retained-Lument-statement-2025-08-01",
-      "locator": "Mortgage loan statement, amount-due detail, Insurance line"
+      "locator": "Mortgage loan statement, amount-due detail, Insurance line",
+      "_note": "Confirmed unchanged at $3,019.07 through the 2025-11-01 statement; superseded by the row below."
+    },
+    {
+      "row": { "reserve_kind": "insurance_imposition", "amount_cents": 466649, "amount_basis": "monthly",
+               "effective_from": "2025-12-01", "effective_to": "2026-02-28" },
+      "source_sha256": "FILL-with-sha256-of-retained-Lument-statement-2025-12-01",
+      "locator": "Mortgage loan statement, amount-due detail, Insurance line",
+      "_note": "First annual escrow reanalysis after the 7/28/2025 annual premium payment. First evidenced on the 2025-12-01 statement (jumped from $3,019.07); still in force on the 2026-01-01 statement. No 2026-02-01 statement retained yet, so effective_to is bounded by the next confirmed statement (2026-03-01), not by direct evidence of a February change."
+    },
+    {
+      "row": { "reserve_kind": "insurance_imposition", "amount_cents": 361429, "amount_basis": "monthly",
+               "effective_from": "2026-03-01" },
+      "source_sha256": "FILL-with-sha256-of-retained-Lument-statement-2026-03-01",
+      "locator": "Mortgage loan statement, amount-due detail, Insurance line",
+      "_note": "Second reanalysis, evidenced on the 2026-03-01 statement; confirmed unchanged through the 2026-08-01 statement (the property's current position() as_of today reads this row)."
     },
     {
       "row": { "reserve_kind": "replacement", "amount_cents": 176300, "amount_basis": "monthly", "effective_from": "2020-08-01" },
