@@ -49,6 +49,14 @@ const workOrderRead = require("../surfaces/work_order_status_read");
 const complianceRead = require("../asset/compliance_read");
 const utilityAskRead = require("../asset/utility_ask_detail.js");
 const contractedServiceAskRead = require("../asset/contracted_service_ask_detail.js");
+//  ⚠ THE SAME GOVERNED READER, NOT A NEW ONE. No equity_ask_detail.js
+//  exists and none is being added here — Ask Spine reads exactly the
+//  canonical loadHistory() + position() + standingProjection() the
+//  Capital Stack UI reads, the same way compliance is registered below.
+//  "One conversational architecture" (CLAUDE.md) means this file is the
+//  only place a second Equity reader could quietly appear, so it does not.
+const equityPositionService = require("../asset/equity_position_service.js");
+const equityPositionRead = require("../asset/equity_position_read.js");
 
 const MODEL = process.env.ASK_SPINE_MODEL || "claude-opus-5";
 /*  THINKING AND THE ANSWER SHARE THIS CEILING. On this model family
@@ -117,12 +125,15 @@ const DECISION_SCHEMA = {
  *  Widening it is a product decision with its own facts to gather. It is
  *  not something a prompt edit should be able to do quietly.  */
 const SUPPORTED_SCOPE =
-  "the current open work and governed Compliance, Utility, or Contracted Services records at this property — " +
+  "the current open work and governed Compliance, Utility, Contracted Services, or " +
+  "Preferred/Common Equity records at this property — " +
   "what work is open and who has it, or whether a recorded Compliance item is " +
   "current and why, or this property's governed Utility setup, providers, account and meter map, " +
   "responsibility and recovery arrangement, statement history, known gaps, and " +
   "same-account statement comparisons, or governed service providers, scope, price, term, " +
-  "notice decisions, retained evidence, financial observations, and known contract gaps";
+  "notice decisions, retained evidence, financial observations, and known contract gaps, or " +
+  "who holds equity or preferred equity in this property, on what terms, what has been " +
+  "contributed, and what remains unresolved";
 
 //  The refusal is OWNED BY THE SERVER, not written by the model. A model
 //  that composes its own decline can talk itself into being helpful, and
@@ -131,7 +142,7 @@ const SUPPORTED_SCOPE =
 const OUT_OF_SCOPE_ANSWER =
   "I can only answer about " + SUPPORTED_SCOPE + ". " +
   "Ask me what needs attention, about a recorded Compliance item, how a Utility works here, " +
-  "or what governs a contracted service.";
+  "what governs a contracted service, or who holds equity here.";
 
 const COMPLIANCE_TERMS =
   /\b(compliance|licen[cs]e|registration|inspection|certificate|violation|cure|renewal|expire[sd]?|expiration)\b/i;
@@ -139,6 +150,11 @@ const UTILITY_TERMS =
   /\b(utilit(?:y|ies)|electric(?:ity)?|gas|water|sewer|meter(?:ed|s|ing)?|submeter(?:ed|s|ing)?|provider account|utility account|account ending|peco|bills? residents)\b/i;
 const CONTRACTED_SERVICE_TERMS =
   /\b(contracted services?|service contract|service agreement|vendor agreement|contractor|janitorial|cleaning (?:service|company|vendor|provider)|contracted (?:cleaning )?provider|elevator (?:service|maintenance)|pest control|exterminat(?:or|ion)|trash removal|waste removal|snow removal|landscaping service|security service|service provider)\b/i;
+//  ⚠ Deliberately scoped to capital-stack vocabulary, not "equity" alone —
+//  a bare "equity" collides with fair-housing/legal usage far more often
+//  than it means capital structure in an operator's question.
+const EQUITY_TERMS =
+  /\b(preferred equity|common equity|equity (?:position|holder|stake)|equity in this property|cap(?:ital)? stack|capital structure|cap table|ownership (?:percent(?:age)?|stake|interest)|preferred return|minimum dividend|side letter|capital contribution|membership interest|capital-stack)\b/i;
 const EXPLICIT_WORK_TERMS =
   /\b(work[ -]?order|repair|maintenance|technician|task|job|assigned|assignment)\b/i;
 
@@ -147,13 +163,15 @@ function questionSubject(question) {
   const compliance = COMPLIANCE_TERMS.test(text);
   const utility = UTILITY_TERMS.test(text);
   const contractedService = CONTRACTED_SERVICE_TERMS.test(text);
+  const equity = EQUITY_TERMS.test(text);
   const work = EXPLICIT_WORK_TERMS.test(text) && !contractedService;
-  if ([compliance, utility, contractedService, work].filter(Boolean).length > 1) {
+  if ([compliance, utility, contractedService, equity, work].filter(Boolean).length > 1) {
     return "composition_unavailable";
   }
   if (compliance) return "compliance";
   if (utility) return "utility";
   if (contractedService) return "contracted_service";
+  if (equity) return "equity";
   return "work";
 }
 
@@ -218,6 +236,10 @@ async function gatherFacts(db, {
   property_id, allowed_modules, subject = "work", mintComplianceReference,
   complianceReader = complianceRead, utilityReader = utilityAskRead,
   contractedServiceReader = contractedServiceAskRead, question = "",
+  //  Injectable for tests, same reasoning as the other readers above —
+  //  the SAME canonical service/read pair the Capital Stack UI calls,
+  //  never a second reader built for Ask Spine.
+  equityService = equityPositionService, equityRead = equityPositionRead,
 }) {
   const facts = {
     property_id,
@@ -382,6 +404,42 @@ async function gatherFacts(db, {
     }
   }
 
+  //  ⚠ THE SAME GOVERNED READER, GATHERED THE SAME WAY THE UI GATHERS IT —
+  //  loadHistory() then position()/standingProjection(), never a second
+  //  derivation. NOT_ESTABLISHED and a read failure stay two different
+  //  facts here exactly as they do on screen (§40.7): an empty property
+  //  reads facts.equity.standing.truth_state === NOT_ESTABLISHED; a
+  //  broken read reads facts.equity.read_state === READ_FAILED. Neither
+  //  is ever collapsed into the other.
+  if (subject === "equity" && (allowed_modules || []).includes("asset_management")) {
+    try {
+      const history = await equityService.loadHistory(db, property_id);
+      if (!history.positions.length) {
+        facts.equity = {
+          read_state: "OK",
+          as_of: new Date().toISOString().slice(0, 10),
+          positions: [],
+          standing: { truth_state: equityRead.NOT_ESTABLISHED,
+            why: "no capital-stack position is established for this property in Spine" },
+        };
+      } else {
+        const asOf = new Date().toISOString().slice(0, 10);
+        const reading = equityRead.position(history, asOf);
+        facts.equity = withoutDatabaseIds({
+          read_state: "OK",
+          as_of: reading.as_of,
+          standing: equityRead.standingProjection(reading),
+          positions: reading.positions,
+          conflicts: reading.conflicts,
+          coverage_gaps: reading.coverage_gaps,
+        });
+      }
+    } catch (e) {
+      facts.equity = { read_state: "READ_FAILED" };
+      failures.push("equity");
+    }
+  }
+
   facts.reads_that_failed = failures;
   return facts;
 }
@@ -495,6 +553,20 @@ function systemPrompt(subject = "work") {
     "10. Contracted Services comparison and causal explanation are unavailable unless",
     "   the governed read explicitly establishes that capability. Never infer performance,",
     "   price competitiveness, savings, or payment from the retained evidence.",
+    "11. For Equity, a position's accrued preferred balance is NEVER computed — it is",
+    "   always not established, even when a rate and a contribution amount are both",
+    "   known. Do not multiply a rate by time or by an amount to produce one.",
+    "12. For Equity, a Minimum-Dividend-shaped schedule (a stepped rate observed from a",
+    "   secondary source) is a different fact from the position's governed preferred",
+    "   return. If its relationship to that return is not established, say exactly that —",
+    "   never guess additive, offset, or any other relationship from the schedule's shape.",
+    "13. For Equity, an override or side letter that is recorded but not executed is a",
+    "   real fact you may mention, but it does not describe the position's current",
+    "   settled terms. Say it is recorded and not yet applied; never describe it as",
+    "   though it were in effect.",
+    "14. For Equity, an unnamed holder or an unrecorded ownership percentage is a",
+    "   coverage gap, not a property fact you may fill in. Never guess a holder's",
+    "   identity or a missing percentage, and never imply a cap table is complete.",
     "",
     "HOW TO SOUND:",
     "· Talk like a competent colleague, not a database. Short sentences.",
@@ -519,7 +591,7 @@ function systemPrompt(subject = "work") {
  */
 async function answer(db, anthropic, {
   property_id, allowed_modules, question, mintComplianceReference, complianceReader,
-  utilityReader, contractedServiceReader,
+  utilityReader, contractedServiceReader, equityService, equityRead,
 }) {
   if (!property_id) throw new Error("ask_spine.answer requires a server-derived property_id");
 
@@ -544,10 +616,11 @@ async function answer(db, anthropic, {
     };
   }
   const modules = Array.isArray(allowed_modules) ? allowed_modules.map(String) : [];
-  if (["compliance", "utility", "contracted_service"].includes(subject)
+  if (["compliance", "utility", "contracted_service", "equity"].includes(subject)
       && !modules.includes("asset_management")) {
     const label = subject === "compliance" ? "Compliance"
-      : subject === "utility" ? "Utilities" : "Contracted Services";
+      : subject === "utility" ? "Utilities"
+      : subject === "equity" ? "Preferred Equity or Common Equity" : "Contracted Services";
     return {
       outcome: "not_authorized",
       answer: `${label} is not available in your current access for this property.`,
@@ -568,7 +641,7 @@ async function answer(db, anthropic, {
   const facts = await gatherFacts(db, {
     property_id, allowed_modules: modules, subject,
     mintComplianceReference, complianceReader, utilityReader,
-    contractedServiceReader, question: q,
+    contractedServiceReader, equityService, equityRead, question: q,
   });
 
   let text = "";
@@ -667,6 +740,10 @@ async function answer(db, anthropic, {
         ? facts.contracted_service.read_state : null,
       contracted_service_detail_mode: facts.contracted_service
         ? facts.contracted_service.detail_mode : null,
+      equity_position_count: facts.equity ? facts.equity.positions.length : null,
+      equity_read_state: facts.equity ? facts.equity.read_state : null,
+      equity_coverage_gap_count: facts.equity && facts.equity.coverage_gaps
+        ? facts.equity.coverage_gaps.length : null,
       reads_that_failed: facts.reads_that_failed,
       gathered_at: facts.gathered_at,
     },

@@ -191,21 +191,17 @@ const REGISTRY = {
             "draft) and entitlement applied before model context, after §40.8 " +
             "cross-domain composition authorization is governed.",
   },
-  //  ⚠ EQUITY DECLARED ITSELF, same as Debt did — the gate went red the
-  //  moment equity_position_read.js landed. `pending` is honest, not a
-  //  weakening: Equity Build 1 stops at the canonical read, drafted
-  //  against a 15-deal portfolio survey and taken through FOUR owner
-  //  correction rounds before its five structural rulings froze (see
-  //  docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md). One piece stays
-  //  deliberately open even after freezing — MSC's Minimum Dividend
-  //  relationship to its preferred return reads NOT_ESTABLISHED until
-  //  the real governing clause (§1.49) is read, never a survey
-  //  paraphrase. Equity cannot claim domain-level done until this reads
-  //  `registered` AND a route/UI exist — neither is built yet. Do not
-  //  wire Ask Spine early merely to improve this count.
+  //  ⚠ EQUITY IS NOW REGISTERED. The canonical read, the route, and the
+  //  Capital Stack UI (split into Preferred Equity / Common Equity
+  //  compartments) are live; Ask Spine gathers the SAME
+  //  loadHistory()/position()/standingProjection() call — see
+  //  src/agent/ask_spine_answer.js's "equity" subject. No new reader was
+  //  built for this; "one conversational architecture" (CLAUDE.md) means
+  //  Ask Spine is the same governed pipe the screen uses, never a second
+  //  one. Composition authorization is still unsolved cross-domain, same
+  //  as every other registered domain.
   equity: {
-    state: "pending",
-    owner: "asset management",
+    state: "registered",
     //  Matches docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md: retrieval
     //  claimed narrowly, comparison and causal explanation explicitly
     //  not. Equity claims LESS than Debt did at the same build stage on
@@ -217,13 +213,6 @@ const REGISTRY = {
       "canonical Equity standing — position(property, as_of) over governed history, " +
       "including derived coverage gaps and open conflicts, never a synthesized cap table"),
     composition_authorization: "unsolved_cross_domain",
-    clears: "Ask Spine gathers the governed Equity standing projection with the " +
-            "Equity truth walls preserved (E1 governing schedule ≠ actual holders, " +
-            "E2 tracker ≠ governing document, E3 accrued ≠ booked, a redacted or " +
-            "unnamed tier is a DERIVED coverage gap never a guess, an unexecuted " +
-            "side-letter override is surfaced but never applied) and entitlement " +
-            "applied before model context, after §40.8 cross-domain composition " +
-            "authorization is governed.",
   },
 };
 

@@ -475,12 +475,17 @@ NOT   the full recursive N-tier entity graph as a generalized structure —
       the chain is flat, position-by-position, not a graph database.
 NOT   waterfall distribution CALCULATOR (recording the terms is in scope;
       computing what a capital event pays out is not) · document reader ·
-      reconciliation engine for E4/E6/E7's conflicts · Ask Spine gathering
-      (registry entry exists; see docs/THREAD_HANDOFF.md) · SOLO
+      reconciliation engine for E4/E6/E7's conflicts · SOLO
 NOT   real establishment for any property — the schema, route and UI are
       live; establishing real data still requires real retained
       governing documents, which do not exist in production yet
 ```
+
+Ask Spine gathering IS built — registered in `src/agent/ask_spine_answer.js`,
+reading the SAME `loadHistory()`/`position()`/`standingProjection()` the
+Capital Stack UI reads, never a second reader. See `tests/gate_ask_spine_
+readers.js`'s `equity` entry (`state: "registered"`) and `tests/equity_ask_
+spine.test.js`.
 
 ---
 
@@ -504,8 +509,7 @@ branch from clean main
 ```text
 NOT   distribution waterfall calculation · document reader · reconciliation
       of any E4/E6/E7 conflict · covenant-style compliance engine ·
-      generalized entity graph · SOLO · Ask Spine gathering ·
-      real establishment for any property
+      generalized entity graph · SOLO · real establishment for any property
 ```
 
 ### This document is now under Round 4's freeze — with one exception
