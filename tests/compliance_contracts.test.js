@@ -3,8 +3,9 @@
 
 const contracts = require("../src/asset/compliance_contracts.js");
 const reader = require("../src/asset/compliance_document_read.js");
+const complianceRead = require("../src/asset/compliance_read.js");
 
-const EXPECTED_ASSERTIONS = 39;
+const EXPECTED_ASSERTIONS = 42;
 let pass = 0, fail = 0;
 function ok(label, condition, detail) {
   if (condition) { pass++; console.log("  ok    " + label); }
@@ -17,6 +18,13 @@ function rejects(label, fn) {
 }
 
 console.log("COMPLIANCE CONTRACTS - exact wires and implementation state");
+
+ok("credential labels name their authority identifier",
+  complianceRead.entityLabel("rental_license", "922616", null) === "Rental License #922616");
+ok("finding labels name their authority reference",
+  complianceRead.entityLabel("code_violation", null, "71334222") === "Code Violation #71334222");
+ok("finding labels do not repeat a CVN prefix",
+  complianceRead.entityLabel("code_violation", null, "CVN 71334222") === "Code Violation #71334222");
 
 ok("proposal contract is implemented", contracts.WIRE_CONTRACTS.proposal.implementation === "implemented");
 ok("intake contract is implemented", contracts.WIRE_CONTRACTS.intake.implementation === "implemented");

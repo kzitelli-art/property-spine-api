@@ -129,6 +129,13 @@ const REGISTRY = {
     composition_authorization: "unsolved_cross_domain",
     governed_detail: true,
   },
+  contracted_service: {
+    state: "registered",
+    capability_classes: readerCapabilities.retrievalOnly(
+      "canonical Contracted Services standing, evidence, and recorded derivation basis"),
+    composition_authorization: "unsolved_cross_domain",
+    governed_detail: true,
+  },
   insurance: {
     state: "pending",
     owner: "asset management",
