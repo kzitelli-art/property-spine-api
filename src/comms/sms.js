@@ -20,6 +20,7 @@
 //    TWILIO_MESSAGING_SERVICE_SID  optional — the A2P campaign's service;
 //                                  pass it so carriers see registered traffic
 //    APP_BASE_URL                  required for webhook signature validation
+//                                  AND for delivery-status tracking
 //                                  (Render sits behind a proxy; the signed
 //                                  URL must be the PUBLIC https URL)
 // ════════════════════════════════════════════════════════════════════
@@ -53,6 +54,50 @@ function normalizeMime(v) {
   return t || null;
 }
 
+// ── THE DELIVERY-STATUS DOOR ────────────────────────────────────────
+//  Where Twilio reports what happened to a message we sent. The router
+//  that owns it is mounted at "/" in server.js, so this IS the whole
+//  path, and it carries NO query string: the signature covers the URL
+//  exactly as Twilio received it, and validation rebuilds that URL from
+//  `origin + req.originalUrl`.
+const STATUS_CALLBACK_PATH = "/interactions/provider-event";
+
+// ── THE SIGNED-URL ORIGIN, DERIVED ONCE ─────────────────────────────
+//  Two callers need this string and they must agree exactly:
+//
+//    sendSms          hands Twilio the URL to call back
+//    validateWebhook  rebuilds the URL Twilio signed, to check it
+//
+//  Twilio signs the URL it was GIVEN. If the send side and the validate
+//  side derive that origin separately they can drift, and the drift is
+//  silent in the worst possible direction: every delivery receipt fails
+//  signature validation, returns a correct-looking 403, and the message
+//  sits at its creation status forever. The operator then reads `queued`
+//  for a message that was delivered — a FALSE status, not a missing one,
+//  which is what §5 forbids. One derivation, both callers.
+//
+//  Refuses rather than guesses, for the reason recorded in validateWebhook:
+//  reconstructing http:// where Twilio signed https:// fails every message
+//  while a negative control passes for entirely the wrong reason.
+function resolveSignedOrigin(purpose) {
+  const configured = process.env.APP_BASE_URL;
+  if (!configured) {
+    console.error(`sms: APP_BASE_URL is not set — ${purpose} refuses.`);
+    return null;
+  }
+  try {
+    const u = new URL(configured);
+    if (u.protocol !== "https:") {
+      console.error(`sms: APP_BASE_URL must be an https origin — ${purpose} refuses.`);
+      return null;
+    }
+  } catch (e) {
+    console.error(`sms: APP_BASE_URL is malformed — ${purpose} refuses.`);
+    return null;
+  }
+  return configured.replace(/\/+$/, "");
+}
+
 module.exports = function smsTransport(opts) {
   //  Injected ONLY so the media path can be proven without a socket. It
   //  defaults to the real https.request, so production has exactly one
@@ -77,8 +122,28 @@ module.exports = function smsTransport(opts) {
         const params = { to, body: String(body).slice(0, 1500) };
         if (messagingServiceSid) params.messagingServiceSid = messagingServiceSid;
         if (from) params.from = from; // pins the property line even under a messaging service
+
+        //  ── DELIVERY TRACKING ─────────────────────────────────────
+        //  Without a statusCallback, Twilio has nowhere to report, so the
+        //  row keeps the status `messages.create` returned at creation —
+        //  `queued` — for the rest of its life. The receiving door has
+        //  always existed and always worked; nothing was ever pointed at
+        //  it. A delivered message reading `queued` is a false status,
+        //  and intent is not delivery (§29).
+        const origin = resolveSignedOrigin("delivery-status tracking");
+        if (origin) params.statusCallback = origin + STATUS_CALLBACK_PATH;
+
         const m = await client.messages.create(params);
-        return { sent: true, sid: m.sid, status: m.status };
+        return {
+          sent: true,
+          sid: m.sid,
+          status: m.status,
+          //  Whether `status` can ever move. Unset APP_BASE_URL makes the
+          //  creation status TERMINAL, and a surface waiting for an update
+          //  that cannot arrive will render a stale state as a live one.
+          //  Say which of the two this is rather than leaving it inferred.
+          delivery_tracking: origin ? "enabled" : "unavailable_no_app_base_url",
+        };
       } catch (e) {
         console.error("sms send failed:", e.message);
         return { sent: false, reason: "send_failed", error: e.message };
@@ -231,30 +296,18 @@ module.exports = function smsTransport(opts) {
       if (!twilio || !authToken) return false;
       const signature = req.headers["x-twilio-signature"];
       if (!signature) return false;
-      //  APP_BASE_URL IS REQUIRED, AND NOW ENFORCED.
+      //  APP_BASE_URL IS REQUIRED, AND ENFORCED.
       //  The header above has always said so. The code used to fall back
       //  to `${req.protocol}://${req.get("host")}`, which behind a proxy
       //  reconstructs http:// where Twilio signed https:// — every message
       //  then fails validation with a correct-looking 403, and a negative
       //  control passes for entirely the wrong reason. Guessing the signed
       //  URL is worse than refusing to guess.
-      const configured = process.env.APP_BASE_URL;
-      if (!configured) {
-        console.error("sms: APP_BASE_URL is not set — webhook validation refuses.");
-        return false;
-      }
-      let base;
-      try {
-        const u = new URL(configured);
-        if (u.protocol !== "https:") {
-          console.error("sms: APP_BASE_URL must be an https origin — webhook validation refuses.");
-          return false;
-        }
-        base = configured.replace(/\/+$/, "");
-      } catch (e) {
-        console.error("sms: APP_BASE_URL is malformed — webhook validation refuses.");
-        return false;
-      }
+      //
+      //  Derived by the SAME function that builds the statusCallback we
+      //  hand Twilio, so the URL signed and the URL checked cannot drift.
+      const base = resolveSignedOrigin("webhook validation");
+      if (!base) return false;
       const url = base + req.originalUrl;
       try {
         return twilio.validateRequest(authToken, signature, url, req.body || {});
@@ -274,3 +327,5 @@ module.exports.MEDIA_MAX_REDIRECTS = MEDIA_MAX_REDIRECTS;
 module.exports.MEDIA_TIMEOUT_MS = MEDIA_TIMEOUT_MS;
 module.exports.MEDIA_ALLOWED_MIME = MEDIA_ALLOWED_MIME.slice();
 module.exports.normalizeMime = normalizeMime;
+module.exports.STATUS_CALLBACK_PATH = STATUS_CALLBACK_PATH;
+module.exports.resolveSignedOrigin = resolveSignedOrigin;

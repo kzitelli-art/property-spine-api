@@ -182,8 +182,13 @@ function breakIt(pattern, replacement, label) {
     //  url. The proof is not that it returns true — a fake signature still
     //  fails — but that it stops REFUSING on the missing configuration and
     //  proceeds to judge a URL nobody signed.
+    //  RETARGETED 2026-08-15. The refusal used to be inlined here. It now
+    //  lives in resolveSignedOrigin(), shared with the sendSms statusCallback
+    //  so the URL Twilio signs and the URL this rebuilds cannot drift apart.
+    //  The falsification is unchanged in meaning: replace the refusal with a
+    //  guess and prove the guess happens.
     const broken = breakIt(
-      /const configured = process\.env\.APP_BASE_URL;\n      if \(!configured\) \{[\s\S]*?const url = base \+ req\.originalUrl;/,
+      /const base = resolveSignedOrigin\("webhook validation"\);\n      if \(!base\) return false;\n      const url = base \+ req\.originalUrl;/,
       `const base = process.env.APP_BASE_URL
         ? process.env.APP_BASE_URL.replace(/\\/+$/, "")
         : \`\${req.protocol}://\${req.get("host")}\`;

@@ -109,6 +109,13 @@ const GATES = [
     what: "intent seam: one implementation, transport-independent, behaviour pinned" },
   { file: "conversation_clarification_and_receipt.test.js",
     what: "clarification + receipt seams: wording unchanged, operating ≠ delivery" },
+  //  Delivery status. Twilio delivered the message and Spine showed `queued`,
+  //  because nothing was ever pointed at the callback door that had always
+  //  worked. A false status, not a missing one. The load-bearing assertion is
+  //  not "a callback is set" — it is that the URL Twilio signs and the URL
+  //  validation rebuilds come from ONE derivation and cannot drift apart.
+  { file: "sms_delivery_status_callback.test.js",
+    what: "delivery status: the callback is wired, and the signed URL cannot drift from the checked one" },
   //  The technician work-selection decisions. Every one of them is a refusal,
   //  and a refusal that only fires against a provisioned database is a refusal
   //  nobody has seen fire. These run with no credentials.
