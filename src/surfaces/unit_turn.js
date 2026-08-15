@@ -18,10 +18,13 @@ module.exports = function unitTurn(deps) {
   const router = express.Router();
   const staffSessions = require("../identity/staff_session_service");
 
-  const { pool, unitTurnRead, workAcceptanceService, unitTriageService } = deps || {};
+  const { pool, unitTurnRead, rankTurnPriority } = deps || {};
   if (!pool) throw new Error("unit_turn module requires a pool");
   if (!unitTurnRead || typeof unitTurnRead.readUnitTurn !== "function") {
     throw new Error("unit_turn module requires unitTurnRead (build it with makeUnitTurnRead)");
+  }
+  if (typeof rankTurnPriority !== "function") {
+    throw new Error("unit_turn module requires the shared rankTurnPriority read");
   }
 
   async function requireOperator(req, res, next) {
@@ -43,12 +46,16 @@ module.exports = function unitTurn(deps) {
   // ── THE ONE PAGE ──────────────────────────────────────────────────
   router.get("/operator/units/:unitId/turn", ...gate, async (req, res) => {
     try {
+      const ranked = await rankTurnPriority(pool, req.operator.property_id);
+      const turnPriority = (ranked.turns || [])
+        .find((t) => String(t.unit_id) === String(req.params.unitId)) || null;
       const out = await unitTurnRead.readUnitTurn(pool, {
         property_id: req.operator.property_id,
         unit_id: req.params.unitId,
         user_id: req.operator.id,
         // SERVER-DERIVED. From the session's active assignment, never the body.
         allowed_modules: req.operator.allowed_modules || [],
+        turn_priority: turnPriority,
       });
       res.json(out);
     } catch (e) { res.status(e.httpStatus || 500).json({ error: e.message }); }
@@ -63,18 +70,31 @@ module.exports = function unitTurn(deps) {
   router.get("/operator/turns", ...gate, async (req, res) => {
     const attention = req.query.attention === "true";
     try {
-      const units = (await pool.query(
-        `select distinct u.id, u.unit_number from units u
-          where u.property_id=$1
-            and (exists (select 1 from unit_triage_confirmations c where c.unit_id=u.id)
-              or exists (select 1 from unit_turn_scopes s where s.unit_id=u.id))
-          order by u.unit_number asc`, [req.operator.property_id])).rows;
-
+      // The active population and its order come from ONE canonical read:
+      // physical turnovers currently in progress, ranked by the lease
+      // commitment waiting on each. Historical triage/scope rows cannot keep
+      // a completed turn alive, and a new move-out is visible before its first
+      // walk has happened.
+      const priority = await rankTurnPriority(pool, req.operator.property_id);
       const rows = [];
-      for (const u of units) {
+      const seenUnits = new Set();
+      const countsByUnit = new Map();
+      for (const p of priority.turns || []) {
+        const k = String(p.unit_id || "");
+        countsByUnit.set(k, (countsByUnit.get(k) || 0) + 1);
+      }
+
+      let unpositionedCount = 0;
+      for (const p of priority.turns || []) {
+        if (!p.unit_id) { unpositionedCount++; continue; }
+        const unitKey = String(p.unit_id);
+        if (seenUnits.has(unitKey)) continue;
+        seenUnits.add(unitKey);
+
         const t = await unitTurnRead.readUnitTurn(pool, {
-          property_id: req.operator.property_id, unit_id: u.id, user_id: req.operator.id,
+          property_id: req.operator.property_id, unit_id: p.unit_id, user_id: req.operator.id,
           allowed_modules: req.operator.allowed_modules || [],
+          turn_priority: p,
         });
 
         // Exception reasons, FORWARDED from the layers that decide them.
@@ -83,21 +103,38 @@ module.exports = function unitTurn(deps) {
         if (t.work.some((w) => w.latest_outcome === "completed" && w.proof_satisfied === false)) reasons.push("questioned proof");
         if (t.work.some((w) => w.latest_outcome === "unable_to_complete")) reasons.push("unable to complete");
         if (t.work.some((w) => w.reopened_count > 0 && w.status === "required")) reasons.push("reopened work");
-        if (t.status.next_move_in && !t.status.certified) reasons.push("move-in at risk");
+        if (p.demand_tier_key === "conflicted_commitment") reasons.push("lease commitment conflict");
+        if (p.demand_tier_key === "committed_start" && !t.status.certified) reasons.push("committed move-in at risk");
+        if (p.demand_tier_key === "pending_commitment" && !t.status.certified) reasons.push("pending lease attached");
         if (t.scope && t.scope.inspection_completeness === "partial") reasons.push("consequential unknown");
         if (!t.triage_confirmation) reasons.push("initial walk outstanding");
+        const activeTurnoverCount = countsByUnit.get(unitKey) || 1;
+        if (activeTurnoverCount > 1) reasons.push(`${activeTurnoverCount} active turnover records`);
 
         const row = {
-          unit_id: u.id, unit_number: u.unit_number,
+          turnover_id: p.turnover_id,
+          unit_id: p.unit_id, unit_number: p.unit_label,
           readiness_label: t.status.readiness_label,
           marketability: t.status.marketability,
           next_action: t.controlling_next_action ? t.controlling_next_action.action : null,
           open_work: t.work.filter((w) => w.status === "required").length,
           next_move_in: t.status.next_move_in,
+          status: p.status,
+          ready_date: p.ready_date,
+          needs: p.needs,
+          demand_tier: p.demand_tier,
+          demand_tier_key: p.demand_tier_key,
+          priority_label: p.priority_label,
+          priority_reason: p.reason,
+          commitment_start_date: p.commitment_start_date,
+          deadline_known: p.deadline_known,
+          commitment_conflict: p.commitment_conflict,
+          contributing_commitments: p.contributing_commitments || [],
+          active_turnover_count: activeTurnoverCount,
           needs_attention: reasons.length > 0,
           attention_reasons: reasons,
           // The management view opens the SAME page.
-          opens: `/operator/units/${u.id}/turn`,
+          opens: `/operator/units/${p.unit_id}/turn`,
         };
         if (!attention || row.needs_attention) rows.push(row);
       }
@@ -107,10 +144,12 @@ module.exports = function unitTurn(deps) {
         filter: attention ? "needs_attention" : "all",
         count: rows.length,
         turns: rows,
+        unpositioned_turnovers: unpositionedCount,
         note: attention && rows.length === 0
           ? "Nothing needs judgment right now. Routine turn work is deliberately not listed."
           : null,
         // Stated so no client builds a second management workflow.
+        ordering: priority.note,
         management_is_a_filter: "Management exceptions are a filter over operating truth. Selecting one opens the same Unit Turn page the operator uses.",
       });
     } catch (e) { res.status(500).json({ error: e.message }); }

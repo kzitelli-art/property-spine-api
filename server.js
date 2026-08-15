@@ -3099,6 +3099,14 @@ const unitTriageService = require("./src/maintenance/unit_triage_service")
   .makeUnitTriageService({ spawnObligationFromEvent });
 app.use("/", require("./src/maintenance/unit_triage")({ pool, unitTriageService }));
 
+// ── MOVE-OUT -> TURNOVER (one write, two adapters) ─────────────────────
+//  The staff-session door and the older operator-key route both call this
+//  service. Management authority and actor attribution come from the staff
+//  session; neither HTTP body can choose a property or write domain rows.
+const turnoverService = require("./src/maintenance/turnover_service")
+  .makeTurnoverService({ spawnObligationFromEvent, recordEffectivePossession, unitTriageService });
+app.use("/", require("./src/maintenance/operator_turnover")({ pool, turnoverService }));
+
 // ── UNIT TURN SCOPE (BUILD 2: normal turn scope + ordered flow) ──────────
 //  Extends a confirmed BUILD 1 triage. Same injection discipline, same single
 //  authority-scoped door, asserted at construction.
@@ -3176,7 +3184,11 @@ const unitTurnRead = require("./src/surfaces/unit_turn_read").makeUnitTurnRead({
   staffAgentService, availabilityRead: require("./src/surfaces/availability_read").availabilityRead,
   workProofAttachmentService,
 });
-app.use("/", require("./src/surfaces/unit_turn")({ pool, unitTurnRead }));
+app.use("/", require("./src/surfaces/unit_turn")({
+  pool,
+  unitTurnRead,
+  rankTurnPriority: require("./src/maintenance/turn_priority").rankTurnPriority,
+}));
 // applications module mounted lower (after the conversion + submission services exist,
 // so /approve can close the leasing_manager application_approval gate). See below.
 const __leasePackets = leasePacketsModule({ pool, satisfyObligation, completeObligation });
@@ -3187,7 +3199,7 @@ app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));
 app.use("/", moneyModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, reassignObligation }));
 app.use("/", orgchartModule({ pool }));
 app.use("/", roomOwnersModule({ pool }));
-app.use("/", turnoversModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, recordEffectivePossession, unitTriageService }));
+app.use("/", turnoversModule({ pool, satisfyObligation, completeObligation, turnoverService }));
 const deliveryHelper = require("./src/comms/delivery")({ satisfyObligation, completeObligation }); // Slice D shared completion-feed
 app.use("/", moveinModule({ pool, spawnObligationFromEvent, satisfyObligation, completeObligation, deliveryHelper, recordEffectivePossession }));
 app.use("/", noticeModule({ pool }));   // Availability Slice A — notice writes unit_events only; no obligation spawns at notice
