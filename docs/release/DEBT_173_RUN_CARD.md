@@ -1,7 +1,15 @@
 # Release Run Card — Migration 173 (Debt)
 
-**Regenerated 2026-08-15 against `claude/philosophy-doctrine-essence-ae6xni`.**
-**One migration. Release BEFORE merge. Read the ledger; never type a ceiling.**
+**Executed 2026-08-15 from `codex/debt-release-20260815`, after merging current**
+**API main `0afa19fc57b171e4ddd83c71b76eab005930a419`.**
+
+```text
+ledger                       172 -> 173
+Debt tables                  7
+retained declaration sources 5
+canonical instrument         ac44a135-4eb5-462d-bdd5-f521955d2615
+canonical rows               21
+```
 
 ---
 
@@ -36,12 +44,9 @@ seam) was re-run at the new number before this card was regenerated:
 13/13   debt_institutional_acceptance.db.js
 ```
 
-`debt_establishment_tool.db.js` was also re-run and still refuses to complete
-— correctly. That failure is unrelated to the renumbering: every
-`source_sha256` in `tools/debt/declarations/4125_480010465.json` is still a
-placeholder, and the tool refuses to establish anything from a document Spine
-does not hold. See "AFTER THE RELEASE" below — that is the actual remaining
-blocker, not this renumbering.
+`debt_establishment_tool.db.js` now passes `19/19` against regular PostgreSQL.
+The production declaration contains five real retained-source hashes, and the
+production establishment completed atomically.
 
 **If a fourth lane takes 173 before this releases, renumber again. Do not
 renumber backward to reclaim 171 or 172 — those are real, merged, and not
@@ -136,11 +141,9 @@ pending                     173        ← and NOTHING else. If it names another
                                          pending file, not just yours — and
                                          given ledger_ceiling=172 this is the
                                          same fact restated, not a second check.
-in_ledger_but_not_in_build  168, 169, 170, 171, 172  ← exactly these five,
-                            nothing more or fewer. This is what "168–172 have
-                            already released through their own lanes" looks
-                            like from Debt's build list, which never claims
-                            them as its own.
+in_ledger_but_not_in_build  empty      ← the release branch first merged the
+                                      current main tree, so 168–172 are both
+                                      in the build and in the ledger.
 ```
 
 If any of the three reads differently than this, stop and do not proceed to
@@ -239,20 +242,14 @@ problem it solves.
 
 ```text
 merge branch → main            deploy boots clean, 173 already in ledger
-retain the 3 real 4125 documents as source_artifacts, get their sha256
-fill tools/debt/declarations/4125_480010465.json with the real hashes
-run tools/debt/establish_instrument.js --apply   (PRODUCTION_APPROVED, Class 4)
 prove the production standing read     GET /operator/debt/standing
-then the simple Debt UI
+prove Capital Stack → Debt in the authenticated browser
 ```
 
-This is the actual remaining blocker, and it is an access problem, not a
-schema or code problem: the Microsoft 365 connector available in this
-environment returns extracted text for these documents, not raw bytes —
-`downloadUrl` is null on every result. A real sha256 requires either a human
-downloading these specific PDFs and uploading them through the app's real
-document intake path (which hashes server-side), or direct file-storage access
-this environment doesn't have.
+Source access is no longer a blocker. Five real files were downloaded from
+SharePoint, independently hashed, retained through the shared source-artifact
+service, and resolved by the canonical establishment tool before any Debt row
+was written.
 
 Ask Spine follows the same governed read after that. Debt's registry entry in
 `tests/gate_ask_spine_readers.js` stays `pending` until it does — deliberately,
