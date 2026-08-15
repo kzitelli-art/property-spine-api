@@ -85,7 +85,7 @@ const STMT = /update\s+work_orders\b[\s\S]{0,400}?`/gi;
 const found = [];
 for (const file of walk(SRC)) {
   const text = fs.readFileSync(file, "utf8");
-  const rel = path.relative(ROOT, file);
+  const rel = path.relative(ROOT, file).replace(/\\/g, "/");
   for (const m of text.matchAll(STMT)) {
     const stmt = m[0];
     if (!/\bstatus\s*=/i.test(stmt)) continue;          // not a status writer at all
@@ -180,7 +180,7 @@ const UNIT_TURN_OWNER = "src/maintenance/work_acceptance_service.js";
   const callers = [];
   for (const file of walk(SRC)) {
     const text = fs.readFileSync(file, "utf8");
-    const rel = path.relative(ROOT, file);
+    const rel = path.relative(ROOT, file).replace(/\\/g, "/");
     if (rel === "src/technician/lifecycle_service.js") continue;
     if (!/claimCompletion\s*\(/.test(text)) continue;
     //  Distinguish by what the file imports, not by the bare verb.

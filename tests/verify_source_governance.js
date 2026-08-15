@@ -120,6 +120,16 @@ const GATES = [
     what: "Ask Spine: answers only from reads, names them, and an outage never reads as good news" },
   { file: "technician_language.test.js",
     what: "technician language: plain phrases read correctly, nothing guessed into an action" },
+  { file: "compliance_document_read.test.js",
+    what: "Compliance reader: real City license, explicit unknowns, hostile classification refusals" },
+  { file: "compliance_evidence_intake.test.js",
+    what: "Compliance intake: generic PDF retention, dedupe, retain-before-recognition failure" },
+  { file: "compliance_contracts.test.js",
+    what: "Compliance contracts: exact proposal and frozen future writer/read/reference wires" },
+  { file: "asset_reader_capabilities.test.js",
+    what: "Insurance + Tax readers: retrieval declared; comparison and cause not claimed" },
+  { file: "compliance_user_journey.test.js",
+    what: "Compliance user journey: six natural questions, honest attention, server-minted openers" },
 ];
 
 const bar = "════════════════════════════════════════════════════════════════";

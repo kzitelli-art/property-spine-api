@@ -199,7 +199,7 @@ function scanInserts(table) {
                  ...ROOT_ROUTE_FILES.map((f) => path.join(ROOT, f)).filter(fs.existsSync)];
   for (const file of files) {
     const text = fs.readFileSync(file, "utf8");
-    const rel = path.relative(ROOT, file);
+    const rel = path.relative(ROOT, file).replace(/\\/g, "/");
     for (const m of text.matchAll(STMT)) {
       if (isProse(text, m.index)) continue;          // a header sentence, not a writer
       found.push({ rel, line: text.slice(0, m.index).split("\n").length, stmt: m[0] });

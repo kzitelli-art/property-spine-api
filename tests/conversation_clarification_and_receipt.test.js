@@ -726,7 +726,7 @@ section("11. WORK-ORDER WRITES STAY IN THE CANONICAL SERVICE");
   walk(path.join(ROOT, "src"));
 
   const creators = files.filter((f) => /insert\s+into\s+work_orders/i.test(strip(fs.readFileSync(f, "utf8"))))
-    .map((f) => path.relative(ROOT, f)).sort();
+    .map((f) => path.relative(ROOT, f).replace(/\\/g, "/")).sort();
   ok("work orders are CREATED in exactly one place — the canonical service",
     creators.join(",") === "src/maintenance/work_order_service.js", creators.join(","));
 
@@ -734,7 +734,7 @@ section("11. WORK-ORDER WRITES STAY IN THE CANONICAL SERVICE");
   //  outside this slice. The register is pinned so a NEW one fails here rather
   //  than being discovered later; it is not a claim that these are correct.
   const updaters = files.filter((f) => /update\s+work_orders/i.test(strip(fs.readFileSync(f, "utf8"))))
-    .map((f) => path.relative(ROOT, f)).sort();
+    .map((f) => path.relative(ROOT, f).replace(/\\/g, "/")).sort();
   //  Four now. src/technician/lifecycle_service.js was ADDED deliberately: it
   //  is the canonical writer of field facts and of governed completion, and it
   //  is the only place the technician path can move a work order. The register

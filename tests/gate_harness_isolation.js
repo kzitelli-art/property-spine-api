@@ -597,7 +597,7 @@ function walk(dir, out = []) {
   const abs = path.join(REPO, dir);
   if (!fs.existsSync(abs)) return out;
   for (const e of fs.readdirSync(abs, { withFileTypes: true })) {
-    const rel = path.join(dir, e.name);
+    const rel = path.join(dir, e.name).replace(/\\/g, "/");
     if (e.isDirectory()) walk(rel, out);
     else if (e.name.endsWith(".js")) out.push(rel);
   }

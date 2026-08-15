@@ -189,8 +189,7 @@ const ROOMS = Object.freeze([
       { key: "insurance", label: "Insurance", derived: "insurance" },
       { key: "payroll_staffing", label: "Payroll & Staffing",
         note: "No governed payroll allocation yet" },
-      { key: "utilities", label: "Utilities",
-        note: "No governed utility accounts yet" },
+      { key: "utilities", label: "Utilities", derived: "utilities" },
       { key: "contracted_services", label: "Contracted Services",
         note: "No governed service contracts yet" },
       { key: "repairs_maintenance", label: "Repairs & Maintenance",
@@ -247,15 +246,15 @@ const ROOMS = Object.freeze([
     eyebrow: ["Licenses", "Inspections", "Certificates"],
     belongs: "Whether this property is legally and regulatorily in good standing.",
     compartments: [
-      { key: "licenses_registrations", label: "Licenses & Registrations",
+      { key: "licenses_registrations", label: "Licenses & Registrations", derived: "licenses_registrations",
         note: "No governed licences or registrations yet" },
-      { key: "inspections", label: "Inspections",
+      { key: "inspections", label: "Inspections", derived: "inspections",
         note: "No governed inspection schedule yet" },
-      { key: "certificates", label: "Certificates",
+      { key: "certificates", label: "Certificates", derived: "certificates",
         note: "No governed certificates yet" },
-      { key: "violations_cure", label: "Violations & Cure",
+      { key: "violations_cure", label: "Violations & Cure", derived: "violations_cure",
         note: "No governed violations or cure deadlines yet" },
-      { key: "recurring_requirements", label: "Recurring Requirements",
+      { key: "recurring_requirements", label: "Recurring Requirements", derived: "recurring_requirements",
         note: "No governed recurring requirements yet" },
     ],
   }),
@@ -300,6 +299,8 @@ module.exports = function assetManagement(deps) {
   //  write `tax_payments`, so no escrow can make a bill read as paid.
   const taxFunding = require("../asset/tax_funding.js");
   const taxFundingRead = require("../asset/tax_funding_read.js");
+  const utilityPosition = require("../asset/utility_position_read.js");
+  const utilityRoutes = require("../asset/utility_routes.js");
   //  The taxpayer capture seam. NOT owned by Taxes — `legal_entities` is a
   //  shared primitive that ownership and debt work will want too — but
   //  mounted here because this is the door an operator is standing in when
@@ -309,6 +310,8 @@ module.exports = function assetManagement(deps) {
   //  durable write path belongs to document establishment, not to a
   //  public door per canonical writer. See src/asset/debt_routes.js.
   const debtRoutes = require("../asset/debt_routes.js");
+  const complianceHttp = require("../asset/compliance_http.js");
+  const complianceRead = require("../asset/compliance_read.js");
 
   const { pool, fileToText } = deps || {};
   if (!pool) throw new Error("asset_management requires a pool");
@@ -413,14 +416,31 @@ module.exports = function assetManagement(deps) {
     }
     if (insurance.established) live.push("Insurance");
 
-    const byKey = { taxes, insurance };
+    let utilities = null;
+    try {
+      const standing = await utilityPosition.readStanding(client, { property_id: propertyId });
+      utilities = standing.setup_state !== "not_established"
+        ? { established: true,
+            note: `${standing.established_services} service` +
+                  `${standing.established_services === 1 ? "" : "s"} established` +
+                  (standing.unresolved_count
+                    ? `, ${standing.unresolved_count} setup question${standing.unresolved_count === 1 ? "" : "s"} open`
+                    : "") }
+        : { established: false, note: "No governed Utility setup yet" };
+    } catch (e) {
+      console.error("asset-management overview: Utility establishment probe failed", e);
+      utilities = { established: false, note: "No governed Utility setup yet" };
+    }
+    if (utilities.established) live.push("Utilities");
+
+    const byKey = { taxes, insurance, utilities };
 
     if (!live.length) {
       return {
         state: "not_established",
         byKey,
         //  SHORT — the home card. One line, no machinery.
-        summary: "No tax, insurance or other operating expense terms are established for this property.",
+        summary: "No tax, insurance, Utility or other operating expense terms are established for this property.",
         why: "Spine holds no governed expense terms for this property. Bills, policies, " +
              "contracts and payroll arrangements may have been retained during Deal Setup, " +
              "but nothing has been read out of them, so Spine cannot say what this property " +
@@ -433,15 +453,22 @@ module.exports = function assetManagement(deps) {
     //  PARTIAL, ALWAYS, AND IT SAYS WHICH PART. Naming the two that are
     //  governed is what stops the sentence reading as a claim about the
     //  other seven.
-    const named = live.join(" and ");
+    const named = live.length > 1
+      ? `${live.slice(0, -1).join(", ")} and ${live[live.length - 1]}`
+      : live[0];
+    const absent = [];
+    if (!taxes.established) absent.push("taxes");
+    if (!insurance.established) absent.push("insurance");
+    if (!utilities.established) absent.push("utilities");
+    absent.push("payroll", "contracted services", "repairs", "management and administration",
+      "marketing", "other operating expenses");
     return {
       state: "partially_established",
       byKey,
       summary: `${named} ${live.length === 1 ? "is" : "are"} established. ` +
                `The other operating expenses are not.`,
       why: `${named} ${live.length === 1 ? "carries" : "carry"} governed terms Spine can ` +
-           `stand behind. Payroll, utilities, contracted services, repairs, management and ` +
-           `administration, marketing and other operating expenses have no governed terms ` +
+           `stand behind. ${absent.join(", ")} have no governed terms ` +
            `anywhere, so this room cannot yet state what the property costs in total.`,
       establishes: "Governed terms for the remaining operating expenses, each with its own " +
                    "evidence and period.",
@@ -497,16 +524,64 @@ module.exports = function assetManagement(deps) {
       //  established" there is a statement the server can defend rather
       //  than a placeholder.
       const expenses = await propertyExpensesEstablishment(client, propertyId);
+      let compliance = UNBUILT.compliance;
+      try {
+        const found = await complianceRead.readComplianceEstablishment(client,
+          { property_id: propertyId });
+        compliance = found.established
+          ? {
+              state: "partially_established",
+              summary: `${found.item_count} governed Compliance item${found.item_count === 1 ? "" : "s"} established. The property-wide requirement census remains unknown.`,
+              why: "Spine holds source-backed Compliance truth for this property, but no complete requirement census has been established.",
+              establishes: "Additional governed Compliance items and, later, an explicit requirement census.",
+              byKey: {
+                licenses_registrations: {
+                  established: found.license_count > 0,
+                  note: found.license_count > 0
+                    ? `${found.license_count} governed license or registration item${found.license_count === 1 ? "" : "s"}`
+                    : "No governed licences or registrations yet",
+                },
+                inspections: {
+                  established: found.inspection_count > 0,
+                  note: found.inspection_count > 0
+                    ? `${found.inspection_count} governed inspection item${found.inspection_count === 1 ? "" : "s"}`
+                    : "No governed inspections yet",
+                },
+                certificates: {
+                  established: found.certificate_count > 0,
+                  note: found.certificate_count > 0
+                    ? `${found.certificate_count} governed certificate item${found.certificate_count === 1 ? "" : "s"}`
+                    : "No governed certificates yet",
+                },
+                violations_cure: {
+                  established: found.finding_count > 0,
+                  note: found.finding_count > 0
+                    ? `${found.finding_count} governed violation item${found.finding_count === 1 ? "" : "s"}`
+                    : "No governed violations or cures yet",
+                },
+                recurring_requirements: {
+                  established: found.requirement_count > 0,
+                  note: found.requirement_count > 0
+                    ? `${found.requirement_count} governed applicability item${found.requirement_count === 1 ? "" : "s"}`
+                    : "No governed recurring requirements yet",
+                },
+              },
+            }
+          : UNBUILT.compliance;
+      } catch (e) {
+        console.error("asset-management overview: Compliance establishment probe failed", e);
+      }
 
       const rooms = ROOMS.map((room) => {
-        const found = room.key === "property_expenses" ? expenses : UNBUILT[room.key];
+        const found = room.key === "property_expenses" ? expenses
+          : room.key === "compliance" ? compliance : UNBUILT[room.key];
 
         //  A compartment marked `derived` names the module that answers
         //  for it; every other compartment is honestly not established and
         //  says which KIND of thing is missing rather than repeating one
         //  generic line.
         const compartments = (room.compartments || []).map((c) => {
-          const answer = c.derived ? expenses.byKey[c.derived] : null;
+          const answer = c.derived && found.byKey ? found.byKey[c.derived] : null;
           return answer
             ? { key: c.key, label: c.label,
                 establishment: answer.established ? "established" : "not_established",
@@ -1316,12 +1391,21 @@ module.exports = function assetManagement(deps) {
     fileToText,
   }));
 
+  router.use(utilityRoutes({
+    pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
+    fileToText,
+  }));
+
   router.use(legalEntityRoutes({
     pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
   }));
 
   router.use(debtRoutes({
     pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
+  }));
+
+  router.use(complianceHttp({
+    pool, fileToText, requireOperator, refuseClientAuthority, requireAssetManagementModule,
   }));
 
   return router;

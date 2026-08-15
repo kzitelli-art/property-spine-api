@@ -126,7 +126,7 @@ for (const file of walk(path.join(ROOT, "src"))) {
       reads++;
       const field = m[1];
       if (FIELDS.has(field) || assigned.has(field)) continue;
-      const rel = path.relative(ROOT, file);
+      const rel = path.relative(ROOT, file).replace(/\\/g, "/");
       const key = rel + ":" + field;
       if (KNOWN.has(key)) { known.push(key + "  (line " + (i + 1) + ")"); continue; }
       offenders.push(rel + ":" + (i + 1) + "  req.operator." + field);

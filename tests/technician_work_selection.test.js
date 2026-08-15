@@ -229,7 +229,7 @@ section("6. THE CANONICAL WRITE — ONE PLACE, SERVER-DERIVED");
   });
   walk(path.join(ROOT, "src"));
   const writers = files.filter((f) => /accepted_by_user_id\s*=\s*\$/.test(strip(fs.readFileSync(f, "utf8"))))
-    .map((f) => path.relative(ROOT, f)).sort();
+    .map((f) => path.relative(ROOT, f).replace(/\\/g, "/")).sort();
   ok("acceptance is written in exactly one place",
     writers.join(",") === "src/technician/acceptance_service.js", writers.join(","));
 

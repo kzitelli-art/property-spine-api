@@ -68,9 +68,14 @@ const BINARY_EXT  = new Set(["xlsx", "xlsm", "xls", "pdf"]);
  *  Deal Setup — is byte-identical without passing anything new.
  */
 const RENT_ROLL_SHAPES = Object.freeze(["csv", "tsv", "txt", "xlsx", "xlsm", "xls"]);
+//  `other` is deliberately generic. It preserves every shape the historical
+//  fallback accepted and additionally permits opaque PDF retention. A domain
+//  adapter may later propose what the bytes appear to be; storage does not.
+const OTHER_SHAPES = Object.freeze([...RENT_ROLL_SHAPES, "pdf"]);
 
 const KIND_SHAPES = Object.freeze({
   rent_roll:                     RENT_ROLL_SHAPES,
+  other:                         OTHER_SHAPES,
   //  A policy and a binder are issued as PDFs. Narrow on purpose: adding
   //  a kind here is a deliberate act, not a side effect of some other
   //  workflow needing a file.
@@ -97,6 +102,14 @@ const KIND_SHAPES = Object.freeze({
   tax_account_statement:         Object.freeze(["pdf", "xlsx", "xls", "csv"]),
   tax_escrow_statement:          Object.freeze(["pdf", "xlsx", "xls", "csv"]),
   tax_escrow_analysis:           Object.freeze(["pdf", "xlsx", "xls", "csv"]),
+  //  Utility evidence stays on the shared retained-source rail. Provider
+  //  statements and agreements are issued as PDFs; meter schedules and
+  //  account confirmations are also commonly exported as spreadsheets.
+  utility_statement:             Object.freeze(["pdf"]),
+  utility_service_agreement:     Object.freeze(["pdf"]),
+  utility_addendum:              Object.freeze(["pdf"]),
+  utility_meter_schedule:        Object.freeze(["pdf", "xlsx", "xls", "csv"]),
+  utility_account_confirmation:  Object.freeze(["pdf", "xlsx", "xls", "csv"]),
 });
 
 //  Per-kind refusal copy. §5 and the repo's rule that a refusal a user
@@ -107,6 +120,9 @@ const KIND_REFUSAL = Object.freeze({
   rent_roll: (filename) =>
     `Spine reads rent rolls as .xlsx, .xls, .csv or .tsv. "${filename}" is none of those. ` +
     `If it is a PDF, export or save it as a spreadsheet first.`,
+  other: (filename) =>
+    `Spine retains a generic source as a PDF, spreadsheet or text file. ` +
+    `"${filename}" is none of those. Upload the source in its original format.`,
   insurance_policy: (filename) =>
     `Spine reads an insurance policy as a PDF. "${filename}" is not one. ` +
     `Upload the policy document your broker or carrier issued.`,
@@ -146,6 +162,21 @@ const KIND_REFUSAL = Object.freeze({
   tax_escrow_analysis: (filename) =>
     `Spine reads an escrow analysis as a PDF or a spreadsheet. "${filename}" is neither. ` +
     `Upload the analysis the servicer sent.`,
+  utility_statement: (filename) =>
+    `Spine reads a Utility statement as a PDF. "${filename}" is not one. ` +
+    `Upload the statement the provider issued.`,
+  utility_service_agreement: (filename) =>
+    `Spine reads a Utility service agreement as a PDF. "${filename}" is not one. ` +
+    `Upload the agreement the provider issued.`,
+  utility_addendum: (filename) =>
+    `Spine reads a Utility addendum as a PDF. "${filename}" is not one. ` +
+    `Upload the signed addendum.`,
+  utility_meter_schedule: (filename) =>
+    `Spine reads a Utility meter schedule as a PDF or a spreadsheet. "${filename}" is neither. ` +
+    `Upload the schedule or export that identifies the meters.`,
+  utility_account_confirmation: (filename) =>
+    `Spine reads a Utility account confirmation as a PDF or a spreadsheet. "${filename}" is neither. ` +
+    `Upload the provider confirmation or account export.`,
 });
 
 function shapesFor(artifact_kind) {
