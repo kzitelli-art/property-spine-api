@@ -124,17 +124,51 @@ That was true on 2026-08-12 and is **no longer true.** Two domains are registere
 and gathered in `src/agent/ask_spine_answer.js`; Contracted Services registered
 in the same PR that built it.
 
-⚠ **This means the §40.8 trigger has fired.** `ask_spine_answer.js` now composes
-`facts.compliance` and `facts.utility` into a single answer. §40.8 names
-cross-domain composition authorization as *"a major architectural problem, and it
-is unsolved,"* to be designed deliberately **at the first genuinely cross-domain
-answer**. That answer is being produced today. The code declares
-`composition_authorization: "unsolved_cross_domain"` and threads it into the
-receipt, so it is honest — but honest and shipping is still shipping.
+**The §40.8 trigger has NOT fired. Composition is REFUSED, not performed.**
 
-Insurance and Tax are `pending` **for this reason**, not for lack of effort. Any
-Tax/Insurance hardening build runs into this wall immediately; sequence the
-composition design with that work, not after it.
+An earlier revision of this section claimed the composer was producing
+cross-domain answers. That was wrong and is corrected here. `questionSubject()`
+detects a question touching more than one domain and returns
+`composition_unavailable` **before any facts are gathered**, so no unentitled
+composition can occur:
+
+```text
+"I can answer about Compliance, Utilities, Contracted Services, or open
+ work separately, but I can't combine them in one answer yet."
+```
+
+Proven in `tests/ask_spine_answer.test.js`, `tests/contracted_service_ask_spine.test.js`
+and the HTTP proof `tests/compliance_http.db.js`. The refusal is sayable and names
+its next step, which is what §5 asks of a refusal a user can see.
+
+⚠ **BUT THE MECHANISM IS A KEYWORD INTENT ROUTER, AND §40.6 SAYS NOT TO BUILD ONE.**
+
+`questionSubject` decides by regex over the question text —
+`COMPLIANCE_TERMS`, `UTILITY_TERMS`, `CONTRACTED_SERVICE_TERMS`,
+`EXPLICIT_WORK_TERMS` — and two matches means refuse. §40.6 is explicit that
+the standing projection exists precisely so that many entitled domains can be
+gathered on every question **without a classifier or an intent router deciding
+in advance which domain the question was about**, because *"an intent router is
+judgement with no edge, and it fails in the direction of answering the wrong
+domain confidently."*
+
+The failure mode this leaves open is not a composed answer. It is the opposite,
+and it is quieter:
+
+```text
+a question that genuinely spans two domains but trips only ONE keyword set
+  → routed to that single subject
+  → answered confidently from one domain
+  → the other domain is never read, and nothing says so
+```
+
+That is a real §40.6 divergence. It is contained rather than dangerous — the
+router errs toward refusal where it fires at all — but it is the thing to design
+out, and it is the SAME design conversation as §40.8 rather than a separate one.
+
+Insurance and Tax are `pending` for the §40.8 reason, not for lack of effort.
+Any Tax/Insurance hardening build meets both of these; sequence the composition
+design with that work rather than after it.
 
 ## ══════════════════════════════════════════════════════════════════
 ##  ASK SPINE IS NOW AN INTERFACE CONTRACT, NOT A FEATURE.
