@@ -60,36 +60,45 @@ Releasing from the branch first avoids it entirely, and the deploy that follows
 the merge boots clean because 173 is already in the ledger.
 
 ```text
-1  read the ledger              expect ceiling somewhere in 167–172 — see below
+1  read the ledger              REQUIRE ceiling exactly 172 — see below
 2  confirm pending = ONLY 173
-3  apply the release            <ceiling> → 173
+3  apply the release            172 → 173
 4  verify ceiling 173
 5  THEN merge branch → main     deploy boots clean
 ```
 
-### ⚠ THE CEILING IS UNVERIFIED FROM THIS ENVIRONMENT
+### ⚠ RELEASE REQUIRES CEILING = 172. NOT "ANYWHERE IN 167–172".
 
-The last confirmed production ceiling was 167. Whether Compliance's `168`/`170`,
-Utilities' `169`, or Contracted Services' `171`/`172` have since been RELEASED
-(not merely merged to `main`) is **unverified from this environment** — no
-`DATABASE_URL` access here. Step 1 below is not a formality; its result
-determines everything after it.
+An earlier version of this card said any ceiling from 167 through 172 was safe
+to proceed on. **That was wrong, and it was caught before release, not after.**
+
+The reason it's wrong: Debt's branch build list (the query below) is generated
+from Debt's own `migrations/` directory — which, because the branch descends
+from `main`, **already contains** 168 (Compliance), 169 (Utilities), 170
+(Compliance), 171 and 172 (Contracted Services), plus Debt's own 173. If
+production's ledger is still below 172 — say it's only at 169 — then 170, 171
+and 172 are genuinely **pending** from Debt's branch too, not just 173. Running
+`migrate.js --apply` from this branch at that ledger state would apply
+Compliance's and Contracted Services' migrations along with Debt's. **Debt must
+never be the release vehicle for another lane's migration** — each lane
+releases its own schema, on its own branch, through its own path.
 
 ```text
-IF ceiling reads anywhere    None of 168–172 belong to Debt, and Debt's own
-   from 167 through 172      build list (below) never claims them. Whatever
-                             subset has actually been released, Debt's
-                             release is still just "apply 173 on top" — the
-                             pending query still returns 173 only. Proceed.
+IF ceiling reads exactly 172   All of 168–172 are already released through
+                               their own lanes. Debt's release is genuinely
+                               "apply 173 on top" — pending returns 173 only.
+                               Proceed.
 
-IF ceiling is below 167,     STOP. Something applied — or failed to apply —
-   above 172, or otherwise   that this card does not account for. Do not
-   does not look like a      guess why. Read what actually happened before
-   clean prefix of 001–172   releasing anything.
+IF ceiling reads anything      STOP. Do not release from this branch. Let
+   else — below 172, or        main's preceding migrations (whichever of
+   above 172, or otherwise     168–172 are still pending) release through
+   unexpected                  their own lanes first. Then re-read the
+                               ledger and start this card over from step 1.
 ```
 
-Either way, only the second outcome requires a human to stop and investigate
-before running anything below.
+Only the first outcome is safe to proceed on. This is the one thing on this
+card worth being strict about — everything else here is process, this is the
+actual safety property.
 
 ---
 
@@ -116,20 +125,27 @@ select
     as in_ledger_but_not_in_build;
 ```
 
-**Required result before proceeding:**
+**Required result before proceeding — all three, exactly:**
 
 ```text
-ledger_ceiling              somewhere in 167–172 — see the branching logic above
+ledger_ceiling              172        ← exactly. Not 167, not 171, not 173.
+                                         See the branching logic above for why
+                                         "close enough" is not a safe reading.
 pending                     173        ← and NOTHING else. If it names another
                                          version, STOP: a release applies every
-                                         pending file, not just yours.
-in_ledger_but_not_in_build  any subset of 168, 169, 170, 171, 172 IS EXPECTED
-                            AND FINE — Debt's build list never claims them, so
-                            this is not "code and schema disagree", it is
-                            "other lanes' schema, which this release does not
-                            touch". Anything OTHER than a subset of
-                            {168,169,170,171,172} here means stop.
+                                         pending file, not just yours — and
+                                         given ledger_ceiling=172 this is the
+                                         same fact restated, not a second check.
+in_ledger_but_not_in_build  168, 169, 170, 171, 172  ← exactly these five,
+                            nothing more or fewer. This is what "168–172 have
+                            already released through their own lanes" looks
+                            like from Debt's build list, which never claims
+                            them as its own.
 ```
+
+If any of the three reads differently than this, stop and do not proceed to
+"THE RELEASE" below — go back to production and let the missing lane(s)
+release first.
 
 ---
 
