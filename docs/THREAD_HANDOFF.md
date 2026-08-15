@@ -1,14 +1,35 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
-##  DEBT IS BUILT, VERIFIED, AND WAITING ONLY ON PRODUCTION ACCESS.
-##  2026-08-15. THIS SUPERSEDES THE "MIGRATION 168" BANNER BELOW ON
+##  DEBT 173 IS RELEASED AND 4125 CANONICAL TRUTH IS ESTABLISHED.
+##  2026-08-15. MERGE/DEPLOY/PRODUCTION-BROWSER PROOF REMAIN. THIS
+##  SUPERSEDES THE "MIGRATION 168" BANNER BELOW ON
 ##  DEBT'S MIGRATION NUMBER — NOT ON THE MEETING-TRANSCRIPT BRANCH'S
 ##  OWN STATUS, WHICH THIS SESSION HAS NO UPDATE ON. READ THIS FIRST
 ##  IF YOU ARE PICKING UP DEBT.
 ## ══════════════════════════════════════════════════════════════════
 
-**Branch:** `claude/philosophy-doctrine-essence-ae6xni`, latest commit `0e3ca0a`.
+**Release branch:** `codex/debt-release-20260815`, based on current API
+`origin/main` `0afa19fc57b171e4ddd83c71b76eab005930a419` plus the Debt history.
+
+### Production receipt (2026-08-15)
+
+```text
+source artifacts retained                         5/5
+regular isolated PostgreSQL proofs                green
+source-governance chain                           25/25 gates
+production ledger                                 172 -> 173
+canonical instrument                              ac44a135-4eb5-462d-bdd5-f521955d2615
+canonical rows                                    21, all source-backed
+merge / deploy / authenticated browser proof      pending
+```
+
+The executable declaration needed five sources after the insurance-history
+correction, not the stale three-source list previously written here. The
+1,960-page closing binder exceeded the existing 25 MB retained-source limit.
+Spine therefore retained an 11.7 MB, 268-page Debt Closing Packet containing
+the cover/index and every cited financing section. Its PDF metadata records
+the original binder SHA-256 and exact original page ranges.
 
 ### What Debt's migration number actually is now
 
@@ -63,52 +84,25 @@ $1,110,703 one-time COVID-19 debt service reserve              looked
   fabricated on first read; confirmed real, sourced to the closing binder.
 ```
 
-`debt_establishment_tool.db.js` still fails, correctly — every `source_sha256`
-in the declaration is a placeholder. That is the real remaining blocker, not
-a code problem. Ask Spine registration is deliberately still `pending` in
+`debt_establishment_tool.db.js` now passes `19/19` against regular PostgreSQL,
+using isolated fixture digests substituted for the declaration's five real
+retained hashes. Ask Spine registration is deliberately still `pending` in
 `tests/gate_ask_spine_readers.js` — Build 1 stops at the canonical read on
 purpose; do not wire Ask Spine early just to change that.
 
 ### What is left — exact steps, in order
 
-Needs someone/something with production DB access and a live app login.
-Full detail and the exact SQL is in `docs/release/DEBT_173_RUN_CARD.md`;
-this is the condensed version.
+Source retention, migration release, and canonical establishment are complete.
+Only integration and deployed proof remain.
 
 ```text
-1  Upload the 3 real 4125 documents through any live document-intake
-   endpoint in the app (Deal Setup's upload works; any endpoint that calls
-   src/onboarding/source_artifact_service.js's store() works — matching is
-   by sha256 only, not by which screen uploaded it):
-     - Lument amortization schedule
-     - 4125 Chestnut closing binder
-     - Lument statement, 2025-08-01
-   Each upload returns a real sha256.
+1  Push this release branch and merge it to current API main. Migration 173 is
+   already in the production ledger, so prestart must verify cleanly.
 
-2  Put those 3 real hashes into tools/debt/declarations/4125_480010465.json,
-   replacing every "FILL-with-sha256-of-..." placeholder.
+2  Wait for the exact merged API SHA to deploy; do not infer deployment from
+   GitHub merge state.
 
-3  Read the production ledger. Run the query in DEBT_173_RUN_CARD.md.
-   REQUIRE ALL THREE, EXACTLY:
-     ledger_ceiling              = 172
-     pending                     = 173 (only)
-     in_ledger_but_not_in_build  = 168, 169, 170, 171, 172 (exactly these five)
-   Anything else -> STOP. Do not release. Some other lane's migration
-   (168-172) has not actually released yet even though it's merged to main —
-   let it release through its own path first, then re-read the ledger.
-   Debt must never be the release vehicle for another lane's schema.
-
-4  Release, from the Debt branch (not main):
-     MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=172 node migrations/migrate.js --apply
-   Re-run the step-3 query. Expect ledger_ceiling 173, pending empty.
-
-5  node tools/debt/establish_instrument.js --apply
-   using the now-real declaration file. It refuses anything it can't match
-   to a retained document by hash — that is correct, not a bug.
-
-6  Merge the branch to main. Deploy boots clean (173 already in the ledger).
-
-7  Prove it live:
+3  Prove it live:
      GET /operator/debt/standing for 4125's property_id in production
      -> confirm the real numbers come back
      open the app -> Capital Stack -> Debt -> confirm it renders
@@ -117,8 +111,8 @@ this is the condensed version.
 ### Guardrails for whoever executes this
 
 ```text
-- Steps 1-2 need real document access (SharePoint or equivalent) and a
-  live app login. Steps 3-7 are mechanical once the hashes are real.
+- The five source artifacts and canonical rows are production truth now. Do
+  not re-run establishment; the duplicate guard will and should refuse it.
 - Do not touch any other domain's migration file. The only file outside
   Debt's own tree this session touched was one stale comment in
   migrations/169_utilities_canonical_truth.sql (prose only, no logic,

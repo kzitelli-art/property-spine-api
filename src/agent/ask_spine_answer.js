@@ -48,6 +48,7 @@ const askSpineService = require("./ask_spine_service");
 const workOrderRead = require("../surfaces/work_order_status_read");
 const complianceRead = require("../asset/compliance_read");
 const utilityAskRead = require("../asset/utility_ask_detail.js");
+const contractedServiceAskRead = require("../asset/contracted_service_ask_detail.js");
 
 const MODEL = process.env.ASK_SPINE_MODEL || "claude-opus-5";
 /*  THINKING AND THE ANSWER SHARE THIS CEILING. On this model family
@@ -116,11 +117,12 @@ const DECISION_SCHEMA = {
  *  Widening it is a product decision with its own facts to gather. It is
  *  not something a prompt edit should be able to do quietly.  */
 const SUPPORTED_SCOPE =
-  "the current open work and governed Compliance or Utility records at this property — " +
+  "the current open work and governed Compliance, Utility, or Contracted Services records at this property — " +
   "what work is open and who has it, or whether a recorded Compliance item is " +
   "current and why, or this property's governed Utility setup, providers, account and meter map, " +
   "responsibility and recovery arrangement, statement history, known gaps, and " +
-  "same-account statement comparisons";
+  "same-account statement comparisons, or governed service providers, scope, price, term, " +
+  "notice decisions, retained evidence, financial observations, and known contract gaps";
 
 //  The refusal is OWNED BY THE SERVER, not written by the model. A model
 //  that composes its own decline can talk itself into being helpful, and
@@ -128,12 +130,15 @@ const SUPPORTED_SCOPE =
 //  outcome exists to prevent.
 const OUT_OF_SCOPE_ANSWER =
   "I can only answer about " + SUPPORTED_SCOPE + ". " +
-  "Ask me what needs attention, about a recorded Compliance item, or how a Utility works here.";
+  "Ask me what needs attention, about a recorded Compliance item, how a Utility works here, " +
+  "or what governs a contracted service.";
 
 const COMPLIANCE_TERMS =
   /\b(compliance|licen[cs]e|registration|inspection|certificate|violation|cure|renewal|expire[sd]?|expiration)\b/i;
 const UTILITY_TERMS =
   /\b(utilit(?:y|ies)|electric(?:ity)?|gas|water|sewer|meter(?:ed|s|ing)?|submeter(?:ed|s|ing)?|provider account|utility account|account ending|peco|bills? residents)\b/i;
+const CONTRACTED_SERVICE_TERMS =
+  /\b(contracted services?|service contract|service agreement|vendor agreement|contractor|janitorial|cleaning (?:service|company|vendor|provider)|contracted (?:cleaning )?provider|elevator (?:service|maintenance)|pest control|exterminat(?:or|ion)|trash removal|waste removal|snow removal|landscaping service|security service|service provider)\b/i;
 const EXPLICIT_WORK_TERMS =
   /\b(work[ -]?order|repair|maintenance|technician|task|job|assigned|assignment)\b/i;
 
@@ -141,10 +146,14 @@ function questionSubject(question) {
   const text = String(question || "");
   const compliance = COMPLIANCE_TERMS.test(text);
   const utility = UTILITY_TERMS.test(text);
-  const work = EXPLICIT_WORK_TERMS.test(text);
-  if ([compliance, utility, work].filter(Boolean).length > 1) return "composition_unavailable";
+  const contractedService = CONTRACTED_SERVICE_TERMS.test(text);
+  const work = EXPLICIT_WORK_TERMS.test(text) && !contractedService;
+  if ([compliance, utility, contractedService, work].filter(Boolean).length > 1) {
+    return "composition_unavailable";
+  }
   if (compliance) return "compliance";
   if (utility) return "utility";
+  if (contractedService) return "contracted_service";
   return "work";
 }
 
@@ -207,7 +216,8 @@ function utilityEvidenceReferences(standing) {
  *  they both show.  */
 async function gatherFacts(db, {
   property_id, allowed_modules, subject = "work", mintComplianceReference,
-  complianceReader = complianceRead, question = "",
+  complianceReader = complianceRead, utilityReader = utilityAskRead,
+  contractedServiceReader = contractedServiceAskRead, question = "",
 }) {
   const facts = {
     property_id,
@@ -300,6 +310,7 @@ async function gatherFacts(db, {
           unresolved: item.unresolved,
           next: item.next,
           attention: item.attention,
+          reference_roles: (item.references || []).map((reference) => reference.role),
         })),
       };
       facts.__refs = standing.references.map((reference) => ({
@@ -317,7 +328,7 @@ async function gatherFacts(db, {
   // Entitlement excludes the facts themselves, not merely their links.
   if (subject === "utility" && (allowed_modules || []).includes("asset_management")) {
     try {
-      const governed = await utilityAskRead.readForQuestion(db, {
+      const governed = await utilityReader.readForQuestion(db, {
         property_id,
         allowed_modules,
         question,
@@ -335,10 +346,39 @@ async function gatherFacts(db, {
       facts.utility = {
         read_state: state,
         attention_state: null,
-        detail_mode: utilityAskRead.detailRequest(question).mode,
+        detail_mode: utilityReader.detailRequest(question).mode,
         detail: null,
       };
       failures.push(state === "READ_TIMED_OUT" ? "utility_timed_out" : "utility");
+    }
+  }
+
+  if (subject === "contracted_service"
+      && (allowed_modules || []).includes("asset_management")) {
+    try {
+      const governed = await contractedServiceReader.readForQuestion(db, {
+        property_id,
+        allowed_modules,
+        question,
+      });
+      facts.contracted_service = {
+        ...governed.standing,
+        read_state: governed.read_state,
+        attention_state: governed.attention_state,
+        detail_mode: governed.mode,
+        detail: governed.detail,
+      };
+      facts.__refs = (facts.__refs || []).concat(governed.references || []);
+    } catch (e) {
+      const state = e && e.code === "READ_TIMED_OUT" ? "READ_TIMED_OUT" : "READ_FAILED";
+      facts.contracted_service = {
+        read_state: state,
+        attention_state: null,
+        detail_mode: contractedServiceReader.detailRequest(question).mode,
+        detail: null,
+      };
+      failures.push(state === "READ_TIMED_OUT"
+        ? "contracted_service_timed_out" : "contracted_service");
     }
   }
 
@@ -426,14 +466,19 @@ function systemPrompt(subject = "work") {
     "   For Utilities, READ_FAILED means Spine could not read it; READ_TIMED_OUT",
     "   means the read exceeded its bound; QUIET means the read succeeded and",
     "   nothing requires attention. None of those means there are no accounts.",
+    "   The same failure and quiet-state distinctions apply to Contracted Services.",
     "4. Nothing being open is a real, good answer. Say it plainly and stop.",
     "   Do not manufacture concerns to seem useful.",
-    "5. The FACTS contain only one authorized subject. Never combine Compliance",
-    "   or Utilities with work, residents, finances or any absent domain. Composition authority",
+    "5. The FACTS contain only one authorized subject. Never combine Compliance,",
+    "   Utilities, or Contracted Services with work, residents, finances or any absent domain. Composition authority",
     "   is not established merely because each domain could be read separately.",
     "6. For Compliance, item standing is not a property-wide legal conclusion.",
     "   An expiration date is not a renewal obligation, and a date-only next event",
     "   is not work that needs action. Preserve those distinctions exactly.",
+    "   If a Compliance item has `source_artifact` in `reference_roles`, the interface",
+    "   will show an Open source control below your answer. When asked to show the",
+    "   document, say to use that source link below. Never say the source cannot be",
+    "   opened or sent from here, and never claim that you personally opened it.",
     "7. For Utilities, a statement is not a provider payment; a resident recovery",
     "   method is not a resident collection; a collection is not a provider payment;",
     "   a provider is not a billing administrator; and a submeter is not a provider",
@@ -442,6 +487,14 @@ function systemPrompt(subject = "work") {
     "   Do not invent weather, occupancy, rates, leaks, equipment behavior, or any",
     "   causal explanation. If no governed causal fact exists, say the cause is not",
     "   established even when the amounts changed.",
+    "9. For Contracted Services, a proposal or unsigned document is not an executed",
+    "   agreement; an accounting observation or invoice is not a contract price; a",
+    "   service report is not proof that every scope obligation was completed; and a",
+    "   renewal date is not a notice deadline unless the governing event and offset are",
+    "   established. Preserve NOT_ESTABLISHED exactly as unknown, never as none or no.",
+    "10. Contracted Services comparison and causal explanation are unavailable unless",
+    "   the governed read explicitly establishes that capability. Never infer performance,",
+    "   price competitiveness, savings, or payment from the retained evidence.",
     "",
     "HOW TO SOUND:",
     "· Talk like a competent colleague, not a database. Short sentences.",
@@ -466,6 +519,7 @@ function systemPrompt(subject = "work") {
  */
 async function answer(db, anthropic, {
   property_id, allowed_modules, question, mintComplianceReference, complianceReader,
+  utilityReader, contractedServiceReader,
 }) {
   if (!property_id) throw new Error("ask_spine.answer requires a server-derived property_id");
 
@@ -484,16 +538,19 @@ async function answer(db, anthropic, {
   if (subject === "composition_unavailable") {
     return {
       outcome: "composition_unavailable",
-      answer: "I can answer about Compliance, Utilities, or open work separately, but I can't combine them in one answer yet.",
+      answer: "I can answer about Compliance, Utilities, Contracted Services, or open work separately, but I can't combine them in one answer yet.",
       grounded_on: null,
       references: [],
     };
   }
   const modules = Array.isArray(allowed_modules) ? allowed_modules.map(String) : [];
-  if ((subject === "compliance" || subject === "utility") && !modules.includes("asset_management")) {
+  if (["compliance", "utility", "contracted_service"].includes(subject)
+      && !modules.includes("asset_management")) {
+    const label = subject === "compliance" ? "Compliance"
+      : subject === "utility" ? "Utilities" : "Contracted Services";
     return {
       outcome: "not_authorized",
-      answer: `${subject === "compliance" ? "Compliance" : "Utilities"} is not available in your current access for this property.`,
+      answer: `${label} is not available in your current access for this property.`,
       grounded_on: null,
       references: [],
     };
@@ -510,7 +567,8 @@ async function answer(db, anthropic, {
 
   const facts = await gatherFacts(db, {
     property_id, allowed_modules: modules, subject,
-    mintComplianceReference, complianceReader, question: q,
+    mintComplianceReference, complianceReader, utilityReader,
+    contractedServiceReader, question: q,
   });
 
   let text = "";
@@ -601,6 +659,14 @@ async function answer(db, anthropic, {
       utility_services: facts.utility ? facts.utility.established_services : null,
       utility_read_state: facts.utility ? facts.utility.read_state : null,
       utility_detail_mode: facts.utility ? facts.utility.detail_mode : null,
+      contracted_service_setup_state: facts.contracted_service
+        ? facts.contracted_service.setup_state : null,
+      contracted_service_engagements: facts.contracted_service
+        ? facts.contracted_service.engagement_count : null,
+      contracted_service_read_state: facts.contracted_service
+        ? facts.contracted_service.read_state : null,
+      contracted_service_detail_mode: facts.contracted_service
+        ? facts.contracted_service.detail_mode : null,
       reads_that_failed: facts.reads_that_failed,
       gathered_at: facts.gathered_at,
     },

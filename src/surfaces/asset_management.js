@@ -301,6 +301,8 @@ module.exports = function assetManagement(deps) {
   const taxFundingRead = require("../asset/tax_funding_read.js");
   const utilityPosition = require("../asset/utility_position_read.js");
   const utilityRoutes = require("../asset/utility_routes.js");
+  const contractedServicePosition = require("../asset/contracted_service_position_read.js");
+  const contractedServiceRoutes = require("../asset/contracted_service_routes.js");
   //  The taxpayer capture seam. NOT owned by Taxes — `legal_entities` is a
   //  shared primitive that ownership and debt work will want too — but
   //  mounted here because this is the door an operator is standing in when
@@ -436,14 +438,32 @@ module.exports = function assetManagement(deps) {
     }
     if (utilities.established) live.push("Utilities");
 
-    const byKey = { taxes, insurance, utilities };
+    let contractedServices = null;
+    try {
+      const standing = await contractedServicePosition.readStanding(client,
+        { property_id: propertyId });
+      contractedServices = standing.setup_state !== "not_established"
+        ? { established: true,
+            note: `${standing.engagement_count} service engagement` +
+              `${standing.engagement_count === 1 ? "" : "s"} established` +
+              (standing.unresolved_count
+                ? `, ${standing.unresolved_count} question${standing.unresolved_count === 1 ? "" : "s"} open`
+                : "") }
+        : { established: false, note: "No governed contracted services yet" };
+    } catch (e) {
+      console.error("asset-management overview: Contracted Services establishment probe failed", e);
+      contractedServices = { established: false, note: "No governed contracted services yet" };
+    }
+    if (contractedServices.established) live.push("Contracted Services");
+
+    const byKey = { taxes, insurance, utilities, contracted_services: contractedServices };
 
     if (!live.length) {
       return {
         state: "not_established",
         byKey,
         //  SHORT — the home card. One line, no machinery.
-        summary: "No tax, insurance, Utility or other operating expense terms are established for this property.",
+        summary: "No tax, insurance, Utility, Contracted Services or other operating expense terms are established for this property.",
         why: "Spine holds no governed expense terms for this property. Bills, policies, " +
              "contracts and payroll arrangements may have been retained during Deal Setup, " +
              "but nothing has been read out of them, so Spine cannot say what this property " +
@@ -463,7 +483,8 @@ module.exports = function assetManagement(deps) {
     if (!taxes.established) absent.push("taxes");
     if (!insurance.established) absent.push("insurance");
     if (!utilities.established) absent.push("utilities");
-    absent.push("payroll", "contracted services", "repairs", "management and administration",
+    if (!contractedServices.established) absent.push("contracted services");
+    absent.push("payroll", "repairs", "management and administration",
       "marketing", "other operating expenses");
     return {
       state: "partially_established",
@@ -1420,6 +1441,11 @@ module.exports = function assetManagement(deps) {
   }));
 
   router.use(utilityRoutes({
+    pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
+    fileToText,
+  }));
+
+  router.use(contractedServiceRoutes({
     pool, requireOperator, refuseClientAuthority, requireAssetManagementModule,
     fileToText,
   }));

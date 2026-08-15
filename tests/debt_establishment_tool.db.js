@@ -15,6 +15,7 @@
        a cited document that is not retained    → refuse
        a row with no provenance                 → refuse
        a placeholder hash                       → refuse
+       the shipped declaration carries real hashes, not fixtures
        a second run                             → refuse, no duplicates
        dry run                                  → writes nothing
        what it wrote reads back through the HTTP seam unchanged
@@ -47,7 +48,7 @@ const MIGRATION = path.join(__dirname, "..", "migrations", "173_debt_instruments
 const REAL_DECL = path.join(__dirname, "..", "tools", "debt", "declarations", "4125_480010465.json");
 
 const URL_ = receipt.harnessConnectionString();
-receipt.begin(__filename, { url: URL_, expected: 16 });
+receipt.begin(__filename, { url: URL_, expected: 19 });
 
 let pass = 0, fail = 0, ran = 0;
 function ok(label, cond, detail) {
@@ -63,19 +64,29 @@ const sha = (s) => crypto.createHash("sha256").update(s).digest("hex");
 //  the declaration cites and what the tool must resolve.
 const DOCS = {
   schedule: { name: "Lument amortization schedule.pdf", body: "AMORTIZATION SCHEDULE 480010465" },
-  binder:   { name: "4125 Chestnut Closing Binder.pdf", body: "CLOSING BINDER ORIX FREDDIE 2020" },
-  stmt:     { name: "480010465 statement 2025-08-01.pdf", body: "MORTGAGE LOAN STATEMENT 2025-08-01" },
+  packet:   { name: "4125 Chestnut Debt Closing Packet.pdf", body: "DEBT CLOSING PACKET ORIX FREDDIE 2020" },
+  stmtAug:  { name: "480010465 statement 2025-08-01.pdf", body: "MORTGAGE LOAN STATEMENT 2025-08-01" },
+  stmtDec:  { name: "480010465 statement 2025-12-01.pdf", body: "MORTGAGE LOAN STATEMENT 2025-12-01" },
+  stmtMar:  { name: "480010465 statement 2026-03-01.pdf", body: "MORTGAGE LOAN STATEMENT 2026-03-01" },
 };
 for (const d of Object.values(DOCS)) d.sha = sha(d.body);
 
-//  The real declaration with its placeholders replaced by the fixture
-//  hashes — so this proves the SHIPPED declaration's structure, not a
-//  convenient one written for the test.
+const REAL_HASHES = Object.freeze({
+  schedule: "1f146fe73fb0b2bc673e0e413f0a3ba9a29b32317bb1b839518efc0f6e9113c3",
+  packet:   "8aa80192cc4563533d1be212dcdcd0f359bda8874ca797ec5d1e6a22a11d18eb",
+  stmtAug:  "136f595d11b4c51c26d0087f5d0bfb94c58f4901a383c91392c4b3721cd37a34",
+  stmtDec:  "148ec36181e26f54c0d14f019cf4e6d4f22383700122c31aba62f57208a48d0e",
+  stmtMar:  "50c3a3c0a581147ccddf6b7d5afd603fe39fc42ac6869c592749261a534e620b",
+});
+
+//  Substitute only the retained production digests with isolated fixture
+//  digests. This proves the shipped declaration's exact row structure while
+//  keeping the harness independent of production bytes.
 function realDeclarationWithFixtureHashes() {
   let text = fs.readFileSync(REAL_DECL, "utf8");
-  text = text.replace(/FILL-with-sha256-of-retained-Lument-amortization-schedule/g, DOCS.schedule.sha)
-             .replace(/FILL-with-sha256-of-retained-4125-closing-binder/g, DOCS.binder.sha)
-             .replace(/FILL-with-sha256-of-retained-Lument-statement-2025-08-01/g, DOCS.stmt.sha);
+  for (const [key, realHash] of Object.entries(REAL_HASHES)) {
+    text = text.split(realHash).join(DOCS[key].sha);
+  }
   return JSON.parse(text);
 }
 
@@ -119,9 +130,10 @@ function runTool(args, extraEnv) {
     await c.query(`insert into users values ($1)`, [uid]);
     const prop = (await c.query(`insert into properties (name) values ('4125 Chestnut') returning id`)).rows[0].id;
 
-    //  Retain two of the three documents. The statement is deliberately
-    //  NOT retained yet, so the first assertion is a refusal.
-    for (const k of ["schedule", "binder"]) {
+    //  Retain four of the five documents. The March statement is deliberately
+    //  absent, so the first assertion proves that one missing source refuses
+    //  the whole atomic establishment.
+    for (const k of ["schedule", "packet", "stmtAug", "stmtDec"]) {
       await c.query(`insert into source_artifacts (original_filename, sha256) values ($1,$2)`,
         [DOCS[k].name, DOCS[k].sha]);
     }
@@ -138,14 +150,21 @@ function runTool(args, extraEnv) {
     ok("a cited document that is NOT retained → refused",
        missingDoc.code === 1 && /NOT retained/i.test(missingDoc.out), `exit ${missingDoc.code}`);
     ok("…and the refusal names the missing hash",
-       missingDoc.out.includes(DOCS.stmt.sha));
+       missingDoc.out.includes(DOCS.stmtMar.sha));
 
-    //  The SHIPPED declaration must refuse as shipped — its placeholders
-    //  are not hashes, and a placeholder must never reach the database.
-    const shipped = runTool(["--declaration", REAL_DECL, "--property", prop,
-                             "--recorded-by-user", uid, "--apply"]);
-    ok("the shipped declaration's placeholder hashes → refused",
-       shipped.code === 1 && /placeholder|not a sha256/i.test(shipped.out), `exit ${shipped.code}`);
+    const shipped = JSON.parse(fs.readFileSync(REAL_DECL, "utf8"));
+    const shippedHashes = JSON.stringify(shipped).match(/[0-9a-f]{64}/g) || [];
+    ok("the shipped declaration carries five real retained-source hashes",
+       new Set(shippedHashes).size === 5
+       && Object.values(REAL_HASHES).every((h) => shippedHashes.includes(h)));
+
+    const placeholder = JSON.parse(JSON.stringify(decl));
+    placeholder.instrument.source_sha256 = "FILL-with-sha256-of-retained-source";
+    const placeholderRes = runTool(["--declaration", writeDecl("placeholder.json", placeholder),
+                                    "--property", prop, "--recorded-by-user", uid, "--apply"]);
+    ok("a placeholder hash → refused",
+       placeholderRes.code === 1 && /placeholder|not a sha256/i.test(placeholderRes.out),
+       `exit ${placeholderRes.code}`);
 
     const noProv = JSON.parse(JSON.stringify(decl));
     delete noProv.terms[0].source_sha256;
@@ -167,12 +186,12 @@ function runTool(args, extraEnv) {
     ok("…and it says the uuid is attribution, not authorisation",
        /ATTRIBUTION, not proof of authorisation/i.test(missingArgs.out));
 
-    /*  ══ NOW RETAIN THE THIRD DOCUMENT ════════════════════════════ */
+    /*  ══ NOW RETAIN THE FIFTH DOCUMENT ═══════════════════════════ */
     await pool.query(`set search_path to ${SCHEMA}`);
     const c2 = await pool.connect();
     await c2.query(`set search_path to ${SCHEMA}`);
     await c2.query(`insert into source_artifacts (original_filename, sha256) values ($1,$2)`,
-      [DOCS.stmt.name, DOCS.stmt.sha]);
+      [DOCS.stmtMar.name, DOCS.stmtMar.sha]);
     c2.release();
 
     console.log("\n  ── dry run writes nothing ──");
@@ -258,5 +277,5 @@ function runTool(args, extraEnv) {
   await scoped.end();
   await pool.end();
   fs.rmSync(tmp, { recursive: true, force: true });
-  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 16 }));
+  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 19 }));
 })();
