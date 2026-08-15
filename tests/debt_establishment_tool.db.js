@@ -43,7 +43,7 @@ const receipt = require("./_run_receipt.js");
 
 const SCHEMA = "debt_establish_proof";
 const TOOL = path.join(__dirname, "..", "tools", "debt", "establish_instrument.js");
-const MIGRATION = path.join(__dirname, "..", "migrations", "168_debt_instruments.sql");
+const MIGRATION = path.join(__dirname, "..", "migrations", "171_debt_instruments.sql");
 const REAL_DECL = path.join(__dirname, "..", "tools", "debt", "declarations", "4125_480010465.json");
 
 const URL_ = receipt.harnessConnectionString();

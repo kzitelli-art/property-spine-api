@@ -16,7 +16,7 @@ structure is *not* forced, it is named as a seam and left unbuilt.
 > 3  append-only means POINT BACKWARD — no superseded_by, no rewriting old rows
 > 4  extension_standing REMOVED from canonical terms
 > 5  balloon_amount REMOVED — the schedule's figure is a projection
-> 6  debt_obligation_requirements REMOVED from 168 entirely
+> 6  debt_obligation_requirements REMOVED from 171 entirely
 > 7  debt_payments → debt_payment_observations; satisfies_requirement dropped
 > ```
 >
@@ -410,7 +410,7 @@ cross-collateral / supplemental affirmatively excluded by the Loan Agreement
 
 ```text
 branch from clean main
-→ migration 168
+→ migration 171
 → minimal canonical writers
 → real 4125 establishment
 → position(instrument, as_of)
@@ -423,10 +423,10 @@ NOT   UI · document reader · generic proposal router · covenant engine ·
       reserve module · SOLO · Ask Spine implementation
 ```
 
-### ⚠ Migration 168 cannot merge to `main`
+### ⚠ Migration 171 cannot merge to `main`
 
 Production ledger ceiling is **167**, and `prestart` verifies rather than applies.
 **Merging a pending migration to `main` is a failed production deploy** — the trap
-that has already cost time twice. 168 lands on a branch and stays there until a
+that has already cost time twice. 171 lands on a branch and stays there until a
 deliberate release runs, with `EXPECTED_LEDGER_CEILING` read from the ledger
 rather than typed from this document.

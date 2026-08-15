@@ -44,7 +44,7 @@ const { Pool } = require("pg");
 const receipt = require("./_run_receipt.js");
 
 const SCHEMA = "debt_falsification";
-const MIGRATION = path.join(__dirname, "..", "migrations", "168_debt_instruments.sql");
+const MIGRATION = path.join(__dirname, "..", "migrations", "171_debt_instruments.sql");
 
 const url = receipt.harnessConnectionString();
 const started = receipt.begin(__filename, { url, expected: 14 });
@@ -84,8 +84,8 @@ async function refused(db, sql, params) {
 
     //  Minimal dependencies. The full migration chain cannot rebuild from
     //  empty (012_bank_intake / yardi_code), which predates this work and
-    //  bounds every DB proof in this repo — so 168's referents are stubbed
-    //  at the shape 168 actually uses.
+    //  bounds every DB proof in this repo — so 171's referents are stubbed
+    //  at the shape 171 actually uses.
     await db.query(`create table users (id uuid primary key)`);
     await db.query(`create table properties (id uuid primary key)`);
     await db.query(`create table legal_entities (id uuid primary key)`);
@@ -103,7 +103,7 @@ async function refused(db, sql, params) {
       `select table_name from information_schema.tables
         where table_schema = $1 and table_name like 'debt%' order by 1`, [SCHEMA]);
     const tables = t.rows.map((r) => r.table_name);
-    ok("168 applies against real Postgres", tables.length > 0);
+    ok("171 applies against real Postgres", tables.length > 0);
     ok("it creates exactly 7 debt tables", tables.length === 7, tables.join(", "));
 
     //  ── ABSENCE IS PART OF THE DESIGN, SO ABSENCE IS ASSERTED ──────
