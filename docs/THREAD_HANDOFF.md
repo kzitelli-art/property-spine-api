@@ -1,110 +1,129 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
-##  EQUITY BUILD 1 EXISTS — SCHEMA, WRITERS, READ, PROVEN HTTP.
-##  2026-08-15. DRAFTED UNATTENDED FROM A 15-DEAL SURVEY. NO OWNER
-##  REVIEW PASS HAS HAPPENED YET. READ THIS FIRST IF YOU ARE PICKING
-##  UP EQUITY, AND READ IT BEFORE THE DEBT BANNER BELOW IT.
+##  EQUITY — ROUND 4: FIVE STRUCTURAL RULINGS FROZEN, ONE DELIBERATELY
+##  NOT. SCHEMA + READ REBUILT AND PROVEN. NO ROUTE, NO UI, NO RELEASE.
+##  2026-08-15. READ THIS FIRST IF YOU ARE PICKING UP EQUITY, AND READ
+##  IT BEFORE THE DEBT BANNER BELOW IT.
 ## ══════════════════════════════════════════════════════════════════
 
 **Branch:** `claude/philosophy-doctrine-essence-ae6xni`, on top of the merged
-Debt release (`a870056`, PR #108). Migration **174**, next free number after
-Debt's 173 — re-verify against `main` before releasing; the same collision
-that hit Debt twice (168→171→173) can hit 174 too if another lane merges
-first. See `docs/release/DEBT_173_RUN_CARD.md` for the exact discipline —
-Equity's own run card does not exist yet because Equity has nothing to
-release: there is no real specimen data behind this build, on purpose.
+Debt release (`a870056`, PR #108). Migration file is **174** but is DRAFT
+ONLY — not released, not numbered against a live ledger check. Re-verify
+against `main` before ever releasing it; the same collision that hit Debt
+twice (168→171→173) can hit 174 too if another lane merges first.
 
 ### The one thing to understand before touching this domain
 
 A 15-deal portfolio equity survey — real executed agreements, real trial
 balances, real trackers, **not committed to this repo** (real individual
 investors and guarantors, named, with real dollar amounts — a data-handling
-call for the deal's owner, made once already this session; ask for the
-survey directly if it's needed again) — found that **for no deal in the
-surveyed portfolio does a complete, self-consistent cap table exist as a
-document.**
-Every tracker disagrees with its own governing agreement. Nothing accrues in
-any general ledger, anywhere. Redacted Schedule I's (`"[OWNERSHIP/INVESTOR
-INFORMATION MAINTAINED BY MANAGING MEMBER]"`) are the norm, not the
-exception — including at 4125, Debt's own clean specimen, whose common tier
-is 100% unnamed.
+call for the deal's owner; ask for the survey directly if it's needed
+again) — found that **for no deal in the surveyed portfolio does a
+complete, self-consistent cap table exist as a document.** Every tracker
+disagrees with its own governing agreement. Nothing accrues in any general
+ledger, anywhere.
 
-This is not a data-quality problem to work around. It is the actual shape of
-the domain, and the schema is built to hold disagreement and absence as
-first-class facts rather than smoothing over them. Read
-`docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md` before changing anything — its ten
-walls (E1–E10) are each forced by a specific, cited real document, not
-invented.
+The first pass at this domain (schema, writers, reader, HTTP route, UI
+wiring, Ask Spine registration) was built unattended in one session and then
+went through **four owner correction rounds** before anything froze —
+Debt's own contract took seven. Read
+`docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md` before changing anything: it
+documents all four rounds, the five rulings Round 4 froze, and the one
+piece (MSC's Minimum Dividend relationship) it deliberately left open.
+
+### The five frozen rulings, in one line each
+
+```text
+1  ONE shared capital_stack_positions identity for Common AND Preferred —
+   position_class is a tag, never a base-table split.
+2  A pro-rata preferred return AND a deal's default waterfall belong to
+   the ISSUER (common_equity_class_terms), never duplicated per holder.
+3  A side-letter override (common_equity_position_overrides) is surfaced
+   the moment it's written down, but APPLIED only when execution_status
+   = 'executed' — Lincoln's unexecuted override never reads as settled.
+4  preferred_equity_terms carries current_pay_rate_bp and accrued_rate_bp
+   as separate columns (Tower's SHAPE is real) — but no fixture or
+   migration writes Tower's own specific numbers (not yet governed).
+5  No capital_stack_evidence, no capital_stack_exposure table. Coverage
+   gaps are DERIVED by the reader from what's absent, never hand-authored.
+```
+
+### The one deliberately unfrozen piece
+
+MSC's 12.5% preferred return (4125) is well governed — OA §1.60/§1.42. A
+SEPARATE Minimum Dividend schedule (8%→9%→10%→11%→12%→12.5%) is only
+paraphrased by the survey, not quoted from source. Whether it is additive
+to, an offset against, or otherwise related to the 12.5% is unknown until
+OA **§1.49 itself** is read.
+`preferred_equity_terms.minimum_dividend_relationship_to_preferred_return`
+defaults to `'not_established'` in the schema and stays there in every
+fixture — never populated from the survey's paraphrase, however specific it
+reads.
 
 ### What is actually built and proven
 
 ```text
-migration 174 (7 tables)              DONE — migrations/174_equity_positions.sql
-canonical writers                     DONE — src/asset/equity_position_service.js
-position(property, as_of) read        DONE — src/asset/equity_position_read.js
-                                       (accrual is NEVER computed — see E3)
-HTTP read seam (1 GET)                DONE — src/asset/equity_routes.js
-Capital Stack room probe              DONE — src/surfaces/asset_management.js
-                                       now probes BOTH debt and equity
-Ask Spine registry entry              DONE, correctly `pending` —
-                                       tests/gate_ask_spine_readers.js
-funding-boundary gate coverage        DONE — tests/gate_funding_boundary.js
-browser UI                            NOT BUILT
-real 4125 establishment               NOT BUILT — no retained documents
-                                       exist for equity yet; MSC's real
-                                       terms are proven only as TEST fixtures
+migration 174 (7 tables, Round-4 shape)   DRAFT — migrations/174_equity_positions.sql
+canonical writers                         DONE — src/asset/equity_position_service.js
+position(property, as_of) read            DONE — src/asset/equity_position_read.js
+                                           (accrual is NEVER computed — see E3)
+HTTP read seam                            NOT BUILT — explicitly deferred this round
+Capital Stack room probe                  NOT WIRED — reverted to debt-only, this round
+Ask Spine registry entry                  DONE, correctly `pending` —
+                                           tests/gate_ask_spine_readers.js
+funding-boundary gate coverage            DONE — tests/gate_funding_boundary.js
+                                           (table/file names updated to Round-4 shape)
+browser UI                                NOT BUILT
+real 4125 establishment                   NOT BUILT — no retained documents
+                                           exist for equity yet; every fixture below
+                                           is a TEST fixture, not production truth
 ```
 
 DB proofs, real Postgres 16, all green:
 
 ```text
-34/34   equity_position_falsification.db.js   E1–E10, schema + read
-14/14   equity_routes_http.db.js              real HTTP, real authority checks
-92/92   gate_funding_boundary.js              (includes equity's new entry)
-62/62   gate_ask_spine_readers.js             (includes equity's new entry)
-54/54   asset_management_shell.db.js          no regression from the room-probe change
+46/46   equity_position_falsification.db.js   E1–E10 AND the 5 Round-4 rulings
+92/92   gate_funding_boundary.js              (Round-4 table/file names)
+62/62   gate_ask_spine_readers.js             (equity entry text updated)
+54/54   asset_management_shell.db.js          confirms the wiring revert is clean
+42/42   debt_position_falsification.db.js     confirms no cross-domain regression
 ```
 
 Every hostile fixture in the falsification suite is drawn from a real quote
-in `EQUITY_SURVEY.md`, cited in code comments — MSC's actual 12.5%
-quarterly/actual-360 terms with its Make-Whole and 7th-anniversary
-redemption date, the real OA-vs-tracker compounding disagreement, the real
-$389k-shaped contribution conflicts, the real Skyline GP pledge, the real
-Lightstone/Shafran K-1 substitution, the real Lincoln side-letter, the real
-debt-vs-equity characterization conflict on the same dollars. None of it is
-invented data — all of it is either the real 4125 specimen or explicitly
-labeled as drawn from a different named deal (Skyline) for the walls 4125
-alone doesn't exhibit.
+in the survey, cited in code comments — MSC's actual 12.5% quarterly/
+actual-360 terms with its Make-Whole and 7th-anniversary redemption date,
+the real OA-vs-tracker compounding disagreement, the real Skyline 7.5%
+pro-rata preferred return and 65/35 waterfall, the real Lincoln side-letter
+(recorded as unexecuted, and proven NOT applied to the read), the real
+Skyline GP pledge, the real Lightstone/Shafran K-1 substitution, the real
+debt-vs-equity characterization conflict on the same dollars.
 
-### What is deliberately NOT built (see the wall doc's Part 4 for the full list)
+### What is deliberately NOT built this round
 
 ```text
+NOT   a migration release, an HTTP route, UI, or Ask Spine wiring beyond the
+      registry entry — this round is schema + read contract only, per
+      explicit instruction: "No migration number, route, or UI yet."
 NOT   a waterfall distribution calculator — recording the terms is in scope,
       computing what a capital event pays out is not
-NOT   a generalized N-tier entity-graph engine — equity_capital_entities is
-      flat, one row per named tier, deep enough for 4125's four tiers
-      because they're each named, not a graph database
+NOT   a generalized N-tier entity-graph engine — the chain is positions,
+      flat and emergent, not a graph database
 NOT   reconciliation of any E4/E6/E7 conflict — recording a conflict is a
       writer's job, resolving one is a human's
-NOT   the browser UI, Ask Spine wiring, or real establishment against
-      retained documents — no documents have been retained for Equity yet
+NOT   MSC's actual Minimum Dividend mechanics — deliberately left
+      NOT_ESTABLISHED pending a real read of OA §1.49
 ```
 
 ### The honest caveat this banner exists to carry
 
-Debt's read contract went through **seven owner corrections** before it
-froze. This one has had **zero** — it was designed, schema'd, written, and
-proven entirely in one unattended session, end to end, against explicit
-instructions to keep building rather than wait. Every wall is forced by a
-real cited document, and every proof is real and green, but the design
-choices in Part 3 of the wall doc (particularly the flat entity-tier model,
-and the decision to never compute accrual even from an internally-consistent
-source) have not had a human's adversarial read yet. Treat this build as
-"Proven" on the project's own proof ladder — real DB, real HTTP — and
-explicitly NOT yet "reviewed." The next session that opens the wall doc
-should read its own closing section before writing a line of establishment
-code.
+Five structural rulings are frozen; treat them as settled unless new real
+evidence forces a reopening. The MSC piece is NOT frozen and must stay
+`not_established` in schema, writers, reader and every fixture until §1.49
+is actually read — resist the temptation to "finish" it from the survey's
+own paraphrase. The next session picking this up should build the migration
+release, the HTTP route and the UI as their own deliberate next step, not
+assume they were implied by this one.
 
 ## ══════════════════════════════════════════════════════════════════
 ##  DEBT 173 IS RELEASED AND 4125 CANONICAL TRUTH IS ESTABLISHED.

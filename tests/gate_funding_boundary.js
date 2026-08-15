@@ -222,13 +222,13 @@ const EQUITY_ECONOMIC = [
   "src/asset/equity_position_read.js",
 ];
 const EQUITY_ECONOMIC_TABLES = [
-  "equity_capital_entities",
-  "equity_positions",
-  "equity_position_pledges",
-  "equity_preferred_terms",
-  "equity_contribution_claims",
-  "equity_conflicts",
-  "equity_exposure",
+  "capital_stack_positions",
+  "common_equity_class_terms",
+  "common_equity_position_overrides",
+  "preferred_equity_terms",
+  "capital_stack_pledges",
+  "capital_amount_claims",
+  "capital_stack_conflicts",
 ];
 
 const DOMAINS = [
@@ -240,7 +240,7 @@ const DOMAINS = [
     //  rule asserts the read file's own vocabulary rather than a
     //  derivation, mirroring Debt's accrualRule shape.
     accrualFile: "src/asset/equity_position_read.js",
-    accrualRule: /effective_from|source_authority|position_kind/ },
+    accrualRule: /effective_from|source_authority|position_class/ },
   { name: "insurance",
     economic: INSURANCE_ECONOMIC, funding: INSURANCE_FUNDING,
     economicTables: INSURANCE_ECONOMIC_TABLES, fundingTables: INSURANCE_FUNDING_TABLES,

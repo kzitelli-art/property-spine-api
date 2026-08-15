@@ -1,335 +1,441 @@
 -- ════════════════════════════════════════════════════════════════════
 --  174_equity_positions.sql — THE GOVERNED EQUITY & PREFERRED EQUITY
---  DOMAIN. Forced by a 15-deal portfolio survey, not by one clean
---  specimen — see docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md, walls E1–E10.
+--  DOMAIN. Rebuilt after four owner correction rounds against a real
+--  15-deal portfolio survey — see docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md
+--  for the walls (E1–E10) and the rulings this shape now carries.
 --
---  ── THIS DOMAIN'S DEFAULT FACT IS ABSENCE, AND THAT IS THE POINT ─────
---  Debt's specimen (4125's first mortgage) was well-governed by one
---  clean monthly statement. Equity's own specimen property shows a
---  well-governed preferred position (MSC) sitting beside a common tier
---  whose Schedule I literally reads "[OWNERSHIP/INVESTOR INFORMATION
---  MAINTAINED BY MANAGING MEMBER]" for 100% of $9,048,350 — and that
---  redaction is the norm across the surveyed portfolio, not the
---  exception. This schema is built to make that absence a first-class,
---  visible fact (equity_exposure), never a blank nobody notices and
---  never a gap silently filled with a plausible-looking name.
+--  ── NOT RELEASED. NOT WIRED TO ANY ROUTE. DRAFT SQL ONLY ─────────────
+--  Round 4 explicitly withheld a migration number, a route and UI:
+--  "You may now draft the structural SQL and read contract... No
+--  migration number, route, or UI yet." This file exists so the shape
+--  can be proven against real Postgres; it is not a release.
 --
---  ── NOTHING ACCRUES IN ANY GENERAL LEDGER, ANYWHERE (E3) ────────────
---  Not one deal in the survey books a preferred-return accrual, at any
---  rate, at any deal. There is no accrued_balance column anywhere in
---  this file. Accrual is a READING of position(as_of) applied to dated
---  preferred terms, exactly like Debt's projected balance — never a
---  stored number, so it can never be read back as though someone had
---  actually computed and recorded it.
+--  ── ONE SHARED IDENTITY, NOT TWO BASE TABLES (Round-4 Ruling 1) ──────
+--  Round 2 tried splitting Common and Preferred into their own base
+--  tables and Round 3 reversed that: "I was pushing too hard toward a
+--  theoretically clean split." One holder-at-an-issuer is one KIND of
+--  fact regardless of what it holds — capital_stack_positions is that
+--  shared identity. position_class is an identity TAG, not a table
+--  split. Common and Preferred economics live in SEPARATE tables
+--  UNDERNEATH this shared identity (common_equity_class_terms /
+--  common_equity_position_overrides / preferred_equity_terms) —
+--  separate READINGS, not separate holders.
 --
---  ── SOURCES DISAGREE, AND THAT DISAGREEMENT IS ITSELF A FACT (E2,E4) ─
---  Every tracker the survey found disagrees with its own governing
---  document — different rate, different compounding convention,
---  different contributed-capital total. equity_preferred_terms and
---  equity_contribution_claims are APPEND-ONLY, one row PER SOURCE, on
---  purpose: this schema has no "the rate is X" column to fight over,
---  because there routinely is no single X that all real sources agree
---  on. position() returns every sourced claim, attributed, never a
---  reconciliation nobody performed.
+--  ── TIER_ORDER IS GONE. THE GRAPH IS POSITIONS, NOT A DISPLAY FIELD ──
+--  The old equity_capital_entities.tier_order was display-only and had
+--  been standing in for real ownership facts nobody had recorded (e.g.
+--  "Holdings LLC owns 77.57% of Interest Holder LLC" existed nowhere as
+--  data). There is no entities table any more. A tier is now just
+--  another capital_stack_positions row: issuer_legal_entity_id names
+--  the entity whose capital table this is, and the holder of one tier
+--  can itself be the issuer of the next. The ownership chain EMERGES
+--  from real position rows, never from a hierarchy column.
 --
---  ── A MEMBER LOAN IS DEBT, EVEN WHEN FUNDED BY EQUITY HOLDERS (E5) ──
---  No interest rate, no maturity, no lien position, no payment schedule
---  column exists anywhere in this file. A member loan cannot be entered
---  here no matter who funded it or how entangled it is with the same
---  people's equity — mirrors the funding-boundary discipline that
---  already keeps Capital Stack from importing Tax/Insurance funding
---  truth (gate_funding_boundary.js covers this file too).
-create table if not exists equity_capital_entities (
-  id                     uuid primary key default gen_random_uuid(),
-  property_id            uuid not null references properties(id) on delete restrict,
-
-  --  One row per TIER in the property's ownership chain — e.g. 4125 has
-  --  "4125 Chestnut Interest Holder LLC" and, one tier up,
-  --  "4125 Chestnut Holdings LLC". Flat, not a recursive graph: deep
-  --  enough because each tier is named in a real document, not a
-  --  generalised company-structure engine (see the read contract's
-  --  "not built" list).
-  entity_kind            text not null check (entity_kind in
-                           ('tic_interest','llc_membership','lp_interest',
-                            'condo_interest','other')),
-
-  --  The tier itself is always a named entity in every surveyed deal,
-  --  even at deals where that entity's OWN members are redacted (E1) —
-  --  so no attributed-name escape hatch here, unlike parties below.
-  legal_entity_id        uuid not null references legal_entities(id) on delete restrict,
-
-  --  Display ordering only — 1 nearest the property, increasing moving
-  --  up the stack. Never used for any economic derivation.
-  tier_order             int check (tier_order >= 1),
-
-  effective_from         date not null,
-  effective_to           date,
-
-  source_artifact_id     uuid references source_artifacts(id),
-  provenance_note        text,
-
-  recorded_by_user_id    uuid not null references users(id),
-  recorded_at            timestamptz not null default now(),
-
-  constraint equity_entity_effective_order check (
-    effective_to is null or effective_to >= effective_from
-  )
-);
-
-create index if not exists idx_equity_entities_property
-  on equity_capital_entities (property_id, tier_order);
-
---  ── POSITIONS ──────────────────────────────────────────────────────
---  One row per holder-at-an-entity. Append-only, effective-dated, POINTS
---  BACKWARD on transfer — same discipline as debt_instrument_parties:
---  no superseded_by, an assignment inserts a row naming the row it
---  replaces, the earlier row is never UPDATEd.
+--  ── PRO-RATA PREFERRED RETURN BELONGS TO THE ISSUER, NOT A HOLDER
+--     (Round-4 Ruling 2) ────────────────────────────────────────────
+--  Skyline's 7.5% and Greenery's 7% preferred returns are shared by
+--  EVERY common holder of that entity pro rata — they are a term of
+--  the issuer's common class, stated once, never copied onto each
+--  holder's own position. common_equity_class_terms exists for exactly
+--  this and is keyed by issuer, not by position.
 --
---  ⚠ W1/E1 — a party row is only superseded by ANOTHER PARTY ROW citing
---  an actual transfer/assignment instrument. A K-1 or tracker later
---  naming a different holder, with no assignment on file, does NOT
---  supersede this row — it becomes an equity_conflicts row instead
---  (E7). Skyline Minority's 2024 K-1s go to Aryeh Lightstone in Joel
---  Shafran's Schedule I slot with no assignment, no GP consent, no
---  amended schedule anywhere, and the governing LPA itself says such a
---  transfer is "deemed void and of no force or effect" — that fact
---  pattern is a conflict, never a silent supersession.
-create table if not exists equity_positions (
-  id                     uuid primary key default gen_random_uuid(),
-  capital_entity_id      uuid not null references equity_capital_entities(id) on delete restrict,
+--  ── A SIDE LETTER IS A HOLDER-SPECIFIC OVERRIDE, AND AN UNEXECUTED
+--     ONE MUST NEVER READ AS SETTLED (Round-4 Ruling 3) ───────────────
+--  Lincoln's side letter at Skyline Note Owner is the opposite scope
+--  from a class term: it exempts ONE holder from the promote. It lives
+--  in common_equity_position_overrides, scoped to one position_id, and
+--  carries execution_status — the reader (equity_position_read.js) must
+--  refuse to apply an override whose execution_status is not 'executed'
+--  to the current economic read, even though it stays visible.
+--
+--  ── STEPPED PAID/ACCRUED MECHANICS ARE REAL. THE NUMBERS ARE NOT YET
+--     GOVERNED (Round-4 Ruling 4) ───────────────────────────────────
+--  Tower Place proves a preferred position can carry a genuinely
+--  stepped structure — a paid rate and a separately accruing rate,
+--  changing over dated steps. preferred_equity_terms carries
+--  current_pay_rate_bp and accrued_rate_bp as two distinct columns for
+--  exactly this shape. Tower's own specific numbers (the survey's
+--  paraphrased "4/4 → 6/2") are NOT written into this migration or any
+--  fixture — the structural columns exist because the shape is real;
+--  the specific figures stay out until read from the governing document
+--  itself, the same discipline MSC's Minimum Dividend gets below.
+--
+--  ── MSC'S MINIMUM DIVIDEND IS DELIBERATELY LEFT NOT_ESTABLISHED ──────
+--  MSC's 12.5% preferred return is well governed (Interest Holder OA
+--  §1.60, §1.42). The survey ALSO paraphrases a separate "Minimum
+--  Dividend" schedule stepping 8% → 9% → 10% → 11% → 12% → 12.5% — but
+--  only paraphrases it; the actual governing clause is OA §1.49, which
+--  has not been read. Whether the Minimum Dividend is ADDITIVE to the
+--  12.5% preferred return, an OFFSET against it, or something else
+--  entirely is genuinely unknown, and minimum_dividend_relationship_
+--  to_preferred_return exists specifically to hold NOT_ESTABLISHED
+--  rather than a guessed mechanic. This is §38's line, applied at the
+--  first schema conversation: a recorded fact (12.5%, from the OA) and
+--  a derived attribution (what the Minimum Dividend DOES to it) are
+--  different kinds of thing, and only the first is governed here.
+--
+--  ── STILL TRUE FROM THE FIRST DRAFT, CARRIED FORWARD ──────────────────
+--  no accrued_balance column anywhere (E3) · claims are append-only,
+--  one row per source (E2, E4) · a member loan is Debt's shape, never
+--  representable here (E5) · a K-1/tracker naming a different holder
+--  with no assignment is a conflict, never a silent supersession (E7) ·
+--  no capital_stack_evidence shared-provenance table — one source-
+--  backed observation per row is disciplined enough at this scale · no
+--  capital_stack_exposure table — coverage gaps (an entity with zero
+--  positions, a claim with no ownership_percent recorded, and so on)
+--  are DERIVED by the reader from what is absent, never manually
+--  maintained as a parallel ledger of blanks.
+create table if not exists capital_stack_positions (
+  id                      uuid primary key default gen_random_uuid(),
+  property_id             uuid not null references properties(id) on delete restrict,
 
-  --  E1.2 — two kinds, not three. A pro-rata preferred RETURN shared by
-  --  a common holder (shape 1) and a stepped/paid-accrued return
-  --  (shape 3) are both just dated rows in equity_preferred_terms
-  --  attached to a `common` position — never a third position_kind.
-  position_kind          text not null check (position_kind in
-                           ('common','preferred_class')),
+  --  The entity whose capital table this position sits in. A tier one
+  --  level up is just another row where THIS row's holder becomes THAT
+  --  row's issuer — the chain is data, never a tier_order column.
+  issuer_legal_entity_id  uuid not null references legal_entities(id) on delete restrict,
 
-  --  EXACTLY ONE of these, enforced below — same rule as Debt's
-  --  guarantors. Reading an operating agreement or a K-1 filename must
-  --  never mint a durable Spine person (PHILOSOPHY §12).
-  legal_entity_id        uuid references legal_entities(id) on delete restrict,
-  party_name_text        text,
+  --  An IDENTITY TAG, not a base-table split (Round-4 Ruling 1). Common
+  --  and Preferred share this one table; their economics diverge only
+  --  in the terms tables underneath.
+  position_class          text not null check (position_class in ('common','preferred')),
 
-  effective_from         date not null,
-  effective_to           date,
+  --  EXACTLY ONE of these — same rule as Debt's guarantors. Reading an
+  --  operating agreement or a K-1 filename must never mint a durable
+  --  Spine person (PHILOSOPHY §12).
+  holder_legal_entity_id  uuid references legal_entities(id) on delete restrict,
+  holder_name_text        text,
 
-  supersedes_position_id uuid references equity_positions(id),
+  effective_from          date not null,
+  effective_to            date,
 
-  source_artifact_id     uuid references source_artifacts(id),
-  provenance_note        text,
+  --  ⚠ E1/E7 — superseded ONLY by another position row citing an actual
+  --  transfer/assignment instrument. A K-1 or tracker later naming a
+  --  different holder, with no assignment on file, is NEVER written as
+  --  a supersession here — it becomes a capital_stack_conflicts row.
+  supersedes_position_id  uuid references capital_stack_positions(id),
 
-  recorded_by_user_id    uuid not null references users(id),
-  recorded_at            timestamptz not null default now(),
+  source_artifact_id      uuid references source_artifacts(id),
+  provenance_note         text,
 
-  constraint equity_position_exactly_one_subject check (
-    (legal_entity_id is not null and party_name_text is null) or
-    (legal_entity_id is null and party_name_text is not null
-       and length(btrim(party_name_text)) > 0)
+  recorded_by_user_id     uuid not null references users(id),
+  recorded_at             timestamptz not null default now(),
+
+  constraint capital_stack_position_exactly_one_holder check (
+    (holder_legal_entity_id is not null and holder_name_text is null) or
+    (holder_legal_entity_id is null and holder_name_text is not null
+       and length(btrim(holder_name_text)) > 0)
   ),
-  constraint equity_position_effective_order check (
+  constraint capital_stack_position_effective_order check (
     effective_to is null or effective_to >= effective_from
   )
 );
 
-create index if not exists idx_equity_positions_entity
-  on equity_positions (capital_entity_id, position_kind, effective_from);
+create index if not exists idx_capital_stack_positions_property
+  on capital_stack_positions (property_id, effective_from);
+create index if not exists idx_capital_stack_positions_issuer
+  on capital_stack_positions (issuer_legal_entity_id, position_class, effective_from);
 
---  ── ENCUMBRANCE (E9) ───────────────────────────────────────────────
---  A pledge is its own dated fact, APPEND-ONLY, never a column on
---  equity_positions. Absence of a row means NOT_ESTABLISHED — "nobody
---  has recorded whether this is pledged" — never "confirmed
---  unencumbered". Skyline Apartments GP LLC's interest, and the
---  Retaining Partners' interests, were pledged to a lender in September
---  2025; Exhibit A alone would never have shown that.
-create table if not exists equity_position_pledges (
-  id                     uuid primary key default gen_random_uuid(),
-  position_id            uuid not null references equity_positions(id) on delete restrict,
+--  ── COMMON CLASS TERMS (Round-4 Ruling 2) ────────────────────────────
+--  "Skyline/Greenery's pro-rata pref belongs once at the entity/
+--  WATERFALL level, not per-holder" — the ruling names both in one
+--  breath, so this table carries both: a pro-rata preferred RETURN
+--  shared by every common holder of ONE issuer (Skyline's 7.5%,
+--  Greenery's 7%) AND that issuer's default waterfall priority (the
+--  Skyline deal's own 65/35 GP split), each recorded ONCE at the
+--  issuer, never duplicated onto each holder's own position. This is
+--  NOT a position-scoped table; it is issuer-scoped on purpose — the
+--  opposite scope from common_equity_position_overrides below, which
+--  is how ONE holder (Lincoln) can read differently from this default
+--  without this table ever being touched.
+create table if not exists common_equity_class_terms (
+  id                      uuid primary key default gen_random_uuid(),
+  property_id             uuid not null references properties(id) on delete restrict,
+  issuer_legal_entity_id  uuid not null references legal_entities(id) on delete restrict,
 
-  pledgee_name_text      text not null check (length(btrim(pledgee_name_text)) > 0),
-  pledge_description     text,
+  term_source             text not null check (term_source in
+                            ('governing_document','amendment')),
+  source_authority        text not null check (source_authority in
+                            ('governed_read','accounting_record',
+                             'tracker_claim','verbal_claim','secondary_summary')),
 
-  effective_from         date not null,
-  effective_to           date,
+  rate_bp                 int check (rate_bp >= 0),
+  rate_convention_as_stated  text,
+  compounding             text check (compounding in
+                            ('monthly','quarterly','annual','simple','unstated')),
+  waterfall_priority_text text,
 
-  source_artifact_id     uuid references source_artifacts(id),
-  provenance_note        text,
+  effective_from          date not null,
+  effective_to            date,
 
-  recorded_by_user_id    uuid not null references users(id),
-  recorded_at            timestamptz not null default now(),
+  source_artifact_id      uuid references source_artifacts(id),
+  provenance_note         text,
 
-  constraint equity_pledge_effective_order check (
+  recorded_by_user_id     uuid not null references users(id),
+  recorded_at             timestamptz not null default now(),
+
+  constraint common_class_terms_effective_order check (
     effective_to is null or effective_to >= effective_from
   )
 );
 
-create index if not exists idx_equity_pledges_position
-  on equity_position_pledges (position_id, effective_from);
+create index if not exists idx_common_class_terms_issuer
+  on common_equity_class_terms (issuer_legal_entity_id, effective_from);
 
---  ── PREFERRED TERMS (E2, E8) ───────────────────────────────────────
---  APPEND-ONLY, one row PER SOURCE'S STATEMENT of the terms — never one
---  "the rate is X" column. 4125's MSC HoldCo Pay Schedule computes
---  MONTHLY compounding; the Interest Holder OA §1.60 states QUARTERLY,
---  actual/360. Both real, both current, disagreeing — both get a row,
---  distinguished by source_authority, and position() returns both.
+--  ── HOLDER-SPECIFIC OVERRIDES (Round-4 Ruling 3) ─────────────────────
+--  A side letter overrides ONE holder's terms, never the class's. This
+--  is a position-scoped table on purpose — the opposite scope from
+--  common_equity_class_terms above.
 --
---  ⚠ Convention is stored AS WRITTEN (rate_convention_as_stated), not
---  forced into a rigid enum — the survey shows "compounded monthly",
---  "compounded quarterly, actual/360", "added to unreturned Capital
---  Contributions" with no compounding word at all, and no convention
---  stated whatsoever (Tower Place). Normalising that variance into one
---  clean enum before it is understood is exactly the premature
---  confidence this domain exists to refuse.
---
---  A side letter (E8) is its own row, term_source='side_letter',
---  layered over — never replacing — the position's deal-level terms.
-create table if not exists equity_preferred_terms (
-  id                     uuid primary key default gen_random_uuid(),
-  position_id            uuid not null references equity_positions(id) on delete restrict,
+--  ⚠ execution_status IS THE WHOLE POINT OF THIS TABLE. The Lincoln
+--  side letter at Skyline Note Owner exists only as counsel's draft
+--  framing ("consistent with how we've handled this in the past") —
+--  no signature, no execution date found in the survey. A row here
+--  with execution_status != 'executed' is returned by the reader as a
+--  visible, dated fact — a real thing that exists — but is NEVER
+--  applied to the current economic read as though it were settled.
+--  'status_unknown' is a THIRD state, not folded into either extreme:
+--  a source describing a side letter with no statement about whether
+--  it was signed is a different fact from one explicitly still in
+--  draft, and both are different from a confirmed execution date.
+create table if not exists common_equity_position_overrides (
+  id                      uuid primary key default gen_random_uuid(),
+  position_id             uuid not null references capital_stack_positions(id) on delete restrict,
 
-  term_source            text not null check (term_source in
-                           ('governing_document','side_letter','amendment')),
+  override_kind           text not null check (override_kind in
+                            ('waterfall_priority','promote_exemption','other')),
+  override_text           text not null check (length(btrim(override_text)) > 0),
+
+  execution_status        text not null check (execution_status in
+                            ('executed','draft_unexecuted','status_unknown')),
+  execution_date          date,
+
+  term_source             text not null default 'side_letter' check (term_source in
+                            ('side_letter','amendment')),
+  source_authority        text not null check (source_authority in
+                            ('governed_read','accounting_record',
+                             'tracker_claim','verbal_claim','secondary_summary')),
+
+  effective_from          date not null,
+  effective_to            date,
+
+  source_artifact_id      uuid references source_artifacts(id),
+  provenance_note         text,
+
+  recorded_by_user_id     uuid not null references users(id),
+  recorded_at             timestamptz not null default now(),
+
+  constraint position_override_effective_order check (
+    effective_to is null or effective_to >= effective_from
+  ),
+  --  An executed override without an execution date is a contradiction
+  --  in terms — if the fact "it executed" is known, the date belongs
+  --  with it. draft_unexecuted / status_unknown carry no date, because
+  --  there is nothing to date yet.
+  constraint position_override_execution_date_iff_executed check (
+    (execution_status = 'executed' and execution_date is not null) or
+    (execution_status <> 'executed' and execution_date is null)
+  )
+);
+
+create index if not exists idx_position_overrides_position
+  on common_equity_position_overrides (position_id, effective_from);
+
+--  ── PREFERRED TERMS (E2, E3, Round-4 Rulings 4 & the MSC deferral) ───
+--  APPEND-ONLY, one row PER SOURCE'S STATEMENT of the terms, attached
+--  ONLY to a position_class = 'preferred' position (enforced by the
+--  writer, not a cross-table check — same discipline Debt applies to
+--  its own party-role writers).
+--
+--  current_pay_rate_bp / accrued_rate_bp are TWO columns, not one,
+--  because Tower Place proves a preferred position can carry a
+--  genuinely stepped paid-vs-accruing structure. Tower's own specific
+--  numbers are not written anywhere in this schema or its fixtures —
+--  the columns exist because the SHAPE is real; the FIGURES stay out
+--  until read from the governing document (Round-4 Ruling 4).
+--
+--  minimum_dividend_schedule_text / minimum_dividend_relationship_to_
+--  preferred_return exist for MSC's shape and MSC's shape only: a
+--  preferred return that is well governed (current_pay_rate_bp = 1250,
+--  source_authority = governed_read) sitting beside a SEPARATE
+--  Minimum Dividend schedule the survey paraphrases but does not
+--  quote from source. The relationship field defaults to
+--  'not_established' and MUST stay there until OA §1.49 itself is
+--  read — this is the one deliberately unfrozen piece of Round 4.
+create table if not exists preferred_equity_terms (
+  id                      uuid primary key default gen_random_uuid(),
+  position_id             uuid not null references capital_stack_positions(id) on delete restrict,
+
+  term_source             text not null check (term_source in
+                            ('governing_document','side_letter','amendment','secondary_summary')),
+  source_authority        text not null check (source_authority in
+                            ('governed_read','accounting_record',
+                             'tracker_claim','verbal_claim','secondary_summary')),
 
   --  Passive representation, like Debt's floating-rate columns — a rate
   --  is recorded as STATED, never computed or verified against a feed.
-  rate_bp                int check (rate_bp >= 0),
+  current_pay_rate_bp     int check (current_pay_rate_bp >= 0),
+  accrued_rate_bp         int check (accrued_rate_bp >= 0),
   rate_convention_as_stated  text,
-  compounding            text check (compounding in
-                           ('monthly','quarterly','annual','simple','unstated')),
+  compounding             text check (compounding in
+                            ('monthly','quarterly','annual','simple','unstated')),
+  step_schedule_text      text,
 
-  --  Free text, not a tier calculator — a waterfall calculator is
-  --  explicitly out of scope (see the read contract). Recording the
-  --  clause is in scope; computing a distribution from it is not.
+  --  ⚠ MSC's shape. Left deliberately open — see the file header and
+  --  docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md.
+  minimum_dividend_schedule_text  text,
+  minimum_dividend_relationship_to_preferred_return  text
+                          not null default 'not_established' check (
+                            minimum_dividend_relationship_to_preferred_return in
+                            ('additive','offset','other','not_established')),
+
   waterfall_priority_text   text,
   redemption_terms_text     text,
   make_whole_text           text,
+  control_rights_text       text,
+  redemption_or_maturity_date  date,
 
-  --  §40.4's authority vocabulary, extended by the two source kinds
-  --  this domain's survey actually found and Debt's four values don't
-  --  cover: an internally-maintained operating spreadsheet is neither a
-  --  transcript, an email, nor a user assertion.
-  source_authority       text not null check (source_authority in
-                           ('governed_read','accounting_record',
-                            'tracker_claim','verbal_claim')),
+  effective_from          date not null,
+  effective_to            date,
 
-  effective_from         date not null,
-  effective_to           date,
+  source_artifact_id      uuid references source_artifacts(id),
+  provenance_note         text,
 
-  source_artifact_id     uuid references source_artifacts(id),
-  provenance_note        text,
+  recorded_by_user_id     uuid not null references users(id),
+  recorded_at             timestamptz not null default now(),
 
-  recorded_by_user_id    uuid not null references users(id),
-  recorded_at            timestamptz not null default now(),
-
-  constraint equity_terms_effective_order check (
+  constraint preferred_terms_effective_order check (
     effective_to is null or effective_to >= effective_from
   )
 );
 
-create index if not exists idx_equity_terms_position
-  on equity_preferred_terms (position_id, source_authority, effective_from);
+create index if not exists idx_preferred_terms_position
+  on preferred_equity_terms (position_id, source_authority, effective_from);
 
---  ── CONTRIBUTION CLAIMS (E4) ───────────────────────────────────────
---  APPEND-ONLY, one row PER SOURCE'S CLAIM of an amount contributed —
---  never a single contributed_amount column. Skyline's GL account 3110
---  carries $1,006,580 against a $23,313 Exhibit A commitment (43×);
---  Greenery's contributed equity is $3,701,824 in QuickBooks, $4,091,501
---  in the tracker, $4,100,000 on Schedule I — a $389,677 gap nobody has
---  reconciled. position() returns every claim, dated and attributed;
---  it does not pick a winner and it does not average.
-create table if not exists equity_contribution_claims (
-  id                     uuid primary key default gen_random_uuid(),
-  position_id            uuid not null references equity_positions(id) on delete restrict,
+--  ── ENCUMBRANCE (E9) ───────────────────────────────────────────────
+--  A pledge is its own dated fact, APPEND-ONLY, never a column on
+--  capital_stack_positions. Absence of a row means NOT_ESTABLISHED —
+--  never "confirmed unencumbered".
+create table if not exists capital_stack_pledges (
+  id                      uuid primary key default gen_random_uuid(),
+  position_id             uuid not null references capital_stack_positions(id) on delete restrict,
 
-  claim_source           text not null check (claim_source in
-                           ('governing_document','accounting_record','tracker')),
+  pledgee_name_text       text not null check (length(btrim(pledgee_name_text)) > 0),
+  pledge_description      text,
 
-  amount_cents           bigint not null check (amount_cents >= 0),
-  as_of_date             date not null,
+  effective_from          date not null,
+  effective_to            date,
 
-  source_artifact_id     uuid references source_artifacts(id),
-  provenance_note        text,
+  source_artifact_id      uuid references source_artifacts(id),
+  provenance_note         text,
 
-  recorded_by_user_id    uuid not null references users(id),
-  recorded_at            timestamptz not null default now()
+  recorded_by_user_id     uuid not null references users(id),
+  recorded_at             timestamptz not null default now(),
+
+  constraint capital_stack_pledge_effective_order check (
+    effective_to is null or effective_to >= effective_from
+  )
 );
 
-create index if not exists idx_equity_contrib_position
-  on equity_contribution_claims (position_id, claim_source, as_of_date desc);
+create index if not exists idx_capital_stack_pledges_position
+  on capital_stack_pledges (position_id, effective_from);
+
+--  ── CAPITAL AMOUNT CLAIMS (E4) ─────────────────────────────────────
+--  Narrower than the first draft's "contribution claims"/"capital
+--  movements": this table holds STANDING TOTALS a source states as of
+--  a date, never individual cash transactions — no source in the
+--  survey evidences movement-by-movement history, only period totals
+--  (a GL balance, a tracker's running figure, a Schedule I percentage).
+--
+--  ⚠ EXACTLY ONE OF amount_cents / ownership_percent PER ROW. Ownership
+--  percentage is kept a SEPARATE economic fact from contribution
+--  amount, even though both are per-source claims about the same
+--  position — a row claiming "43.2%" and a row claiming "$1,006,580"
+--  are two different KINDS of fact and are never merged into one
+--  record, even when the same source states both.
+--
+--  ⚠ claim_source includes 'internal_note' — the fix for a real bug:
+--  Rob Vernicek's verbal "$3.7MM" estimate was originally forced into
+--  'tracker' for lack of anywhere else to put it, because the first
+--  draft's enum had no slot for a spoken/internal estimate. asserted_
+--  by_text exists so that kind of claim carries who said it, not just
+--  that it was said — necessary precisely because 'internal_note' is
+--  the WEAKEST source_authority this table accepts and a reader must
+--  be able to see whose estimate it is, not just that it disagrees.
+create table if not exists capital_amount_claims (
+  id                      uuid primary key default gen_random_uuid(),
+  position_id             uuid not null references capital_stack_positions(id) on delete restrict,
+
+  claim_source            text not null check (claim_source in
+                            ('governing_document','accounting_record','tracker','internal_note')),
+  asserted_by_text        text,
+
+  amount_cents            bigint check (amount_cents >= 0),
+  ownership_percent       numeric(7,4) check (ownership_percent >= 0 and ownership_percent <= 100),
+
+  as_of_date              date not null,
+
+  source_artifact_id      uuid references source_artifacts(id),
+  provenance_note         text,
+
+  recorded_by_user_id     uuid not null references users(id),
+  recorded_at             timestamptz not null default now(),
+
+  constraint capital_amount_claim_exactly_one_value check (
+    (amount_cents is not null and ownership_percent is null) or
+    (amount_cents is null and ownership_percent is not null)
+  )
+);
+
+create index if not exists idx_capital_amount_claims_position
+  on capital_amount_claims (position_id, claim_source, as_of_date desc);
 
 --  ── CONFLICTS (E6, E7) ─────────────────────────────────────────────
 --  Two recorded claims about the SAME fact, disagreeing, BOTH retained,
---  neither deleted to make room for the other. Distinct from
---  equity_exposure below: a conflict is two positive statements that
---  contradict each other; Exposure is the absence of a statement at
---  all. `1417 Note Purchase - Summary.docx` says $338,050 was
---  "re-contributed as equity in Skyline Note Owner LLC"; the Carlisle
---  trial balance carries the same dollars (off by $50) as
---  `2525 Loan from Shafran`, a liability — a debt-vs-equity
---  characterization conflict on the same money, not resolved by
---  picking a side.
-create table if not exists equity_conflicts (
-  id                     uuid primary key default gen_random_uuid(),
-  property_id            uuid not null references properties(id) on delete restrict,
+--  neither deleted to make room for the other. Kept as its own durable
+--  table on purpose (Round-3 ruling): these are genuine unresolved
+--  facts about the world, not a UI state to be dismissed.
+create table if not exists capital_stack_conflicts (
+  id                      uuid primary key default gen_random_uuid(),
+  property_id             uuid not null references properties(id) on delete restrict,
 
-  --  Nullable — a characterization conflict (E6) may not yet have an
-  --  equity_positions row on either side of it to attach to.
-  position_id            uuid references equity_positions(id) on delete restrict,
+  --  Nullable — a characterization conflict (E6) may not yet have a
+  --  capital_stack_positions row on either side of it to attach to.
+  position_id             uuid references capital_stack_positions(id) on delete restrict,
 
-  conflict_kind          text not null check (conflict_kind in
-                           ('characterization_debt_vs_equity','holder_identity',
-                            'contribution_amount','rate_or_convention','other')),
+  conflict_kind           text not null check (conflict_kind in
+                            ('characterization_debt_vs_equity','holder_identity',
+                             'contribution_amount','ownership_percent',
+                             'rate_or_convention','other')),
 
-  claim_a_text           text not null check (length(btrim(claim_a_text)) > 0),
+  claim_a_text            text not null check (length(btrim(claim_a_text)) > 0),
   claim_a_source_artifact_id  uuid references source_artifacts(id),
 
-  claim_b_text           text not null check (length(btrim(claim_b_text)) > 0),
+  claim_b_text            text not null check (length(btrim(claim_b_text)) > 0),
   claim_b_source_artifact_id  uuid references source_artifacts(id),
 
-  noted_as_of            date not null,
-  provenance_note        text,
+  noted_as_of             date not null,
+  provenance_note         text,
 
-  recorded_by_user_id    uuid not null references users(id),
-  recorded_at            timestamptz not null default now()
+  recorded_by_user_id     uuid not null references users(id),
+  recorded_at             timestamptz not null default now()
 );
 
-create index if not exists idx_equity_conflicts_property
-  on equity_conflicts (property_id, conflict_kind, noted_as_of desc);
+create index if not exists idx_capital_stack_conflicts_property
+  on capital_stack_conflicts (property_id, conflict_kind, noted_as_of desc);
 
---  ── EXPOSURE (E10) ─────────────────────────────────────────────────
---  CLAUDE.md's Exposure contract, structural — the six parts as
---  columns, not a table to backfill with a guess. 4233 GP Holdco's
---  Class A is 100% redacted, zero names, zero amounts by name; 1417
---  Note Owner's Schedule I lists ONE member at $0 / 0.000% and then
---  asserts TOTALS $1,550,000.00 / 100.000%. Both are Exposure, not a
---  cap table Spine should attempt to reconstruct.
-create table if not exists equity_exposure (
-  id                     uuid primary key default gen_random_uuid(),
-  property_id            uuid not null references properties(id) on delete restrict,
-  capital_entity_id      uuid references equity_capital_entities(id) on delete restrict,
-
-  what_text              text not null check (length(btrim(what_text)) > 0),
-
-  --  Nullable ON PURPOSE — "if known", never zero. A null here means
-  --  Spine does not even have an estimate of scale, which is a
-  --  different fact from a zero-dollar exposure.
-  magnitude_cents        bigint check (magnitude_cents >= 0),
-  magnitude_basis_text   text,
-
-  why_unresolved_text    text not null check (length(btrim(why_unresolved_text)) > 0),
-  resolution_text        text,
-
-  as_of_date             date not null,
-
-  --  Null reads as UNASSIGNED, never as silently missing.
-  owner_user_id          uuid references users(id),
-
-  source_artifact_id     uuid references source_artifacts(id),
-  provenance_note        text,
-
-  recorded_by_user_id    uuid not null references users(id),
-  recorded_at            timestamptz not null default now()
-);
-
-create index if not exists idx_equity_exposure_property
-  on equity_exposure (property_id, as_of_date desc);
+--  ── DELIBERATELY ABSENT ────────────────────────────────────────────
+--  no capital_stack_evidence — a shared multi-source provenance table
+--    was proposed and withdrawn (Round 3): one source-backed
+--    observation per row is disciplined enough until two or three real
+--    cases prove a shared evidence model is actually needed.
+--  no capital_stack_exposure — the first draft's six-part Exposure
+--    table was withdrawn (Round 3): coverage gaps (an issuer with zero
+--    positions, a position with no ownership_percent claim, a
+--    preferred position with no minimum_dividend_relationship
+--    established) are DERIVED by equity_position_read.js from what is
+--    absent, never separately authored and never allowed to drift from
+--    what the rest of this schema actually holds.
+--  no accrued_balance column, anywhere — E3, unchanged from the first
+--    draft: nothing accrues in any surveyed general ledger.
+--  no interest_rate_bp / maturity_date / lien_position column on any
+--    table here — E5, unchanged: a member loan is Debt's shape.
