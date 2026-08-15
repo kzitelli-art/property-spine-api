@@ -157,12 +157,26 @@ async function materializeRentableSpaces(client, {
       byLabel.set(firstLabel, { id: placeholder.id, space_label: firstLabel });
       receipt.consumed_placeholder = { space_id: placeholder.id, became: firstLabel };
     } else {
-      //  The first label already exists as its own row (a re-run after a
-      //  partial load). The placeholder is then surplus, and surplus
-      //  UNREFERENCED inventory is deleted rather than left to read as a
-      //  vacant bed — that is the whole defect this module removes.
-      await client.query(`delete from spaces where id = $1`, [placeholder.id]);
-      receipt.consumed_placeholder = { space_id: placeholder.id, became: null, removed: true };
+      //  The first label ALREADY exists as its own row, so there is nothing
+      //  for the placeholder to become — the unit carries one more rentable
+      //  position than the source says exists.
+      //
+      //  An earlier version DELETED it here, on the reasoning that surplus
+      //  unreferenced inventory should not linger as a phantom bed. That was
+      //  wrong, and wrong in the direction this module exists to prevent:
+      //  silently destroying a rentable position is the same class of act as
+      //  silently creating one. Both change what the building IS without a
+      //  human seeing it, and a delete cannot be reviewed after the fact.
+      //
+      //  It also cannot be reached by a clean run. It means a partial load,
+      //  a hand-edit, or two importers disagreeing — every one of which is a
+      //  question for a person, not a row for an importer to remove.
+      throw err("SURPLUS_PLACEHOLDER",
+        `Unit already has a '${wanted[0]}' position, so its '${PLACEHOLDER_LABEL}' ` +
+        `placeholder is surplus and cannot be consumed. Nothing was changed. ` +
+        `Resolve the extra position before re-running onboarding.`,
+        { unit_id, space_id: placeholder.id, surplus_label: PLACEHOLDER_LABEL,
+          existing_labels: existing.map((s) => s.space_label) });
     }
   }
 

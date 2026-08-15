@@ -103,13 +103,35 @@ function proofBasis(lease) {
 //  proof_basis is carried, never collapsed. A confirmed opening import is real
 //  operating truth that may suppress marketing, but it did not pass native
 //  execution and funding, and callers must be able to tell the difference.
-function classifyFutureCommitment(lease) {
-  if (!lease) return { state: "none", lease_id: null, start_date: null, proof_basis: null, locked: false };
+//  ── IT CARRIES WHO AND WHAT, NOT ONLY WHEN ──────────────────────────
+//  This returned the commitment's DATE and PROOF but not its tenants,
+//  term end or rent, so any surface wanting to say "Next: Emily Chen ·
+//  starts 8/1/27 · $875" had to go back to `leases` and work out which row
+//  was the successor a second time. That is a second derivation of a fact
+//  the classifier had already decided, and two derivations of one fact
+//  drift.
+//
+//  So the commitment carries the same shaped payload the current lease
+//  does. `personNames` is threaded in for the same reason it is threaded
+//  into the current lease — names are data the caller already loaded, and
+//  the classifier stays pure.
+//
+//  end_date and rent are carried as they are, NULL included: a future
+//  lease whose rent the source never stated must read as unknown, never
+//  as $0 (§5, §39).
+function classifyFutureCommitment(lease, personNames) {
+  if (!lease) {
+    return { state: "none", lease_id: null, start_date: null, end_date: null,
+             rent: null, tenants: [], proof_basis: null, locked: false };
+  }
   const locked = isNativelyProven(lease);
   return {
     state: locked ? "locked" : "pending",
     lease_id: lease.id,
     start_date: lease.start_date || null,
+    end_date: lease.end_date || null,
+    rent: lease.rent == null ? null : Number(lease.rent),
+    tenants: tenantList(lease, personNames),
     proof_basis: proofBasis(lease),
     locked,
   };
@@ -208,7 +230,7 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     if (next) {
       // LOCKED uses the SAME governed rule as everywhere else: executed AND
       // funded. A 'pending' lease_status alone never closes the position.
-      successor = classifyFutureCommitment(next);
+      successor = classifyFutureCommitment(next, personNames);
     }
   }
 
@@ -241,7 +263,7 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     // THE STANDALONE FUTURE COMMITMENT. Same helper, same governed locked rule.
     // availability_read consumes this instead of assuming committed_future
     // implies locked, so no availability state can be stronger than its proof.
-    future_commitment: classifyFutureCommitment(future),
+    future_commitment: classifyFutureCommitment(future, personNames),
     _compat_occupancy: row.compat_occupancy,
   };
 }

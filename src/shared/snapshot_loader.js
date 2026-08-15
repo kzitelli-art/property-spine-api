@@ -26,6 +26,9 @@ const { resolvePropertyForImport, resolutionError } = require("../identity/prope
 //  (/operator/rent-roll/import) is deliberately NOT behind this.
 const { syntheticTargetAllowed, syntheticRefusal } = require("./synthetic_data_perimeter.js");
 const { spacePosition } = require("../tenancy/space_position");
+//  The ONE canonical inventory-materialization rule. The evidence pass must
+//  not create beds beside the trigger's provisional whole-unit placeholder.
+const { materializeRentableSpaces } = require("../tenancy/inventory_materialization.js");
 
 const CONFIGS = {
   skyline: {
@@ -280,6 +283,7 @@ async function loadSnapshot(pool, cfg, inputRows, options = {}) {
     const stamp = ["historical_snapshot", meta.source_as_of_date, meta.confidence];
     const unitCache = new Map();
     const spaceCache = new Map();
+    const materializedUnits = new Set();
     const counts = { units_created:0, units_reused:0, spaces_created:0, spaces_reused:0,
                      persons_created:0, leases_created:0, leases_reused:0,
                      current_rows:0, future_rows:0, vacant:0, model:0, down:0,
@@ -312,6 +316,31 @@ async function loadSnapshot(pool, cfg, inputRows, options = {}) {
       }
       unitCache.set(row.unit_number, id);
       return id;
+    }
+
+    /*  ── THE PHANTOM BED ───────────────────────────────────────────────
+     *  `trg_unit_space` inserts a '(whole unit)' space on every unit insert.
+     *  This function used to look up its label and, not finding it, insert
+     *  a bed BESIDE the placeholder — so a by-the-bed unit ended up with
+     *  N+1 rentable positions and the surplus one read as a vacant bed.
+     *  On Skyline that was 72 phantom beds and a vacancy denominator
+     *  inflated from 25 to 97.
+     *
+     *  The canonical inventory-materialization rule consumes the pristine
+     *  placeholder as the first named position instead. It is called once
+     *  per unit, before any bed of that unit is resolved, so the placeholder
+     *  is still untouched when it is consumed.
+     */
+    async function materializeUnitGrain(unitId, labels) {
+      if (materializedUnits.has(unitId)) return;
+      await materializeRentableSpaces(client, {
+        unit_id: unitId,
+        labels,
+        kind: cfg.leasing_model === "bed" ? "bed" : "unit",
+        stamp: { import_batch_id: batchId, source_type: stamp[0],
+                 source_as_of_date: stamp[1], confidence: stamp[2] },
+      });
+      materializedUnits.add(unitId);
     }
 
     async function ensureSpace(unitId, row) {
@@ -360,6 +389,17 @@ async function loadSnapshot(pool, cfg, inputRows, options = {}) {
       return q.rows[0]?.id || null;
     }
 
+    //  The source's OWN statement of this property's grain: every distinct
+    //  rentable-position label it names per unit, in first-seen order.
+    const labelsByUnit = new Map();
+    for (const row of rows) {
+      if (!row.unit_number) continue;
+      const label = stableSpaceLabel(cfg, row);
+      if (!labelsByUnit.has(row.unit_number)) labelsByUnit.set(row.unit_number, []);
+      const list = labelsByUnit.get(row.unit_number);
+      if (!list.includes(label)) list.push(label);
+    }
+
     for (const row of rows) {
       counts.source_rows++;
       if (row.section === "future") counts.future_rows++; else counts.current_rows++;
@@ -369,6 +409,11 @@ async function loadSnapshot(pool, cfg, inputRows, options = {}) {
       if (row.is_commercial) counts.commercial++;
 
       const unitId = await ensureUnit(row);
+      //  Establish this unit's rentable positions from EVERY row the source
+      //  gave for it, before resolving the one this row is about. Doing it
+      //  per row would consume the placeholder for Room1 and then create
+      //  Room2/Room3 beside it, which is the same phantom by another route.
+      await materializeUnitGrain(unitId, labelsByUnit.get(row.unit_number) || []);
       const spaceId = await ensureSpace(unitId, row);
       const nonRevenue = NON_REVENUE.test(row.status);
       let personId = null, leaseId = null;

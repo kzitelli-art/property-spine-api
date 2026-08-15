@@ -297,6 +297,18 @@ async function ingestRentRoll(db, {
         where import_batch_id = $1`, [batchId])).rows;
     const evidenceByIndex = new Map(evidence.map((e) => [Number(e.row_index), e]));
 
+    /*  The durable identity of a proposed position within one activation.
+     *  Unit alone for a whole-unit export; unit + room where the source
+     *  names a rentable position inside the unit. Trimmed and cased
+     *  consistently so "Room1" and "room1 " are one key rather than two
+     *  proposals for one bed. */
+    const naturalKeyFor = (m) => {
+      const unit = m.unit_number ? String(m.unit_number).trim() : null;
+      if (!unit) return null;
+      const label = m.space_label ? String(m.space_label).trim() : "";
+      return label ? `${unit}|${label}` : unit;
+    };
+
     const counts = { staged: 0, needs_review: 0, blocked: 0, vacant: 0 };
     for (const m of mapped) {
       const c = classify(m);
@@ -336,7 +348,19 @@ async function ingestRentRoll(db, {
          on conflict (activation_id, target_type, natural_key)
            where natural_key is not null do nothing`,
         [activation_id, property_id,
-         m.unit_number ? String(m.unit_number).trim() : null,
+         //  ── THE NATURAL KEY IS THE RENTABLE POSITION, NOT THE UNIT ────
+         //  This was the unit number alone, and the insert carries
+         //  `on conflict (activation_id, target_type, natural_key) do
+         //  nothing`. On a by-the-bed property every row of a unit
+         //  therefore collided with the first one and was DROPPED — 160
+         //  Skyline bed rows would have become 72 proposals, silently,
+         //  with no refusal and no count to notice it by.
+         //
+         //  The key is the position the lease will attach to. Where the
+         //  source names a room the key is unit + room; where it does not,
+         //  the key stays the unit — which preserves the old behaviour for
+         //  by-unit exports exactly.
+         naturalKeyFor(m),
          JSON.stringify(m._raw), JSON.stringify(normalized),
          JSON.stringify(evidenceRefs), c.confidence,
          c.status, c.reason, ev ? ev.id : null]);
@@ -435,9 +459,19 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
         [propertyId, String(n.unit_number), n.market_rent ?? n.rent ?? null])).rows[0];
     }
 
-    //  2) the space. A by-the-bed unit has many, and a bare unit number
-    //     cannot say which bed this lease is for. Tying to "the first one"
-    //     would put roommates on one bed. Refuse and send it back.
+    //  2) the space — the rentable position this lease actually attaches to.
+    //
+    //     A by-the-bed unit has many. The source usually SAYS which one, and
+    //     that name survived into the proposal as normalized.space_label; the
+    //     confirm step simply never read it, so every multi-bed unit was
+    //     refused as ambiguous even when the export named the room on every
+    //     row. The refusal was right about the danger and wrong about the
+    //     facts available.
+    //
+    //     So: use the named room when there is one. Refuse ONLY when the
+    //     source genuinely did not say and the unit has more than one
+    //     position. Tying to "the first one" would put roommates on one bed,
+    //     and that has not changed.
     const spaces = (await client.query(
       "select * from spaces where unit_id=$1 order by created_at", [unit.id])).rows;
     if (spaces.length === 0) {
@@ -445,7 +479,31 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
       throw refusal(500, "no_space_for_unit",
         "That unit has no space record, which should be impossible. Nothing was written.");
     }
-    if (spaces.length > 1) {
+
+    const namedLabel = n.space_label ? String(n.space_label).trim() : "";
+    let space = null;
+
+    if (namedLabel) {
+      space = spaces.find((s) => String(s.space_label || "").trim().toLowerCase()
+                                 === namedLabel.toLowerCase()) || null;
+      if (!space) {
+        //  The source named a room this unit does not have. That is a
+        //  DISCREPANCY between the export and the established inventory —
+        //  never something to resolve by picking a neighbour.
+        await client.query("rollback");
+        await db.query(
+          `update proposed_records set status='needs_review', status_reason=$2, updated_at=now()
+            where id=$1`,
+          [proposed_id,
+           `The source says unit ${n.unit_number} has a position called "${namedLabel}", ` +
+           `but this unit's established positions are: ` +
+           `${spaces.map((s) => s.space_label).join(", ")}.`]);
+        throw refusal(422, "unknown_space_label",
+          `Unit ${n.unit_number} has no position called "${namedLabel}". Spine will not ` +
+          `attach this lease to a different one.`,
+          { named: namedLabel, available: spaces.map((s) => s.space_label) });
+      }
+    } else if (spaces.length > 1) {
       await client.query("rollback");
       await db.query(
         `update proposed_records set status='needs_review', status_reason=$2, updated_at=now()
@@ -456,8 +514,9 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
       throw refusal(422, "ambiguous_bed",
         `Unit ${n.unit_number} leases by the bed. This row does not say which bed, so Spine ` +
         `will not guess.`, { space_count: spaces.length });
+    } else {
+      space = spaces[0];
     }
-    const space = spaces[0];
 
     //  3) the person. NEVER matched by name: two residents share a name
     //     more often than a silent merge is ever noticed, and a duplicate

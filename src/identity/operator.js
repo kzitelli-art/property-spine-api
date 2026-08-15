@@ -57,7 +57,8 @@ module.exports = function operatorModule(deps) {
   const { renewalsCohort, renewalsCohortEnriched } = require("../leasing/renewals_read"); // R1 cohort + Slice 6 operating rail
   const { loadAiLeasingStrategyProjection } = require("../leasing/ai_leasing_strategy_projection"); // read-only strategy status + conversation attribution
   const { currentRentRoll } = require("../surfaces/rent_roll_canonical");   // canonical Current Rent Roll (migration route)
-  const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts"); // factual Future Rent Roll (migration route)
+  const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts");
+  const { unitRentRoll } = require("../surfaces/rent_roll_unit_view");   // the operator Rent Roll: unit-first, beds nested // factual Future Rent Roll (migration route)
   const { institutionalRentRoll, institutionalCsv } = require("../surfaces/rent_roll_institutional"); // formal as-of schedule + CSV
   const { availabilityRead } = require("../surfaces/availability_read");   // Availability over the shared classifier
   const { effectivePropertyPricing } = require("../money/effective_pricing"); // the Pricing & Concessions truth sheet
@@ -1938,6 +1939,36 @@ module.exports = function operatorModule(deps) {
     const d = new Date(s + "T00:00:00Z");
     return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
   }
+
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/rent-roll/units?as_of=
+  //   THE operator Rent Roll. Unit-first, rentable positions nested,
+  //   each showing CURRENT and NEXT. One truth: this is the same dated
+  //   position service the Current and Future rent rolls read, taken at
+  //   one date. There is no separate future datastore and no second
+  //   derivation of "who is next".
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/rent-roll/units", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const rawAsOf = req.query.as_of;
+    if (rawAsOf != null && rawAsOf !== "" && !validCalendarDate(String(rawAsOf))) {
+      return res.status(400).json({
+        error: "as_of must be a real calendar date in YYYY-MM-DD form.",
+        code: "invalid_as_of",
+      });
+    }
+    try {
+      const out = await unitRentRoll(pool, {
+        property_id: req.operator.property_id,   // session only
+        as_of: rawAsOf || null,
+      });
+      return res.json(out);
+    } catch (e) {
+      //  A failed read is UNAVAILABLE. It must never render as an empty
+      //  building.
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    }
+  });
 
   router.get("/operator/rent-roll/future-facts", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
