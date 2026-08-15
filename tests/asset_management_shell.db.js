@@ -276,9 +276,9 @@ async function main() {
      *  Tax escrow truth is owned by the Tax module and insurance escrow
      *  by the Insurance module, each behind gate_funding_boundary.js. */
     const cs = rooms.find((r) => r.key === "capital_stack");
-    ok("Capital Stack holds Debt · Equity · Reserves & Escrows",
+    ok("Capital Stack holds Debt · Preferred Equity · Common Equity · Reserves & Escrows",
        (cs.compartments || []).map((c) => c.key).join(",")
-         === "debt,equity,reserves_escrows");
+         === "debt,preferred_equity,common_equity,reserves_escrows");
     ok("⚠ …and reserves are honestly empty — it is not a second escrow writer",
        (cs.compartments || []).find((c) => c.key === "reserves_escrows")
          .establishment === "not_established");

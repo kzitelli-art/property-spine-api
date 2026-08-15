@@ -333,20 +333,40 @@ async function loadHistory(db, propertyId) {
 }
 
 /*  ── ROOM-LEVEL ESTABLISHMENT, FOR THE CAPITAL STACK HOME CARD ────────
- *  Cheap by construction: one COUNT, never position(). Same discipline
- *  as Debt's establishmentForProperty() — a presence check, not a
- *  detail read.
+ *  Cheap by construction: one grouped COUNT, never position(). Same
+ *  discipline as Debt's establishmentForProperty() — a presence check,
+ *  not a detail read.
  *
  *  ⚠ "Established" here means only "this property has at least one
  *  governed capital-stack position recorded" — never "the cap table is
- *  complete", which for every surveyed deal it is not.               */
+ *  complete", which for every surveyed deal it is not.
+ *
+ *  ⚠ preferred_count / common_count exist so the Capital Stack room can
+ *  show Preferred Equity and Common Equity as two DISTINCT compartments
+ *  (product taxonomy, navigation only — see CLAUDE.md's Capital Stack
+ *  room) without a second backend domain. Both compartments still read
+ *  the same GET /operator/equity/standing and filter position_class in
+ *  the UI; this probe only tells the room card which side, if either,
+ *  has anything to show. Still one grouped COUNT — never position().  */
 async function establishmentForProperty(db, propertyId, asOf) {
-  const ids = await listPositionsForProperty(db, propertyId, asOf);
+  const at = asOf || new Date().toISOString().slice(0, 10);
+  const r = await db.query(
+    `select position_class, count(*)::int as n from capital_stack_positions
+      where property_id = $1
+        and effective_from <= $2
+        and (effective_to is null or effective_to >= $2)
+      group by position_class`,
+    [propertyId, at]);
+  const byClass = { common: 0, preferred: 0 };
+  for (const row of r.rows) byClass[row.position_class] = row.n;
+  const total = byClass.common + byClass.preferred;
   return {
-    established: ids.length > 0,
-    position_count: ids.length,
-    note: ids.length > 0
-      ? `${ids.length} governed capital-stack ${ids.length === 1 ? "position" : "positions"}`
+    established: total > 0,
+    position_count: total,
+    preferred_count: byClass.preferred,
+    common_count: byClass.common,
+    note: total > 0
+      ? `${total} governed capital-stack ${total === 1 ? "position" : "positions"}`
       : "No governed equity or preferred terms yet",
   };
 }
