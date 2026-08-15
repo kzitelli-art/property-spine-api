@@ -129,7 +129,11 @@ establishment tool                        DONE — tools/equity/establish_positi
 release run card                          EXECUTED — docs/release/
                                            EQUITY_174_RUN_CARD.md, by the account
                                            owner, outside this session
-Ask Spine registry entry                  see the registration note below
+Ask Spine registry entry                  REGISTERED — src/agent/ask_spine_answer.js
+                                           gathers the SAME loadHistory()/position()/
+                                           standingProjection() the UI reads; no new
+                                           reader was built. 9/9 tests/
+                                           equity_ask_spine.test.js
 funding-boundary gate coverage            DONE — tests/gate_funding_boundary.js
                                            (table/file names updated to Round-4 shape)
 real 4125 establishment                   NOT BUILT — no retained documents
