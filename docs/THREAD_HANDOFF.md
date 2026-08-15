@@ -1,6 +1,112 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  EQUITY BUILD 1 EXISTS — SCHEMA, WRITERS, READ, PROVEN HTTP.
+##  2026-08-15. DRAFTED UNATTENDED FROM A 15-DEAL SURVEY. NO OWNER
+##  REVIEW PASS HAS HAPPENED YET. READ THIS FIRST IF YOU ARE PICKING
+##  UP EQUITY, AND READ IT BEFORE THE DEBT BANNER BELOW IT.
+## ══════════════════════════════════════════════════════════════════
+
+**Branch:** `claude/philosophy-doctrine-essence-ae6xni`, on top of the merged
+Debt release (`a870056`, PR #108). Migration **174**, next free number after
+Debt's 173 — re-verify against `main` before releasing; the same collision
+that hit Debt twice (168→171→173) can hit 174 too if another lane merges
+first. See `docs/release/DEBT_173_RUN_CARD.md` for the exact discipline —
+Equity's own run card does not exist yet because Equity has nothing to
+release: there is no real specimen data behind this build, on purpose.
+
+### The one thing to understand before touching this domain
+
+A 15-deal portfolio equity survey — real executed agreements, real trial
+balances, real trackers, **not committed to this repo** (real individual
+investors and guarantors, named, with real dollar amounts — a data-handling
+call for the deal's owner, made once already this session; ask for the
+survey directly if it's needed again) — found that **for no deal in the
+surveyed portfolio does a complete, self-consistent cap table exist as a
+document.**
+Every tracker disagrees with its own governing agreement. Nothing accrues in
+any general ledger, anywhere. Redacted Schedule I's (`"[OWNERSHIP/INVESTOR
+INFORMATION MAINTAINED BY MANAGING MEMBER]"`) are the norm, not the
+exception — including at 4125, Debt's own clean specimen, whose common tier
+is 100% unnamed.
+
+This is not a data-quality problem to work around. It is the actual shape of
+the domain, and the schema is built to hold disagreement and absence as
+first-class facts rather than smoothing over them. Read
+`docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md` before changing anything — its ten
+walls (E1–E10) are each forced by a specific, cited real document, not
+invented.
+
+### What is actually built and proven
+
+```text
+migration 174 (7 tables)              DONE — migrations/174_equity_positions.sql
+canonical writers                     DONE — src/asset/equity_position_service.js
+position(property, as_of) read        DONE — src/asset/equity_position_read.js
+                                       (accrual is NEVER computed — see E3)
+HTTP read seam (1 GET)                DONE — src/asset/equity_routes.js
+Capital Stack room probe              DONE — src/surfaces/asset_management.js
+                                       now probes BOTH debt and equity
+Ask Spine registry entry              DONE, correctly `pending` —
+                                       tests/gate_ask_spine_readers.js
+funding-boundary gate coverage        DONE — tests/gate_funding_boundary.js
+browser UI                            NOT BUILT
+real 4125 establishment               NOT BUILT — no retained documents
+                                       exist for equity yet; MSC's real
+                                       terms are proven only as TEST fixtures
+```
+
+DB proofs, real Postgres 16, all green:
+
+```text
+34/34   equity_position_falsification.db.js   E1–E10, schema + read
+14/14   equity_routes_http.db.js              real HTTP, real authority checks
+92/92   gate_funding_boundary.js              (includes equity's new entry)
+62/62   gate_ask_spine_readers.js             (includes equity's new entry)
+54/54   asset_management_shell.db.js          no regression from the room-probe change
+```
+
+Every hostile fixture in the falsification suite is drawn from a real quote
+in `EQUITY_SURVEY.md`, cited in code comments — MSC's actual 12.5%
+quarterly/actual-360 terms with its Make-Whole and 7th-anniversary
+redemption date, the real OA-vs-tracker compounding disagreement, the real
+$389k-shaped contribution conflicts, the real Skyline GP pledge, the real
+Lightstone/Shafran K-1 substitution, the real Lincoln side-letter, the real
+debt-vs-equity characterization conflict on the same dollars. None of it is
+invented data — all of it is either the real 4125 specimen or explicitly
+labeled as drawn from a different named deal (Skyline) for the walls 4125
+alone doesn't exhibit.
+
+### What is deliberately NOT built (see the wall doc's Part 4 for the full list)
+
+```text
+NOT   a waterfall distribution calculator — recording the terms is in scope,
+      computing what a capital event pays out is not
+NOT   a generalized N-tier entity-graph engine — equity_capital_entities is
+      flat, one row per named tier, deep enough for 4125's four tiers
+      because they're each named, not a graph database
+NOT   reconciliation of any E4/E6/E7 conflict — recording a conflict is a
+      writer's job, resolving one is a human's
+NOT   the browser UI, Ask Spine wiring, or real establishment against
+      retained documents — no documents have been retained for Equity yet
+```
+
+### The honest caveat this banner exists to carry
+
+Debt's read contract went through **seven owner corrections** before it
+froze. This one has had **zero** — it was designed, schema'd, written, and
+proven entirely in one unattended session, end to end, against explicit
+instructions to keep building rather than wait. Every wall is forced by a
+real cited document, and every proof is real and green, but the design
+choices in Part 3 of the wall doc (particularly the flat entity-tier model,
+and the decision to never compute accrual even from an internally-consistent
+source) have not had a human's adversarial read yet. Treat this build as
+"Proven" on the project's own proof ladder — real DB, real HTTP — and
+explicitly NOT yet "reviewed." The next session that opens the wall doc
+should read its own closing section before writing a line of establishment
+code.
+
+## ══════════════════════════════════════════════════════════════════
 ##  DEBT 173 IS RELEASED AND 4125 CANONICAL TRUTH IS ESTABLISHED.
 ##  2026-08-15. MERGE/DEPLOY/PRODUCTION-BROWSER PROOF REMAIN. THIS
 ##  SUPERSEDES THE "MIGRATION 168" BANNER BELOW ON
