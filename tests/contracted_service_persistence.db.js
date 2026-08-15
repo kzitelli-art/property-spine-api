@@ -10,6 +10,20 @@ const service = require("../src/asset/contracted_service_service.js");
 const positionRead = require("../src/asset/contracted_service_position_read.js");
 const artifactService = require("../src/onboarding/source_artifact_service.js");
 
+const REQUIRED_TABLES = [
+  "contracted_service_coverage_reviews",
+  "contracted_service_requirements",
+  "contracted_service_providers",
+  "contracted_service_engagements",
+  "contracted_service_documents",
+  "contracted_service_terms",
+  "contracted_service_scopes",
+  "contracted_service_locations",
+  "contracted_service_price_components",
+  "contracted_service_financial_observations",
+  "contracted_service_decision_links",
+];
+
 async function expectServiceCode(code, action) {
   let error = null;
   try { await action(); } catch (caught) { error = caught; }
@@ -53,20 +67,28 @@ async function run() {
   const client = new Client({ connectionString, application_name: "contracted-services-proof" });
   await client.connect();
   try {
-    const ddl = fs.readFileSync(path.join(__dirname, "..", "proof", "contracted_services",
-      "contracted_services_canonical_truth.sql"), "utf8");
-    await client.query(ddl);
-
-    const properties = (await client.query(
-      "select id from properties order by created_at, id limit 2")).rows;
-    const user = (await client.query("select id from users order by id limit 1")).rows[0];
-    assert(properties.length >= 2, "persistence proof requires two existing properties");
-    assert(user, "persistence proof requires one existing user");
-    const [propertyA, propertyB] = properties.map((row) => row.id);
-    const userId = user.id;
-
     await client.query("begin");
     try {
+      const ddl = fs.readFileSync(path.join(__dirname, "..", "migrations",
+        "171_contracted_services_canonical_truth.sql"), "utf8");
+      const installedTables = (await client.query(
+        `select table_name from information_schema.tables
+          where table_schema = 'public' and table_name = any($1::text[])
+          order by table_name`, [REQUIRED_TABLES])).rows.map((row) => row.table_name);
+      assert(
+        installedTables.length === 0 || installedTables.length === REQUIRED_TABLES.length,
+        `partial Contracted Services schema: found ${installedTables.length}/${REQUIRED_TABLES.length} tables`
+      );
+      if (installedTables.length === 0) await client.query(ddl);
+
+      const properties = (await client.query(
+        "select id from properties order by created_at, id limit 2")).rows;
+      const user = (await client.query("select id from users order by id limit 1")).rows[0];
+      assert(properties.length >= 2, "persistence proof requires two existing properties");
+      assert(user, "persistence proof requires one existing user");
+      const [propertyA, propertyB] = properties.map((row) => row.id);
+      const userId = user.id;
+
       const agreementA = await retain(client, propertyA, userId,
         "contracted_service_agreement", "proof-agreement-a");
       const unsignedA = await retain(client, propertyA, userId,

@@ -1,9 +1,5 @@
--- Contracted Services canonical truth - frozen pre-numbering proof payload.
---
--- Release authority is migrations/171_contracted_services_canonical_truth.sql.
--- This audit artifact preserves the real-PostgreSQL-proven candidate payload;
--- tests execute the numbered migration, whose payload must remain byte-for-byte
--- identical after the release header.
+-- Migration 171: Contracted Services canonical truth.
+-- Owner ruling: Contracted Services owns the first slot after migration 170.
 
 create table contracted_service_coverage_reviews (
   id                    uuid primary key default gen_random_uuid(),

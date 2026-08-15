@@ -1,11 +1,12 @@
-# Contracted Services schema design (unnumbered)
+# Contracted Services schema design (migration 171)
 
-Status: DDL design only. This document intentionally claims no migration number.
+Status: Promoted to `migrations/171_contracted_services_canonical_truth.sql`.
 
-The next number is coordination-owned and must be established from the refreshed
-main ledger when this design is approved for DDL. The tables below are the
-durable shape required by the Contracted Services contract; they are not
-permission to create a numbered migration.
+The owner ruling assigned Contracted Services migration 171 after the refreshed
+main and production ledgers both showed ceiling 170. The tables below are the
+durable shape enforced by that migration. The pre-numbering SQL under
+`proof/contracted_services/` is retained only as a frozen payload-parity record;
+the numbered migration is the release authority.
 
 ## Proposed durable tables
 
@@ -131,9 +132,9 @@ contracted_service_decision_links
 - Source-artifact indexes for every table that cites retained evidence.
 - Supersedes indexes for append-only head projection.
 
-## Migration proof obligations
+## Migration 171 proof obligations
 
-The eventual numbered migration must prove on real PostgreSQL that:
+The numbered migration must prove on real PostgreSQL that:
 
 - it applies after the actual current ledger and follows repository down/up
   discipline;
@@ -150,7 +151,7 @@ The eventual numbered migration must prove on real PostgreSQL that:
 
 ## Shared prerequisites
 
-The eventual migration depends only on existing `properties`, `users`,
+Migration 171 depends only on existing `properties`, `users`,
 `source_artifacts`, `units`, `spaces`, and the canonical obligation identifier.
 It must not add writes to Utilities, Compliance, Maintenance, Accounting,
 Insurance, Debt, or their tables.
