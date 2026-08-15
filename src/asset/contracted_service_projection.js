@@ -377,6 +377,7 @@ function project(snapshot = {}, { as_of = null } = {}) {
     const engagementTerms = terms.filter((row) => row.engagement_id === engagement.id);
     const governingTerms = engagementTerms.filter((row) => isExecutedGoverningTerm(row, documentById));
     const offeredTerms = engagementTerms.filter((row) => row.term_authority === "offered");
+    const observedTerms = engagementTerms.filter((row) => row.term_authority === "observed");
     const invalidGoverningTerms = engagementTerms.filter((row) =>
       row.term_authority === "governing" && !isExecutedGoverningTerm(row, documentById));
     const termStanding = evaluateTerm(engagement.id, governingTerms, asOf, snapshot);
@@ -394,6 +395,7 @@ function project(snapshot = {}, { as_of = null } = {}) {
     const termPrices = currentTerm
       ? prices.filter((row) => row.term_id === currentTerm.id) : [];
     const offered = newest(offeredTerms, ["commencement_date", "recorded_at"]);
+    const observed = newest(observedTerms, ["commencement_date", "recorded_at"]);
     const observationsForEngagement = observations.filter((row) => row.engagement_id === engagement.id);
 
     if (!provider) {
@@ -470,6 +472,9 @@ function project(snapshot = {}, { as_of = null } = {}) {
         offered: offered
           ? termView(offered, documentById.get(offered.document_id),
               prices.filter((row) => row.term_id === offered.id)) : null,
+        observed: observed
+          ? termView(observed, documentById.get(observed.document_id),
+              prices.filter((row) => row.term_id === observed.id)) : null,
       },
       scope: currentScope ? {
         id: currentScope.id,

@@ -111,6 +111,30 @@ function baseSnapshot() {
 
 {
   const snapshot = baseSnapshot();
+  snapshot.documents[0] = {
+    ...snapshot.documents[0], document_kind: "invoice", execution_state: "unverified",
+    filename: "Package locker invoice.pdf",
+  };
+  snapshot.terms[0] = {
+    ...snapshot.terms[0], term_authority: "observed",
+    commencement_date: "2020-11-04", initial_end_date: "2025-11-04",
+    automatic_renewal: null, notice_days: null,
+  };
+  snapshot.prices = [];
+  const read = projection.project(snapshot, { as_of: "2026-08-14" });
+  const engagement = read.detail.engagements[0];
+  assert.strictEqual(engagement.execution_standing, "EVIDENCE_ONLY");
+  assert.strictEqual(engagement.term_standing.state, "NOT_ESTABLISHED");
+  assert.strictEqual(engagement.term_standing.current, null);
+  assert.strictEqual(engagement.term_standing.offered, null);
+  assert.strictEqual(engagement.term_standing.observed.authority, "observed");
+  assert.strictEqual(engagement.term_standing.observed.commencement_date, "2020-11-04");
+  assert.strictEqual(engagement.term_standing.observed.initial_end_date, "2025-11-04");
+  assert(read.detail.unresolved.some((gap) => gap.concept === "governing_term"));
+}
+
+{
+  const snapshot = baseSnapshot();
   snapshot.documents[0].document_date = "2024-11-11";
   snapshot.terms[0] = {
     ...snapshot.terms[0], commencement_date: "2026-01-01", initial_end_date: "2027-01-01",
