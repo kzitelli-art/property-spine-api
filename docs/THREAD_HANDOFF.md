@@ -1,6 +1,96 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  SLICE 1 — THE SKYLINE RENT ROLL IS BROWSER-VERIFIED.
+##  2026-08-15. NO MIGRATION. NOT DEPLOYED. SKYLINE'S OPENING TRUTH
+##  IS STILL NOT ESTABLISHED — that is deliberate and still waiting
+##  on a fresher export. This block is about the LEASING/TENANCY lane
+##  and supersedes nothing in the Debt banner below.
+## ══════════════════════════════════════════════════════════════════
+
+**Branch (both repos):** `claude/code-philosophy-review-xoiz8f`.
+**Migrations shipped: NONE.** Nothing here needs a ledger release.
+
+### What is actually done
+
+```text
+canonical inventory writer                DONE — src/tenancy/inventory_materialization.js
+  materializes rentable positions from stated grain; consumes a PRISTINE
+  placeholder; REFUSES (never deletes) a surplus one and names what holds it
+bed-grain evidence → proposal → confirm   DONE — activation_service + snapshot_loader
+  natural key is unit|room, so 160 bed rows no longer collapse to 72 proposals
+canonical operator read                   DONE — src/surfaces/rent_roll_unit_view.js
+HTTP seam                                 DONE — GET /operator/rent-roll/units?as_of=
+operator browser surface                  DONE — property-spine-app/index.html
+  psLiveUnitRentRoll + rru- styles; openRentRollFull now routes here
+Ask Spine standing read                   NOT DONE — see "the open rung" below
+```
+
+### Proof
+
+```text
+tests/inventory_materialization.db.js       26/26   real July XLSX
+tests/skyline_bed_grain_activation.db.js    19/19
+tests/skyline_rent_roll_read.db.js          22/22   incl. stable-ID contract
+tests/skyline_rent_roll_model.db.js         40/40
+11 API source gates                         PASS
+31 app node tests                           PASS
+property-spine-app/skyline_rent_roll_units.browser.js  53/53
+  real server.js + real index.html + Chromium, 72 units / 160 beds from the
+  actual 07/31 export. Screenshots and the performance baseline are in
+  property-spine-app/docs/screenshots_rent_roll_units/.
+```
+
+Performance at 160 positions: **one** request (114 KB, 715 B/position), door
+to fully rendered 70–105 ms, full repaint 24 ms, expanding a position issues
+**zero** further requests. Nothing pathological at this size.
+
+### Facts about the real 07/31 export, found by loading it
+
+```text
+6 of 251 rows carry an actual rent.  Everything else is blank in the source.
+  The surface says "Rent unknown" and states the count once at page level.
+  It is a gap in the source, never a rent of zero.
+2 resident names appear on two rows each (Chyng Shan Chiu, Nehal Khosla).
+  Spine creates two person records and does NOT merge them. Correct under the
+  identity refusal — a matching name is not a key.
+No bed carries both a current lease and a next one at 07/31: the 37 sitting
+  residents began 07/27 and the 91 future leases start 08/03 on other beds.
+  The read renders both halves; the capability is proven with a constructed
+  successor rather than claimed from data that cannot show it.
+```
+
+### THE OPEN RUNG — say it this way, do not soften it
+
+The Rent Roll is **done as a screen and not done as a domain** (§40.2). Its
+governed standing state is not readable by Ask Spine, and
+`tests/gate_ask_spine_readers.js` did not go red, because it discovers domains
+by filename suffix (`*_position_read.js`, `*_establishment.js`, `*_read.js`)
+and neither `src/tenancy/dated_positions.js` nor
+`src/surfaces/rent_roll_unit_view.js` matches one. **The gate scans less than
+it asserts** — that is the failure mode CLAUDE.md names, and it is real here,
+not hypothetical. Two things are owed and neither has been done:
+
+1. a compact standing projection for tenancy, registered in
+   `src/agent/ask_spine_answer.js`;
+2. discovery in that gate widened to see this domain, so the next canonical
+   read that lands outside the suffix convention goes red on its own.
+
+### Other things left honestly open
+
+```text
+Skyline opening truth        NOT established. Ruling stands: prove the
+                             machinery now, establish from the freshest
+                             export at activation.
+Source PMS resident ID       Extracted by rent_roll_field_map, but `persons`
+                             has NO durable column for it — so it is not
+                             persisted as sourced external identity. That is a
+                             migration and this slice shipped none.
+Phase Zero production close  Still blocked on network policy: no DATABASE_URL
+                             and the proxy CONNECTs 403 to Render.
+```
+
+## ══════════════════════════════════════════════════════════════════
 ##  DEBT 173 IS RELEASED AND 4125 CANONICAL TRUTH IS ESTABLISHED.
 ##  2026-08-15. MERGE/DEPLOY/PRODUCTION-BROWSER PROOF REMAIN. THIS
 ##  SUPERSEDES THE "MIGRATION 168" BANNER BELOW ON

@@ -199,6 +199,28 @@ async function cleanup(pool) {
       rr.units.flatMap((u) => u.positions).filter((p) => !p.current)
         .every((p) => p.current === null));
 
+    console.log("\n  ── stable identity travels with the row ──");
+    //  AN API OUTPUT KEY IS A CONTRACT. These are asserted BY NAME because a
+    //  surface that shows a resident and cannot say which person record it is
+    //  has made the displayed NAME the key — and the identity rules in this
+    //  repo exist precisely because names are not keys. A blunt rename sweep
+    //  that dropped one of these would break the Person Card silently, which
+    //  is the exact defect class migration 159 already cost us once.
+    const occ = withBoth.units.flatMap((u) => u.positions).filter((p) => p.current);
+    ok("every current position carries person_id",
+      occ.length > 0 && occ.every((p) => "person_id" in p.current && p.current.person_id),
+      `${occ.filter((p) => !p.current.person_id).length} missing of ${occ.length}`);
+    ok("every current position carries lease_id",
+      occ.every((p) => "lease_id" in p.current && p.current.lease_id));
+    const nx = withBoth.units.flatMap((u) => u.positions).filter((p) => p.next);
+    ok("every next commitment carries person_id and lease_id",
+      nx.length > 0 && nx.every((p) => "person_id" in p.next && "lease_id" in p.next && p.next.lease_id),
+      `${nx.length} commitments`);
+    ok("the next person_id is the SUCCESSOR's, never the sitting resident's",
+      !!(line && line.next.person_id === succPerson && line.current.person_id !== succPerson));
+    ok("space_id and unit_id are on every row a surface can act from",
+      withBoth.units.every((u) => u.unit_id && u.positions.every((p) => p.space_id)));
+
     console.log("\n  ── one truth, two dates ──");
     const later = await unitRentRoll(pool, { property_id: prop, as_of: "2026-09-01" });
     ok("the same read at a later date shows the turn completing",

@@ -45,8 +45,8 @@
 const { datedPropertyPositions } = require("../tenancy/dated_positions");
 
 const money = (n) => (n == null ? null : Math.round(Number(n) * 100) / 100);
-const firstName = (tenants) =>
-  (Array.isArray(tenants) && tenants.length && tenants[0] && tenants[0].name) || null;
+const firstTenant = (tenants) =>
+  (Array.isArray(tenants) && tenants.length && tenants[0]) || null;
 
 /*  WHY a rent is missing, so the surface can say it rather than render a
  *  bare dash and let the operator guess whether the import failed.  */
@@ -67,6 +67,13 @@ function positionLine(p) {
   const current = p.lease
     ? {
         resident: p.resident ? p.resident.name : null,
+        //  STABLE IDENTITY, carried but not displayed. A surface that shows a
+        //  resident's name and cannot say WHICH person record it is has made
+        //  the name the key, and names are not keys (§ the identity refusal).
+        //  This is what lets a row open the Person Card without the browser
+        //  matching on a string.
+        person_id: (p.resident && p.resident.person_id) || null,
+        lease_id: p.lease.lease_id || null,
         rent: rentOf(p.lease),
         through: p.lease.end_date || null,
         started: p.lease.start_date || null,
@@ -78,9 +85,12 @@ function positionLine(p) {
     p.successor && p.successor.state !== "none" ? p.successor
       : (p.future_commitment && p.future_commitment.state !== "none" ? p.future_commitment : null);
 
+  const nextTenant = commitment ? firstTenant(commitment.tenants) : null;
   const next = commitment
     ? {
-        resident: firstName(commitment.tenants),
+        resident: nextTenant ? nextTenant.name : null,
+        person_id: nextTenant ? nextTenant.person_id : null,
+        lease_id: commitment.lease_id || null,
         starts: commitment.start_date || null,
         through: commitment.end_date || null,
         rent: rentOf(commitment),
