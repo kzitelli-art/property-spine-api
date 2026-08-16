@@ -3,6 +3,14 @@
 **Read-only. No migration, no production writer change, no new identity
 table, and the reproducible fork is deliberately left unfixed.**
 
+> **RULED — see `docs/PERSON_INGRESS_RULINGS.md`.** §6's ingress boundary and
+> §5's anti-merge finding are APPROVED. §4's matrix cases **A–D are NOT
+> approved** and are parked: the evidence proves the Yardi identifier is a
+> durable *source-record* identifier, not a durable *human* identifier. E–H
+> stand, because they are refusals. §2's "something must give" on contact data
+> is **withdrawn** — the correct shape is one ingress contract with
+> channel-specific evidence, not one universal matching algorithm.
+
 Deliverables 1–6 from the import-identity decision brief. Everything here is
 measured from real artifacts or read out of the tree; where something cannot
 be measured, that is said rather than estimated.
