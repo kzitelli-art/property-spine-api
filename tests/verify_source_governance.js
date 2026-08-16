@@ -120,6 +120,16 @@ const GATES = [
     what: "Ask Spine: answers only from reads, names them, and an outage never reads as good news" },
   { file: "gate_ask_spine_readers.js",
     what: "Ask Spine: every canonical standing domain is registered, pending, or explicitly waived" },
+  //  The gate above is the §40.2 enforcement, so it is the one gate whose
+  //  own failure modes must be demonstrated rather than trusted. It ran
+  //  green for months while scanning one directory and missing Tenancy
+  //  entirely; a green gate that has never been seen to go red is a claim.
+  //  This mutates the registration chain six ways and requires exit 1 each
+  //  time, then requires green again on restore.
+  { file: "ask_spine_reader_gate_falsification.js",
+    what: "the reader gate itself goes RED when registration, discovery or the gather is broken" },
+  { file: "tenancy_ask_spine.test.js",
+    what: "Tenancy Ask Spine: routing, entitlement before any read, the four silences, the truth walls" },
   { file: "contracted_service_source_artifact.test.js",
     what: "Contracted Services evidence: accepted shapes and product-specific refusals" },
   { file: "contracted_service_ask_spine.test.js",

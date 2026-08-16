@@ -84,10 +84,44 @@ function readIf(rel) {
  *  Funding reads are deliberately NOT in this list. `tax_funding_read.js`
  *  is the same DOMAIN reached through its other chain, not a second
  *  domain, and counting it would report a coverage number twice the
- *  real one. The funding boundary itself is gate_funding_boundary.js.  */
-const STANDING_READ_DIRS = ["src/asset"];
+ *  real one. The funding boundary itself is gate_funding_boundary.js.
+ *
+ *  ── THIS LIST WAS WRONG, AND THE GATE WENT GREEN ANYWAY ────────────
+ *  It read ["src/asset"] alone, which quietly meant "Asset Management
+ *  domains" while the header claimed EVERY governed domain. Tenancy —
+ *  the oldest governed domain in the repo, and the one behind the Rent
+ *  Roll — was not merely unregistered, it was UNDISCOVERABLE, so §40.2
+ *  could never go red for it. A gate that scans less than it asserts
+ *  launders the gap into evidence (CLAUDE.md), and this one did: seven
+ *  domains and exit 0 read as coverage of the governed set.
+ *
+ *  Any directory that OWNS canonical domain truth belongs here. When the
+ *  next one lands, add it in the same breath as the read.                */
+const STANDING_READ_DIRS = ["src/asset", "src/tenancy"];
 const STANDING_READ_SUFFIXES = ["_position_read.js", "_establishment.js", "_read.js"];
 const NON_STANDING_READ_SUFFIXES = ["_document_read.js", "_funding_read.js"];
+
+/*  ══ WHAT IS DELIBERATELY NOT A DOMAIN ══════════════════════════════
+ *  `src/surfaces` is full of files that would match every suffix above —
+ *  availability_read.js, management_read.js, unit_turn_read.js,
+ *  work_order_status_read.js — and not one of them is a domain. They are
+ *  PROJECTIONS of domains: a surface composing canonical reads for one
+ *  screen. Discovering them would invent four domains that own no truth,
+ *  demand four registry entries, and inflate the coverage number with
+ *  things that cannot be "registered" because there is nothing behind
+ *  them to register.
+ *
+ *  Excluding a directory silently is how a gate's scope shrinks without
+ *  anyone deciding to shrink it. So the exclusion is DECLARED, carries a
+ *  reason, and is asserted below to still be load-bearing — if a listed
+ *  directory stops producing would-be domains, the exclusion is stale
+ *  debt and the gate says so rather than keeping a dead rule.            */
+const NOT_DOMAINS = Object.freeze([
+  { dir: "src/surfaces",
+    reason: "Projections OF domains, not domains. A surface composes canonical " +
+            "reads for one screen and owns no truth of its own, so there is " +
+            "nothing behind it for Ask Spine to register." },
+]);
 
 function domainsFromFilenames(filenames) {
   const found = new Set();
@@ -214,6 +248,28 @@ const REGISTRY = {
       "including derived coverage gaps and open conflicts, never a synthesized cap table"),
     composition_authorization: "unsolved_cross_domain",
   },
+  //  ⚠ TENANCY WAS INVISIBLE TO THIS GATE UNTIL THE SCAN DIRS WERE FIXED.
+  //  It is the oldest governed domain here and the one the Rent Roll renders,
+  //  and it sat outside §40.2 enforcement entirely — not declared pending,
+  //  not waived, simply unseen. That is the failure mode this gate exists to
+  //  prevent, and it happened to the gate itself.
+  //
+  //  Registered, not pending: readTenancyStanding calls datedPropertyPositions
+  //  — the SAME canonical service the Rent Roll screen reads. No second
+  //  occupancy reader was built for Ask Spine, which is what "one
+  //  conversational architecture" means in practice.
+  tenancy: {
+    state: "registered",
+    //  Matches src/tenancy/tenancy_position_read.js exactly. Retrieval only:
+    //  comparison needs a basis (per bed, per season, against what) that is a
+    //  model nobody recorded, and causal explanation needs linkage between a
+    //  turn, a notice and a vacancy that tenancy does not record. Neither may
+    //  be implicitly promised because occupancy sounds comparable.
+    capability_classes: readerCapabilities.retrievalOnly(
+      "canonical tenancy standing — dated rentable positions, occupancy, known forward " +
+      "commitments, and the opening source they were established from"),
+    composition_authorization: "unsolved_cross_domain",
+  },
 };
 
 /*  ══ IS A DOMAIN ACTUALLY GATHERED? ═════════════════════════════════
@@ -227,10 +283,24 @@ function stripComments(src) {
   return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
+/*  ⚠ THE KEY MUST BE THE DOMAIN'S OWN, EXACTLY.
+ *
+ *  This read `facts\.${domain}\w*\s*=` and the trailing `\w*` was not
+ *  serving anything — every domain in the composer assigns its bare name
+ *  — while it quietly accepted any key STARTING with the domain name as
+ *  proof of a gather. tests/ask_spine_reader_gate_falsification.js found
+ *  it by renaming `facts.tenancy` to `facts.tenancy_unwired`: the gather
+ *  was gone, the facts never reached the model, and this gate stayed
+ *  green. A detector that accepts a lookalike is a detector that cannot
+ *  fail, which is the shape of every under-detecting gate in CLAUDE.md.
+ *
+ *  Anchored on both ends now. A domain that genuinely needs a suffixed
+ *  key is a convention change to make deliberately, in this function,
+ *  not something a rename gets to do by accident.                       */
 function gathersDomain(gatherSrc, domain) {
   const code = stripComments(gatherSrc);
   const required = new RegExp(`require\\([^)]*${domain}[^)]*\\)`).test(code);
-  const assigned = new RegExp(`facts\\.${domain}\\w*\\s*=`).test(code);
+  const assigned = new RegExp(`facts\\.${domain}\\s*=`).test(code);
   return required && assigned;
 }
 
@@ -263,6 +333,14 @@ console.log("  ── detector self-test ──");
      domainsFromFilenames(["compliance_document_read.js"]).length === 0);
   ok("domainsFromFilenames ignores an unrelated file",
      domainsFromFilenames(["philadelphia_tax_rules.js"]).length === 0);
+  //  THE EXCLUSION IS DOING REAL WORK, AND THIS PROVES IT. A surface file
+  //  is indistinguishable from a domain read BY NAME — the suffix matcher
+  //  happily turns availability_read.js into a domain called
+  //  "availability". Only the directory list keeps it out, which is
+  //  exactly why that list is declared rather than assumed.
+  ok("domainsFromFilenames CANNOT tell a surface projection from a domain read",
+     domainsFromFilenames(["availability_read.js", "work_order_status_read.js"]).join() ===
+       "availability,work_order_status");
 
   ok("gathersDomain detects a real gather",
      gathersDomain(`const r = require("../asset/debt_position_read.js"); facts.debt = r.read();`, "debt"));
@@ -270,6 +348,12 @@ console.log("  ── detector self-test ──");
      !gathersDomain(`const r = require("../asset/debt_position_read.js");`, "debt"));
   ok("gathersDomain rejects an assignment with no require",
      !gathersDomain(`facts.debt = {};`, "debt"));
+  //  THE ONE THE FALSIFICATION HARNESS CAUGHT. A key that merely starts
+  //  with the domain name is a different key, and the facts under it
+  //  never reach the model under the name the prompt rules use.
+  ok("gathersDomain rejects a LOOKALIKE fact key",
+     !gathersDomain(`const r = require("../asset/debt_position_read.js"); facts.debt_unwired = r.read();`,
+                    "debt"));
   //  THE ONE THAT MATTERS. A comment promising the work is not the work.
   ok("gathersDomain is not satisfied by a comment",
      !gathersDomain(`// TODO: require debt_position_read and set facts.debt = ...`, "debt"));
@@ -299,6 +383,41 @@ for (const dir of STANDING_READ_DIRS) {
 const domains = [...new Set(discovered)].sort();
 console.log(`        ${domains.length} domain(s) with a canonical standing read: ` +
             (domains.join(", ") || "none"));
+
+/*  ── THE EXCLUSIONS ARE A DECISION, NOT AN OVERSIGHT ──────────────── */
+console.log("\n  ── directories deliberately NOT scanned ──");
+for (const x of NOT_DOMAINS) {
+  const abs = path.join(ROOT, x.dir);
+  console.log(`        ${x.dir} — ${x.reason}`);
+  ok(`${x.dir} exclusion names a reason`, !!(x.reason && x.reason.trim().length > 20));
+  ok(`${x.dir} is not also scanned as a domain directory`,
+     !STANDING_READ_DIRS.includes(x.dir),
+     "a directory cannot be both a source of domains and excluded from being one");
+  if (!fs.existsSync(abs)) {
+    ok(`${x.dir} exists`, false,
+       "the exclusion points at a directory that is gone — delete it, or the gate " +
+       "is carrying a rule about nothing");
+    continue;
+  }
+  //  A STALE EXCLUSION IS DEBT, SAME AS A STALE REGISTRY ENTRY. If this
+  //  directory stopped producing would-be domains, the exclusion is no
+  //  longer keeping anything out and should be removed rather than left
+  //  as a rule nobody can evaluate.
+  const wouldHaveMatched = domainsFromFilenames(fs.readdirSync(abs));
+  ok(`${x.dir} exclusion is still load-bearing`, wouldHaveMatched.length > 0,
+     `nothing in ${x.dir} would be discovered as a domain any more — the exclusion ` +
+     `no longer excludes anything. Remove it from NOT_DOMAINS.`);
+  console.log(`           keeps ${wouldHaveMatched.length} non-domain(s) out: ` +
+              wouldHaveMatched.join(", "));
+  //  And it must be keeping out things that are NOT real domains. If a
+  //  genuine domain ever moved into a surfaces directory, this exclusion
+  //  would hide it from §40.2 — the exact laundering this gate refuses.
+  const hidden = wouldHaveMatched.filter((d) => Object.prototype.hasOwnProperty.call(REGISTRY, d));
+  ok(`${x.dir} does not hide a declared domain`, hidden.length === 0,
+     `${hidden.join(", ")} is declared in the registry AND lives in an excluded ` +
+     `directory. Either it is a domain and the directory is wrong, or it is a ` +
+     `projection and the registry is wrong. It cannot be both.`);
+}
 
 for (const d of domains) {
   ok(`${d} is declared in the Ask Spine registry`,

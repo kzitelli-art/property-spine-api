@@ -112,9 +112,23 @@ function contributesTrustedRent(p) {
 // sources over its life; the contract must not collapse that history into
 // "one batch and one document".
 async function openingTruth(pool, property_id) {
+  //  ⚠ THE DATE IS CAST IN SQL, ON PURPOSE.
+  //  This selected the raw `date` column and then did
+  //  String(b.source_as_of_date).slice(0, 10) — which is correct for a
+  //  string and wrong for what node-pg actually returns, a Date. The
+  //  slice took the first ten characters of "Fri Jul 31 2026 00:00:00
+  //  GMT+0000" and produced "Fri Jul 31": no year, unsortable, and
+  //  rendered straight to an operator by index.html ("· as of Fri Jul
+  //  31"). Nothing threw, and every count around it was right.
+  //
+  //  to_char, not a JS conversion: `new Date(...).toISOString()` on a
+  //  DATE column is the classic off-by-one, because node-pg builds the
+  //  Date at LOCAL midnight and toISOString reads it back in UTC. The
+  //  database already knows what day it is; ask it for the string.
   const rows = (await pool.query(
-    `select id, source_type, source_file, source_as_of_date, confidence, status,
-            leasing_model, loaded_at, notes
+    `select id, source_type, source_file,
+            to_char(source_as_of_date, 'YYYY-MM-DD') as source_as_of_date,
+            confidence, status, leasing_model, loaded_at, notes
        from import_batches where property_id=$1
       order by source_as_of_date desc nulls last, loaded_at desc`, [property_id]
   )).rows;
@@ -122,7 +136,7 @@ async function openingTruth(pool, property_id) {
     batch_id: b.id,
     source_type: b.source_type,
     source_file: b.source_file || null,
-    source_as_of_date: b.source_as_of_date ? String(b.source_as_of_date).slice(0, 10) : null,
+    source_as_of_date: b.source_as_of_date || null,   // already YYYY-MM-DD text
     confidence: b.confidence || null,
     status: b.status || null,
     leasing_model: b.leasing_model || null,
