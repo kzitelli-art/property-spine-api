@@ -57,6 +57,7 @@
 "use strict";
 
 const { intervalPropertyPositions } = require("../tenancy/dated_positions");
+const { readTrackerClaims, _internal: intake } = require("./tracker_intake");
 
 /*  Lease statuses that mean "signed" versus "not yet signed". A status
  *  Spine does not recognise is NOT quietly treated as signed — it lands
@@ -86,8 +87,24 @@ function termShape(lease, cycle_start, cycle_end) {
   return "partial_cycle";
 }
 
+/*  ── THE CLAIM OVERLAY ───────────────────────────────────────────────
+ *  Mike's operating position and Spine's proven position are BOTH real
+ *  and they are not the same number. Showing only the canonical count
+ *  pretends Spine knows less than the operator; manufacturing leases to
+ *  match pretends it knows more than the evidence. So the read carries
+ *  three layers and never adds them into one:
+ *
+ *      144  signed / pending per the current operating tracker
+ *      128  tied to canonical lease truth
+ *       16  awaiting contractual tie / review
+ *
+ *  A claim NEVER moves `headline` — that is canonical, from `leases`.
+ *  The claim layer is its own object with its own vocabulary, so no
+ *  consumer can accidentally read a spreadsheet row as a governed
+ *  position. */
 async function forwardLeasingPosition(pool, {
   property_id, cycle_start, cycle_end, cycle_label = null,
+  include_claims = true,
 } = {}) {
   if (!property_id) throw new Error("forwardLeasingPosition requires property_id");
   if (!cycle_start || !cycle_end) {
@@ -158,6 +175,84 @@ async function forwardLeasingPosition(pool, {
     });
   }
 
+  //  ── overlay the claim layer, labelled ──
+  let claims = [];
+  if (include_claims) {
+    try {
+      claims = await readTrackerClaims(pool, { property_id, cycle_label });
+    } catch (e) {
+      //  FAIL-SOFT BUT NEVER SILENT (§40.7). An empty claim layer and a
+      //  claim layer that could not be read are different silences, and
+      //  a screen that renders them identically tells an operator the
+      //  tracker agrees when Spine simply could not look.
+      claims = null;
+    }
+  }
+  /*  ⚠ AN UNATTACHABLE CLAIM IS NOT AN ABSENT CLAIM.
+   *
+   *  The first version keyed the overlay on payload.space_id and let
+   *  everything else fall out of the read. The two identity-conflict
+   *  claims have no space_id — that is the whole point of them — so the
+   *  overlay reported 139 signed / 3 pending instead of 140 / 4, dropped
+   *  $700 and $1,100 of claimed rent, and printed `needs_review: 0` while
+   *  five claims sat in needs_review.
+   *
+   *  Silently smaller, and internally consistent, which is the dangerous
+   *  kind of wrong. So the tracker's OWN position is counted from every
+   *  claim row, and the ones Spine cannot attach to a bed are surfaced as
+   *  their own bucket with their reasons. */
+  const byBed = new Map();
+  const unattached = [];
+  for (const c of claims || []) {
+    const p = c.payload_json || {};
+    if (p.space_id) byBed.set(String(p.space_id), c);
+    else unattached.push({
+      claim_id: c.id, natural_key: c.natural_key, status: c.status,
+      reason: c.status_reason,
+      tracker_status: p.tracker_status || null,
+      raw_unit: p.raw_unit || null,
+      claimed_rent: p.monthly_rent == null ? null : Number(p.monthly_rent),
+    });
+  }
+  //  Counted from the claims themselves, never from what attached.
+  const allClaims = (claims || []).map((c) => c.payload_json || {});
+  const trackerSigned = allClaims.filter((p) => p.signed).length;
+  const trackerPending = allClaims.filter((p) => p.pending).length;
+  const trackerSignedRent = allClaims.filter((p) => p.signed)
+    .reduce((a, p) => a + (p.monthly_rent || 0), 0);
+  const trackerPendingRent = allClaims.filter((p) => p.pending)
+    .reduce((a, p) => a + (p.monthly_rent || 0), 0);
+  const reviewClaims = (claims || []).filter((c) => c.status === "needs_review" || c.status === "blocked");
+  for (const row of ledger) {
+    const c = byBed.get(String(row.space_id));
+    const p = c ? (c.payload_json || {}) : null;
+    //  PROOF LEVEL — what Spine can stand behind for this bed, said out
+    //  loud on every row. "Lease tied" is canonical; "Tracker claim" is
+    //  an operating claim awaiting the executed lease; "Needs review" is
+    //  a human decision Spine refuses to make for them.
+    row.claim_state = p ? (p.signed ? "signed" : p.pending ? "pending" : "open") : null;
+    row.claim_rent = p && p.monthly_rent != null ? Number(p.monthly_rent) : null;
+    row.claim_resident = p ? (p.resident_name || null) : null;
+    row.claim_cohort = p ? (p.cohort_label || null) : null;
+    row.claim_status = c ? c.status : null;
+    row.claim_reason = c ? c.status_reason : null;
+    row.proof =
+      row.commitment_state === "signed" || row.commitment_state === "pending" ? "lease_tied"
+        : (c && c.status === "needs_review") || (c && c.status === "blocked") ? "needs_review"
+          : p && (p.signed || p.pending) ? "tracker_claim"
+            : row.commitment_state === "unresolved" ? "needs_review" : "none";
+    //  The operating state Mike recognises: canonical where Spine has a
+    //  lease, the tracker's claim where it does not, and CHECK wherever
+    //  the two disagree or a human is owed a decision.
+    row.operating_state =
+      row.proof === "needs_review" ? "check"
+        : row.commitment_state === "signed" ? "signed"
+          : row.commitment_state === "pending" ? "pending"
+            : row.claim_state === "signed" ? "signed"
+              : row.claim_state === "pending" ? "pending"
+                : "remaining";
+  }
+
   const count = (s) => ledger.filter((r) => r.commitment_state === s).length;
   const signedRows = ledger.filter((r) => r.commitment_state === "signed");
   const pendingRows = ledger.filter((r) => r.commitment_state === "pending");
@@ -206,6 +301,37 @@ async function forwardLeasingPosition(pool, {
       rent_not_established: missing(signedRows) + missing(pendingRows),
       rent_established: signedRows.length + pendingRows.length - (missing(signedRows) + missing(pendingRows)),
       complete: (missing(signedRows) + missing(pendingRows)) === 0,
+    },
+
+    /*  THREE LAYERS, NEVER SUMMED. `headline` is canonical. This is the
+     *  operating position Mike recognises, with the proof level attached
+     *  so the screen can say WHY each bed is where it is. */
+    operating_position: claims === null ? {
+      read_state: "READ_FAILED",
+      note: "The claim layer could not be read. This is NOT the same as no claims existing, " +
+            "and it must not render as agreement.",
+    } : {
+      read_state: "ok",
+      claims_present: (claims || []).length,
+      //  THE TRACKER'S OWN POSITION, from every claim row — not only the
+      //  ones Spine could attach to a bed.
+      per_tracker_signed: trackerSigned,
+      per_tracker_pending: trackerPending,
+      per_tracker_committed: trackerSigned + trackerPending,
+      tied_to_canonical_lease: ledger.filter((r) => r.proof === "lease_tied").length,
+      awaiting_contractual_tie: ledger.filter((r) => r.proof === "tracker_claim").length,
+      needs_review: reviewClaims.length,
+      remaining: ledger.filter((r) => r.operating_state === "remaining").length,
+      //  Named, never dropped. Each of these is a bed the tracker counts
+      //  and Spine cannot place, so the two totals legitimately differ and
+      //  the difference is explained rather than absorbed.
+      unattached_claims: unattached,
+      //  ⚠ A TRACKER RENT IS A CLAIM, NOT CONTRACTED RENT. Labelled so
+      //  no caller can quote it as governed economics because Mike typed
+      //  it into Excel.
+      tracked_signed_rent_claims: trackerSignedRent,
+      tracked_pending_rent_claims: trackerPendingRent,
+      rent_basis: "CLAIMED — from the operating tracker, not established contractual rent",
     },
 
     term_shapes: ledger.reduce((m, r) => {
