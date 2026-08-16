@@ -1,6 +1,20 @@
 # External Resident Identity — investigation, finding, and proposal
 
-**Status: PROPOSAL. No migration written. No implementation. Awaiting review.**
+**STATUS: SUPERSEDED AS A BUILD PATH — see `docs/PERSON_SPINE_IMPORT_AUDIT.md`.**
+
+This document diagnosed the symptom correctly and then reached for a new
+subsystem before establishing that the existing Person architecture was
+*unreachable* rather than *insufficient*. The audit shows it is reachable: the
+Person Card wall already admits an imported resident through
+`A LEASE IS PRESENCE`, and `relationship_stage` already derives `resident`
+from the active lease. What is missing is one adapter into that spine, not a
+parallel identity system beside it.
+
+**Do not build `source_identities` on the strength of this document.** Its
+`property_aliases` finding (§2) and the `findLease` finding (§3) stand and are
+retained for the design conversation; §4's proposed table is parked.
+
+Original status line: proposal, no migration written, no implementation.
 
 Slice 1 item 1. The question: how does Spine say
 `source system + external identifier → durable Property Spine person`
