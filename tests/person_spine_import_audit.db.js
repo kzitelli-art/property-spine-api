@@ -15,7 +15,10 @@
    reading of the source. It CHANGES NOTHING: it writes only into its own
    scoped organization and deletes that at the end.
 
-   CLASS 3 — audit infrastructure. Delete when the divergence is closed.
+   CLASS 3 — audit infrastructure. It documented the defect; it now ASSERTS
+   the defect stays closed, and goes red if a renewal ever forks again.
+   Removal condition: delete when person_ingress_hostile.db.js is considered
+   sufficient coverage on its own.
    ════════════════════════════════════════════════════════════════════ */
 "use strict";
 
@@ -88,6 +91,7 @@ async function cleanup(pool) {
   await pool.query(`delete from organizations where name=$1`, [ORG]);
 }
 
+let ok = null;
 (async () => {
   const pool = new Pool({ connectionString: CONN });
   say("");
@@ -124,8 +128,13 @@ async function cleanup(pool) {
     // ══ RUN THE REAL IMPORT ══════════════════════════════════════════
     const cfg = { key: "audit", label: "Audit Building",
                   cols: { unit: 0, unit_type: 1, resident: 2 }, leasing_model: "bed" };
+    //  AN AUTHORITY IS NOW REQUIRED TO MINT A HUMAN. Without one this load
+    //  creates no person at all — which is the seam working, and is why this
+    //  harness had to be updated rather than left to "fail". The authority is
+    //  the operator confirmation that establishes opening truth.
+    const AUTH = { actor: "audit@example.test", basis: "operator establishment confirmation" };
     const first = await snap.loadSnapshot(pool, cfg, [row],
-      { targetPropertyId: prop, sourceType: "historical_snapshot",
+      { targetPropertyId: prop, sourceType: "historical_snapshot", ingestAuthority: AUTH,
         sourceFile: "audit_v1.xlsx", asOfDate: "2026-07-31", confidence: "confirmed" });
 
     const personRow = (await pool.query(
@@ -215,7 +224,7 @@ async function cleanup(pool) {
     //  Same human, same bed. The lease renews: end_date moves out a year.
     const renewed = { ...row, lease_from: "2027-08-02", lease_to: "2028-07-25" };
     await snap.loadSnapshot(pool, cfg, [renewed],
-      { targetPropertyId: prop, sourceType: "historical_snapshot",
+      { targetPropertyId: prop, sourceType: "historical_snapshot", ingestAuthority: AUTH,
         sourceFile: "audit_v2.xlsx", asOfDate: "2027-07-31", confidence: "confirmed" });
 
     const after = (await pool.query(`select id, name, created_at from persons
@@ -226,10 +235,20 @@ async function cleanup(pool) {
     after.forEach((p) => say(`          ${p.id}  ${p.name}`));
     say(after.length > before
       ? "      -> THE RENEWAL FORKED THE HUMAN. Same person, same bed, two Spine identities."
-      : "      -> the person was reused.");
+      : "      -> THE RENEWAL DID NOT FORK. One human, one person_id, a second lease.");
+    ok = after.length === before;
 
-    head("VERDICT — the first exact divergence");
-    say("      The rent-roll importer never enters the canonical Person path at all.");
+    head("VERDICT — the divergence, and whether it is still open");
+    say(ok
+      ? "      CLOSED. The importer no longer mints a human: it submits evidence to"
+      : "      OPEN. The importer still mints a human:");
+    say(ok
+      ? "      person_ingress and takes back a person_id, a proposal, or a refusal."
+      : "      this is the defect this harness was written to document.");
+    say("");
+    say("      What follows is the original finding, kept as the record of what was");
+    say("      wrong and why. It is history now, not a live defect.");
+    say("      The rent-roll importer never entered the canonical Person path at all.");
     say("      It does not call resolveOrCreatePerson, does not write a conflict, does");
     say("      not record an alias, and keys person reuse off a LEASE whose key");
     say("      contains a display name. Everything downstream of persons is already");
@@ -248,5 +267,8 @@ async function cleanup(pool) {
   }
   say("");
   say("════════════════════════════════════════════════════════════════════");
-  process.exit(0);
+  //  This harness is Class 3 with a stated removal condition: delete when the
+  //  divergence is closed. It now ASSERTS closure rather than merely
+  //  narrating it, so a regression that reopens the fork turns it red.
+  process.exit(ok === false ? 1 : 0);
 })().catch((e) => { console.error("AUDIT ERROR", e); process.exit(1); });

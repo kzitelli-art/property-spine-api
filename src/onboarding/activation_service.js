@@ -1,4 +1,5 @@
 // ════════════════════════════════════════════════════════════════════
+const personIngress = require("../identity/person_ingress.js"); // the ONE door a human enters Spine through
 //  activation_service.js — ACTIVATION, AND WHAT COMES OUT OF IT
 //
 //    ACTIVATION is the process:
@@ -518,19 +519,40 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
       space = spaces[0];
     }
 
-    //  3) the person. NEVER matched by name: two residents share a name
-    //     more often than a silent merge is ever noticed, and a duplicate
-    //     person is fixable where a merged one corrupts two tenancies.
-    const person = (await client.query(
-      `insert into persons (name, email, phone, source, lifecycle_status, leasing_stage,
-                            import_batch_id, source_type, source_as_of_date, confidence)
-       values ($1,$2,$3,'activation','resident','resident',$4,'rent_roll_ledger',$5,'extracted')
-       returning *`,
-      [n.tenant_name, n.email ?? null, n.phone ?? null,
-       (await client.query("select import_batch_id from activations where id=$1",
-         [p.activation_id])).rows[0]?.import_batch_id || null,
-       (await client.query("select source_as_of_date from activations where id=$1",
-         [p.activation_id])).rows[0]?.source_as_of_date || null])).rows[0];
+    //  3) the person, RESOLVED through the one governed ingress boundary.
+    //     The name ruling this carried is preserved verbatim inside
+    //     person_ingress.js — never matched by name, because two residents
+    //     share a name more often than a silent merge is ever noticed. What
+    //     changes is who decides: this service no longer mints a human, it
+    //     submits evidence. This IS the confirmation, so the authority is
+    //     real and named, and the operator signs once.
+    const actMeta = (await client.query(
+      "select import_batch_id, source_as_of_date from activations where id=$1",
+      [p.activation_id])).rows[0] || {};
+    const ingested = await personIngress.ingestPerson(client, {
+      property_id: n.property_id || p.property_id || null,
+      channel: "rent_roll",
+      activation_id: p.activation_id,
+      authority: { actor: p.confirmed_by || "operator",
+                   basis: "operator confirmation of an activation row" },
+      evidence: {
+        name: n.tenant_name,
+        phone: n.phone ?? null,
+        email: n.email ?? null,
+        source_record_id: n.resident_id ?? null,
+        import_batch_id: actMeta.import_batch_id || null,
+        source: "activation",
+        source_type: "rent_roll_ledger",
+        source_as_of_date: actMeta.source_as_of_date || null,
+        confidence: "extracted",
+        lifecycle_status: "resident",
+        leasing_stage: "resident",
+        normalized: n,
+      },
+    });
+    const person = ingested.person_id
+      ? (await client.query(`select * from persons where id=$1`, [ingested.person_id])).rows[0]
+      : null;
 
     //  4) the lease, stamped with the batch it came from (migration 046).
     const act = (await client.query(
@@ -550,7 +572,7 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
           import_batch_id, source_type, source_as_of_date, confidence)
        values ($1,$2,$3,$4,$5,$6,$7,'active',$8,'rent_roll_ledger',$9,'extracted')
        returning *`,
-      [propertyId, space.id, [person.id], n.rent,
+      [propertyId, space.id, person ? [person.id] : [], n.rent,
        n.start_date ?? null, n.end_date ?? null, n.balance ?? 0,
        act.import_batch_id || null, act.source_as_of_date || null])).rows[0];
 
@@ -567,7 +589,7 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
                 produced_space_id=coalesce(produced_space_id,$5),
                 parse_note='current ledger row — confirmed into canonical truth'
           where id=$1`,
-        [p.import_source_row_id, person.id, lease.id, unit.id, space.id]);
+        [p.import_source_row_id, person ? person.id : null, lease.id, unit.id, space.id]);
     }
 
     await client.query(
@@ -577,7 +599,7 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
         where id=$1`, [proposed_id, lease.id, String(user_id)]);
 
     await client.query("commit");
-    return { lease_id: lease.id, person_id: person.id, unit_id: unit.id, vacant: false,
+    return { lease_id: lease.id, person_id: person ? person.id : null, unit_id: unit.id, vacant: false,
       receipt: `Unit ${n.unit_number} — ${n.tenant_name} is now part of the position.`,
       authority_basis: scope.authority_basis };
   } catch (e) {

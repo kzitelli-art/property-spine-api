@@ -1,4 +1,5 @@
 // ════════════════════════════════════════════════════════════════════
+const personIngress = require("../identity/person_ingress.js"); // the ONE door a human enters Spine through
 //  seed_snapshot.js — ONE-TIME historical snapshot seed (Skyline + Solo)
 //
 //  PURPOSE: get real portfolio data into the app for demo/feel — NOT the
@@ -160,11 +161,26 @@ async function seedOne(pool, key){
       // person + lease — only real occupants (not vacant/MODEL/DOWN)
       let personId = null, leaseId = null;
       if (!isNonRev && nameStr){
-        personId = (await client.query(
-          `insert into persons (name, lifecycle_status, leasing_stage, source, import_batch_id, source_type, source_as_of_date, confidence)
-           values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
-          [nameStr, isFuture ? "applicant" : "tenant", isFuture ? "future_resident" : "current_resident",
-           "historical_snapshot", batchId, ...stamp])).rows[0].id;
+        //  THE SEED GOES THROUGH THE SAME DOOR. §17: "Demo data may exist.
+        //  Demo paths may not." A waiver here would be the leak three feet
+        //  from the thing we just fixed — and the gate would have to carry an
+        //  exception that quietly becomes the architecture. The authority is
+        //  named honestly as what it is.
+        const ingested = await personIngress.ingestPerson(client, {
+          property_id: propertyId,
+          channel: "rent_roll",
+          authority: { actor: "seed_snapshot", basis: "QA/demo seed load" },
+          evidence: {
+            name: nameStr,
+            source_record_id: r.resident_id || null,
+            import_batch_id: batchId,
+            source: "historical_snapshot",
+            lifecycle_status: isFuture ? "applicant" : "tenant",
+            leasing_stage: isFuture ? "future_resident" : "current_resident",
+            normalized: r,
+          },
+        });
+        personId = ingested.person_id || null;
         if (isFuture) counts.future_residents++; else counts.current_residents++;
 
         if (spaceId && (dt(r.from) || dt(r.to))){
