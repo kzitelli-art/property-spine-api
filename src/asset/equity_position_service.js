@@ -26,8 +26,8 @@
    See docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md for the walls (E1–E10)
    and the Round-4 structural rulings these writers now hold.
 
-   CLASS 1 — permanent product primitive. NOT YET RELEASED — no route
-   calls these writers; see migration 174's own header.
+   CLASS 1 — permanent product primitive. Released behind the governed,
+   read-only Equity route; no HTTP route exposes these writers directly.
    ════════════════════════════════════════════════════════════════════ */
 "use strict";
 
@@ -43,6 +43,20 @@ function required(v, name) {
 //  Attribution is not optional — same reasoning as Debt's actor().
 function actor(opts) {
   return required(opts && opts.recorded_by_user_id, "recorded_by_user_id");
+}
+
+//  Every Equity write must point to retained evidence or state where the
+//  fact came from. A source-authority label without either is just an
+//  assertion about confidence, not provenance.
+function provenance(opts) {
+  const o = opts || {};
+  if (!o.source_artifact_id
+      && (!o.provenance_note || !String(o.provenance_note).trim())) {
+    const e = new Error(
+      "equity writer: source_artifact_id or provenance_note is required");
+    e.code = "EQUITY_PROVENANCE_REQUIRED";
+    throw e;
+  }
 }
 
 //  ── THE SHARED IDENTITY (Round-4 Ruling 1) ───────────────────────────
@@ -72,18 +86,46 @@ async function addPosition(db, opts) {
     e.code = "EQUITY_POSITION_SUBJECT";
     throw e;
   }
+  provenance(o);
+  if (o.supersedes_position_id && !o.source_artifact_id) {
+    const e = new Error(
+      "equity writer: superseding a position requires the transfer or assignment artifact");
+    e.code = "EQUITY_POSITION_SUPERSESSION_UNGOVERNED";
+    throw e;
+  }
   const r = await db.query(
     `insert into capital_stack_positions
        (property_id, issuer_legal_entity_id, position_class,
         holder_legal_entity_id, holder_name_text,
         effective_from, effective_to, supersedes_position_id,
         source_artifact_id, provenance_note, recorded_by_user_id)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning *`,
+     select $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
+      where $8::uuid is null
+         or exists (
+           select 1 from capital_stack_positions prior
+            where prior.id = $8
+              and prior.property_id = $1
+              and prior.issuer_legal_entity_id = $2
+              and prior.position_class = $3
+              and prior.effective_from <= $6
+              and not exists (
+                select 1 from capital_stack_positions successor
+                 where successor.supersedes_position_id = prior.id
+              )
+         )
+     returning *`,
     [o.property_id, o.issuer_legal_entity_id, o.position_class,
      o.holder_legal_entity_id || null,
      hasName ? o.holder_name_text.trim() : null,
      o.effective_from, o.effective_to || null, o.supersedes_position_id || null,
      o.source_artifact_id || null, o.provenance_note || null, actor(o)]);
+  if (!r.rows[0]) {
+    const e = new Error(
+      "equity writer: a superseded position must be an earlier, unsuperseded position " +
+      "in the same property, issuer, and class");
+    e.code = "EQUITY_POSITION_SUPERSESSION_MISMATCH";
+    throw e;
+  }
   return r.rows[0];
 }
 
@@ -100,6 +142,7 @@ async function addCommonClassTerms(db, opts) {
   required(o.term_source, "term_source");
   required(o.source_authority, "source_authority");
   required(o.effective_from, "effective_from");
+  provenance(o);
   const r = await db.query(
     `insert into common_equity_class_terms
        (property_id, issuer_legal_entity_id, term_source, source_authority,
@@ -142,24 +185,33 @@ async function addPositionOverride(db, opts) {
     e.code = "EQUITY_OVERRIDE_EXECUTION_DATE";
     throw e;
   }
+  provenance(o);
   const r = await db.query(
     `insert into common_equity_position_overrides
        (position_id, override_kind, override_text, execution_status, execution_date,
         term_source, source_authority, effective_from, effective_to,
         source_artifact_id, provenance_note, recorded_by_user_id)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning *`,
+     select $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12
+       from capital_stack_positions
+      where id = $1 and position_class = 'common'
+     returning *`,
     [o.position_id, o.override_kind, o.override_text, o.execution_status,
      o.execution_date || null, o.term_source || "side_letter", o.source_authority,
      o.effective_from, o.effective_to || null,
      o.source_artifact_id || null, o.provenance_note || null, actor(o)]);
+  if (!r.rows[0]) {
+    const e = new Error(
+      "equity writer: common position overrides require a common capital-stack position");
+    e.code = "EQUITY_POSITION_CLASS_MISMATCH";
+    throw e;
+  }
   return r.rows[0];
 }
 
-//  ⚠ ONLY valid against a position_class = 'preferred' position — this
-//  writer trusts the caller to have picked the right position the same
-//  way debt_instrument_service.js trusts an instrument id; the check
-//  constraint on capital_stack_positions.position_class is the wall
-//  behind it, not a query here.
+//  ⚠ ONLY valid against a position_class = 'preferred' position. The
+//  INSERT ... SELECT below enforces that relationship in the same
+//  statement that appends the terms; the parent's check constraint only
+//  validates its own label and cannot protect this child table by itself.
 //
 //  ⚠ Round-4 Ruling 4 — current_pay_rate_bp and accrued_rate_bp are
 //  separate arguments, never merged, because Tower Place proves a
@@ -178,6 +230,19 @@ async function addPreferredTerms(db, opts) {
   required(o.term_source, "term_source");
   required(o.source_authority, "source_authority");
   required(o.effective_from, "effective_from");
+  const minimumDividendRelationship =
+    o.minimum_dividend_relationship_to_preferred_return || "not_established";
+  if (minimumDividendRelationship !== "not_established"
+      && (o.source_authority !== "governed_read"
+          || o.term_source === "secondary_summary"
+          || !o.source_artifact_id)) {
+    const e = new Error(
+      "equity writer: a Minimum Dividend relationship requires a governed source " +
+      "artifact; a tracker, verbal claim, or secondary summary cannot establish the mechanic");
+    e.code = "EQUITY_MINIMUM_DIVIDEND_RELATIONSHIP_UNGOVERNED";
+    throw e;
+  }
+  provenance(o);
   const r = await db.query(
     `insert into preferred_equity_terms
        (position_id, term_source, source_authority,
@@ -188,7 +253,9 @@ async function addPreferredTerms(db, opts) {
         control_rights_text, redemption_or_maturity_date,
         effective_from, effective_to, source_artifact_id, provenance_note,
         recorded_by_user_id)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+     select $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20
+       from capital_stack_positions
+      where id = $1 and position_class = 'preferred'
      returning *`,
     [o.position_id, o.term_source, o.source_authority,
      o.current_pay_rate_bp == null ? null : o.current_pay_rate_bp,
@@ -196,12 +263,18 @@ async function addPreferredTerms(db, opts) {
      o.rate_convention_as_stated || null, o.compounding || null,
      o.step_schedule_text || null,
      o.minimum_dividend_schedule_text || null,
-     o.minimum_dividend_relationship_to_preferred_return || "not_established",
+     minimumDividendRelationship,
      o.waterfall_priority_text || null, o.redemption_terms_text || null,
      o.make_whole_text || null, o.control_rights_text || null,
      o.redemption_or_maturity_date || null,
      o.effective_from, o.effective_to || null,
      o.source_artifact_id || null, o.provenance_note || null, actor(o)]);
+  if (!r.rows[0]) {
+    const e = new Error(
+      "equity writer: preferred terms require a preferred capital-stack position");
+    e.code = "EQUITY_POSITION_CLASS_MISMATCH";
+    throw e;
+  }
   return r.rows[0];
 }
 
@@ -213,6 +286,7 @@ async function addPledge(db, opts) {
   required(o.position_id, "position_id");
   required(o.pledgee_name_text, "pledgee_name_text");
   required(o.effective_from, "effective_from");
+  provenance(o);
   const r = await db.query(
     `insert into capital_stack_pledges
        (position_id, pledgee_name_text, pledge_description,
@@ -236,6 +310,13 @@ async function addCapitalAmountClaim(db, opts) {
   required(o.position_id, "position_id");
   required(o.claim_source, "claim_source");
   required(o.as_of_date, "as_of_date");
+  if (o.claim_source === "internal_note"
+      && (!o.asserted_by_text || !String(o.asserted_by_text).trim())) {
+    const e = new Error(
+      "equity writer: an internal_note claim must name who asserted it");
+    e.code = "EQUITY_INTERNAL_NOTE_ATTRIBUTION_REQUIRED";
+    throw e;
+  }
   const hasAmount = o.amount_cents != null;
   const hasPercent = o.ownership_percent != null;
   if (hasAmount === hasPercent) {
@@ -245,6 +326,7 @@ async function addCapitalAmountClaim(db, opts) {
     e.code = "EQUITY_CLAIM_EXACTLY_ONE_VALUE";
     throw e;
   }
+  provenance(o);
   const r = await db.query(
     `insert into capital_amount_claims
        (position_id, claim_source, asserted_by_text, amount_cents, ownership_percent,
@@ -266,17 +348,35 @@ async function recordConflict(db, opts) {
   required(o.claim_a_text, "claim_a_text");
   required(o.claim_b_text, "claim_b_text");
   required(o.noted_as_of, "noted_as_of");
+  if (!o.claim_a_source_artifact_id || !o.claim_b_source_artifact_id) {
+    const e = new Error(
+      "equity writer: both sides of a conflict require their retained source artifacts");
+    e.code = "EQUITY_CONFLICT_PROVENANCE_REQUIRED";
+    throw e;
+  }
   const r = await db.query(
     `insert into capital_stack_conflicts
        (property_id, position_id, conflict_kind,
         claim_a_text, claim_a_source_artifact_id,
         claim_b_text, claim_b_source_artifact_id,
         noted_as_of, provenance_note, recorded_by_user_id)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning *`,
+     select $1,$2,$3,$4,$5,$6,$7,$8,$9,$10
+      where $2::uuid is null
+         or exists (
+           select 1 from capital_stack_positions p
+            where p.id = $2 and p.property_id = $1
+         )
+     returning *`,
     [o.property_id, o.position_id || null, o.conflict_kind,
      o.claim_a_text, o.claim_a_source_artifact_id || null,
      o.claim_b_text, o.claim_b_source_artifact_id || null,
      o.noted_as_of, o.provenance_note || null, actor(o)]);
+  if (!r.rows[0]) {
+    const e = new Error(
+      "equity writer: a position-scoped conflict must belong to the conflict's property");
+    e.code = "EQUITY_CONFLICT_PROPERTY_MISMATCH";
+    throw e;
+  }
   return r.rows[0];
 }
 
@@ -301,7 +401,11 @@ async function listPositionsForProperty(db, propertyId, asOf) {
 //  hands rows to equity_position_read.position(), which is pure.
 async function loadHistory(db, propertyId) {
   const positions = await db.query(
-    `select * from capital_stack_positions where property_id = $1 order by effective_from`,
+    `select p.*, h.legal_name as holder_legal_name
+       from capital_stack_positions p
+       left join legal_entities h on h.id = p.holder_legal_entity_id
+      where p.property_id = $1
+      order by p.effective_from`,
     [propertyId]);
   const positionIds = positions.rows.map((r) => r.id);
 

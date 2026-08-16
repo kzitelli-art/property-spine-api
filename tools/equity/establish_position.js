@@ -40,15 +40,14 @@
 
    ── THE MSC DEFERRAL IS AN EXECUTABLE REFUSAL, NOT JUST A DEFAULT ────
    The schema default for minimum_dividend_relationship_to_preferred_
-   return is 'not_established', and the writer will happily accept
-   anything the caller passes. This TOOL is stricter than the writer on
-   purpose: it refuses to establish a preferred_terms row that sets the
-   relationship to anything other than 'not_established' unless that
-   row's OWN source_authority is 'governed_read' — i.e. unless the
-   declaration is citing the actual governing clause, not a survey
-   paraphrase, an internal note, or any other secondary source. This is
-   Round 4's frozen ruling made mechanically impossible to route around
-   by a declaration file that just fills in a plausible-looking value.
+   return is 'not_established'. Both the canonical writer and this tool's
+   preflight refuse to resolve that relationship from a secondary source.
+   A resolved value requires governed_read authority, a non-secondary
+   term source, and a retained artifact — i.e. evidence capable of
+   establishing the mechanic, not a survey paraphrase, an internal note,
+   or any other secondary source. This is Round 4's frozen ruling made
+   mechanically impossible to route around by a declaration file that
+   just fills in a plausible-looking value.
 
    ── SAFETY ──────────────────────────────────────────────────────────
    Dry-run by default. `--apply` writes. One transaction: every position
@@ -129,11 +128,20 @@ function validateShape(decl) {
       //  ⚠ THE MSC DEFERRAL, ENFORCED HERE — see file header.
       if (group === "preferred_terms" && e && e.row) {
         const rel = e.row.minimum_dividend_relationship_to_preferred_return;
-        if (rel && rel !== "not_established" && e.row.source_authority !== "governed_read") {
+        if (rel && rel !== "not_established"
+            && (e.row.source_authority !== "governed_read"
+                || e.row.term_source === "secondary_summary")) {
           problems.push(`${where}: minimum_dividend_relationship_to_preferred_return="${rel}" is refused ` +
-            `unless source_authority is "governed_read" — a survey paraphrase or any other secondary ` +
-            `source may not settle this relationship. Read the actual governing clause first.`);
+            `unless source_authority is "governed_read" and term_source is not "secondary_summary" — ` +
+            `a survey paraphrase or any other secondary source may not settle this relationship. ` +
+            `Read the actual governing clause first.`);
         }
+      }
+      if (group === "amount_claims" && e && e.row
+          && e.row.claim_source === "internal_note"
+          && (!e.row.asserted_by_text || !String(e.row.asserted_by_text).trim())) {
+        problems.push(`${where}: claim_source="internal_note" requires asserted_by_text — ` +
+          `a spoken estimate without its speaker is not attributable evidence.`);
       }
     });
   }
@@ -154,7 +162,9 @@ function validateShape(decl) {
   return problems;
 }
 
-(async () => {
+module.exports = { validateShape };
+
+async function main() {
   const declPath = arg("declaration");
   //  ⚠ ATTRIBUTION, NOT AUTHORITY — same as Debt's tool. This uuid
   //  records WHO the facts are attributed to in canonical history. It is
@@ -315,4 +325,6 @@ function validateShape(decl) {
     await db.end();
     die(["establishment failed and was rolled back in full:", "", "  " + (e.message || String(e))]);
   }
-})();
+}
+
+if (require.main === module) main();
