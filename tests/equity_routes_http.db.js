@@ -33,7 +33,7 @@ const SCHEMA = "equity_routes_proof";
 const MIGRATION = path.join(__dirname, "..", "migrations", "174_equity_positions.sql");
 
 const URL_ = receipt.harnessConnectionString();
-receipt.begin(__filename, { url: URL_, expected: 15 });
+receipt.begin(__filename, { url: URL_, expected: 16 });
 
 let pass = 0, fail = 0, ran = 0;
 function ok(label, cond, detail) {
@@ -172,6 +172,10 @@ let server = null, scoped = null, admin = null;
        positions[0].preferred.accrued_preferred_return.truth_state === "NOT_ESTABLISHED");
     ok("E9 · no pledge recorded reads NOT_ESTABLISHED, never a false 'unencumbered'",
        positions[0].encumbrance.truth_state === "NOT_ESTABLISHED");
+    ok("an absent percentage stays NOT_ESTABLISHED with no false 0% total over the wire",
+       positions[0].ownership.truth_state === "NOT_ESTABLISHED"
+       && st.json.ownership_reconciliation.truth_state === "NOT_ESTABLISHED"
+       && st.json.ownership_reconciliation.current_total_percent === null);
 
     await admin.query(`drop schema if exists ${SCHEMA} cascade`);
   } catch (e) {
@@ -183,5 +187,5 @@ let server = null, scoped = null, admin = null;
   if (server) server.close();
   if (scoped) await scoped.end();
   if (admin) await admin.end();
-  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 14 }));
+  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 16 }));
 })();

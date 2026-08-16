@@ -71,6 +71,13 @@ module.exports = function equityRoutes(deps) {
           positions: [],
           conflicts: [],
           coverage_gaps: [],
+          ownership_reconciliation: {
+            truth_state: read.NOT_ESTABLISHED,
+            target_percent: 100,
+            current_total_percent: null,
+            issuer_groups: [],
+            why: "no current capital-stack positions are established",
+          },
           standing: {
             truth_state: read.NOT_ESTABLISHED,
             why: "no capital-stack position is established for this property in Spine",
@@ -85,6 +92,7 @@ module.exports = function equityRoutes(deps) {
         positions: position.positions,
         conflicts: position.conflicts,
         coverage_gaps: position.coverage_gaps,
+        ownership_reconciliation: position.ownership_reconciliation,
         standing: read.standingProjection(position),
       });
     } catch (e) {

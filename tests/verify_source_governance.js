@@ -120,6 +120,8 @@ const GATES = [
     what: "Ask Spine: answers only from reads, names them, and an outage never reads as good news" },
   { file: "gate_ask_spine_readers.js",
     what: "Ask Spine: every canonical standing domain is registered, pending, or explicitly waived" },
+  { file: "equity_writer_guards.test.js",
+    what: "Equity: provenance, class, transfer, attribution, and ownership reconciliation guards" },
   { file: "contracted_service_source_artifact.test.js",
     what: "Contracted Services evidence: accepted shapes and product-specific refusals" },
   { file: "contracted_service_ask_spine.test.js",

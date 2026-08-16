@@ -243,6 +243,33 @@ function amountClaimsReading(claims, asOf) {
   };
 }
 
+function ownershipReading(claims, asOf) {
+  const rows = latestClaimsPerSource(claims, asOf, "ownership_percent");
+  if (!rows.length) {
+    return {
+      truth_state: NOT_ESTABLISHED,
+      value_percent: null,
+      sources: [],
+      why: "no source has recorded an ownership percentage for this position",
+    };
+  }
+  const values = [...new Set(rows.map((r) => Number(r.ownership_percent).toFixed(4)))];
+  if (values.length > 1) {
+    return {
+      truth_state: "CONFLICTED",
+      value_percent: null,
+      sources: rows.map((r) => r.claim_source),
+      why: "current source claims disagree on this position's ownership percentage",
+    };
+  }
+  return {
+    truth_state: "ESTABLISHED",
+    value_percent: Number(values[0]),
+    sources: rows.map((r) => r.claim_source),
+    why: null,
+  };
+}
+
 function positionReading(pos, history, asOf) {
   //  ⚠ NOT allInForce — capital_amount_claims is dated by as_of_date,
   //  not effective_from/effective_to (it states what a source claimed
@@ -264,6 +291,7 @@ function positionReading(pos, history, asOf) {
     //  ⚠ E4 — amount and ownership-percent claims stay separate lists,
     //  each per source, never merged into one figure.
     capital_amounts: amountClaimsReading(claims, asOf),
+    ownership: ownershipReading(claims, asOf),
 
     //  ⚠ E9 — absence of a pledge row is NOT_ESTABLISHED, never
     //  "confirmed unencumbered".
@@ -314,6 +342,83 @@ function positionReading(pos, history, asOf) {
   };
 }
 
+function ownershipReconciliation(positionReadings) {
+  if (!positionReadings.length) {
+    return {
+      truth_state: NOT_ESTABLISHED,
+      target_percent: 100,
+      current_total_percent: null,
+      issuer_groups: [],
+      why: "no current capital-stack positions are established",
+    };
+  }
+
+  const byIssuer = {};
+  for (const p of positionReadings) {
+    (byIssuer[p.issuer_legal_entity_id] = byIssuer[p.issuer_legal_entity_id] || []).push(p);
+  }
+  const issuerGroups = Object.keys(byIssuer).sort().map((issuerId) => {
+    const positions = byIssuer[issuerId];
+    const established = positions.filter((p) => p.ownership.truth_state === "ESTABLISHED");
+    const conflicted = positions.filter((p) => p.ownership.truth_state === "CONFLICTED");
+    const total = Math.round(established.reduce(
+      (sum, p) => sum + Number(p.ownership.value_percent), 0) * 10000) / 10000;
+    let truthState, why;
+    if (conflicted.length) {
+      truthState = "CONFLICTED";
+      why = "one or more positions carry disagreeing current ownership claims";
+    } else if (!established.length) {
+      truthState = NOT_ESTABLISHED;
+      why = "no current position at this issuer has an established ownership percentage";
+    } else if (established.length < positions.length) {
+      truthState = "INCOMPLETE";
+      why = "not every current position at this issuer has an established ownership percentage";
+    } else if (Math.abs(total - 100) <= 0.0001) {
+      truthState = "RECONCILED";
+      why = null;
+    } else {
+      truthState = "DOES_NOT_RECONCILE";
+      why = "the established current ownership percentages do not total 100%";
+    }
+    return {
+      issuer_legal_entity_id: issuerId,
+      truth_state: truthState,
+      target_percent: 100,
+      current_total_percent: conflicted.length || !established.length ? null : total,
+      position_count: positions.length,
+      positions_with_established_percentage: established.length,
+      why,
+    };
+  });
+
+  let truthState, why;
+  if (issuerGroups.some((g) => g.truth_state === "CONFLICTED")) {
+    truthState = "CONFLICTED";
+    why = "at least one issuer carries disagreeing ownership claims";
+  } else if (issuerGroups.some((g) => g.truth_state === "DOES_NOT_RECONCILE")) {
+    truthState = "DOES_NOT_RECONCILE";
+    why = "at least one issuer's established ownership does not total 100%";
+  } else if (issuerGroups.every((g) => g.truth_state === "RECONCILED")) {
+    truthState = "RECONCILED";
+    why = null;
+  } else if (issuerGroups.every((g) => g.truth_state === NOT_ESTABLISHED)) {
+    truthState = NOT_ESTABLISHED;
+    why = "no issuer has an established ownership schedule";
+  } else {
+    truthState = "INCOMPLETE";
+    why = "one or more issuer ownership schedules are incomplete";
+  }
+
+  return {
+    truth_state: truthState,
+    target_percent: 100,
+    current_total_percent: issuerGroups.length === 1
+      ? issuerGroups[0].current_total_percent : null,
+    issuer_groups: issuerGroups,
+    why,
+  };
+}
+
 //  ── DERIVED COVERAGE GAPS — REPLACES capital_stack_exposure ─────────
 //  Computed from the SAME rows position() already resolved. Never
 //  hand-authored, never allowed to drift from what the rest of the
@@ -344,17 +449,26 @@ function coverageGaps(positionReadings, history, asOf) {
     }
   }
 
-  //  A named common holder with no recorded ownership percentage from
-  //  ANY source — "who holds it" is answered; "how much" is not.
+  //  A named holder with no settled ownership percentage from ANY source —
+  //  "who holds it" is answered; "how much" is not. Preferred positions
+  //  are included: the operating snapshot cannot reconcile to 100% by
+  //  silently dropping the class whose percentage is missing.
   for (const r of positionReadings) {
-    if (r.position_class !== "common") continue;
-    if (!r.capital_amounts.ownership_percent.length) {
+    if (r.ownership.truth_state === NOT_ESTABLISHED) {
       gaps.push({
         kind: "unrecorded_ownership_percent",
         position_id: r.position_id,
         holder: r.holder,
-        what: "this common holder is named, but no source has recorded its ownership percentage",
+        what: "this holder is named, but no source has recorded its ownership percentage",
         why_unresolved: "no capital_amount_claims row states ownership_percent for this position as of " + asOf,
+      });
+    } else if (r.ownership.truth_state === "CONFLICTED") {
+      gaps.push({
+        kind: "ownership_percent_conflict",
+        position_id: r.position_id,
+        holder: r.holder,
+        what: "current sources disagree on this holder's ownership percentage",
+        why_unresolved: r.ownership.why,
       });
     }
   }
@@ -411,6 +525,7 @@ function position(history, asOfInput) {
     as_of: asOf,
     positions: positionReadings,
     conflicts: conflictReadings,
+    ownership_reconciliation: ownershipReconciliation(positionReadings),
     //  ⚠ Round 3 — DERIVED, never read from a stored exposure table.
     coverage_gaps: coverageGaps(positionReadings, history, asOf),
   };
@@ -430,6 +545,7 @@ function standingProjection(reading) {
     preferred_position_count: preferredPositions.length,
     open_conflict_count: reading.conflicts.length,
     coverage_gap_count: reading.coverage_gaps.length,
+    ownership_reconciliation: reading.ownership_reconciliation,
     //  Never "complete" — the portfolio-wide finding is that no deal's
     //  cap table is ever fully named. This says what IS named, plainly.
     next_milestone: reading.coverage_gaps.length
@@ -440,4 +556,4 @@ function standingProjection(reading) {
   };
 }
 
-module.exports = { position, standingProjection, NOT_ESTABLISHED };
+module.exports = { position, standingProjection, ownershipReconciliation, NOT_ESTABLISHED };

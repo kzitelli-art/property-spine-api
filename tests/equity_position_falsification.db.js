@@ -55,7 +55,7 @@ const MIGRATION = path.join(__dirname, "..", "migrations", "174_equity_positions
 const NE = read.NOT_ESTABLISHED;
 
 const url = receipt.harnessConnectionString();
-receipt.begin(__filename, { url, expected: 49 });
+receipt.begin(__filename, { url, expected: 58 });
 
 let pass = 0, fail = 0, ran = 0;
 function ok(label, cond, detail) {
@@ -550,6 +550,9 @@ const ART = "44444444-4444-4444-4444-444444444444";
     ok("Holdings' ownership percentage (77.57%) reads separately from its contribution amount",
        holdingsRead.capital_amounts.ownership_percent.some((c) => c.ownership_percent === 77.57)
        && holdingsRead.capital_amounts.contribution.some((c) => c.amount_cents === 904835000));
+    ok("4125's ownership schedule stays incomplete at 77.57%; no balancing holder is invented",
+       pos4125.ownership_reconciliation.truth_state === "INCOMPLETE"
+       && pos4125.ownership_reconciliation.current_total_percent === 77.57);
 
     console.log("\n  ── Round 3 · coverage_gaps, derived, no exposure table anywhere ──");
     ok("Holdings LLC's own common tier is a DERIVED gap — governed pref terms, zero named holders",
@@ -601,9 +604,9 @@ const ART = "44444444-4444-4444-4444-444444444444";
 
     console.log("\n  ── the standing projection stays honest at scale ──");
     const standing4125 = read.standingProjection(pos4125);
-    ok("4125's standing shows 2 positions, both named, 2 coverage gaps",
+    ok("4125's standing shows 2 positions, both named, 3 coverage gaps",
        standing4125.position_count === 2 && standing4125.named_holder_count === 2
-       && standing4125.coverage_gap_count === 2);
+       && standing4125.coverage_gap_count === 3);
     ok("...and next_milestone points at a coverage gap, never claims completeness",
        standing4125.next_milestone === "resolve the largest recorded coverage gap");
 
@@ -620,5 +623,5 @@ const ART = "44444444-4444-4444-4444-444444444444";
   }
   db.release();
   await pool.end();
-  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 38 }));
+  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 58 }));
 })();

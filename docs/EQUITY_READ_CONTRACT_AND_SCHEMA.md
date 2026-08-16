@@ -466,6 +466,17 @@ capital_stack_conflicts          E6/E7 — two claims, same fact, disagreeing,
                                  (Round 3) rather than a UI state.
 ```
 
+### Ownership reconciliation is derived, never authored
+
+The operator's cap-table question is answered per issuer, not by summing
+percentages across different LLC tiers. Each current position first receives
+an ownership reading: no claim is `NOT_ESTABLISHED`, disagreeing current source
+claims are `CONFLICTED`, and agreeing claims produce one established percentage.
+An issuer is `RECONCILED` only when every current position has an established
+percentage and those percentages total 100%. A partial, conflicting, 92%, or
+107% schedule remains explicitly unresolved; the reader never chooses a source,
+normalises the percentages, or manufactures a balancing holder.
+
 **⚠ Deliberately absent:** no `accrued_balance` column anywhere (E3). No
 member-loan/debt-shaped column anywhere (E5). No `capital_stack_evidence`
 shared-provenance table (Round 3 — one source-backed observation per row is

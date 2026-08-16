@@ -303,6 +303,56 @@ function internalNote(overrides) {
     assert(problems.some((p) => /internal_note.*asserted_by_text/.test(p)), problems.join("\n"));
   });
 
+  await test("an issuer reconciles only when every current position agrees to 100%", async () => {
+    const history = {
+      positions: [
+        { id: "p-60", issuer_legal_entity_id: "issuer-1", position_class: "common",
+          holder_name_text: "Partner A", effective_from: "2020-01-01" },
+        { id: "p-40", issuer_legal_entity_id: "issuer-1", position_class: "common",
+          holder_name_text: "Partner B", effective_from: "2020-01-01" },
+      ],
+      common_class_terms: [], position_overrides: [], preferred_terms: [], pledges: [], conflicts: [],
+      amount_claims: [
+        { position_id: "p-60", claim_source: "governing_document",
+          ownership_percent: 60, as_of_date: "2020-01-01" },
+        { position_id: "p-40", claim_source: "governing_document",
+          ownership_percent: 40, as_of_date: "2020-01-01" },
+      ],
+    };
+    const reading = read.position(history, "2026-08-16");
+    assert.strictEqual(reading.ownership_reconciliation.truth_state, "RECONCILED");
+    assert.strictEqual(reading.ownership_reconciliation.current_total_percent, 100);
+    assert(reading.positions.every((p) => p.ownership.truth_state === "ESTABLISHED"));
+  });
+
+  await test("missing or disagreeing percentages never publish an authoritative cap table", async () => {
+    const history = {
+      positions: [
+        { id: "p-a", issuer_legal_entity_id: "issuer-1", position_class: "common",
+          holder_name_text: "Partner A", effective_from: "2020-01-01" },
+        { id: "p-b", issuer_legal_entity_id: "issuer-1", position_class: "preferred",
+          holder_name_text: "Partner B", effective_from: "2020-01-01" },
+      ],
+      common_class_terms: [], position_overrides: [], preferred_terms: [], pledges: [], conflicts: [],
+      amount_claims: [
+        { position_id: "p-a", claim_source: "governing_document",
+          ownership_percent: 60, as_of_date: "2020-01-01" },
+      ],
+    };
+    const incomplete = read.position(history, "2026-08-16");
+    assert.strictEqual(incomplete.ownership_reconciliation.truth_state, "INCOMPLETE");
+    assert.strictEqual(incomplete.ownership_reconciliation.current_total_percent, 60);
+
+    history.amount_claims.push({ position_id: "p-a", claim_source: "tracker",
+      ownership_percent: 65, as_of_date: "2026-01-01" });
+    history.amount_claims.push({ position_id: "p-b", claim_source: "governing_document",
+      ownership_percent: 40, as_of_date: "2020-01-01" });
+    const conflicted = read.position(history, "2026-08-16");
+    assert.strictEqual(conflicted.positions[0].ownership.truth_state, "CONFLICTED");
+    assert.strictEqual(conflicted.ownership_reconciliation.truth_state, "CONFLICTED");
+    assert.strictEqual(conflicted.ownership_reconciliation.current_total_percent, null);
+  });
+
   await test("the canonical history read carries the holder's governed legal name", async () => {
     const db = {
       async query(sql) {
