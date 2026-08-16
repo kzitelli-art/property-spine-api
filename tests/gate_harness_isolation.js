@@ -164,6 +164,18 @@ const PRODUCTION_APPROVED = [
             "human confirms them through the product. Proven by tests/debt_establishment_tool.db.js, " +
             "which spawns it as a real process and asserts every refusal above",
     until: "governed document establishment owns the Debt write workflow" },
+  { file: "tools/equity/establish_position.js",
+    reason: "The controlled Equity establishment step — WRITE-CAPABLE BY DESIGN and the " +
+            "capital-stack counterpart to tools/debt/establish_instrument.js. Production is " +
+            "the subject because a position established elsewhere establishes nothing. The " +
+            "tool is dry-run by default, requires --apply for a write, wraps every position " +
+            "and dependent row in ONE transaction, refuses a second establishment for the " +
+            "property, and calls only the canonical Equity writers. Every proposed row must " +
+            "cite a retained source artifact by sha256 plus a locator; Minimum Dividend " +
+            "relationships additionally refuse any source short of a governed read. CLASS 4 " +
+            "scaffolding documented by the Equity 174 run card and deleted when governed " +
+            "document establishment owns the same confirmation workflow",
+    until: "governed document establishment owns the Equity write workflow" },
 ];
 
 /*  DEAD — retained but not to be run. Not safe, not active. */
