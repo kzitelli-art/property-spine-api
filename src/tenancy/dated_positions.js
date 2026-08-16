@@ -35,7 +35,11 @@
 
 "use strict";
 
-const { spacePosition } = require("./space_position");
+const { spacePosition, loadSpaceRows, loadPersonNames } = require("./space_position");
+//  The interval question is a CLASSIFICATION, so it lives with every other
+//  classification — pure, beside classifyPosition, sharing rangesOverlap and
+//  leaseIsValid rather than importing the vocabulary out of them.
+const { classifyPosition, classifyPositionForInterval } = require("./position_classifier");
 
 // Occupancy-axis values that mean "structurally not earning".
 const NON_REVENUE_CLAIMS = new Set(["model", "down"]);
@@ -261,7 +265,152 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
   };
 }
 
+// ════════════════════════════════════════════════════════════════════
+//  intervalPropertyPositions — THE SAME MODEL, ASKED ABOUT A SPAN
+//
+//  datedPropertyPositions answers "what is true on this DATE".
+//  This answers "what does the recorded right-set permit over this
+//  INTERVAL". They are two temporal parameterizations of ONE model, over
+//  the same spaces, the same leases and the same governed vocabulary —
+//  not two systems, and there is no forward store for either to drift
+//  from. A signed future lease changes this answer because it changed
+//  `leases`; there is no Forward Leasing writer and there must not be.
+//
+//  ── WHAT IT OWNS, AND THE LINE IT DOES NOT CROSS ────────────────────
+//  It owns CONTRACTUAL availability: dated rights, and whether they
+//  conflict with what is being asked for. It does NOT own operating or
+//  physical availability — readiness, down state, turnover, possession,
+//  operating designation, use type, marketability. Those stay in
+//  availability_read.js, where `vacant ≠ ready ≠ marketable` already is
+//  the permanent rule, and the two compose ABOVE both reads:
+//
+//      CONTRACTUAL AVAILABILITY  +  OPERATING AVAILABILITY
+//                          ↓
+//                  OFFERABLE POSITION
+//
+//  is_down and use_type are CARRIED here as context an operator needs
+//  beside the answer — never folded into interval_state. A position that
+//  is contractually free and out of service is two true facts, and
+//  collapsing them into one false destroys the reason.
+//
+//  ── PARKED, DELIBERATELY ────────────────────────────────────────────
+//  No named cycles or seasons — the durable primitive is a pair of dates
+//  and a named period is configuration resolved to dates ABOVE this read.
+//  No pace, no preleased %, no comparison to another period or property,
+//  no pricing, no prospect placement. Each is a later, separate decision.
+//
+//  READ-ONLY.
+// ════════════════════════════════════════════════════════════════════
+async function intervalPropertyPositions(pool, {
+  property_id, requested_start = null, requested_end = null,
+} = {}) {
+  if (!property_id) throw new Error("intervalPropertyPositions requires property_id");
+  if (!requested_start) throw new Error("intervalPropertyPositions requires requested_start");
+  if (requested_end && String(requested_end) < String(requested_start)) {
+    const e = new Error("requested_end is before requested_start");
+    e.code = "INVALID_INTERVAL";
+    throw e;
+  }
+  const start = String(requested_start).slice(0, 10);
+  const end = requested_end ? String(requested_end).slice(0, 10) : null;
+
+  //  THE SAME ROWS THE RENT ROLL READS. Not a second query.
+  const rows = await loadSpaceRows(pool, property_id);
+  const personNames = await loadPersonNames(pool, rows);
+
+  const down = new Set((await pool.query(
+    `select id from units where property_id=$1 and coalesce(is_down,false)=true`, [property_id]
+  )).rows.map((r) => String(r.id)));
+
+  const attrs = new Map((await pool.query(
+    `select s.id as space_id, u.square_feet, s.use_type, s.position_kind,
+            put.code as unit_type_code, put.label as unit_type_label
+       from spaces s
+       join units u on u.id = s.unit_id
+       left join property_unit_types put on put.id = u.unit_type_id
+      where u.property_id = $1`, [property_id]
+  )).rows.map((r) => [String(r.space_id), r]));
+
+  const positions = rows.map((row) => {
+    const iv = classifyPositionForInterval(row, { start_date: start, end_date: end, personNames });
+
+    /*  ⚠ EVIDENCE: `disagrees` BLOCKS THE ANSWER. `inconclusive` DOES NOT.
+     *
+     *  The trace proposed that inconclusive opening evidence should read
+     *  `unresolved`. Building it showed that is wrong twice over. The
+     *  classifier's own comment says it: "unknown CONTRADICTS NOTHING — it
+     *  is opening truth that never resolved, not a conflict." And on real
+     *  Skyline every unit imports with occupancy_status 'unknown', so the
+     *  rule would have made all 160 positions unresolved and the read
+     *  useless — honest-looking and worthless.
+     *
+     *  What genuinely blocks the answer is `disagrees`: the opening source
+     *  claims the position is occupied and no lease says so. Someone may be
+     *  in there that Spine has no recorded right for, and calling that
+     *  contractually free would be a confident wrong answer.
+     *
+     *  Evidence is judged AT requested_start — the day the position would
+     *  be handed over — using the same classifier and the same
+     *  evidenceState the Rent Roll uses. Not a second definition.  */
+    const atStart = classifyPosition(row, { asOf: start, personNames });
+    const evidence = evidenceState({ ...atStart, is_down: down.has(String(row.unit_id)) });
+
+    let state = iv.interval_state;
+    let because = iv.conflict_state === "conflicted" ? "overlapping_claims" : null;
+    if (evidence === "disagrees" && state === "contractually_free") {
+      state = "unresolved";
+      because = "opening_evidence_disagrees";
+    }
+
+    const a = attrs.get(String(row.space_id)) || {};
+    return {
+      ...iv,
+      interval_state: state,
+      unresolved_because: state === "unresolved" ? because : null,
+
+      //  CONTEXT, CARRIED AND NEVER FOLDED IN. An operator composing this
+      //  with marketability needs these beside the contractual answer; this
+      //  read has no opinion about them.
+      evidence_state: evidence,
+      is_down: down.has(String(row.unit_id)),
+      use_type: a.use_type || null,
+      position_kind: a.position_kind
+        || (row.space_label && !/whole\s*unit/i.test(row.space_label) ? "bed" : "unit"),
+      square_feet: a.square_feet ?? null,
+      unit_type: a.unit_type_label || null,
+      unit_type_code: a.unit_type_code || null,
+    };
+  });
+
+  const inState = (s) => positions.filter((p) => p.interval_state === s).length;
+  return {
+    property_id,
+    requested_start: start,
+    requested_end: end,
+    count: positions.length,
+    opening_truth: await openingTruth(pool, property_id),
+    totals: {
+      contractually_free: inState("contractually_free"),
+      committed: inState("committed"),
+      partially_conflicted: inState("partially_conflicted"),
+      unresolved: inState("unresolved"),
+      units: new Set(positions.map((p) => String(p.unit_id))).size,
+    },
+    //  Said out loud in the payload, so no consumer has to remember it and
+    //  no screen can imply it.
+    does_not_establish: [
+      "Whether any of these positions can be marketed, shown or offered — that is " +
+      "operating availability (readiness, turnover, possession, down state, operating " +
+      "designation) and it is availability_read's answer, not this one.",
+      "Any price, market rent or concession for the requested interval.",
+      "Which prospect may have which position.",
+      "How this interval compares to another period, property or market — no basis is recorded.",
+    ],
+    positions,
+  };
+}
+
 module.exports = {
-  datedPropertyPositions, openingTruth,
+  datedPropertyPositions, intervalPropertyPositions, openingTruth,
   tenancyState, evidenceState, economicsState, contributesTrustedRent,
 };

@@ -130,6 +130,11 @@ const GATES = [
     what: "the reader gate itself goes RED when registration, discovery or the gather is broken" },
   { file: "tenancy_ask_spine.test.js",
     what: "Tenancy Ask Spine: routing, entitlement before any read, the four silences, the truth walls" },
+  //  Slice 2's primitive is PURE, which is why its whole edge-case surface
+  //  runs here in milliseconds instead of behind a Postgres. The DB rung
+  //  (interval_positions.db.js) proves the same states on 160 real beds.
+  { file: "interval_position_hostile.test.js",
+    what: "Interval tenancy: closed-interval arithmetic, which rights count, honest refusals, and the line it does not cross" },
   { file: "contracted_service_source_artifact.test.js",
     what: "Contracted Services evidence: accepted shapes and product-specific refusals" },
   { file: "contracted_service_ask_spine.test.js",

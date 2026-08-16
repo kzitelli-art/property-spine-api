@@ -268,8 +268,166 @@ function classifyPosition(row, { asOf, personNames } = {}) {
   };
 }
 
+// ════════════════════════════════════════════════════════════════════
+//  THE INTERVAL QUESTION — Slice 2's whole foundation
+//
+//    Does this rentable position carry a governed dated right that
+//    conflicts with the requested interval?
+//
+//  ONE QUESTION. It does NOT decide whether the position is ready to
+//  show, physically ready, down, marketable, priced, or something we
+//  should offer a prospect. Those are OPERATING availability and they
+//  live in availability_read.js, where `vacant ≠ ready ≠ marketable` is
+//  already the permanent rule. Composition happens ABOVE both reads:
+//
+//      CONTRACTUAL AVAILABILITY   dated lease/right truth      ← here
+//                 +
+//      OPERATING AVAILABILITY     readiness · down · turnover
+//                 ↓
+//      OFFERABLE POSITION
+//
+//  The states are named `contractually_free`, never `available`, for
+//  exactly that reason: a generic `available` is a word the next reader
+//  has to remember the meaning of, and the meaning they will guess is
+//  "can I lease this to someone", which this read does not answer.
+//  A position can truthfully be contractually free AND physically not
+//  ready AND down; flattening those into one false destroys the reason.
+//
+//  ── WHY IT NEEDS NO NEW PREDICATE ───────────────────────────────────
+//  rangesOverlap already IS the interval predicate — it exists above to
+//  detect two leases colliding, and this is the same test with one side
+//  being a requested span instead of a second lease. leaseIsValid already
+//  decides which rights count, and fails closed. proofBasis already
+//  decides how strongly each is known. Slice 2 invents no policy; it asks
+//  the existing model a second temporal question.
+//
+//  PURE. Same as everything else in this file.
+// ════════════════════════════════════════════════════════════════════
+
+const FOREVER = "9999-12-31";
+const dayAfter = (ymd) => {
+  const d = new Date(String(ymd) + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10);
+};
+const dayBefore = (ymd) => {
+  const d = new Date(String(ymd) + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+};
+
+/*  The sub-spans of [start, end] that no colliding right covers.
+ *  Closed intervals throughout: end_date is the LAST day a lease governs,
+ *  which is the convention datesSpan already uses (end_date >= asOf) and
+ *  the one rangesOverlap already enforces. An open end runs forever.       */
+function freeSpans(start, end, rights) {
+  const reqEnd = end || FOREVER;
+  const blocks = rights
+    .map((r) => ({ from: String(r.start_date), to: r.end_date ? String(r.end_date) : FOREVER }))
+    .sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0));
+  const spans = [];
+  let cursor = String(start);
+  for (const b of blocks) {
+    if (b.to < cursor) continue;               // entirely behind us
+    if (b.from > cursor) {
+      const gapEnd = dayBefore(b.from < reqEnd ? b.from : dayAfter(reqEnd));
+      if (gapEnd >= cursor) spans.push({ from: cursor, to: gapEnd > reqEnd ? reqEnd : gapEnd });
+    }
+    if (b.to >= reqEnd) return spans;           // nothing left after this one
+    if (b.to >= cursor) cursor = dayAfter(b.to);
+  }
+  if (cursor <= reqEnd) spans.push({ from: cursor, to: end ? reqEnd : null });
+  return spans;
+}
+
+/*  classifyPositionForInterval — the whole Slice 2 primitive.
+ *
+ *  row          one loaded space, exactly as loadSpaceRows returns it
+ *  start_date   requested interval start, 'YYYY-MM-DD'
+ *  end_date     requested interval end, 'YYYY-MM-DD', or null for open-ended
+ *
+ *  Four states, and each says what it is FOR:
+ *    contractually_free    no valid right overlaps the requested interval
+ *    committed             a valid right covers the ENTIRE interval
+ *    partially_conflicted  a valid right overlaps PART of it — the free
+ *                          sub-spans are reported, because "this bed is
+ *                          yours Aug 1 – Dec 31" is the operating answer
+ *    unresolved            Spine cannot answer: overlapping claims that
+ *                          touch this interval, and which governs is
+ *                          unknown. NEVER silently resolved to the first
+ *                          matching lease.
+ */
+function classifyPositionForInterval(row, { start_date, end_date = null, personNames } = {}) {
+  if (!start_date) throw new Error("classifyPositionForInterval requires start_date");
+  if (end_date && String(end_date) < String(start_date)) {
+    const e = new Error("requested_end is before requested_start");
+    e.code = "INVALID_INTERVAL";
+    throw e;
+  }
+  const requested = { start_date: String(start_date), end_date: end_date ? String(end_date) : null };
+  const leases = (row.leases || []).filter(leaseIsValid);
+
+  //  THE ONE TEST. Same predicate the conflict detector uses.
+  const colliding = leases.filter((l) => rangesOverlap(requested, l));
+
+  //  A CONTEST ONLY MATTERS IF IT TOUCHES THIS INTERVAL. Two leases that
+  //  overlap each other in 2029 do not stop Spine answering about 2026,
+  //  and reporting `unresolved` for them would be a different kind of
+  //  wrong — a refusal Spine has no basis for.
+  const contested = [];
+  for (let i = 0; i < colliding.length; i++) {
+    for (let j = i + 1; j < colliding.length; j++) {
+      if (rangesOverlap(colliding[i], colliding[j])) contested.push(colliding[i].id, colliding[j].id);
+    }
+  }
+  const contestedIds = [...new Set(contested)];
+
+  //  Carried whole and unflattened: WHICH rights collide, and how strongly
+  //  each is known. A collision with an `unproven` right is still a
+  //  collision — the position is spoken for — but it is a weaker claim
+  //  than a native_verified one, and only a human may decide to write over
+  //  it, through the governing writer. This read never decides that.
+  const shape = (l) => ({
+    lease_id: l.id,
+    lease_status: l.lease_status,
+    start_date: l.start_date,
+    end_date: l.end_date || null,
+    proof_basis: proofBasis(l),
+    tenants: tenantList(l, personNames),
+  });
+
+  let interval_state;
+  let free_spans = [];
+  if (contestedIds.length) {
+    interval_state = "unresolved";
+  } else if (!colliding.length) {
+    interval_state = "contractually_free";
+    free_spans = [{ from: requested.start_date, to: requested.end_date }];
+  } else {
+    free_spans = freeSpans(requested.start_date, requested.end_date, colliding);
+    interval_state = free_spans.length ? "partially_conflicted" : "committed";
+  }
+
+  return {
+    space_id: row.space_id,
+    unit_id: row.unit_id,
+    unit_number: row.unit_number,
+    space_label: row.space_label,
+    requested,
+    interval_state,
+    colliding_rights: colliding.map(shape),
+    free_spans,
+    //  Contest state SCOPED TO THIS INTERVAL, deliberately not the
+    //  position-wide conflict_state the dated read reports.
+    conflict_state: contestedIds.length ? "conflicted" : "clear",
+    conflicting_lease_ids: contestedIds,
+  };
+}
+
 module.exports = {
   classifyPosition,
+  classifyPositionForInterval,
+  freeSpans,
   classifyFutureCommitment,
   isNativelyProven,
   // shared vocabulary, exported so no caller redefines it

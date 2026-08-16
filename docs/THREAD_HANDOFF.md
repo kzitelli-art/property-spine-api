@@ -212,6 +212,83 @@ straight to retaining the real governing documents; the mechanism to
 establish from them once retained already exists and is proven.
 
 ## ══════════════════════════════════════════════════════════════════
+##  SLICE 2 FOUNDATION — THE INTERVAL READ IS BUILT AND PROVEN.
+##  2026-08-16. NO MIGRATION. NO UI. NOT ACTIVATED — Slice 1 activation
+##  still has priority. Read the Slice 2 trace before touching this.
+## ══════════════════════════════════════════════════════════════════
+
+**Branch (API):** `claude/code-philosophy-review-xoiz8f`. **Migrations: NONE.**
+Design: `docs/SLICE_2_FORWARD_LEASING_TRACE.md`. Cutover for the
+prospect-facing path: `docs/PROSPECT_INVENTORY_CUTOVER.md`.
+
+### What landed
+
+```text
+loadSpaceRows(pool, property_id)          space_position.js — extracted, so
+  the dated and interval readers load the SAME rows. Proven
+  behaviour-preserving: spacePosition output compared before/after across
+  12 property/date combinations, 0 mismatches.
+classifyPositionForInterval(row, {...})   position_classifier.js — PURE.
+intervalPropertyPositions(pool, {...})    dated_positions.js, beside its
+  dated sibling. as_of and (start,end) are two parameterizations of ONE
+  model, which is north-star ruling 1 stated in code.
+```
+
+**Four states, and the vocabulary is deliberate:**
+
+```text
+contractually_free · committed · partially_conflicted · unresolved
+```
+
+`contractually_free`, never a generic `available` — owner ruling. The read
+answers ONE question: does this position carry a governed dated right that
+conflicts with the requested interval? It does not decide ready, down,
+marketable, priced or offerable. Those compose ABOVE both reads.
+
+### The number, on the real 07/31 export
+
+```text
+at 2026-07-31              occupied 37 · "open" 123
+interval 2026-08-01 → 2027-07-31
+  contractually_free        32     ← what is actually left to lease
+  partially_conflicted     128
+interval 2027-09-01 → 2028-07-31
+  contractually_free       160
+```
+
+### Two findings that corrected the trace
+
+1. **`evidence_state === 'inconclusive'` must NOT force `unresolved`.** The
+   trace proposed it. Every Skyline unit imports with occupancy_status
+   'unknown', so the rule would have made all 160 positions unresolved and the
+   read useless. The classifier already says why: *"unknown CONTRADICTS
+   NOTHING"*. What genuinely blocks the answer is `disagrees` — a claim of
+   occupied with no lease — and that is what the read uses.
+2. **`committed` is rarer than expected and `partially_conflicted` is the
+   norm** (128 of 160 here). A boolean would have thrown away the free
+   sub-spans, which are the operating answer: *"this bed is yours Aug 1 –
+   Dec 31."*
+
+### Proof
+
+```text
+tests/interval_position_hostile.test.js   38/38  pure, no database
+tests/interval_positions.db.js            31/31  real Postgres, 160 real beds
+  incl. a signed future lease moving the answer with NO Forward Leasing
+  writer, a void returning it, by-bed and by-unit through one code path,
+  and a DOWN position staying contractually_free with is_down carried beside
+```
+
+**No new Ask Spine domain was created and none should be.** The interval read
+is a second temporal question over Tenancy, not a fifth domain —
+`gate_ask_spine_readers.js` correctly discovers nothing new.
+
+### Not built, deliberately
+
+No UI. No named cycles or seasons. No pace or preleased %. No comparison. No
+prospect placement. No pricing. No route yet.
+
+## ══════════════════════════════════════════════════════════════════
 ##  TENANCY IS READABLE BY ASK SPINE. THE COVERAGE GATE WAS BLIND AND
 ##  IS NOT ANY MORE — AND IT HAS NOW BEEN SEEN TO GO RED.
 ##  2026-08-16. NO MIGRATION. NOT DEPLOYED. Closes STILL-OWED item 1 of
