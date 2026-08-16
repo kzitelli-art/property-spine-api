@@ -203,6 +203,24 @@ async function forwardLeasingPosition(pool, {
    *  their own bucket with their reasons. */
   const byBed = new Map();
   const unattached = [];
+  /*  ── AN UNRESOLVED IDENTITY TAINTS THE BEDS IT COULD MEAN ──────────
+   *  A malformed claim names a unit and two possible ordinals. The bed it
+   *  did NOT land on must not quietly become "remaining": absence of
+   *  resolved evidence is not evidence of availability, and that is the
+   *  exact failure this whole slice exists to eliminate.
+   *
+   *  Bed 405B is the live case. Row 141's Unit cell says 405B and its Room
+   *  cell says A, so nothing attaches to 405B — and reading that as an
+   *  open bed would invent a vacancy out of a typo. It is unresolved. */
+  const taintedBeds = new Map();
+  for (const c of claims || []) {
+    const p = c.payload_json || {};
+    if (p.reconciliation === "identity_conflict" && p.unit) {
+      for (const ord of [p.ordinal_from_unit_cell, p.ordinal_from_room_cell]) {
+        if (ord) taintedBeds.set(`${p.unit}#${ord}`, c);
+      }
+    }
+  }
   for (const c of claims || []) {
     const p = c.payload_json || {};
     if (p.space_id) byBed.set(String(p.space_id), c);
@@ -223,9 +241,19 @@ async function forwardLeasingPosition(pool, {
   const trackerPendingRent = allClaims.filter((p) => p.pending)
     .reduce((a, p) => a + (p.monthly_rent || 0), 0);
   const reviewClaims = (claims || []).filter((c) => c.status === "needs_review" || c.status === "blocked");
+  const bedKeyOf = (row) => `${String(row.unit_number).replace(/^\d{3,4}-(?=\d)/, "")}#` +
+    String(row.space_label || "").replace(/\D/g, "");
   for (const row of ledger) {
     const c = byBed.get(String(row.space_id));
     const p = c ? (c.payload_json || {}) : null;
+    //  Tainted only when nothing resolved landed here — a bed that DID
+    //  attach a claim is answered, whatever else the source got wrong.
+    const tainted = !c && taintedBeds.get(bedKeyOf(row));
+    row.identity_exception = tainted ? {
+      claim_id: tainted.id,
+      reason: "A tracker row names this bed ambiguously, so nothing could be attached to it. " +
+              "Unresolved is not open — a human resolves the source row.",
+    } : null;
     //  PROOF LEVEL — what Spine can stand behind for this bed, said out
     //  loud on every row. "Lease tied" is canonical; "Tracker claim" is
     //  an operating claim awaiting the executed lease; "Needs review" is
@@ -246,16 +274,37 @@ async function forwardLeasingPosition(pool, {
      *  the two sources contradict each other is not signed and not
      *  remaining; it is a question, and it must read as one. */
     row.proof =
-      (c && (c.status === "needs_review" || c.status === "blocked")) ? "needs_review"
-        : row.commitment_state === "unresolved" ? "needs_review"
-          : row.commitment_state === "signed" || row.commitment_state === "pending" ? "lease_tied"
-            : p && (p.signed || p.pending) ? "tracker_claim"
-              : "none";
+      row.identity_exception ? "needs_review"
+        : (c && (c.status === "needs_review" || c.status === "blocked")) ? "needs_review"
+          : row.commitment_state === "unresolved" ? "needs_review"
+            : row.commitment_state === "signed" || row.commitment_state === "pending" ? "lease_tied"
+              : p && (p.signed || p.pending) ? "tracker_claim"
+                : "none";
     //  The operating state Mike recognises: canonical where Spine has a
     //  lease, the tracker's claim where it does not, and CHECK wherever
     //  the two disagree or a human is owed a decision.
+    /*  ── STATE AND PROOF ARE DIFFERENT AXES, AND ONLY ONE KIND OF
+     *     REVIEW MOVES THE STATE ────────────────────────────────────────
+     *  STATE answers what Mike is operating. PROOF answers how well Spine
+     *  can stand behind it. A rent disagreement is an ECONOMIC dispute —
+     *  111A and 305A are signed to the operator and signed in the lease,
+     *  and the two sources merely disagree about the amount. Those stay
+     *  SIGNED · NEEDS REVIEW.
+     *
+     *  What genuinely makes a bed a question is a disagreement about the
+     *  COMMITMENT itself: the tracker says open and a canonical lease says
+     *  committed (416A), the position is contested, or the identity could
+     *  not be resolved at all (405B). Only those read CHECK.
+     *
+     *  The first version made `proof === needs_review` imply CHECK, which
+     *  demoted two correctly-signed beds over an amount. */
+    const stateDisputed =
+      !!row.identity_exception ||
+      row.commitment_state === "unresolved" ||
+      (p && p.reconciliation === "open_but_leased") ||
+      (c && c.status === "blocked");
     row.operating_state =
-      row.proof === "needs_review" ? "check"
+      stateDisputed ? "check"
         : row.commitment_state === "signed" ? "signed"
           : row.commitment_state === "pending" ? "pending"
             : row.claim_state === "signed" ? "signed"
@@ -331,11 +380,21 @@ async function forwardLeasingPosition(pool, {
       tied_to_canonical_lease: ledger.filter((r) => r.proof === "lease_tied").length,
       awaiting_contractual_tie: ledger.filter((r) => r.proof === "tracker_claim").length,
       needs_review: reviewClaims.length,
-      remaining: ledger.filter((r) => r.operating_state === "remaining").length,
+      /*  MIKE'S REMAINING, which is the tracker's open set — not Spine's
+       *  leftover. 416A is on his open list AND reads CHECK, so counting
+       *  only operating_state==='remaining' returned 15 and the headline
+       *  stopped adding to 160. A disputed bed is still a bed he is trying
+       *  to lease; it is the ROW that must show the dispute, not the total
+       *  that must hide the bed. */
+      remaining: ledger.filter((r) => r.claim_state === "open" || r.operating_state === "remaining").length,
       //  Named, never dropped. Each of these is a bed the tracker counts
       //  and Spine cannot place, so the two totals legitimately differ and
       //  the difference is explained rather than absorbed.
       unattached_claims: unattached,
+      //  Beds a malformed source row could have meant, which therefore
+      //  cannot be called open. Named so the exception is inspectable.
+      identity_exceptions: ledger.filter((r) => r.identity_exception)
+        .map((r) => ({ space_id: r.space_id, unit_number: r.unit_number, space_label: r.space_label })),
       //  ⚠ A TRACKER RENT IS A CLAIM, NOT CONTRACTED RENT. Labelled so
       //  no caller can quote it as governed economics because Mike typed
       //  it into Excel.
