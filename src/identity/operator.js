@@ -62,6 +62,7 @@ module.exports = function operatorModule(deps) {
   //  Forward Leasing reads the SAME canonical model, parameterized by a span
   //  instead of a date. Not a second service and not a forward store.
   const { intervalPropertyPositions } = require("../tenancy/dated_positions");
+const { forwardLeasingPosition } = require("../leasing/forward_leasing_read");
   const { institutionalRentRoll, institutionalCsv } = require("../surfaces/rent_roll_institutional"); // formal as-of schedule + CSV
   const { availabilityRead } = require("../surfaces/availability_read");   // Availability over the shared classifier
   const { effectivePropertyPricing } = require("../money/effective_pricing"); // the Pricing & Concessions truth sheet
@@ -2037,6 +2038,61 @@ module.exports = function operatorModule(deps) {
       } catch (e) {
         //  A failed read is UNAVAILABLE, never an empty building and never
         //  "nothing is available for those dates".
+        return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+      }
+    });
+
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/leasing/forward-position
+  //     ?cycle_start=&cycle_end=&cycle_label=
+  //
+  // THE FORWARD LEASING LEDGER — the screen that replaces Mike's tracker.
+  //
+  // Returns three layers that are never summed: the canonical `headline`
+  // from `leases`, the `operating_position` the leasing tracker claims,
+  // and the per-bed `ledger` carrying both plus a proof level.
+  //
+  // Property comes from the SESSION, never the query (§21). Both cycle
+  // dates are REQUIRED — a cycle is a named span, and there is no default
+  // one; "today", "this year" and an implied school year are each a second
+  // time model smuggled in as a convenience.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/leasing/forward-position", requireOperator, requireLeasingModuleAccess,
+    async (req, res) => {
+      res.set("Cache-Control", "no-store");
+      const start = req.query.cycle_start;
+      const end = req.query.cycle_end;
+      for (const [name, v] of [["cycle_start", start], ["cycle_end", end]]) {
+        if (v == null || v === "") {
+          return res.status(400).json({
+            error: `${name} is required. A leasing cycle is a span, and a span has two dates.`,
+            code: "cycle_required",
+          });
+        }
+        if (!validCalendarDate(String(v))) {
+          return res.status(400).json({
+            error: `${name} must be a real calendar date in YYYY-MM-DD form.`,
+            code: "invalid_cycle_date",
+          });
+        }
+      }
+      if (String(end) < String(start)) {
+        return res.status(400).json({
+          error: "cycle_end is before cycle_start.",
+          code: "invalid_cycle",
+        });
+      }
+      try {
+        const out = await forwardLeasingPosition(pool, {
+          property_id: req.operator.property_id,   // session only, never the query
+          cycle_start: String(start),
+          cycle_end: String(end),
+          cycle_label: req.query.cycle_label ? String(req.query.cycle_label).slice(0, 40) : null,
+        });
+        return res.json(out);
+      } catch (e) {
+        //  A failed read is UNAVAILABLE. It is never an empty building and
+        //  never "nothing is committed for that cycle".
         return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
       }
     });

@@ -236,11 +236,21 @@ async function forwardLeasingPosition(pool, {
     row.claim_cohort = p ? (p.cohort_label || null) : null;
     row.claim_status = c ? c.status : null;
     row.claim_reason = c ? c.status_reason : null;
+    /*  ⚠ A REVIEW CLAIM OUTRANKS A CANONICAL TIE, and the order is the
+     *  whole requirement. The first version tested `commitment_state`
+     *  first, so bed 416A — where Spine holds a lease and the tracker
+     *  says the bed is OPEN — rendered SIGNED · LEASE TIED and the
+     *  disagreement vanished into Spine's side of it.
+     *
+     *  That is the failure this surface exists to prevent. A bed where
+     *  the two sources contradict each other is not signed and not
+     *  remaining; it is a question, and it must read as one. */
     row.proof =
-      row.commitment_state === "signed" || row.commitment_state === "pending" ? "lease_tied"
-        : (c && c.status === "needs_review") || (c && c.status === "blocked") ? "needs_review"
-          : p && (p.signed || p.pending) ? "tracker_claim"
-            : row.commitment_state === "unresolved" ? "needs_review" : "none";
+      (c && (c.status === "needs_review" || c.status === "blocked")) ? "needs_review"
+        : row.commitment_state === "unresolved" ? "needs_review"
+          : row.commitment_state === "signed" || row.commitment_state === "pending" ? "lease_tied"
+            : p && (p.signed || p.pending) ? "tracker_claim"
+              : "none";
     //  The operating state Mike recognises: canonical where Spine has a
     //  lease, the tracker's claim where it does not, and CHECK wherever
     //  the two disagree or a human is owed a decision.
