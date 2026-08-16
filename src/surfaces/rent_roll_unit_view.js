@@ -113,12 +113,29 @@ function positionLine(p) {
     current,
     next,
     //  Institutional detail lives on the same row for the expanded view.
+    //  Carried here so opening a row costs NOTHING — a detail view that
+    //  fetched would issue one request per curious click, and could disagree
+    //  with the row above it about the date.
+    //
+    //  What is deliberately NOT here: move-out, market rent, deposit and
+    //  ledger balance. None is carried by the dated position service, and
+    //  inventing a null for each would let a surface print "Not recorded" —
+    //  a claim about the PROPERTY — when the true claim is that this read
+    //  does not carry them. The surface says that instead.
     detail: {
       unit_type: p.unit_type,
       use_type: p.use_type,
       square_feet: p.square_feet,
       imported_occupancy_claim: p.imported_occupancy_claim,
       notice_state: p.notice_state,
+      //  The DATE, not just the state. "On notice" without a date cannot be
+      //  acted on, and the classifier already carries it.
+      notice_date: p.notice_date || null,
+      //  Possession, in the operator's words: when they actually moved in.
+      //  A lease start is a contract date; a move-in is a recorded event, and
+      //  they are routinely not the same day.
+      moved_in: (p.current_possession && p.current_possession.since) || null,
+      possession_state: p.possession_state || null,
       is_down: p.is_down,
       contributes_trusted_rent: p.contributes_trusted_rent,
     },

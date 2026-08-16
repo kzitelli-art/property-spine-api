@@ -204,6 +204,11 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
       current_rent: lease && lease.rent != null ? Number(lease.rent) : null,
       proof_basis: lease ? lease.proof_basis : null,
       notice_state: p.notice_state,
+      // THE DATE, not only the state. The classifier has carried notice_date
+      // since it was written; this projection dropped it, so every consumer
+      // could say a position was on notice and none could say from when —
+      // which is the half an operator has to act on. Additive.
+      notice_date: p.notice_date || null,
       successor: p.successor,
       // THE STANDALONE FUTURE COMMITMENT, carried forward. Without it
       // availability_read had no proof for a future lease on a vacant position

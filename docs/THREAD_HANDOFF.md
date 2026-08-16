@@ -26,6 +26,48 @@ operator browser surface                  DONE — property-spine-app/index.html
 Ask Spine standing read                   NOT DONE — see "the open rung" below
 ```
 
+### The UI reset (second pass, same day)
+
+The first browser presentation was **rejected**: technically truthful, too
+vertical, too sparse, too prose-heavy, hard to scan across units. The mistake
+was "sentences, not columns" — an operator reading a rent roll is constantly
+comparing one position to the next, and comparison needs COLUMNS. The truth
+model, the service, the route and the payload were **not** touched.
+
+What replaced it:
+
+```text
+one dense aligned table   72 unit bands, 160 one-line positions, columns that
+                          line up ACROSS unit groups (proven as geometry)
+columns                   Room · Current resident · Rent · Lease end ·
+                          Next resident · Next start · Next rent · Status
+grain from the payload    positions > units decides room-vs-unit. A whole-unit
+                          property collapses to one row per unit, no fake
+                          Room1, no "(whole unit)". No `if Skyline` (§22).
+status                    Occupied · Open · Committed · Pending · Exception
+                          — never "Vacant", never "Leased"
+two silences, two marks   "—" the column does not apply · "Unknown" the fact
+                          applies and Spine was never given it. Never $0.
+header                    one quiet standing line, no hero number, no
+                          percentage. Provenance collapsed to one line.
+expanded row              operator language only — Resident, Lease start,
+                          Lease end, Contracted rent, Lease status, How this
+                          is known. No tenancy_state / evidence_state /
+                          proof_basis / position kind on screen.
+secondary mode            "Full schedule →" (was "One row per position")
+```
+
+Contract changes, both additive and both because the presentation needed
+them: `dated_positions` now carries `notice_date` (the classifier always had
+it; the projection dropped it, so every consumer could say a position was on
+notice and none could say from when), and `positionLine.detail` carries
+`moved_in` and `possession_state`.
+
+Move-out, market rent, deposit and ledger balance are **deliberately absent**
+rather than emitted as nulls — a surface that printed "Not recorded" for them
+would make a claim about the PROPERTY when the true claim is that this read
+does not carry them. The expanded row says that once.
+
 ### Proof
 
 ```text
@@ -34,16 +76,22 @@ tests/skyline_bed_grain_activation.db.js    19/19
 tests/skyline_rent_roll_read.db.js          22/22   incl. stable-ID contract
 tests/skyline_rent_roll_model.db.js         40/40
 11 API source gates                         PASS
-31 app node tests                           PASS
-property-spine-app/skyline_rent_roll_units.browser.js  53/53
+app node tests (31 files)                   PASS   incl. 130/130 cutover
+property-spine-app/skyline_rent_roll_units.browser.js  84/84
   real server.js + real index.html + Chromium, 72 units / 160 beds from the
-  actual 07/31 export. Screenshots and the performance baseline are in
-  property-spine-app/docs/screenshots_rent_roll_units/.
+  actual 07/31 export, PLUS a second whole-unit property in the same browser
+  as the by-unit control. Eight screenshots and the performance baseline are
+  in property-spine-app/docs/screenshots_rent_roll_units/.
 ```
 
-Performance at 160 positions: **one** request (114 KB, 715 B/position), door
-to fully rendered 70–105 ms, full repaint 24 ms, expanding a position issues
-**zero** further requests. Nothing pathological at this size.
+Density is measured, not eyeballed — the complaint that caused the reset was
+vertical waste, so it is now numbers: **26 px per position**, the surface's
+own header (title → first row) **174 px**, **16 positions and 8 units in the
+first viewport** at 1400×1000.
+
+Performance at 160 positions: **one** request (125 KB, 779 B/position), door
+to fully rendered ~70 ms, full repaint 52 ms, expanding a row and every
+search/filter issue **zero** further requests. Nothing pathological.
 
 ### Facts about the real 07/31 export, found by loading it
 
@@ -60,35 +108,49 @@ No bed carries both a current lease and a next one at 07/31: the 37 sitting
   successor rather than claimed from data that cannot show it.
 ```
 
-### THE OPEN RUNG — say it this way, do not soften it
+### STILL OWED — tracked separately, deliberately NOT mixed into the UI pass
 
-The Rent Roll is **done as a screen and not done as a domain** (§40.2). Its
+**1. The Rent Roll is done as a screen and not done as a domain** (§40.2). Its
 governed standing state is not readable by Ask Spine, and
-`tests/gate_ask_spine_readers.js` did not go red, because it discovers domains
-by filename suffix (`*_position_read.js`, `*_establishment.js`, `*_read.js`)
-and neither `src/tenancy/dated_positions.js` nor
-`src/surfaces/rent_roll_unit_view.js` matches one. **The gate scans less than
-it asserts** — that is the failure mode CLAUDE.md names, and it is real here,
-not hypothetical. Two things are owed and neither has been done:
+`tests/gate_ask_spine_readers.js` did not go red, because
+`STANDING_READ_DIRS = ["src/asset"]` — it scans ONE directory while asserting
+"every governed domain". Tenancy lives in `src/tenancy`, so it was invisible.
+**The gate scans less than it asserts**, which is the failure mode CLAUDE.md
+names, and it is real here rather than hypothetical. Two things are owed:
+a compact standing projection for tenancy registered in
+`src/agent/ask_spine_answer.js`, and widened discovery in that gate so the
+next canonical read landing outside `src/asset` goes red on its own. Note
+that `src/surfaces/` must be EXCLUDED explicitly, not by accident: it holds
+projections OF domains (`availability_read.js`, `management_read.js`), and
+counting those as domains would over-report coverage.
 
-1. a compact standing projection for tenancy, registered in
-   `src/agent/ask_spine_answer.js`;
-2. discovery in that gate widened to see this domain, so the next canonical
-   read that lands outside the suffix convention goes red on its own.
+A first cut of both was written and then **parked unfinished** when the UI
+reset arrived, rather than half-landed into this branch. It is not in the
+tree. Redo it deliberately.
 
-### Other things left honestly open
+**2. Source/PMS resident identity has no durable home, and this blocks
+establishing opening truth.** `rent_roll_field_map` extracts the PMS id
+(`s0005738`) from the source; `persons` has no column for it, so nothing is
+persisted. When a fresher export arrives, Spine has no safe way to know that
+`s0005738` is the person it imported last time — and merging on name is
+refused, correctly. **Do not add `yardi_id` or `pms_id` to `persons`**; that
+bakes one vendor into the Person model. First check for an existing generic
+external-identity primitive and reuse it. If none exists, stop and bring the
+smallest general design: `source_system + external_id → durable person`,
+useful for Yardi, AppFolio, Entrata and whatever follows. An investigation
+was in flight when this pass began and its result is not recorded here.
 
-```text
-Skyline opening truth        NOT established. Ruling stands: prove the
-                             machinery now, establish from the freshest
-                             export at activation.
-Source PMS resident ID       Extracted by rent_roll_field_map, but `persons`
-                             has NO durable column for it — so it is not
-                             persisted as sourced external identity. That is a
-                             migration and this slice shipped none.
-Phase Zero production close  Still blocked on network policy: no DATABASE_URL
-                             and the proxy CONNECTs 403 to Render.
-```
+**3. Skyline opening truth is NOT established.** Ruling stands: prove the
+machinery now, establish from the freshest export at activation, after a
+human review.
+
+**4. Phase Zero production close-out** — still blocked on network policy: no
+`DATABASE_URL` and the proxy CONNECTs 403 to Render.
+
+**5. Slice 2 has not started** and must not start until 1–3 are resolved.
+Leasing seasons, pace, preleased %, period-aware availability, AI placement,
+application grain, screening and e-sign are all deliberately absent from the
+surface and from its proof.
 
 ## ══════════════════════════════════════════════════════════════════
 ##  DEBT 173 IS RELEASED AND 4125 CANONICAL TRUTH IS ESTABLISHED.
