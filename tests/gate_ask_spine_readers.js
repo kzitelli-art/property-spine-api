@@ -191,6 +191,29 @@ const REGISTRY = {
             "draft) and entitlement applied before model context, after §40.8 " +
             "cross-domain composition authorization is governed.",
   },
+  //  ⚠ EQUITY IS NOW REGISTERED. The canonical read, the route, and the
+  //  Capital Stack UI (split into Preferred Equity / Common Equity
+  //  compartments) are live; Ask Spine gathers the SAME
+  //  loadHistory()/position()/standingProjection() call — see
+  //  src/agent/ask_spine_answer.js's "equity" subject. No new reader was
+  //  built for this; "one conversational architecture" (CLAUDE.md) means
+  //  Ask Spine is the same governed pipe the screen uses, never a second
+  //  one. Composition authorization is still unsolved cross-domain, same
+  //  as every other registered domain.
+  equity: {
+    state: "registered",
+    //  Matches docs/EQUITY_READ_CONTRACT_AND_SCHEMA.md: retrieval
+    //  claimed narrowly, comparison and causal explanation explicitly
+    //  not. Equity claims LESS than Debt did at the same build stage on
+    //  purpose — the specimen property itself shows a well-governed
+    //  preferred position beside a common tier with no named holder at
+    //  the next tier up, and claiming broad retrieval would
+    //  misrepresent that.
+    capability_classes: readerCapabilities.retrievalOnly(
+      "canonical Equity standing — position(property, as_of) over governed history, " +
+      "including derived coverage gaps and open conflicts, never a synthesized cap table"),
+    composition_authorization: "unsolved_cross_domain",
+  },
 };
 
 /*  ══ IS A DOMAIN ACTUALLY GATHERED? ═════════════════════════════════
