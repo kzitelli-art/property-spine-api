@@ -18,9 +18,21 @@
 //
 //  ── FOUR PROPERTIES OF THE REAL SPECIMEN THAT SHAPE THIS FILE ───────
 //
-//  MEASURED against the Weekly Solo transcript of 2026-08-11 by running
-//  this parser over it: 96 turns, 4 speaker labels, 2,624 words, running
-//  to 17:16. Every property below was found in that file, not imagined:
+//  MEASURED against the Weekly Solo transcript of MONDAY 2026-08-10 by
+//  running this parser over it: 96 turns, 4 speaker labels, 2,624 words,
+//  running to 17:16. Every property below was found in that file, not
+//  imagined.
+//
+//  ⚠ THAT DATE WAS WRONG IN THIS FILE FOR THREE COMMITS. It read
+//  2026-08-11 — a Tuesday — because the author needed a date, did not
+//  have one, and produced a plausible one. Nothing in the transcript
+//  contains a date; the owner supplied the real one afterwards.
+//
+//  That is the entire reason this parser refuses a transcript with no
+//  meeting date, and the reason the date must come from the SOURCE
+//  ARTIFACT rather than from anyone's memory. The failure this build
+//  exists to prevent happened inside the build, in a comment, and
+//  propagated into a migration and a receipt before it was caught.
 //
 //  1. THE TIMESTAMP IS NOT UNIQUE. FIVE collisions in one meeting —
 //     1:00, 6:41, 12:26, 15:09 and 16:14 each carry two different

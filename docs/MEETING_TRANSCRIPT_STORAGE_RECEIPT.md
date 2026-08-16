@@ -128,7 +128,7 @@ Default is deny. Both switches unset means the door is shut.
 - **Unit, 43 assertions** — `node tests/meeting_transcript.test.js`. Pure; no DB,
   no model.
 - **Real specimen** — the parser was run over the actual Weekly Solo transcript
-  of 2026-08-11: **96 turns, 4 speaker labels, 5 timestamp collisions, 2,624
+  of **Monday 2026-08-10**: **96 turns, 4 speaker labels, 5 timestamp collisions, 2,624
   words, running to 17:16.** Parses whole; sequence contiguous; collisions
   preserved as distinct turns; re-parsing yields identical references.
 - **Real HTTP, 31 assertions** — `node tests/meeting_transcript_http_proof.js`.
