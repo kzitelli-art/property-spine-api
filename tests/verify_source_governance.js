@@ -122,6 +122,8 @@ const GATES = [
     what: "Ask Spine: every canonical standing domain is registered, pending, or explicitly waived" },
   { file: "equity_writer_guards.test.js",
     what: "Equity: provenance, class, transfer, attribution, and ownership reconciliation guards" },
+  { file: "equity_routes_contract.test.js",
+    what: "Equity HTTP: ownership reconciliation survives the canonical standing route" },
   { file: "contracted_service_source_artifact.test.js",
     what: "Contracted Services evidence: accepted shapes and product-specific refusals" },
   { file: "contracted_service_ask_spine.test.js",
