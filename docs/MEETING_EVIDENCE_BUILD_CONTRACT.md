@@ -148,6 +148,43 @@ supporting segments  passage ids — the item is fetched by id, never quoted
 modifies             a reference to an earlier item, if it revises one
 ```
 
+### Where §42 binds, and where it does not
+
+The candidate text above — *"527 residents say the bathroom-door configuration
+differs from the floor plan"* — **is a paraphrase.** Kandice's actual words were
+longer, messier, and contain the hedge that matters. So the extraction layer
+produces paraphrase by construction, and §42 forbids paraphrase. Both are true,
+and the boundary must be explicit or the rule will be breached by accident.
+
+```text
+A CANDIDATE          Spine's INTERPRETATION. Column 2 of §2. Explicitly
+                     non-authoritative, always carrying passage ids.
+                     MAY summarise.
+
+AN ANSWER            what Spine says on a speaker's behalf.
+                     MAY NOT. §42 binds absolutely.
+```
+
+**The failure path is a candidate's paraphrase leaking into an answer and
+reading as speech.** It is the most likely way §42 gets broken, because the
+paraphrase will already exist, already be attached to the right passages, and
+already read well.
+
+Three rules follow:
+
+1. **A candidate is never rendered as a quotation**, and never inside quotation
+   marks. It is labelled as Spine's reading, or it is not shown.
+2. **Candidate text and segment text never share a field.** Different columns,
+   different names, different types — so a renderer cannot substitute one for
+   the other, and a reviewer can always see both.
+3. **Any surface showing a candidate shows the supporting passages with it**,
+   verbatim, fetched by id. The interpretation never travels without the words
+   it came from.
+
+The gold-corpus review in §5 depends on this: a reviewer marking `overclaimed`
+is comparing column 2 against column 1, and cannot do it if the paraphrase has
+displaced the record.
+
 ### Nested attribution — an open gap
 
 `reported claim` in the 527 example is a claim **about a claim**: a resident's
@@ -277,6 +314,10 @@ caught it.
 4. Extracted candidates are not operationally actionable until reviewed shapes
    exist.
 5. The source is never repaired — `$29.97`, "Thailand", "route" all stand (§42).
+5a. **Quote, never paraphrase, is absolute in an ANSWER** (§42). A candidate is
+   Spine's interpretation and may summarise; it is never rendered as a
+   quotation, never shares a field with segment text, and never travels
+   without the passages it came from.
 6. Speaker labels are never resolved by inference (§43).
 7. Meeting date, identity, speakers, bytes, timestamps and provider IDs come
    from the source artifact, never from memory.
