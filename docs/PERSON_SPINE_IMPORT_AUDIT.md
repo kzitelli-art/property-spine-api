@@ -199,7 +199,14 @@ exist target other tables entirely — `ai_leasing_operating_context`,
 `recovery_variants`.) `staffbridge.js` *reads* `record_status` and branches on
 it, so a retired person is honoured where it is read — but nothing sets it.
 
-**There is a merge/retire vocabulary in the schema and no mechanism behind it.**
+**There is a merge/retire vocabulary in the schema and no writer behind it.**
+
+> **CORRECTED by `docs/PERSON_INGRESS_DECISION_PASS.md` §5.** Calling this
+> "no mechanism" was wrong. Migration 104 is a *finished anti-merge primitive*
+> built for a staff duplicate, with its doctrine frozen in the column comments
+> — *"Retirement NEVER deletes and never merges"* and *"an auditable pointer,
+> NOT a merge — nothing is moved."* A writer was drafted in Release 0 and
+> **deliberately not shipped**. The absence is a decision, not an oversight.
 
 ### Q14 · Which existing primitive should own an external PMS identifier?
 
