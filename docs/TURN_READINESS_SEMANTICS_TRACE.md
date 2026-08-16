@@ -6,19 +6,52 @@ Three facts share one field today. This traces every writer and reader,
 proposes where each fact should durably live, and stops there.
 
 ```text
-TARGET        when we want the turn finished
-EXPECTATION   when a named human currently believes it will actually be ready
-ACHIEVEMENT   when it was actually certified ready
+TARGET                when accountable work is supposed to be finished
+                      → obligations.due_at
+EXPECTATION           when a named human currently believes the unit will
+                      actually be ready
+                      → turn_readiness_expectations  (does not exist)
+PHYSICAL READINESS    when governed inspection says the unit IS ready
+ACHIEVEMENT           → unit_readiness_certifications.certified_at
 ```
 
-They must never share a field. Right now two of them do, and the third has a
-proper home already.
+and, separately, not a readiness fact at all:
+
+```text
+TURN COMPLETED        → obligations.completed_at (module='turnover')
+```
+
+They must never share a field. Right now two of them do, and two already have
+proper homes.
+
+## 0 · The distinction the code already admits
+
+This is not a theoretical separation. `turnovers.js` states it and even carries
+the operator copy for it:
+
+```js
+// but if it was flagged down for turn work, that's resolved separately via
+// the down-units flow — we do NOT auto-clear is_down here (different axis).
+…
+unitNote = "Turn marked ready, but unit is still flagged DOWN — resolve the
+            down-unit obligation separately before it's truly rentable.";
+```
+
+So the product already knows:
+
+```text
+turn complete  ≠  unit physically ready  ≠  marketable
+```
+
+A turn can be marked ready while the unit is out of service. Any design that
+lets turn completion stand in for the readiness achievement would contradict a
+distinction the running code makes today, in a sentence it shows to a human.
 
 ---
 
 ## 1 · Exact writers and readers, today
 
-### `turnovers.ready_date` — holds TARGET and ACHIEVEMENT
+### `turnovers.ready_date` — holds TARGET and a DUPLICATE ACHIEVEMENT
 
 ```text
 WRITERS
@@ -27,10 +60,13 @@ WRITERS
                             ← a TARGET, typed by whoever opened the turn.
                               Unproven, unattributed, overwritable.
   turnovers.js:203          update turnovers set status='ready',
-                            ready_date=$2  ← an ACHIEVEMENT
+                            ready_date=$2  ← a completion date, which is a
+                            DUPLICATE of a fact the certification already owns
   readiness_service.js:65   set status='ready',
                             ready_date=coalesce($3::date,current_date)
-                            ← an ACHIEVEMENT, from the certification path
+                            ← same, from the certification path — so the
+                              certification writes its own record AND a
+                              second copy into the turnover
 
 READERS
   turn_priority.js:103,188  selects it, exposes it as `ready_date`
@@ -147,21 +183,40 @@ EXPECTATION   turn_readiness_expectations  (NEW, append-only)
               basis        CHECK ('walk_assessment','vendor_commitment',
                                   'scope_review','operator_judgement')
               source_authority           the §40.4 ladder, same CHECK
-              conditioned_on jsonb       the recorded `needs` at the moment
-                                         it was stated — so a later reader
-                                         can see the expectation was about a
-                                         different scope of work
+              conditioned_on jsonb       EVIDENCE EXPLAINING THE
+                                         EXPECTATION, not a second mutable
+                                         copy of current turn scope. It
+                                         records what the expectation relied
+                                         on WHEN STATED; a later scope change
+                                         never rewrites it, it produces a new
+                                         expectation row or none at all.
               stated_by_user_id · stated_at · note
               NO update path. A changed belief is a NEW ROW. The current
               expectation is the latest row; the prior one is still there.
               NEVER derived. No "typical turn = N days" writer exists or
               may exist — enforced by a source gate, not by memory.
 
-ACHIEVEMENT   unit_readiness_certifications, ALONE.
-              It already carries the named human, the walk and the moment.
-              `turnovers.ready_date` becomes `completed_at` OR is dropped in
-              favour of reading the certification — see §4, which is a
-              census question, not a design one.
+PHYSICAL      unit_readiness_certifications.certified_at, ALONE.
+READINESS     It already carries the named human, the walk, the moment and
+ACHIEVEMENT   what it relied on. Nothing else may claim this fact.
+
+TURN          obligations.completed_at, where module='turnover' and
+COMPLETED     type='move_out' and related_id = the turnover.
+              A SEPARATE OPERATIONAL FACT, and it is NOT readiness.
+              It already has a durable home — traced, not assumed: the
+              ready route completes that obligation through the shared
+              completeObligation helper (turnovers.js:184), which sets
+              completed_at = now() (obligation_engine.js:166) after
+              enforcing the move-out proof gate.
+
+              ⚠ SO NO `turnovers.completed_at` IS PROPOSED, AND THE
+              EARLIER DRAFT OF THIS TRACE WAS WRONG TO SUGGEST ONE.
+              Adding it would have split one fact into two homes in the
+              same change that exists to stop a field doing exactly that.
+              One obligation row already carries the TARGET (due_at) and
+              the TURN COMPLETION (completed_at), which is coherent: an
+              obligation has a deadline and a completion. Neither of them
+              is readiness.
 ```
 
 **`turn_priority` then ranks against the target it means to rank against.**
@@ -190,30 +245,34 @@ STEP 0  CENSUS PRODUCTION, and publish the counts before writing semantics
           row (that pair is strong evidence the value was an achievement)
         · how many match NEITHER pattern ← these are the honest unknowns
 
-STEP 1  SPLIT WITH NO INTERPRETATION
-        add turnovers.completed_at (date, null)
+STEP 1  ADD ONE TABLE. ADD NO COLUMNS.
         add turn_readiness_expectations (empty)
         keep ready_date, untouched, unread by new code
+        NO turnovers.completed_at — turn completion already lives on
+        obligations.completed_at, so a new column would be the same
+        two-homes mistake this whole repair exists to undo.
 
-STEP 2  BACKFILL ONLY WHAT GOVERNED EVIDENCE SUPPORTS
-        completed_at ← ready_date ONLY where a certification corroborates it
-                       (or where status='ready' AND the census shows the
-                        pattern is unambiguous — decided from the numbers,
-                        not in advance)
+STEP 2  BACKFILL NOTHING THAT EVIDENCE DOES NOT SUPPORT
         expectations ← NOTHING. Historical expectation cannot be
                        reconstructed: the value that was typed is
                        indistinguishable from the target it also became.
                        It stays UNKNOWN, and unknown is a valid answer.
+        readiness    ← NOTHING. The certification is already the record.
+                       A turnover row is not evidence a unit was inspected.
 
-STEP 3  MOVE THE READERS
-        turn_priority → obligations.due_at
-        unit_turn     → completed_at, plus latest expectation as its own field
-        readiness_service / turnovers.js → completed_at
+STEP 3  MOVE THE READERS TO THE FACT THEY MEAN
+        turn_priority   → obligations.due_at            (the deadline)
+        unit_turn       → obligations.completed_at      (turn completion)
+                          + certified_at                (readiness)
+                          + latest expectation, as its own field
+        readiness_service / turnovers.js → stop writing ready_date
 
 STEP 4  RETIRE ready_date
-        Removal condition: no reader remains and the census-backed backfill
-        has been reviewed by a human. Until then it is legacy, read by
-        nothing, and says so in a column comment.
+        Removal condition: no reader remains, and the census (§0 of this
+        step) has been reviewed by a human. Until then it is legacy, read
+        by nothing, and says so in a column comment. It is NOT migrated
+        into a new column — every fact it was overloaded with already has
+        a home, so the honest end state is deletion, not relocation.
 ```
 
 **What stays unknown, stays unknown.** A turnover whose date matches neither
@@ -259,9 +318,36 @@ T11  someone tries to write an expectation from a computed default
 T12  the census finds a ready_date on an in_progress turn with a matching
      obligation due_at
      → strong target evidence, still not backfilled into expectation.
+T13  turn completed, unit still flagged DOWN
+     → turn_completed_at set, readiness NOT_ESTABLISHED, is_down true.
+       Three true facts. The one the code already prints a sentence about,
+       and the case that forbids turn completion standing in for readiness.
+T14  a certification exists with no turnover at all
+     → CERTIFIED. Readiness does not require a turn to have happened.
+T15  obligations.due_at has passed with no expectation behind it
+     → NOT_ESTABLISHED, and the passed target is SHOWN beside it. That row
+       is exactly what an operator should look at, and the target still
+       does not upgrade the answer.
 ```
 
 ---
+
+## 5a · The reader rule — a deadline is not a belief
+
+```text
+CERTIFIED         a certification already establishes readiness
+EXPECTED          the CURRENT governed expectation supports readiness by the
+                  requested start — with who stated it, its basis and its
+                  source authority
+NOT_ESTABLISHED   no governed expectation supports that date
+```
+
+**A TARGET never upgrades that answer.** `obligations.due_at` means *we want it
+done by then*. It never means *we believe it will be done by then*, and a read
+that let a deadline satisfy a readiness question would be manufacturing
+judgment out of accountability. The target may be SHOWN beside the answer —
+a target that has already passed with no expectation behind it is exactly the
+row an operator should look at — but it never changes the state.
 
 ## 6 · What this unlocks, and it is deliberately small
 
@@ -274,8 +360,12 @@ readyByDate(unit_id, requested_start) →
          | 'NOT_ESTABLISHED'     no expectation recorded
     expected_ready_date, basis, source_authority,
     stated_by, stated_at, conditioned_on,
-    target_ready_date          from obligations.due_at, for contrast
-    achievement                 from the certification, if it exists }
+    target_ready_date          from obligations.due_at, shown for contrast
+                               and NEVER used to reach `expected_ready`
+    certified_at               from unit_readiness_certifications, if it
+                               exists — which short-circuits to CERTIFIED
+    turn_completed_at          from obligations.completed_at, carried as
+                               operational context and NOT as readiness }
 ```
 
 That is enough for Forward Leasing to stop saying *"physical readiness is not
