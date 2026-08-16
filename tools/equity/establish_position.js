@@ -136,11 +136,12 @@ function validateShape(decl) {
             `a survey paraphrase or any other secondary source may not settle this relationship. ` +
             `Read the actual governing clause first.`);
         }
-        if (group === "amount_claims" && e.row.claim_source === "internal_note"
-            && (!e.row.asserted_by_text || !String(e.row.asserted_by_text).trim())) {
-          problems.push(`${where}: claim_source="internal_note" requires asserted_by_text — ` +
-            `a spoken estimate without its speaker is not attributable evidence.`);
-        }
+      }
+      if (group === "amount_claims" && e && e.row
+          && e.row.claim_source === "internal_note"
+          && (!e.row.asserted_by_text || !String(e.row.asserted_by_text).trim())) {
+        problems.push(`${where}: claim_source="internal_note" requires asserted_by_text — ` +
+          `a spoken estimate without its speaker is not attributable evidence.`);
       }
     });
   }
@@ -161,7 +162,9 @@ function validateShape(decl) {
   return problems;
 }
 
-(async () => {
+module.exports = { validateShape };
+
+async function main() {
   const declPath = arg("declaration");
   //  ⚠ ATTRIBUTION, NOT AUTHORITY — same as Debt's tool. This uuid
   //  records WHO the facts are attributed to in canonical history. It is
@@ -322,4 +325,6 @@ function validateShape(decl) {
     await db.end();
     die(["establishment failed and was rolled back in full:", "", "  " + (e.message || String(e))]);
   }
-})();
+}
+
+if (require.main === module) main();

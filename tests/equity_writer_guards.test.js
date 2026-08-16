@@ -3,6 +3,7 @@
 const assert = require("assert");
 const svc = require("../src/asset/equity_position_service.js");
 const read = require("../src/asset/equity_position_read.js");
+const establish = require("../tools/equity/establish_position.js");
 
 let passed = 0;
 let failed = 0;
@@ -271,6 +272,35 @@ function internalNote(overrides) {
     await svc.addCapitalAmountClaim(db, internalNote({ asserted_by_text: "Rob Vernicek" }));
     assert.strictEqual(db.calls.length, 1);
     assert.strictEqual(db.calls[0].params[2], "Rob Vernicek");
+  });
+
+  await test("establishment preflight refuses an internal note without its speaker", async () => {
+    const artifactSha = "a".repeat(64);
+    const problems = establish.validateShape({
+      positions: [{
+        key: "msc",
+        source_sha256: artifactSha,
+        locator: "Interest Holder OA, Schedule I",
+        row: {
+          property_id: "property-1",
+          issuer_legal_entity_id: "issuer-1",
+          position_class: "preferred",
+          holder_name_text: "MSC",
+          effective_from: "2020-07-31",
+        },
+      }],
+      amount_claims: [{
+        position_key: "msc",
+        source_sha256: artifactSha,
+        locator: "Internal note",
+        row: {
+          claim_source: "internal_note",
+          amount_cents: 370000000,
+          as_of_date: "2026-03-30",
+        },
+      }],
+    });
+    assert(problems.some((p) => /internal_note.*asserted_by_text/.test(p)), problems.join("\n"));
   });
 
   await test("the canonical history read carries the holder's governed legal name", async () => {
