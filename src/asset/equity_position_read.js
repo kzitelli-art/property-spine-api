@@ -114,6 +114,20 @@ function allInForce(rows, asOf) {
   });
 }
 
+//  A transfer is append-only: the successor points backward, so the
+//  reader retires the prior holder once the successor becomes effective.
+//  The old row does not need an in-place effective_to update, and it must
+//  never reappear merely because a later successor has itself ended.
+function positionsInForce(rows, asOf) {
+  const supersededIds = new Set(
+    rows.filter((r) => {
+      const from = ymd(r.effective_from);
+      return r.supersedes_position_id && from && onOrBefore(from, asOf);
+    }).map((r) => r.supersedes_position_id)
+  );
+  return allInForce(rows, asOf).filter((r) => !supersededIds.has(r.id));
+}
+
 //  ── E4 · LATEST CLAIM PER SOURCE, AT OR BEFORE as_of, PER VALUE KIND ─
 //  A source can restate its number over time (a GL balance grows with
 //  each capital call) without any row being wrong. This picks the
@@ -135,7 +149,10 @@ function latestClaimsPerSource(claims, asOf, valueKey) {
 
 function holderOf(row) {
   return row.holder_legal_entity_id
-    ? { legal_entity_id: row.holder_legal_entity_id }
+    ? {
+        legal_entity_id: row.holder_legal_entity_id,
+        legal_name: row.holder_legal_name || null,
+      }
     : { party_name_text: row.holder_name_text };
 }
 
@@ -376,7 +393,7 @@ function position(history, asOfInput) {
   const conflicts = history.conflicts || [];
 
   //  ── EVERY POSITION IN FORCE, ONE SHARED IDENTITY, TWO READINGS ────
-  const positionReadings = allInForce(positions, asOf)
+  const positionReadings = positionsInForce(positions, asOf)
     .map((p) => positionReading(p, history, asOf));
 
   //  ── E6/E7 · CONFLICTS, SURFACED NEVER RESOLVED ────────────────────
