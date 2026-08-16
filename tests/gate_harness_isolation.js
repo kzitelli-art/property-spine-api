@@ -178,6 +178,21 @@ const PRODUCTION_APPROVED = [
             "Prints statuses and counts only: no resident, phone, note or media data. " +
             "CLASS 3 — migration-preparation tooling",
     until: "`turnovers.ready_date` is retired (docs/TURN_READINESS_SEMANTICS_TRACE.md §4)" },
+  { file: "tools/leasing_basis_discovery.js",
+    reason: "Leasing cycle basis discovery — must read the database holding the FRESH " +
+            "activation import, which for the acceptance run is PRODUCTION, because the " +
+            "whole question is which dated-lease-right rule reproduces the beds a real " +
+            "operator is counting on a real property today; a rehearsal export already " +
+            "produced a wrong answer (docs/LEASING_CYCLE_AND_PACE_TRACE.md §4). READ-ONLY: " +
+            "every statement is a SELECT inside `begin read only` / `rollback`, so the " +
+            "SERVER refuses a write regardless of this file's contents. It CHOOSES NOTHING " +
+            "— it reports each candidate basis with its edge sensitivity and, given a " +
+            "tracker export, the exact set difference, and it refuses rather than guessing " +
+            "on an ambiguous property, an unresolvable tracker bed, or a non-ISO lease " +
+            "date. Prints unit/room labels and counts only: no resident, phone, rent, " +
+            "note or media data. CLASS 3 — activation-acceptance tooling",
+    until: "property_leasing_cycles.commitment_basis is established for the property and " +
+           "the external tracker is retired" },
 ];
 
 /*  DEAD — retained but not to be run. Not safe, not active. */

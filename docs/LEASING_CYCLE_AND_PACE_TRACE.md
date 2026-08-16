@@ -58,6 +58,15 @@ M4 is the finding that shapes §4. Same property, same day, same governed lease
 rows, and the answer to *"how preleased are we for 2026–27?"* is 0%, 52%, 57% or
 80% depending on a rule nobody has written down.
 
+> ⚠ **None of these is Skyline's committed count, and 91 in particular is not.**
+> All four are measured against the **07/31/2026 rehearsal export**, which is
+> already stale, and §4 shows basis A collapsing from 121 beds to 1 when the
+> cycle window moves a single week. M4 proves that *a basis is required*. It
+> does not choose one. **§4a governs:** the basis is discovered from the fresh
+> rent roll and the live tracker, by
+> `tools/leasing_basis_discovery.js`, and recorded — never argued from this
+> table.
+
 ---
 
 ## 1 · The duplicate preleased state already exists
@@ -307,38 +316,226 @@ without saying so would report 0% preleased for a property that is 57% leased.
 That is not a rounding problem. It is the difference between an operator
 believing they have sold nothing and believing they have sold more than half.
 
-### The proposed ruling
+### The recommendation this section originally made, withdrawn
 
-**Basis A — a governed dated right whose `start_date` falls inside the cycle
-window — is the recommendation, and it is a recommendation, not a decision.**
+**This trace first recommended basis A, on the argument that it was the only
+reading stable under the cycle window's exact endpoints. That argument was
+wrong, and `tools/leasing_basis_discovery.js` — built to stop this being
+settled by argument — measured how wrong within a minute of running.**
+
+Edge sensitivity, moving BOTH window edges together, on the same population:
 
 ```text
-WHY A     "this lease belongs to this cycle" is what a leasing operator means
-          by preleased. A lease sold FOR next year starts next year. It is the
-          only basis that is stable under the cycle window's exact endpoints —
-          shifting the window by two days moves B and D and does not move A.
-
-WHY NOT B overlap counts a lease that is ENDING inside the window as a
-          commitment FOR it. The 78 fall-only leases ending 12/28 would be
-          counted as 2026–27 commitments and then vanish mid-cycle.
-
-WHY NOT C zero, for the reason above.
-
-WHY NOT D a coverage threshold is a tunable, and a tunable in a definition is
-          how "62% preleased" becomes unfalsifiable. Whose 80%?
+BASIS                    beds   ±7d          ±30d
+A  start in window         91   121 / 1      122 / 0     ← the swing
+A2 start within ±45d of   122   123 / 122    125 / 121
+   cycle_start
+B  overlaps at all        128   128 / 128    128 / 128
+C  covers whole window      0     2 / 0        2 / 0
+D  covers >= 80%           83    83 / 81      83 / 72
+E  ends within ±45d of     72    72 / 72      83 / 71
+   cycle_end
 ```
 
-**But A is wrong for some properties**, and that is why `commitment_basis` is a
-column rather than a constant. A conventional multifamily property running
-rolling twelve-month terms has no cycle at all. A property selling a
-January–December calendar year with mid-year starts may genuinely mean B. The
-basis is a property's declaration about its own leasing model, recorded once,
-visible in every number derived from it.
+**A is the most fragile of the six, not the most stable.** Move the window one
+week later and it reports **1 bed committed** out of 160. It was never stable —
+it happened to sit in a gap between lease-start clusters at the exact dates I
+tested, and I generalized from one point.
 
-**The basis must be printed with the number, everywhere, in the UI and in Ask
-Spine.** *"91 of 160 committed"* is not a fact until it says *"committed = a
-lease starting inside 2026-08-01 → 2027-07-31."* Same rule as
-`term_partially_blocked` never rendering as "partly available."
+### Why, and it is the finding that matters
+
+The tool's cohort section, same run:
+
+```text
+2026-05-01                    2 beds
+2026-06-01 … 2026-06-13       4 beds
+2026-07-13 … 2026-08-17     122 beds   ⚠ STRADDLES A CYCLE EDGE
+```
+
+**This property leases in ONE wave — 122 of 160 beds in a five-week move-in
+window — and a nominal August 1 cycle edge cuts straight through it.** The 30
+beds starting 2026-07-27 obviously belong to the 2026–27 cycle and fall four
+days outside the window. Basis A silently drops all 30.
+
+So the question is not *"does the lease start inside the window."* It is
+**cohort membership**: does this lease belong to the wave this cycle is selling.
+That is exactly the owner's reading — *"a governed lease **belonging to** the
+selected leasing cycle"*, not window containment — and the data says it before
+anyone argues it.
+
+A2 and B are the stable readings; they differ by 6 beds and by meaning (B counts
+the 78 fall-only leases that end 12/28 as 2026–27 commitments and then watches
+them vanish mid-cycle). **Neither is adopted here.** §4a says why.
+
+### What survives from this section
+
+Not a basis, but four constraints on whichever one is chosen:
+
+```text
+1  commitment_basis is NOT NULL with no default. A default is a basis chosen
+   silently, and this section is what happens when one is chosen by argument.
+2  the basis must be printed with the number, everywhere — UI and Ask Spine.
+   "91 of 160 committed" is not a fact until it says what committed means.
+3  a candidate basis must be reported WITH its edge sensitivity. A rule that
+   swings 121→1 under a one-week edit is a rule that will be re-litigated
+   every time someone adjusts a date.
+4  a rule that splits a lease-start cohort is disqualified on its face,
+   whatever its count. Cohorts are visible in the data; a rule that cannot
+   see them is modelling the calendar instead of the property.
+```
+
+---
+
+## 4a · The basis is DISCOVERED, not chosen — owner ruling, 2026-08-16
+
+> Stop trying to settle Skyline's cycle basis from the stale 07/31 file. Fresh
+> activation data and Mike's live tracker are now the acceptance evidence. Use
+> the tracker only to discover/validate the operating definition of "committed
+> for cycle"; once understood, Spine must derive it from canonical lease truth
+> and the tracker disappears.
+
+This supersedes §4's original recommendation, and §4's own measurement agrees
+with it: a basis argued from semantics produced a rule that collapses to 1 bed
+under a one-week edit.
+
+### Two questions that must never be quoted as each other
+
+```text
+CURRENT OCCUPANCY      how many of the 160 beds are occupied TODAY
+                       Skyline is expected to reconcile around 90%
+
+FORWARD POSITION       how many of the 160 beds are already COMMITTED for
+                       the selected future cycle
+                       this is what the tracker is actually about
+```
+
+Same 160 positions, different questions, different answers, and the second is
+the one Mike's tracker exists to answer. `leasingintel`'s payload already
+conflates them — `headline.future_rent_roll` and `headline.future_occupancy`
+carry the same value under two names, one of which reads as occupancy. §1's
+removal is what stops that.
+
+### The 07/31 numbers are a rehearsal, not Skyline's cycle number
+
+Everything in §0 and §4 was measured against the 07/31/2026 export in the local
+proof database. It was the right data for proving the interval read works. It is
+**not** acceptance evidence for the basis, and 91 / 128 must not be frozen as
+Skyline's committed count.
+
+The same run, for honesty about how stale: current occupancy from canonical
+truth at 2026-08-16 is **127 of 160 contractually occupied (79.4%), with 33
+positions `unresolved`** — no spanning lease, and an opening claim that does not
+say vacant. If the fresh import reconciles to ~90%, that movement is real
+leasing plus resolution of those 33, and the fresh file is the one to reason
+from.
+
+### The acceptance evidence, and the four questions it answers
+
+```text
+1  does Spine derive ~90% current occupancy from the FRESH rent roll?
+2  for the cycle Mike is actively leasing, what number does HE call
+   committed today?
+3  which exact beds make up that number?
+4  which dated-lease-right rule reproduces those beds with no residue?
+```
+
+Question 4 is the basis. It is not a preference — it is whichever predicate over
+canonical lease truth returns Mike's set exactly.
+
+### The instrument — `tools/leasing_basis_discovery.js`
+
+Built so this is a command, not a conversation. Read-only, `begin read only` /
+`rollback`, registered in `PRODUCTION_APPROVED`:
+
+```sh
+DATABASE_URL=<the db holding the FRESH import> \
+node tools/leasing_basis_discovery.js \
+  --property "<id or name>" \
+  --cycle-start 2026-08-01 --cycle-end 2027-07-31 \
+  --tracker /path/to/mikes_tracker.xlsx
+```
+
+What it reports, in order:
+
+```text
+§1  CURRENT OCCUPANCY today from datedPropertyPositions, against the
+    canonical denominator. Question 1. It reports `unresolved` separately
+    and refuses to fold it into either occupied or vacant.
+
+§2  LEASE-START COHORTS, clustered on a 14-day gap, flagging any cohort a
+    cycle edge cuts through. This is what disqualified basis A.
+
+§3  EVERY CANDIDATE BASIS with its bed count AND its ±7d/±30d edge
+    sensitivity. Six rules today; adding one is a line.
+
+§4  SET DIFFERENCE against the tracker, per rule: matched · rule-only ·
+    tracker-only. An exact match names the discovered basis. No exact
+    match prints the closest rule's residue BED BY BED.
+```
+
+**The no-match case is the important one.** If no rule reproduces the tracker,
+those residual beds are the manual state the tracker carries — a human counting
+something Spine has no recorded fact for. That list is the specification for
+what Spine must start recording before the tracker can be retired. It is the
+difference between replacing the tracker and re-implementing it.
+
+The tool refuses rather than guesses in three places, each earned:
+
+```text
+· an ambiguous --property prints the candidates and stops (the local
+  database has two "Skyline Apartments"; picking one would have made every
+  number below it wrong and plausible)
+· a tracker bed that does not exist in Spine's inventory is REPORTED, never
+  dropped — a comparison set that silently shrank makes every rule look
+  better than it is
+· a lease date that is not YYYY-MM-DD stops the run. This is not
+  hypothetical: the tool's first run printed a clean six-row table in which
+  every basis returned 0 beds, because `pg` hands back a JS Date and
+  `String(date).slice(0,10)` is "Mon Aug 03", which loses every string
+  comparison silently. The identical defect had been fixed in openingTruth
+  two commits earlier. Six well-formatted zeros is what a green claim about
+  the wrong measurement looks like.
+```
+
+### Proven against a known set, not shipped dormant
+
+§4 was exercised before it was committed, both branches, because a
+reconciliation tool that is wrong is worse than no reconciliation tool — it
+produces a confident set difference nobody can see through.
+
+```text
+SYNTHETIC TRACKER = exactly the A2 bed set
+  → ✓ EXACT MATCH — A2_start_near_anchor, 122 matched, 0 residue either way
+  → and the near misses read correctly: A misses 31, B over-includes 6
+
+SAME SET, 3 beds removed and 2 unrelated beds added, plus one bed that does
+not exist in inventory
+  → ✗ no exact match; closest A2 with 3 rule-only and 2 tracker-only, each
+    named by unit and room
+  → the non-existent bed reported separately, the header row reported as
+    unparseable, neither silently dropped
+```
+
+**And it caught a second defect of the same class as the date bug.** The first
+tracker parser tried the combined "unit and room in one cell" pattern before the
+ordinary two-column shape, with the room digit optional — so the row
+`1417-103 | Room1` parsed as **unit 10, room 3**. Every bed resolved to a
+position that does not exist, all six rules reported zero matches, and the table
+looked fine. Separate cells are now tried first, and the combined form requires
+an explicit room keyword rather than treating a trailing digit as one.
+
+> ⚠ **A2 matched a set this trace constructed from A2. That is a proof about the
+> instrument, not evidence about Skyline.** It says §4 detects an exact match and
+> reports residue correctly. It says nothing about which rule Mike is using, and
+> nobody may cite it as though it did — that answer comes from the real tracker
+> and no earlier.
+
+### What this changes about the build order
+
+Nothing structural. `property_leasing_cycles` and the cycle-resolved read are
+unchanged — the basis was always going to be a column. What changed is that its
+**value** is now an acceptance artifact from real operating behaviour rather than
+a decision this trace makes on the property's behalf.
 
 ---
 
@@ -662,15 +859,40 @@ DID NOT  open PRs and parked branches beyond docs/. Frozen decisions may
          exist there that this trace did not check.
 ```
 
-## 11 · The one decision this trace cannot make
+## 11 · The one decision this trace cannot make — and must not
 
-**Does `2026–27` at Skyline mean 91 committed, or 128?**
+**"Does 2026–27 at Skyline mean 91 or 128?" was the wrong question, asked of the
+wrong file.**
 
-This document recommends 91 (basis A), shows why 0 (basis C) is disqualified by
-the actual lease dates, and shows why 128 (basis B) counts leases that end
-mid-cycle as commitments to it. But the property's leasing operator is the
-authority on what their own cycle means, and the number will be read by people
-who will act on it.
+An earlier version of this section posed exactly that and recommended 91. Both
+halves were wrong. 91 and 128 come from the 07/31 rehearsal export, which is
+already stale; and §4's own measurement shows 91 is produced by the least stable
+of six rules, one that collapses to a single bed when the window moves a week.
 
-Recording it as `commitment_basis` is what makes the answer reviewable instead
-of embedded. **Whichever is chosen, the number must never be shown without it.**
+The question is settled by evidence that has not arrived yet:
+
+```text
+BLOCKED ON     the fresh Skyline rent roll (post-activation)
+               Mike's live leasing tracker export
+
+ANSWERED BY    tools/leasing_basis_discovery.js §4 — which candidate rule
+               reproduces the tracker's beds exactly
+
+RECORDED AS    property_leasing_cycles.commitment_basis, NOT NULL, no default
+```
+
+Two things stay true whichever rule wins:
+
+**The number is never shown without the basis.** *"122 of 160 committed"* is not
+a fact until it says what committed means, the same way `term_partially_blocked`
+never renders as "partly available."
+
+**And the basis is discovered once, then Spine owns it.** The tracker's job here
+is to reveal the operating definition — not to become a permanent input. Once the
+rule is known, the number is derived from canonical lease truth, the tracker has
+nothing left to say that Spine cannot, and it goes away. Anything the rule cannot
+reproduce is not a reason to keep the tracker; it is the list of facts Spine has
+to start recording.
+
+That is the mission stated exactly: **replace the tracker, do not theorize about
+it, and do not re-implement it.**
