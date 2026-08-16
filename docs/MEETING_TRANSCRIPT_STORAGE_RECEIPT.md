@@ -12,7 +12,7 @@ into a conversational surface.
 ## 1. What shipped
 
 ```text
-migrations/169_meeting_transcript_segments.sql   artifact kind + segments + immutability
+migrations/175_meeting_transcript_segments.sql   artifact kind + segments + immutability
 src/meetings/meeting_transcript_parser.js        deterministic parser, pure
 src/meetings/meeting_transcript_service.js       the canonical writer
 src/meetings/meeting_transcript_ingest.js        POST /operator/meetings/transcript
@@ -140,7 +140,7 @@ Default is deny. Both switches unset means the door is shut.
 
 - **Not proven against real Postgres.** No `DATABASE_URL` in this environment.
   The HTTP proof uses a scripted stub, which is what makes "no insert ran" an
-  assertable fact — but it means migration 169's DDL, the CHECK constraints, the
+  assertable fact — but it means migration 175's DDL, the CHECK constraints, the
   unique index and the immutability trigger have **never executed**.
 - **Not browser verified.** There is no UI. The route is reachable only by a
   direct multipart POST.
@@ -155,7 +155,7 @@ number, a misspelling — and none of the content. Run the real one with
 
 ## 7. ⚠ A deploy does NOT migrate
 
-Migration **169 is not in the ledger**. `prestart` runs `migrate.js` in
+Migration **175 is not in the ledger**. `prestart` runs `migrate.js` in
 verify-only mode, so merging this and hitting deploy produces a **failed deploy**
 — Render keeps the previous instance live and the API looks fine while the
 schema is simply absent.

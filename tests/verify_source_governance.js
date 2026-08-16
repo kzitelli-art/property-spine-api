@@ -155,6 +155,17 @@ const GATES = [
   //  order is worse than no guard, and only a real request finds it.
   { file: "meeting_transcript_http_proof.js",
     what: "meeting ingest door: default deny, cohort is per-user, and a refusal writes nothing" },
+  //  A duplicate migration number is not a merge conflict — git takes both
+  //  files and the failure surfaces as a failed production deploy. It has
+  //  hit the meeting branch twice: written as 168 (Debt took it), moved to
+  //  169 (Utilities had already taken it on main).
+  { file: "gate_migration_collision.js",
+    what: "no two migration files share a number" },
+  //  The signed meeting ingress. The ordering assertion is the point: a
+  //  router mounted after express.json() sees a parsed object rather than
+  //  the bytes Read signed, and every check downstream becomes decorative.
+  { file: "read_ai_webhook_proof.js",
+    what: "Read AI webhook: raw-body HMAC, nothing unverified stored, no human invented" },
 ];
 
 const bar = "════════════════════════════════════════════════════════════════";

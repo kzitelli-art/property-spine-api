@@ -203,7 +203,7 @@ Spine must not flatten *"Kandice said the residents say X"* into *"X."*
 **Immutable raw meeting storage**, conditional on two proofs:
 
 ```text
-1  migration 169 executes against real Postgres, and the immutability
+1  migration 175 executes against real Postgres, and the immutability
    trigger is observed REFUSING an UPDATE
 2  the parser is proven against a REAL Read AI export file — not pasted
    text

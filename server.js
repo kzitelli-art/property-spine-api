@@ -120,6 +120,19 @@ app.use((req, res, next) => {
   return generalCors(req, res, next);
 });
 app.set("trust proxy", 1); // Render = one proxy hop: makes req.ip the real client so per-IP rate limits actually bind per client
+// ── SIGNED PROVIDER INGRESS — MOUNTED BEFORE THE JSON PARSER ────────────
+//  ⚠ ORDER IS LOAD-BEARING. Read AI signs the HMAC over the EXACT bytes it
+//  sent. express.json() below parses and discards those bytes, and
+//  re-serialising to verify changes key order, whitespace and unicode
+//  escaping — at which point the signature either fails, or someone
+//  "fixes" it by verifying against our own re-serialisation, which proves
+//  only that we can hash our own output.
+//
+//  This router carries its own express.raw() scoped to its path. Moving
+//  this line below express.json() does not break loudly; it silently
+//  stops the signature proving anything.
+app.use("/", require("./src/meetings/read_ai_webhook")({ pool }));
+
 app.use(express.json({ limit: "1mb" }));  // body-size cap — stops oversized payloads
 
 // ── operator gate (Phase 0 auth centralization) ──────────────────────
