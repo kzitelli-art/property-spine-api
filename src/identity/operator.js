@@ -63,6 +63,8 @@ module.exports = function operatorModule(deps) {
   //  instead of a date. Not a second service and not a forward store.
   const { intervalPropertyPositions } = require("../tenancy/dated_positions");
 const { forwardLeasingPosition } = require("../leasing/forward_leasing_read");
+const { forwardRent } = require("../leasing/forward_rent");
+const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   const { institutionalRentRoll, institutionalCsv } = require("../surfaces/rent_roll_institutional"); // formal as-of schedule + CSV
   const { availabilityRead } = require("../surfaces/availability_read");   // Availability over the shared classifier
   const { effectivePropertyPricing } = require("../money/effective_pricing"); // the Pricing & Concessions truth sheet
@@ -2060,40 +2062,98 @@ const { forwardLeasingPosition } = require("../leasing/forward_leasing_read");
   router.get("/operator/leasing/forward-position", requireOperator, requireLeasingModuleAccess,
     async (req, res) => {
       res.set("Cache-Control", "no-store");
-      const start = req.query.cycle_start;
-      const end = req.query.cycle_end;
+      try {
+        //  Dates still reach the read. What changed is that Mike no longer
+        //  has to type them when the property has a governed cycle.
+        const c = await resolveRequestedCycle(req);
+        const out = await forwardLeasingPosition(pool, {
+          property_id: req.operator.property_id,   // session only, never the query
+          cycle_start: c.cycle_start, cycle_end: c.cycle_end, cycle_label: c.cycle_label,
+        });
+        return res.json({ ...out, cycle_resolved_by: c.resolved_by });
+      } catch (e) {
+        //  A failed read is UNAVAILABLE. It is never an empty building and
+        //  never "nothing is committed for that cycle". A cycle that cannot
+        //  be resolved refuses with its own code and its candidates, so the
+        //  surface can ask rather than guess.
+        return res.status(e.httpStatus || (e.code ? 400 : 500))
+          .json({ error: e.publicMessage || e.message, code: e.code || null,
+                  candidates: e.candidates || undefined });
+      }
+    });
+
+  // ══════════════════════════════════════════════════════════════════
+  //  THE CYCLE RESOLVER, shared by both forward reads.
+  //
+  //  A named cycle is CONFIGURATION. The route still ends up with two
+  //  dates — the durable computational primitive never changes — but Mike
+  //  no longer retypes them. Precedence: explicit dates > named label >
+  //  the configured cycle covering today. Ambiguity REFUSES.
+  // ══════════════════════════════════════════════════════════════════
+  async function resolveRequestedCycle(req) {
+    const start = req.query.cycle_start, end = req.query.cycle_end;
+    if (start != null && start !== "" && end != null && end !== "") {
       for (const [name, v] of [["cycle_start", start], ["cycle_end", end]]) {
-        if (v == null || v === "") {
-          return res.status(400).json({
-            error: `${name} is required. A leasing cycle is a span, and a span has two dates.`,
-            code: "cycle_required",
-          });
-        }
         if (!validCalendarDate(String(v))) {
-          return res.status(400).json({
-            error: `${name} must be a real calendar date in YYYY-MM-DD form.`,
-            code: "invalid_cycle_date",
-          });
+          const e = new Error(`${name} must be a real calendar date in YYYY-MM-DD form.`);
+          e.code = "invalid_cycle_date"; e.httpStatus = 400; throw e;
         }
       }
       if (String(end) < String(start)) {
-        return res.status(400).json({
-          error: "cycle_end is before cycle_start.",
-          code: "invalid_cycle",
-        });
+        const e = new Error("cycle_end is before cycle_start.");
+        e.code = "invalid_cycle"; e.httpStatus = 400; throw e;
       }
+      return { cycle_start: String(start), cycle_end: String(end),
+        cycle_label: req.query.cycle_label ? String(req.query.cycle_label).slice(0, 40) : null,
+        resolved_by: "explicit_dates" };
+    }
+    if ((start == null || start === "") !== (end == null || end === "")) {
+      const e = new Error("Give both cycle dates or neither. A cycle is a span.");
+      e.code = "cycle_required"; e.httpStatus = 400; throw e;
+    }
+    const c = await resolveCycle(pool, {
+      property_id: req.operator.property_id,
+      cycle_label: req.query.cycle_label ? String(req.query.cycle_label) : null,
+    });
+    return { cycle_start: c.cycle_start, cycle_end: c.cycle_end,
+      cycle_label: c.cycle_label, resolved_by: c.resolved_by, cycle_id: c.id };
+  }
+
+  router.get("/operator/leasing/cycles", requireOperator, requireLeasingModuleAccess,
+    async (req, res) => {
+      res.set("Cache-Control", "no-store");
       try {
-        const out = await forwardLeasingPosition(pool, {
-          property_id: req.operator.property_id,   // session only, never the query
-          cycle_start: String(start),
-          cycle_end: String(end),
-          cycle_label: req.query.cycle_label ? String(req.query.cycle_label).slice(0, 40) : null,
-        });
-        return res.json(out);
+        const cycles = await listLeasingCycles(pool, { property_id: req.operator.property_id });
+        let current = null;
+        try { current = await resolveCycle(pool, { property_id: req.operator.property_id }); }
+        catch (e) { current = { unresolved: e.code, reason: e.publicMessage || e.message }; }
+        return res.json({ cycles, current });
       } catch (e) {
-        //  A failed read is UNAVAILABLE. It is never an empty building and
-        //  never "nothing is committed for that cycle".
-        return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+        return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code });
+      }
+    });
+
+  // ══════════════════════════════════════════════════════════════════
+  //  GET /operator/leasing/forward-rent
+  //
+  //  The economic reading of the same position. Four buckets that never
+  //  merge — CONTRACTUAL, CLAIMED, ASSUMED, PROJECTED — plus the dated
+  //  committed-rent schedule and the commitments that cannot be dated.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/leasing/forward-rent", requireOperator, requireLeasingModuleAccess,
+    async (req, res) => {
+      res.set("Cache-Control", "no-store");
+      try {
+        const c = await resolveRequestedCycle(req);
+        const out = await forwardRent(pool, {
+          property_id: req.operator.property_id,   // session only, never the query
+          cycle_start: c.cycle_start, cycle_end: c.cycle_end, cycle_label: c.cycle_label,
+        });
+        return res.json({ ...out, cycle_resolved_by: c.resolved_by });
+      } catch (e) {
+        return res.status(e.httpStatus || (e.code ? 400 : 500))
+          .json({ error: e.publicMessage || e.message, code: e.code || null,
+                  candidates: e.candidates || undefined });
       }
     });
 

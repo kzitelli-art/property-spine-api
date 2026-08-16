@@ -60,6 +60,8 @@ const { ingestPerson } = require("../identity/person_ingress");
 const { TERMINAL_LEASE_STATUSES, rangesOverlap } = require("../tenancy/position_classifier");
 
 const TARGET_TYPE = "forward_lease_commitment";
+const ASSUMPTION_TYPE = "open_bed_asking_assumption";
+const SOURCE_KIND = "leasing_tracker";
 const SIGNED = /^(signed|executed)$/i;
 const PENDING = /^pending$/i;
 
@@ -156,11 +158,56 @@ function parseTrackerSheet(rows) {
   return { beds, unreadable, header_row: hdr + 1 };
 }
 
+/*  ── ASKING-RENT ASSUMPTIONS, FROM THE STATS TAB ─────────────────────
+ *  Mike's summary sheet is label-keyed: a unit-type row carrying Total
+ *  Beds, Signed & Pending, Remaining and Asking. Only two cells matter
+ *  here — the subject (unit type) and the asking amount — and neither
+ *  becomes a rent fact.
+ *
+ *  The `Total` row is EXCLUDED deliberately: its "asking" cell is a
+ *  weighted average of the type rows ($834.06 at Skyline), which is a
+ *  derived figure and not an assumption anybody stated about any bed. */
+function parseAskingAssumptions(rows) {
+  if (!Array.isArray(rows) || !rows.length) return [];
+  const cell = (r, j) => (j >= 0 && r && r[j] != null ? String(r[j]).trim() : "");
+  let hdr = -1, cType = -1, cAsk = -1, cRemaining = -1, cBeds = -1;
+  for (let i = 0; i < Math.min(rows.length, 30); i++) {
+    const c = (rows[i] || []).map((x) => String(x == null ? "" : x).trim());
+    const t = c.findIndex((x) => /^unit\s*type$/i.test(x));
+    if (t < 0) continue;
+    hdr = i; cType = t;
+    cAsk = c.findIndex((x) => /^asking\*?$/i.test(x));
+    cRemaining = c.findIndex((x) => /^remaining$/i.test(x));
+    cBeds = c.findIndex((x) => /^total\s*beds$/i.test(x));
+    break;
+  }
+  if (hdr < 0 || cAsk < 0) return [];
+  const out = [];
+  for (let i = hdr + 1; i < rows.length; i++) {
+    const r = rows[i] || [];
+    const subject = cell(r, cType);
+    if (!subject) continue;
+    if (/^total$/i.test(subject)) continue;          // a weighted mean, not an assumption
+    const amount = r[cAsk];
+    if (typeof amount !== "number" || !isFinite(amount) || amount <= 0) continue;
+    const beds = cBeds >= 0 && typeof r[cBeds] === "number" ? r[cBeds] : null;
+    if (beds === 0) continue;                        // a type with no inventory states nothing
+    out.push({
+      subject, amount: Number(amount),
+      stated_remaining: cRemaining >= 0 && typeof r[cRemaining] === "number" ? r[cRemaining] : null,
+      source_sheet: "stats", source_row: i + 1,
+      basis: "asking rent stated by the operating tracker for beds still open",
+    });
+  }
+  return out;
+}
+
 /*  ── STAGE ───────────────────────────────────────────────────────────
  *  One claim per tracker bed row, reconciled against canonical truth. */
 async function stageTrackerClaims(client, {
   property_id, cycle_start, cycle_end, cycle_label = null,
-  source_label, source_sha256 = null, rows,
+  source_label, source_sha256 = null, rows, stats_rows = null,
+  accepted_by_user_id = null,
 } = {}) {
   if (!property_id) throw new Error("stageTrackerClaims requires property_id");
   if (!cycle_start || !cycle_end) {
@@ -174,11 +221,46 @@ async function stageTrackerClaims(client, {
 
   const { beds, unreadable, header_row } = parseTrackerSheet(rows);
 
-  //  ── the activation that names this file ──
+  /*  ── THE SOURCE ARTIFACT, AND WHY THIS VERSION IS THE OPERATING ONE
+   *
+   *  v2 does not rewrite v1. It is a NEW activation that SUPERSEDES the
+   *  current one in the same statement that accepts it, so the history
+   *  stays intact and there is never a moment with two current sources
+   *  or none. The answer to "why this version?" is a sentence a person
+   *  can read — "it is the accepted source; it superseded the 08-14
+   *  upload" — and not `max(created_at)`, which is an authority rule
+   *  nobody ever stated. See migration 177.  */
+  const prior = (await client.query(
+    `select id, source_label, accepted_at from activations
+      where property_id=$1 and source_kind=$2 and status='activated'
+        and superseded_by_id is null
+      for update`, [property_id, SOURCE_KIND])).rows[0] || null;
+
+  /*  ⚠ ORDER MATTERS, AND THE CONSTRAINT PROVED IT. Inserting the new
+   *  row as `activated` first left TWO rows activated-and-unsuperseded for
+   *  the length of one statement, and uq_activation_current_source
+   *  (migration 177) refused the write — correctly. The window was real:
+   *  a concurrent read in between would have seen two current sources.
+   *
+   *  So the new row is born `open`, the prior one is pointed at it, and
+   *  only then is it accepted. At no instant are there two current
+   *  sources, and at no instant are there none. */
   const activation = (await client.query(
-    `insert into activations (property_id, source_label, status)
-     values ($1,$2,'open') returning id`,
-    [property_id, source_label])).rows[0];
+    `insert into activations
+       (property_id, source_label, status, source_kind, supersedes_activation_id)
+     values ($1,$2,'open',$3,$4) returning id`,
+    [property_id, source_label, SOURCE_KIND, prior ? prior.id : null])).rows[0];
+
+  if (prior) {
+    await client.query(
+      `update activations
+          set superseded_by_id=$1, superseded_at=now(), updated_at=now()
+        where id=$2`, [activation.id, prior.id]);
+  }
+  await client.query(
+    `update activations
+        set status='activated', accepted_by_user_id=$2, accepted_at=now(), updated_at=now()
+      where id=$1`, [activation.id, accepted_by_user_id]);
 
   //  ── canonical inventory and the leases overlapping the cycle ──
   const inv = (await client.query(
@@ -257,7 +339,25 @@ async function stageTrackerClaims(client, {
             canonical_lease_ids: governing.map((l) => l.id), cycle_label }, evidence_refs,
         }));
       } else {
+        /*  ⚠ AN OPEN BED IS ALSO A STATEMENT, and it was the one shape not
+         *  being recorded. Skipping it meant 15 of Mike's 16 open beds had
+         *  no claim, so nothing downstream knew their unit type — and the
+         *  open-bed asking assumption silently priced ONE bed and reported
+         *  $799 instead of $13,345. A plausible total, wrong by 94%.
+         *
+         *  The tracker is saying: this bed is open, it is a 2 BR, and the
+         *  asking rent for that type applies to it. That is evidence, and
+         *  it belongs in the claim layer with everything else. */
         outcomes.agrees_open++;
+        claims.push(await writeClaim(client, {
+          activation_id: activation.id, property_id, natural_key: `bed:${b.bed_key}`,
+          status: "staged",
+          status_reason: "The tracker shows this bed open and Spine holds no lease for it. " +
+            "Recorded so the open set carries its unit type and the asking-rent assumption " +
+            "can be applied to a named bed rather than a count.",
+          payload: { ...b, reconciliation: "agrees_open", space_id: inventory.space_id,
+            cycle_label }, evidence_refs,
+        }));
       }
       continue;
     }
@@ -320,8 +420,32 @@ async function stageTrackerClaims(client, {
     }));
   }
 
+  /*  ── THE PROJECTION'S OTHER INPUT, AND IT IS NOT A RENT ────────────
+   *  Mike's Stats tab states an asking rent per unit type for the beds
+   *  still open. That is a PRICING ASSUMPTION carried by the same source
+   *  artifact — it is not contractual rent, not market rent, and not
+   *  achieved rent, and calling it any of those would establish a fact
+   *  no evidence supports. It is stored as its own claim type so nothing
+   *  reading commitments can pick it up by accident.  */
+  const assumptions = [];
+  for (const a of parseAskingAssumptions(stats_rows)) {
+    assumptions.push(await writeClaim(client, {
+      activation_id: activation.id, property_id,
+      natural_key: `asking:${a.subject}`, target_type: ASSUMPTION_TYPE,
+      status: "staged",
+      status_reason: "An asking-rent ASSUMPTION stated by the operating tracker for beds " +
+        "still open. Not contractual rent, not market rent, not achieved rent.",
+      payload: { ...a, cycle_label, claim_class: "assumption" },
+      evidence_refs: [{ source: source_label, sha256: source_sha256,
+        sheet: a.source_sheet || null, row: a.source_row || null }],
+    }));
+  }
+
   return {
     activation_id: activation.id,
+    superseded_activation_id: prior ? prior.id : null,
+    source_kind: SOURCE_KIND,
+    assumptions_written: assumptions.length,
     source: { label: source_label, sha256: source_sha256, header_row },
     cycle: { label: cycle_label, start: cycle_start, end: cycle_end },
     parsed: { bed_rows: beds.length, unreadable_rows: unreadable.length, unreadable },
@@ -343,6 +467,7 @@ async function stageTrackerClaims(client, {
 
 async function writeClaim(client, {
   activation_id, property_id, natural_key, status, status_reason, payload, evidence_refs,
+  target_type = TARGET_TYPE,
 }) {
   const row = (await client.query(
     `insert into proposed_records
@@ -350,7 +475,7 @@ async function writeClaim(client, {
         payload_json, evidence_refs, status, status_reason)
      values ($1,$2,'leasing',$3,$4,$5::jsonb,$6::jsonb,$7,$8)
      returning id, status`,
-    [activation_id, property_id, TARGET_TYPE, natural_key,
+    [activation_id, property_id, target_type, natural_key,
       JSON.stringify(payload), JSON.stringify(evidence_refs), status, status_reason || null])).rows[0];
   return row;
 }
@@ -359,6 +484,16 @@ async function writeClaim(client, {
  *  READ-ONLY, and deliberately returns the claim layer LABELLED — a
  *  caller cannot mistake it for a canonical position. */
 async function readTrackerClaims(client, { property_id, cycle_label = null, activation_id = null } = {}) {
+  /*  ⚠ THE CURRENT SOURCE, NOT THE NEWEST ROWS. Ordering every claim by
+   *  created_at and taking the first per bed would make max(created_at)
+   *  the authority — and would happily read half of v1 and half of v2 if
+   *  v2 omitted a bed. Scoped to the accepted, unsuperseded activation,
+   *  the operating read describes ONE source artifact. */
+  if (!activation_id) {
+    const cur = await currentTrackerSource(client, { property_id });
+    if (!cur) return [];
+    activation_id = cur.id;
+  }
   const rows = (await client.query(
     `select id, natural_key, status, status_reason, payload_json, evidence_refs, created_at
        from proposed_records
@@ -378,7 +513,37 @@ async function readTrackerClaims(client, { property_id, cycle_label = null, acti
 
 const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
 
+/*  The CURRENT source, by supersession — never max(created_at). */
+async function currentTrackerSource(client, { property_id } = {}) {
+  const { rows } = await client.query(
+    `select id, source_label, accepted_at, supersedes_activation_id
+       from activations
+      where property_id=$1 and source_kind=$2 and status='activated'
+        and superseded_by_id is null`, [property_id, SOURCE_KIND]);
+  return rows[0] || null;
+}
+
+/*  Asking assumptions from the CURRENT source only. A superseded upload's
+ *  pricing must not keep feeding a projection. */
+async function readAskingAssumptions(client, { property_id, cycle_label = null } = {}) {
+  const cur = await currentTrackerSource(client, { property_id });
+  if (!cur) return { source: null, assumptions: [] };
+  const { rows } = await client.query(
+    `select id, natural_key, payload_json, evidence_refs, status
+       from proposed_records
+      where property_id=$1 and target_type=$2 and activation_id=$3
+      order by natural_key`, [property_id, ASSUMPTION_TYPE, cur.id]);
+  return {
+    source: { activation_id: cur.id, label: cur.source_label, accepted_at: cur.accepted_at },
+    assumptions: rows
+      .filter((r) => !cycle_label || !r.payload_json || !r.payload_json.cycle_label ||
+        r.payload_json.cycle_label === cycle_label)
+      .map((r) => ({ ...r.payload_json, claim_id: r.id, status: r.status })),
+  };
+}
+
 module.exports = {
-  stageTrackerClaims, readTrackerClaims, parseTrackerSheet, sha256,
-  TARGET_TYPE, _internal: { bedKey, ordinal },
+  stageTrackerClaims, readTrackerClaims, readAskingAssumptions, currentTrackerSource,
+  parseTrackerSheet, parseAskingAssumptions, sha256,
+  TARGET_TYPE, ASSUMPTION_TYPE, SOURCE_KIND, _internal: { bedKey, ordinal },
 };

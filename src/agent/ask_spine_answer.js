@@ -58,6 +58,8 @@ const contractedServiceAskRead = require("../asset/contracted_service_ask_detail
 const equityPositionService = require("../asset/equity_position_service.js");
 const equityPositionRead = require("../asset/equity_position_read.js");
 const tenancyStandingRead = require("../tenancy/tenancy_position_read.js");
+const forwardRentRead = require("../leasing/forward_rent.js");
+const leasingCycleConfig = require("../leasing/leasing_cycle.js");
 
 const MODEL = process.env.ASK_SPINE_MODEL || "claude-opus-5";
 /*  THINKING AND THE ANSWER SHARE THIS CEILING. On this model family
@@ -135,7 +137,10 @@ const SUPPORTED_SCOPE =
   "notice decisions, retained evidence, financial observations, and known contract gaps, or " +
   "this property's governed tenancy standing — how many rentable positions there are, how " +
   "many are occupied or open on a date, what is committed next, and what Spine does not know " +
-  "about them, or " +
+  "about them, including its FORWARD position for a named leasing cycle — beds committed and " +
+  "remaining, how much of that is tied to canonical lease truth, the rent claimed by the " +
+  "operating tracker versus rent established contractually, the stated asking-rent assumption " +
+  "on open beds, the full-sell-out monthly run rate, and the dated committed-rent schedule, or " +
   "who holds equity or preferred equity in this property, on what terms, what has been " +
   "contributed, and what remains unresolved";
 
@@ -508,6 +513,65 @@ async function gatherFacts(db, {
     try {
       const standing = await tenancyReader.readTenancyStanding(db, { property_id });
       facts.tenancy = withoutDatabaseIds({ ...standing, read_state: "OK" });
+
+      /*  ── THE FORWARD CYCLE, ON THE SAME DOMAIN ──────────────────────
+       *  Forward Leasing and Forward Rent are the SAME property truth read
+       *  over an interval and then read economically. They are not a new
+       *  Ask Spine domain and must not become one — a second domain would
+       *  mean a second place entitlement, silence handling and truth walls
+       *  are implemented, and those diverge silently.
+       *
+       *  Attached only when the property has a GOVERNED cycle. No cycle
+       *  configured, or an ambiguous one, is a real answer and it is
+       *  carried as a truth state rather than a guessed interval. */
+      try {
+        const cyc = await leasingCycleConfig.resolveCycle(db, { property_id });
+        const fr = await forwardRentRead.forwardRent(db, {
+          property_id, cycle_start: cyc.cycle_start, cycle_end: cyc.cycle_end,
+          cycle_label: cyc.cycle_label,
+        });
+        facts.tenancy.forward = withoutDatabaseIds({
+          read_state: "OK",
+          cycle: { label: cyc.cycle_label, start: cyc.cycle_start, end: cyc.cycle_end,
+                   resolved_by: cyc.resolved_by },
+          position: fr.operating_position && fr.operating_position.read_state === "ok" ? {
+            beds: fr.forward_leasing.positions,
+            signed: fr.operating_position.per_tracker_signed,
+            pending: fr.operating_position.per_tracker_pending,
+            committed: fr.operating_position.per_tracker_committed,
+            remaining: fr.operating_position.remaining,
+            tied_to_canonical_lease: fr.operating_position.tied_to_canonical_lease,
+            awaiting_contractual_tie: fr.operating_position.awaiting_contractual_tie,
+            needs_review: fr.operating_position.needs_review,
+          } : { read_state: "READ_FAILED",
+                note: "The operating claim layer could not be read. This is NOT zero and NOT " +
+                      "the canonical count." },
+          rent: {
+            contractual: fr.committed_rent.contractual,
+            contractual_state: fr.committed_rent.contractual_state,
+            contractual_missing_positions: fr.committed_rent.contractual_missing_positions,
+            signed_rent_claims: fr.committed_rent.signed_rent_claims,
+            pending_rent_claims: fr.committed_rent.pending_rent_claims,
+            tracked_committed_rent: fr.committed_rent.tracked_committed_rent,
+            open_bed_assumption: fr.open_bed_assumption.monthly,
+            open_bed_lines: fr.open_bed_assumption.lines,
+            open_bed_unpriced: fr.open_bed_assumption.unpriced,
+            full_sell_out_run_rate: fr.full_sell_out_run_rate.monthly,
+            unscheduled_claims: fr.unscheduled_rent_claims,
+          },
+          dated_schedule: fr.dated_schedule.months,
+          vocabulary: fr.vocabulary,
+          coverage: fr.coverage,
+          does_not_establish: fr.does_not_establish,
+        });
+      } catch (fe) {
+        //  A missing or ambiguous cycle is a STATE, not a failure to hide.
+        facts.tenancy.forward = {
+          read_state: fe && /cycle/i.test(String(fe.code || "")) ? "NOT_ESTABLISHED" : "READ_FAILED",
+          reason: fe && (fe.publicMessage || fe.message) || null,
+          code: fe && fe.code || null,
+        };
+      }
     } catch (e) {
       const state = e && e.code === "READ_TIMED_OUT" ? "READ_TIMED_OUT" : "READ_FAILED";
       facts.tenancy = { read_state: state, standing: null, position: null, unknowns: null };
@@ -658,6 +722,32 @@ function systemPrompt(subject = "work") {
     "   prior period, or to a market, and do not explain WHY occupancy is where it is —",
     "   no causal linkage is recorded. Do not compute a percentage the facts do not",
     "   carry; the counts are given for a reason.",
+    "18. The FORWARD block is a different question from occupancy and the two are never",
+    "   quoted as each other. Occupancy is who is in the building today; forward is how",
+    "   much of a named future cycle has been sold. Never add them, subtract them, or",
+    "   answer one with the other.",
+    "19. Forward rent has FOUR words and they never merge. CONTRACTUAL is established by",
+    "   governing lease evidence. CLAIMED is what the operating tracker says and is NOT",
+    "   yet contractual truth. ASSUMED is an explicit asking rent for a bed that is still",
+    "   open. PROJECTED is arithmetic over those three. If asked how much rent is signed,",
+    "   give the CLAIMED figure and say it is claimed; give the contractual figure only",
+    "   when contractual_state is established. contractual_state NOT_ESTABLISHED means no",
+    "   governing lease carries an amount — it is not a rent of zero and not a property",
+    "   that earns nothing.",
+    "20. The full-sell-out run rate is a MONTHLY scenario at the stated asking rents. Never",
+    "   multiply it by twelve and never call it annual rent: terms differ, and the dated",
+    "   schedule is the only thing that knows which months a lease governs.",
+    "21. A commitment with no established term is UNSCHEDULED. Report its money and say the",
+    "   term is not established. Never place it in a month, and never infer a term from a",
+    "   cohort label like Full Year or Fall Only — that label is evidence about the term,",
+    "   not the term.",
+    "22. The open beds are NOT in the dated schedule and there is no dated forecast for",
+    "   them. Answering what a future month will earn once the open beds lease would",
+    "   require assuming what term each will sign, which nobody has stated. Say that.",
+    "23. When the forward block reports read_state NOT_ESTABLISHED, the property has no",
+    "   governed leasing cycle configured — say so and offer the dates instead. When it",
+    "   reports READ_FAILED, Spine could not look. Neither is an empty building and",
+    "   neither is zero rent.",
     "",
     "HOW TO SOUND:",
     "· Talk like a competent colleague, not a database. Short sentences.",
@@ -865,6 +955,10 @@ async function answer(db, anthropic, {
       tenancy_as_of: facts.tenancy ? facts.tenancy.as_of : null,
       tenancy_rentable_positions: facts.tenancy && facts.tenancy.position
         ? facts.tenancy.position.rentable_positions : null,
+      tenancy_forward_read_state: facts.tenancy && facts.tenancy.forward
+        ? facts.tenancy.forward.read_state : null,
+      tenancy_forward_cycle: facts.tenancy && facts.tenancy.forward && facts.tenancy.forward.cycle
+        ? facts.tenancy.forward.cycle.label : null,
       reads_that_failed: facts.reads_that_failed,
       gathered_at: facts.gathered_at,
     },

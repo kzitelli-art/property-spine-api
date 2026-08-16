@@ -262,6 +262,13 @@ async function forwardLeasingPosition(pool, {
     row.claim_rent = p && p.monthly_rent != null ? Number(p.monthly_rent) : null;
     row.claim_resident = p ? (p.resident_name || null) : null;
     row.claim_cohort = p ? (p.cohort_label || null) : null;
+    /*  The tracker's own unit type. The canonical `unit_type` is null until
+     *  a reviewed mapping receipt exists (migration 100), so without this
+     *  every open bed matched no asking-rent assumption and the whole
+     *  open-bed bucket silently came out $0 — a plausible-looking total
+     *  that was wrong by $13,345. */
+    row.claim_unit_type = p ? (p.unit_type || null) : null;
+    row.claim_new_or_renewal = p ? (p.new_or_renewal || null) : null;
     row.claim_status = c ? c.status : null;
     row.claim_reason = c ? c.status_reason : null;
     /*  ⚠ A REVIEW CLAIM OUTRANKS A CANONICAL TIE, and the order is the
