@@ -1938,6 +1938,45 @@ Lower-authority evidence may **explain** canonical truth. It may never replace
 it, and the replacement is always silent when it happens — nobody writes a commit
 saying "let the transcript win."
 
+#### Authority is not one ladder — it is three dimensions
+
+`source_authority` as a single ranked list conflates three orthogonal things.
+`governed_read`, `transcript_claim` and `read_failed` are not increasingly weak
+versions of one fact; they answer different questions, and a packet that flattens
+them cannot express the states that matter most.
+
+```text
+SOURCE CLASS        where it came from
+  canonical_read · transcript · document · operator_statement · external_source
+
+EPISTEMIC STATUS    how well it is known
+  established · reported · claimed · inferred · conflicting · not_established
+
+READ STATUS         whether we got it at all
+  available · empty · failed · not_authorized
+
+PROVENANCE          source object · source id · occurred_at · recorded_at ·
+                    actor/speaker · supporting passage or proof
+```
+
+READ STATUS is the dimension §40.7's four silences live on — which is why they
+never sat comfortably on the authority ladder. They were never a weaker kind of
+fact. They are a statement about the read, not about the world.
+
+**The distinction this exists to protect.** Kandice says residents in 527 report
+a floor-plan discrepancy. That fact is `transcript · reported · available`.
+
+```text
+MAY SAY   "Kandice reported that residents of 527 raised a floor-plan
+           discrepancy."
+MAY NOT   "527 has an incorrect floor plan."
+```
+
+And when Robert instructs someone to clarify what the residents actually mean,
+**the open operating fact is the uncertainty itself.** The meeting produced real
+knowledge without establishing the underlying claim. A system with one authority
+ladder cannot represent that; a system with an epistemic dimension can, and must.
+
 ### 40.5 Truth walls are executable contracts
 
 Natural language erodes distinctions the domain enforces. *"Are our taxes paid?"*
@@ -2008,6 +2047,28 @@ result set.
 
 An attention surface that cannot tell quiet from blind is worse than none,
 because composite silence reads as health (§5).
+
+#### "Nothing needs attention" is an extremely expensive sentence
+
+*"Anything I should worry about at Solo?"* is not one query. It composes Leasing,
+Maintenance, Management, Money, Compliance and Asset Management.
+
+An all-clear is legal only when the SERVER — never the model — knows all four:
+
+```text
+required readers were determined
+    +  the user is authorized for every required domain
+    +  every required read SUCCEEDED
+    +  their outputs support no material open issue
+```
+
+Fail the third and the honest answer changes shape entirely:
+
+> *"I don't see an issue in the areas I could check, but Maintenance is
+> unavailable, so I can't give you an all-clear."*
+
+That is not hedging. That is a system telling the truth about its own coverage,
+and it is the difference between a quiet property and a quiet failure.
 
 ### 40.8 Entitlements precede intelligence
 
@@ -2354,6 +2415,30 @@ Recorded conversation has no standing projection and is not discovered by the
 That is deliberate, not an oversight: a domain has a position Ask Spine can
 state; a transcript has only passages it can quote. Evidence is read *beside*
 governed standing, never *as* it.
+
+### Recorded conversation is a READER, not context
+
+When Ask Spine consults meetings it asks a governed reader a question and
+receives a governed answer, exactly as it does of Debt or Insurance.
+
+```text
+RIGHT   Ask Spine → Meeting Evidence reader: "what has been said about 527?"
+        reader returns: reported claim · speaker label · timestamp ·
+                        supporting passage · unresolved instruction ·
+                        no canonical resolution found
+        Ask Spine narrates that.
+
+WRONG   a model searches 52 transcripts, decides what probably happened,
+        and tells the owner.
+```
+
+The second architecture would destroy Property Spine. It makes the model the
+arbiter of what a year of meetings meant, with no reader to hold accountable, no
+epistemic status on anything it concluded, and no way to distinguish what was
+established from what was merely said often.
+
+Meeting candidates therefore become **one governed reader among many**. They are
+never loaded into model context as free-floating knowledge.
 
 ### Consent and retention
 

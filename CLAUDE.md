@@ -238,7 +238,15 @@ ATTRIBUTION, SOURCE AUTHORITY, CURRENT STATE, RELEVANCE, OR CONFLICT.
 
 The rulings a builder trips over first:
 
-- **Facts carry authority in their shape** (§40.4). An envelope, never a bag:
+- **Property Spine decides what is true. Ask Spine decides how to make that truth useful to a human.** And: **Ask Spine may reason across evidence; it may never reason evidence into truth.** It is a governed *reasoning and narration* surface, not a lookup — it may understand the question, choose among permitted readers, connect facts across domains, explain cause and effect, name disagreement and compress complexity. It may not promote evidence into truth, manufacture authority, or resolve ambiguity by prose.
+
+**Authority is three dimensions, not one ladder** (§40.4). `SOURCE CLASS` (canonical_read · transcript · document · operator_statement · external_source) · `EPISTEMIC STATUS` (established · reported · claimed · inferred · conflicting · not_established) · `READ STATUS` (available · empty · failed · not_authorized) · plus provenance. The four silences live on READ STATUS, which is why they never fitted the ladder. *"Kandice reported that residents raised a discrepancy"* is sayable; *"527 has an incorrect floor plan"* is not — and where a claim is left open, **the open operating fact is the uncertainty itself.**
+
+**"Nothing needs attention" is an expensive sentence** (§40.7). Legal only when the server knows required readers were determined, the user is authorized for all of them, every read SUCCEEDED, and the outputs support no material open issue. If Maintenance failed: *"I can't give you an all-clear."*
+
+**Recorded conversation is a READER, not context** (§43). Ask Spine asks the meeting reader a question and narrates its governed answer. A model searching 52 transcripts and deciding what probably happened would destroy Property Spine.
+
+**Facts carry authority in their shape** (§40.4). An envelope, never a bag:
   `domain · concept · value|truth_state · source_authority · provenance · as_of ·
   entitled reference`. `governed_read` outranks `transcript_claim`, `email_claim`,
   `user_assertion`. Lower authority may **explain** canonical truth, never replace
