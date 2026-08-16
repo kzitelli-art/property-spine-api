@@ -49,10 +49,11 @@
 
 "use strict";
 
-const { datedPropertyPositions } = require("./dated_positions");
+const { datedPropertyPositions, intervalPropertyPositions } = require("./dated_positions");
 const readerCapabilities = require("../shared/reader_capability_contract.js");
 
 const CONTRACT_VERSION = "tenancy_standing.v1";
+const TERM_CONTRACT_VERSION = "tenancy_term_standing.v1";
 const NOT_ESTABLISHED = "NOT_ESTABLISHED";
 
 /*  ── THE TRUTH WALLS (§40.5) ────────────────────────────────────────
@@ -219,4 +220,101 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
   };
 }
 
-module.exports = { readTenancyStanding, TRUTH_WALLS, CONTRACT_VERSION, NOT_ESTABLISHED };
+/*  ══ THE TERM STANDING PROJECTION ═══════════════════════════════════
+ *  The same compression, asked about a SPAN instead of a date. Same
+ *  domain, same file, deliberately NOT a new module — the interval
+ *  question is a second temporal reading of Tenancy, not a fifth domain,
+ *  and a new `*_read.js` would make the coverage gate invent one.
+ *
+ *  ⚠ THE WALL THIS PROJECTION EXISTS TO HOLD.
+ *  `partially_conflicted` does NOT mean "partly available for this term".
+ *  For the term being asked about, the position does not fit. Its free
+ *  sub-spans are useful context for a DIFFERENT term; they are not
+ *  permission to offer this one. Every consumer — screen and sentence —
+ *  gets that wall with the facts.  */
+const TERM_TRUTH_WALLS = Object.freeze([
+  "contractually free ≠ marketable — this read consults no readiness, turnover, " +
+    "possession or out-of-service state, and cannot say a position may be shown or offered.",
+  "partially conflicted ≠ partly available for this term — it does NOT fit the term asked " +
+    "for. Its free spans are context for another term, never permission to offer this one.",
+  "committed ≠ occupied today — a term can be wholly taken by a lease that has not started.",
+  "unresolved ≠ free — Spine could not answer for this position, which is not a yes.",
+  "an unproven right is still a right — proof strength is reported so a human can weigh it, " +
+    "never so the read can override it.",
+  "free for this term ≠ free next term — the answer is a function of the dates asked about.",
+]);
+
+const TERM_CAPABILITIES = readerCapabilities.validate(
+  readerCapabilities.retrievalOnly(
+    "canonical contractual position for a requested term — which rentable positions carry a " +
+    "governed dated right that conflicts with it, and where the conflicts fall"));
+
+/*  readTenancyTermStanding — "what is left to lease for this term", small.
+ *
+ *  property_id      server-derived by the caller. Never from a question.
+ *  requested_start  required. There is NO default interval and there must
+ *  requested_end    not be one — see the route for why.
+ */
+async function readTenancyTermStanding(pool, { property_id, requested_start, requested_end } = {}) {
+  if (!property_id) throw new Error("readTenancyTermStanding requires property_id");
+  if (!requested_start || !requested_end) {
+    const e = new Error("readTenancyTermStanding requires requested_start and requested_end");
+    e.code = "INTERVAL_REQUIRED";
+    throw e;
+  }
+  const iv = await intervalPropertyPositions(pool, { property_id, requested_start, requested_end });
+
+  const base = {
+    contract_version: TERM_CONTRACT_VERSION,
+    capability_classes: TERM_CAPABILITIES,
+    composition_authorization: "unsolved_cross_domain",
+    term: { requested_start: iv.requested_start, requested_end: iv.requested_end },
+    truth_walls: TERM_TRUTH_WALLS,
+  };
+
+  if (!iv.count) {
+    return {
+      ...base,
+      standing: { truth_state: NOT_ESTABLISHED,
+        why: "no rentable position is recorded for this property in Spine" },
+      position: null, unknowns: null,
+      does_not_establish: iv.does_not_establish,
+    };
+  }
+
+  const t = iv.totals;
+  return {
+    ...base,
+    standing: { truth_state: "ESTABLISHED",
+      why: `${t.contractually_free} of ${iv.count} rentable positions can support the whole term` },
+    //  COUNTS, NEVER A PERCENTAGE. "62% preleased" is a judgement about
+    //  performance; stating the position is this read's whole job.
+    position: {
+      rentable_positions: iv.count,
+      units: t.units,
+      can_support_the_whole_term: t.contractually_free,
+      //  ONE number for "does not fit", because for THIS term committed and
+      //  partially_conflicted mean the same thing to someone trying to lease
+      //  it. The split is available below for the operator who needs it.
+      conflicts_with_part_or_all_of_it: t.committed + t.partially_conflicted,
+      wholly_taken: t.committed,
+      partly_taken: t.partially_conflicted,
+    },
+    unknowns: {
+      positions_spine_could_not_answer_for: t.unresolved,
+      positions_taken_only_by_an_unproven_right: iv.positions.filter((p) =>
+        p.interval_state !== "contractually_free"
+        && p.colliding_rights.length
+        && p.colliding_rights.every((r) => r.proof_basis === "unproven")).length,
+      //  Carried because operating readiness for a FUTURE date is not
+      //  governed anywhere yet. Saying nothing here would imply it is.
+      positions_whose_future_physical_readiness_is_not_established: t.contractually_free,
+    },
+    does_not_establish: iv.does_not_establish,
+  };
+}
+
+module.exports = {
+  readTenancyStanding, TRUTH_WALLS, CONTRACT_VERSION, NOT_ESTABLISHED,
+  readTenancyTermStanding, TERM_TRUTH_WALLS, TERM_CONTRACT_VERSION,
+};

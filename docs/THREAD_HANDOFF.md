@@ -212,6 +212,78 @@ straight to retaining the real governing documents; the mechanism to
 establish from them once retained already exists and is proven.
 
 ## ══════════════════════════════════════════════════════════════════
+##  FORWARD LEASING IS BUILT AND BROWSER-PROVEN. THE PROSPECT PATH IS
+##  CONTAINED. 2026-08-16. NO MIGRATION. NOT ACTIVATED.
+## ══════════════════════════════════════════════════════════════════
+
+**Branch:** `claude/code-philosophy-review-xoiz8f`. **Migrations: NONE.**
+
+### The operator surface
+
+```text
+GET /operator/leasing/positions-for-period?requested_start=&requested_end=
+readTenancyTermStanding(...)      the compact term projection
+Forward Leasing ledger            .rru-t grammar reused wholesale
+```
+
+Both dates REQUIRED — no default term, ever. The surface opens ASKING.
+
+On the real 07/31 export: **32 can support the full term · 128 conflict with
+at least part of it**, with `Contractual only — whether a position will be
+physically ready by 8/1/26 is not established.` under the counts.
+
+`partially_conflicted` renders as **PART TAKEN**, styled identically to TAKEN.
+The word "available" appears nowhere on the surface.
+
+### ⚠ WHAT WAS *NOT* BUILT, AND WHY IT MUST NOT BE
+
+**`offerableInventory` was NOT built, and the plan that proposed AND-ing the
+interval read with `availability_read` is WRONG.** Availability answers
+*"marketable NOW"* and deliberately refuses to infer readiness after a lease
+ends (`blocking_fact: "no_governed_turnover_duration"`). ANDing them would
+reject a unit that legitimately turns before a future start — replacing an
+over-offering bug with an under-offering one. Owner correction, and it stands.
+
+See `docs/FUTURE_OPERATING_READINESS_TRACE.md`: **future operating readiness
+is a genuinely missing primitive**, and `turnovers.ready_date` currently holds
+a TARGET (written at turn open from `expected_ready_date`) and an ACHIEVEMENT
+(written at completion) in one column — `turn_priority.js:219` already sorts
+across both. There is also no `expected_ready_date` column; the API accepts
+the field and silently redirects it. Not fixed: it is a migration, outside
+this lane.
+
+### The prospect path is contained, not cut over
+
+`leasing_inventory.availableUnits` — the path the AI leasing agent quotes from
+— now **fails closed**:
+
+```text
+no term            → REFUSAL (qualification 'term_required'), never an
+                     empty inventory answer
+term check failed  → REFUSAL, and says Spine could not check
+term supplied      → every position that cannot support the WHOLE term is
+                     eliminated via intervalPropertyPositions
+always             → may_promise: false. A survivor is contractually open
+                     for those dates; readiness is NOT confirmed.
+```
+
+`agent.js` no longer hardcodes "No units match" for every empty result — it
+carries the door's own sentence, so a refusal is never spoken as an inventory
+answer. Removal condition for the date-blind predicate is written in the
+source and in `docs/PROSPECT_INVENTORY_CUTOVER.md`.
+
+### Proof
+
+```text
+tests/forward_leasing_http.db.js            26/26
+tests/prospect_inventory_containment.db.js  21/21
+tests/interval_positions.db.js              31/31
+tests/interval_position_hostile.test.js     38/38
+property-spine-app browser                  160/160
+app suite (32 harnesses)                    1333 passed
+```
+
+## ══════════════════════════════════════════════════════════════════
 ##  SLICE 2 FOUNDATION — THE INTERVAL READ IS BUILT AND PROVEN.
 ##  2026-08-16. NO MIGRATION. NO UI. NOT ACTIVATED — Slice 1 activation
 ##  still has priority. Read the Slice 2 trace before touching this.

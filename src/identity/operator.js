@@ -59,6 +59,9 @@ module.exports = function operatorModule(deps) {
   const { currentRentRoll } = require("../surfaces/rent_roll_canonical");   // canonical Current Rent Roll (migration route)
   const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts");
   const { unitRentRoll } = require("../surfaces/rent_roll_unit_view");   // the operator Rent Roll: unit-first, beds nested // factual Future Rent Roll (migration route)
+  //  Forward Leasing reads the SAME canonical model, parameterized by a span
+  //  instead of a date. Not a second service and not a forward store.
+  const { intervalPropertyPositions } = require("../tenancy/dated_positions");
   const { institutionalRentRoll, institutionalCsv } = require("../surfaces/rent_roll_institutional"); // formal as-of schedule + CSV
   const { availabilityRead } = require("../surfaces/availability_read");   // Availability over the shared classifier
   const { effectivePropertyPricing } = require("../money/effective_pricing"); // the Pricing & Concessions truth sheet
@@ -1969,6 +1972,74 @@ module.exports = function operatorModule(deps) {
       return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
     }
   });
+
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/leasing/positions-for-period?requested_start=&requested_end=
+  //   FORWARD LEASING — the same positions, asked about a SPAN.
+  //
+  //   Which rentable positions can support this ENTIRE requested term?
+  //
+  //   The Rent Roll above answers "what is true on this date". This
+  //   answers "what does the recorded right-set permit over this
+  //   interval". Two temporal questions over one truth; there is no
+  //   forward datastore for either to drift from.
+  //
+  //   ⚠ CONTRACTUAL ONLY. It does not say a position can be marketed,
+  //   shown or offered. Operating availability — readiness, turnover,
+  //   possession, down state — is availability_read's answer, and
+  //   composing them is a deliberate later step, NOT an AND of these two
+  //   reads: availability answers "marketable NOW" and deliberately
+  //   refuses to infer readiness after a future lease ends, so ANDing
+  //   would reject a unit that legitimately turns before the requested
+  //   start. That would replace an over-offering bug with an
+  //   under-offering one.
+  //
+  //   BOTH DATES ARE REQUIRED. There is no default interval and there
+  //   must not be one: "today", "today for one day" and any implied
+  //   school year are all a second time model smuggled in as a
+  //   convenience. A named period is configuration resolved to dates
+  //   ABOVE this route.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/leasing/positions-for-period", requireOperator, requireLeasingModuleAccess,
+    async (req, res) => {
+      res.set("Cache-Control", "no-store");
+      const start = req.query.requested_start;
+      const end = req.query.requested_end;
+      //  Refused honestly and specifically. "Invalid request" would make an
+      //  operator guess which of the two dates Spine could not read.
+      for (const [name, v] of [["requested_start", start], ["requested_end", end]]) {
+        if (v == null || v === "") {
+          return res.status(400).json({
+            error: `${name} is required. Forward Leasing answers about a term, and a term has two dates.`,
+            code: "interval_required",
+          });
+        }
+        if (!validCalendarDate(String(v))) {
+          return res.status(400).json({
+            error: `${name} must be a real calendar date in YYYY-MM-DD form.`,
+            code: "invalid_interval_date",
+          });
+        }
+      }
+      if (String(end) < String(start)) {
+        return res.status(400).json({
+          error: "requested_end is before requested_start.",
+          code: "invalid_interval",
+        });
+      }
+      try {
+        const out = await intervalPropertyPositions(pool, {
+          property_id: req.operator.property_id,   // session only, never the query
+          requested_start: String(start),
+          requested_end: String(end),
+        });
+        return res.json(out);
+      } catch (e) {
+        //  A failed read is UNAVAILABLE, never an empty building and never
+        //  "nothing is available for those dates".
+        return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+      }
+    });
 
   router.get("/operator/rent-roll/future-facts", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");

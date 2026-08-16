@@ -26,9 +26,62 @@ module.exports = function leasingInventoryModule({ pool }) {
   //  availableUnits — the ONE query that answers "what could we offer?"
   //  property_id is SERVER-DERIVED by the caller (the conversation's
   //  property) — never model output, never client input.
-  async function availableUnits({ property_id, bedrooms = null, max_rent = null, bathrooms = null, limit = 5 }, clientArg = null) {
+  async function availableUnits({
+    property_id, bedrooms = null, max_rent = null, bathrooms = null, limit = 5,
+    requested_start = null, requested_end = null,
+  }, clientArg = null) {
     const q = clientArg || pool;
     if (!property_id) return { units: [], qualification: "no_property" };
+
+    /*  ══ CONTAINMENT — FAIL CLOSED WITHOUT A TERM ═══════════════════
+     *
+     *  This is the PROSPECT-FACING path: what comes back is offered to a
+     *  real person by the leasing agent. The predicate below is
+     *  date-blind — it asks whether a unit is flagged vacant and carries
+     *  no live lease at all — and a date-blind answer cannot know whether
+     *  a position can support the term the prospect actually wants.
+     *
+     *  Measured, on constructed cases:
+     *    · a unit flagged `vacant` with NO lease rows is offered with no
+     *      dated check whatsoever — absence of lease data reads as
+     *      availability
+     *    · a by-bed unit with ONE leased bed is withheld entirely, so a
+     *      genuinely free bed beside it is never offered
+     *    · a bed free Aug–Dec with a January commitment is withheld for
+     *      every term, including the ones it could serve
+     *
+     *  The blanket exclusion is the right patch over a missing date
+     *  model. It is the wrong thing to keep now that the date model
+     *  exists — and the wrong thing to REPLACE carelessly, because
+     *  ANDing this with availability_read ("marketable NOW") would
+     *  reject a unit that legitimately turns before a future start.
+     *
+     *  So until contractual interval + future operating readiness can
+     *  compose into one governed prospect answer, this door FAILS
+     *  CLOSED: no term, no inventory. Not an empty list — a REFUSAL with
+     *  a sentence, because "nothing matches" and "I need your dates" are
+     *  different facts and conflating them is the failure this whole
+     *  slice exists to prevent.
+     *
+     *  FROZEN NO-DATE RULE. No default interval. Not today, not today
+     *  for one day, not an implied school year. A named cycle is
+     *  configuration resolved to dates ABOVE this function.
+     *
+     *  REMOVAL CONDITION for the whole date-blind predicate below:
+     *  delete it once contractual interval + governed future operating
+     *  readiness compose into the prospect-facing answer. See
+     *  docs/PROSPECT_INVENTORY_CUTOVER.md.  */
+    if (!requested_start || !requested_end) {
+      return {
+        units: [],
+        qualification: "term_required",
+        may_promise: false,
+        note: "Ask the prospect for their move-in and move-out dates. Inventory cannot be "
+            + "discussed until the term is known — do not describe this as nothing being "
+            + "available, because it is not an answer about inventory.",
+      };
+    }
+
     const params = [property_id];
     // RESIDENTIAL SHAPE GUARD (owner decision, 2026-07-27). `units` carries
     // non-apartment rows — the property's commercial space is one (7,391 sq ft,
@@ -79,10 +132,66 @@ module.exports = function leasingInventoryModule({ pool }) {
         order by market_rent asc nulls last, unit_number asc
         limit $${params.length}`, params
     )).rows;
+    /*  ══ THE CANONICAL TERM FILTER ══════════════════════════════════
+     *  Every surviving unit is now put through the SAME interval read the
+     *  operator's Forward Leasing surface uses. A unit stays only if it
+     *  holds at least one rentable position that can support the WHOLE
+     *  requested term. One truth, two projections (§40) — the agent does
+     *  not get its own availability logic, and if it needed one, Slice 2
+     *  was built wrong.
+     *
+     *  This runs AFTER the legacy predicate rather than replacing it, on
+     *  purpose: the legacy predicate is over-suppressive, so composing
+     *  them can only ever withhold more, never offer more. Removing it is
+     *  step 4 of the cutover, not something to do inside a containment.  */
+    const { intervalPropertyPositions } = require("../tenancy/dated_positions");
+    let iv;
+    try {
+      iv = await intervalPropertyPositions(pool, {
+        property_id, requested_start, requested_end,
+      });
+    } catch (e) {
+      //  A FAILED READ IS NOT AN EMPTY BUILDING AND NOT AN OFFER. If Spine
+      //  cannot check the term, nothing may be offered for it.
+      return {
+        units: [], qualification: "term_check_unavailable", may_promise: false,
+        note: "Spine could not check those dates just now. Do not offer or describe any unit; "
+            + "tell the prospect you will confirm and come back to them.",
+      };
+    }
+    const freeUnitIds = new Set(iv.positions
+      .filter((p) => p.interval_state === "contractually_free")
+      .map((p) => String(p.unit_id)));
+    const survivors = rows.filter((u) => freeUnitIds.has(String(u.id)));
+
     return {
-      units: rows,
-      // honest qualification: what "available" means TODAY
-      qualification: "vacant_not_down",
+      units: survivors,
+      //  ⚠ THE QUALIFICATION IS THE PRODUCT. It says exactly what was
+      //  checked, and the name no longer claims availability.
+      qualification: "contractually_free_for_term_readiness_unconfirmed",
+      term: { requested_start, requested_end },
+      /*  ⚠ may_promise IS FALSE, AND STAYS FALSE UNTIL READINESS IS
+       *  GOVERNED. A surviving position is contractually open for those
+       *  dates. Whether it will be PHYSICALLY ready by the requested start
+       *  is not established anywhere in Spine — availability_read answers
+       *  "marketable now" and deliberately refuses to infer readiness
+       *  after a lease ends, because turnover duration is not a governed
+       *  fact. So the agent may say the dates are open and must not say
+       *  the unit is available.  */
+      may_promise: false,
+      note: survivors.length
+        ? "These positions are contractually open for the requested dates. Physical readiness "
+        + "by the move-in date is NOT confirmed — say the dates are open and that you will "
+        + "confirm the unit itself. Do not promise, hold, or describe any unit as available."
+        : "No position can support that entire term. Say so plainly and offer to note their "
+        + "preferences or discuss different dates.",
+      //  Carried so a receipt can show what the filter actually did.
+      checked: {
+        positions_examined: iv.count,
+        positions_free_for_the_term: iv.positions.filter(
+          (p) => p.interval_state === "contractually_free").length,
+        units_before_term_filter: rows.length,
+      },
     };
   }
 
