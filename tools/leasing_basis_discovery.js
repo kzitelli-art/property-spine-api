@@ -90,6 +90,7 @@ const CYCLE_START = arg("cycle-start");
 const CYCLE_END = arg("cycle-end");
 const AS_OF = arg("as-of", new Date().toISOString().slice(0, 10));
 const TRACKER = arg("tracker");
+const TRACKER_SHEET = arg("tracker-sheet");
 
 if (!PROPERTY || !CYCLE_START || !CYCLE_END) {
   console.error("\n  --property, --cycle-start and --cycle-end are all required.");
@@ -169,31 +170,117 @@ function parseTrackerRow(cells) {
   return null;
 }
 
-function readTracker(file) {
+/*  A bed letter is an ORDINAL POSITION within the unit, and different
+ *  systems spell the same ordinal differently: Spine's rent-roll import
+ *  produced 'Room1'/'Room2'/'Room3', the leasing tracker writes 'A'/'B'/'C'.
+ *  Mapping one to the other is deterministic and reversible, so it is done
+ *  rather than refused — but it is NAMED in the output, because a silent
+ *  identity translation is how two systems come to disagree about which bed
+ *  they mean. */
+const LETTER_ORDINAL = { a: "1", b: "2", c: "3", d: "4" };
+const asOrdinal = (room) => {
+  const r = String(room == null ? "" : room).trim().toLowerCase()
+    .replace(/^(room|rm|bed|bd|space)\s*[-#.]?\s*/, "");
+  return LETTER_ORDINAL[r] || r;
+};
+
+/*  ── HEADER-AWARE READING ────────────────────────────────────────────
+ *  A real leasing tracker is not a list of committed beds — it is a list of
+ *  EVERY bed, with a status column saying which are committed. Reading it as
+ *  "every parseable row is committed" would have scored the tracker at 160
+ *  of 160 and made every rule look wrong by exactly the remaining count.
+ *
+ *  So: find a header row, find the status column, and split the rows the way
+ *  the operator does. If no status column is found, every bed row counts and
+ *  the output SAYS so, because that assumption changes every number below. */
+const STATUS_HEADER = /^(signed\s*\/?\s*pending|signed|status|lease\s*status)$/i;
+const COMMITTED_VALUE = /^(signed|pending|executed|committed|yes|x)$/i;
+const PENDING_VALUE = /^pending$/i;
+const UNIT_HEADER = /^unit\s*#?$|^unit$|^apt\.?\s*#?$/i;
+const ROOM_HEADER = /^(room|bed|space)\s*#?$/i;
+
+function sheetRows(file) {
   const ext = path.extname(file).toLowerCase();
-  let rows;
   if (ext === ".csv" || ext === ".tsv" || ext === ".txt") {
     const sep = ext === ".tsv" ? "\t" : ",";
-    rows = require("fs").readFileSync(file, "utf8").split(/\r?\n/).map((l) => l.split(sep));
-  } else {
-    const XLSX = require("xlsx");
-    const wb = XLSX.readFile(file);
-    rows = [];
-    for (const name of wb.SheetNames) {
-      for (const r of XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: null })) {
-        rows.push(r);
+    return [["(file)", require("fs").readFileSync(file, "utf8")
+      .split(/\r?\n/).map((l) => l.split(sep))]];
+  }
+  const XLSX = require("xlsx");
+  const wb = XLSX.readFile(file);
+  return wb.SheetNames.map((n) =>
+    [n, XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, defval: null })]);
+}
+
+function readTracker(file, sheetFilter) {
+  /*  ⚠ EXACT NAME WINS. A substring filter of "Skyline 2026-2027 RR" also
+   *  matches "Skyline 2026-2027 RR Stats" — and the Stats sheet is a summary
+   *  whose "Total Units / Total Beds" cells parse as bed identifiers. It
+   *  produced four fictional beds and a clean zero-match table. A summary tab
+   *  next to a detail tab with a prefix name is the ordinary case, not an
+   *  exotic one, so the ordering is part of the contract. */
+  const all = sheetRows(file);
+  const wanted = !sheetFilter ? all
+    : (all.filter(([n]) => n.toLowerCase().trim() === sheetFilter.toLowerCase().trim()).length
+      ? all.filter(([n]) => n.toLowerCase().trim() === sheetFilter.toLowerCase().trim())
+      : all.filter(([n]) => n.toLowerCase().includes(sheetFilter.toLowerCase())));
+  const sheets = wanted;
+  const resolved = [], unresolved = [], identityConflicts = [];
+  let statusColUsed = null, sheetUsed = null;
+
+  for (const [name, rows] of sheets) {
+    //  locate a header row and its columns
+    let hdr = -1, cStatus = -1, cUnit = -1, cRoom = -1;
+    for (let i = 0; i < Math.min(rows.length, 40); i++) {
+      const cells = (rows[i] || []).map((c) => String(c == null ? "" : c).trim());
+      const s = cells.findIndex((c) => STATUS_HEADER.test(c));
+      const u = cells.findIndex((c) => UNIT_HEADER.test(c));
+      if (u >= 0) { hdr = i; cUnit = u; cStatus = s; cRoom = cells.findIndex((c) => ROOM_HEADER.test(c)); break; }
+    }
+    for (let i = (hdr >= 0 ? hdr + 1 : 0); i < rows.length; i++) {
+      const row = rows[i] || [];
+      const cell = (j) => (j >= 0 && row[j] != null ? String(row[j]).trim() : "");
+      let unit = null, room = null;
+      if (cUnit >= 0 && /^\d{2,4}\s*[a-d]?/i.test(cell(cUnit))) {
+        const raw = cell(cUnit);
+        const m = raw.match(/^(\d{2,4})\s*([a-d])?/i);
+        unit = m[1];
+        const fromUnit = m[2] ? m[2].toLowerCase() : null;
+        const fromRoom = cRoom >= 0 && cell(cRoom) ? asOrdinal(cell(cRoom)) : null;
+        //  ⚠ BOTH COLUMNS, CROSS-CHECKED. Neither is reliable alone: this
+        //  tracker has one row whose Unit cell is wrong and one whose Room
+        //  cell is wrong, and each mis-identifies a real signed bed.
+        const fromUnitOrd = fromUnit ? LETTER_ORDINAL[fromUnit] : null;
+        if (fromUnitOrd && fromRoom && fromUnitOrd !== fromRoom) {
+          identityConflicts.push({ sheet: name, row: i + 1, raw,
+            unitSays: fromUnit.toUpperCase(), roomSays: cell(cRoom),
+            status: cStatus >= 0 ? cell(cStatus) : "" });
+        }
+        room = fromUnitOrd || fromRoom;
+      } else {
+        const p = parseTrackerRow(row);
+        if (p) { unit = p.unit; room = p.room == null ? null : asOrdinal(p.room); }
       }
+      if (unit == null) {
+        if (row.some((c) => c != null && String(c).trim())) {
+          unresolved.push(row.filter(Boolean).join(" | "));
+        }
+        continue;
+      }
+      const status = cStatus >= 0 ? cell(cStatus) : "";
+      resolved.push({
+        key: bedKey(unit, room), raw: row.filter(Boolean).join(" | "),
+        status,
+        committed: cStatus < 0 ? true : COMMITTED_VALUE.test(status),
+        pending: PENDING_VALUE.test(status),
+      });
+      statusColUsed = cStatus >= 0 ? cStatus : statusColUsed;
+      sheetUsed = name;
     }
+    if (resolved.length) break;                 // first sheet that yields beds
   }
-  const resolved = [], unresolved = [];
-  for (const r of rows) {
-    const p = parseTrackerRow(r || []);
-    if (p) resolved.push({ key: bedKey(p.unit, p.room), raw: (r || []).filter(Boolean).join(" | ") });
-    else if ((r || []).some((c) => c != null && String(c).trim())) {
-      unresolved.push((r || []).filter(Boolean).join(" | "));
-    }
-  }
-  return { resolved, unresolved };
+  return { resolved, unresolved, identityConflicts,
+    statusColumnFound: statusColUsed != null, sheetUsed };
 }
 
 // ── candidate bases ────────────────────────────────────────────────
@@ -388,16 +475,38 @@ const pct = (n, d0) => (d0 ? `${((100 * n) / d0).toFixed(1)}%` : "—");
       console.log("     will not pick one from the numbers alone. Re-run with the live");
       console.log("     tracker export to discover which rule matches operating behaviour.");
     } else {
-      const { resolved, unresolved } = readTracker(TRACKER);
-      const trackerKeys = new Set(resolved.map((r) => r.key));
+      const T = readTracker(TRACKER, TRACKER_SHEET);
+      const { resolved, unresolved, identityConflicts } = T;
+      const committedRows = resolved.filter((r) => r.committed);
+      const trackerKeys = new Set(committedRows.map((r) => r.key));
       const known = new Set(labelOf.keys());
       const trackerUnknown = [...trackerKeys].filter((k) => !known.has(k));
       const trackerMatched = new Set([...trackerKeys].filter((k) => known.has(k)));
 
       H(`4 · TRACKER RECONCILIATION — ${TRACKER}`);
+      if (T.sheetUsed) console.log(`     sheet                            ${T.sheetUsed}`);
       console.log(`     rows that parsed as a bed        ${resolved.length}`);
-      console.log(`     distinct beds named              ${trackerKeys.size}`);
+      if (T.statusColumnFound) {
+        const pend = committedRows.filter((r) => r.pending).length;
+        console.log(`     …the tracker marks COMMITTED     ${committedRows.length}  (of which pending ${pend})`);
+        console.log(`     …the tracker leaves OPEN         ${resolved.length - committedRows.length}`);
+      } else {
+        console.log("     ⚠ NO STATUS COLUMN FOUND — every parsed bed row is being treated as");
+        console.log("       committed. If this tracker lists all inventory with a status column,");
+        console.log("       that assumption inflates the tracker set and makes every rule below");
+        console.log("       look wrong by exactly the open-bed count. Check the header row.");
+      }
+      console.log(`     distinct committed beds          ${trackerKeys.size}`);
       console.log(`     …resolved to a Spine position    ${trackerMatched.size}`);
+      if (identityConflicts.length) {
+        console.log(`\n     ⚠ ${identityConflicts.length} tracker rows NAME THE BED TWO DIFFERENT WAYS:`);
+        identityConflicts.forEach((c) => console.log(
+          `        row ${c.row}: Unit cell says "${c.raw}" (${c.unitSays}) but Room cell says "${c.roomSays}"` +
+          (c.status ? `  [${c.status}]` : "")));
+        console.log("       Neither column is reliable alone. Each conflict leaves one real bed");
+        console.log("       unnamed and double-counts another — resolve them before trusting the");
+        console.log("       counts, and note this is a defect the tracker cannot detect itself.");
+      }
       if (trackerUnknown.length) {
         console.log(`\n     ⚠ ${trackerUnknown.length} tracker beds DO NOT EXIST in Spine's inventory:`);
         trackerUnknown.slice(0, 25).forEach((k) => console.log(`        ${k}`));
