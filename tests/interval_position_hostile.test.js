@@ -71,7 +71,7 @@ ok("H1  exact adjacent terms, no overlap → contractually_free",
  *  here, and the successor rule agrees (a successor must start strictly
  *  after, because `!rangesOverlap` filters the equal-date case out).  */
 ok("H2  a prior lease ending ON the requested start DOES collide",
-   state([L("a", "2025-08-01", "2026-08-01")]) === "partially_conflicted",
+   state([L("a", "2025-08-01", "2026-08-01")]) === "term_partially_blocked",
    state([L("a", "2025-08-01", "2026-08-01")]));
 ok("H3  one-day overlap at the front is a collision",
    state([L("a", "2026-07-01", "2026-08-01")]) !== "contractually_free");
@@ -79,8 +79,8 @@ ok("H4  one-day overlap at the back is a collision",
    state([L("a", "2027-07-31", "2028-06-30")]) !== "contractually_free");
 {
   const r = call([L("a", "2027-01-01", "2027-03-31")]);
-  ok("H5  a commitment INSIDE the interval is partially_conflicted",
-     r.interval_state === "partially_conflicted", r.interval_state);
+  ok("H5  a commitment INSIDE the interval is term_partially_blocked",
+     r.interval_state === "term_partially_blocked", r.interval_state);
   //  THE OPERATING ANSWER. "This bed is yours Aug 1 – Dec 31" is what a
   //  leasing agent can act on; a bare false is not.
   ok("H5b …and the free sub-spans are reported, both of them",
@@ -88,12 +88,12 @@ ok("H4  one-day overlap at the back is a collision",
        { from: "2026-08-01", to: "2026-12-31" }, { from: "2027-04-01", to: "2027-07-31" }]),
      JSON.stringify(r.free_spans));
 }
-ok("H6  the request sitting inside a longer lease is committed",
-   state([L("a", "2026-01-01", "2028-01-01")]) === "committed");
+ok("H6  the request sitting inside a longer lease is term_blocked",
+   state([L("a", "2026-01-01", "2028-01-01")]) === "term_blocked");
 ok("H7  a lease ending the day BEFORE the request is free",
    state([L("a", "2025-08-01", "2026-07-31")]) === "contractually_free");
-ok("H8  an open-ended lease running from before the request is committed",
-   state([L("a", "2020-01-01", null)]) === "committed");
+ok("H8  an open-ended lease running from before the request is term_blocked",
+   state([L("a", "2020-01-01", null)]) === "term_blocked");
 ok("H9  an open-ended REQUEST against a future commitment is not free",
    state([L("a", "2027-01-01", "2027-12-31")], START, null) !== "contractually_free");
 ok("H10 an interval whose end precedes its start is REFUSED, not answered",
@@ -101,7 +101,7 @@ ok("H10 an interval whose end precedes its start is REFUSED, not answered",
             catch (e) { return e.code === "INVALID_INTERVAL"; } })());
 ok("H11 a one-day interval is answered like any other",
    state([], "2026-08-01", "2026-08-01") === "contractually_free"
-   && state([L("a", "2026-08-01", "2026-08-01")], "2026-08-01", "2026-08-01") === "committed");
+   && state([L("a", "2026-08-01", "2026-08-01")], "2026-08-01", "2026-08-01") === "term_blocked");
 ok("H12 a missing start is refused",
    (() => { try { pc.classifyPositionForInterval(ROW([]), { end_date: END }); return false; }
             catch (_) { return true; } })());
@@ -117,9 +117,9 @@ ok("R1  every terminal status is not a right — all six",
  *  to CURRENT_ECONOMIC_STATUSES would re-open the exact hole that quoted a
  *  committed unit to nine prospects.  */
 ok("R2  a PENDING lease is a real dated right",
-   state([L("a", "2026-09-01", "2027-06-30", "pending")]) === "partially_conflicted");
+   state([L("a", "2026-09-01", "2027-06-30", "pending")]) === "term_partially_blocked");
 ok("R3  an unrecognised status FAILS CLOSED — it withholds the position",
-   state([L("a", "2026-01-01", "2028-01-01", "some_status_nobody_anticipated")]) === "committed");
+   state([L("a", "2026-01-01", "2028-01-01", "some_status_nobody_anticipated")]) === "term_blocked");
 {
   const proven = call([L("a", "2027-01-01", "2027-03-31", "active",
     { executed_verified: true, move_in_funds_cleared: true })]);
@@ -127,7 +127,7 @@ ok("R3  an unrecognised status FAILS CLOSED — it withholds the position",
     { source_type: "historical_snapshot", confidence: "confirmed" })]);
   const unproven = call([L("c", "2027-01-01", "2027-03-31", "active")]);
   ok("R4  a collision is a collision at every proof level",
-     [proven, imported, unproven].every((r) => r.interval_state === "partially_conflicted"));
+     [proven, imported, unproven].every((r) => r.interval_state === "term_partially_blocked"));
   //  …and HOW WELL each is known travels with it, unflattened. Whether an
   //  unproven right may be written over is a human decision, made through
   //  the governing writer. This read never makes it.
@@ -142,9 +142,9 @@ ok("R5  a sitting lease that expires BEFORE the request is not reported as colli
 ok("R6  current occupant + successor, both ending before the request → free",
    state([L("a", "2024-08-01", "2025-07-31"), L("b", "2025-08-01", "2026-07-31")])
      === "contractually_free");
-ok("R7  a successor sitting inside the request is partially_conflicted",
+ok("R7  a successor sitting inside the request is term_partially_blocked",
    state([L("a", "2025-08-01", "2026-09-30"), L("b", "2026-10-01", "2027-02-28")])
-     === "partially_conflicted");
+     === "term_partially_blocked");
 
 // ── U · WHEN IT MUST REFUSE TO ANSWER ─────────────────────────────────────
 console.log("\n  ── U · the honest refusals ──");
@@ -182,7 +182,7 @@ console.log("\n  ── C · the line it does not cross ──");
   ok("C2  the free state is `contractually_free`, never a generic `available`",
      r.interval_state === "contractually_free");
   ok("C3  every state is one of the four, and only those four",
-     ["contractually_free", "committed", "partially_conflicted", "unresolved"]
+     ["contractually_free", "term_blocked", "term_partially_blocked", "unresolved"]
        .includes(r.interval_state));
   ok("C4  the requested interval is echoed back, so an answer is never orphaned",
      r.requested.start_date === START && r.requested.end_date === END);

@@ -300,13 +300,20 @@ Which is why the answer is not a boolean. The north star already named the four
 states, and they fall straight out of the existing predicate:
 
 ```text
-available              no valid lease overlaps the interval
-committed              a valid lease covers the ENTIRE interval
-partially_conflicted   a valid lease overlaps PART of it
-                       → report the free sub-spans, which is the operating
-                         answer ("this bed is yours Aug 1 – Dec 31")
-unresolved             conflicted claims, or inconclusive opening evidence
+contractually_free       no valid lease overlaps the interval
+term_blocked             a valid lease covers the ENTIRE interval
+term_partially_blocked   a valid lease overlaps PART of it
+                         → report the free sub-spans, which is the operating
+                           answer ("this bed is yours Aug 1 – Dec 31")
+unresolved               competing claims, or opening evidence that disagrees
 ```
+
+> **Renamed after this trace was written.** It first proposed `available` /
+> `committed` / `partially_conflicted`. `available` was overloaded (owner
+> ruling: contractual ≠ offerable) and `partially_conflicted` collided with
+> `conflict_state`, which already means a CONTESTED position — two rights
+> competing, which governs unknown. An ordinary lease overlapping part of a
+> term is not a dispute. Renamed while the read had two consumers.
 
 ---
 
@@ -421,11 +428,11 @@ would invite a second loader beside `spacePosition`.
 classifyPositionForInterval(row, { start_date, end_date, personNames })
   → { space_id, unit_id, unit_number, space_label,
       interval_state,            // available | committed |
-                                 // partially_conflicted | unresolved
+                                 // term_partially_blocked | unresolved
       colliding_rights: [        // every valid lease that overlaps
         { lease_id, start_date, end_date, lease_status,
           proof_basis, tenants } ],
-      free_spans: [ {from, to} ],   // computed, only when partially_conflicted
+      free_spans: [ {from, to} ],   // computed, only when term_partially_blocked
       conflict_state, conflicting_lease_ids }  // carried, not re-derived
 
 //   ⚠ evidence_state is NOT available at this layer. evidenceState() lives in
@@ -520,13 +527,13 @@ governed fact it rests on.
 | # | case | expected |
 |---|---|---|
 | H1 | exact adjacent terms, no overlap (`…07-31` then `08-01…`) | `available` |
-| H2 | prior lease ends ON requested start | `committed`/`partially_conflicted` — closed interval, existing convention |
+| H2 | prior lease ends ON requested start | `term_blocked`/`term_partially_blocked` — closed interval, existing convention |
 | H3 | one-day overlap at the front | not `available` |
 | H4 | one-day overlap at the back | not `available` |
-| H5 | commitment strictly INSIDE the requested interval | `partially_conflicted`, two free spans reported |
-| H6 | request strictly inside a longer lease | `committed` |
+| H5 | commitment strictly INSIDE the requested interval | `term_partially_blocked`, two free spans reported |
+| H6 | request strictly inside a longer lease | `term_blocked` |
 | H7 | lease ends the day before requested start | `available` |
-| H8 | open-ended lease (`end_date` null) starting before request | `committed` |
+| H8 | open-ended lease (`end_date` null) starting before request | `term_blocked` |
 | H9 | open-ended REQUEST against a future commitment | not `available` |
 | H10 | requested_end before requested_start | refused — a malformed interval is not an answer |
 | H11 | requested_start === requested_end (one day) | answered, not special-cased |
@@ -541,7 +548,7 @@ governed fact it rests on.
 | R4 | overlapping `native_verified` vs `unproven` | both collide; `proof_basis` differs in the output |
 | R5 | current occupant whose lease expires BEFORE requested start | `available`, and the expiring lease is NOT reported as colliding |
 | R6 | current occupant + successor, request after both | `available` |
-| R7 | successor lease sitting inside the request | `partially_conflicted` |
+| R7 | successor lease sitting inside the request | `term_partially_blocked` |
 
 ### U · When it must refuse to answer
 

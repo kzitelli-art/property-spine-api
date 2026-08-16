@@ -186,7 +186,7 @@ receipt.begin(__filename, { url: CONN, expected: 20 });
       r.json.totals && r.json.totals.contractually_free === 32,
       JSON.stringify(r.json.totals));
     ok("F11 …with the other three states beside it",
-      ["committed", "partially_conflicted", "unresolved", "units"]
+      ["term_blocked", "term_partially_blocked", "unresolved", "units"]
         .every((k) => Number.isInteger(r.json.totals[k])), JSON.stringify(r.json.totals));
     ok("F12 the whole building came back", r.json.count === 160, String(r.json.count));
     ok("F13 every position carries its state and its identity",
@@ -197,7 +197,7 @@ receipt.begin(__filename, { url: CONN, expected: 20 });
         .every((p) => p.colliding_rights.length > 0
           && p.colliding_rights.every((c) => c.lease_id && c.proof_basis)));
     ok("F15 free spans travel with the partially conflicted ones",
-      r.json.positions.filter((p) => p.interval_state === "partially_conflicted")
+      r.json.positions.filter((p) => p.interval_state === "term_partially_blocked")
         .every((p) => Array.isArray(p.free_spans) && p.free_spans.length > 0));
     //  THE LINE, ON THE WIRE.
     ok("F16 no position carries a marketability verdict",

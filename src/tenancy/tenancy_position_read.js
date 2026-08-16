@@ -235,9 +235,9 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
 const TERM_TRUTH_WALLS = Object.freeze([
   "contractually free ≠ marketable — this read consults no readiness, turnover, " +
     "possession or out-of-service state, and cannot say a position may be shown or offered.",
-  "partially conflicted ≠ partly available for this term — it does NOT fit the term asked " +
+  "partly blocked ≠ partly available for this term — it does NOT fit the term asked " +
     "for. Its free spans are context for another term, never permission to offer this one.",
-  "committed ≠ occupied today — a term can be wholly taken by a lease that has not started.",
+  "blocked ≠ occupied today — a term can be wholly blocked by a lease that has not started.",
   "unresolved ≠ free — Spine could not answer for this position, which is not a yes.",
   "an unproven right is still a right — proof strength is reported so a human can weigh it, " +
     "never so the read can override it.",
@@ -296,9 +296,9 @@ async function readTenancyTermStanding(pool, { property_id, requested_start, req
       //  ONE number for "does not fit", because for THIS term committed and
       //  partially_conflicted mean the same thing to someone trying to lease
       //  it. The split is available below for the operator who needs it.
-      conflicts_with_part_or_all_of_it: t.committed + t.partially_conflicted,
-      wholly_taken: t.committed,
-      partly_taken: t.partially_conflicted,
+      blocked_for_part_or_all_of_it: t.term_blocked + t.term_partially_blocked,
+      wholly_blocked: t.term_blocked,
+      partly_blocked: t.term_partially_blocked,
     },
     unknowns: {
       positions_spine_could_not_answer_for: t.unresolved,

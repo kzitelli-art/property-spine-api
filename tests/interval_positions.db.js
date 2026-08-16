@@ -197,16 +197,16 @@ receipt.begin(__filename, { url: CONN, expected: 30 });
   console.log(`        at ${AS_OF}          occupied ${dated.positions.length - open} · "open" ${open}`);
   console.log(`        interval ${YEAR.start} → ${YEAR.end}`);
   console.log(`          contractually_free    ${iv.totals.contractually_free}`);
-  console.log(`          committed             ${iv.totals.committed}`);
-  console.log(`          partially_conflicted  ${iv.totals.partially_conflicted}`);
+  console.log(`          term_blocked          ${iv.totals.term_blocked}`);
+  console.log(`          term_partially_blocked ${iv.totals.term_partially_blocked}`);
   console.log(`          unresolved            ${iv.totals.unresolved}`);
 
   ok("I1  both reads see the same inventory", iv.count === dated.count && iv.count === totals.beds,
      `${iv.count} vs ${dated.count} vs ${totals.beds}`);
   ok("I2  and the same units", iv.totals.units === screen.totals.units, `${iv.totals.units}`);
   ok("I3  every position lands in exactly one of the four states",
-     iv.totals.contractually_free + iv.totals.committed
-     + iv.totals.partially_conflicted + iv.totals.unresolved === iv.count,
+     iv.totals.contractually_free + iv.totals.term_blocked
+     + iv.totals.term_partially_blocked + iv.totals.unresolved === iv.count,
      JSON.stringify(iv.totals));
   //  THE POINT OF SLICE 2, on real data.
   ok(`I4  the interval answer (${iv.totals.contractually_free}) is FAR below the point-in-time "open" (${open})`,
@@ -272,7 +272,7 @@ receipt.begin(__filename, { url: CONN, expected: 30 });
      afterSign.totals.contractually_free === iv.totals.contractually_free - 1,
      `${iv.totals.contractually_free} → ${afterSign.totals.contractually_free}`);
   ok("I13 …that exact position is now partially_conflicted",
-     signedPos.interval_state === "partially_conflicted", signedPos.interval_state);
+     signedPos.interval_state === "term_partially_blocked", signedPos.interval_state);
   ok("I14 …and it reports the two spans it CAN still take",
      JSON.stringify(signedPos.free_spans) === JSON.stringify([
        { from: "2026-08-01", to: "2026-10-31" }, { from: "2027-05-01", to: "2027-07-31" }]),
@@ -319,7 +319,7 @@ receipt.begin(__filename, { url: CONN, expected: 30 });
      crLeased.position_kind === "unit" && crFree.position_kind === "unit",
      `${crLeased.position_kind}/${crFree.position_kind}`);
   ok("I21 …and the identical right shape produces the identical state",
-     crLeased.interval_state === "partially_conflicted" && crFree.interval_state === "contractually_free",
+     crLeased.interval_state === "term_partially_blocked" && crFree.interval_state === "contractually_free",
      `${crLeased.interval_state}/${crFree.interval_state}`);
   ok("I22 …with the same free-span arithmetic as the by-bed property",
      JSON.stringify(crLeased.free_spans) === JSON.stringify([

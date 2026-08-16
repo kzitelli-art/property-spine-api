@@ -232,7 +232,7 @@ On the real 07/31 export: **32 can support the full term · 128 conflict with
 at least part of it**, with `Contractual only — whether a position will be
 physically ready by 8/1/26 is not established.` under the counts.
 
-`partially_conflicted` renders as **PART TAKEN**, styled identically to TAKEN.
+`term_partially_blocked` renders as **PART TAKEN**, styled identically to TAKEN.
 The word "available" appears nowhere on the surface.
 
 ### ⚠ WHAT WAS *NOT* BUILT, AND WHY IT MUST NOT BE
@@ -309,7 +309,7 @@ intervalPropertyPositions(pool, {...})    dated_positions.js, beside its
 **Four states, and the vocabulary is deliberate:**
 
 ```text
-contractually_free · committed · partially_conflicted · unresolved
+contractually_free · committed · term_partially_blocked · unresolved
 ```
 
 `contractually_free`, never a generic `available` — owner ruling. The read
@@ -323,7 +323,7 @@ marketable, priced or offerable. Those compose ABOVE both reads.
 at 2026-07-31              occupied 37 · "open" 123
 interval 2026-08-01 → 2027-07-31
   contractually_free        32     ← what is actually left to lease
-  partially_conflicted     128
+  term_partially_blocked     128
 interval 2027-09-01 → 2028-07-31
   contractually_free       160
 ```
@@ -336,7 +336,7 @@ interval 2027-09-01 → 2028-07-31
    read useless. The classifier already says why: *"unknown CONTRADICTS
    NOTHING"*. What genuinely blocks the answer is `disagrees` — a claim of
    occupied with no lease — and that is what the read uses.
-2. **`committed` is rarer than expected and `partially_conflicted` is the
+2. **`term_blocked` is rarer than expected and `term_partially_blocked` is the
    norm** (128 of 160 here). A boolean would have thrown away the free
    sub-spans, which are the operating answer: *"this bed is yours Aug 1 –
    Dec 31."*

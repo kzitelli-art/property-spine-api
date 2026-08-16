@@ -347,15 +347,25 @@ function freeSpans(start, end, rights) {
  *  end_date     requested interval end, 'YYYY-MM-DD', or null for open-ended
  *
  *  Four states, and each says what it is FOR:
- *    contractually_free    no valid right overlaps the requested interval
- *    committed             a valid right covers the ENTIRE interval
- *    partially_conflicted  a valid right overlaps PART of it — the free
- *                          sub-spans are reported, because "this bed is
- *                          yours Aug 1 – Dec 31" is the operating answer
- *    unresolved            Spine cannot answer: overlapping claims that
- *                          touch this interval, and which governs is
- *                          unknown. NEVER silently resolved to the first
- *                          matching lease.
+ *    contractually_free       no valid right overlaps the requested term
+ *    term_blocked             a valid right covers the ENTIRE term
+ *    term_partially_blocked   a valid right overlaps PART of it — the free
+ *                             sub-spans are reported, because "this bed is
+ *                             yours Aug 1 – Dec 31" is the operating answer
+ *    unresolved               Spine cannot answer: competing claims that
+ *                             touch this term, and which governs is
+ *                             unknown. NEVER silently resolved to the first
+ *                             matching lease.
+ *
+ *  ⚠ WHY NOT `partially_conflicted`, WHICH THIS SHIPPED AS FIRST.
+ *  `conflict` already means something specific in this file:
+ *  rangesOverlap between two LEASES, a contested position where which
+ *  right governs is unknown. That is an evidence dispute and it is a
+ *  problem. An ordinary lease overlapping part of a requested term is not
+ *  a problem at all — it is the normal state of a leased building. Naming
+ *  both "conflicted" made a routine fact sound like a defect and made the
+ *  genuine defect sound routine. `blocked` says what it is: the term is
+ *  blocked, wholly or partly, by a right that is doing its job.
  */
 function classifyPositionForInterval(row, { start_date, end_date = null, personNames } = {}) {
   if (!start_date) throw new Error("classifyPositionForInterval requires start_date");
@@ -405,7 +415,7 @@ function classifyPositionForInterval(row, { start_date, end_date = null, personN
     free_spans = [{ from: requested.start_date, to: requested.end_date }];
   } else {
     free_spans = freeSpans(requested.start_date, requested.end_date, colliding);
-    interval_state = free_spans.length ? "partially_conflicted" : "committed";
+    interval_state = free_spans.length ? "term_partially_blocked" : "term_blocked";
   }
 
   return {

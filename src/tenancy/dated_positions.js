@@ -391,8 +391,13 @@ async function intervalPropertyPositions(pool, {
     opening_truth: await openingTruth(pool, property_id),
     totals: {
       contractually_free: inState("contractually_free"),
-      committed: inState("committed"),
-      partially_conflicted: inState("partially_conflicted"),
+      //  ⚠ THESE KEYS ARE A CONTRACT and were renamed once, deliberately,
+      //  while this read had two consumers. `committed` /
+      //  `partially_conflicted` made an ordinary lease overlap sound like
+      //  the evidence dispute `conflict_state` already names. Both repos
+      //  moved together; the app is pinned by the browser proof.
+      term_blocked: inState("term_blocked"),
+      term_partially_blocked: inState("term_partially_blocked"),
       unresolved: inState("unresolved"),
       units: new Set(positions.map((p) => String(p.unit_id))).size,
     },
