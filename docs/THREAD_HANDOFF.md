@@ -68,6 +68,51 @@ rather than emitted as nulls — a surface that printed "Not recorded" for them
 would make a claim about the PROPERTY when the true claim is that this read
 does not carry them. The expanded row says that once.
 
+### The chrome strip (third pass, same day)
+
+The aligned table was right and still read as an app screen: a big rounded
+card, beige unit bands, coloured status pills, rounded filter chips, and a
+header spending a third of the screen. **Less interface, more ledger** — the
+information model was not touched again.
+
+```text
+no page card              the shell's .hero is neutralised with :has(.rr-bleed)
+                          — CSS, not a body class, so the styles revert when
+                          the markup leaves the DOM and there is no lifecycle
+                          to get wrong on back / switch / session loss
+one header band           name · property · as-of · counts · source, 82px
+flat controls             underlined text switches, not rounded chips
+unit RULE not band        a hairline and a bold number; the shaded bars were
+                          chopping the ledger into 72 documents
+status as text            no badge, no fill, no radius
+uniform weight            the resident name was outweighing the record — on a
+                          rent roll the POSITION is the record
+tabular numerals          columns align digit for digit
+CURRENT / NEXT groups     a two-tier head, so the forward half is explicit at
+                          the cost of one 8px row rather than weight on 160
+short ledger dates        7/26/27 in columns; long form kept where a person
+                          reads a sentence
+two-line expansion        a ledger sub-row, not a form. Deeper detail is the
+                          resident record, which is its own action.
+no back button            the app bar already says ‹ BACK MANAGEMENT
+```
+
+Density, measured at 1400×1000 — **25 rentable positions and 12 units in the
+first viewport**, 22px per position, 82px of surface-owned header. It was 16
+and 8 before this pass. The `.rru-nav` toolbar was 48px because a
+`type="search"` input carries a UA box more than twice its own type;
+`-webkit-appearance:none` is load-bearing there, not decoration.
+
+Two things were compressed away and are worth knowing: the expanded row no
+longer has separate "Lease start"/"Lease end" (one **Term**) and no longer
+carries the sentence naming what this read does not hold. Absent fields are
+still **omitted** rather than printed as "Not recorded" — asserted — so no
+false claim is made about the property, but the explanation of *why* they are
+absent now lives only in `rent_roll_unit_view.js`.
+
+**This is the visual language to propagate** to Work Orders, Renewals,
+Availability and Applications — not the beige-card language above it.
+
 ### Proof
 
 ```text
@@ -76,8 +121,8 @@ tests/skyline_bed_grain_activation.db.js    19/19
 tests/skyline_rent_roll_read.db.js          22/22   incl. stable-ID contract
 tests/skyline_rent_roll_model.db.js         40/40
 11 API source gates                         PASS
-app node tests (31 files)                   PASS   incl. 130/130 cutover
-property-spine-app/skyline_rent_roll_units.browser.js  84/84
+app node tests (31 files)                   PASS   incl. 132/132 cutover
+property-spine-app/skyline_rent_roll_units.browser.js  96/96
   real server.js + real index.html + Chromium, 72 units / 160 beds from the
   actual 07/31 export, PLUS a second whole-unit property in the same browser
   as the by-unit control. Eight screenshots and the performance baseline are
@@ -85,9 +130,9 @@ property-spine-app/skyline_rent_roll_units.browser.js  84/84
 ```
 
 Density is measured, not eyeballed — the complaint that caused the reset was
-vertical waste, so it is now numbers: **26 px per position**, the surface's
-own header (title → first row) **174 px**, **16 positions and 8 units in the
-first viewport** at 1400×1000.
+vertical waste, so it is now numbers, and the proof prints the height of every
+header band each run so the next pass does not have to guess which element
+holds the space.
 
 Performance at 160 positions: **one** request (125 KB, 779 B/position), door
 to fully rendered ~70 ms, full repaint 52 ms, expanding a row and every
