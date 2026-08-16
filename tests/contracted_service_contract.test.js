@@ -2,6 +2,7 @@
 
 const assert = require("assert");
 const contract = require("../src/asset/contracted_service_contract.js");
+const rooms = require("../src/surfaces/asset_management.js").ROOMS;
 
 assert.strictEqual(contract.CONTRACT_VERSION, "contracted_service.v1");
 assert(contract.isOpenServiceKey("building_cleaning"));
@@ -40,6 +41,12 @@ assert.strictEqual(contract.CAPABILITIES.causal_explanation.claimed, false);
 assert.throws(() => contract.enumValue("execution_state", "probably_signed",
   contract.EXECUTION_STATES), (error) => error.code === "BAD_INPUT");
 assert.strictEqual(contract.enumValue("notice", null, ["yes"], { nullable: true }), null);
+
+const propertyExpenses = rooms.find((room) => room.key === "property_expenses");
+const overviewCompartment = propertyExpenses.compartments.find(
+  (compartment) => compartment.key === "contracted_services");
+assert.strictEqual(overviewCompartment.derived, "contracted_services",
+  "the Asset Management overview must render Contracted Services from its canonical standing");
 
 console.log("contracted service contract tests passed");
 
