@@ -49,7 +49,8 @@
 
 "use strict";
 
-const { datedPropertyPositions, intervalPropertyPositions } = require("./dated_positions");
+const { datedPropertyPositions, intervalPropertyPositions, rentRollBuckets } =
+  require("./dated_positions");
 const readerCapabilities = require("../shared/reader_capability_contract.js");
 
 const CONTRACT_VERSION = "tenancy_standing.v1";
@@ -151,8 +152,22 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
     };
   }
 
-  const occupied = positions.filter((p) => p.tenancy_state === "contractually_occupied");
-  const open = positions.filter((p) => p.tenancy_state !== "contractually_occupied");
+  /*  ── ONE CLASSIFICATION, TWO PROJECTIONS ──────────────────────────
+   *  §40 requires the screen and Ask Spine to be two projections of the
+   *  same truth — not two verdicts. This read used to compute
+   *  `open = positions.filter(p => p.tenancy_state !== "contractually_occupied")`:
+   *  Open by subtraction, the exact defect removed from the Rent Roll,
+   *  still live here. An entitled person texting Spine from a meeting was
+   *  told that committed beds, contested beds and beds Spine holds no fact
+   *  about were all available.
+   *
+   *  The buckets are now DECIDED upstream in dated_positions and tallied,
+   *  never re-derived. If the sentence and the screen ever disagree again,
+   *  it will be because the data differs — not because two files hold two
+   *  opinions about what Open means.  */
+  const tally = rentRollBuckets(positions);
+  const occupied = positions.filter((p) => p.bucket === "occupied");
+  const open = positions.filter((p) => p.bucket === "open");
   const committed = positions.filter((p) =>
     (p.successor && p.successor.state !== "none") ||
     (p.future_commitment && p.future_commitment.state !== "none"));
@@ -175,8 +190,19 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
 
   return {
     ...base,
-    standing: { truth_state: "ESTABLISHED",
-      why: `${positions.length} rentable positions are recorded across ${units.size} units` },
+    /*  The same three-valued state the Rent Roll reports, from the same
+     *  tally. A property with inventory but no basis for any position is
+     *  not ESTABLISHED merely because rows exist.  */
+    standing: tally.established === tally.total
+      ? { truth_state: "ESTABLISHED",
+          why: `${positions.length} rentable positions are recorded across ${units.size} units` }
+      : (tally.established > 0
+        ? { truth_state: "PARTIALLY_ESTABLISHED",
+            why: `${tally.established} of ${positions.length} rentable positions have an ` +
+                 `established basis; ${tally.not_established} do not` }
+        : { truth_state: NOT_ESTABLISHED,
+            why: `${positions.length} rentable positions are recorded, but Spine holds no ` +
+                 `authoritative fact establishing any of them at this date` }),
 
     established_from: src ? {
       source_file: src.source_file || null,
@@ -189,8 +215,17 @@ async function readTenancyStanding(pool, { property_id, as_of = null } = {}) {
     position: {
       units: units.size,
       rentable_positions: positions.length,
-      occupied: occupied.length,
-      open: open.length,
+      occupied: tally.occupied,
+      //  A CLASSIFICATION, never a remainder.
+      open: tally.open,
+      //  Spoken for and not offerable — never folded into Open.
+      activation_pending: tally.activation_pending,
+      //  Facts that conflict. Different from having no facts at all.
+      needs_review: tally.needs_review,
+      //  Positions Spine holds no authoritative fact about. NOT a tenancy
+      //  state, which is why it sits outside the four.
+      not_established: tally.not_established,
+      established: tally.established,
       positions_with_a_known_next: committed.length,
       forward_commitments_natively_proven: lockedForward.length,
       leasing_grain: positions.length > units.size ? "bed" : "unit",

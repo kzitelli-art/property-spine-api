@@ -149,6 +149,30 @@ function classifyPosition(row, { asOf, personNames } = {}) {
   const activationPending = leases.find((lease) => normalizedStatus(lease) === "pending" && datesSpan(lease, asOf)) || null;
   const future = leases.find((lease) => isFuture(lease, asOf)) || null;
 
+  /*  ── LEASES THAT SPAN D AND FIT NO BUCKET ─────────────────────────
+   *  CURRENT_ECONOMIC_STATUSES is an ALLOW list {active, commercial}
+   *  sitting beside a DENY list (TERMINAL_LEASE_STATUSES). A lease that
+   *  is in neither — 'signed' is live in this product
+   *  (src/surfaces/management.js:101) — spans D and emits NOTHING:
+   *  current is null, activation_pending is null, future is null,
+   *  economic_tenancy_state reads 'none' and availability_state reads
+   *  'ready_now'.
+   *
+   *  So a SIGNED bed looked exactly like an empty one, and nothing
+   *  downstream could tell the difference or refuse to offer it. That is
+   *  the same allow-list-instead-of-deny-list defect already fixed on the
+   *  WRITE side in operative_overlap.js — still open on the read side.
+   *
+   *  These are emitted, not reinterpreted. This does NOT make them
+   *  occupancy: which statuses count as current economic tenancy is a
+   *  product ruling this classifier must not make on its own. It makes
+   *  them VISIBLE, so a reader can decline to call a bed empty when
+   *  Spine holds a lease over it. */
+  const otherSpanning = leases.filter((lease) =>
+    datesSpan(lease, asOf)
+    && !CURRENT_ECONOMIC_STATUSES.has(normalizedStatus(lease))
+    && normalizedStatus(lease) !== "pending");
+
   const events = row.possession_events || [];
   const ins = events.filter((e) => e.event_type === "move_in");
   const outs = events.filter((e) => e.event_type === "move_out");
@@ -264,12 +288,19 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     // availability_read consumes this instead of assuming committed_future
     // implies locked, so no availability state can be stronger than its proof.
     future_commitment: classifyFutureCommitment(future, personNames),
+    /*  Valid leases spanning asOf that fit none of the buckets above.
+     *  Never occupancy on their own; they exist so a reader can refuse to
+     *  call a bed empty while Spine holds a lease over it. */
+    other_spanning_lease_positions: otherSpanning.map(shapeLease),
     _compat_occupancy: row.compat_occupancy,
-    //  The per-SPACE claim the established opening position accepted, when
-    //  there is one. Carried beside the unit-level column rather than
-    //  replacing it, so "which evidence answered this" stays readable
-    //  instead of one silently shadowing the other.
-    _opening_space_claim: row.opening_space_claim || null,
+    //  The per-SPACE claim the chosen opening baseline accepted, when there
+    //  is one, WITH the proposal that supplied it. Carried beside the
+    //  unit-level column rather than replacing it, so "which evidence
+    //  answered this" stays readable instead of one silently shadowing the
+    //  other — and so a reader can point at the record, not just repeat
+    //  its verdict.
+    _opening_space_claim: (row.opening_space_claim && row.opening_space_claim.claim) || null,
+    _opening_claim_source: row.opening_space_claim || null,
   };
 }
 

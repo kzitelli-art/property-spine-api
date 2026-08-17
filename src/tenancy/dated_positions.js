@@ -49,6 +49,8 @@ const { classifyPosition, classifyPositionForInterval } = require("./position_cl
 const NON_REVENUE_CLAIMS = new Set(["model", "down"]);
 
 const claim = (v) => String(v || "").toLowerCase();
+//  Same normalisation, named so it reads clearly inside positionBasis.
+const claimOf = claim;
 
 // ── FOUR INDEPENDENT AXES ────────────────────────────────────────────
 //  A position can simultaneously be contractually occupied, have
@@ -86,6 +88,104 @@ function occupancyClaim(p) {
   return { value: "", basis: null };
 }
 
+/*  ── DOES SPINE HAVE A BASIS FOR THIS POSITION AT ALL? ──────────────
+ *  A Current Rent Roll position requires an established factual BASIS.
+ *  It does not require one particular KIND of source. An opening tenancy
+ *  baseline is one basis type; it is not a ritual every property must
+ *  pass through.
+ *
+ *  ⚠ THIS IS NOT A TENANCY STATE AND NOT A FIFTH BUCKET. It is the prior
+ *  question: can Spine say anything authoritative about this position at
+ *  all? Only positions WITH a basis get one of the four operator buckets.
+ *
+ *      I have evidence and it disagrees        →  Needs Review
+ *      I do not have enough evidence to know   →  Not Established
+ *
+ *  Those are not remotely the same institutional condition, and the
+ *  distinction recurs across Spine — two policy records disagreeing is
+ *  not the same as no coverage evidence; two payoff balances disagreeing
+ *  is not the same as no balance source.
+ *
+ *  ORDER IS THE CONTRACT. First match wins, and the vacancy arm is LAST
+ *  so that every fact capable of refuting a vacancy is consulted before
+ *  a bed can be called empty.
+ *
+ *  ── THE ASYMMETRY THAT SHAPES THIS ───────────────────────────────
+ *  FOUR fact types can establish occupancy — a spanning operative lease,
+ *  a commenced pending lease, recorded possession, an accepted per-space
+ *  claim of 'occupied'. Exactly ONE can establish vacancy: an accepted
+ *  per-space claim of 'vacant'. And it is the weakest of them: an
+ *  accepted document claim, dated once, that nothing re-observes and
+ *  nothing expires.
+ *
+ *  The error is not symmetric either. A stale OCCUPANCY basis over-holds
+ *  a bed — lost days on market, visible and recoverable. A stale VACANCY
+ *  basis offers a bed someone lives in — double-let, a resident arriving
+ *  at an occupied unit. Same staleness, one recoverable cost and one
+ *  that is not. So vacancy is the one arm that must survive a veto from
+ *  every other fact Spine holds.  */
+function positionBasis(p) {
+  const claim = claimOf(p._opening_space_claim);
+  const src = p._opening_claim_source || null;
+  const openingRef = src ? {
+    kind: "opening_position_claim",
+    opening_position_id: src.opening_position_id || null,
+    opening_position_as_of: src.opening_position_as_of || null,
+    proposal_id: src.proposal_id || null,
+    proposal_status: src.proposal_status || null,
+    natural_key: src.natural_key || null,
+  } : null;
+
+  if (p.conflict_state === "conflicted") {
+    return { state: "established", type: "contested_rights",
+      ref: { kind: "lease_ids", ids: p.conflicting_lease_ids || [] } };
+  }
+  if (p.current_lease_position) {
+    return { state: "established", type: "operative_lease",
+      ref: { kind: "lease", id: p.current_lease_position.lease_id,
+             lease_status: p.current_lease_position.lease_status } };
+  }
+  if (p.activation_pending_lease_position) {
+    return { state: "established", type: "commenced_lease_pending_activation",
+      ref: { kind: "lease", id: p.activation_pending_lease_position.lease_id,
+             lease_status: p.activation_pending_lease_position.lease_status } };
+  }
+  //  A lease Spine holds over this bed that fits none of the buckets —
+  //  'signed' being the live example. It does not establish occupancy
+  //  (which statuses count is a product ruling, not this function's), but
+  //  it absolutely stops the bed being called empty.
+  if ((p.other_spanning_lease_positions || []).length) {
+    const l = p.other_spanning_lease_positions[0];
+    return { state: "established", type: "spanning_lease_outside_current_vocabulary",
+      ref: { kind: "lease", id: l.lease_id, lease_status: l.lease_status } };
+  }
+  if (p.current_possession && p.current_possession.since) {
+    return { state: "established", type: "recorded_possession",
+      ref: { kind: "possession", since: p.current_possession.since } };
+  }
+  if (claim === "unreconciled") {
+    return { state: "established", type: "opening_position_unreconciled", ref: openingRef };
+  }
+  if (claim === "occupied") {
+    return { state: "established", type: "opening_claim_occupied", ref: openingRef };
+  }
+  if (claim === "vacant") {
+    return { state: "established", type: "opening_claim_vacant", ref: openingRef };
+  }
+  /*  ── THE UNIT-LEVEL COLUMN IS CONTEXT, NEVER A BASIS ──────────────
+   *  `units.occupancy_status` is unit-grain on a bed-grain product,
+   *  undated, overwritten in place, and defaults to 'unknown'. The
+   *  loader's own comment calls it a placeholder. A placeholder must not
+   *  be the thing that offers a bed to a prospect, so it is reported as
+   *  context and never establishes.  */
+  const unitLevel = claimOf(p._compat_occupancy);
+  if (unitLevel && unitLevel !== "unknown") {
+    return { state: "not_established", type: "unit_occupancy_status_only",
+      ref: { kind: "unit_occupancy_status", value: unitLevel, grain: "unit", authoritative: false } };
+  }
+  return { state: "not_established", type: null, ref: null };
+}
+
 function tenancyState(p) {
   if (p.conflict_state === "conflicted") return "contested";
   if (p.current_lease_position) return "contractually_occupied";
@@ -101,7 +201,11 @@ function tenancyState(p) {
   //  belongs on this axis. Evidence contradictions do NOT: see the note
   //  on rentRollBuckets below.
   if (p.activation_pending_lease_position) return "activation_pending";
-  if (occupancyClaim(p).value === "vacant") return "vacant";
+  //  PER-SPACE claim only. The unit-level placeholder must not be able to
+  //  produce `vacant` — see positionBasis: it is context, never a basis,
+  //  and a bed offered on the strength of an undated unit-grain cache is
+  //  the double-let this whole correction exists to prevent.
+  if (claim(p._opening_space_claim) === "vacant") return "vacant";
   return "unresolved";                     // 'occupied' claim, or 'unknown'
 }
 
@@ -132,6 +236,13 @@ function tenancyState(p) {
  *  function, so a browser can never hold a second opinion about what Open
  *  means — it consumes this, it does not re-derive it. */
 function rentRollBucketOf(p) {
+  /*  ── NO BASIS, NO BUCKET ──────────────────────────────────────────
+   *  Not Established is NOT a fifth kind of tenancy. It is a statement
+   *  about whether Spine can establish the position at all. Manufacturing
+   *  a tenancy bucket for a position Spine knows nothing about is the
+   *  confident-wrong answer in its purest form — and dumping them into
+   *  needs_review would be just as false, because nothing is in conflict.  */
+  if (p.basis_state && p.basis_state !== "established") return null;
   const contradicted = p.evidence_state === "disagrees"
                     || p.evidence_state === "unreconciled";
   if (p.tenancy_state === "contested" || contradicted) return "needs_review";
@@ -152,62 +263,131 @@ function rentRollBucketOf(p) {
 }
 
 /*  ── WHY THIS BED IS IN THIS BUCKET ─────────────────────────────────
- *  The classification and its reason are decided in the same place. A
- *  surface that renders the bucket but explains it in its own words has
- *  made itself a second interpreter, which is what the browser was doing.
+ *  STRUCTURED FIRST, PROSE SECOND. The sentence is for a person; the code
+ *  and the refs are the contract. A surface that had to regex English to
+ *  find out what happened would be reverse-engineering business meaning
+ *  from copy — the explanation would quietly become the API, and rewording
+ *  it would be a breaking change nobody could see.
  *
- *  Every reason is POSITIVE and causal. Open in particular must never
- *  read "none of the other buckets matched" — that sentence IS the defect
- *  this whole correction exists to remove. It must name the established
- *  vacancy, the absence of a governing tenancy fact, and the absence of a
- *  contradiction, because those three together are what make a bed
- *  genuinely offerable. */
-function rentRollBucketReason(p, opts = {}) {
+ *      bucket_reason_code   what happened, as a governed token
+ *      bucket_reason        the same thing, sayable
+ *      supporting_refs      the records that support the classification
+ *      conflicting_refs     the records that fight it, when any do
+ *
+ *  Ask Spine reads the code and the refs. The glass reads the sentence.
+ *  Tests assert the code. Nobody parses prose.
+ *
+ *  Only the codes the existing classifier actually requires. This is not
+ *  the place to invent a taxonomy for conditions Spine cannot yet record.
+ *
+ *  Every reason is POSITIVE and causal. Open in particular must never read
+ *  "none of the other buckets matched" — that sentence IS the defect this
+ *  correction exists to remove. It names the established vacancy, the
+ *  absence of a governing tenancy fact, and the absence of a contradiction,
+ *  because those three together are what make a bed genuinely offerable. */
+const REASON = Object.freeze({
+  OVERLAPPING_OPERATIVE_LEASES: "OVERLAPPING_OPERATIVE_LEASES",
+  OPENING_VACANCY_CONFLICTS_WITH_OPERATIVE_LEASE: "OPENING_VACANCY_CONFLICTS_WITH_OPERATIVE_LEASE",
+  OPENING_OCCUPANCY_UNSUPPORTED_BY_LEASE: "OPENING_OCCUPANCY_UNSUPPORTED_BY_LEASE",
+  OPENING_POSITION_UNRECONCILED: "OPENING_POSITION_UNRECONCILED",
+  OPERATIVE_LEASE_SPANS_DATE: "OPERATIVE_LEASE_SPANS_DATE",
+  COMMENCED_LEASE_NOT_ACTIVATED: "COMMENCED_LEASE_NOT_ACTIVATED",
+  ESTABLISHED_VACANT_NO_LATER_BLOCKER: "ESTABLISHED_VACANT_NO_LATER_BLOCKER",
+  NO_AUTHORITATIVE_BASIS: "NO_AUTHORITATIVE_BASIS",
+});
+
+const ref = (kind, id, extra = {}) => (id ? { kind, id, ...extra } : null);
+
+function rentRollExplain(p, opts = {}) {
   const asOf = opts.as_of || null;
   const base = opts.baseline_as_of || null;
   const claim = occupancyClaim(p);
+  const src = p._opening_claim_source || null;
   const cur = p.current_lease_position;
   const pend = p.activation_pending_lease_position;
   const term = (l) => `${l.start_date || "no start"} → ${l.end_date || "no end"}`;
-  const asOfText = asOf ? ` on ${asOf}` : "";
-  const baseText = base ? ` at ${base}` : "";
+  const onDate = asOf ? ` on ${asOf}` : "";
+  const atBase = base ? ` at ${base}` : "";
+
+  //  The records the opening baseline used to answer for this bed.
+  const openingRefs = [
+    ref("opening_position", src && src.opening_position_id, { as_of: src && src.opening_position_as_of }),
+    ref("proposal", src && src.proposal_id, { status: src && src.proposal_status, natural_key: src && src.natural_key }),
+  ].filter(Boolean);
 
   if (p.conflict_state === "conflicted") {
-    return `Overlapping operative leases on this position (${(p.conflicting_lease_ids || []).join(", ")}) — ` +
-      `which one governs is unknown, so no tenancy claim can be made.`;
+    return {
+      code: REASON.OVERLAPPING_OPERATIVE_LEASES,
+      sentence: `Overlapping operative leases on this position — which one governs is unknown, ` +
+        `so no tenancy claim can be made.`,
+      supporting_refs: openingRefs,
+      conflicting_refs: (p.conflicting_lease_ids || []).map((id) => ref("lease", id)).filter(Boolean),
+    };
   }
   if (p.evidence_state === "unreconciled") {
-    return `The opening position${baseText} could not reconcile this bed: its source row was left ` +
-      `unresolved rather than accepted, so there is no established claim to read forward.`;
+    return {
+      code: REASON.OPENING_POSITION_UNRECONCILED,
+      sentence: `The opening position${atBase} could not reconcile this bed: its source row was ` +
+        `left unresolved rather than accepted, so there is no established claim to read forward.`,
+      supporting_refs: [],
+      conflicting_refs: openingRefs,
+    };
   }
   if (p.evidence_state === "disagrees") {
-    return cur
-      ? `The opening position${baseText} accepted this bed as ${claim.value}, but lease ` +
-        `${cur.lease_id} (${cur.lease_status}, ${term(cur)}) is in force${asOfText}. ` +
-        `Spine has no basis to choose between the source and the lease record.`
-      : `The opening position${baseText} accepted this bed as ${claim.value}, but no lease ` +
-        `supports that${asOfText}.`;
+    return cur ? {
+      code: REASON.OPENING_VACANCY_CONFLICTS_WITH_OPERATIVE_LEASE,
+      sentence: `The opening position${atBase} records this bed as ${claim.value}, but lease ` +
+        `${cur.lease_id} (${cur.lease_status}, ${term(cur)}) is in force${onDate}. Spine has no ` +
+        `basis to choose between the source and the lease record.`,
+      supporting_refs: openingRefs,
+      conflicting_refs: [ref("lease", cur.lease_id, { lease_status: cur.lease_status })].filter(Boolean),
+    } : {
+      code: REASON.OPENING_OCCUPANCY_UNSUPPORTED_BY_LEASE,
+      sentence: `The opening position${atBase} records this bed as ${claim.value}, but no lease ` +
+        `supports that${onDate}.`,
+      supporting_refs: [],
+      conflicting_refs: openingRefs,
+    };
   }
   if (cur) {
-    return `Operative lease ${cur.lease_id} (${cur.lease_status}, ${term(cur)}) spans${asOfText}` +
-      (claim.value === "occupied" ? `, and the opening position${baseText} agrees.` : ".");
+    return {
+      code: REASON.OPERATIVE_LEASE_SPANS_DATE,
+      sentence: `Operative lease ${cur.lease_id} (${cur.lease_status}, ${term(cur)}) spans${onDate}` +
+        (claim.value === "occupied" ? `, and the opening position${atBase} agrees.` : "."),
+      supporting_refs: [ref("lease", cur.lease_id, { lease_status: cur.lease_status }), ...openingRefs].filter(Boolean),
+      conflicting_refs: [],
+    };
   }
   if (pend) {
-    return `Lease ${pend.lease_id} is committed (${pend.lease_status}, ${term(pend)}) and spans` +
-      `${asOfText}, but economic tenancy is not activated — the bed is spoken for and cannot ` +
-      `be offered to anyone else.`;
+    return {
+      code: REASON.COMMENCED_LEASE_NOT_ACTIVATED,
+      sentence: `Lease ${pend.lease_id} is committed (${pend.lease_status}, ${term(pend)}) and ` +
+        `spans${onDate}, but economic tenancy is not activated — the bed is spoken for and ` +
+        `cannot be offered to anyone else.`,
+      supporting_refs: [ref("lease", pend.lease_id, { lease_status: pend.lease_status }), ...openingRefs].filter(Boolean),
+      conflicting_refs: [],
+    };
   }
   if (claim.value === "vacant") {
-    return `Established vacant${baseText}, no operative lease spanning${asOfText}, ` +
-      `and no unresolved contradiction.`;
+    return {
+      code: REASON.ESTABLISHED_VACANT_NO_LATER_BLOCKER,
+      sentence: `Established vacant${atBase}, no operative lease spanning${onDate}, and no ` +
+        `unresolved contradiction.`,
+      supporting_refs: openingRefs,
+      conflicting_refs: [],
+    };
   }
-  //  Everything left is a QUESTION, and says which one.
-  if (!claim.value || claim.value === "unknown") {
-    return `No established occupancy claim for this bed${baseText} and no lease spanning` +
-      `${asOfText} — Spine cannot say whether it is occupied or available.`;
-  }
-  return `The opening position${baseText} claims this bed is ${claim.value}, but no lease ` +
-    `supports that${asOfText}.`;
+  //  ── LACK OF KNOWLEDGE IS NOT A CONTRADICTION ─────────────────────
+  //  No lease, no accepted claim, nothing in conflict. Spine simply holds
+  //  no authoritative fact about this bed. That is NOT Needs Review, which
+  //  means two recorded facts are fighting.
+  return {
+    code: REASON.NO_AUTHORITATIVE_BASIS,
+    sentence: `Spine holds no authoritative fact establishing this bed${onDate}: no operative ` +
+      `lease, and no accepted occupancy or vacancy claim${base ? ` from the ${base} opening position` : ""}.`,
+    supporting_refs: [],
+    conflicting_refs: [],
+  };
 }
 
 /*  The operator vocabulary, decided server-side. Internal words
@@ -220,10 +400,35 @@ const RENT_ROLL_LABELS = Object.freeze({
   unclassified: "Unclassified",
 });
 
+/*  The four operator states, over the positions that HAVE a basis.
+ *  `not_established` sits beside them, deliberately outside the four: it
+ *  is not a tenancy state, so it is not a tenancy bucket. `total` is every
+ *  rentable position, and the four plus not_established plus unclassified
+ *  must equal it — which is what makes the arithmetic checkable. */
 function rentRollBuckets(positions) {
   const t = { occupied: 0, activation_pending: 0, open: 0, needs_review: 0,
-              unclassified: 0, total: positions.length };
-  for (const p of positions) t[rentRollBucketOf(p)]++;
+              not_established: 0, unclassified: 0,
+              established: 0, total: positions.length };
+  for (const p of positions) {
+    /*  TALLY THE DECISION, do not re-make it. A caller may hand us the
+     *  canonical positions or a surface's projection of them; either way
+     *  the bucket was decided once, upstream. Re-deriving here would be a
+     *  second interpreter — and it silently WAS one: the Rent Roll passed
+     *  projected rows that had dropped `basis_state`, so every
+     *  basis-less bed was re-bucketed as needs_review instead of counted
+     *  as not_established.  */
+    const b = Object.prototype.hasOwnProperty.call(p, "bucket")
+      ? p.bucket : rentRollBucketOf(p);
+    if (b === null || b === undefined) { t.not_established++; continue; }
+    t.established++;
+    //  Only the four are counted by name. `t[b]++` on an unexpected value
+    //  would either mint a new key nobody reads or produce NaN in a
+    //  headline — a number that is wrong in a way no assertion about the
+    //  four would catch.
+    if (b === "occupied" || b === "activation_pending"
+        || b === "open" || b === "needs_review") t[b]++;
+    else t.unclassified++;
+  }
   return t;
 }
 
@@ -383,13 +588,26 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
        *  `current_lease_position` do not survive that projection, so every
        *  reason came out as "no established occupancy claim" — including
        *  for beds that were plainly Open. Wrong, and confidently so. */
-      bucket: rentRollBucketOf({ ...withDown,
-        tenancy_state: tenancyState(withDown), evidence_state: evidenceState(withDown) }),
-      bucket_label: RENT_ROLL_LABELS[rentRollBucketOf({ ...withDown,
-        tenancy_state: tenancyState(withDown), evidence_state: evidenceState(withDown) })],
-      bucket_reason: rentRollBucketReason({ ...withDown,
-        tenancy_state: tenancyState(withDown), evidence_state: evidenceState(withDown) },
-        { as_of: asOf, baseline_as_of: sp.opening_baseline ? sp.opening_baseline.as_of_date : null }),
+      ...(() => {
+        const basis = positionBasis(withDown);
+        const axes = { ...withDown, basis_state: basis.state,
+          tenancy_state: tenancyState(withDown), evidence_state: evidenceState(withDown) };
+        const why = rentRollExplain(axes,
+          { as_of: asOf, baseline_as_of: sp.opening_baseline ? sp.opening_baseline.as_of_date : null });
+        const b = rentRollBucketOf(axes);
+        return {
+          //  THE PRIOR QUESTION, answered first and separately.
+          basis_state: basis.state,
+          basis_type: basis.type,
+          basis_ref: basis.ref,
+          bucket: b,
+          bucket_label: b ? RENT_ROLL_LABELS[b] : null,
+          bucket_reason_code: why.code,
+          bucket_reason: why.sentence,
+          supporting_refs: why.supporting_refs,
+          conflicting_refs: why.conflicting_refs,
+        };
+      })(),
 
       imported_occupancy_claim: p._compat_occupancy || null,
       //  The claim that actually answered, and where it came from. Without
@@ -645,7 +863,7 @@ module.exports = {
   //  Exported so every surface that shows Occupied/Pending/Open/Needs
   //  Review shows the SAME four numbers. A second implementation of "what
   //  counts as Open" is how the subtraction got there in the first place.
-  rentRollBuckets, rentRollBucketOf, rentRollBucketReason,
+  rentRollBuckets, rentRollBucketOf, rentRollExplain, REASON, positionBasis,
   RENT_ROLL_LABELS, occupancyClaim,
   //  Re-exported so a surface can ask which baseline answers for a date
   //  without reaching into space_position for it.

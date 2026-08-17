@@ -232,15 +232,47 @@ const started = receipt.begin(__filename, { url: CONN, expected: 34 });
     .split("\n").map((l) => "    " + l).join("\n"));
 
   console.log("\n  ── it agrees with the artifact ──");
-  ok("standing is ESTABLISHED", standing.standing.truth_state === "ESTABLISHED",
+  /*  ⚠ THIS ASSERTED "ESTABLISHED" AND WAS RIGHT ABOUT THE OLD RULE.
+   *
+   *  This fixture builds inventory and leases straight from the workbook
+   *  and establishes NO opening tenancy position. Under the old rule any
+   *  property with rows was ESTABLISHED, and every bed without a lease was
+   *  counted Open — by subtraction, which is the assertion two lines down.
+   *
+   *  Occupancy and vacancy are not symmetric. Four kinds of recorded fact
+   *  can establish that a bed is occupied; exactly one can establish that
+   *  it is empty — an accepted per-space vacancy claim. With no opening
+   *  position there is no such claim, so Spine holds NO evidence that
+   *  those beds are available. Calling them Open was the double-let risk;
+   *  calling them Needs Review would invent a conflict where there is only
+   *  silence. They are Not Established.
+   *
+   *  So the honest standing is PARTIALLY_ESTABLISHED: the leased beds are
+   *  established by their leases, and the rest are unknown.  */
+  ok("standing is PARTIALLY_ESTABLISHED — leases establish, silence does not",
+     standing.standing.truth_state === "PARTIALLY_ESTABLISHED",
      JSON.stringify(standing.standing));
   ok("72 units", standing.position.units === 72, String(standing.position.units));
   ok(`${totals.beds} rentable positions, the file's own bed total`,
      standing.position.rentable_positions === totals.beds, String(standing.position.rentable_positions));
   ok(`occupied agrees with the file's summary (${totals.occupied})`,
      standing.position.occupied === totals.occupied, String(standing.position.occupied));
-  ok("open = positions - occupied, with nothing invented in between",
-     standing.position.open === totals.beds - totals.occupied, String(standing.position.open));
+  /*  THE SUBTRACTION, DELETED. `open = positions - occupied` is the defect
+   *  this correction exists to remove, and it was written here as the
+   *  intended behaviour. Open now requires a POSITIVE vacancy basis; with
+   *  no opening position this fixture has none, so Open is 0 and the
+   *  un-leased beds are counted as not_established instead of being
+   *  offered to a prospect.  */
+  ok("Open is 0 — no positive vacancy evidence exists in this fixture",
+     standing.position.open === 0, String(standing.position.open));
+  ok("the un-leased beds are not_established, not Open",
+     standing.position.not_established === totals.beds - totals.occupied,
+     `${standing.position.not_established} vs ${totals.beds - totals.occupied}`);
+  ok("occupied + not_established accounts for every rentable position",
+     standing.position.occupied + standing.position.not_established
+       + standing.position.activation_pending + standing.position.needs_review
+       === standing.position.rentable_positions,
+     JSON.stringify(standing.position));
   ok("the leasing grain is read from the inventory, not configured",
      standing.position.leasing_grain === "bed", standing.position.leasing_grain);
   ok("as_of is the artifact's own date, echoed back",

@@ -52,7 +52,7 @@ const { datedPropertyPositions, intervalPropertyPositions, rentRollBuckets } =
 const { unitRentRoll } = require("../src/surfaces/rent_roll_unit_view.js");
 
 const HARNESS = "rent_roll_occupancy_correction.db.js";
-const EXPECTED = 59;
+const EXPECTED = 71;
 const AS_OF = "2026-08-17";
 const TERM  = { from: "2026-08-01", to: "2027-07-31" };
 const APRIL = { from: "2026-04-01", to: "2027-03-31" };   // the 109A lease
@@ -228,11 +228,26 @@ const note = (l) => console.log("        " + l);
 
     // ══ 4. OPEN MAY NOT ABSORB THE UNKNOWN ══════════════════════════
     console.log("\n  ── Open is a classification, not a remainder ──");
-    const fake = dp.positions.slice(0, 3).map((p) => ({
-      ...p, tenancy_state: "a_state_from_the_future", evidence_state: "confirmed" }));
-    const fb = rentRollBuckets(fake);
-    ok("an unknown state lands in unclassified, NOT Open",
-      fb.unclassified === 3 && fb.open === 0, JSON.stringify(fb));
+    //  Two doors into the tally, so both are provoked.
+    //  (a) a position whose bucket was never decided — the classifier hits
+    //      a tenancy_state from the future.
+    const undecided = dp.positions.slice(0, 3).map((p) => {
+      const q = { ...p, tenancy_state: "a_state_from_the_future",
+        evidence_state: "confirmed", basis_state: "established" };
+      delete q.bucket;
+      return q;
+    });
+    const ub = rentRollBuckets(undecided);
+    ok("an undecidable state lands in unclassified, NOT Open",
+      ub.unclassified === 3 && ub.open === 0, JSON.stringify(ub));
+    //  (b) a DECIDED bucket carrying a value the tally does not know.
+    //      Without the guard this did `t[b]++` on an undefined key —
+    //      minting a key nobody reads, or NaN in a headline.
+    const alien = dp.positions.slice(0, 2).map((p) => ({ ...p, bucket: "vibes" }));
+    const ab = rentRollBuckets(alien);
+    ok("an unknown DECIDED bucket lands in unclassified, never NaN",
+      ab.unclassified === 2 && ab.open === 0
+      && Object.values(ab).every((n) => Number.isFinite(n)), JSON.stringify(ab));
 
     // ══ 5. 109A — TWO FACTS, ONE BUCKET ═════════════════════════════
     console.log("\n  ── 109A keeps both of its contradicting facts ──");
@@ -281,7 +296,33 @@ const note = (l) => console.log("        " + l);
     //  name the established vacancy, the absence of a governing tenancy
     //  fact, and the absence of a contradiction — the three things that
     //  together make a bed genuinely offerable.
-    ok("every row carries a reason", rows.every((r) => !!r.bucket_reason));
+    //  ── THE CODE IS THE CONTRACT, THE SENTENCE IS FOR A PERSON ───────
+    //  These assert the CODE, not the prose. A test that regexes English
+    //  makes the copy an API and turns rewording into a breaking change.
+    ok("every row carries a reason code and a sentence",
+      rows.every((r) => !!r.bucket_reason_code && !!r.bucket_reason));
+    ok("★ 109A's code names the exact contradiction",
+      p109row.bucket_reason_code === "OPENING_VACANCY_CONFLICTS_WITH_OPERATIVE_LEASE",
+      p109row.bucket_reason_code);
+    ok("★ …and its conflicting_refs name the lease, structurally",
+      (p109row.conflicting_refs || []).some((x) => x.kind === "lease"
+        && String(x.id) === String(lease109A)),
+      JSON.stringify(p109row.conflicting_refs));
+    ok("★ …while supporting_refs name the opening position and proposal",
+      (p109row.supporting_refs || []).some((x) => x.kind === "opening_position")
+      && (p109row.supporting_refs || []).some((x) => x.kind === "proposal"),
+      JSON.stringify(p109row.supporting_refs));
+    const codes = [...new Set(rows.map((r) => r.bucket_reason_code))].sort();
+    note(`reason codes in play: ${codes.join(", ")}`);
+    ok("Open beds carry the positive-support code",
+      rows.filter((r) => r.bucket === "open")
+        .every((r) => r.bucket_reason_code === "ESTABLISHED_VACANT_NO_LATER_BLOCKER"));
+    ok("Pending Activation beds name the unmet activation condition",
+      rows.filter((r) => r.bucket === "activation_pending")
+        .every((r) => r.bucket_reason_code === "COMMENCED_LEASE_NOT_ACTIVATED"));
+    ok("every Occupied bed's supporting_refs include its lease",
+      rows.filter((r) => r.bucket === "occupied")
+        .every((r) => (r.supporting_refs || []).some((x) => x.kind === "lease")));
     const anOpen = rows.find((r) => r.bucket === "open");
     ok("★ an Open bed states its POSITIVE basis",
       /Established vacant at 2026-07-31/.test(anOpen.bucket_reason)
@@ -291,10 +332,16 @@ const note = (l) => console.log("        " + l);
     ok("★ a Pending Activation bed names the lease and the condition",
       /committed/.test(aPend.bucket_reason)
       && /economic tenancy is not activated/.test(aPend.bucket_reason), aPend.bucket_reason);
-    ok("★ 109A names BOTH claims that are fighting",
-      /accepted this bed as vacant/.test(p109row.bucket_reason)
-      && p109row.bucket_reason.includes(lease109A)
-      && /no basis to choose/.test(p109row.bucket_reason), p109row.bucket_reason);
+    /*  This assertion used to regex the sentence for "accepted this bed as
+     *  vacant". Rewording the copy to "records this bed as vacant" broke
+     *  it — which is precisely why prose must not be the contract. The
+     *  structural version lives above (reason code + conflicting_refs);
+     *  what remains here is a SANITY check that the sentence is a real
+     *  explanation naming both sides, not a phrase match. */
+    ok("★ 109A's sentence still names both sides for a human",
+      p109row.bucket_reason.includes(lease109A)
+      && /vacant/.test(p109row.bucket_reason)
+      && /no basis to choose/i.test(p109row.bucket_reason), p109row.bucket_reason);
     const anUnrec = rows.find((r) => r.bucket === "needs_review"
       && /could not reconcile/.test(r.bucket_reason || ""));
     ok("★ an unreconciled bed says the source row was left unresolved",
@@ -405,19 +452,41 @@ const note = (l) => console.log("        " + l);
       }
     }
     const bareRoll = await unitRentRoll(pool, { property_id: bare, as_of: AS_OF });
-    ok("★ it is NOT_ESTABLISHED, not a wall of exceptions",
-      bareRoll.established === false && bareRoll.truth_state === "NOT_ESTABLISHED",
-      JSON.stringify({ e: bareRoll.established, t: bareRoll.truth_state }));
-    ok("…no buckets are stated at all", bareRoll.totals === null,
+    ok("★ it is NOT_ESTABLISHED", bareRoll.truth_state === "NOT_ESTABLISHED",
+      bareRoll.truth_state);
+    ok("★ …and NOT a wall of 3 review exceptions",
+      bareRoll.totals.needs_review === 0, JSON.stringify(bareRoll.totals));
+    ok("★ …the beds are not_established, which is not a tenancy bucket",
+      bareRoll.totals.not_established === 3 && bareRoll.totals.established === 0,
       JSON.stringify(bareRoll.totals));
-    ok("…and it does NOT report 3 needs_review",
-      !bareRoll.totals || bareRoll.totals.needs_review !== 3);
-    ok("…the inventory Spine does hold is still reported",
-      bareRoll.inventory.units === 1 && bareRoll.inventory.rentable_positions === 3,
-      JSON.stringify(bareRoll.inventory));
+    ok("★ …and they are NOT Open either",
+      bareRoll.totals.open === 0, String(bareRoll.totals.open));
+    ok("…totals and units are still returned, not blanked",
+      !!bareRoll.totals && bareRoll.units.length === 1,
+      JSON.stringify({ totals: !!bareRoll.totals, units: bareRoll.units.length }));
+    ok("…each bed carries basis_state not_established with no bucket",
+      bareRoll.units[0].positions.every((r) => r.basis_state === "not_established"
+        && r.bucket === null && r.bucket_reason_code === "NO_AUTHORITATIVE_BASIS"),
+      JSON.stringify(bareRoll.units[0].positions.map((r) => [r.basis_state, r.bucket])));
     ok("…and it says why, and what would resolve it",
-      /No opening tenancy position has been established/.test(bareRoll.why)
-      && /Establish the opening tenancy position/.test(bareRoll.next_step));
+      /have no authoritative fact establishing them/.test(bareRoll.why)
+      && /Establish those positions/.test(bareRoll.next_step), bareRoll.why);
+
+    //  A property with SOME basis is partially established — it must show
+    //  the beds it can and say how many it cannot, never refuse the lot.
+    await pool.query(
+      `insert into leases (property_id, space_id, rent, lease_status, start_date, end_date, tenant_ids)
+       select $1, s.id, 900, 'active', $2, $3, '{}' from spaces s
+        join units u on u.id=s.unit_id
+        where u.property_id=$1 and s.space_label='Room1'`, [bare, TERM.from, TERM.to]);
+    const partial = await unitRentRoll(pool, { property_id: bare, as_of: AS_OF });
+    ok("★ one lease makes the property PARTIALLY_ESTABLISHED",
+      partial.truth_state === "PARTIALLY_ESTABLISHED", partial.truth_state);
+    ok("★ …1 occupied is stated, 2 remain not_established",
+      partial.totals.occupied === 1 && partial.totals.not_established === 2,
+      JSON.stringify(partial.totals));
+    ok("★ …and the two without a basis did NOT become needs_review",
+      partial.totals.needs_review === 0, String(partial.totals.needs_review));
 
     // ══ 10. THE BASELINE IS CHOSEN BY DATE, NOT BY LIFECYCLE FLAG ═══
     /*  The ruling's second blocker, and the one my receipt under-ranked.
@@ -480,9 +549,23 @@ const note = (l) => console.log("        " + l);
 
     //  And before any baseline existed, the property was not established.
     const earlyRoll = await unitRentRoll(pool, { property_id: prop, as_of: "2026-06-01" });
-    ok("★ a read BEFORE any baseline is NOT_ESTABLISHED, not empty buckets",
-      earlyRoll.established === false && earlyRoll.totals === null,
-      JSON.stringify({ e: earlyRoll.established, t: earlyRoll.totals }));
+    /*  ★ THE RULING'S CORE POINT, PROVEN. At 2026-06-01 NO opening
+     *  baseline is effective — and the read still answers. The 109A April
+     *  lease spans that date, so that ONE position is established by a
+     *  canonical lease with no baseline anywhere, and the other 159 are
+     *  honestly not_established. An opening tenancy position is a
+     *  bootstrap mechanism, not a prerequisite: remove it entirely and
+     *  native tenancy facts still establish what they establish.  */
+    ok("★ with NO baseline at all, the read still answers",
+      !!earlyRoll.totals && earlyRoll.totals.rentable_positions === 160,
+      JSON.stringify(earlyRoll.totals));
+    ok("★ …a native lease establishes its position with no baseline",
+      earlyRoll.truth_state === "PARTIALLY_ESTABLISHED"
+      && earlyRoll.totals.occupied === 1 && earlyRoll.totals.established === 1,
+      JSON.stringify({ t: earlyRoll.truth_state, totals: earlyRoll.totals }));
+    ok("★ …and the other 159 are not_established, not Open and not review",
+      earlyRoll.totals.not_established === 159 && earlyRoll.totals.open === 0
+      && earlyRoll.totals.needs_review === 0, JSON.stringify(earlyRoll.totals));
 
     // ══ 11. INVENTORY INVARIANTS ════════════════════════════════════
     console.log("\n  ── the inventory did not move ──");

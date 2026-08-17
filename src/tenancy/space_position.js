@@ -281,12 +281,22 @@ async function loadSpaceRows(pool, property_id, baseline_id = null) {
          *  proposed position (unit, or unit|room), rather than re-deriving
          *  it from JSON here — two spellings of "which bed is this" would
          *  diverge, and would diverge silently.  */
-        (select case
-                  when pr.status = 'needs_review' then 'unreconciled'
-                  when coalesce(pr.normalized_json->>'is_vacant','false') = 'true'
-                       or pr.normalized_json->>'tenant_name' is null then 'vacant'
-                  else 'occupied'
-                end
+        /*  Returns the claim AND the proposal that supplied it. A basis a
+         *  reader cannot point at is not a basis an operator can check —
+         *  the trace, Ask Spine and the row detail all need to name the
+         *  exact record, not just repeat its verdict. */
+        (select jsonb_build_object(
+                  'claim', case
+                    when pr.status = 'needs_review' then 'unreconciled'
+                    when coalesce(pr.normalized_json->>'is_vacant','false') = 'true'
+                         or pr.normalized_json->>'tenant_name' is null then 'vacant'
+                    else 'occupied'
+                  end,
+                  'proposal_id', pr.id,
+                  'proposal_status', pr.status,
+                  'natural_key', pr.natural_key,
+                  'opening_position_id', otp.id,
+                  'opening_position_as_of', to_char(otp.as_of_date,'YYYY-MM-DD'))
            from opening_tenancy_positions otp
            join proposed_records pr
              on pr.activation_id = otp.activation_id
