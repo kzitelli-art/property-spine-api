@@ -129,12 +129,51 @@ ANYWHERE ELSE             OPTIONAL — but if you pin, it is CHECKED against thi
                           repository's git HEAD, and the release also refuses
                           when tracked files are modified, because then the sha
                           is not the code
+UNTRACKED MIGRATION       refused. This runner executes migrations/NNN_*.sql
+                          from the FILESYSTEM, not from the commit, so a
+                          migration no commit contains was invisible to the
+                          tracked-file check and fully executable. Other
+                          untracked files — .env, screenshots, notes, even
+                          inside migrations/ — are still ignored
 CANNOT BE RESOLVED        a pin that cannot be verified is REFUSED, never
                           accepted — unknown is answered as unknown
 SHORTER THAN 7 HEX        refused; a prefix that matches many commits pins
                           nothing
 OMITTED OFF RENDER        still allowed, and the banner prints
                           "NOT PINNED — no build was authorised"
+```
+
+### ⚠ And the second hole the first fix opened
+
+Scoping the dirty-tree check with `--untracked-files=no` is right for `.env`
+and screenshots and **wrong for a migration**, because the runner runs the
+directory rather than the commit. That produced precisely the state the pin
+exists to make impossible:
+
+```text
+git HEAD                     471f2e0…
+EXPECTED_SHA                 471f2e0…
+tracked files                clean
+untracked                    migrations/180_something.sql
+                             ↓
+banner                       "VERIFIED against git HEAD"
+actually executed            schema that commit does not contain
+```
+
+The guard now compares the migration files **on disk** against the migration
+files **in the pinned commit**, discovered with the same `MIGRATION_FILE_RE`
+the runner executes with — one definition, so the guard cannot drift into
+scanning less than it asserts. `git ls-tree` is deliberately **non-recursive**:
+a tracked `migrations/archive/181_decoy.sql` must not vouch for an untracked
+`migrations/181_decoy.sql` sitting where the runner will find it.
+
+**Pin with the full 40 characters at release.** Abbreviations of 7+ still work
+and there is no reason to forbid normal git behaviour, but if the doctrine is
+*exact build*, the release command should say the exact build:
+
+```text
+EXPECTED_SHA=471f2e0c797fc5eff2eae73c2436fa6ed32766f9   (re-read before release —
+                                                         this commit is not it)
 ```
 
 It stays optional off Render because four Class-3 seeding tools
@@ -144,13 +183,25 @@ unpinned by design. Making it mandatory would have broken them — which is wort
 knowing, because "just require it everywhere" is the obvious fix and it is
 wrong.
 
-**Release Slice 2 pinned.** Both proofs exist:
-`tests/migration_release_gate.test.js` refuses a deliberately wrong sha off
-Render and accepts the exact HEAD, and it is registered in
-`verify_source_governance.js` so it runs without anyone remembering. Falsified
-against the previous runner: 10 of its 25 assertions fail there, including
-*"nothing was applied on the way to that refusal"* — the old code applied the
-pending migration under a wrong pin and exited 0.
+**Release Slice 2 pinned.** `tests/migration_release_gate.test.js` refuses a
+deliberately wrong sha off Render, accepts the exact HEAD, and refuses a
+verified pin with an untracked migration on disk — and it is registered in
+`verify_source_governance.js` so it runs without anyone remembering.
+
+Falsified twice, against each runner it replaced:
+
+```text
+vs the ORIGINAL runner        10 of 33 fail, incl. "nothing was applied on the
+                             way to that refusal" — it applied the pending
+                             migration under a WRONG pin and exited 0
+
+vs the FIRST SHA FIX          5 of 33 fail, incl. "it refuses BEFORE anything
+                             is applied" — a MATCHING pin with an untracked
+                             migration printed VERIFIED, applied it, exited 0
+```
+
+Both numbers come from running this file against those exact runners, not from
+reasoning about them.
 
 For orientation only, the commit that reconciled the code with `main`:
 
@@ -239,11 +290,13 @@ PROVEN (real Postgres)
   gate_person_ingress.js           10/10
   gate_harness_isolation.js          8/8
   tenancy_ask_spine.test.js        43/43
-  migration_release_gate.test.js   25/25   (was 12; the 13 new ones are the
-                                            off-Render sha pin, in a scratch
-                                            git repo so the result is a fact
-                                            about the guard and not about
-                                            whatever tree the suite ran in)
+  migration_release_gate.test.js   33/33   (was 12. The 21 new ones are the
+                                            off-Render sha pin and the
+                                            untracked-migration case, run in a
+                                            scratch git repo the test builds,
+                                            so the result is a fact about the
+                                            guard and not about whatever tree
+                                            the suite happened to run in)
   verify_source_governance.js      all 35 gates exit 0
 
 BROWSER VERIFIED (real app, real server, real import, real tracker)

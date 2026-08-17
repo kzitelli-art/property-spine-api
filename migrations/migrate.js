@@ -27,6 +27,10 @@
      · Anywhere else, it is OPTIONAL — but if you give it, it is CHECKED,
        against this repository's git HEAD, and the release also refuses if
        tracked files are modified, because then the sha is not the code.
+     · It further refuses if any migrations/NNN_*.sql file on disk is absent
+       from the pinned commit. This runner executes the FILESYSTEM, not the
+       commit, so an untracked migration would otherwise be applied under a
+       sha that does not contain it. Other untracked files are ignored.
      · Omit it off-Render and nothing is pinned. The release banner says so
        in those words rather than printing a reassuring blank.
 
@@ -61,25 +65,72 @@ const { classifyLedger } = require("./ledger_verdict");
  *  still match that HEAD, which matters, because a sha over a modified
  *  worktree describes code that is not the code about to run.
  *
- *  Untracked files are deliberately ignored: .env, scratch output and
+ *  MOST untracked files are deliberately ignored: .env, scratch output and
  *  node_modules noise are not the release. Tracked modifications are.
+ *
+ *  ⚠ BUT "UNTRACKED" AND "NOT PART OF THE RELEASE" ARE NOT THE SAME SET,
+ *  AND THE FIRST VERSION OF THIS GUARD ASSUMED THEY WERE.
+ *
+ *  This runner does not execute a commit. It executes whatever
+ *  `migrations/NNN_*.sql` files it finds ON DISK. So an UNTRACKED migration
+ *  is both invisible to `--untracked-files=no` and fully executable, which
+ *  produced exactly the state the sha pin exists to make impossible:
+ *
+ *      git HEAD           471f2e0…
+ *      EXPECTED_SHA       471f2e0…        → "VERIFIED against git HEAD"
+ *      tracked files      clean
+ *      untracked          migrations/180_something.sql
+ *      applied            180_something.sql — schema NOT in that commit
+ *
+ *  The fix is not to ban untracked files; that would strand a release on a
+ *  stray screenshot. It is to scope the check to files that can PARTICIPATE
+ *  in a release. Every migration-shaped file in this directory must be
+ *  present in the pinned commit, and the set is discovered with the SAME
+ *  predicate the runner executes with — one implementation, so the guard
+ *  cannot drift into scanning less than it asserts.
  */
+//  The shape of a migration file. One definition: the guard scans exactly
+//  the file class the runner runs.
+const MIGRATION_FILE_RE = /^\d{3}_.*\.sql$/;
+
 function resolveBuildIdentity() {
   const render = (process.env.RENDER_GIT_COMMIT || "").trim();
-  if (render) return { sha: render, source: "RENDER_GIT_COMMIT", modified: null };
+  if (render) {
+    //  A Render instance's tree IS a checkout the platform made from that
+    //  commit; there is no working copy for anyone to drop a file into, and
+    //  no git to ask. Stated rather than silently skipped.
+    return { sha: render, source: "RENDER_GIT_COMMIT", modified: null, unpinnedMigrations: null };
+  }
 
   const repo = path.join(__dirname, "..");
-  const git = (args) => execFileSync("git", args,
-    { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  const git = (args, cwd) => execFileSync("git", args,
+    { cwd: cwd || repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
   try {
     const sha = git(["rev-parse", "HEAD"]);
-    if (!/^[0-9a-f]{40}$/.test(sha)) return { sha: null, source: null, modified: null };
+    if (!/^[0-9a-f]{40}$/.test(sha)) {
+      return { sha: null, source: null, modified: null, unpinnedMigrations: null };
+    }
     const dirty = git(["status", "--porcelain", "--untracked-files=no"]);
-    return { sha, source: "git HEAD", modified: dirty ? dirty.split("\n") : [] };
+
+    //  Which migration files does the PINNED COMMIT contain? Non-recursive,
+    //  so a tracked `sub/180_x.sql` cannot vouch for an untracked
+    //  `180_x.sql` sitting beside the runner.
+    const inCommit = new Set(
+      git(["ls-tree", "--name-only", "HEAD", "."], MIGRATIONS_DIR)
+        .split("\n").map((l) => path.basename(l.trim())).filter(Boolean));
+
+    //  And which does the runner actually see on disk? Same predicate.
+    const onDisk = fs.readdirSync(MIGRATIONS_DIR).filter((f) => MIGRATION_FILE_RE.test(f)).sort();
+
+    return {
+      sha, source: "git HEAD",
+      modified: dirty ? dirty.split("\n") : [],
+      unpinnedMigrations: onDisk.filter((f) => !inCommit.has(f)),
+    };
   } catch {
     //  No git, no repository, or a git that refused. Unknown is a valid
     //  answer here and is handled by the caller as unknown — never as OK.
-    return { sha: null, source: null, modified: null };
+    return { sha: null, source: null, modified: null, unpinnedMigrations: null };
   }
 }
 
@@ -175,8 +226,11 @@ async function main() {
   // 3. Find migration files: NNN_label.sql, numerically ordered.
   //    The ledger file (000_schema_migrations.sql) is skipped — the ledger
   //    is created above, not as a tracked migration.
+  //  MIGRATION_FILE_RE is shared with resolveBuildIdentity() on purpose. The
+  //  release guard must scan the same file class this loop executes, or it
+  //  asserts over a set the runner does not use.
   const files = fs.readdirSync(MIGRATIONS_DIR)
-    .filter(f => /^\d{3}_.*\.sql$/.test(f))
+    .filter(f => MIGRATION_FILE_RE.test(f))
     .filter(f => !f.startsWith("000_"))
     .sort();
 
@@ -442,6 +496,21 @@ async function main() {
       await client.end();
       process.exit(1);
     }
+    //  THE PIN IS ONLY TRUE IF IT COVERS EVERY FILE THIS RUNNER CAN EXECUTE.
+    //  An untracked migration passes the tracked-file check above and is
+    //  still discovered and applied by the loop below, so a "VERIFIED"
+    //  release would execute schema the pinned commit does not contain.
+    if (build.unpinnedMigrations && build.unpinnedMigrations.length) {
+      console.error("\n  ✗ RELEASE REFUSED — a migration on disk is NOT in the pinned commit.\n");
+      console.error(`    ${build.sha.slice(0, 12)} matches your pin, and this runner executes migration`);
+      console.error("    files from the FILESYSTEM, not from the commit. These are present here");
+      console.error("    and absent from that commit, so the pin would not describe them:");
+      for (const f of build.unpinnedMigrations) console.error(`      · migrations/${f}`);
+      console.error("\n    Commit them and re-pin, or move them out of migrations/. A release");
+      console.error("    that prints VERIFIED must have verified everything it is about to run.\n");
+      await client.end();
+      process.exit(1);
+    }
   }
 
   console.log("\n  ── MIGRATION RELEASE ──────────────────────────────────");
@@ -450,8 +519,13 @@ async function main() {
   //  releaser nothing about whether their pin had been checked.
   console.log(`     build:                     ${build.sha ? build.sha.slice(0, 12) : "UNKNOWN"}` +
     `${build.source ? `  (${build.source})` : ""}`);
+  //  Say what VERIFIED covers. On a git checkout it covers the tracked tree
+  //  AND every migration file on disk; on Render there is no working copy to
+  //  check, and that difference is printed rather than implied.
   console.log(`     sha pin:                   ${expectedSha
-    ? `VERIFIED against ${build.source}`
+    ? `VERIFIED against ${build.source}${build.unpinnedMigrations
+      ? " — tree clean, all migrations in the commit"
+      : " — no working copy to check"}`
     : "NOT PINNED — EXPECTED_SHA was not set, so no build was authorised"}`);
   console.log(`     to apply:                  ${pending.length ? pending.join(", ") : "nothing pending"}`);
   console.log("  ───────────────────────────────────────────────────────\n");

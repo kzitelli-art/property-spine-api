@@ -1819,6 +1819,18 @@ guard that catches that.
 > `NOT PINNED — no build was authorised` in those words instead of printing
 > a reassuring blank. Proven in `tests/migration_release_gate.test.js`,
 > which is now registered in `verify_source_governance.js`.
+>
+> **And that fix opened a second hole, found before release.** Scoping the
+> dirty-tree check to tracked files is right for `.env` and screenshots and
+> wrong for a migration: this runner executes `migrations/NNN_*.sql` from the
+> FILESYSTEM, not from the commit, so an untracked migration was invisible to
+> the check and fully executable — a release printing `VERIFIED against git
+> HEAD` while applying schema that commit does not contain. The guard now
+> compares the migration files on disk against those in the pinned commit,
+> using the same predicate the runner executes with, with a non-recursive
+> `ls-tree` so a tracked `archive/181_decoy.sql` cannot vouch for an
+> untracked `181_decoy.sql` beside the runner. Irrelevant untracked files,
+> including inside `migrations/`, still do not block a release.
 
 ### THE SEQUENCE — API #92, PATH A
 

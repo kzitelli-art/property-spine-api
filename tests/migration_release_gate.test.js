@@ -241,6 +241,86 @@ console.log(`  (using the real migrations/ directory: ${files.length} files, new
     fs.unlinkSync(path.join(SCRATCH, ".env"));
   }
 
+  // ──────────────────────────────────────────────────────────────────
+  //  THE HOSTILE CASE: AN UNTRACKED MIGRATION UNDER A VERIFIED PIN.
+  //
+  //  The first version of this guard asked git for a dirty tree with
+  //  `--untracked-files=no`, which is right for .env and screenshots and
+  //  WRONG for a migration — because this runner executes
+  //  migrations/NNN_*.sql from the FILESYSTEM, not from the commit. So a
+  //  file no commit contains was invisible to the check and fully
+  //  executable, and the release would have printed "VERIFIED against git
+  //  HEAD" while running schema that sha does not contain.
+  //
+  //  Three assertions, in order: the runner DOES discover it, an unpinned
+  //  release DOES apply it, and a pinned release now refuses first.
+  // ──────────────────────────────────────────────────────────────────
+  {
+    const HOSTILE = "180_untracked_hostile.sql";
+    fs.writeFileSync(path.join(MIGDIR, HOSTILE), "-- present on disk, in no commit\nselect 1;\n");
+    const ALL_APPLIED = { MIGRATION_RELEASE: "1", EXPECTED_LEDGER_CEILING: ceilingOfAll };
+
+    //  (a) IT IS REACHABLE. Not argued — verify mode names it as pending,
+    //      which is the runner saying it intends to apply it.
+    const seen = runScratch(ALL, {});
+    ok_or(seen.code === 1 && new RegExp(HOSTILE).test(seen.out),
+      "HOSTILE: the runner DISCOVERS an untracked migration from the filesystem", `exit=${seen.code}`);
+
+    //  (b) IT IS APPLIED when nothing pins the release. This is the damage,
+    //      executed against the stubbed ledger rather than described.
+    const unpinned = runScratch(ALL, ALL_APPLIED);
+    ok_or(unpinned.code === 0 && new RegExp(HOSTILE + "\\s+— applying").test(unpinned.out),
+      "HOSTILE: an UNPINNED release applies it — the hole, run", unpinned.out.slice(-400));
+
+    //  (c) AND A VERIFIED PIN NOW REFUSES. Before anything is applied.
+    const pinned = runScratch(ALL, { ...ALL_APPLIED, EXPECTED_SHA: HEAD });
+    ok_or(pinned.code === 1 && /NOT in the pinned commit/.test(pinned.out),
+      "HOSTILE: a matching sha with an untracked migration on disk is REFUSED", `exit=${pinned.code} :: ${pinned.out.slice(-300)}`);
+    ok_or(new RegExp("migrations/" + HOSTILE).test(pinned.out),
+      "HOSTILE: …the refusal NAMES the untracked migration", pinned.out.slice(-400));
+    ok_or(!/applying\.\.\./.test(pinned.out),
+      "HOSTILE: …and it refuses BEFORE anything is applied", "it applied something");
+    //  Asserted against the BANNER LINE, not the word. The refusal text
+    //  itself says "a release that prints VERIFIED must have verified
+    //  everything it is about to run" — a bare /VERIFIED/ search matches
+    //  the explanation and calls the refusal a false claim.
+    ok_or(!/sha pin:\s+VERIFIED/.test(pinned.out),
+      "HOSTILE: …and the VERIFIED banner is never printed on the way to refusing", pinned.out.slice(-300));
+
+    fs.unlinkSync(path.join(MIGDIR, HOSTILE));
+  }
+
+  //  SCOPED BY FILE CLASS, NOT BY DIRECTORY. An untracked file that cannot
+  //  participate in a release must not block one, even sitting in
+  //  migrations/ — banning the directory would strand a release on a note.
+  {
+    fs.writeFileSync(path.join(MIGDIR, "scratch_notes.md"), "not a migration\n");
+    const r = runScratch(MISSING_LAST, { ...RELEASE, EXPECTED_SHA: HEAD });
+    ok_or(r.code === 0, "SCOPE: an untracked NON-migration inside migrations/ does not block the release",
+      `exit=${r.code} :: ${r.out.slice(-300)}`);
+    fs.unlinkSync(path.join(MIGDIR, "scratch_notes.md"));
+  }
+
+  //  A TRACKED MIGRATION IN A SUBDIRECTORY CANNOT VOUCH FOR AN UNTRACKED
+  //  ONE BESIDE THE RUNNER. `ls-tree` is non-recursive for exactly this.
+  {
+    const SUB = path.join(MIGDIR, "archive");
+    fs.mkdirSync(SUB, { recursive: true });
+    fs.writeFileSync(path.join(SUB, "181_decoy.sql"), "select 1;\n");
+    git("-c", "user.email=proof@spine.local", "-c", "user.name=proof", "add", "-A");
+    git("-c", "user.email=proof@spine.local", "-c", "user.name=proof", "commit", "-q", "-m", "archive a decoy");
+    const HEAD2 = git("rev-parse", "HEAD");
+    fs.writeFileSync(path.join(MIGDIR, "181_decoy.sql"), "-- different file, same name\nselect 1;\n");
+    const r = runScratch(ALL, { MIGRATION_RELEASE: "1", EXPECTED_LEDGER_CEILING: ceilingOfAll, EXPECTED_SHA: HEAD2 });
+    ok_or(r.code === 1 && /NOT in the pinned commit/.test(r.out),
+      "SCOPE: a tracked subdirectory file of the same NAME does not launder an untracked migration",
+      `exit=${r.code} :: ${r.out.slice(-300)}`);
+    fs.unlinkSync(path.join(MIGDIR, "181_decoy.sql"));
+    fs.rmSync(SUB, { recursive: true, force: true });
+    git("-c", "user.email=proof@spine.local", "-c", "user.name=proof", "add", "-A");
+    git("-c", "user.email=proof@spine.local", "-c", "user.name=proof", "commit", "-q", "-m", "remove decoy");
+  }
+
   //  NO GIT, NO RENDER, BUT A PIN. Unknown is answered as unknown.
   {
     fs.rmSync(path.join(SCRATCH, ".git"), { recursive: true, force: true });
