@@ -104,11 +104,20 @@ EXPECTED_SHA=<the sha being deployed> \
 #  3. Verify the ceiling moved to 179, then deploy API and app.
 ```
 
-The SHAs to deploy, reconciled with `main` and pushed:
+`EXPECTED_SHA` is **the sha actually being deployed**, so read it the same way
+you read the ceiling — from the thing itself, not from here. A doc-only commit
+moves the head without moving the product, which is exactly how a pinned sha
+in a document goes quietly wrong.
+
+```sh
+git rev-parse origin/claude/code-philosophy-review-xoiz8f   # in each repo
+```
+
+For orientation only, the commit that reconciled the code with `main`:
 
 ```text
-API   3b21a73   property-spine-api  claude/code-philosophy-review-xoiz8f
-APP   5964848   property-spine-app  claude/code-philosophy-review-xoiz8f
+API   3b21a73   the merge + renumber + gate scope
+APP   5964848   browser proof re-run on the merged surfaces
 ```
 
 ### What 178 and 179 do to a live database
