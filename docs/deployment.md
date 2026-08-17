@@ -33,6 +33,12 @@ PLAID_CLIENT_ID=...
 PLAID_SECRET=...
 PLAID_ENV=sandbox                     # or 'production'
 
+# Optional — Read AI Meeting Evidence
+# Both values are required before the public webhook accepts evidence.
+READ_AI_CONNECTION_ID=<stable UUID>
+READ_AI_WEBHOOK_SIGNING_KEY=<provider key, Base64-encoded>
+MEETING_RECEIPT_MODEL=claude-sonnet-4-6  # optional model override
+
 # Render deploy script (for deploy.sh)
 RENDER_API_KEY=rnd_...
 RENDER_SERVICE_ID=srv-...
@@ -84,6 +90,29 @@ Files are numbered `001`, `002`, ..., `090`, etc. The `schema_migrations` table 
 ```
 
 Requires `RENDER_API_KEY` and `RENDER_SERVICE_ID` in `.env` or environment.
+
+## Activating Read AI Meeting Evidence
+
+The Meeting Evidence code is dormant unless both Read AI variables above are
+configured. Activation is deliberately explicit:
+
+1. Generate one stable UUID for `READ_AI_CONNECTION_ID` and configure it with
+   the Base64-encoded provider signing key in Render.
+2. Deploy the API, then authorize that connection once through
+   `POST /operator/meeting-evidence/read-ai/connection` using a real
+   `x-staff-session`.
+3. Configure Read AI to post to
+   `https://property-spine-api.onrender.com/integrations/read-ai/webhook`.
+4. Use the `provider_meeting_id` from the authenticated webhook receipt to call
+   `POST /operator/meeting-evidence/provider-meetings/:id/bind` with the staff
+   session for the intended property.
+5. Confirm `GET /operator/meeting-evidence/release-readiness`, then generate the
+   draft through
+   `POST /operator/meeting-evidence/provider-meetings/:id/owner-receipt`.
+
+The webhook verifies `X-Read-Signature` over the exact raw request bytes before
+parsing JSON. A verified meeting remains unbound and unavailable to property
+reads until step 4; binding authority is always derived from the staff session.
 
 ---
 
