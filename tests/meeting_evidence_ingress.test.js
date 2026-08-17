@@ -13,7 +13,7 @@ const payload = require("../src/meeting_evidence/read_ai_payload.js");
 const routes = require("../src/meeting_evidence/meeting_evidence_routes.js");
 const service = require("../src/meeting_evidence/meeting_evidence_service.js");
 
-const EXPECTED = 54;
+const EXPECTED = 57;
 let passed = 0;
 let failed = 0;
 
@@ -86,7 +86,8 @@ function makeFakeDb(connectionId) {
       raw_body: params[7],
       signature_header: params[8],
       delivery_state: params[9],
-      provider_payload_metadata: params[10],
+      provider_event_trigger: params[10],
+      provider_payload_metadata: params[11],
       received_at: new Date().toISOString(),
     };
     state.deliveries.push(row);
@@ -215,6 +216,13 @@ function makeFakeDb(connectionId) {
       signatureHeader: compactDigest,
       signingKeyBase64: keyBase64,
     }).ok === false);
+  const wrongKeyBase64 = Buffer.from("read-ai-wrong-secret").toString("base64");
+  ok("correctly formed HMAC from the wrong secret is refused",
+    signature.verifyReadSignature({
+      rawBody: raw,
+      signatureHeader: hmac(raw, wrongKeyBase64),
+      signingKeyBase64: keyBase64,
+    }).ok === false);
   eq("missing signature is classified distinctly",
     signature.verifyReadSignature({ rawBody: raw, signingKeyBase64: keyBase64 }).reason,
     "missing_signature");
@@ -230,6 +238,7 @@ function makeFakeDb(connectionId) {
   const withDerived = payload.readProviderMetadata({
     request_id: "req-2",
     session_id: "sess-2",
+    trigger: "meeting_end",
     title: "Weekly Operations Review",
     summary: "Read summary",
     action_items: [],
@@ -239,6 +248,8 @@ function makeFakeDb(connectionId) {
   });
   eq("provider title is observed as metadata, not property authority",
     withDerived.provider_title, "Weekly Operations Review");
+  eq("provider trigger is preserved as observed metadata, not finality authority",
+    withDerived.provider_event_trigger, "meeting_end");
   ok("Read summary is only observed as provider metadata",
     withDerived.metadata.has_summary === true);
   ok("Read action_items are only observed as provider metadata",
@@ -340,6 +351,7 @@ function makeFakeDb(connectionId) {
   const first = signedObject({
     request_id: "req-live-1",
     session_id: "sess-live-1",
+    trigger: "meeting_end",
     title: "Weekly Operations Review",
   });
   const firstReceipt = await service.receiveReadWebhook(fakeDb, {
@@ -352,6 +364,8 @@ function makeFakeDb(connectionId) {
     firstReceipt.body.status, "processed_unbound");
   eq("service creates one logical provider delivery", fakeDb.state.deliveries.length, 1);
   eq("service creates one provider meeting from session_id", fakeDb.state.meetings.length, 1);
+  eq("service preserves observed provider trigger on the exact delivery",
+    fakeDb.state.deliveries[0].provider_event_trigger, "meeting_end");
 
   const invalidReceipt = await service.receiveReadWebhook(fakeDb, {
     rawBody: first.body,

@@ -136,7 +136,7 @@ function operatorRoutes({
         providerMeetingId: req.params.id,
         propertyId: req.operator.property_id,
         boundByUserId: req.operator.id,
-        bindingBasis: (req.body && req.body.binding_basis) || "staff_session_explicit_binding",
+        bindingBasis: "staff_session_explicit_binding",
       });
       return res.json({
         provider_meeting_id: row.provider_meeting_id,
@@ -144,6 +144,63 @@ function operatorRoutes({
         bound_by_user_id: row.bound_by_user_id,
         bound_at: row.bound_at,
         binding_basis: row.binding_basis,
+        binding_kind: row.binding_kind,
+        correction_reason: row.correction_reason,
+        supersedes_binding_id: row.supersedes_binding_id,
+        deduplicated: row.deduplicated,
+      });
+    } catch (err) {
+      return mapError(res, err);
+    }
+  });
+
+  router.post("/operator/meeting-evidence/provider-meetings/:id/binding-corrections", ...gate, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const row = await service.correctProviderMeetingBinding(pool, {
+        providerMeetingId: req.params.id,
+        currentPropertyId: req.operator.property_id,
+        replacementPropertyId: body.replacement_property_id,
+        correctedByUserId: req.operator.id,
+        correctionReason: body.correction_reason,
+        bindingBasis: "staff_session_explicit_correction",
+      });
+      return res.status(201).json({
+        provider_meeting_id: row.provider_meeting_id,
+        property_id: row.property_id,
+        bound_by_user_id: row.bound_by_user_id,
+        bound_at: row.bound_at,
+        binding_basis: row.binding_basis,
+        binding_kind: row.binding_kind,
+        correction_reason: row.correction_reason,
+        supersedes_binding_id: row.supersedes_binding_id,
+      });
+    } catch (err) {
+      return mapError(res, err);
+    }
+  });
+
+  router.post("/operator/meeting-evidence/provider-meetings/:id/deliveries/:deliveryId/finality", ...gate, async (req, res) => {
+    try {
+      const body = req.body || {};
+      const row = await service.qualifyProviderDelivery(pool, {
+        providerMeetingId: req.params.id,
+        providerDeliveryId: req.params.deliveryId,
+        qualificationStatus: body.qualification_status,
+        qualificationBasis: body.qualification_basis,
+        qualifiedByUserId: req.operator.id,
+      });
+      return res.status(row.deduplicated ? 200 : 201).json({
+        qualification_id: row.qualification_id,
+        provider_meeting_id: row.provider_meeting_id,
+        provider_delivery_id: row.provider_delivery_id,
+        qualification_status: row.qualification_status,
+        qualification_method: row.qualification_method,
+        qualification_basis: row.qualification_basis,
+        qualified_by_user_id: row.qualified_by_user_id,
+        qualified_at: row.qualified_at,
+        supersedes_qualification_id: row.supersedes_qualification_id,
+        provider_event_trigger: row.provider_event_trigger,
         deduplicated: row.deduplicated,
       });
     } catch (err) {
@@ -196,6 +253,8 @@ function operatorRoutes({
       return res.status(201).json({
         meeting: out.meeting,
         transcript: out.transcript,
+        extraction_attempt: out.extraction_attempt,
+        extraction_outcome: out.extraction_outcome,
         extraction_run: out.extraction.run,
         receipt: out.receipt,
         rendered: out.rendered,

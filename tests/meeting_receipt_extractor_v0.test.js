@@ -348,10 +348,10 @@ function fakeDb() {
     has_meeting_speaker_resolutions: false,
   });
   ok("release readiness refuses live ceiling 174", live174.ok === false);
-  includes("release readiness names ceiling problem", live174.problems.join("\n"), "below required 176");
-  const row176 = { ledger_ceiling: "176", migration_count: 164 };
-  for (const table of release.REQUIRED_TABLES) row176[`has_${table}`] = true;
-  ok("release readiness accepts ceiling 176 with all tables", release.evaluateReleaseReadiness(row176).ok);
+  includes("release readiness names ceiling problem", live174.problems.join("\n"), "below required 180");
+  const row180 = { ledger_ceiling: "180", migration_count: 168 };
+  for (const table of release.REQUIRED_TABLES) row180[`has_${table}`] = true;
+  ok("release readiness accepts ceiling 180 with all governed relations", release.evaluateReleaseReadiness(row180).ok);
   includes("migration creates manual edit delta ledger", migration, "meeting_receipt_manual_edit_deltas");
   includes("manual edit delta ledger is append-only", migration, "trg_meeting_receipt_manual_edit_deltas_append_only");
   includes("service writes extraction run and candidates from validated record", serviceSrc, "persistExtractionResult");

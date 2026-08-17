@@ -40,6 +40,7 @@ function readProviderMetadata(payload) {
     provider_title: asPresentString(object.title) || asPresentString(object.meeting_title) || null,
     provider_started_at_text: asPresentString(object.started_at) || asPresentString(object.start_time) || null,
     provider_ended_at_text: asPresentString(object.ended_at) || asPresentString(object.end_time) || null,
+    provider_event_trigger: asPresentString(object.trigger),
     metadata,
   };
 }

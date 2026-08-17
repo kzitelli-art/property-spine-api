@@ -1,6 +1,6 @@
 "use strict";
 
-const REQUIRED_LEDGER_CEILING = "176";
+const REQUIRED_LEDGER_CEILING = "180";
 
 const REQUIRED_TABLES = Object.freeze([
   "meeting_evidence_meetings",
@@ -18,6 +18,12 @@ const REQUIRED_TABLES = Object.freeze([
   "meeting_receipt_candidate_reviews",
   "meeting_receipt_missed_items",
   "meeting_receipt_manual_edit_deltas",
+  "meeting_property_current_bindings",
+  "meeting_provider_delivery_qualifications",
+  "meeting_provider_delivery_current_qualifications",
+  "meeting_transcript_provider_sources",
+  "meeting_extraction_attempts",
+  "meeting_extraction_attempt_outcomes",
 ]);
 
 function numericVersion(value) {

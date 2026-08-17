@@ -95,19 +95,20 @@ async function insertDelivery(client, {
   byte_length,
   signature_header,
   delivery_state,
+  provider_event_trigger = null,
   provider_payload_metadata = {},
 }) {
   return (await client.query(
     `insert into meeting_provider_deliveries
        (provider, connection_id, related_delivery_id, provider_request_id, provider_session_id,
         payload_sha256, byte_length, raw_body, signature_header, delivery_state,
-        provider_payload_metadata)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        provider_event_trigger, provider_payload_metadata)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      returning id, provider_request_id, provider_session_id, payload_sha256, byte_length,
-               delivery_state, received_at`,
+               delivery_state, provider_event_trigger, received_at`,
     [PROVIDER, connection_id, related_delivery_id, provider_request_id, provider_session_id,
      payload_sha256, byte_length, raw_body, signature_header, delivery_state,
-     provider_payload_metadata]
+     provider_event_trigger, provider_payload_metadata]
   )).rows[0];
 }
 
@@ -312,6 +313,7 @@ async function receiveReadWebhook(db, {
     provider_title: null,
     provider_started_at_text: null,
     provider_ended_at_text: null,
+    provider_event_trigger: null,
     metadata: { parse_error: parsed.error || "unknown" },
   };
 
@@ -339,6 +341,7 @@ async function receiveReadWebhook(db, {
     byte_length: byteLength,
     signature_header: normaliseHeader(signatureHeader).toLowerCase(),
     delivery_state,
+    provider_event_trigger: providerMetadata.provider_event_trigger,
     provider_payload_metadata: providerMetadata.metadata,
     provider_metadata_columns: {
       provider_title: providerMetadata.provider_title,
@@ -397,31 +400,199 @@ async function bindProviderMeeting(db, {
   if (!propertyId) throw serviceError(400, "missing_property_id", "property id is required.");
   if (!boundByUserId) throw serviceError(401, "no_binder", "A staff session is required to bind meeting evidence.");
 
-  const meeting = (await db.query(
-    `select id, provider, connection_id, provider_session_id, first_delivery_id
-       from meeting_provider_meetings
-      where id = $1`,
-    [providerMeetingId]
-  )).rows[0];
-  if (!meeting) throw serviceError(404, "provider_meeting_not_found", "Provider meeting not found.");
+  return withTransaction(db, async (client) => {
+    const meeting = (await client.query(
+      `select id, provider, connection_id, provider_session_id, first_delivery_id
+         from meeting_provider_meetings
+        where id = $1`,
+      [providerMeetingId]
+    )).rows[0];
+    if (!meeting) throw serviceError(404, "provider_meeting_not_found", "Provider meeting not found.");
 
-  const row = (await db.query(
-    `insert into meeting_property_bindings
-       (provider_meeting_id, property_id, bound_by_user_id, binding_basis)
-     values ($1,$2,$3,$4)
-     on conflict (provider_meeting_id, property_id) do nothing
-     returning id, provider_meeting_id, property_id, bound_by_user_id, bound_at, binding_basis`,
-    [providerMeetingId, propertyId, boundByUserId, bindingBasis]
-  )).rows[0];
+    const current = (await client.query(
+      `select b.id, b.provider_meeting_id, b.property_id, b.bound_by_user_id,
+              b.bound_at, b.binding_basis, b.binding_kind, b.correction_reason,
+              b.supersedes_binding_id
+         from meeting_property_bindings b
+        where b.provider_meeting_id = $1
+          and not exists (
+            select 1 from meeting_property_bindings child
+             where child.supersedes_binding_id = b.id
+          )
+        for update`,
+      [providerMeetingId]
+    )).rows[0];
+    if (current) {
+      if (String(current.property_id) === String(propertyId)) {
+        return { ...current, deduplicated: true };
+      }
+      throw serviceError(409, "provider_meeting_binding_correction_required",
+        "Provider meeting is already bound to another property; use an explicit binding correction.");
+    }
 
-  if (row) return { ...row, deduplicated: false };
-  const existing = (await db.query(
-    `select id, provider_meeting_id, property_id, bound_by_user_id, bound_at, binding_basis
-       from meeting_property_bindings
-      where provider_meeting_id = $1 and property_id = $2`,
-    [providerMeetingId, propertyId]
-  )).rows[0];
-  return { ...existing, deduplicated: true };
+    const row = (await client.query(
+      `insert into meeting_property_bindings
+         (provider_meeting_id, property_id, bound_by_user_id, binding_basis, binding_kind)
+       values ($1,$2,$3,$4,'initial')
+       on conflict (provider_meeting_id) where supersedes_binding_id is null do nothing
+       returning id, provider_meeting_id, property_id, bound_by_user_id, bound_at,
+                 binding_basis, binding_kind, correction_reason, supersedes_binding_id`,
+      [providerMeetingId, propertyId, boundByUserId, bindingBasis]
+    )).rows[0];
+    if (row) return { ...row, deduplicated: false };
+
+    const raced = (await client.query(
+      `select * from meeting_property_current_bindings where provider_meeting_id = $1`,
+      [providerMeetingId]
+    )).rows[0];
+    if (raced && String(raced.property_id) === String(propertyId)) {
+      return { ...raced, deduplicated: true };
+    }
+    throw serviceError(409, "provider_meeting_binding_correction_required",
+      "Provider meeting became bound to another property; use an explicit binding correction.");
+  });
+}
+
+async function correctProviderMeetingBinding(db, {
+  providerMeetingId,
+  currentPropertyId,
+  replacementPropertyId,
+  correctedByUserId,
+  correctionReason,
+  bindingBasis = "staff_session_explicit_correction",
+} = {}) {
+  if (!providerMeetingId) throw serviceError(400, "missing_provider_meeting_id", "provider meeting id is required.");
+  if (!currentPropertyId) throw serviceError(400, "missing_current_property_id", "current property id is required.");
+  if (!replacementPropertyId) throw serviceError(400, "missing_replacement_property_id", "replacement property id is required.");
+  if (!correctedByUserId) throw serviceError(401, "no_binding_corrector", "A staff session is required to correct meeting evidence.");
+  if (!String(correctionReason || "").trim()) {
+    throw serviceError(400, "missing_binding_correction_reason", "binding correction reason is required.");
+  }
+  if (String(currentPropertyId) === String(replacementPropertyId)) {
+    throw serviceError(409, "binding_replacement_unchanged", "replacement property must differ from the current binding.");
+  }
+
+  return withTransaction(db, async (client) => {
+    const current = (await client.query(
+      `select b.*
+         from meeting_property_bindings b
+        where b.provider_meeting_id = $1
+          and not exists (
+            select 1 from meeting_property_bindings child
+             where child.supersedes_binding_id = b.id
+          )
+        for update`,
+      [providerMeetingId]
+    )).rows[0];
+    if (!current) throw serviceError(404, "provider_meeting_binding_not_found", "Provider meeting has no current property binding.");
+    if (String(current.property_id) !== String(currentPropertyId)) {
+      throw serviceError(404, "provider_meeting_binding_not_visible",
+        "The current provider meeting binding is not visible from this staff session property.");
+    }
+
+    const assignments = (await client.query(
+      `select property_id, can_manage_roles
+         from property_team_assignments
+        where user_id = $1
+          and property_id = any($2::uuid[])
+          and active = true`,
+      [correctedByUserId, [currentPropertyId, replacementPropertyId]]
+    )).rows;
+    const manages = new Set(assignments
+      .filter((row) => row.can_manage_roles === true)
+      .map((row) => String(row.property_id)));
+    if (!manages.has(String(currentPropertyId)) || !manages.has(String(replacementPropertyId))) {
+      throw serviceError(403, "binding_correction_authority_required",
+        "Binding correction requires active management authority at both properties.");
+    }
+
+    return (await client.query(
+      `insert into meeting_property_bindings
+         (provider_meeting_id, property_id, bound_by_user_id, binding_basis,
+          binding_kind, correction_reason, supersedes_binding_id)
+       values ($1,$2,$3,$4,'correction',$5,$6)
+       returning id, provider_meeting_id, property_id, bound_by_user_id, bound_at,
+                 binding_basis, binding_kind, correction_reason, supersedes_binding_id`,
+      [providerMeetingId, replacementPropertyId, correctedByUserId, bindingBasis,
+       String(correctionReason).trim(), current.id]
+    )).rows[0];
+  });
+}
+
+async function qualifyProviderDelivery(db, {
+  providerMeetingId,
+  providerDeliveryId,
+  qualificationStatus,
+  qualificationBasis,
+  qualifiedByUserId,
+} = {}) {
+  if (!providerMeetingId) throw serviceError(400, "missing_provider_meeting_id", "provider meeting id is required.");
+  if (!providerDeliveryId) throw serviceError(400, "missing_provider_delivery_id", "provider delivery id is required.");
+  if (!qualifiedByUserId) throw serviceError(401, "no_finality_qualifier", "A staff session is required to qualify finality.");
+  if (!["qualified_final", "not_final"].includes(qualificationStatus)) {
+    throw serviceError(400, "unknown_finality_qualification", "qualification status must be qualified_final or not_final.");
+  }
+  if (!String(qualificationBasis || "").trim()) {
+    throw serviceError(400, "missing_finality_basis", "qualification basis is required.");
+  }
+
+  return withTransaction(db, async (client) => {
+    const delivery = (await client.query(
+      `select d.id, d.provider_event_trigger, d.related_delivery_id, d.delivery_state,
+              m.id as provider_meeting_id, c.authorized_by_user_id
+         from meeting_provider_deliveries d
+         join meeting_provider_meetings m
+           on m.connection_id = d.connection_id
+          and m.provider = d.provider
+          and m.provider_session_id = d.provider_session_id
+         join integration_connections c
+           on c.id = d.connection_id
+          and c.connection_status = 'active'
+        where d.id = $1 and m.id = $2`,
+      [providerDeliveryId, providerMeetingId]
+    )).rows[0];
+    if (!delivery || delivery.related_delivery_id || delivery.delivery_state !== "processed_unbound") {
+      throw serviceError(404, "logical_provider_delivery_not_found",
+        "No exact logical provider delivery is available for this provider meeting.");
+    }
+    if (String(delivery.authorized_by_user_id) !== String(qualifiedByUserId)) {
+      throw serviceError(403, "finality_qualification_authority_required",
+        "Only the user who authorized this Read connection may qualify delivery finality.");
+    }
+
+    const current = (await client.query(
+      `select q.*
+         from meeting_provider_delivery_qualifications q
+        where q.provider_delivery_id = $1
+          and not exists (
+            select 1 from meeting_provider_delivery_qualifications child
+             where child.supersedes_qualification_id = q.qualification_id
+          )
+        for update`,
+      [providerDeliveryId]
+    )).rows[0];
+    if (current
+        && current.qualification_status === qualificationStatus
+        && current.qualification_basis === String(qualificationBasis).trim()) {
+      return { ...current, provider_event_trigger: delivery.provider_event_trigger, deduplicated: true };
+    }
+
+    const inserted = (await client.query(
+      `insert into meeting_provider_delivery_qualifications
+         (provider_meeting_id, provider_delivery_id, qualification_status,
+          qualification_method, qualification_basis, qualified_by_user_id,
+          supersedes_qualification_id)
+       values ($1,$2,$3,'manual_exact_delivery_review',$4,$5,$6)
+       returning qualification_id, provider_meeting_id, provider_delivery_id,
+                 qualification_status, qualification_method, qualification_basis,
+                 qualified_by_user_id,
+                 qualified_at, supersedes_qualification_id`,
+      [providerMeetingId, providerDeliveryId, qualificationStatus,
+       String(qualificationBasis).trim(), qualifiedByUserId,
+       current ? current.qualification_id : null]
+    )).rows[0];
+    return { ...inserted, provider_event_trigger: delivery.provider_event_trigger, deduplicated: false };
+  });
 }
 
 async function readBoundProviderMeeting(db, { providerMeetingId, propertyId } = {}) {
@@ -431,7 +602,7 @@ async function readBoundProviderMeeting(db, { providerMeetingId, propertyId } = 
             m.provider_started_at_text, m.provider_ended_at_text,
             b.id as binding_id, b.property_id, b.bound_by_user_id, b.bound_at, b.binding_basis
        from meeting_provider_meetings m
-       join meeting_property_bindings b on b.provider_meeting_id = m.id
+       join meeting_property_current_bindings b on b.provider_meeting_id = m.id
       where m.id = $1 and b.property_id = $2`,
     [providerMeetingId, propertyId]
   )).rows[0];
@@ -439,7 +610,8 @@ async function readBoundProviderMeeting(db, { providerMeetingId, propertyId } = 
 
   const deliveries = (await db.query(
     `select id, provider_request_id, provider_session_id, received_at,
-            payload_sha256, byte_length, delivery_state, related_delivery_id
+            payload_sha256, byte_length, delivery_state, related_delivery_id,
+            provider_event_trigger
        from meeting_provider_deliveries
       where connection_id = $1 and provider_session_id = $2
       order by received_at asc`,
@@ -456,14 +628,20 @@ async function readBoundProviderTranscript(db, { providerMeetingId, propertyId }
   }
 
   const deliveries = (await db.query(
-    `select id, received_at, payload_sha256, raw_body
-       from meeting_provider_deliveries
-      where connection_id = $1
-        and provider_session_id = $2
-        and related_delivery_id is null
-        and delivery_state = 'processed_unbound'
-      order by received_at desc`,
-    [scoped.meeting.connection_id, scoped.meeting.provider_session_id]
+    `select d.id, d.received_at, d.payload_sha256, d.raw_body,
+            d.provider_event_trigger, q.qualification_id,
+            q.qualification_status, q.qualification_basis, q.qualified_at
+       from meeting_provider_deliveries d
+       join meeting_provider_delivery_current_qualifications q
+         on q.provider_delivery_id = d.id
+        and q.provider_meeting_id = $3
+        and q.qualification_status = 'qualified_final'
+      where d.connection_id = $1
+        and d.provider_session_id = $2
+        and d.related_delivery_id is null
+        and d.delivery_state = 'processed_unbound'
+      order by d.received_at desc`,
+    [scoped.meeting.connection_id, scoped.meeting.provider_session_id, providerMeetingId]
   )).rows;
 
   for (const delivery of deliveries) {
@@ -477,11 +655,14 @@ async function readBoundProviderTranscript(db, { providerMeetingId, propertyId }
       ...transcript,
       provider_meeting: scoped.meeting,
       provider_delivery_id: delivery.id,
+      provider_delivery_qualification_id: delivery.qualification_id,
+      provider_event_trigger: delivery.provider_event_trigger,
       provider_payload_sha256: delivery.payload_sha256,
     };
   }
 
-  throw serviceError(409, "bound_meeting_has_no_transcript", "The bound Read AI meeting has no valid meeting-end transcript delivery yet.");
+  throw serviceError(409, "bound_meeting_has_no_qualified_final_transcript",
+    "The bound Read AI meeting has no valid transcript from an exact delivery currently qualified as final.");
 }
 
 module.exports = {
@@ -489,8 +670,10 @@ module.exports = {
   PROVIDER,
   RAW_BODY_LIMIT_BYTES,
   bindProviderMeeting,
+  correctProviderMeetingBinding,
   ensureReadAiConnection,
   hasMeetingEvidenceAccess,
+  qualifyProviderDelivery,
   readBoundProviderMeeting,
   readBoundProviderTranscript,
   receiveReadWebhook,

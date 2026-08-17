@@ -13,7 +13,7 @@ const meetingReceiptService = require("../src/meeting_evidence/meeting_receipt_s
 const meetingEvidenceRoutes = require("../src/meeting_evidence/meeting_evidence_routes");
 const release = require("../src/meeting_evidence/meeting_receipt_release_readiness");
 
-const EXPECTED = 59;
+const EXPECTED = 73;
 let passed = 0;
 let failed = 0;
 
@@ -211,12 +211,16 @@ function modelOutput() {
   const serviceSource = fs.readFileSync(path.join(root, "src", "meeting_evidence", "meeting_receipt_service.js"), "utf8");
   const serverSource = fs.readFileSync(path.join(root, "server.js"), "utf8");
   const migration = fs.readFileSync(path.join(root, "migrations", "176_meeting_receipt_v0.sql"), "utf8");
+  const hardeningMigration = fs.readFileSync(
+    path.join(root, "migrations", "180_meeting_evidence_binding_finality_lineage.sql"), "utf8");
   includes("owner receipt generation endpoint is mounted", routesSource, "/owner-receipt");
   includes("property-scoped receipt read endpoint is mounted", routesSource, "/receipts/:id");
   includes("manual preview edit endpoint is mounted", routesSource, "/manual-edits");
   includes("manual sent assertion endpoint is mounted", routesSource, "/sent");
   includes("human feedback endpoint is mounted", routesSource, "/feedback");
   includes("release readiness endpoint is mounted", routesSource, "/release-readiness");
+  includes("binding correction endpoint is mounted", routesSource, "/binding-corrections");
+  includes("exact-delivery finality endpoint is mounted", routesSource, "/deliveries/:deliveryId/finality");
   includes("server injects the existing Anthropic client", serverSource, "operatorRoutes({ pool, anthropic })");
   notIncludes("workflow still does not call Ask Spine", workflowSource, "ask_spine");
   notIncludes("model adapter has no database dependency", adapterSource, "require(\"pg\")");
@@ -228,6 +232,16 @@ function modelOutput() {
   includes("migration guards review candidate lineage", migration, "trg_meeting_receipt_review_guard");
   includes("migration guards missed-item transcript evidence", migration, "trg_meeting_receipt_missed_item_guard");
   notIncludes("migration still does not write work orders", migration, "insert into work_orders");
+  includes("hardening migration enforces one initial binding", hardeningMigration, "uq_meeting_binding_one_initial");
+  includes("hardening migration cannot leapfrog concurrent 177 through 179", hardeningMigration,
+    "requires migrations 177, 178, and 179 to land first");
+  includes("hardening migration prevents binding forks", hardeningMigration, "uq_meeting_binding_one_successor");
+  includes("hardening migration exposes only current finality", hardeningMigration, "meeting_provider_delivery_current_qualifications");
+  includes("finality method is closed to manual exact-delivery review", hardeningMigration,
+    "qualification_method = 'manual_exact_delivery_review'");
+  includes("hardening migration records model attempts and outcomes", hardeningMigration, "meeting_extraction_attempt_outcomes");
+  includes("hardening migration defers accepted outcome enforcement to commit", hardeningMigration, "deferrable initially deferred");
+  notIncludes("hardening migration still writes no canonical work", hardeningMigration, "insert into work_orders");
 
   const sentReceiptDb = {
     async query(sql) {
@@ -260,7 +274,7 @@ function modelOutput() {
     "receipt_sent_assertion_conflict"
   ));
 
-  const readinessRow = { ledger_ceiling: "176", migration_count: 164 };
+  const readinessRow = { ledger_ceiling: "180", migration_count: 168 };
   for (const table of release.REQUIRED_TABLES) readinessRow[`has_${table}`] = true;
   const db = {
     async query(sql) {
@@ -271,6 +285,8 @@ function modelOutput() {
   };
   let evidenceArgs = null;
   let persistedRecord = null;
+  let persistedOptions = null;
+  let attemptArgs = null;
   let persistenceCount = 0;
   const evidence = {
     async readBoundProviderTranscript(_db, args) {
@@ -281,6 +297,7 @@ function modelOutput() {
         occurred_at_source: "provider_recorded",
         source_kind: "read_ai_webhook_transcript",
         provider_delivery_id: uuid(20),
+        provider_delivery_qualification_id: uuid(25),
       };
     },
   };
@@ -288,13 +305,29 @@ function modelOutput() {
     async ensureCanonicalMeeting() { return meeting; },
     async latestReceiptForMeeting() { return null; },
     async reissueGate() { return { ok_to_auto_reissue: true, review_count: 0, reason: null }; },
-    async ingestTranscriptVersion() { return { version: transcriptVersion, segments, deduplicated: false }; },
+    async ingestTranscriptVersion() {
+      return {
+        version: transcriptVersion,
+        segments,
+        provider_source: { source_link_id: uuid(26) },
+        deduplicated: false,
+      };
+    },
     async loadPropertyPeople() { return speakerPeople; },
-    async persistExtractionAndReceipt(_db, record) {
+    async openExtractionAttempt(_db, args) {
+      attemptArgs = args;
+      return { extraction_attempt_id: uuid(27), ...args };
+    },
+    async recordExtractionAttemptOutcome() {
+      throw new Error("successful workflow must close the attempt inside accepted persistence");
+    },
+    async persistExtractionAndReceipt(_db, record, options) {
       persistenceCount += 1;
       persistedRecord = record;
+      persistedOptions = options;
       return {
         extraction: { run: record.run, candidates: record.candidates },
+        extraction_outcome: { extraction_outcome_id: uuid(28), outcome_status: "accepted" },
         receipt: { receipt_id: uuid(21), rendered_digest: "a".repeat(64) },
         rendered: { rendered_subject: "SOLO Receipt", rendered_body: "body" },
       };
@@ -315,6 +348,15 @@ function modelOutput() {
   ok("provider meeting lookup is property scoped", evidenceArgs.providerMeetingId === uuid(22) && evidenceArgs.propertyId === meeting.property_id);
   ok("workflow persists the validated extraction record", persistedRecord && persistedRecord.candidates.length === 1);
   ok("workflow response exposes transcript metadata, not transcript prose", !Object.prototype.hasOwnProperty.call(generated.transcript, "transcript_text"));
+  ok("workflow opens attempt against the exact transcript source link",
+    attemptArgs.transcriptSourceLinkId === uuid(26));
+  ok("workflow records prompt, schema, and request digests before model use",
+    [attemptArgs.promptSha256, attemptArgs.outputSchemaSha256, attemptArgs.requestInputSha256]
+      .every((digest) => /^[0-9a-f]{64}$/.test(digest)));
+  ok("accepted persistence is bound to the opened attempt",
+    persistedOptions.extractionAttemptId === uuid(27));
+  ok("workflow returns accepted attempt outcome lineage",
+    generated.extraction_outcome.outcome_status === "accepted");
 
   const reviewedReceipts = {
     ...receipts,
@@ -356,6 +398,8 @@ function modelOutput() {
       return {
         meeting: { meeting_id: uuid(64) },
         transcript: { transcript_version_id: uuid(65), segment_count: 1 },
+        extraction_attempt: { extraction_attempt_id: uuid(70) },
+        extraction_outcome: { extraction_outcome_id: uuid(71), outcome_status: "accepted" },
         extraction: { run: { extraction_run_id: uuid(66) } },
         receipt: { receipt_id: uuid(67) },
         rendered: { rendered_subject: "SOLO Receipt", rendered_body: "body" },
