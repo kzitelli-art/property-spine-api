@@ -68,12 +68,82 @@ const claim = (v) => String(v || "").toLowerCase();
 //   unresolved              no spanning lease, but the opening claim says
 //                           occupied, or says nothing conclusive. NOT vacant.
 //   vacant                  no spanning lease and the opening claim agrees.
+/*  ── WHICH OCCUPANCY CLAIM ANSWERS FOR THIS POSITION ────────────────
+ *  The per-SPACE claim accepted by the established opening position wins
+ *  over the unit-level `occupancy_status` column, because it is about
+ *  this bed and the column is not. On a bed-grain property the column is
+ *  'unknown' for every unit, so treating it as the opening position is
+ *  how 160 beds ended up with no occupancy axis at all.
+ *
+ *  Returns the claim AND where it came from — a read that cannot say
+ *  which evidence answered is a read that cannot be argued with.  */
+function occupancyClaim(p) {
+  const perSpace = claim(p._opening_space_claim);
+  if (perSpace) return { value: perSpace, basis: "opening_position_space_claim" };
+  const unitLevel = claim(p._compat_occupancy);
+  if (unitLevel) return { value: unitLevel, basis: "unit_occupancy_status" };
+  return { value: "", basis: null };
+}
+
 function tenancyState(p) {
   if (p.conflict_state === "conflicted") return "contested";
   if (p.current_lease_position) return "contractually_occupied";
-  const c = claim(p._compat_occupancy);
-  if (c === "vacant") return "vacant";
+  //  ── COMMITTED BUT NOT ACTIVATED IS ITS OWN TENANCY FACT ──────────
+  //  The classifier has always computed this separately
+  //  (`economic_tenancy_state: 'activation_pending'`); this axis simply
+  //  never had a word for it, so it fell through to `unresolved` and the
+  //  Rent Roll's subtraction then sold it as Open. A bed with a commenced
+  //  lease awaiting activation is spoken for. It cannot be leased to
+  //  anyone else, and offering it as available is the expensive mistake.
+  //
+  //  This IS a tenancy fact — a contractual commitment exists — so it
+  //  belongs on this axis. Evidence contradictions do NOT: see the note
+  //  on rentRollBuckets below.
+  if (p.activation_pending_lease_position) return "activation_pending";
+  if (occupancyClaim(p).value === "vacant") return "vacant";
   return "unresolved";                     // 'occupied' claim, or 'unknown'
+}
+
+/*  ── THE FOUR BUCKETS A RENT ROLL SHOWS ─────────────────────────────
+ *  Occupied · Activation Pending · Open · Needs Review.
+ *
+ *  This reads BOTH axes and collapses nothing in the record — the
+ *  collapse happens here, at the moment of presentation, and the two
+ *  underlying facts stay separately readable on the position.
+ *
+ *  109A is why that matters. A spanning April lease says Navraj Julka
+ *  lives there; the accepted July rent roll says the bed was empty. Those
+ *  are two true recorded facts in contradiction. `tenancy_state` still
+ *  says `contractually_occupied`, because a lease really does span today;
+ *  `evidence_state` says `disagrees`, because the accepted source really
+ *  does contradict it. The bucket is Needs Review because Spine has no
+ *  basis to choose between them — and an operator opening the bed can
+ *  still see exactly which two claims are fighting.
+ *
+ *  ⚠ Open is a CLASSIFICATION, never a remainder. It is the only bucket
+ *  that could quietly absorb a position nobody classified, so it is the
+ *  one that must never be computed by subtraction.
+ *
+ *  Every position lands in exactly one bucket; `unclassified` exists so
+ *  that if a future state escapes all four it shows up as a visible
+ *  number rather than inflating Open.  */
+function rentRollBuckets(positions) {
+  const t = { occupied: 0, activation_pending: 0, open: 0, needs_review: 0,
+              unclassified: 0, total: positions.length };
+  for (const p of positions) {
+    const contradicted = p.evidence_state === "disagrees"
+                      || p.evidence_state === "unreconciled";
+    if (p.tenancy_state === "contested" || contradicted) t.needs_review++;
+    else if (p.tenancy_state === "contractually_occupied") t.occupied++;
+    else if (p.tenancy_state === "activation_pending") t.activation_pending++;
+    else if (p.tenancy_state === "vacant") t.open++;
+    //  `unresolved` is NOT Open. No spanning lease, and opening truth that
+    //  never resolved or claims someone is there — that is a question, and
+    //  a question offered as available is how a bed gets double-let.
+    else if (p.tenancy_state === "unresolved") t.needs_review++;
+    else t.unclassified++;
+  }
+  return t;
 }
 
 // AXIS 2 — EVIDENCE. Does opening truth agree with lease evidence?
@@ -84,7 +154,12 @@ function tenancyState(p) {
 //                  it is opening truth that never resolved, not a conflict.
 function evidenceState(p) {
   const lease = !!p.current_lease_position;
-  const c = claim(p._compat_occupancy);
+  const c = occupancyClaim(p).value;
+  //  A bed the opening position could not reconcile has no settled claim
+  //  to agree or disagree WITH. It is not inconclusive either — that word
+  //  means "opening truth never resolved"; this one did resolve, into an
+  //  open question a person owns.
+  if (c === "unreconciled") return "unreconciled";
   if (!c || c === "unknown") return "inconclusive";
   if (NON_REVENUE_CLAIMS.has(c)) return "confirmed";       // model/down is a use statement
   if (lease && c === "occupied") return "confirmed";
@@ -216,6 +291,11 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
       contributes_trusted_rent: contributesTrustedRent(withDown),
 
       imported_occupancy_claim: p._compat_occupancy || null,
+      //  The claim that actually answered, and where it came from. Without
+      //  the basis a reader cannot tell an accepted per-bed vacancy from
+      //  the unit-level placeholder that means nothing.
+      occupancy_claim: occupancyClaim(p).value || null,
+      occupancy_claim_basis: occupancyClaim(p).basis,
       lease: lease ? {
         lease_id: lease.lease_id,
         start_date: lease.start_date,
@@ -368,9 +448,22 @@ async function intervalPropertyPositions(pool, {
 
     let state = iv.interval_state;
     let because = iv.conflict_state === "conflicted" ? "overlapping_claims" : null;
-    if (evidence === "disagrees" && state === "contractually_free") {
+    /*  `unreconciled` blocks the answer for the same reason `disagrees`
+     *  does, and it must be named explicitly here. Adding the value to
+     *  evidenceState without adding it to this gate would have offered
+     *  Skyline's six unreconciled beds as contractually free — a NEW way
+     *  to double-let a bed, introduced by the change that exists to stop
+     *  exactly that. The as-of read and the forward read answer to the
+     *  same evidence or they are two different products.  */
+    if ((evidence === "disagrees" || evidence === "unreconciled")
+        && state === "contractually_free") {
       state = "unresolved";
-      because = "opening_evidence_disagrees";
+      //  Two different situations, two different reasons. "disagrees" is a
+      //  contradiction between claim and lease; "unreconciled" is an
+      //  opening claim that was never settled at all. Collapsing them
+      //  would tell whoever chases this the wrong thing to go look at.
+      because = evidence === "unreconciled"
+        ? "opening_position_unreconciled" : "opening_evidence_disagrees";
     }
 
     const a = attrs.get(String(row.space_id)) || {};
@@ -432,4 +525,8 @@ async function intervalPropertyPositions(pool, {
 module.exports = {
   datedPropertyPositions, intervalPropertyPositions, openingTruth,
   tenancyState, evidenceState, economicsState, contributesTrustedRent,
+  //  Exported so every surface that shows Occupied/Pending/Open/Needs
+  //  Review shows the SAME four numbers. A second implementation of "what
+  //  counts as Open" is how the subtraction got there in the first place.
+  rentRollBuckets, occupancyClaim,
 };

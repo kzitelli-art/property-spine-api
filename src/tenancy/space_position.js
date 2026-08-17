@@ -208,7 +208,58 @@ async function loadSpaceRows(pool, property_id) {
             and ue.status='scheduled' order by ue.effective_date desc limit 1) as notice_date,
         (select t.status from turnovers t
           where t.unit_id=u.id and t.status='in_progress' limit 1) as turn_status,
-        u.occupancy_status as compat_occupancy
+        u.occupancy_status as compat_occupancy,
+        /*  ── WHAT THE ESTABLISHED OPENING POSITION SAID ABOUT THIS BED ──
+         *
+         *  u.occupancy_status above is a UNIT-level column, and on a
+         *  bed-grain property it is 'unknown' for every unit — Skyline
+         *  imports 72 units all reading 'unknown', which left the dated
+         *  read with no occupancy axis at all and the Rent Roll papering
+         *  over the hole by subtracting occupied from total.
+         *
+         *  The opening position DID record a per-bed answer; it was just
+         *  never readable from here. It lives in the promoted proposals of
+         *  the activation the established position was built from. This
+         *  reads it back, per space, and it is EVIDENCE — a claim the
+         *  source made and a human accepted — never a lease and never a
+         *  substitute for one.
+         *
+         *  Three outcomes, because there are three:
+         *      vacant        accepted as empty at the opening date
+         *      occupied      accepted as tenanted
+         *      unreconciled  the source made a claim about this bed that
+         *                    Spine could not reconcile, and a person still
+         *                    has to. NOT open, and not occupied.
+         *
+         *  Matched on natural_key, which is the durable identity of a
+         *  proposed position (unit, or unit|room), rather than re-deriving
+         *  it from JSON here — two spellings of "which bed is this" would
+         *  diverge, and would diverge silently.  */
+        (select case
+                  when pr.status = 'needs_review' then 'unreconciled'
+                  when coalesce(pr.normalized_json->>'is_vacant','false') = 'true'
+                       or pr.normalized_json->>'tenant_name' is null then 'vacant'
+                  else 'occupied'
+                end
+           from opening_tenancy_positions otp
+           join proposed_records pr
+             on pr.activation_id = otp.activation_id
+            and pr.status in ('promoted','needs_review')
+            and (
+              lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number || '|' || s.space_label))
+              --  A key naming only the unit answers for the whole unit ONLY
+              --  when the unit is one position. Spreading it across a
+              --  three-bed unit would invent an answer for two beds the
+              --  source never named.
+              or (lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number))
+                  and (select count(*) from spaces s2 where s2.unit_id = u.id) = 1)
+            )
+          where otp.property_id = u.property_id
+            and otp.status = 'established'
+          order by case when lower(btrim(pr.natural_key))
+                             = lower(btrim(u.unit_number || '|' || s.space_label))
+                        then 0 else 1 end
+          limit 1) as opening_space_claim
       from spaces s
       join units u on u.id=s.unit_id
      where u.property_id=$1

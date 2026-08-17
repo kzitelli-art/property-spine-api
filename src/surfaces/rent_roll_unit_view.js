@@ -42,7 +42,7 @@
 
 "use strict";
 
-const { datedPropertyPositions } = require("../tenancy/dated_positions");
+const { datedPropertyPositions, rentRollBuckets } = require("../tenancy/dated_positions");
 
 const money = (n) => (n == null ? null : Math.round(Number(n) * 100) / 100);
 const firstTenant = (tenants) =>
@@ -166,7 +166,7 @@ async function unitRentRoll(pool, { property_id, as_of = null } = {}) {
   }
 
   const units = [...byUnit.values()].map((u) => {
-    const occupied = u.positions.filter((x) => x.tenancy_state === "contractually_occupied").length;
+    const t = rentRollBuckets(u.positions);
     const committed = u.positions.filter((x) => x.next).length;
     return {
       ...u,
@@ -174,14 +174,16 @@ async function unitRentRoll(pool, { property_id, as_of = null } = {}) {
       //  Counts only — no percentage, because a percentage of three beds
       //  is a number that looks more precise than it is.
       rentable_positions: u.positions.length,
-      occupied,
-      open: u.positions.length - occupied,
+      occupied: t.occupied,
+      activation_pending: t.activation_pending,
+      open: t.open,
+      needs_review: t.needs_review,
       with_next_known: committed,
     };
   }).sort((a, b) => String(a.unit_number).localeCompare(String(b.unit_number), undefined, { numeric: true }));
 
   const positions = units.flatMap((u) => u.positions);
-  const occupied = positions.filter((p) => p.tenancy_state === "contractually_occupied").length;
+  const totals = rentRollBuckets(positions);
   const withNext = positions.filter((p) => p.next).length;
   const rentUnknown = positions.filter(
     (p) => p.current && p.current.rent.state === "not_in_source").length;
@@ -193,11 +195,25 @@ async function unitRentRoll(pool, { property_id, as_of = null } = {}) {
     totals: {
       units: units.length,
       rentable_positions: positions.length,
-      occupied,
+      occupied: totals.occupied,
+      //  Committed and awaiting economic activation. Spoken for, and never
+      //  Open — offering one of these to a prospect is the expensive
+      //  mistake the subtraction used to make silently.
+      activation_pending: totals.activation_pending,
       //  NOT "vacant". A position with no lease spanning this date is open
       //  ON THIS DATE; whether it can be marketed is a different question
       //  with different inputs, and this read does not answer it.
-      open: positions.length - occupied,
+      //
+      //  And NOT `positions.length - occupied`. That subtraction was the
+      //  defect: it swept committed, contested and unreconciled beds into
+      //  Open because they were not Occupied. Open is now a state a
+      //  position is classified INTO, so it can never absorb a bed nobody
+      //  classified.
+      open: totals.open,
+      //  Contested claims and beds whose accepted opening evidence
+      //  contradicts the lease record. Spine has no basis to choose, and
+      //  will not.
+      needs_review: totals.needs_review,
       with_next_known: withNext,
       //  Stated rather than hidden: on a source that carries no forward
       //  rents this is most of the building, and an operator seeing many

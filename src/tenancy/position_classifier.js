@@ -265,6 +265,11 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     // implies locked, so no availability state can be stronger than its proof.
     future_commitment: classifyFutureCommitment(future, personNames),
     _compat_occupancy: row.compat_occupancy,
+    //  The per-SPACE claim the established opening position accepted, when
+    //  there is one. Carried beside the unit-level column rather than
+    //  replacing it, so "which evidence answered this" stays readable
+    //  instead of one silently shadowing the other.
+    _opening_space_claim: row.opening_space_claim || null,
   };
 }
 
