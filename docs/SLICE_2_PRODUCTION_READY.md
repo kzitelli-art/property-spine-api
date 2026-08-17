@@ -144,7 +144,7 @@ PROVEN (real Postgres)
   gate_person_ingress.js           10/10
 
 BROWSER VERIFIED (real app, real server, real import, real tracker)
-  forward_leasing_ledger.browser.js  77/77
+  forward_leasing_ledger.browser.js  85/85
   screenshots: docs/screenshots_forward_ledger/ (property-spine-app)
 
 NOT VERIFIED
@@ -208,6 +208,50 @@ inventory still to sell —               already counted inside the 144 committ
 $13,345/mo at stated asking rents       $12,200/mo of claimed rent that cannot yet
                                         be placed into months
 ```
+
+---
+
+## 4b · The language pass — glass only, reads untouched
+
+`git status src/ migrations/` is empty after this pass: **no API file changed.**
+The doctrine words are exactly where they were, in the payload, where they
+are precise and where nobody has to read them. Only the glass moved.
+
+```text
+PAYLOAD (unchanged)          GLASS
+per_tracker_committed        144 Signed & Pending, under 90.0% PRELEASED
+lease_tied                   Lease on File
+tracker_claim                Leasing Tracker
+needs_review                 Needs Review
+term_shape full_cycle        Full Year
+term_shape first_half_only   Fall Only
+contractual_rent_established Lease Rent in Spine
+rent_claimed_only            Rent from Leasing Tracker
+claims_not_attached_to_a_bed Bed Match Needed
+open_bed_assumption          Remaining at Asking
+full_sell_out_run_rate       Projected GPR
+earned_rent_state            partial month
+awaiting_contractual_tie     from the leasing tracker
+```
+
+**PRELEASED, not COMMITTED, and never OCCUPANCY.** Preleased is how much of
+the cycle has been sold; occupancy is who is in the building today. The word
+occupancy does not appear on this surface at all, and the browser proof
+asserts its absence from the headline.
+
+Forward Rent now reads in the reporting shape — Beds and Monthly Rent,
+Signed then Pending, a rule, **Total Rent**; then Remaining with its asking
+lines, a rule, **Remaining at Asking**; then **Projected GPR**. The rent
+source block is four lines that answer "how much of this is on paper?"
+without a paragraph of epistemology, and the browser proof asserts that the
+words CLAIMED, ASSUMED, epistemic, run-rate and NOT_ESTABLISHED appear
+nowhere on the panel.
+
+**The machinery did not soften to make the language natural.** Every
+distinction still holds in the payload and in the DB proofs: Signed ≠
+Pending, lease evidence ≠ tracker evidence, tracker rent ≠ proven lease rent,
+asking ≠ lease rent, preleased ≠ occupancy, missing dates ≠ invented Full
+Year dates, partial month ≠ earned revenue, failed bed matching ≠ Remaining.
 
 ---
 
