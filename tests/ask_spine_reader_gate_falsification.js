@@ -94,13 +94,16 @@ for (const f of FILES) {
 function mutate(file, ...edits) {
   let src = ORIGINAL.get(file);
   for (const [find, replace] of edits) {
-    const parts = src.split(find);
+    const newline = src.includes("\r\n") ? "\r\n" : "\n";
+    const nativeFind = find.replace(/\r?\n/g, newline);
+    const nativeReplace = replace.replace(/\r?\n/g, newline);
+    const parts = src.split(nativeFind);
     if (parts.length !== 2) {
       throw new Error(
         `anchor found ${parts.length - 1} time(s) in ${path.relative(ROOT, file)}, expected exactly 1:\n` +
         `    ${find.slice(0, 90)}…`);
     }
-    src = parts.join(replace);
+    src = parts.join(nativeReplace);
   }
   fs.writeFileSync(file, src);
 }
