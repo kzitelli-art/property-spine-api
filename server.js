@@ -60,6 +60,7 @@ const superAdminModule = require("./src/identity/super_admin");
 const orgAdminModule   = require("./src/identity/org_admin");
 const smsTransport = require("./src/comms/sms"); // SMS transport (Twilio) — fail-soft when unconfigured
 const communicationsBoundary = require("./src/comms/communications_boundary"); // the permanent communications boundary — one inbound resolver, one outbound gate
+const meetingEvidenceModule = require("./src/meeting_evidence/meeting_evidence_routes");
 // uploads held in memory; 25mb cap — OMs are image-heavy and run large, but a
 // runaway file still can't choke the box. Oversize returns a clean 413 below.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -120,6 +121,21 @@ app.use((req, res, next) => {
   return generalCors(req, res, next);
 });
 app.set("trust proxy", 1); // Render = one proxy hop: makes req.ip the real client so per-IP rate limits actually bind per client
+
+// The database connection. DATABASE_URL is set as an environment variable
+// in Render — NEVER hardcoded here. Neon requires SSL.
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+
+// ── READ AI WEBHOOK — raw bytes before JSON middleware ───────────────
+//  This route is mounted before global express.json() so X-Read-Signature
+//  is checked against the exact provider bytes. The route itself verifies
+//  the configured connection and HMAC before parsing JSON.
+app.use("/integrations/read-ai/webhook", meetingEvidenceModule.readAiWebhook({ pool }));
+app.use("/integrations/read-ai/webhook", meetingEvidenceModule.readAiWebhookErrorHandler({ pool }));
+
 app.use(express.json({ limit: "1mb" }));  // body-size cap — stops oversized payloads
 
 // ── operator gate (Phase 0 auth centralization) ──────────────────────
@@ -188,13 +204,6 @@ app.use((req, res, next) => {
     return res.status(401).json({ receipt: "Missing or wrong x-operator-key." });
   }
   next();
-});
-
-// The database connection. DATABASE_URL is set as an environment variable
-// in Render — NEVER hardcoded here. Neon requires SSL.
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
 });
 
 // single shared registry instance — created AFTER pool exists; mounted below
@@ -3174,6 +3183,13 @@ app.use("/", require("./src/surfaces/asset_management")({ pool, fileToText }));
 //  question is not recorded as a staff-agent message. It shares the authority
 //  seam above and nothing else.
 app.use("/", require("./src/agent/ask_spine")({ pool, anthropic }));
+
+// ── MEETING EVIDENCE — governed capture binding/read surface ─────────
+//  The provider webhook is mounted above express.json(); these operator
+//  endpoints stay here with the rest of the staff-session surfaces. They
+//  authorize the Read connection row, bind provider meetings to the
+//  session property, and read only already-bound meeting evidence.
+app.use("/", meetingEvidenceModule.operatorRoutes({ pool, anthropic }));
 
 // ── THE ONE UNIT TURN PAGE (BUILD 6A) ────────────────────────────────────
 //  READ-ONLY consolidation of the Build 1-5 canonical reads. Creates no state
