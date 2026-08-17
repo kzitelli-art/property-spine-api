@@ -207,30 +207,25 @@ const RATIONALE =
         (await pool.query(
           `select count(*)::int n from units where property_id = $1 and unit_number = '101'`,
           [propertyId])).rows[0].n === 1);
-      //  ⚠ RECORDED, NOT ASSUMED. loadLedgerSnapshot is the EVIDENCE stage:
-      //  it hardcodes space_label '(whole unit)' (line ~878) and only stores
-      //  `leasing_model` on the import_batches row. Real bed positions are
-      //  established later, at CONFIRM, by materializeRentableSpaces.
-      //
-      //  So this load ADDS a whole-unit position beside the existing beds,
-      //  even with leasingModel:'bed'. That is the documented behaviour of
-      //  this stage — and it is exactly why loading July 31 into an
-      //  already-bed-grained Skyline needs a decision before step E. Pinned
-      //  here so the next person meets the fact rather than the surprise.
+      //  ⚠ THIS ASSERTION WAS PINNED TO THE DEFECT, AND CAUGHT ITS FIX.
+      //  It used to record that the evidence loader added a '(whole unit)'
+      //  position beside the beds regardless of basis — the behaviour that
+      //  would have undone the 72-placeholder repair at step E. The loader
+      //  is now grain-aware, so an already-materialized unit is RECONCILED
+      //  to its existing positions instead. Proven in full across five
+      //  cases by tests/ledger_grain_reconciliation.db.js; asserted here
+      //  because this harness is the one that pinned the old behaviour.
       const afterLoad = (await intervalPropertyPositions(pool, {
         property_id: propertyId, requested_start: "2026-08-01", requested_end: "2027-07-31" })).count;
-      ok("the EVIDENCE-stage ledger load adds a '(whole unit)' position beside the beds",
-        afterLoad === 4, String(afterLoad));
-      ok("…so this loader is unit-grained by design; bed grain comes from the confirm step",
+      ok("the refresh RECONCILES to the established beds — the denominator does not move",
+        afterLoad === 3, String(afterLoad));
+      ok("…and no '(whole unit)' placeholder was recreated on current inventory",
         (await pool.query(
           `select count(*)::int n from spaces s join units u on u.id = s.unit_id
             where u.property_id = $1 and s.space_label = '(whole unit)'
-              and s.import_batch_id is not null`, [propertyId])).rows[0].n >= 1 &&
-        (await pool.query(
-          `select count(*)::int n from spaces s join units u on u.id = s.unit_id
-            where u.property_id = $1 and s.space_label like 'Room%'
-              and s.import_batch_id is not null`, [propertyId])).rows[0].n === 0,
-        "it wrote whole-unit positions and zero Room positions");
+              and not exists (select 1 from inventory_retirements ir
+                               where ir.unit_id = u.id and ir.reversed_at is null)`,
+          [propertyId])).rows[0].n === 0);
 
       //  A genuinely NEW unit number is created — the rule is not a
       //  whitelist. `force` is required because the same source_file +

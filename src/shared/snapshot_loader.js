@@ -281,6 +281,15 @@ function stableSpaceLabel(cfg, row) {
     The predicate is IMPORTED. This file does not get its own copy of
     "is it retired?".
     ════════════════════════════════════════════════════════════════════ */
+/*  Has this unit's grain ever been established? True once it carries any
+    position the source named, which is exactly the condition the surplus
+    placeholder repair keys on. One definition of "materialized".  */
+async function unitIsMaterialized(client, unitId) {
+  const r = await client.query(
+    `select 1 from spaces where unit_id = $1 and space_label <> '(whole unit)' limit 1`, [unitId]);
+  return r.rowCount > 0;
+}
+
 async function resolveCurrentUnitId(client, propertyId, unitNumber) {
   const cur = await client.query(
     `select u.id from units u
@@ -857,6 +866,32 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
     const counts={source_rows:0,units_created:0,units_reused:0,spaces_created:0,spaces_reused:0,current_rows:0,future_rows:0};
     //  Same pre-flight, same refusal, before this loader writes anything.
     await refuseIfSourceOnlyMatchesRetiredInventory(client, propertyId, rows);
+
+    /*  ── GRAIN IS THE PROPERTY'S, NOT THE CALLER'S ──────────────────
+     *  `options.leasingModel` was only ever stamped onto the batch row; the
+     *  spaces ignored it. The building's established basis is the
+     *  authority, and a caller that disagrees does not get to reshape it.  */
+    const basisRow = (await client.query(
+      `select leasing_basis from properties where id = $1`, [propertyId])).rows[0];
+    const grain = String((basisRow && basisRow.leasing_basis) || options.leasingModel || "unit")
+      .toLowerCase() === "bed" ? "bed" : "unit";
+
+    /*  The source's OWN statement of this property's grain, per unit, in
+     *  first-seen order — the same construction loadSnapshot uses. Needed
+     *  before the loop because materializing per row would consume the
+     *  placeholder for Room1 and then create Room2/Room3 beside it, which
+     *  is the phantom by another route.  */
+    const labelsByUnit = new Map();
+    for (const r of rows) {
+      if (!r.unit_number) continue;
+      const l = stableSpaceLabel({ leasing_model: grain }, r);
+      if (l === "(bed)") continue;                 //  unnamed: not a position
+      if (!labelsByUnit.has(r.unit_number)) labelsByUnit.set(r.unit_number, []);
+      const list = labelsByUnit.get(r.unit_number);
+      if (!list.includes(l)) list.push(l);
+    }
+    const discrepancies = [];
+
     for (const row of rows) {
       counts.source_rows++; if(row.section==='future') counts.future_rows++; else counts.current_rows++;
       let unitId=unitCache.get(row.unit_number);
@@ -875,16 +910,77 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
         }
         unitCache.set(row.unit_number,unitId);
       }
-      const label="(whole unit)", sk=`${unitId}|${label}`; let spaceId=spaceCache.get(sk);
-      if(!spaceId){
-        const q=await client.query("select id from spaces where unit_id=$1 and space_label=$2 limit 1",[unitId,label]);
-        if(q.rows.length){spaceId=q.rows[0].id;counts.spaces_reused++;}
-        else{spaceId=(await client.query(
-          `insert into spaces (unit_id,space_label,import_batch_id,source_type,source_as_of_date,confidence)
-           values ($1,$2,$3,'rent_roll_ledger',$4,$5) returning id`,
-          [unitId,label,batchId,sourceAsOfDate,options.confidence||'confirmed'])).rows[0].id;counts.spaces_created++;}
-        spaceCache.set(sk,spaceId);
+      /*  ── THE RENTABLE POSITION THIS EVIDENCE ROW IS ABOUT ──────────
+       *
+       *  This used to be `const label="(whole unit)"` for every row of
+       *  every property, regardless of the established leasing basis. On a
+       *  by-the-bed building that manufactured one phantom position per
+       *  unit and attached the evidence to it, so a July refresh of an
+       *  already-bed-grained Skyline would have put its 72 placeholders
+       *  straight back and then jammed confirmation on
+       *  SURPLUS_PLACEHOLDER.
+       *
+       *  THE RULE, and the asymmetry is the point:
+       *
+       *    a unit that has NEVER been materialized may be materialized
+       *    FROM the source;
+       *    a unit that ALREADY carries established positions may only be
+       *    RECONCILED to them.
+       *
+       *  A rent roll refresh is evidence about the building. It is not
+       *  authority to redefine what the building contains.
+       */
+      const label = stableSpaceLabel({ leasing_model: grain }, row);
+      let spaceId = null, discrepancy = null;
+
+      if (label === "(bed)") {
+        //  A by-bed row that never named its bed. Activation doctrine already
+        //  calls this ambiguous; turning it into a synthetic "(bed)" position
+        //  would invent inventory out of a missing identity.
+        discrepancy = `bed-grained source row named no room for unit ${row.unit_number}`;
+        counts.rows_without_a_named_position = (counts.rows_without_a_named_position || 0) + 1;
+      } else {
+        const sk = `${unitId}|${label}`;
+        spaceId = spaceCache.get(sk) || null;
+        if (!spaceId) {
+          const q = await client.query(
+            "select id from spaces where unit_id=$1 and space_label=$2 limit 1", [unitId, label]);
+          if (q.rows.length) { spaceId = q.rows[0].id; counts.spaces_reused++; }
+          else if (grain === "bed" && !(await unitIsMaterialized(client, unitId))) {
+            //  FRESH unit on a by-bed property: the canonical writer consumes
+            //  the trigger's provisional placeholder and creates exactly the
+            //  positions the source names. Not a second inventory writer —
+            //  the same one loadSnapshot uses.
+            await materializeRentableSpaces(client, {
+              unit_id: unitId,
+              labels: labelsByUnit.get(row.unit_number) || [label],
+              kind: "bed",
+              stamp: { import_batch_id: batchId, source_type: "rent_roll_ledger",
+                       source_as_of_date: sourceAsOfDate, confidence: options.confidence || "confirmed" },
+            });
+            const after = await client.query(
+              "select id from spaces where unit_id=$1 and space_label=$2 limit 1", [unitId, label]);
+            if (after.rows.length) { spaceId = after.rows[0].id; counts.spaces_created++; }
+          } else if (grain === "bed") {
+            //  ALREADY MATERIALIZED and the source names a position this unit
+            //  does not have. Visible discrepancy — never a new bed because a
+            //  later rent roll said so.
+            discrepancy =
+              `source names position "${label}" on unit ${row.unit_number}, ` +
+              `which is not one of its established positions`;
+            counts.positions_not_established = (counts.positions_not_established || 0) + 1;
+          } else {
+            //  BY-UNIT property: unchanged behaviour, one whole-unit position.
+            spaceId = (await client.query(
+              `insert into spaces (unit_id,space_label,import_batch_id,source_type,source_as_of_date,confidence)
+               values ($1,$2,$3,'rent_roll_ledger',$4,$5) returning id`,
+              [unitId, label, batchId, sourceAsOfDate, options.confidence || "confirmed"])).rows[0].id;
+            counts.spaces_created++;
+          }
+        }
+        if (spaceId) spaceCache.set(sk, spaceId);
       }
+      if (discrepancy) discrepancies.push({ row_index: row.row_index, unit_number: row.unit_number, note: discrepancy });
       await client.query(
         `insert into import_source_rows (import_batch_id,row_index,raw,produced_unit_id,produced_space_id,produced_person_id,produced_lease_id,parse_note)
          values ($1,$2,$3,$4,$5,null,null,$6)`,
@@ -894,7 +990,9 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
         //  the display is unaffected and the evidence stops being only our
         //  reading of the document.
         [batchId,row.row_index,JSON.stringify({ ...row, _source_cells: row._source_cells || null }),
-         unitId,spaceId,row.section==='future'?'future ledger row — evidence only':'current ledger row — evidence only']
+         unitId,spaceId,
+         discrepancy ? `discrepancy — evidence only, established no position: ${discrepancy}`
+           : (row.section==='future'?'future ledger row — evidence only':'current ledger row — evidence only')]
       );
     }
 
@@ -914,7 +1012,12 @@ async function loadLedgerSnapshot(pool, inputRows, options = {}) {
 
     await client.query("update import_batches set status='committed',updated_at=now() where id=$1",[batchId]);
     if (!borrowed) await client.query("commit");
-    return {ok:true,property_id:propertyId,import_batch_id:batchId,source_type:'rent_roll_ledger',source_file:sourceFile,source_as_of_date:sourceAsOfDate,loaded:counts};
+    return {ok:true,property_id:propertyId,import_batch_id:batchId,source_type:'rent_roll_ledger',
+            source_file:sourceFile,source_as_of_date:sourceAsOfDate,loaded:counts,
+            //  A refresh that could not place a row says so. Silence here
+            //  would read as "everything matched".
+            grain,
+            discrepancies};
   } catch(e){
     if (!borrowed) await client.query("rollback");
     console.error("rent-roll ledger load error:", e);
@@ -1512,6 +1615,10 @@ module.exports.availabilityProjection = availabilityProjection;
 module.exports.loadSnapshot = loadSnapshot;
 module.exports.readLatestSnapshot = readLatestSnapshot;
 module.exports.loadLedgerSnapshot = loadLedgerSnapshot;
+//  Exported so confirmation resolves current inventory through the SAME
+//  function the evidence pass uses. Two copies of "which unit is this?"
+//  would diverge, and would diverge silently.
+module.exports.resolveCurrentUnitId = resolveCurrentUnitId;
 module.exports.loadReconciliation = loadReconciliation;
 module.exports.readLatestReconciliation = readLatestReconciliation;
 module.exports.reconciliationAvailability = reconciliationAvailability;
