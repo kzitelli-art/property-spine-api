@@ -151,6 +151,65 @@ function rentRollBucketOf(p) {
   return "unclassified";
 }
 
+/*  ── WHY THIS BED IS IN THIS BUCKET ─────────────────────────────────
+ *  The classification and its reason are decided in the same place. A
+ *  surface that renders the bucket but explains it in its own words has
+ *  made itself a second interpreter, which is what the browser was doing.
+ *
+ *  Every reason is POSITIVE and causal. Open in particular must never
+ *  read "none of the other buckets matched" — that sentence IS the defect
+ *  this whole correction exists to remove. It must name the established
+ *  vacancy, the absence of a governing tenancy fact, and the absence of a
+ *  contradiction, because those three together are what make a bed
+ *  genuinely offerable. */
+function rentRollBucketReason(p, opts = {}) {
+  const asOf = opts.as_of || null;
+  const base = opts.baseline_as_of || null;
+  const claim = occupancyClaim(p);
+  const cur = p.current_lease_position;
+  const pend = p.activation_pending_lease_position;
+  const term = (l) => `${l.start_date || "no start"} → ${l.end_date || "no end"}`;
+  const asOfText = asOf ? ` on ${asOf}` : "";
+  const baseText = base ? ` at ${base}` : "";
+
+  if (p.conflict_state === "conflicted") {
+    return `Overlapping operative leases on this position (${(p.conflicting_lease_ids || []).join(", ")}) — ` +
+      `which one governs is unknown, so no tenancy claim can be made.`;
+  }
+  if (p.evidence_state === "unreconciled") {
+    return `The opening position${baseText} could not reconcile this bed: its source row was left ` +
+      `unresolved rather than accepted, so there is no established claim to read forward.`;
+  }
+  if (p.evidence_state === "disagrees") {
+    return cur
+      ? `The opening position${baseText} accepted this bed as ${claim.value}, but lease ` +
+        `${cur.lease_id} (${cur.lease_status}, ${term(cur)}) is in force${asOfText}. ` +
+        `Spine has no basis to choose between the source and the lease record.`
+      : `The opening position${baseText} accepted this bed as ${claim.value}, but no lease ` +
+        `supports that${asOfText}.`;
+  }
+  if (cur) {
+    return `Operative lease ${cur.lease_id} (${cur.lease_status}, ${term(cur)}) spans${asOfText}` +
+      (claim.value === "occupied" ? `, and the opening position${baseText} agrees.` : ".");
+  }
+  if (pend) {
+    return `Lease ${pend.lease_id} is committed (${pend.lease_status}, ${term(pend)}) and spans` +
+      `${asOfText}, but economic tenancy is not activated — the bed is spoken for and cannot ` +
+      `be offered to anyone else.`;
+  }
+  if (claim.value === "vacant") {
+    return `Established vacant${baseText}, no operative lease spanning${asOfText}, ` +
+      `and no unresolved contradiction.`;
+  }
+  //  Everything left is a QUESTION, and says which one.
+  if (!claim.value || claim.value === "unknown") {
+    return `No established occupancy claim for this bed${baseText} and no lease spanning` +
+      `${asOfText} — Spine cannot say whether it is occupied or available.`;
+  }
+  return `The opening position${baseText} claims this bed is ${claim.value}, but no lease ` +
+    `supports that${asOfText}.`;
+}
+
 /*  The operator vocabulary, decided server-side. Internal words
  *  (`contractually_occupied`, `unreconciled`) never reach the glass. */
 const RENT_ROLL_LABELS = Object.freeze({
@@ -311,6 +370,26 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
       evidence_state: evidenceState(withDown),
       economics_state: economicsState(withDown),
       contributes_trusted_rent: contributesTrustedRent(withDown),
+
+      /*  ── THE OPERATOR CLASSIFICATION, DECIDED HERE ─────────────────
+       *  Not in the Rent Roll surface. Ask Spine does not go through that
+       *  surface, and neither does any future reader — computing the
+       *  bucket there would force every one of them to re-derive it,
+       *  which is the same second-interpreter defect the browser had.
+       *
+       *  It is computed from the CLASSIFIER shape, which is what is in
+       *  scope here. The first version of this lived in the surface and
+       *  was handed the already-projected row: `_opening_space_claim` and
+       *  `current_lease_position` do not survive that projection, so every
+       *  reason came out as "no established occupancy claim" — including
+       *  for beds that were plainly Open. Wrong, and confidently so. */
+      bucket: rentRollBucketOf({ ...withDown,
+        tenancy_state: tenancyState(withDown), evidence_state: evidenceState(withDown) }),
+      bucket_label: RENT_ROLL_LABELS[rentRollBucketOf({ ...withDown,
+        tenancy_state: tenancyState(withDown), evidence_state: evidenceState(withDown) })],
+      bucket_reason: rentRollBucketReason({ ...withDown,
+        tenancy_state: tenancyState(withDown), evidence_state: evidenceState(withDown) },
+        { as_of: asOf, baseline_as_of: sp.opening_baseline ? sp.opening_baseline.as_of_date : null }),
 
       imported_occupancy_claim: p._compat_occupancy || null,
       //  The claim that actually answered, and where it came from. Without
@@ -566,7 +645,8 @@ module.exports = {
   //  Exported so every surface that shows Occupied/Pending/Open/Needs
   //  Review shows the SAME four numbers. A second implementation of "what
   //  counts as Open" is how the subtraction got there in the first place.
-  rentRollBuckets, rentRollBucketOf, RENT_ROLL_LABELS, occupancyClaim,
+  rentRollBuckets, rentRollBucketOf, rentRollBucketReason,
+  RENT_ROLL_LABELS, occupancyClaim,
   //  Re-exported so a surface can ask which baseline answers for a date
   //  without reaching into space_position for it.
   openingBaselineAsOf,

@@ -52,7 +52,7 @@ const { datedPropertyPositions, intervalPropertyPositions, rentRollBuckets } =
 const { unitRentRoll } = require("../src/surfaces/rent_roll_unit_view.js");
 
 const HARNESS = "rent_roll_occupancy_correction.db.js";
-const EXPECTED = 53;
+const EXPECTED = 59;
 const AS_OF = "2026-08-17";
 const TERM  = { from: "2026-08-01", to: "2027-07-31" };
 const APRIL = { from: "2026-04-01", to: "2027-03-31" };   // the 109A lease
@@ -275,6 +275,32 @@ const note = (l) => console.log("        " + l);
     const p109row = rows.find((r) => String(r.space_id) === String(bed109A.space_id));
     ok("109A renders as Needs Review on the glass",
       p109row.bucket_label === "Needs Review", p109row.bucket_label);
+
+    //  ── EVERY REASON IS POSITIVE AND CAUSAL ──────────────────────────
+    //  "None of the other buckets matched" IS the defect. An Open bed must
+    //  name the established vacancy, the absence of a governing tenancy
+    //  fact, and the absence of a contradiction — the three things that
+    //  together make a bed genuinely offerable.
+    ok("every row carries a reason", rows.every((r) => !!r.bucket_reason));
+    const anOpen = rows.find((r) => r.bucket === "open");
+    ok("★ an Open bed states its POSITIVE basis",
+      /Established vacant at 2026-07-31/.test(anOpen.bucket_reason)
+      && /no operative lease spanning/.test(anOpen.bucket_reason)
+      && /no unresolved contradiction/.test(anOpen.bucket_reason), anOpen.bucket_reason);
+    const aPend = rows.find((r) => r.bucket === "activation_pending");
+    ok("★ a Pending Activation bed names the lease and the condition",
+      /committed/.test(aPend.bucket_reason)
+      && /economic tenancy is not activated/.test(aPend.bucket_reason), aPend.bucket_reason);
+    ok("★ 109A names BOTH claims that are fighting",
+      /accepted this bed as vacant/.test(p109row.bucket_reason)
+      && p109row.bucket_reason.includes(lease109A)
+      && /no basis to choose/.test(p109row.bucket_reason), p109row.bucket_reason);
+    const anUnrec = rows.find((r) => r.bucket === "needs_review"
+      && /could not reconcile/.test(r.bucket_reason || ""));
+    ok("★ an unreconciled bed says the source row was left unresolved",
+      !!anUnrec, "no unreconciled reason found");
+    ok("no reason is a negative residue",
+      rows.every((r) => !/none of the other|did not match|no bucket/i.test(r.bucket_reason)));
 
     //  Per-unit numbers must add up too, or the header and the rows disagree.
     const perUnit = rr.units.reduce((a, u) => ({

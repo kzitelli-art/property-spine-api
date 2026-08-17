@@ -42,8 +42,7 @@
 
 "use strict";
 
-const { datedPropertyPositions, rentRollBuckets, rentRollBucketOf, RENT_ROLL_LABELS } =
-  require("../tenancy/dated_positions");
+const { datedPropertyPositions, rentRollBuckets } = require("../tenancy/dated_positions");
 
 const money = (n) => (n == null ? null : Math.round(Number(n) * 100) / 100);
 const firstTenant = (tenants) =>
@@ -110,8 +109,10 @@ function positionLine(p) {
      *  field come from the same function, so a surface renders what Spine
      *  decided rather than re-deriving Occupied/Open in the browser — which
      *  is how a screen and its own header come to disagree. */
-    bucket: rentRollBucketOf(p),
-    bucket_label: RENT_ROLL_LABELS[rentRollBucketOf(p)],
+    //  RELAYED, not recomputed. dated_positions decided all three.
+    bucket: p.bucket,
+    bucket_label: p.bucket_label,
+    bucket_reason: p.bucket_reason,
     //  The position's own standing, in the vocabulary the classifier owns.
     //  Carried for the detail view and for Ask Spine; NOT for the glass.
     tenancy_state: p.tenancy_state,
