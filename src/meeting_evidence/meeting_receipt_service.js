@@ -4,6 +4,7 @@ const contract = require("./meeting_receipt_contract");
 const { buildTranscriptVersionPayload } = require("./transcript_segments");
 const { assertValidRecord } = require("./meeting_receipt_validator");
 const { renderOwnerReceipt } = require("./meeting_receipt_renderer");
+const { canonicalJson, sha256Text } = require("./meeting_receipt_extractor_runner");
 
 function serviceError(httpStatus, code, message) {
   const e = new Error(message);
@@ -56,7 +57,7 @@ async function ensureCanonicalMeeting(db, {
 
   const binding = (await db.query(
     `select provider_meeting_id, property_id, bound_by_user_id, bound_at
-       from meeting_property_bindings
+       from meeting_property_current_bindings
       where provider_meeting_id = $1 and property_id = $2`,
     [providerMeetingId, propertyId]
   )).rows[0];
@@ -93,6 +94,9 @@ async function ingestTranscriptVersion(db, {
   sourceKind = "provider_transcript",
   supersedesVersionId = null,
   lineageMap = null,
+  providerDeliveryId = null,
+  providerDeliveryQualificationId = null,
+  linkedByUserId = null,
 } = {}) {
   requireValue(meetingId, "missing_meeting_id", "meeting id is required");
   const payload = buildTranscriptVersionPayload(requireValue(transcriptText, "missing_transcript_text", "transcript text is required"), {
@@ -100,6 +104,13 @@ async function ingestTranscriptVersion(db, {
   });
   if (!payload.segments.length) {
     throw serviceError(400, "no_transcript_segments", "transcript text produced no addressable segments");
+  }
+  const providerSourceRequested = providerDeliveryId || providerDeliveryQualificationId || linkedByUserId;
+  if (payload.source_kind === "read_ai_webhook_transcript" || providerSourceRequested) {
+    requireValue(providerDeliveryId, "missing_provider_delivery_id", "provider delivery id is required for a provider transcript");
+    requireValue(providerDeliveryQualificationId, "missing_provider_delivery_qualification_id",
+      "provider delivery qualification id is required for a provider transcript");
+    requireValue(linkedByUserId, "missing_transcript_source_linker", "linked_by_user_id is required for a provider transcript");
   }
 
   return withTransaction(db, async (client) => {
@@ -142,9 +153,39 @@ async function ingestTranscriptVersion(db, {
       [version.transcript_version_id]
     )).rows;
 
+    let providerSource = null;
+    if (providerSourceRequested || payload.source_kind === "read_ai_webhook_transcript") {
+      const insertedSource = (await client.query(
+        `insert into meeting_transcript_provider_sources
+           (transcript_version_id, provider_delivery_id,
+            provider_delivery_qualification_id, linked_by_user_id)
+         values ($1,$2,$3,$4)
+         on conflict (provider_delivery_qualification_id, transcript_version_id) do nothing
+         returning source_link_id, transcript_version_id, provider_delivery_id,
+                   provider_delivery_qualification_id, linked_by_user_id, linked_at`,
+        [version.transcript_version_id, providerDeliveryId,
+         providerDeliveryQualificationId, linkedByUserId]
+      )).rows[0];
+      providerSource = insertedSource || (await client.query(
+        `select source_link_id, transcript_version_id, provider_delivery_id,
+                provider_delivery_qualification_id, linked_by_user_id, linked_at
+           from meeting_transcript_provider_sources
+          where provider_delivery_qualification_id = $1
+            and transcript_version_id = $2`,
+        [providerDeliveryQualificationId, version.transcript_version_id]
+      )).rows[0];
+      if (!providerSource
+          || String(providerSource.transcript_version_id) !== String(version.transcript_version_id)
+          || String(providerSource.provider_delivery_qualification_id) !== String(providerDeliveryQualificationId)) {
+        throw serviceError(409, "provider_delivery_transcript_lineage_conflict",
+          "The exact provider delivery is already linked to different transcript lineage");
+      }
+    }
+
     return {
       version,
       segments,
+      provider_source: providerSource,
       deduplicated: !inserted,
     };
   });
@@ -152,6 +193,7 @@ async function ingestTranscriptVersion(db, {
 
 async function createExtractionRun(db, {
   extractionRunId = null,
+  extractionAttemptId,
   meetingId,
   transcriptVersionId,
   model,
@@ -163,6 +205,7 @@ async function createExtractionRun(db, {
   initiatedByUserId = null,
 } = {}) {
   requireValue(meetingId, "missing_meeting_id", "meeting id is required");
+  requireValue(extractionAttemptId, "missing_extraction_attempt_id", "extraction attempt id is required");
   requireValue(transcriptVersionId, "missing_transcript_version_id", "transcript version id is required");
   requireValue(model, "missing_model", "model is required");
   requireValue(modelVersion, "missing_model_version", "model version is required");
@@ -171,16 +214,92 @@ async function createExtractionRun(db, {
 
   return (await db.query(
     `insert into meeting_extraction_runs
-       (extraction_run_id, meeting_id, transcript_version_id, model, model_version,
+       (extraction_run_id, extraction_attempt_id, meeting_id, transcript_version_id, model, model_version,
         extractor_contract_revision, prompt_revision, extraction_coverage,
         coverage_notes, initiated_by_user_id)
-     values (coalesce($1, gen_random_uuid()), $2,$3,$4,$5,$6,$7,$8,$9,$10)
-     returning extraction_run_id, meeting_id, transcript_version_id, model,
+     values (coalesce($1, gen_random_uuid()), $2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     returning extraction_run_id, extraction_attempt_id, meeting_id, transcript_version_id, model,
                model_version, extractor_contract_revision, prompt_revision,
                extraction_coverage, coverage_notes, initiated_by_user_id, extracted_at`,
-    [extractionRunId, meetingId, transcriptVersionId, model, modelVersion, extractorContractRevision,
+    [extractionRunId, extractionAttemptId, meetingId, transcriptVersionId, model, modelVersion, extractorContractRevision,
      promptRevision, extractionCoverage, coverageNotes, initiatedByUserId]
   )).rows[0];
+}
+
+async function openExtractionAttempt(db, {
+  meetingId,
+  transcriptVersionId,
+  transcriptSourceLinkId,
+  model,
+  modelVersion,
+  extractorContractRevision = contract.CONTRACT_REVISION,
+  promptRevision = contract.PROMPT_REVISION,
+  promptSha256,
+  outputSchemaSha256,
+  requestInputSha256,
+  initiatedByUserId,
+} = {}) {
+  requireValue(meetingId, "missing_meeting_id", "meeting id is required");
+  requireValue(transcriptVersionId, "missing_transcript_version_id", "transcript version id is required");
+  requireValue(transcriptSourceLinkId, "missing_transcript_source_link_id", "transcript source link id is required");
+  requireValue(model, "missing_model", "model is required");
+  requireValue(modelVersion, "missing_model_version", "model version is required");
+  requireValue(promptSha256, "missing_prompt_sha256", "prompt digest is required");
+  requireValue(outputSchemaSha256, "missing_output_schema_sha256", "output schema digest is required");
+  requireValue(requestInputSha256, "missing_request_input_sha256", "request input digest is required");
+  requireValue(initiatedByUserId, "missing_initiated_by_user_id", "initiating user is required");
+
+  return (await db.query(
+    `insert into meeting_extraction_attempts
+       (meeting_id, transcript_version_id, transcript_source_link_id,
+        model, model_version, extractor_contract_revision, prompt_revision,
+        prompt_sha256, output_schema_sha256, request_input_sha256,
+        initiated_by_user_id)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     returning extraction_attempt_id, meeting_id, transcript_version_id,
+               transcript_source_link_id, model, model_version,
+               extractor_contract_revision, prompt_revision, prompt_sha256,
+               output_schema_sha256, request_input_sha256,
+               initiated_by_user_id, started_at`,
+    [meetingId, transcriptVersionId, transcriptSourceLinkId, model, modelVersion,
+     extractorContractRevision, promptRevision, promptSha256, outputSchemaSha256,
+     requestInputSha256, initiatedByUserId]
+  )).rows[0];
+}
+
+function validationErrorList(detail) {
+  if (detail === null || detail === undefined) return [];
+  if (Array.isArray(detail)) return detail;
+  if (typeof detail === "object") return [detail];
+  return [{ detail: String(detail) }];
+}
+
+async function recordExtractionAttemptOutcome(db, {
+  extractionAttemptId,
+  outcomeStatus,
+  structuredOutput = null,
+  failureCode = null,
+  validationErrors = [],
+  extractionRunId = null,
+} = {}) {
+  requireValue(extractionAttemptId, "missing_extraction_attempt_id", "extraction attempt id is required");
+  if (!["accepted", "rejected", "provider_failed", "persistence_failed"].includes(outcomeStatus)) {
+    throw serviceError(400, "unknown_extraction_outcome", "extraction outcome is not canonical");
+  }
+  const outputDigest = structuredOutput === null ? null : sha256Text(canonicalJson(structuredOutput));
+  return (await db.query(
+    `insert into meeting_extraction_attempt_outcomes
+       (extraction_attempt_id, outcome_status, structured_output,
+        structured_output_sha256, failure_code, validation_errors,
+        extraction_run_id)
+     values ($1,$2,$3,$4,$5,$6,$7)
+     on conflict (extraction_attempt_id) do nothing
+     returning extraction_outcome_id, extraction_attempt_id, outcome_status,
+               structured_output_sha256, failure_code, validation_errors,
+               extraction_run_id, completed_at`,
+    [extractionAttemptId, outcomeStatus, structuredOutput, outputDigest,
+     failureCode, JSON.stringify(validationErrorList(validationErrors)), extractionRunId]
+  )).rows[0] || null;
 }
 
 async function loadPropertyPeople(db, { propertyId } = {}) {
@@ -365,6 +484,7 @@ async function insertReceiptDraft(db, record, {
 
 async function persistExtractionResult(db, record, {
   initiatedByUserId = null,
+  extractionAttemptId,
 } = {}) {
   assertValidRecord(record, { forReceipt: true });
   const run = record.run || {};
@@ -373,6 +493,7 @@ async function persistExtractionResult(db, record, {
   return withTransaction(db, async (client) => {
     const insertedRun = await createExtractionRun(client, {
       extractionRunId: run.extraction_run_id,
+      extractionAttemptId,
       meetingId: record.meeting.meeting_id,
       transcriptVersionId: run.transcript_version_id || record.transcript_version_id,
       model: run.model,
@@ -405,17 +526,34 @@ async function persistExtractionAndReceipt(db, record, {
   createdByUserId,
   intendedRecipientPersonId = null,
   supersedesReceiptId = null,
+  extractionAttemptId,
+  structuredOutput,
 } = {}) {
   requireValue(createdByUserId, "missing_created_by_user_id", "created_by_user_id is required");
+  requireValue(extractionAttemptId, "missing_extraction_attempt_id", "extraction attempt id is required");
+  requireValue(structuredOutput, "missing_structured_output", "structured model output is required");
   assertValidRecord(record, { forReceipt: true });
   return withTransaction(db, async (client) => {
-    const extraction = await persistExtractionResult(client, record, { initiatedByUserId });
+    const extraction = await persistExtractionResult(client, record, {
+      initiatedByUserId,
+      extractionAttemptId,
+    });
     const draft = await insertReceiptDraft(client, record, {
       createdByUserId,
       intendedRecipientPersonId,
       supersedesReceiptId,
     });
-    return { extraction, ...draft };
+    const outcome = await recordExtractionAttemptOutcome(client, {
+      extractionAttemptId,
+      outcomeStatus: "accepted",
+      structuredOutput,
+      extractionRunId: extraction.run.extraction_run_id,
+    });
+    if (!outcome) {
+      throw serviceError(409, "extraction_attempt_already_completed",
+        "The extraction attempt already has a terminal outcome");
+    }
+    return { extraction, extraction_outcome: outcome, ...draft };
   });
 }
 
@@ -431,6 +569,17 @@ async function loadReceiptForProperty(db, { receiptId, propertyId } = {}) {
             r.sent_channel_note, r.supersedes_receipt_id
        from meeting_receipts r
        join meeting_evidence_meetings m on m.meeting_id = r.meeting_id
+       join meeting_extraction_runs run on run.extraction_run_id = r.extraction_run_id
+       join meeting_extraction_attempts attempt
+         on attempt.extraction_attempt_id = run.extraction_attempt_id
+       join meeting_transcript_provider_sources source
+         on source.source_link_id = attempt.transcript_source_link_id
+       join meeting_provider_delivery_current_qualifications finality
+         on finality.qualification_id = source.provider_delivery_qualification_id
+        and finality.qualification_status = 'qualified_final'
+       join meeting_property_current_bindings b
+         on b.provider_meeting_id = m.provider_meeting_id
+        and b.property_id = m.property_id
       where r.receipt_id = $1 and m.property_id = $2`,
     [receiptId, propertyId]
   )).rows[0];
@@ -776,11 +925,13 @@ module.exports = {
   loadPropertyPeople,
   loadReceiptForProperty,
   markReceiptSent,
+  openExtractionAttempt,
   persistExtractionAndReceipt,
   persistExtractionResult,
   persistCandidates,
   persistSpeakerResolutions,
   recordManualSend,
+  recordExtractionAttemptOutcome,
   recordReceiptFeedback,
   reissueGate,
   serviceError,

@@ -13,6 +13,19 @@ function extractorError(code, message, detail) {
   return e;
 }
 
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value).filter((key) => value[key] !== undefined).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function sha256Text(value) {
+  return crypto.createHash("sha256").update(String(value), "utf8").digest("hex");
+}
+
 function list(v) {
   return Array.isArray(v) ? v : [];
 }
@@ -325,22 +338,11 @@ async function runMeetingReceiptExtractor({
   if (typeof extractor !== "function") {
     throw extractorError("extractor_required", "an extractor function is required");
   }
-  const speakerLabels = list(speakerPeople).map((person) => person.label).filter(Boolean);
-  const prompt = buildExtractorPrompt({ meeting, segments, speakerLabels });
+  const prepared = prepareMeetingReceiptExtraction({ meeting, transcriptVersion, segments, speakerPeople });
   const raw = await extractor({
-    prompt,
-    schema: EXTRACTOR_OUTPUT_SCHEMA,
-    input: {
-      meeting,
-      transcript_version: transcriptVersion,
-      speaker_resolution_labels: speakerLabels,
-      segments: segments.map((segment) => ({
-        ordinal: segment.ordinal,
-        provider_timestamp: segment.provider_timestamp,
-        speaker_label: segment.speaker_label,
-        text: segment.text,
-      })),
-    },
+    prompt: prepared.prompt,
+    schema: prepared.schema,
+    input: prepared.input,
   });
   return compileExtractorOutput(raw, {
     meeting,
@@ -353,11 +355,43 @@ async function runMeetingReceiptExtractor({
   });
 }
 
+function prepareMeetingReceiptExtraction({ meeting, transcriptVersion, segments, speakerPeople = [] } = {}) {
+  if (!meeting || !meeting.meeting_id) throw extractorError("missing_meeting", "meeting is required");
+  if (!transcriptVersion || !transcriptVersion.transcript_version_id) {
+    throw extractorError("missing_transcript_version", "transcriptVersion is required");
+  }
+  if (!list(segments).length) throw extractorError("missing_segments", "segments are required");
+  const speakerLabels = list(speakerPeople).map((person) => person.label).filter(Boolean);
+  const prompt = buildExtractorPrompt({ meeting, segments, speakerLabels });
+  const input = {
+    meeting,
+    transcript_version: transcriptVersion,
+    speaker_resolution_labels: speakerLabels,
+    segments: segments.map((segment) => ({
+      ordinal: segment.ordinal,
+      provider_timestamp: segment.provider_timestamp,
+      speaker_label: segment.speaker_label,
+      text: segment.text,
+    })),
+  };
+  return {
+    prompt,
+    schema: EXTRACTOR_OUTPUT_SCHEMA,
+    input,
+    prompt_sha256: sha256Text(prompt),
+    output_schema_sha256: sha256Text(canonicalJson(EXTRACTOR_OUTPUT_SCHEMA)),
+    request_input_sha256: sha256Text(canonicalJson(input)),
+  };
+}
+
 module.exports = {
+  canonicalJson,
   compileExtractorOutput,
   extractorError,
   normalizedLabel,
+  prepareMeetingReceiptExtraction,
   runMeetingReceiptExtractor,
+  sha256Text,
   stableUuid,
   transcriptContainsLabel,
 };
