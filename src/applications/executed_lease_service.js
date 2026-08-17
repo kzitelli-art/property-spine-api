@@ -24,6 +24,7 @@
 // ════════════════════════════════════════════════════════════════════
 
 const { normalizeAndHash } = require("./proposed_terms_service");
+const { OPERATIVE_OVERLAP_SQL } = require("../tenancy/operative_overlap.js");
 // The canonical lifecycle authority — status and its milestones are authored
 // only here (Path D).
 const lifecycle = require("./application_lifecycle");
@@ -421,16 +422,11 @@ async function computeAdmissionBlockers(client, { application_id }) {
   //  application_id would be too broad: a stale or duplicate lease carrying
   //  the same application must still surface as a conflict. Before confirm-
   //  term record.lease_id is null, so nothing is excluded.
-  const overlap = await client.query(
-    `select id, lease_status, start_date, end_date, tenant_ids
-       from leases
-      where space_id = $1
-        and ($2::uuid is null or id <> $2::uuid)
-        and lease_status not in
-            ('cancelled','terminated','rescinded','void','expired','superseded')
-        and daterange(start_date, end_date, '[]')
-            && daterange($3::date, $4::date, '[]')
-      order by start_date asc`,
+  //  The predicate moved to src/tenancy/operative_overlap.js UNCHANGED —
+  //  same SQL, same parameter order — so that confirmProposal, the other
+  //  canonical lease writer, holds the identical wall instead of a copy of
+  //  it. This call site's behaviour is not altered by that move.
+  const overlap = await client.query(OPERATIVE_OVERLAP_SQL,
     [record.space_id, record.lease_id || null,
      record.lease_start_date, record.lease_end_date]);
   sources.overlap_check = {

@@ -59,6 +59,8 @@ const personIngress = require("../identity/person_ingress.js"); // the ONE door 
 const { mapRows, describePlan, planFor } = require("./rent_roll_field_map.js");
 const artifacts = require("./source_artifact_service.js");
 const dealService = require("./deal_service.js");
+const { competingOperativeLeases, describeCompeting, asDate } =
+  require("../tenancy/operative_overlap.js");
 
 function refusal(status, reason, receipt, extra = {}) {
   const e = new Error(receipt);
@@ -523,6 +525,57 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
         `will not guess.`, { space_count: spaces.length });
     } else {
       space = spaces[0];
+    }
+
+    //  ── 2c. ONE SPACE, ONE TENANCY ────────────────────────────────
+    //  The wall executed_lease_service §2b has always held, now held by
+    //  this writer too. It was not here, and nothing else stopped it:
+    //  `leases` has only a plain index on space_id, so confirming a newer
+    //  rent roll would have inserted a SECOND tenancy onto a bed that
+    //  already had one — silently, and straight into every economic read
+    //  underneath it.
+    //
+    //  It runs BEFORE person ingress on purpose. A refused row must leave
+    //  nothing behind, and a Person minted for a lease that was never
+    //  created is exactly the kind of residue that reads later as truth.
+    //
+    //  No self-exclusion is passed: a proposal that already produced a
+    //  lease is refused above as `already_promoted` and never reaches here,
+    //  so there is no lease of its own to exclude.
+    //
+    //  This REFUSES; it does not choose a winner. Which claim supersedes
+    //  which is a decision made from source evidence by a person, and
+    //  guessing it here would be the confident-wrong answer the whole
+    //  activation seam exists to prevent.
+    const competing = await competingOperativeLeases(client, {
+      space_id: space.id,
+      start_date: n.start_date ?? null,
+      end_date: n.end_date ?? null,
+    });
+    if (competing.length) {
+      await client.query("rollback");
+      const where = `Unit ${n.unit_number}${space.space_label ? ` · ${space.space_label}` : ""}`;
+      //  Written through `db`, not `client`: the transaction above is gone,
+      //  and this record of WHY has to survive the refusal. Same shape the
+      //  unknown_space_label and ambiguous_bed paths use.
+      await db.query(
+        `update proposed_records
+            set status='needs_review', status_reason=$2, updated_at=now()
+          where id=$1`,
+        [proposed_id,
+         `${where} already has ${competing.length === 1 ? "an operative lease" :
+            `${competing.length} operative leases`} covering ` +
+         `${asDate(n.start_date)} → ${asDate(n.end_date)}: ${describeCompeting(competing)}. ` +
+         `This row was not confirmed and no lease was created.`]);
+      throw refusal(409, "overlapping_operative_lease",
+        `${where} already has a lease in force for these dates, so Spine will not put a ` +
+        `second tenancy on it. This row is now marked for review — resolve the existing ` +
+        `lease first (correct its dates, or retire it if it never happened), then confirm ` +
+        `this one again.`,
+        { competing: competing.map((l) => ({
+            lease_id: l.id, lease_status: l.lease_status,
+            start_date: l.start_date, end_date: l.end_date,
+            tenant_ids: l.tenant_ids || [] })) });
     }
 
     //  3) the person, RESOLVED through the one governed ingress boundary.
