@@ -1,6 +1,117 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  ⚠ SKYLINE HOLDS TWO INVENTORY REPRESENTATIONS. EVERY CANONICAL
+##  TENANCY READ OF IT RETURNS 391 POSITIONS AGAINST 160 REAL BEDS.
+##  MIGRATION 180 IS WRITTEN AND NOT RELEASED. 2026-08-17.
+## ══════════════════════════════════════════════════════════════════
+
+```text
+property   14e41b7c-e91c-49e8-9651-10c4908a8f6a   'skyline' · 1417 n 15 phily
+           (two EMPTY duplicate Skyline rows also exist, created 07-25. Not these.)
+
+160  labelled bed spaces      source-backed 2026 import — the real inventory
+ 72  '(whole unit)' spaces    trg_unit_space, on the 72 REAL units
+159  '(whole unit)' spaces    trg_unit_space, on 159 LEGACY units
+---
+391  what intervalPropertyPositions returns today
+```
+
+**Two populations, and only one has a canonical rule.** `trg_unit_space`
+(001_baseline) inserts a `(whole unit)` space on every unit insert,
+unconditionally. On a by-the-bed property it lands beside the beds.
+
+The 159 legacy units are the promoted output of **ingest_run `468a06d1`** — a
+2020-03-30 rent roll that modelled each bed (`101 - A`) as a UNIT, promoted
+2026-06-12, before Spine had a by-bed model. They are **wrong as current
+inventory and real as promotion history**.
+`ingest_candidates.promoted_unit_id` is `ON DELETE SET NULL`, so deleting them
+succeeds and silently nulls 159 pointers — preserving the claim that a
+promotion happened while destroying the identity of what it produced.
+
+### The correction, and where each half lives
+
+```text
+72 surplus placeholders   tools/repair/resolve_surplus_whole_unit_spaces.js
+                          CLASS 4. The canonical writer
+                          (inventory_materialization.js) REFUSES this shape
+                          with SURPLUS_PLACEHOLDER by design, because it means
+                          a partial load — "a question for a person". This is
+                          how a person answers it.
+159 superseded units      migration 180 + src/tenancy/inventory_retirement.js
+                          CLASS 1. Retained as history, removed from current
+                          inventory. Nothing is deleted.
+```
+
+`391 → 319 → 160`, proven through **unmodified** `intervalPropertyPositions`
+in `tests/inventory_retirement.db.js` (45/45) and
+`tests/surplus_placeholder_repair.db.js` (28/28).
+
+### ⚠ Read this before touching retirement
+
+Retirement makes the loader **hide rows**, and an adversarial probe of its
+first version found that dangerous in a specific way: a real active lease
+attached to a retired unit returned `count=0` from `datedPropertyPositions` —
+**invisible, with no error anywhere.** A later rent roll naming a retired unit
+number would have done exactly that. Three guards now close it, and all three
+are asserted:
+
+```text
+DATABASE      trg_refuse_lease_on_retired_inventory refuses a lease on retired
+              inventory (23514), naming the unit and the next step. In Postgres
+              and not in one writer, because many paths write leases and a rule
+              in one of them is a rule the others do not have.
+WRITER        materializeRentableSpaces refuses UNIT_RETIRED_FROM_INVENTORY —
+              it used to create beds that no read could see.
+READ          datedPropertyPositions and intervalPropertyPositions now return
+              `retired_excluded: {units, leases_on_retired_inventory, conflict}`.
+              A read that excludes rows says so. `conflict: true` is an
+              Exposure, never a tidy zero.
+```
+
+**A raw `unit_number` lookup still resolves a retired unit** (snapshot_loader
+does this). That is asserted as a known property, harmless only because of the
+two guards above. If you change the lookup, revisit it deliberately.
+
+**The temporal wall.** The loader excludes retired units at **every** `as_of`,
+including dates before `retired_at`. That is right for the one reason that
+exists — a bed-as-unit source was never a true description of the building —
+and **wrong** for a future reason like `physically_removed`, where the unit
+genuinely was inventory until a date. The vocabulary is split by that property
+(`REASONS_NEVER_WAS_INVENTORY` / `REASONS_DATE_SENSITIVE`) and asserted, so a
+new reason code goes red until someone confronts the question.
+
+### Deliberate boundaries — named, not built
+
+```text
+eleven other readers      pricing_decision_packet, effective_pricing,
+                          commitmentledger, shadow_quote_simulator,
+                          identity/activation, snapshot_loader and others read
+                          spaces/units by property DIRECTLY and do NOT honour
+                          retirement. Only the tenancy loader family does.
+                          Decide before pricing reads Skyline.
+Mike's ledger             forwardLeasingPosition reads iv.positions only, so
+                          `retired_excluded` does not reach the Forward Leasing
+                          surface. Deliberate — that surface had its doctrine
+                          vocabulary removed on purpose.
+Ask Spine                 retirement has no standing read. "Why does Skyline
+                          show 160 beds when there are 231 units?" is a real
+                          question with no governed answer yet (§40.2).
+migration number          180 was expected to be Meeting Evidence's. Production
+                          is at 179 and no 180 is on main, so it is the next
+                          free slot. WHOEVER RELEASES SECOND RENUMBERS, after
+                          reading the live ceiling.
+```
+
+Also still true and unrelated to inventory: production holds only the **April
+30** Skyline rent roll (the July 31 evidence Slice 2 was validated against is
+not in `import_batches` or `source_artifacts`), the 160 beds carry only 28
+overlapping 2026–27 rights, KZ's Skyline team assignment
+(`1b8527af-7ba2-4dd8-af7b-cf2f51e8c794`) is `active = false`, and Mike has no
+staff user.
+
+
+## ══════════════════════════════════════════════════════════════════
 ##  ⚠ THE PRODUCTION LEDGER CEILING IS **176**, NOT 174. THE EQUITY
 ##  BANNER BELOW SAYS 174 AND WAS TRUE WHEN WRITTEN. 2026-08-17.
 ##  READ THIS BEFORE ANY MIGRATION OR RELEASE, INCLUDING BEFORE THE

@@ -54,6 +54,15 @@
 
 const PLACEHOLDER_LABEL = "(whole unit)";
 
+/*  RETIRED INVENTORY MUST NOT ACQUIRE NEW POSITIONS.
+ *
+ *  An adversarial probe found that materializing onto a retired unit was
+ *  ALLOWED, and that the beds it created were then invisible in every
+ *  canonical read — a write that succeeds and produces nothing anyone can
+ *  see. This is the one canonical inventory writer, so the guard belongs
+ *  here rather than in each caller.  */
+const { NOT_RETIRED_SQL } = require("./inventory_retirement");
+
 function err(code, message, extra) {
   const e = new Error(message);
   e.code = code;
@@ -119,6 +128,21 @@ async function materializeRentableSpaces(client, {
 
   const wanted = [...new Set(labels.map((l) => String(l == null ? "" : l).trim()).filter(Boolean))];
   if (!wanted.length) wanted.push(PLACEHOLDER_LABEL);
+
+  //  REFUSE BEFORE READING ANYTHING ELSE. Creating a rentable position on
+  //  retired inventory would succeed and then be hidden by the loader — a
+  //  silent no-op, which is worse than an error.
+  const notRetired = (await client.query(
+    `select ${NOT_RETIRED_SQL("u")} as ok, u.unit_number from units u where u.id = $1`,
+    [unit_id])).rows[0];
+  if (!notRetired) throw err("UNIT_NOT_FOUND", `No such unit ${unit_id}.`, { unit_id });
+  if (!notRetired.ok) {
+    throw err("UNIT_RETIRED_FROM_INVENTORY",
+      `Unit ${notRetired.unit_number} is retired from current inventory, so it cannot ` +
+      `be given rentable positions — they would be created and then hidden from every ` +
+      `read. Reinstate the unit first if this is real current inventory.`,
+      { unit_id });
+  }
 
   const existing = (await client.query(
     `select id, space_label from spaces where unit_id = $1 order by created_at, id`,

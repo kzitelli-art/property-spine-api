@@ -450,9 +450,15 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
 
     //  1) the unit — created by the evidence pass already, but resolved
     //     rather than assumed, because a human may have renamed it.
-    let unit = (await client.query(
-      `select * from units where property_id=$1 and unit_number=$2`,
-      [propertyId, String(n.unit_number)])).rows[0];
+    //  CURRENT inventory only, through the SAME resolver the evidence pass
+    //  uses. Without it, staging was retirement-aware and promotion could
+    //  still land on an obsolete representation whenever a current and a
+    //  retired unit share a unit number.
+    const { resolveCurrentUnitId } = require("../shared/snapshot_loader.js");
+    const currentUnitId = await resolveCurrentUnitId(client, propertyId, String(n.unit_number));
+    let unit = currentUnitId
+      ? (await client.query(`select * from units where id=$1`, [currentUnitId])).rows[0]
+      : undefined;
     if (!unit) {
       unit = (await client.query(
         `insert into units (property_id, unit_number, market_rent)

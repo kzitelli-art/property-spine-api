@@ -205,6 +205,28 @@ const PRODUCTION_APPROVED = [
             "scaffolding documented by the Equity 174 run card and deleted when governed " +
             "document establishment owns the same confirmation workflow",
     until: "governed document establishment owns the Equity write workflow" },
+  { file: "tools/repair/resolve_surplus_whole_unit_spaces.js",
+    reason: "PLATFORM REPAIR, and repair authority is narrower than management authority. " +
+            "`trg_unit_space` (001_baseline) inserts one '(whole unit)' space on every unit " +
+            "insert; on a by-the-bed property loaded BEFORE " +
+            "src/tenancy/inventory_materialization.js existed, that placeholder sits beside " +
+            "the real beds and every leasable denominator counts it — production's Skyline " +
+            "reads 391 rentable positions against 160 beds. The canonical writer deliberately " +
+            "REFUSES that shape (SURPLUS_PLACEHOLDER) rather than deleting, because it means " +
+            "a partial load or two importers disagreeing, which is a question for a person. " +
+            "This tool is how a person answers it: DRY-RUN by default, --apply writes in ONE " +
+            "transaction, the predicate is derived from the inventory (a placeholder whose " +
+            "unit also carries a source-named position) with no property, address or " +
+            "import_batch_id hardcoded, and the pristine test is IMPORTED from the canonical " +
+            "module so it reads pg_constraint at runtime rather than a list maintained here. " +
+            "It REFUSES per row and names what holds it, never skips quietly, and never " +
+            "removes a unit's last position. Proven in tests/surplus_placeholder_repair.db.js " +
+            "(28/28), which reproduces production's shape through the real trigger and " +
+            "provokes the canonical refusal. CLASS 4 platform repair",
+    until: "no property has a '(whole unit)' space on a unit that also carries a source-named " +
+           "position — a query, not a judgement: select count(*) from spaces p join units u on " +
+           "u.id = p.unit_id where p.space_label = '(whole unit)' and exists (select 1 from " +
+           "spaces s where s.unit_id = u.id and s.space_label <> '(whole unit)')" },
 ];
 
 /*  DEAD — retained but not to be run. Not safe, not active. */

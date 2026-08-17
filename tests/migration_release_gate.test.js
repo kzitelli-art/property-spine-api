@@ -256,7 +256,7 @@ console.log(`  (using the real migrations/ directory: ${files.length} files, new
   //  release DOES apply it, and a pinned release now refuses first.
   // ──────────────────────────────────────────────────────────────────
   {
-    const HOSTILE = "180_untracked_hostile.sql";
+    const HOSTILE = "990_untracked_hostile.sql";
     fs.writeFileSync(path.join(MIGDIR, HOSTILE), "-- present on disk, in no commit\nselect 1;\n");
     const ALL_APPLIED = { MIGRATION_RELEASE: "1", EXPECTED_LEDGER_CEILING: ceilingOfAll };
 
@@ -306,16 +306,16 @@ console.log(`  (using the real migrations/ directory: ${files.length} files, new
   {
     const SUB = path.join(MIGDIR, "archive");
     fs.mkdirSync(SUB, { recursive: true });
-    fs.writeFileSync(path.join(SUB, "181_decoy.sql"), "select 1;\n");
+    fs.writeFileSync(path.join(SUB, "991_decoy.sql"), "select 1;\n");
     git("-c", "user.email=proof@spine.local", "-c", "user.name=proof", "add", "-A");
     git("-c", "user.email=proof@spine.local", "-c", "user.name=proof", "commit", "-q", "-m", "archive a decoy");
     const HEAD2 = git("rev-parse", "HEAD");
-    fs.writeFileSync(path.join(MIGDIR, "181_decoy.sql"), "-- different file, same name\nselect 1;\n");
+    fs.writeFileSync(path.join(MIGDIR, "991_decoy.sql"), "-- different file, same name\nselect 1;\n");
     const r = runScratch(ALL, { MIGRATION_RELEASE: "1", EXPECTED_LEDGER_CEILING: ceilingOfAll, EXPECTED_SHA: HEAD2 });
     ok_or(r.code === 1 && /NOT in the pinned commit/.test(r.out),
       "SCOPE: a tracked subdirectory file of the same NAME does not launder an untracked migration",
       `exit=${r.code} :: ${r.out.slice(-300)}`);
-    fs.unlinkSync(path.join(MIGDIR, "181_decoy.sql"));
+    fs.unlinkSync(path.join(MIGDIR, "991_decoy.sql"));
     fs.rmSync(SUB, { recursive: true, force: true });
     git("-c", "user.email=proof@spine.local", "-c", "user.name=proof", "add", "-A");
     git("-c", "user.email=proof@spine.local", "-c", "user.name=proof", "commit", "-q", "-m", "remove decoy");
