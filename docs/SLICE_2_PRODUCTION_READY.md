@@ -1,7 +1,15 @@
 # Slice 2 — Production Ready, and the one thing blocking the rung
 
-**Status: FROZEN LOCALLY · PRODUCTION READY. Not deployed, not established,
-not verified in production.** 2026-08-16.
+**Status: RECONCILED WITH MAIN · PRODUCTION READY. Not deployed, not
+established, not verified in production.** 2026-08-16, reconciled 2026-08-17.
+
+> ⚠ **The migration numbers in the first draft of this document were wrong by
+> the time it was written down, and that is the whole lesson of §3.**
+> Production moved: Meeting Evidence merged to `main` and took **175 and
+> 176**, so the three Slice 2 files are now **177 · 178 · 179**, and the live
+> ledger ceiling is **176**, not 174. Reconciled in `3b21a73`. Numbers in a
+> document are a snapshot of an assumption — the ceiling is read from the
+> database at release time or it is not read at all.
 
 No further architecture, UI expansion or financial modelling. The next
 action is the release rail in §3, and nothing else. If production access
@@ -35,8 +43,15 @@ PRODUCTION DATABASE CREDENTIALS ARE NOT PRESENT IN THIS SESSION
 That is infrastructure, not architecture. There is no code change that
 makes it go away, and writing one would be replacing a blocker with work.
 
+**The blocker is asymmetric, and saying so is the point.** Kameron has Neon
+and Render access and has already released 175–176 and deployed `e5497a4`
+from outside this container. This container does not, and does not need
+credentials pasted into it to be useful — it produces the release rail, the
+migrations and the proofs; the release itself is run where the access
+already is. Nothing below assumes this session ever reads production.
+
 **What it prevents, precisely:** reading the live migration ledger,
-releasing 175–177, deploying, establishing Skyline through the production
+releasing 177–179, deploying, establishing Skyline through the production
 path, staging the tracker there, signing in as a real operator, and
 verifying 144 / 16 / 90.0% and $130,532 against production. Steps 1–12 of
 the ship sequence, all of them.
@@ -55,10 +70,19 @@ verifies and refuses to start on a pending file, so releasing schema is a
 separate, deliberate act before the code deploy.
 
 ```text
-175_person_ingress_resolution_kind.sql     already written, not yet released
-176_property_leasing_cycles.sql            new — the named cycle
-177_activation_source_supersession.sql     new — which tracker version is current
+LIVE LEDGER CEILING AT RECONCILIATION   176   (175 + 176 are Meeting Evidence,
+                                               released and deployed on main)
+
+177_person_ingress_resolution_kind.sql     already written, not yet released
+178_property_leasing_cycles.sql            new — the named cycle
+179_activation_source_supersession.sql     new — which tracker version is current
 ```
+
+The classifier that `migrations/migrate.js` uses was run with that same input
+shape against a ledger simulated at 176: `duplicateFileNumbers []`,
+`versionNameConflicts []`, `ledgerVersionMissingFromRepo []`, `ceiling 176`,
+`structurallySound true`, and pending = exactly these three files and nothing
+else.
 
 ### The release command
 
@@ -77,27 +101,48 @@ EXPECTED_LEDGER_CEILING=<what step 1 printed> \
 EXPECTED_SHA=<the sha being deployed> \
   node migrations/migrate.js --apply
 
-#  3. Verify the ceiling moved to 177, then deploy API and app.
+#  3. Verify the ceiling moved to 179, then deploy API and app.
 ```
 
-### What 176 and 177 do to a live database
+The SHAs to deploy, reconciled with `main` and pushed:
 
 ```text
-176   CREATE TABLE property_leasing_cycles. New table only. Nothing reads
+API   3b21a73   property-spine-api  claude/code-philosophy-review-xoiz8f
+APP   5964848   property-spine-app  claude/code-philosophy-review-xoiz8f
+```
+
+### What 178 and 179 do to a live database
+
+```text
+178   CREATE TABLE property_leasing_cycles. New table only. Nothing reads
       it until a cycle is established, and every forward read still accepts
       explicit dates, so the deploy changes no existing answer.
 
-177   ALTER TABLE activations — six nullable columns and one PARTIAL unique
+179   ALTER TABLE activations — six nullable columns and one PARTIAL unique
       index on (property_id, source_kind) where status='activated' and
       superseded_by_id is null and source_kind is not null.
 
       ⚠ THE INDEX IS THE ONLY THING THAT CAN BITE. Existing activations
       have source_kind NULL and are therefore OUTSIDE the index entirely —
       by design, so no historical row is retro-classified into a lane it
-      was never told about. Confirm before releasing:
+      was never told about.
+```
 
-        select count(*) from activations where source_kind is not null;
-        -- expected: 0 on any database that has not run the new intake
+⚠ **The confirmation query in the first draft could not run, and would have
+looked like a database problem.** It selected `activations.source_kind` —
+the column 179 is what *creates*. Before the migration, ask whether the
+column exists; only after it exists is counting rows a meaningful question.
+
+```sh
+#  BEFORE releasing 179 — expected: f
+psql "$DATABASE_URL" -c "select exists (select 1 from information_schema.columns
+  where table_schema='public' and table_name='activations'
+    and column_name='source_kind');"
+
+#  AFTER releasing 179 — expected: 0. Every historical activation sits
+#  OUTSIDE the partial index, by design, so none is retro-classified into
+#  a lane it was never told about.
+psql "$DATABASE_URL" -c "select count(*) from activations where source_kind is not null;"
 ```
 
 ---
@@ -109,7 +154,7 @@ established before the surface can default to it.
 
 ```text
  1  read the live ledger ceiling
- 2  release 175, 176, 177
+ 2  release 177, 178, 179
  3  deploy API + app together
  4  establish Skyline through the canonical production path
  5  establish the 2026–27 cycle          2026-08-01 → 2027-07-31
@@ -135,26 +180,56 @@ proof drives, and it must be what runs.
 
 ## 4 · What is proven, and at which rung
 
+Re-run after the merge, not carried over from before it.
+
 ```text
 PROVEN (real Postgres)
   forward_rent.db.js               42/42
   forward_leasing_ledger.db.js     20/20
   tracker_intake.db.js             18/18
-  gate_ask_spine_readers.js        73/73
+  gate_ask_spine_readers.js        72/72
   gate_person_ingress.js           10/10
+  gate_harness_isolation.js          8/8
+  tenancy_ask_spine.test.js        43/43
+  verify_source_governance.js      all 34 gates exit 0
 
 BROWSER VERIFIED (real app, real server, real import, real tracker)
-  forward_leasing_ledger.browser.js  85/85
+  forward_leasing_ledger.browser.js  85/85   on the MERGED app + MERGED API
   screenshots: docs/screenshots_forward_ledger/ (property-spine-app)
 
 NOT VERIFIED
   anything in production. No step of §3 has been attempted.
 ```
 
-`gate_harness_isolation.js` remains red on
-`tools/equity/establish_position.js`, inherited from `21e6812` and outside
-this lane by instruction. It listed that one consumer before this build and
-lists that one consumer after it.
+**The inherited Equity red is gone, and not because I touched it.** `main`
+registered `tools/equity/establish_position.js`, so `gate_harness_isolation.js`
+went 7/8 → 8/8 on the merge. It listed that one consumer before and lists none
+after.
+
+Two reds surfaced during reconciliation and neither was a Slice 2 defect:
+
+```text
+conversation_intent_extraction   exit 3 — NOT PROVEN, not FAIL. It pins a
+                                 byte comparison against commit 1454330,
+                                 absent from this container's shallow clone.
+                                 `git fetch --unshallow` made it reachable.
+                                 The harness was right: an unproven check is
+                                 not a passing check.
+
+technician_work_selection        FAIL — a gate scanning WIDER than its own
+                                 claim. "Acceptance is written in exactly
+                                 one place" matched the column name
+                                 accepted_by_user_id anywhere under src/,
+                                 and `activations` carries one too, meaning
+                                 "a human accepted this source document
+                                 version". Each write now resolves to the
+                                 table its UPDATE targets. Provoked for real
+                                 with a second `update obligations set
+                                 accepted_by_user_id` — red on it, green
+                                 when removed. Not an allowlist; an
+                                 allowlist is where a genuine second door
+                                 would hide.
+```
 
 ---
 

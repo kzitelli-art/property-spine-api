@@ -1,5 +1,51 @@
 # Property Spine — Thread Handoff
 
+## ══════════════════════════════════════════════════════════════════
+##  ⚠ THE PRODUCTION LEDGER CEILING IS **176**, NOT 174. THE EQUITY
+##  BANNER BELOW SAYS 174 AND WAS TRUE WHEN WRITTEN. 2026-08-17.
+##  READ THIS BEFORE ANY MIGRATION OR RELEASE, INCLUDING BEFORE THE
+##  EQUITY BANNER.
+## ══════════════════════════════════════════════════════════════════
+
+```text
+PRODUCTION                deployed sha e5497a4  ·  ledger ceiling 176
+  175  meeting_evidence_provider_inbox    released and deployed
+  176  meeting_receipt_v0                 released and deployed
+```
+
+Meeting Evidence is **live code, deliberately dormant.** It waits on one
+real-world ingredient — `READ_AI_WEBHOOK_SIGNING_KEY`, to be set directly in
+Render by the account owner, never pasted into a session. Until it is set
+there is no connection UUID, no webhook and no meeting receipt. No meeting
+record, interpretation or receipt has been created.
+
+**Slice 2 (Forward Leasing) was renumbered because of this.** It was written
+against a ceiling of 174 and would have collided head-on:
+
+```text
+WAS   175 person_ingress  ·  176 leasing_cycles  ·  177 activation_source
+IS    177 person_ingress  ·  178 leasing_cycles  ·  179 activation_source
+```
+
+```text
+RECONCILED WITH MAIN, PUSHED, NOT RELEASED AND NOT DEPLOYED
+  API   3b21a73   property-spine-api  claude/code-philosophy-review-xoiz8f
+  APP   5964848   property-spine-app  claude/code-philosophy-review-xoiz8f
+```
+
+Read `docs/SLICE_2_PRODUCTION_READY.md` before releasing it. Two things in it
+are corrections to its own first draft, and both would have cost time: the
+pre-release safety query selected the column 179 *creates*, and the numbers in
+the document were stale before the ink dried. **Read the ceiling from the
+database. Never from a document, including this one.**
+
+**One honest foundation debt, recorded and not fixed:** rebuilding a
+completely blank database still fails at old migration `012`. The real
+production upgrade 174 → 176 was separately proven and succeeded, so this is
+not blocking a release — it is blocking a from-scratch rebuild, which is a
+different and quieter kind of exposure. Magnitude: unknown until someone
+actually needs a clean rebuild.
+
 > **TWO ACTIVE LANES.** Equity is LIVE in production (below, first). The
 > LEASING/TENANCY lane is NOT deployed (second): its Rent Roll screen is
 > browser-proven, and its Ask Spine reader is proven against real Postgres
