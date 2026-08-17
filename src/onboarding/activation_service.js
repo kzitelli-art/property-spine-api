@@ -1,4 +1,5 @@
 // ════════════════════════════════════════════════════════════════════
+const personIngress = require("../identity/person_ingress.js"); // the ONE door a human enters Spine through
 //  activation_service.js — ACTIVATION, AND WHAT COMES OUT OF IT
 //
 //    ACTIVATION is the process:
@@ -297,6 +298,18 @@ async function ingestRentRoll(db, {
         where import_batch_id = $1`, [batchId])).rows;
     const evidenceByIndex = new Map(evidence.map((e) => [Number(e.row_index), e]));
 
+    /*  The durable identity of a proposed position within one activation.
+     *  Unit alone for a whole-unit export; unit + room where the source
+     *  names a rentable position inside the unit. Trimmed and cased
+     *  consistently so "Room1" and "room1 " are one key rather than two
+     *  proposals for one bed. */
+    const naturalKeyFor = (m) => {
+      const unit = m.unit_number ? String(m.unit_number).trim() : null;
+      if (!unit) return null;
+      const label = m.space_label ? String(m.space_label).trim() : "";
+      return label ? `${unit}|${label}` : unit;
+    };
+
     const counts = { staged: 0, needs_review: 0, blocked: 0, vacant: 0 };
     for (const m of mapped) {
       const c = classify(m);
@@ -336,7 +349,19 @@ async function ingestRentRoll(db, {
          on conflict (activation_id, target_type, natural_key)
            where natural_key is not null do nothing`,
         [activation_id, property_id,
-         m.unit_number ? String(m.unit_number).trim() : null,
+         //  ── THE NATURAL KEY IS THE RENTABLE POSITION, NOT THE UNIT ────
+         //  This was the unit number alone, and the insert carries
+         //  `on conflict (activation_id, target_type, natural_key) do
+         //  nothing`. On a by-the-bed property every row of a unit
+         //  therefore collided with the first one and was DROPPED — 160
+         //  Skyline bed rows would have become 72 proposals, silently,
+         //  with no refusal and no count to notice it by.
+         //
+         //  The key is the position the lease will attach to. Where the
+         //  source names a room the key is unit + room; where it does not,
+         //  the key stays the unit — which preserves the old behaviour for
+         //  by-unit exports exactly.
+         naturalKeyFor(m),
          JSON.stringify(m._raw), JSON.stringify(normalized),
          JSON.stringify(evidenceRefs), c.confidence,
          c.status, c.reason, ev ? ev.id : null]);
@@ -435,9 +460,19 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
         [propertyId, String(n.unit_number), n.market_rent ?? n.rent ?? null])).rows[0];
     }
 
-    //  2) the space. A by-the-bed unit has many, and a bare unit number
-    //     cannot say which bed this lease is for. Tying to "the first one"
-    //     would put roommates on one bed. Refuse and send it back.
+    //  2) the space — the rentable position this lease actually attaches to.
+    //
+    //     A by-the-bed unit has many. The source usually SAYS which one, and
+    //     that name survived into the proposal as normalized.space_label; the
+    //     confirm step simply never read it, so every multi-bed unit was
+    //     refused as ambiguous even when the export named the room on every
+    //     row. The refusal was right about the danger and wrong about the
+    //     facts available.
+    //
+    //     So: use the named room when there is one. Refuse ONLY when the
+    //     source genuinely did not say and the unit has more than one
+    //     position. Tying to "the first one" would put roommates on one bed,
+    //     and that has not changed.
     const spaces = (await client.query(
       "select * from spaces where unit_id=$1 order by created_at", [unit.id])).rows;
     if (spaces.length === 0) {
@@ -445,7 +480,31 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
       throw refusal(500, "no_space_for_unit",
         "That unit has no space record, which should be impossible. Nothing was written.");
     }
-    if (spaces.length > 1) {
+
+    const namedLabel = n.space_label ? String(n.space_label).trim() : "";
+    let space = null;
+
+    if (namedLabel) {
+      space = spaces.find((s) => String(s.space_label || "").trim().toLowerCase()
+                                 === namedLabel.toLowerCase()) || null;
+      if (!space) {
+        //  The source named a room this unit does not have. That is a
+        //  DISCREPANCY between the export and the established inventory —
+        //  never something to resolve by picking a neighbour.
+        await client.query("rollback");
+        await db.query(
+          `update proposed_records set status='needs_review', status_reason=$2, updated_at=now()
+            where id=$1`,
+          [proposed_id,
+           `The source says unit ${n.unit_number} has a position called "${namedLabel}", ` +
+           `but this unit's established positions are: ` +
+           `${spaces.map((s) => s.space_label).join(", ")}.`]);
+        throw refusal(422, "unknown_space_label",
+          `Unit ${n.unit_number} has no position called "${namedLabel}". Spine will not ` +
+          `attach this lease to a different one.`,
+          { named: namedLabel, available: spaces.map((s) => s.space_label) });
+      }
+    } else if (spaces.length > 1) {
       await client.query("rollback");
       await db.query(
         `update proposed_records set status='needs_review', status_reason=$2, updated_at=now()
@@ -456,22 +515,44 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
       throw refusal(422, "ambiguous_bed",
         `Unit ${n.unit_number} leases by the bed. This row does not say which bed, so Spine ` +
         `will not guess.`, { space_count: spaces.length });
+    } else {
+      space = spaces[0];
     }
-    const space = spaces[0];
 
-    //  3) the person. NEVER matched by name: two residents share a name
-    //     more often than a silent merge is ever noticed, and a duplicate
-    //     person is fixable where a merged one corrupts two tenancies.
-    const person = (await client.query(
-      `insert into persons (name, email, phone, source, lifecycle_status, leasing_stage,
-                            import_batch_id, source_type, source_as_of_date, confidence)
-       values ($1,$2,$3,'activation','resident','resident',$4,'rent_roll_ledger',$5,'extracted')
-       returning *`,
-      [n.tenant_name, n.email ?? null, n.phone ?? null,
-       (await client.query("select import_batch_id from activations where id=$1",
-         [p.activation_id])).rows[0]?.import_batch_id || null,
-       (await client.query("select source_as_of_date from activations where id=$1",
-         [p.activation_id])).rows[0]?.source_as_of_date || null])).rows[0];
+    //  3) the person, RESOLVED through the one governed ingress boundary.
+    //     The name ruling this carried is preserved verbatim inside
+    //     person_ingress.js — never matched by name, because two residents
+    //     share a name more often than a silent merge is ever noticed. What
+    //     changes is who decides: this service no longer mints a human, it
+    //     submits evidence. This IS the confirmation, so the authority is
+    //     real and named, and the operator signs once.
+    const actMeta = (await client.query(
+      "select import_batch_id, source_as_of_date from activations where id=$1",
+      [p.activation_id])).rows[0] || {};
+    const ingested = await personIngress.ingestPerson(client, {
+      property_id: n.property_id || p.property_id || null,
+      channel: "rent_roll",
+      activation_id: p.activation_id,
+      authority: { actor: p.confirmed_by || "operator",
+                   basis: "operator confirmation of an activation row" },
+      evidence: {
+        name: n.tenant_name,
+        phone: n.phone ?? null,
+        email: n.email ?? null,
+        source_record_id: n.resident_id ?? null,
+        import_batch_id: actMeta.import_batch_id || null,
+        source: "activation",
+        source_type: "rent_roll_ledger",
+        source_as_of_date: actMeta.source_as_of_date || null,
+        confidence: "extracted",
+        lifecycle_status: "resident",
+        leasing_stage: "resident",
+        normalized: n,
+      },
+    });
+    const person = ingested.person_id
+      ? (await client.query(`select * from persons where id=$1`, [ingested.person_id])).rows[0]
+      : null;
 
     //  4) the lease, stamped with the batch it came from (migration 046).
     const act = (await client.query(
@@ -491,7 +572,7 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
           import_batch_id, source_type, source_as_of_date, confidence)
        values ($1,$2,$3,$4,$5,$6,$7,'active',$8,'rent_roll_ledger',$9,'extracted')
        returning *`,
-      [propertyId, space.id, [person.id], n.rent,
+      [propertyId, space.id, person ? [person.id] : [], n.rent,
        n.start_date ?? null, n.end_date ?? null, n.balance ?? 0,
        act.import_batch_id || null, act.source_as_of_date || null])).rows[0];
 
@@ -508,7 +589,7 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
                 produced_space_id=coalesce(produced_space_id,$5),
                 parse_note='current ledger row — confirmed into canonical truth'
           where id=$1`,
-        [p.import_source_row_id, person.id, lease.id, unit.id, space.id]);
+        [p.import_source_row_id, person ? person.id : null, lease.id, unit.id, space.id]);
     }
 
     await client.query(
@@ -518,7 +599,7 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
         where id=$1`, [proposed_id, lease.id, String(user_id)]);
 
     await client.query("commit");
-    return { lease_id: lease.id, person_id: person.id, unit_id: unit.id, vacant: false,
+    return { lease_id: lease.id, person_id: person ? person.id : null, unit_id: unit.id, vacant: false,
       receipt: `Unit ${n.unit_number} — ${n.tenant_name} is now part of the position.`,
       authority_basis: scope.authority_basis };
   } catch (e) {

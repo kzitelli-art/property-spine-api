@@ -154,3 +154,140 @@ data-integrity finding in their own right — separate from Ask Spine.
 **Not a Release 0 blocker.** Release 0 governs work-order completion proof and
 never reads `obligations.related_id` for that purpose. Do not let this into the
 activation decision.
+
+---
+
+## GAP 2 · `gate_harness_isolation.js` under-detects by one variable of indirection
+
+**Status** OPEN · **Found** 2026-08-16, while adding `tools/turn_readiness_census.js` ·
+**Class** a gate that scans less than it asserts · **Not** a runtime defect
+
+### The structural fact
+
+The gate classifies a script as production-facing by matching, in
+`tests/gate_harness_isolation.js`:
+
+```js
+const CONNECTS = /connectionString:\s*process\.env\.DATABASE_URL|
+                  new\s+(Pool|Client)\s*\(\s*\{[^}]*process\.env\.DATABASE_URL/;
+```
+
+Both alternatives require `process.env.DATABASE_URL` to appear **at the
+connection site**. These two files are identical at runtime and only the first
+is seen:
+
+```js
+new Pool({ connectionString: process.env.DATABASE_URL });   // detected
+
+const CONN = process.env.DATABASE_URL;                      // NOT detected
+new Pool({ connectionString: CONN });
+```
+
+One local variable is enough. Nothing about the second form is evasive — it is
+the more ordinary way to write it, which is why this is a real gap rather than a
+theoretical one: the file that exposed it was written that way **by accident**.
+
+### How it was found
+
+`tools/turn_readiness_census.js` was added in this lane, read
+`process.env.DATABASE_URL` through a local, and the gate stayed green. The tool
+is read-only and now registered, so it was never a hazard. The gate's silence
+was the finding.
+
+**Falsified, not just reasoned about.** Reading the regex says the alias form
+cannot match; the contrapositive proves it. Changing *only* the connection line
+from `connectionString: CONN` to `connectionString: process.env.DATABASE_URL` —
+same file, same runtime behaviour, same read-only transaction — and running the
+**unmodified** gate flipped it from silent to:
+
+```text
+NEW: tools/turn_readiness_census.js  (unguarded_read_only)
+```
+
+One line of the file moved, nothing in the gate did, and the classification
+changed. That is the gap, demonstrated rather than asserted.
+
+### The measurement
+
+Detector widened to *"reads `process.env.DATABASE_URL` anywhere in the file AND
+constructs a `Pool` or `Client` anywhere in the file"*, applied to the same two
+roots the gate walks (`tests/`, `tools/`, 355 `.js` files), excluding — as
+`classify()` does, and in its order — the guard module, `PRODUCTION_APPROVED`
+and `DEAD` entries, guarded harnesses, and files already tracked as
+`harness_var_no_refusal`:
+
+```text
+files whose gate CLASSIFICATION would change      31
+    under tests/                                  24
+    under tools/                                   7
+```
+
+The raw count of files matching the wider shape is 43; the 12 difference are
+already classified by an earlier branch of `classify()` — mostly
+`PRODUCTION_APPROVED` entries such as `tools/ledger_reconcile.js`,
+`tools/step7/activate.js` and `tools/release0/gate1_production_census.js` — and
+their classification does not move. **31 is the number that matters; 43 is the
+number a careless measurement would report.**
+
+The 7 under `tools/`:
+
+```text
+tools/activation/readonly_falsify.js
+tools/release0/acceptance_receipt.js
+tools/release0/preflight_production.js
+tools/release0_proof_audit.js
+tools/step7/prove_guard_active.js
+tools/turn_readiness_census.js        ← repaired: now reads at the connection site
+tools/work_orders_schema_readiness.js
+```
+
+The 24 under `tests/` are proof harnesses — the `slice9_*`, `pricing_*`,
+`rent_roll_*` and authority proofs. They are the same population the frozen
+inventory already describes, reached by a different route.
+
+### Why it is not fixed here
+
+Widening the regex is a two-line change and a 31-file triage: each newly
+classified file has to be read, its write-class confirmed from source (the
+register's `write` field is **measured**, and assertion 3b fails if it
+disagrees), and given either a repair, a `FROZEN_UNGUARDED` entry with a removal
+condition, or a deletion as dead. That is a harness-inventory project, and
+CLAUDE.md rules on exactly this case:
+
+> Three slices of authority work found an unauthenticated admin route, an
+> unnamed fixture door and a gate that under-detects by 37 files. Each was real;
+> chasing all of them turns a product build into a harness-inventory project.
+
+This is that same gate, measured again on a later tree, from a different
+direction.
+
+### What was done instead
+
+Narrow and complete, so the finding is not paid for with the file that revealed
+it:
+
+1. `tools/turn_readiness_census.js` now reads `process.env.DATABASE_URL` **at
+   the connection site**, with a comment saying why it must not be refactored
+   into a local.
+2. It is registered in `PRODUCTION_APPROVED` with a reason and a removal
+   condition. Either step alone would have made the gate green. Neither alone
+   is honest — registration without visibility hides behind the allowlist,
+   visibility without registration hides behind a classification.
+3. The measurement is recorded **at the `CONNECTS` regex itself**, not only
+   here, because that is where the next person reads it.
+
+### What the gate's green means until this is closed
+
+**"No new direct `DATABASE_URL` consumer written in the detected shape."** Not
+"no new direct `DATABASE_URL` consumer." Stated in the gate's own source so the
+claim and the scan describe the same scope.
+
+### What closes it
+
+Widen `CONNECTS`, then triage the 31. The count is a snapshot of this tree and
+must be re-measured before the work starts, not read from this document.
+
+### Boundary
+
+Not a product defect. Nothing shipped behaves differently. No Slice 2 work
+depends on it, and it does not block the turn-readiness census.

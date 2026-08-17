@@ -26,6 +26,10 @@ const { resolvePropertyForImport, resolutionError } = require("../identity/prope
 //  (/operator/rent-roll/import) is deliberately NOT behind this.
 const { syntheticTargetAllowed, syntheticRefusal } = require("./synthetic_data_perimeter.js");
 const { spacePosition } = require("../tenancy/space_position");
+//  The ONE canonical inventory-materialization rule. The evidence pass must
+//  not create beds beside the trigger's provisional whole-unit placeholder.
+const { materializeRentableSpaces } = require("../tenancy/inventory_materialization.js");
+const personIngress = require("../identity/person_ingress.js"); // the ONE door a human enters Spine through
 
 const CONFIGS = {
   skyline: {
@@ -95,6 +99,39 @@ function cleanStatus(v, section) {
   return s || "current";
 }
 
+/*  ONE PARSING RULE FOR THE SOURCE RECORD ID, BOTH DIALECTS.
+ *
+ *  Two shapes arrive from the same vendor:
+ *      Solo     resident_id is its own column        -> "t0005459"
+ *      Skyline  it is embedded in the display name   -> "Jalen Holder (s0005738)"
+ *
+ *  normalizeRow only ever read the first, so on the path that actually
+ *  writes people the Skyline identifier was never parsed out at all — not
+ *  merely unstorable, unextracted. That is why a re-import had nothing to
+ *  recognise with and forked the human even after the ingress seam existed:
+ *  proven by H8 in tests/person_ingress_hostile.db.js, which failed until
+ *  this function learned the second dialect.
+ *
+ *  parseResident() has always known the embedded form; this is that same
+ *  rule, applied on the object path too, so there is ONE answer to "what is
+ *  this row's source record id" rather than two.
+ *
+ *  The name is NOT rewritten here. Whether the display name should lose its
+ *  parenthetical is a product question about what an operator reads; this is
+ *  only about not throwing the identifier away.  */
+function sourceRecordId(raw, residentName) {
+  if (raw?.resident_id != null && String(raw.resident_id).trim()) {
+    const explicit = String(raw.resident_id).trim();
+    if (!NON_REVENUE.test(explicit)) return explicit;
+  }
+  for (const cell of [residentName, raw?.resident_raw, raw?.resident]) {
+    if (cell == null) continue;
+    const m = String(cell).trim().match(/^(.*?)\s*\(([A-Za-z]\d{3,})\)\s*$/);
+    if (m && m[1].trim()) return m[2];
+  }
+  return null;
+}
+
 function normalizeRow(raw, rowIndex = 0) {
   const section = String(raw?.section || "current").toLowerCase() === "future" ? "future" : "current";
   const status = cleanStatus(raw?.status || raw?.resident_raw || raw?.resident_id, section);
@@ -109,7 +146,7 @@ function normalizeRow(raw, rowIndex = 0) {
     unit_type: raw?.unit_type ?? raw?.type ?? null,
     resident_raw: raw?.resident_raw ?? raw?.resident_id ?? residentName ?? status,
     name: nonRevenue ? null : (residentName == null ? null : String(residentName).trim()),
-    resident_id: nonRevenue ? null : (raw?.resident_id == null ? null : String(raw.resident_id).trim()),
+    resident_id: nonRevenue ? null : sourceRecordId(raw, residentName),
     status,
     sqft: num(raw?.sqft),
     market_rent: num(raw?.market_rent ?? raw?.market),
@@ -239,6 +276,7 @@ async function loadSnapshot(pool, cfg, inputRows, options = {}) {
   const rows = (Array.isArray(inputRows) ? inputRows : []).map(normalizeRow).filter(r => r.unit_number);
   if (!rows.length) return { error: "no_rows" };
   const meta = snapshotMeta(cfg, options);
+  const meta_source_type = options.sourceType || "historical_snapshot";
   const client = await pool.connect();
   try {
     await client.query("begin");
@@ -280,8 +318,13 @@ async function loadSnapshot(pool, cfg, inputRows, options = {}) {
     const stamp = ["historical_snapshot", meta.source_as_of_date, meta.confidence];
     const unitCache = new Map();
     const spaceCache = new Map();
+    const materializedUnits = new Set();
     const counts = { units_created:0, units_reused:0, spaces_created:0, spaces_reused:0,
-                     persons_created:0, leases_created:0, leases_reused:0,
+                     //  Person outcomes are counted SEPARATELY now, because
+                     //  "created" and "recognised" are different institutional
+                     //  facts and a single number hid which one happened.
+                     persons_created:0, persons_resolved:0, persons_unresolved:0,
+                     person_proposals:0, leases_created:0, leases_reused:0,
                      current_rows:0, future_rows:0, vacant:0, model:0, down:0,
                      commercial:0, source_rows:0, skipped:0 };
 
@@ -314,6 +357,31 @@ async function loadSnapshot(pool, cfg, inputRows, options = {}) {
       return id;
     }
 
+    /*  ── THE PHANTOM BED ───────────────────────────────────────────────
+     *  `trg_unit_space` inserts a '(whole unit)' space on every unit insert.
+     *  This function used to look up its label and, not finding it, insert
+     *  a bed BESIDE the placeholder — so a by-the-bed unit ended up with
+     *  N+1 rentable positions and the surplus one read as a vacant bed.
+     *  On Skyline that was 72 phantom beds and a vacancy denominator
+     *  inflated from 25 to 97.
+     *
+     *  The canonical inventory-materialization rule consumes the pristine
+     *  placeholder as the first named position instead. It is called once
+     *  per unit, before any bed of that unit is resolved, so the placeholder
+     *  is still untouched when it is consumed.
+     */
+    async function materializeUnitGrain(unitId, labels) {
+      if (materializedUnits.has(unitId)) return;
+      await materializeRentableSpaces(client, {
+        unit_id: unitId,
+        labels,
+        kind: cfg.leasing_model === "bed" ? "bed" : "unit",
+        stamp: { import_batch_id: batchId, source_type: stamp[0],
+                 source_as_of_date: stamp[1], confidence: stamp[2] },
+      });
+      materializedUnits.add(unitId);
+    }
+
     async function ensureSpace(unitId, row) {
       const label = stableSpaceLabel(cfg, row);
       const cacheKey = `${unitId}|${label}`;
@@ -342,22 +410,78 @@ async function loadSnapshot(pool, cfg, inputRows, options = {}) {
       return id;
     }
 
-    async function findLease(spaceId, row, leaseStatus) {
-      if (!row.name) return null;
+    //  LEASE IDENTITY, and nothing else. The display name is gone from this
+    //  key: it was doing identity work here, in a lease lookup, which is
+    //  exactly the name-matching the rest of the repo refuses. With the
+    //  person resolved first, the question this asks is the one it should:
+    //  "is this the same lease on this position for this person over these
+    //  dates?" An unresolved person narrows to leases that also have none,
+    //  so an unlinked lease is reused rather than duplicated on re-import.
+    async function findLease(spaceId, row, leaseStatus, personId) {
+      //  WHAT IDENTIFIES A LEASE is the position, the status and the term.
+      //  The tenant is someone the lease HAS, not part of what it IS — the
+      //  first cut of this rewiring made the person part of the key and an
+      //  unresolved person then failed to match its own lease, so a
+      //  re-import created a second empty one. H8 caught it.
       const q = await client.query(
-        `select l.id
-           from leases l
-           left join lateral (
-             select p.name from persons p where p.id = any(l.tenant_ids) limit 1
-           ) tp on true
-          where l.property_id=$1 and l.space_id=$2 and l.lease_status=$3
-            and coalesce(l.start_date::text,'')=coalesce($4::text,'')
-            and coalesce(l.end_date::text,'')=coalesce($5::text,'')
-            and lower(coalesce(tp.name,''))=lower($6)
-          limit 1`,
-        [propertyId, spaceId, leaseStatus, row.lease_from, row.lease_to, row.name]
+        `select id, coalesce(tenant_ids,'{}'::uuid[]) as tenant_ids
+           from leases
+          where property_id=$1 and space_id=$2 and lease_status=$3
+            and coalesce(start_date::text,'')=coalesce($4::text,'')
+            and coalesce(end_date::text,'')=coalesce($5::text,'')
+          order by created_at`,
+        [propertyId, spaceId, leaseStatus, row.lease_from, row.lease_to]
       );
-      return q.rows[0]?.id || null;
+      const rows = q.rows.map((l) => ({ id: l.id, held: (l.tenant_ids || []).map(String) }));
+      //  1. The same person already holds it. Unambiguously the same lease.
+      if (personId) {
+        const mine = rows.find((l) => l.held.includes(String(personId)));
+        if (mine) return mine.id;
+      }
+      //  2. Unclaimed. The same lease, waiting for its resident to resolve.
+      const unclaimed = rows.find((l) => !l.held.length);
+      if (unclaimed) return unclaimed.id;
+      //  3. Held by someone, and WE DO NOT KNOW WHO THIS ROW IS. Creating a
+      //     second lease here would assert "a different tenancy on the same
+      //     bed over the same term" — a confident-wrong claim built on an
+      //     unresolved person. The position, status and term already identify
+      //     the lease; who occupies it is a separate open question, and the
+      //     proposal is where that question lives. Reuse, attach nobody.
+      if (!personId && rows.length) return rows[0].id;
+      //  4. Held by a DIFFERENT, KNOWN person. That is a genuine second claim
+      //     on one position — the classifier has a word for it (`contested`),
+      //     and recording it is how the conflict becomes visible.
+      return null;
+    }
+
+    //  HISTORY OFFERED AS EVIDENCE, NEVER AS AUTHORITY. A prior import of
+    //  this same source record produced some person; that is a fact about
+    //  what happened, not a statement about who this human is. It rides into
+    //  ingress as a CANDIDATE and a human confirms it.
+    async function priorProducedPerson(row) {
+      if (!row.resident_id) return null;
+      const q = await client.query(
+        `select s.produced_person_id
+           from import_source_rows s
+           join import_batches b on b.id = s.import_batch_id
+          where b.property_id = $1
+            and s.produced_person_id is not null
+            and s.raw->>'resident_id' = $2
+          order by s.created_at desc
+          limit 1`,
+        [propertyId, String(row.resident_id)]);
+      return q.rows[0] ? q.rows[0].produced_person_id : null;
+    }
+
+    //  The source's OWN statement of this property's grain: every distinct
+    //  rentable-position label it names per unit, in first-seen order.
+    const labelsByUnit = new Map();
+    for (const row of rows) {
+      if (!row.unit_number) continue;
+      const label = stableSpaceLabel(cfg, row);
+      if (!labelsByUnit.has(row.unit_number)) labelsByUnit.set(row.unit_number, []);
+      const list = labelsByUnit.get(row.unit_number);
+      if (!list.includes(label)) list.push(label);
     }
 
     for (const row of rows) {
@@ -369,36 +493,89 @@ async function loadSnapshot(pool, cfg, inputRows, options = {}) {
       if (row.is_commercial) counts.commercial++;
 
       const unitId = await ensureUnit(row);
+      //  Establish this unit's rentable positions from EVERY row the source
+      //  gave for it, before resolving the one this row is about. Doing it
+      //  per row would consume the placeholder for Room1 and then create
+      //  Room2/Room3 beside it, which is the same phantom by another route.
+      await materializeUnitGrain(unitId, labelsByUnit.get(row.unit_number) || []);
       const spaceId = await ensureSpace(unitId, row);
       const nonRevenue = NON_REVENUE.test(row.status);
       let personId = null, leaseId = null;
 
       if (!nonRevenue && row.name && (row.lease_from || row.lease_to)) {
         const leaseStatus = row.is_commercial ? "commercial" : (row.section === "future" ? "pending" : "active");
-        leaseId = await findLease(spaceId, row, leaseStatus);
+
+        //  ── PERSON FIRST, THEN LEASE. TWO QUESTIONS, TWO ANSWERS. ──
+        //  This loader used to decide both at once: findLease matched on
+        //  space + status + exact dates + LOWER(TENANT NAME), and a miss
+        //  inserted a person. So a renewal moved the dates, the key missed,
+        //  and the same human forked into two Spine identities. A lease may
+        //  change while the human does not; a name may change while both
+        //  stay the same. They are not one question.
+        //
+        //  This loader no longer holds the authority to mint a human. It
+        //  submits evidence to the one governed ingress boundary and takes
+        //  back a person_id, a proposal, or a refusal.
+        const ingested = await personIngress.ingestPerson(client, {
+          property_id: propertyId,
+          channel: "rent_roll",
+          activation_id: options.activationId || null,
+          //  An import is not an authority. `ingestAuthority` is present only
+          //  when a human confirmation covers this load — the same
+          //  confirmation that establishes the opening row. Absent, nothing
+          //  is minted and a claim is recorded instead.
+          authority: options.ingestAuthority || null,
+          evidence: {
+            name: row.name,
+            phone: row.phone || null,
+            email: row.email || null,
+            source_system: options.sourceSystem || null,
+            source_record_id: row.resident_id || null,
+            prior_produced_person_id: await priorProducedPerson(row),
+            import_batch_id: batchId,
+            source: "historical_snapshot",
+            source_type: meta_source_type,
+            source_as_of_date: meta.source_as_of_date,
+            confidence: meta.confidence,
+            lifecycle_status: row.section === "future" ? "applicant" : "tenant",
+            leasing_stage: row.section === "future" ? "future_resident" : "current_resident",
+            normalized: row,
+          },
+        });
+        personId = ingested.person_id || null;
+        if (ingested.disposition === "created") counts.persons_created++;
+        else if (ingested.disposition === "resolved") counts.persons_resolved++;
+        else counts.persons_unresolved++;
+        if (ingested.proposal_id) counts.person_proposals++;
+
+        //  LEASE IDENTITY, asked separately and WITHOUT the name.
+        leaseId = await findLease(spaceId, row, leaseStatus, personId);
         if (leaseId) {
+          //  Attach the resident if this lease was adopted while unclaimed and
+          //  the person has since resolved. Never REPLACES an existing tenant:
+          //  that would be a silent re-tenanting of a lease, which is a
+          //  governed act and not something an import may perform.
           await client.query(
             `update leases set rent=$2, balance=$3, import_batch_id=$4, source_type=$5,
-               source_as_of_date=$6, confidence=$7 where id=$1`,
-            [leaseId, row.actual_rent, row.balance, batchId, ...stamp]
+               source_as_of_date=$6, confidence=$7,
+               tenant_ids = case
+                 when $8::uuid is not null and coalesce(array_length(tenant_ids,1),0)=0
+                   then array[$8::uuid] else tenant_ids end
+             where id=$1`,
+            [leaseId, row.actual_rent, row.balance, batchId, ...stamp, personId || null]
           );
           counts.leases_reused++;
         } else {
-          personId = (await client.query(
-            `insert into persons (name, lifecycle_status, leasing_stage, source,
-               import_batch_id, source_type, source_as_of_date, confidence)
-             values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
-            [row.name, row.section === "future" ? "applicant" : "tenant",
-             row.section === "future" ? "future_resident" : "current_resident",
-             "historical_snapshot", batchId, ...stamp]
-          )).rows[0].id;
-          counts.persons_created++;
+          //  A lease with no resolved person is recorded with an EMPTY tenant
+          //  list, not skipped and not attached to a guess. The rent roll
+          //  already renders that honestly as "Not linked", and the proposal
+          //  above is what a human resolves it with.
           leaseId = (await client.query(
             `insert into leases (property_id, space_id, tenant_ids, rent, balance,
                start_date, end_date, lease_status,
                import_batch_id, source_type, source_as_of_date, confidence)
              values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning id`,
-            [propertyId, spaceId, [personId], row.actual_rent, row.balance,
+            [propertyId, spaceId, personId ? [personId] : [], row.actual_rent, row.balance,
              row.lease_from, row.lease_to, leaseStatus, batchId, ...stamp]
           )).rows[0].id;
           counts.leases_created++;

@@ -60,6 +60,8 @@
 //                                    satisfyObligation, completeObligation }));
 // ===========================================================================
 
+const personIngress = require("./person_ingress.js"); // the ONE door a human enters Spine through
+
 module.exports = function activationModule({
   pool,
   spawnObligationFromEvent,
@@ -382,19 +384,46 @@ module.exports = function activationModule({
       }
       const space = sp.rows[0];
 
-      // 3) insert the person (tenant). We do NOT match an existing person by
-      //    name: two different real residents can share a name, and merging
-      //    them onto one person row would silently corrupt the truth (one
-      //    person tied to two unrelated leases). A duplicate person is an
-      //    honest, fixable blank; a merged person is a wrong-confident value.
-      //    This matches every other module, which also inserts fresh.
+      // 3) RESOLVE the person through the one governed ingress boundary.
+      //
+      //    The ruling this replaces was right, and it is preserved verbatim
+      //    inside person_ingress.js: we do NOT match an existing person by
+      //    name, because two real residents can share one, and a merged
+      //    person is a wrong-confident value where a duplicate is an honest
+      //    blank. What was never true is the word FIXABLE — nothing in the
+      //    tree could repair a duplicate, because no code wrote
+      //    record_status or superseded_by_person_id. That half now exists
+      //    (person_supersession.js), which is what earns the choice.
+      //
+      //    What changes here is only WHO decides. This route no longer holds
+      //    the authority to mint a human; it submits evidence and takes back
+      //    a person_id. And this IS the confirmation — an operator is signing
+      //    this row — so the authority is real and named, and the same
+      //    signature that establishes the lease permits the Person it
+      //    implies. Human judgment once, not bureaucracy twice.
       let person = null;
       if (n.tenant_name) {
-        const p = await client.query(
-          `insert into persons (name, email, phone, source, lifecycle_status, leasing_stage)
-           values ($1,$2,$3,'activation','resident','resident') returning *`,
-          [n.tenant_name, n.email ?? null, n.phone ?? null]);
-        person = p.rows[0];
+        const ingested = await personIngress.ingestPerson(client, {
+          property_id,
+          channel: "rent_roll",
+          authority: { actor: confirmed_by, basis: "operator confirmation of an activation row" },
+          evidence: {
+            name: n.tenant_name,
+            phone: n.phone ?? null,
+            email: n.email ?? null,
+            source_record_id: n.resident_id ?? null,
+            source: "activation",
+            lifecycle_status: "resident",
+            leasing_stage: "resident",
+            normalized: n,
+          },
+        });
+        if (ingested.person_id) {
+          person = (await client.query(`select * from persons where id=$1`, [ingested.person_id])).rows[0];
+        }
+        //  No person_id means ingress refused or wants a human. The lease is
+        //  still recorded, with an empty tenant list, and says so honestly
+        //  rather than being attached to a guess.
       }
 
       // 4) insert the lease against space_id with tenant_ids = [person.id]

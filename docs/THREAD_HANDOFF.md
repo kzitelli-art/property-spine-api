@@ -1,6 +1,59 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  ⚠ THE PRODUCTION LEDGER CEILING IS **176**, NOT 174. THE EQUITY
+##  BANNER BELOW SAYS 174 AND WAS TRUE WHEN WRITTEN. 2026-08-17.
+##  READ THIS BEFORE ANY MIGRATION OR RELEASE, INCLUDING BEFORE THE
+##  EQUITY BANNER.
+## ══════════════════════════════════════════════════════════════════
+
+```text
+PRODUCTION                deployed sha e5497a4  ·  ledger ceiling 176
+  175  meeting_evidence_provider_inbox    released and deployed
+  176  meeting_receipt_v0                 released and deployed
+```
+
+Meeting Evidence is **live code, deliberately dormant.** It waits on one
+real-world ingredient — `READ_AI_WEBHOOK_SIGNING_KEY`, to be set directly in
+Render by the account owner, never pasted into a session. Until it is set
+there is no connection UUID, no webhook and no meeting receipt. No meeting
+record, interpretation or receipt has been created.
+
+**Slice 2 (Forward Leasing) was renumbered because of this.** It was written
+against a ceiling of 174 and would have collided head-on:
+
+```text
+WAS   175 person_ingress  ·  176 leasing_cycles  ·  177 activation_source
+IS    177 person_ingress  ·  178 leasing_cycles  ·  179 activation_source
+```
+
+```text
+RECONCILED WITH MAIN, PUSHED, NOT RELEASED AND NOT DEPLOYED
+  API   3b21a73   property-spine-api  claude/code-philosophy-review-xoiz8f
+  APP   5964848   property-spine-app  claude/code-philosophy-review-xoiz8f
+```
+
+Read `docs/SLICE_2_PRODUCTION_READY.md` before releasing it. Two things in it
+are corrections to its own first draft, and both would have cost time: the
+pre-release safety query selected the column 179 *creates*, and the numbers in
+the document were stale before the ink dried. **Read the ceiling from the
+database. Never from a document, including this one.**
+
+**One honest foundation debt, recorded and not fixed:** rebuilding a
+completely blank database still fails at old migration `012`. The real
+production upgrade 174 → 176 was separately proven and succeeded, so this is
+not blocking a release — it is blocking a from-scratch rebuild, which is a
+different and quieter kind of exposure. Magnitude: unknown until someone
+actually needs a clean rebuild.
+
+> **TWO ACTIVE LANES.** Equity is LIVE in production (below, first). The
+> LEASING/TENANCY lane is NOT deployed (second): its Rent Roll screen is
+> browser-proven, and its Ask Spine reader is proven against real Postgres
+> and real HTTP but **not** browser-verified — no `ANTHROPIC_API_KEY` here.
+> Neither lane supersedes the other; they touch different modules and
+> different migrations.
+
+## ══════════════════════════════════════════════════════════════════
 ##  EQUITY IS LIVE. PRODUCTION DB AT 174. CAPITAL STACK NOW SHOWS
 ##  PREFERRED EQUITY AND COMMON EQUITY AS SEPARATE COMPARTMENTS.
 ##  4125 REAL ESTABLISHMENT REMAINS BLOCKED ON DOCUMENT RETENTION.
@@ -203,6 +256,474 @@ not read that as permission to establish 4125 (or any property) from the
 survey, fixtures, or memory. The next session picking this up should go
 straight to retaining the real governing documents; the mechanism to
 establish from them once retained already exists and is proven.
+
+## ══════════════════════════════════════════════════════════════════
+##  FORWARD LEASING IS BUILT AND BROWSER-PROVEN. THE PROSPECT PATH IS
+##  CONTAINED. 2026-08-16. NO MIGRATION. NOT ACTIVATED.
+## ══════════════════════════════════════════════════════════════════
+
+**Branch:** `claude/code-philosophy-review-xoiz8f`. **Migrations: NONE.**
+
+### The operator surface
+
+```text
+GET /operator/leasing/positions-for-period?requested_start=&requested_end=
+readTenancyTermStanding(...)      the compact term projection
+Forward Leasing ledger            .rru-t grammar reused wholesale
+```
+
+Both dates REQUIRED — no default term, ever. The surface opens ASKING.
+
+On the real 07/31 export: **32 can support the full term · 128 conflict with
+at least part of it**, with `Contractual only — whether a position will be
+physically ready by 8/1/26 is not established.` under the counts.
+
+`term_partially_blocked` renders as **PART TAKEN**, styled identically to TAKEN.
+The word "available" appears nowhere on the surface.
+
+### ⚠ WHAT WAS *NOT* BUILT, AND WHY IT MUST NOT BE
+
+**`offerableInventory` was NOT built, and the plan that proposed AND-ing the
+interval read with `availability_read` is WRONG.** Availability answers
+*"marketable NOW"* and deliberately refuses to infer readiness after a lease
+ends (`blocking_fact: "no_governed_turnover_duration"`). ANDing them would
+reject a unit that legitimately turns before a future start — replacing an
+over-offering bug with an under-offering one. Owner correction, and it stands.
+
+See `docs/FUTURE_OPERATING_READINESS_TRACE.md`: **future operating readiness
+is a genuinely missing primitive**, and `turnovers.ready_date` currently holds
+a TARGET (written at turn open from `expected_ready_date`) and an ACHIEVEMENT
+(written at completion) in one column — `turn_priority.js:219` already sorts
+across both. There is also no `expected_ready_date` column; the API accepts
+the field and silently redirects it. Not fixed: it is a migration, outside
+this lane.
+
+### The prospect path is contained, not cut over
+
+`leasing_inventory.availableUnits` — the path the AI leasing agent quotes from
+— now **fails closed**:
+
+```text
+no term            → REFUSAL (qualification 'term_required'), never an
+                     empty inventory answer
+term check failed  → REFUSAL, and says Spine could not check
+term supplied      → every position that cannot support the WHOLE term is
+                     eliminated via intervalPropertyPositions
+always             → may_promise: false. A survivor is contractually open
+                     for those dates; readiness is NOT confirmed.
+```
+
+`agent.js` no longer hardcodes "No units match" for every empty result — it
+carries the door's own sentence, so a refusal is never spoken as an inventory
+answer. Removal condition for the date-blind predicate is written in the
+source and in `docs/PROSPECT_INVENTORY_CUTOVER.md`.
+
+### Proof
+
+```text
+tests/forward_leasing_http.db.js            26/26
+tests/prospect_inventory_containment.db.js  21/21
+tests/interval_positions.db.js              31/31
+tests/interval_position_hostile.test.js     38/38
+property-spine-app browser                  160/160
+app suite (32 harnesses)                    1333 passed
+```
+
+## ══════════════════════════════════════════════════════════════════
+##  SLICE 2 FOUNDATION — THE INTERVAL READ IS BUILT AND PROVEN.
+##  2026-08-16. NO MIGRATION. NO UI. NOT ACTIVATED — Slice 1 activation
+##  still has priority. Read the Slice 2 trace before touching this.
+## ══════════════════════════════════════════════════════════════════
+
+**Branch (API):** `claude/code-philosophy-review-xoiz8f`. **Migrations: NONE.**
+Design: `docs/SLICE_2_FORWARD_LEASING_TRACE.md`. Cutover for the
+prospect-facing path: `docs/PROSPECT_INVENTORY_CUTOVER.md`.
+
+### What landed
+
+```text
+loadSpaceRows(pool, property_id)          space_position.js — extracted, so
+  the dated and interval readers load the SAME rows. Proven
+  behaviour-preserving: spacePosition output compared before/after across
+  12 property/date combinations, 0 mismatches.
+classifyPositionForInterval(row, {...})   position_classifier.js — PURE.
+intervalPropertyPositions(pool, {...})    dated_positions.js, beside its
+  dated sibling. as_of and (start,end) are two parameterizations of ONE
+  model, which is north-star ruling 1 stated in code.
+```
+
+**Four states, and the vocabulary is deliberate:**
+
+```text
+contractually_free · committed · term_partially_blocked · unresolved
+```
+
+`contractually_free`, never a generic `available` — owner ruling. The read
+answers ONE question: does this position carry a governed dated right that
+conflicts with the requested interval? It does not decide ready, down,
+marketable, priced or offerable. Those compose ABOVE both reads.
+
+### The number, on the real 07/31 export
+
+```text
+at 2026-07-31              occupied 37 · "open" 123
+interval 2026-08-01 → 2027-07-31
+  contractually_free        32     ← what is actually left to lease
+  term_partially_blocked     128
+interval 2027-09-01 → 2028-07-31
+  contractually_free       160
+```
+
+### Two findings that corrected the trace
+
+1. **`evidence_state === 'inconclusive'` must NOT force `unresolved`.** The
+   trace proposed it. Every Skyline unit imports with occupancy_status
+   'unknown', so the rule would have made all 160 positions unresolved and the
+   read useless. The classifier already says why: *"unknown CONTRADICTS
+   NOTHING"*. What genuinely blocks the answer is `disagrees` — a claim of
+   occupied with no lease — and that is what the read uses.
+2. **`term_blocked` is rarer than expected and `term_partially_blocked` is the
+   norm** (128 of 160 here). A boolean would have thrown away the free
+   sub-spans, which are the operating answer: *"this bed is yours Aug 1 –
+   Dec 31."*
+
+### Proof
+
+```text
+tests/interval_position_hostile.test.js   38/38  pure, no database
+tests/interval_positions.db.js            31/31  real Postgres, 160 real beds
+  incl. a signed future lease moving the answer with NO Forward Leasing
+  writer, a void returning it, by-bed and by-unit through one code path,
+  and a DOWN position staying contractually_free with is_down carried beside
+```
+
+**No new Ask Spine domain was created and none should be.** The interval read
+is a second temporal question over Tenancy, not a fifth domain —
+`gate_ask_spine_readers.js` correctly discovers nothing new.
+
+### Not built, deliberately
+
+No UI. No named cycles or seasons. No pace or preleased %. No comparison. No
+prospect placement. No pricing. No route yet.
+
+## ══════════════════════════════════════════════════════════════════
+##  TENANCY IS READABLE BY ASK SPINE. THE COVERAGE GATE WAS BLIND AND
+##  IS NOT ANY MORE — AND IT HAS NOW BEEN SEEN TO GO RED.
+##  2026-08-16. NO MIGRATION. NOT DEPLOYED. Closes STILL-OWED item 1 of
+##  the SLICE 1 banner below. Read that banner for the rest of the lane.
+## ══════════════════════════════════════════════════════════════════
+
+**Branch (API):** `claude/code-philosophy-review-xoiz8f`. **Migrations: NONE.**
+
+### The gate was measuring one directory and reporting the repo
+
+`gate_ask_spine_readers.js` ran green for months on
+`STANDING_READ_DIRS = ["src/asset"]` under a header claiming every governed
+domain. Tenancy — the oldest governed domain here, the one behind the Rent
+Roll — was not *unregistered*, it was **undiscoverable**, so §40.2 could
+never go red for it. "7 domains, exit 0" read exactly like coverage of the
+governed set. It was coverage of Asset Management.
+
+Fixed by widening discovery to `["src/asset", "src/tenancy"]` and by
+DECLARING the `src/surfaces` exclusion instead of leaving it implicit —
+`availability_read.js`, `management_read.js`, `unit_turn_read.js` and
+`work_order_status_read.js` all match the suffixes and none is a domain.
+The exclusion carries a reason and is asserted to still be load-bearing, so
+a stale exclusion goes red the way a stale registry entry already did.
+
+### The gate has now failed on purpose, six ways
+
+`tests/ask_spine_reader_gate_falsification.js` mutates real files, runs the
+real gate as a subprocess, and requires **exit 1** each time — then requires
+green again on restore, and byte-identical files at the end:
+
+```text
+1  the tenancy registry entry deleted            → RED
+2  the standing projection removed from disk     → RED
+3  the composer's reader import removed          → RED
+4  the composer assigns no tenancy fact key      → RED
+5  src/tenancy dropped from the scanned dirs     → RED  ← the historical bug
+6  src/surfaces scanned as though it held domains→ RED
+```
+
+**It found a real hole on its first run.** `gathersDomain` matched
+`facts.${domain}\w*`, so renaming `facts.tenancy` to `facts.tenancy_unwired`
+left the gate green with the gather gone. The `\w*` served nothing — every
+domain assigns its bare name — and is now anchored on both ends, with a
+self-test for the lookalike.
+
+### What the projection is, and what it refuses to be
+
+`src/tenancy/tenancy_position_read.js` calls `datedPropertyPositions` — the
+**same** service the Rent Roll screen reads. No second occupancy derivation
+exists, and `tenancy_standing_read.db.js` proves it by running both reads
+against one database at one date and requiring every shared count identical.
+
+```text
+position     counts only — units, rentable positions, occupied, open,
+             positions with a known next, natively-proven forward
+             commitments, leasing grain. NO percentage: a percentage is a
+             judgement about performance and this read claims retrieval.
+unknowns     five counts, including occupied positions with no recorded
+             rent. Unknown is never zero.
+milestone    the nearest RECORDED lease boundary, counted not listed.
+walls        6, declared as data: occupied ≠ paying · rent not recorded ≠
+             rent of zero · open ≠ available · committed ≠ locked ·
+             confirmed opening import ≠ verified in Spine · unit ≠ position
+silences     NOT_ESTABLISHED returns position: null, never occupied: 0.
+             A failed read THROWS so the composer records READ_FAILED.
+size         2.3 KB behind 160 positions, and no record id at all.
+```
+
+Entitled on **leasing || management**, refused before any read (§40.8).
+Asset Management alone is deliberately not sufficient.
+
+### Two adjacent defects found and fixed, both in the blast radius
+
+```text
+opening_truth.source_as_of_date was "Fri Jul 31"
+  String(a Date).slice(0,10). No year, unsortable, and index.html renders
+  it to an operator verbatim ("· as of Fri Jul 31"). Every count around it
+  was right, so nothing noticed. Now cast in SQL with to_char — not via
+  toISOString, which is the classic DATE off-by-one. Pinned by NAME in
+  tenancy_standing_read.db.js, because an output key is a contract.
+COMPLIANCE_TERMS could not match its own plurals
+  \b(licen[cs]e)\b does not match "licenses". So "is the license current"
+  reached Compliance and "are the licenses current" fell through to work,
+  as did "what inspections are due". Found because Tenancy started
+  matching words Compliance could not. Plurals added; and renewal /
+  expiring / expiration are now CLOCK_TERMS, resolved in the open —
+  Compliance's unless the sentence also names a tenancy thing.
+```
+
+### The rung this actually reached
+
+```text
+Reported → Locally exercised → Built-but-dormant → PROVEN ← here
+                                                 → Browser verified ← NOT
+```
+
+```text
+tests/tenancy_standing_read.db.js         41/41  real Postgres, 72 units /
+                                                 160 beds from the real
+                                                 07/31 export
+tests/tenancy_ask_spine_http.db.js        26/26  real Postgres + real
+                                                 Express + real socket +
+                                                 real staff session; the
+                                                 Anthropic client is a
+                                                 STUB that captures what
+                                                 crossed into model context
+tests/tenancy_ask_spine.test.js           43/43  routing, entitlement
+                                                 before any read, the four
+                                                 silences, the truth walls
+tests/ask_spine_reader_gate_falsification.js  24/24
+tests/gate_ask_spine_readers.js           72/72  8 domains · 5 registered
+                                                 · 3 pending · 0 waived
+app suite (31 harnesses)                  1297 passed · 0 failed
+```
+
+**Browser verification is NOT done and this lane could not do it:**
+`ANTHROPIC_API_KEY` is absent in this environment, and the Ask Spine
+browser proof drives a real model through the real app. Do not call
+Tenancy done as a domain until that rung is walked. Everything short of it
+is proven.
+
+**`gate_harness_isolation.js` is RED and it is inherited from `main`** —
+`tools/equity/establish_position.js` is a new unguarded `DATABASE_URL`
+consumer, nothing to do with this lane, and deliberately not fixed here.
+It fails first in `verify_source_governance.js` and stops the runner, so
+the other 24 checks were run individually; all green except the two
+pre-existing `exit 3` shallow-clone artifacts (`HEAD~1 is unreachable`),
+which reproduce identically on a clean tree.
+
+## ══════════════════════════════════════════════════════════════════
+##  SLICE 1 — THE SKYLINE RENT ROLL IS BROWSER-VERIFIED.
+##  2026-08-15. NO MIGRATION. NOT DEPLOYED. SKYLINE'S OPENING TRUTH
+##  IS STILL NOT ESTABLISHED — that is deliberate and still waiting
+##  on a fresher export. This block is about the LEASING/TENANCY lane
+##  and supersedes nothing in the Debt banner below.
+## ══════════════════════════════════════════════════════════════════
+
+**Branch (both repos):** `claude/code-philosophy-review-xoiz8f`.
+**Migrations shipped: NONE.** Nothing here needs a ledger release.
+
+### What is actually done
+
+```text
+canonical inventory writer                DONE — src/tenancy/inventory_materialization.js
+  materializes rentable positions from stated grain; consumes a PRISTINE
+  placeholder; REFUSES (never deletes) a surplus one and names what holds it
+bed-grain evidence → proposal → confirm   DONE — activation_service + snapshot_loader
+  natural key is unit|room, so 160 bed rows no longer collapse to 72 proposals
+canonical operator read                   DONE — src/surfaces/rent_roll_unit_view.js
+HTTP seam                                 DONE — GET /operator/rent-roll/units?as_of=
+operator browser surface                  DONE — property-spine-app/index.html
+  psLiveUnitRentRoll + rru- styles; openRentRollFull now routes here
+Ask Spine standing read                   DONE (proven, not browser-verified)
+  src/tenancy/tenancy_position_read.js — the compact standing projection.
+  Registered in ask_spine_answer.js and in the coverage gate. See the
+  TENANCY IS READABLE banner immediately below for the rung it reached.
+```
+
+### The UI reset (second pass, same day)
+
+The first browser presentation was **rejected**: technically truthful, too
+vertical, too sparse, too prose-heavy, hard to scan across units. The mistake
+was "sentences, not columns" — an operator reading a rent roll is constantly
+comparing one position to the next, and comparison needs COLUMNS. The truth
+model, the service, the route and the payload were **not** touched.
+
+What replaced it:
+
+```text
+one dense aligned table   72 unit bands, 160 one-line positions, columns that
+                          line up ACROSS unit groups (proven as geometry)
+columns                   Room · Current resident · Rent · Lease end ·
+                          Next resident · Next start · Next rent · Status
+grain from the payload    positions > units decides room-vs-unit. A whole-unit
+                          property collapses to one row per unit, no fake
+                          Room1, no "(whole unit)". No `if Skyline` (§22).
+status                    Occupied · Open · Committed · Pending · Exception
+                          — never "Vacant", never "Leased"
+two silences, two marks   "—" the column does not apply · "Unknown" the fact
+                          applies and Spine was never given it. Never $0.
+header                    one quiet standing line, no hero number, no
+                          percentage. Provenance collapsed to one line.
+expanded row              operator language only — Resident, Lease start,
+                          Lease end, Contracted rent, Lease status, How this
+                          is known. No tenancy_state / evidence_state /
+                          proof_basis / position kind on screen.
+secondary mode            "Full schedule →" (was "One row per position")
+```
+
+Contract changes, both additive and both because the presentation needed
+them: `dated_positions` now carries `notice_date` (the classifier always had
+it; the projection dropped it, so every consumer could say a position was on
+notice and none could say from when), and `positionLine.detail` carries
+`moved_in` and `possession_state`.
+
+Move-out, market rent, deposit and ledger balance are **deliberately absent**
+rather than emitted as nulls — a surface that printed "Not recorded" for them
+would make a claim about the PROPERTY when the true claim is that this read
+does not carry them. The expanded row says that once.
+
+### The chrome strip (third pass, same day)
+
+The aligned table was right and still read as an app screen: a big rounded
+card, beige unit bands, coloured status pills, rounded filter chips, and a
+header spending a third of the screen. **Less interface, more ledger** — the
+information model was not touched again.
+
+```text
+no page card              the shell's .hero is neutralised with :has(.rr-bleed)
+                          — CSS, not a body class, so the styles revert when
+                          the markup leaves the DOM and there is no lifecycle
+                          to get wrong on back / switch / session loss
+one header band           name · property · as-of · counts · source, 82px
+flat controls             underlined text switches, not rounded chips
+unit RULE not band        a hairline and a bold number; the shaded bars were
+                          chopping the ledger into 72 documents
+status as text            no badge, no fill, no radius
+uniform weight            the resident name was outweighing the record — on a
+                          rent roll the POSITION is the record
+tabular numerals          columns align digit for digit
+CURRENT / NEXT groups     a two-tier head, so the forward half is explicit at
+                          the cost of one 8px row rather than weight on 160
+short ledger dates        7/26/27 in columns; long form kept where a person
+                          reads a sentence
+two-line expansion        a ledger sub-row, not a form. Deeper detail is the
+                          resident record, which is its own action.
+no back button            the app bar already says ‹ BACK MANAGEMENT
+```
+
+Density, measured at 1400×1000 — **25 rentable positions and 12 units in the
+first viewport**, 22px per position, 82px of surface-owned header. It was 16
+and 8 before this pass. The `.rru-nav` toolbar was 48px because a
+`type="search"` input carries a UA box more than twice its own type;
+`-webkit-appearance:none` is load-bearing there, not decoration.
+
+Two things were compressed away and are worth knowing: the expanded row no
+longer has separate "Lease start"/"Lease end" (one **Term**) and no longer
+carries the sentence naming what this read does not hold. Absent fields are
+still **omitted** rather than printed as "Not recorded" — asserted — so no
+false claim is made about the property, but the explanation of *why* they are
+absent now lives only in `rent_roll_unit_view.js`.
+
+**This is the visual language to propagate** to Work Orders, Renewals,
+Availability and Applications — not the beige-card language above it.
+
+### Proof
+
+```text
+tests/inventory_materialization.db.js       26/26   real July XLSX
+tests/skyline_bed_grain_activation.db.js    19/19
+tests/skyline_rent_roll_read.db.js          22/22   incl. stable-ID contract
+tests/skyline_rent_roll_model.db.js         40/40
+11 API source gates                         PASS
+app node tests (31 files)                   PASS   incl. 132/132 cutover
+property-spine-app/skyline_rent_roll_units.browser.js  96/96
+  real server.js + real index.html + Chromium, 72 units / 160 beds from the
+  actual 07/31 export, PLUS a second whole-unit property in the same browser
+  as the by-unit control. Eight screenshots and the performance baseline are
+  in property-spine-app/docs/screenshots_rent_roll_units/.
+```
+
+Density is measured, not eyeballed — the complaint that caused the reset was
+vertical waste, so it is now numbers, and the proof prints the height of every
+header band each run so the next pass does not have to guess which element
+holds the space.
+
+Performance at 160 positions: **one** request (125 KB, 779 B/position), door
+to fully rendered ~70 ms, full repaint 52 ms, expanding a row and every
+search/filter issue **zero** further requests. Nothing pathological.
+
+### Facts about the real 07/31 export, found by loading it
+
+```text
+6 of 251 rows carry an actual rent.  Everything else is blank in the source.
+  The surface says "Rent unknown" and states the count once at page level.
+  It is a gap in the source, never a rent of zero.
+2 resident names appear on two rows each (Chyng Shan Chiu, Nehal Khosla).
+  Spine creates two person records and does NOT merge them. Correct under the
+  identity refusal — a matching name is not a key.
+No bed carries both a current lease and a next one at 07/31: the 37 sitting
+  residents began 07/27 and the 91 future leases start 08/03 on other beds.
+  The read renders both halves; the capability is proven with a constructed
+  successor rather than claimed from data that cannot show it.
+```
+
+### STILL OWED — tracked separately, deliberately NOT mixed into the UI pass
+
+**1. ~~The Rent Roll is done as a screen and not done as a domain~~ — CLOSED
+to the Proven rung on 2026-08-16.** See the TENANCY IS READABLE banner above
+this one. The compact standing projection, the registration, the widened
+gate discovery and the declared `src/surfaces` exclusion all landed, and the
+gate has been made to go red six ways. What is still owed is the **browser
+rung only**, blocked here by an absent `ANTHROPIC_API_KEY`.
+
+**2. Source/PMS resident identity has no durable home, and this blocks
+establishing opening truth.** `rent_roll_field_map` extracts the PMS id
+(`s0005738`) from the source; `persons` has no column for it, so nothing is
+persisted. When a fresher export arrives, Spine has no safe way to know that
+`s0005738` is the person it imported last time — and merging on name is
+refused, correctly. **Do not add `yardi_id` or `pms_id` to `persons`**; that
+bakes one vendor into the Person model. First check for an existing generic
+external-identity primitive and reuse it. If none exists, stop and bring the
+smallest general design: `source_system + external_id → durable person`,
+useful for Yardi, AppFolio, Entrata and whatever follows. An investigation
+was in flight when this pass began and its result is not recorded here.
+
+**3. Skyline opening truth is NOT established.** Ruling stands: prove the
+machinery now, establish from the freshest export at activation, after a
+human review.
+
+**4. Phase Zero production close-out** — still blocked on network policy: no
+`DATABASE_URL` and the proxy CONNECTs 403 to Render.
+
+**5. Slice 2 has not started** and must not start until 1–3 are resolved.
+Leasing seasons, pace, preleased %, period-aware availability, AI placement,
+application grain, screening and e-sign are all deliberately absent from the
+surface and from its proof.
 
 ## ══════════════════════════════════════════════════════════════════
 ##  DEBT 173 IS RELEASED AND 4125 CANONICAL TRUTH IS ESTABLISHED.
@@ -1285,6 +1806,31 @@ that it is the same.**
 `EXPECTED_SHA` exists precisely so the release cannot be run against a tree
 different from the one being released. Feeding it a guess disarms the only
 guard that catches that.
+
+> **This paragraph was true of the intent and false of the code until
+> 2026-08-17.** `EXPECTED_SHA` was compared only against
+> `RENDER_GIT_COMMIT`, so releasing from anywhere that is not a Render
+> instance read the variable, compared it to nothing, and printed no error.
+> It now resolves the repository's git HEAD when `RENDER_GIT_COMMIT` is
+> absent, refuses a matching sha over a modified tracked tree, refuses a
+> pin it cannot verify at all, and refuses a prefix too short to pin
+> anything. Off Render the variable is still OPTIONAL — several Class-3
+> seeding tools release unpinned — but the release banner now says
+> `NOT PINNED — no build was authorised` in those words instead of printing
+> a reassuring blank. Proven in `tests/migration_release_gate.test.js`,
+> which is now registered in `verify_source_governance.js`.
+>
+> **And that fix opened a second hole, found before release.** Scoping the
+> dirty-tree check to tracked files is right for `.env` and screenshots and
+> wrong for a migration: this runner executes `migrations/NNN_*.sql` from the
+> FILESYSTEM, not from the commit, so an untracked migration was invisible to
+> the check and fully executable — a release printing `VERIFIED against git
+> HEAD` while applying schema that commit does not contain. The guard now
+> compares the migration files on disk against those in the pinned commit,
+> using the same predicate the runner executes with, with a non-recursive
+> `ls-tree` so a tracked `archive/181_decoy.sql` cannot vouch for an
+> untracked `181_decoy.sql` beside the runner. Irrelevant untracked files,
+> including inside `migrations/`, still do not block a release.
 
 ### THE SEQUENCE — API #92, PATH A
 

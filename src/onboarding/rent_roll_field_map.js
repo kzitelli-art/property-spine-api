@@ -45,7 +45,11 @@ const FIELD_SPELLINGS = Object.freeze({
   unit_number: ["unit", "unitnumber", "unitno", "unitid", "unit#", "apt", "apartment",
                 "aptnumber", "suite", "space", "unitcode", "bldgunit"],
   space_label: ["bed", "bedspace", "room", "roomnumber", "spacelabel", "bedlabel"],
-  unit_type:   ["unittype", "type", "floorplan", "plan", "planname", "unitplan", "style"],
+  //  "unitroomtype" is Yardi's two-line header "Unit/Room" + "Type" joined —
+  //  observed in the real 07/31/2026 Skyline export, which carried the unit
+  //  type (STU00015) under it. Learned from the artifact, not guessed.
+  unit_type:   ["unittype", "type", "floorplan", "plan", "planname", "unitplan", "style",
+                "unitroomtype", "roomtype"],
   name:        ["tenant", "tenantname", "resident", "residentname", "lessee", "occupant",
                 "primaryresident", "residentfullname", "name"],
   resident_id: ["residentid", "tenantid", "tcode", "tenantcode", "residentcode"],
@@ -55,7 +59,9 @@ const FIELD_SPELLINGS = Object.freeze({
                 "grosspotentialrent", "scheduledrent"],
   actual_rent: ["actualrent", "rent", "currentrent", "leaserent", "monthlyrent", "chargerent",
                 "contractrent", "inplacerent", "rentamount", "baserent"],
-  deposit:     ["deposit", "securitydeposit", "secdeposit", "security", "depositheld", "sd"],
+  //  "residentdeposit" is the real export's name for the security deposit.
+  deposit:     ["deposit", "securitydeposit", "secdeposit", "security", "depositheld", "sd",
+                "residentdeposit"],
   other:       ["other", "otherdeposit", "otherdeposits", "otherincome"],
   balance:     ["balance", "currentbalance", "arbalance", "amountdue", "outstanding", "delinquent"],
   move_in:     ["movein", "moveindate", "movein_date", "actualmovein", "midate"],
@@ -75,6 +81,10 @@ const KNOWN_UNUSED = Object.freeze(new Set([
   "notes", "note", "comment", "comments", "property", "propertyname", "building",
   "bldg", "floor", "petrent", "parking", "concession", "concessions", "leaseterm",
   "term", "renewaloffer", "noticedate", "lateffee", "latefee",
+  //  Read and deliberately not used. The room-summarised export carries one
+  //  row per bed and states "Total Beds 1.00" on each; the bed count is the
+  //  row itself, so mapping it would store the same fact twice.
+  "totalbeds", "beds",
 ]));
 
 function squash(s) {
@@ -101,7 +111,10 @@ function planFor(rows) {
   const seen = new Set();
   for (const row of rows || []) {
     for (const k of Object.keys(row || {})) {
-      if (k === "__row_number") continue;
+      //  Keys the CALLER attached for its own bookkeeping are not source
+      //  columns. Excluded by prefix so a harness or importer can carry
+      //  context without it being reported as an unread column.
+      if (k === "__row_number" || k.startsWith("__")) continue;
       if (!seen.has(k)) { seen.add(k); headers.push(k); }
     }
   }
@@ -215,6 +228,37 @@ function mapRows(rows) {
       out.non_revenue = true;
     } else {
       out.non_revenue = readsAsNonRevenue(out.status);
+    }
+
+    //  ── THE PMS IDENTIFIER MAY BE INSIDE THE NAME ─────────────────
+    //  Yardi's room-summarised rent roll has no resident-id COLUMN. It
+    //  writes the code into the resident cell:
+    //
+    //      "Sindhura Nagabhirava (s0005738)"
+    //
+    //  That identifier is worth keeping — it is how this person is known
+    //  in the system of record, and it is the only stable handle the
+    //  source offers. So it is split out into `resident_id` and the name
+    //  is left clean.
+    //
+    //  WHAT IT IS NOT: a merge key. §12 says a phone, name or email may
+    //  be EVIDENCE of identity and may never silently create or merge a
+    //  durable person, and a foreign system's primary key is no different
+    //  — it is that system's assertion about its own records, recorded as
+    //  sourced external identity. Two rows carrying one code are still two
+    //  rows until a human says otherwise.
+    //
+    //  Deliberately narrow: a parenthesised token at the END of the cell,
+    //  letter-then-digits. "Smith (unit 4)" and "Ana (see note)" do not
+    //  match and are left alone, because recognition may propose and
+    //  ambiguity may not silently choose.
+    if (out.name && out.resident_id == null) {
+      const m = String(out.name).match(/^(.*?)\s*\(([A-Za-z]\d{3,})\)\s*$/);
+      if (m && m[1].trim()) {
+        out.name = m[1].trim();
+        out.resident_id = m[2];
+        out.resident_id_source = "embedded_in_name";
+      }
     }
 
     //  The ledger's shaping layer reads `rent`/`market` too; give it the

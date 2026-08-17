@@ -124,10 +124,25 @@ async function recordEffectivePossession(client, {
   return { event: inserted.rows[0], created: true, idempotent: false, space_id };
 }
 
-async function spacePosition(pool, { property_id, as_of = null }) {
+/*  ══ THE ONE LOAD ═══════════════════════════════════════════════════
+ *  Every rentable position at a property, with its WHOLE dated right-set:
+ *  every lease on the space, no date filter, ordered by start_date, plus
+ *  possession events, notice, turn state and the compat occupancy claim.
+ *
+ *  ⚠ THE ABSENCE OF A DATE FILTER IS THE ARCHITECTURE, NOT AN OVERSIGHT.
+ *  The date has always been applied afterwards, in the pure classifier —
+ *  which is exactly why an INTERVAL question needs no new query, no new
+ *  table and no new column. The rights are already all here.
+ *
+ *  Extracted so `spacePosition` (one date) and `classifyPositionForInterval`
+ *  (a span) read the SAME rows. Two temporal questions over one truth is a
+ *  claim this repo can now make structurally instead of by discipline: if
+ *  there were two loaders, they would eventually load two different things.
+ *
+ *  PURE LOADING. No meaning is decided here; that is the classifier's job. */
+async function loadSpaceRows(pool, property_id) {
   if (!property_id) throw new Error("property_id required");
-  const asOf = as_of || new Date().toISOString().slice(0, 10);
-  const rows = (await pool.query(
+  return (await pool.query(
     `select
         s.id as space_id,
         s.unit_id,
@@ -181,6 +196,29 @@ async function spacePosition(pool, { property_id, as_of = null }) {
      order by u.unit_number, s.space_label`,
     [property_id]
   )).rows;
+}
+
+/*  Tenant names for a loaded row set. Shared by both temporal readers so a
+ *  name is resolved once, the same way, whatever question is being asked.  */
+async function loadPersonNames(pool, rows) {
+  const tenantIds = new Set();
+  for (const row of rows) {
+    for (const lease of row.leases || []) {
+      for (const id of lease.tenant_ids || []) if (id) tenantIds.add(String(id));
+    }
+  }
+  const personNames = new Map();
+  if (tenantIds.size) {
+    const people = await pool.query("select id, name from persons where id=any($1::uuid[])", [[...tenantIds]]);
+    for (const p of people.rows) personNames.set(String(p.id), p.name || null);
+  }
+  return personNames;
+}
+
+async function spacePosition(pool, { property_id, as_of = null }) {
+  if (!property_id) throw new Error("property_id required");
+  const asOf = as_of || new Date().toISOString().slice(0, 10);
+  const rows = await loadSpaceRows(pool, property_id);
 
   const tenantIds = new Set();
   for (const row of rows) {
@@ -214,5 +252,9 @@ async function spacePosition(pool, { property_id, as_of = null }) {
 module.exports = {
   recordEffectivePossession,
   spacePosition,
+  //  Exported so the interval reader loads the SAME rows rather than
+  //  growing a second query beside this one.
+  loadSpaceRows,
+  loadPersonNames,
   _internal: { leaseIsValid, datesSpan, normalizedStatus, CURRENT_ECONOMIC_STATUSES },
 };

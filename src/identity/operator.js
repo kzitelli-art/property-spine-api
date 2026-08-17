@@ -57,7 +57,14 @@ module.exports = function operatorModule(deps) {
   const { renewalsCohort, renewalsCohortEnriched } = require("../leasing/renewals_read"); // R1 cohort + Slice 6 operating rail
   const { loadAiLeasingStrategyProjection } = require("../leasing/ai_leasing_strategy_projection"); // read-only strategy status + conversation attribution
   const { currentRentRoll } = require("../surfaces/rent_roll_canonical");   // canonical Current Rent Roll (migration route)
-  const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts"); // factual Future Rent Roll (migration route)
+  const { futureRentRollFacts } = require("../surfaces/future_rent_roll_facts");
+  const { unitRentRoll } = require("../surfaces/rent_roll_unit_view");   // the operator Rent Roll: unit-first, beds nested // factual Future Rent Roll (migration route)
+  //  Forward Leasing reads the SAME canonical model, parameterized by a span
+  //  instead of a date. Not a second service and not a forward store.
+  const { intervalPropertyPositions } = require("../tenancy/dated_positions");
+const { forwardLeasingPosition } = require("../leasing/forward_leasing_read");
+const { forwardRent } = require("../leasing/forward_rent");
+const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   const { institutionalRentRoll, institutionalCsv } = require("../surfaces/rent_roll_institutional"); // formal as-of schedule + CSV
   const { availabilityRead } = require("../surfaces/availability_read");   // Availability over the shared classifier
   const { effectivePropertyPricing } = require("../money/effective_pricing"); // the Pricing & Concessions truth sheet
@@ -1938,6 +1945,217 @@ module.exports = function operatorModule(deps) {
     const d = new Date(s + "T00:00:00Z");
     return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
   }
+
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/rent-roll/units?as_of=
+  //   THE operator Rent Roll. Unit-first, rentable positions nested,
+  //   each showing CURRENT and NEXT. One truth: this is the same dated
+  //   position service the Current and Future rent rolls read, taken at
+  //   one date. There is no separate future datastore and no second
+  //   derivation of "who is next".
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/rent-roll/units", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const rawAsOf = req.query.as_of;
+    if (rawAsOf != null && rawAsOf !== "" && !validCalendarDate(String(rawAsOf))) {
+      return res.status(400).json({
+        error: "as_of must be a real calendar date in YYYY-MM-DD form.",
+        code: "invalid_as_of",
+      });
+    }
+    try {
+      const out = await unitRentRoll(pool, {
+        property_id: req.operator.property_id,   // session only
+        as_of: rawAsOf || null,
+      });
+      return res.json(out);
+    } catch (e) {
+      //  A failed read is UNAVAILABLE. It must never render as an empty
+      //  building.
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    }
+  });
+
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/leasing/positions-for-period?requested_start=&requested_end=
+  //   FORWARD LEASING — the same positions, asked about a SPAN.
+  //
+  //   Which rentable positions can support this ENTIRE requested term?
+  //
+  //   The Rent Roll above answers "what is true on this date". This
+  //   answers "what does the recorded right-set permit over this
+  //   interval". Two temporal questions over one truth; there is no
+  //   forward datastore for either to drift from.
+  //
+  //   ⚠ CONTRACTUAL ONLY. It does not say a position can be marketed,
+  //   shown or offered. Operating availability — readiness, turnover,
+  //   possession, down state — is availability_read's answer, and
+  //   composing them is a deliberate later step, NOT an AND of these two
+  //   reads: availability answers "marketable NOW" and deliberately
+  //   refuses to infer readiness after a future lease ends, so ANDing
+  //   would reject a unit that legitimately turns before the requested
+  //   start. That would replace an over-offering bug with an
+  //   under-offering one.
+  //
+  //   BOTH DATES ARE REQUIRED. There is no default interval and there
+  //   must not be one: "today", "today for one day" and any implied
+  //   school year are all a second time model smuggled in as a
+  //   convenience. A named period is configuration resolved to dates
+  //   ABOVE this route.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/leasing/positions-for-period", requireOperator, requireLeasingModuleAccess,
+    async (req, res) => {
+      res.set("Cache-Control", "no-store");
+      const start = req.query.requested_start;
+      const end = req.query.requested_end;
+      //  Refused honestly and specifically. "Invalid request" would make an
+      //  operator guess which of the two dates Spine could not read.
+      for (const [name, v] of [["requested_start", start], ["requested_end", end]]) {
+        if (v == null || v === "") {
+          return res.status(400).json({
+            error: `${name} is required. Forward Leasing answers about a term, and a term has two dates.`,
+            code: "interval_required",
+          });
+        }
+        if (!validCalendarDate(String(v))) {
+          return res.status(400).json({
+            error: `${name} must be a real calendar date in YYYY-MM-DD form.`,
+            code: "invalid_interval_date",
+          });
+        }
+      }
+      if (String(end) < String(start)) {
+        return res.status(400).json({
+          error: "requested_end is before requested_start.",
+          code: "invalid_interval",
+        });
+      }
+      try {
+        const out = await intervalPropertyPositions(pool, {
+          property_id: req.operator.property_id,   // session only, never the query
+          requested_start: String(start),
+          requested_end: String(end),
+        });
+        return res.json(out);
+      } catch (e) {
+        //  A failed read is UNAVAILABLE, never an empty building and never
+        //  "nothing is available for those dates".
+        return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+      }
+    });
+
+  // ══════════════════════════════════════════════════════════════════
+  // GET /operator/leasing/forward-position
+  //     ?cycle_start=&cycle_end=&cycle_label=
+  //
+  // THE FORWARD LEASING LEDGER — the screen that replaces Mike's tracker.
+  //
+  // Returns three layers that are never summed: the canonical `headline`
+  // from `leases`, the `operating_position` the leasing tracker claims,
+  // and the per-bed `ledger` carrying both plus a proof level.
+  //
+  // Property comes from the SESSION, never the query (§21). Both cycle
+  // dates are REQUIRED — a cycle is a named span, and there is no default
+  // one; "today", "this year" and an implied school year are each a second
+  // time model smuggled in as a convenience.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/leasing/forward-position", requireOperator, requireLeasingModuleAccess,
+    async (req, res) => {
+      res.set("Cache-Control", "no-store");
+      try {
+        //  Dates still reach the read. What changed is that Mike no longer
+        //  has to type them when the property has a governed cycle.
+        const c = await resolveRequestedCycle(req);
+        const out = await forwardLeasingPosition(pool, {
+          property_id: req.operator.property_id,   // session only, never the query
+          cycle_start: c.cycle_start, cycle_end: c.cycle_end, cycle_label: c.cycle_label,
+        });
+        return res.json({ ...out, cycle_resolved_by: c.resolved_by });
+      } catch (e) {
+        //  A failed read is UNAVAILABLE. It is never an empty building and
+        //  never "nothing is committed for that cycle". A cycle that cannot
+        //  be resolved refuses with its own code and its candidates, so the
+        //  surface can ask rather than guess.
+        return res.status(e.httpStatus || (e.code ? 400 : 500))
+          .json({ error: e.publicMessage || e.message, code: e.code || null,
+                  candidates: e.candidates || undefined });
+      }
+    });
+
+  // ══════════════════════════════════════════════════════════════════
+  //  THE CYCLE RESOLVER, shared by both forward reads.
+  //
+  //  A named cycle is CONFIGURATION. The route still ends up with two
+  //  dates — the durable computational primitive never changes — but Mike
+  //  no longer retypes them. Precedence: explicit dates > named label >
+  //  the configured cycle covering today. Ambiguity REFUSES.
+  // ══════════════════════════════════════════════════════════════════
+  async function resolveRequestedCycle(req) {
+    const start = req.query.cycle_start, end = req.query.cycle_end;
+    if (start != null && start !== "" && end != null && end !== "") {
+      for (const [name, v] of [["cycle_start", start], ["cycle_end", end]]) {
+        if (!validCalendarDate(String(v))) {
+          const e = new Error(`${name} must be a real calendar date in YYYY-MM-DD form.`);
+          e.code = "invalid_cycle_date"; e.httpStatus = 400; throw e;
+        }
+      }
+      if (String(end) < String(start)) {
+        const e = new Error("cycle_end is before cycle_start.");
+        e.code = "invalid_cycle"; e.httpStatus = 400; throw e;
+      }
+      return { cycle_start: String(start), cycle_end: String(end),
+        cycle_label: req.query.cycle_label ? String(req.query.cycle_label).slice(0, 40) : null,
+        resolved_by: "explicit_dates" };
+    }
+    if ((start == null || start === "") !== (end == null || end === "")) {
+      const e = new Error("Give both cycle dates or neither. A cycle is a span.");
+      e.code = "cycle_required"; e.httpStatus = 400; throw e;
+    }
+    const c = await resolveCycle(pool, {
+      property_id: req.operator.property_id,
+      cycle_label: req.query.cycle_label ? String(req.query.cycle_label) : null,
+    });
+    return { cycle_start: c.cycle_start, cycle_end: c.cycle_end,
+      cycle_label: c.cycle_label, resolved_by: c.resolved_by, cycle_id: c.id };
+  }
+
+  router.get("/operator/leasing/cycles", requireOperator, requireLeasingModuleAccess,
+    async (req, res) => {
+      res.set("Cache-Control", "no-store");
+      try {
+        const cycles = await listLeasingCycles(pool, { property_id: req.operator.property_id });
+        let current = null;
+        try { current = await resolveCycle(pool, { property_id: req.operator.property_id }); }
+        catch (e) { current = { unresolved: e.code, reason: e.publicMessage || e.message }; }
+        return res.json({ cycles, current });
+      } catch (e) {
+        return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code });
+      }
+    });
+
+  // ══════════════════════════════════════════════════════════════════
+  //  GET /operator/leasing/forward-rent
+  //
+  //  The economic reading of the same position. Four buckets that never
+  //  merge — CONTRACTUAL, CLAIMED, ASSUMED, PROJECTED — plus the dated
+  //  committed-rent schedule and the commitments that cannot be dated.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/leasing/forward-rent", requireOperator, requireLeasingModuleAccess,
+    async (req, res) => {
+      res.set("Cache-Control", "no-store");
+      try {
+        const c = await resolveRequestedCycle(req);
+        const out = await forwardRent(pool, {
+          property_id: req.operator.property_id,   // session only, never the query
+          cycle_start: c.cycle_start, cycle_end: c.cycle_end, cycle_label: c.cycle_label,
+        });
+        return res.json({ ...out, cycle_resolved_by: c.resolved_by });
+      } catch (e) {
+        return res.status(e.httpStatus || (e.code ? 400 : 500))
+          .json({ error: e.publicMessage || e.message, code: e.code || null,
+                  candidates: e.candidates || undefined });
+      }
+    });
 
   router.get("/operator/rent-roll/future-facts", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");

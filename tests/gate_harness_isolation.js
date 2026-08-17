@@ -164,6 +164,35 @@ const PRODUCTION_APPROVED = [
             "human confirms them through the product. Proven by tests/debt_establishment_tool.db.js, " +
             "which spawns it as a real process and asserts every refusal above",
     until: "governed document establishment owns the Debt write workflow" },
+  /*  ── THE TURN-READINESS CENSUS, 2026-08-16 ─────────────────────────
+   *  Registered WITH the tool, before the gate was run against it. */
+  { file: "tools/turn_readiness_census.js",
+    reason: "Turn-readiness census — must read PRODUCTION because the question is what " +
+            "production's `turnovers.ready_date` values MEAN, and a local database " +
+            "contains none of them. READ-ONLY: every statement is a SELECT and the whole " +
+            "run is wrapped in `begin read only` / `rollback`, so the SERVER refuses a " +
+            "write regardless of this file's contents. It INFERS NOTHING — it reports " +
+            "evidence pairs (obligation due_at agreement, matching readiness " +
+            "certification) and counts the rows matching neither as honest unknowns, " +
+            "because `status='ready' ⇒ achievement` is a guess about what a human meant. " +
+            "Prints statuses and counts only: no resident, phone, note or media data. " +
+            "CLASS 3 — migration-preparation tooling",
+    until: "`turnovers.ready_date` is retired (docs/TURN_READINESS_SEMANTICS_TRACE.md §4)" },
+  { file: "tools/leasing_basis_discovery.js",
+    reason: "Leasing cycle basis discovery — must read the database holding the FRESH " +
+            "activation import, which for the acceptance run is PRODUCTION, because the " +
+            "whole question is which dated-lease-right rule reproduces the beds a real " +
+            "operator is counting on a real property today; a rehearsal export already " +
+            "produced a wrong answer (docs/LEASING_CYCLE_AND_PACE_TRACE.md §4). READ-ONLY: " +
+            "every statement is a SELECT inside `begin read only` / `rollback`, so the " +
+            "SERVER refuses a write regardless of this file's contents. It CHOOSES NOTHING " +
+            "— it reports each candidate basis with its edge sensitivity and, given a " +
+            "tracker export, the exact set difference, and it refuses rather than guessing " +
+            "on an ambiguous property, an unresolvable tracker bed, or a non-ISO lease " +
+            "date. Prints unit/room labels and counts only: no resident, phone, rent, " +
+            "note or media data. CLASS 3 — activation-acceptance tooling",
+    until: "property_leasing_cycles.commitment_basis is established for the property and " +
+           "the external tracker is retired" },
   { file: "tools/equity/establish_position.js",
     reason: "The controlled Equity establishment step — WRITE-CAPABLE BY DESIGN and the " +
             "capital-stack counterpart to tools/debt/establish_instrument.js. Production is " +
@@ -602,6 +631,32 @@ const SLICE_A_BLOCKERS = [
 const GUARD_IMPORTED = /require\([^)]*_run_receipt[^)]*\)/;
 const GUARD_CALLED = /harnessConnectionString\s*\(/;
 
+/*  ⚠ THIS DETECTOR UNDER-DETECTS, AND THE AMOUNT IS MEASURED.
+ *
+ *  Both alternatives require `process.env.DATABASE_URL` to appear AT THE
+ *  CONNECTION SITE. A file that reads the variable once into a local and
+ *  passes the local to `new Pool` is byte-for-byte equivalent at runtime and
+ *  matches NEITHER. One variable of indirection walks past this gate — found
+ *  2026-08-16 while adding tools/turn_readiness_census.js, which was written
+ *  that way by accident and was simply not seen.
+ *
+ *  MEASURED on this tree: widening to "reads process.env.DATABASE_URL
+ *  ANYWHERE and constructs a Pool/Client ANYWHERE", after excluding the guard
+ *  module, PRODUCTION_APPROVED/DEAD entries, guarded harnesses and
+ *  harness-var files, changes the classification of 31 files — 24 under
+ *  tests/ and 7 under tools/. See docs/build1/INTEGRITY_GAPS.md GAP 2 for the
+ *  list and the decision.
+ *
+ *  NOT WIDENED HERE, deliberately. Widening reclassifies 31 files in a lane
+ *  that is building Slice 2, and CLAUDE.md's rule is explicit: real, recorded,
+ *  moved on. What was done instead is narrower and honest — the tool that
+ *  found it was made visible to this detector AND registered above, so the
+ *  finding is not paid for with the file that revealed it.
+ *
+ *  ⚠ Until it is widened, this gate's green means "no new consumer WRITTEN IN
+ *  THE DETECTED SHAPE." It does not mean "no new consumer." A gate that scans
+ *  less than it asserts launders the gap into evidence; saying so here is what
+ *  keeps that from happening silently. */
 const CONNECTS = /connectionString:\s*process\.env\.DATABASE_URL|new\s+(Pool|Client)\s*\(\s*\{[^}]*process\.env\.DATABASE_URL/;
 const WRITES = /insert\s+into|update\s+[a-z_"]+\s+set|delete\s+from|create\s+table|\bcommit\b/i;
 

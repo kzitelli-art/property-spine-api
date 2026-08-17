@@ -19,19 +19,124 @@
        DATABASE_URL="<connection string>" node migrate.js
      Release schema — deliberate, and it will make you prove you looked:
        MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=<what the ledger says> \
-         [EXPECTED_SHA=<sha>] node migrate.js --apply
+         EXPECTED_SHA=<sha of the code being released> node migrate.js --apply
+
+   THE SHA CONTRACT, stated exactly, because it used to be stated loosely:
+     · On a Render instance, EXPECTED_SHA is REQUIRED and is compared to
+       RENDER_GIT_COMMIT.
+     · Anywhere else, it is OPTIONAL — but if you give it, it is CHECKED,
+       against this repository's git HEAD, and the release also refuses if
+       tracked files are modified, because then the sha is not the code.
+     · It further refuses if any migrations/NNN_*.sql file on disk is absent
+       from the pinned commit. This runner executes the FILESYSTEM, not the
+       commit, so an untracked migration would otherwise be applied under a
+       sha that does not contain it. Other untracked files are ignored.
+     · Omit it off-Render and nothing is pinned. The release banner says so
+       in those words rather than printing a reassuring blank.
 
    It prints exactly what it did. If a migration fails, that migration's
    transaction is rolled back (nothing half-applied) and the script stops
    so you can fix the file and re-run.
 
    This script has NO dependencies beyond 'pg', which the API already uses.
+   It does shell out to `git` to establish which build it is; a missing git
+   is handled as UNKNOWN, never as agreement.
    ════════════════════════════════════════════════════════════════════ */
 
 const fs = require("fs");
 const path = require("path");
+const { execFileSync } = require("child_process");
 const { Client } = require("pg");
 const { classifyLedger } = require("./ledger_verdict");
+
+/*  WHICH BUILD IS THIS, REALLY.
+ *
+ *  EXPECTED_SHA used to be compared only against RENDER_GIT_COMMIT, so
+ *  releasing from anywhere that is not a Render instance — a laptop, a
+ *  container, another agent's environment — read the variable, compared it
+ *  to nothing, and printed no error. The runbook said "pin the exact code
+ *  being released" while the executable gate pinned it only by accident of
+ *  where the command ran. A guard that is satisfied by a value it never
+ *  checks is worse than no guard, because it launders the gap into evidence.
+ *
+ *  So: resolve the build's identity from the strongest source available,
+ *  and SAY which source it was. A Render instance knows its own commit. A
+ *  git checkout knows its HEAD — and also knows whether its tracked files
+ *  still match that HEAD, which matters, because a sha over a modified
+ *  worktree describes code that is not the code about to run.
+ *
+ *  MOST untracked files are deliberately ignored: .env, scratch output and
+ *  node_modules noise are not the release. Tracked modifications are.
+ *
+ *  ⚠ BUT "UNTRACKED" AND "NOT PART OF THE RELEASE" ARE NOT THE SAME SET,
+ *  AND THE FIRST VERSION OF THIS GUARD ASSUMED THEY WERE.
+ *
+ *  This runner does not execute a commit. It executes whatever
+ *  `migrations/NNN_*.sql` files it finds ON DISK. So an UNTRACKED migration
+ *  is both invisible to `--untracked-files=no` and fully executable, which
+ *  produced exactly the state the sha pin exists to make impossible:
+ *
+ *      git HEAD           471f2e0…
+ *      EXPECTED_SHA       471f2e0…        → "VERIFIED against git HEAD"
+ *      tracked files      clean
+ *      untracked          migrations/180_something.sql
+ *      applied            180_something.sql — schema NOT in that commit
+ *
+ *  The fix is not to ban untracked files; that would strand a release on a
+ *  stray screenshot. It is to scope the check to files that can PARTICIPATE
+ *  in a release. Every migration-shaped file in this directory must be
+ *  present in the pinned commit, and the set is discovered with the SAME
+ *  predicate the runner executes with — one implementation, so the guard
+ *  cannot drift into scanning less than it asserts.
+ */
+//  The shape of a migration file. One definition: the guard scans exactly
+//  the file class the runner runs.
+const MIGRATION_FILE_RE = /^\d{3}_.*\.sql$/;
+
+function resolveBuildIdentity() {
+  const render = (process.env.RENDER_GIT_COMMIT || "").trim();
+  if (render) {
+    //  A Render instance's tree IS a checkout the platform made from that
+    //  commit; there is no working copy for anyone to drop a file into, and
+    //  no git to ask. Stated rather than silently skipped.
+    return { sha: render, source: "RENDER_GIT_COMMIT", modified: null, unpinnedMigrations: null };
+  }
+
+  const repo = path.join(__dirname, "..");
+  const git = (args, cwd) => execFileSync("git", args,
+    { cwd: cwd || repo, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  try {
+    const sha = git(["rev-parse", "HEAD"]);
+    if (!/^[0-9a-f]{40}$/.test(sha)) {
+      return { sha: null, source: null, modified: null, unpinnedMigrations: null };
+    }
+    const dirty = git(["status", "--porcelain", "--untracked-files=no"]);
+
+    //  Which migration files does the PINNED COMMIT contain? Non-recursive,
+    //  so a tracked `sub/180_x.sql` cannot vouch for an untracked
+    //  `180_x.sql` sitting beside the runner.
+    const inCommit = new Set(
+      git(["ls-tree", "--name-only", "HEAD", "."], MIGRATIONS_DIR)
+        .split("\n").map((l) => path.basename(l.trim())).filter(Boolean));
+
+    //  And which does the runner actually see on disk? Same predicate.
+    const onDisk = fs.readdirSync(MIGRATIONS_DIR).filter((f) => MIGRATION_FILE_RE.test(f)).sort();
+
+    return {
+      sha, source: "git HEAD",
+      modified: dirty ? dirty.split("\n") : [],
+      unpinnedMigrations: onDisk.filter((f) => !inCommit.has(f)),
+    };
+  } catch {
+    //  No git, no repository, or a git that refused. Unknown is a valid
+    //  answer here and is handled by the caller as unknown — never as OK.
+    return { sha: null, source: null, modified: null, unpinnedMigrations: null };
+  }
+}
+
+//  A pin short enough to match anything is not a pin. `EXPECTED_SHA=3`
+//  prefix-matches roughly one commit in sixteen.
+const MIN_PIN = 7;
 
 /*  How long a migration may WAIT to acquire a lock before giving up.
  *  Raise it deliberately for a planned maintenance window
@@ -121,8 +226,11 @@ async function main() {
   // 3. Find migration files: NNN_label.sql, numerically ordered.
   //    The ledger file (000_schema_migrations.sql) is skipped — the ledger
   //    is created above, not as a tracked migration.
+  //  MIGRATION_FILE_RE is shared with resolveBuildIdentity() on purpose. The
+  //  release guard must scan the same file class this loop executes, or it
+  //  asserts over a set the runner does not use.
   const files = fs.readdirSync(MIGRATIONS_DIR)
-    .filter(f => /^\d{3}_.*\.sql$/.test(f))
+    .filter(f => MIGRATION_FILE_RE.test(f))
     .filter(f => !f.startsWith("000_"))
     .sort();
 
@@ -339,26 +447,86 @@ async function main() {
     await client.end();
     process.exit(1);
   }
-  const deployedSha = process.env.RENDER_GIT_COMMIT;
-  if (deployedSha) {
-    const expectedSha = process.env.EXPECTED_SHA;
-    if (!expectedSha) {
-      console.error("\n  ✗ RELEASE REFUSED — EXPECTED_SHA is required when releasing a deployed build.\n");
-      console.error(`    This instance is running ${deployedSha.slice(0, 12)}. Pin it deliberately.\n`);
+  const build = resolveBuildIdentity();
+  const expectedSha = (process.env.EXPECTED_SHA || "").trim();
+
+  //  A Render deploy must be pinned. Unchanged rule, unchanged wording.
+  if (build.source === "RENDER_GIT_COMMIT" && !expectedSha) {
+    console.error("\n  ✗ RELEASE REFUSED — EXPECTED_SHA is required when releasing a deployed build.\n");
+    console.error(`    This instance is running ${build.sha.slice(0, 12)}. Pin it deliberately.\n`);
+    await client.end();
+    process.exit(1);
+  }
+
+  //  And wherever it IS pinned, the pin is checked — that is the whole
+  //  point of the variable, and it used to be true only on Render.
+  if (expectedSha) {
+    if (expectedSha.length < MIN_PIN || !/^[0-9a-f]+$/i.test(expectedSha)) {
+      console.error("\n  ✗ RELEASE REFUSED — EXPECTED_SHA is not a usable pin.\n");
+      console.error(`    got ${JSON.stringify(expectedSha)} — need at least ${MIN_PIN} hex characters.`);
+      console.error("    A short prefix matches many commits, so it pins nothing.\n");
       await client.end();
       process.exit(1);
     }
-    if (!deployedSha.startsWith(expectedSha) && !expectedSha.startsWith(deployedSha)) {
+    if (!build.sha) {
+      console.error("\n  ✗ RELEASE REFUSED — EXPECTED_SHA was given and CANNOT be verified here.\n");
+      console.error("    Neither RENDER_GIT_COMMIT nor a git HEAD could be resolved, so there");
+      console.error("    is nothing to compare your pin against. Accepting it would report a");
+      console.error("    verified release that was never verified.");
+      console.error("\n    Release from the git checkout of the code being released, or set");
+      console.error("    RENDER_GIT_COMMIT to the sha this build actually is.\n");
+      await client.end();
+      process.exit(1);
+    }
+    if (!build.sha.startsWith(expectedSha) && !expectedSha.startsWith(build.sha)) {
       console.error("\n  ✗ RELEASE REFUSED — this is not the build you authorised.\n");
       console.error(`    expected ${expectedSha}`);
-      console.error(`    running  ${deployedSha}\n`);
+      console.error(`    running  ${build.sha}   (from ${build.source})\n`);
+      await client.end();
+      process.exit(1);
+    }
+    //  The sha matched, and the files no longer match the sha.
+    if (build.modified && build.modified.length) {
+      console.error("\n  ✗ RELEASE REFUSED — the pinned sha does not describe this working tree.\n");
+      console.error(`    ${build.sha.slice(0, 12)} matches your pin, but ${build.modified.length} tracked file(s)`);
+      console.error("    are modified, so the code about to migrate is not the code you pinned:");
+      for (const line of build.modified.slice(0, 12)) console.error(`      · ${line}`);
+      if (build.modified.length > 12) console.error(`      … and ${build.modified.length - 12} more`);
+      console.error("\n    Commit or stash them, then re-read the ledger and release again.\n");
+      await client.end();
+      process.exit(1);
+    }
+    //  THE PIN IS ONLY TRUE IF IT COVERS EVERY FILE THIS RUNNER CAN EXECUTE.
+    //  An untracked migration passes the tracked-file check above and is
+    //  still discovered and applied by the loop below, so a "VERIFIED"
+    //  release would execute schema the pinned commit does not contain.
+    if (build.unpinnedMigrations && build.unpinnedMigrations.length) {
+      console.error("\n  ✗ RELEASE REFUSED — a migration on disk is NOT in the pinned commit.\n");
+      console.error(`    ${build.sha.slice(0, 12)} matches your pin, and this runner executes migration`);
+      console.error("    files from the FILESYSTEM, not from the commit. These are present here");
+      console.error("    and absent from that commit, so the pin would not describe them:");
+      for (const f of build.unpinnedMigrations) console.error(`      · migrations/${f}`);
+      console.error("\n    Commit them and re-pin, or move them out of migrations/. A release");
+      console.error("    that prints VERIFIED must have verified everything it is about to run.\n");
       await client.end();
       process.exit(1);
     }
   }
+
   console.log("\n  ── MIGRATION RELEASE ──────────────────────────────────");
   console.log(`     ledger ceiling (verified): ${ceiling}`);
-  console.log(`     build:                     ${deployedSha ? deployedSha.slice(0, 12) : "(not a Render deploy)"}`);
+  //  Say what was actually established. "(not a Render deploy)" told the
+  //  releaser nothing about whether their pin had been checked.
+  console.log(`     build:                     ${build.sha ? build.sha.slice(0, 12) : "UNKNOWN"}` +
+    `${build.source ? `  (${build.source})` : ""}`);
+  //  Say what VERIFIED covers. On a git checkout it covers the tracked tree
+  //  AND every migration file on disk; on Render there is no working copy to
+  //  check, and that difference is printed rather than implied.
+  console.log(`     sha pin:                   ${expectedSha
+    ? `VERIFIED against ${build.source}${build.unpinnedMigrations
+      ? " — tree clean, all migrations in the commit"
+      : " — no working copy to check"}`
+    : "NOT PINNED — EXPECTED_SHA was not set, so no build was authorised"}`);
   console.log(`     to apply:                  ${pending.length ? pending.join(", ") : "nothing pending"}`);
   console.log("  ───────────────────────────────────────────────────────\n");
 

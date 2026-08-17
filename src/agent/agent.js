@@ -1311,9 +1311,29 @@ Reply with ONLY the message text.`;
               id: u.id, unit_number: u.unit_number, bedrooms: u.bedrooms,
               bathrooms: u.bathrooms, square_feet: u.square_feet, market_rent: u.market_rent,
             }));
-            const toolResultText = offeredUnits.length
-              ? JSON.stringify({ qualification: found.qualification, units: offeredUnits.map(({ id, ...pub }) => pub) })
-              : JSON.stringify({ qualification: found.qualification, units: [], note: "No units match. Tell the prospect honestly; offer to note their preferences." });
+            /*  ⚠ "NO UNITS MATCH" IS AN ANSWER ABOUT INVENTORY. A refusal
+             *  is not. This hardcoded an inventory answer for every empty
+             *  result, so the containment in leasing_inventory — which
+             *  fails closed when the prospect has given no dates, and when
+             *  the term check itself could not run — would have been
+             *  reported to a real person as "nothing is available." Those
+             *  are different facts and conflating them is the exact
+             *  failure this path exists to prevent.
+             *
+             *  The inventory door now says what it means. The agent
+             *  carries its sentence rather than inventing one, and
+             *  may_promise travels so the model is told, in the facts,
+             *  that it may not describe a unit as available — readiness by
+             *  a future date is not governed anywhere in Spine yet.  */
+            const toolResultText = JSON.stringify({
+              qualification: found.qualification,
+              term: found.term || null,
+              may_promise: found.may_promise === true,
+              units: offeredUnits.map(({ id, ...pub }) => pub),
+              note: found.note
+                || (offeredUnits.length ? undefined
+                    : "No units match. Tell the prospect honestly; offer to note their preferences."),
+            });
             r = await anthropic.messages.create({
               model: MODEL, max_tokens: 320, system: built.system,
               messages: [

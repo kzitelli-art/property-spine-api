@@ -58,6 +58,13 @@ const GATES = [
   //  belong on the standard path rather than in a harness nobody runs.
   { file: "gate_migration_137_promotion.js",
     what: "migration 137 DDL is the proven scale payload, unchanged" },
+  //  The release guard stops production migrations, and until now the only
+  //  thing that ran its proof was somebody remembering to. It is DB-free
+  //  (it stubs `pg`) and builds its own scratch git repository, so it
+  //  belongs on the standard path. A safety check nobody runs is the exact
+  //  failure this harness was written for; it does not get to be the third.
+  { file: "migration_release_gate.test.js",
+    what: "EXPECTED_LEDGER_CEILING and EXPECTED_SHA are enforced, on Render and off it" },
   { file: "gate_completion_writers.js",
     what: "exactly the expected work-order completion writers; no third writer" },
   //  Boundary 8a lands the activation service and 8b turns the guard on.
@@ -120,6 +127,21 @@ const GATES = [
     what: "Ask Spine: answers only from reads, names them, and an outage never reads as good news" },
   { file: "gate_ask_spine_readers.js",
     what: "Ask Spine: every canonical standing domain is registered, pending, or explicitly waived" },
+  //  The gate above is the §40.2 enforcement, so it is the one gate whose
+  //  own failure modes must be demonstrated rather than trusted. It ran
+  //  green for months while scanning one directory and missing Tenancy
+  //  entirely; a green gate that has never been seen to go red is a claim.
+  //  This mutates the registration chain six ways and requires exit 1 each
+  //  time, then requires green again on restore.
+  { file: "ask_spine_reader_gate_falsification.js",
+    what: "the reader gate itself goes RED when registration, discovery or the gather is broken" },
+  { file: "tenancy_ask_spine.test.js",
+    what: "Tenancy Ask Spine: routing, entitlement before any read, the four silences, the truth walls" },
+  //  Slice 2's primitive is PURE, which is why its whole edge-case surface
+  //  runs here in milliseconds instead of behind a Postgres. The DB rung
+  //  (interval_positions.db.js) proves the same states on 160 real beds.
+  { file: "interval_position_hostile.test.js",
+    what: "Interval tenancy: closed-interval arithmetic, which rights count, honest refusals, and the line it does not cross" },
   { file: "meeting_evidence_ingress.test.js",
     what: "Meeting Evidence: Read AI raw-byte ingress, immutable inbox shape, and no Ask Spine/transcript fan-out" },
   { file: "meeting_receipt_v0.test.js",

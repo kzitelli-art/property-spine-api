@@ -29,7 +29,7 @@ const path = require("path");
 const receipt = require("./_run_receipt");
 
 const HARNESS = __filename;
-const EXPECTED = 66;
+const EXPECTED = 68;
 let passed = 0, failed = 0;
 const ok = (label, cond, detail) => {
   if (cond) { passed++; console.log("  ok    " + label); }
@@ -228,10 +228,42 @@ section("6. THE CANONICAL WRITE — ONE PLACE, SERVER-DERIVED");
     if (e.isDirectory()) walk(p); else if (e.name.endsWith(".js")) files.push(p);
   });
   walk(path.join(ROOT, "src"));
-  const writers = files.filter((f) => /accepted_by_user_id\s*=\s*\$/.test(strip(fs.readFileSync(f, "utf8"))))
-    .map((f) => path.relative(ROOT, f).replace(/\\/g, "/")).sort();
-  ok("acceptance is written in exactly one place",
-    writers.join(",") === "src/technician/acceptance_service.js", writers.join(","));
+
+  //  THE CLAIM IS ABOUT WORK-ORDER ACCEPTANCE, SO THE SCAN MUST BE TOO.
+  //  `accepted_by_user_id` is not a name this domain owns — `activations`
+  //  carries one too, meaning "a human accepted this source document
+  //  version". Matching the column name alone made an unrelated domain
+  //  look like a second technician-acceptance door. Resolve each write to
+  //  the table its UPDATE targets, and assert per table: work-order
+  //  acceptance stays single-writer, and every other table's writes are
+  //  LISTED rather than silently tolerated, so a real second door here
+  //  cannot hide behind a rename.
+  const acceptanceWritesByTable = new Map();
+  for (const f of files) {
+    const src = strip(fs.readFileSync(f, "utf8"));
+    const rel = path.relative(ROOT, f).replace(/\\/g, "/");
+    const re = /accepted_by_user_id\s*=\s*\$/g;
+    let m;
+    while ((m = re.exec(src)) !== null) {
+      const before = src.slice(0, m.index);
+      const upd = before.match(/update\s+([a-z_][a-z0-9_]*)[\s\S]*$/i);
+      const table = upd ? upd[1].toLowerCase() : "(no enclosing update)";
+      if (!acceptanceWritesByTable.has(table)) acceptanceWritesByTable.set(table, new Set());
+      acceptanceWritesByTable.get(table).add(rel);
+    }
+  }
+  const listOf = (t) => [...(acceptanceWritesByTable.get(t) || [])].sort().join(",");
+
+  ok("work-order acceptance is written in exactly one place",
+    listOf("obligations") === "src/technician/acceptance_service.js", listOf("obligations"));
+  ok("no acceptance write escapes an UPDATE the scan can resolve to a table",
+    !acceptanceWritesByTable.has("(no enclosing update)"),
+    listOf("(no enclosing update)"));
+  ok("every OTHER table carrying an accepted_by_user_id write is named, not hidden",
+    [...acceptanceWritesByTable.keys()].filter((t) => t !== "obligations").sort().join(",")
+      === "activations",
+    [...acceptanceWritesByTable.keys()].filter((t) => t !== "obligations").sort()
+      .map((t) => `${t}: ${listOf(t)}`).join(" · "));
 
   ok("the service does not re-implement eligibility — it imports the proven module",
     /require\(["']\.\/work_selection["']\)/.test(SVC_SRC) && /acceptanceEligibility\s*\(/.test(SVC_SRC)

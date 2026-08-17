@@ -3512,6 +3512,12 @@ app.use("/", agentApp);
 // session (x-staff-session → users row); the browser never claims identity. The
 // demo-session bootstrap is fail-closed (DEMO_MODE=true only). (operator.js)
 app.use("/", require("./src/identity/operator_session_bootstrap")({ pool })); // BRICK ONE: POST /operator/session + /revoke  the only /operator/* routes that self-protect (they create/end the session)
+// PHASE ZERO: the real property boundary. GET /operator/properties (which
+// properties may I operate?) + POST /operator/properties/select (issue me a
+// session for this one). Both require a resolved session; the select route's
+// body property_id is a REQUEST that issueStaffSession grants or refuses  it
+// never selects scope for a read. See the module header.
+app.use("/", require("./src/identity/operator_properties")({ pool }));
 const operatorModule = require("./src/identity/operator");
 app.use("/", operatorModule({ pool, agentService: agentApp._service,
   leasingTourService: __leasingLeads._service, // the ONE completion service (leasingleads.js) — session door calls the same tx

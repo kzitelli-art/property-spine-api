@@ -59,6 +59,9 @@ const debtPositionRead = require("../asset/debt_position_read.js");
 //  only place a second Equity reader could quietly appear, so it does not.
 const equityPositionService = require("../asset/equity_position_service.js");
 const equityPositionRead = require("../asset/equity_position_read.js");
+const tenancyStandingRead = require("../tenancy/tenancy_position_read.js");
+const forwardRentRead = require("../leasing/forward_rent.js");
+const leasingCycleConfig = require("../leasing/leasing_cycle.js");
 
 const MODEL = process.env.ASK_SPINE_MODEL || "claude-opus-5";
 /*  THINKING AND THE ANSWER SHARE THIS CEILING. On this model family
@@ -134,6 +137,12 @@ const SUPPORTED_SCOPE =
   "responsibility and recovery arrangement, statement history, known gaps, and " +
   "same-account statement comparisons, or governed service providers, scope, price, term, " +
   "notice decisions, retained evidence, financial observations, and known contract gaps, or " +
+  "this property's governed tenancy standing — how many rentable positions there are, how " +
+  "many are occupied or open on a date, what is committed next, and what Spine does not know " +
+  "about them, including its FORWARD position for a named leasing cycle — beds committed and " +
+  "remaining, how much of that is tied to canonical lease truth, the rent claimed by the " +
+  "operating tracker versus rent established contractually, the stated asking-rent assumption " +
+  "on open beds, the full-sell-out monthly run rate, and the dated committed-rent schedule, or " +
   "who holds equity or preferred equity in this property, on what terms, what has been " +
   "contributed, and what remains unresolved";
 
@@ -144,10 +153,36 @@ const SUPPORTED_SCOPE =
 const OUT_OF_SCOPE_ANSWER =
   "I can only answer about " + SUPPORTED_SCOPE + ". " +
   "Ask me what needs attention, about a recorded Compliance item, how a Utility works here, " +
-  "what governs a contracted service, what the property owes its lender, or who holds equity here.";
+  "what governs a contracted service, what the property owes its lender, who holds equity here, " +
+  "or where the rent roll stands on a date.";
 
+//  ⚠ EVERY NOUN HERE WAS SINGULAR-ONLY, AND NOBODY ASKS IN THE SINGULAR.
+//  `\b(licen[cs]e)\b` does not match "licenses" — the \b needs a non-word
+//  character and an "s" is not one. So "is the license current" routed to
+//  Compliance and "are the licenses current" fell through to `work`, as
+//  did "what inspections are due" and "are the rental licenses up to
+//  date". A whole domain was reachable only by operators who happened to
+//  ask about exactly one thing.
+//
+//  Found while adding Tenancy beside it: "are our licenses expiring"
+//  started routing to the rent roll, because Tenancy matched a word
+//  Compliance could not. Two domains competing for the same sentence is
+//  what made a silent gap visible.
 const COMPLIANCE_TERMS =
-  /\b(compliance|licen[cs]e|registration|inspection|certificate|violation|cure|renewal|expire[sd]?|expiration)\b/i;
+  /\b(compliance|licen[cs]es?|registrations?|inspections?|certificates?|violations?|cure)\b/i;
+
+/*  ⚠ THE WORDS TWO DOMAINS OWN.
+ *  renewal · expiring · expiration are Compliance's clock AND Tenancy's.
+ *  A licence renews; so does a lease. Left in one regex they were decided
+ *  by whichever test ran first, which is not a decision — it is an
+ *  accident that changes when someone reorders a function.
+ *
+ *  So the collision is resolved in the open, by one rule: a clock word
+ *  belongs to Compliance UNLESS the sentence also names a tenancy thing.
+ *  "when is the next renewal" stays Compliance, exactly as before. "when
+ *  do leases start expiring" is a rent roll question and now reads as
+ *  one, rather than being refused as a composed question it never was.  */
+const CLOCK_TERMS = /\b(renewals?|expir(?:e[sd]?|ing|ation|ations))\b/i;
 const UTILITY_TERMS =
   /\b(utilit(?:y|ies)|electric(?:ity)?|gas|water|sewer|meter(?:ed|s|ing)?|submeter(?:ed|s|ing)?|provider account|utility account|account ending|peco|bills? residents)\b/i;
 const CONTRACTED_SERVICE_TERMS =
@@ -157,6 +192,20 @@ const CONTRACTED_SERVICE_TERMS =
 //  than it means capital structure in an operator's question.
 const EQUITY_TERMS =
   /\b(preferred equity|common equity|equity (?:position|holder|stake)|equity in this property|cap(?:ital)? stack|capital structure|cap table|ownership (?:percent(?:age)?|stake|interest)|preferred return|minimum dividend|side letter|capital contribution|membership interest|capital-stack)\b/i;
+//  ⚠ "vacant" is deliberately IN this list even though the read refuses to
+//  use the word back. Someone asking "how many are vacant" is asking a
+//  tenancy question, and routing it to `work` would answer a rent roll
+//  question out of the work board. The truth walls travel with the facts,
+//  so the answer can say `open` and say why it is not the same claim.
+//
+//  ⚠ AND the clock words — renewal, expiring, expiration — are NOT here.
+//  They are shared with Compliance and are resolved by CLOCK_TERMS above,
+//  in questionSubject, where the tie-break is visible. A lease question
+//  reaches Tenancy through "lease" and then CLAIMS the clock word; a
+//  licence question keeps it. Putting them in both regexes instead would
+//  make every such sentence look composed when it is only ambiguous.
+const TENANCY_TERMS =
+  /\b(rent ?roll|occupanc(?:y|ies)|occupied|vacan(?:t|cy|cies)|leases?\b|leased|leasing|tenanc(?:y|ies)|residents?\b|move[- ]?(?:in|out)s?|beds?\b|who lives|how many (?:units|beds|positions|residents))\b/i;
 const DEBT_TERMS =
   /\b(debt (?:position|service)|mortgage(?: loan)?|loan (?:balance|maturity|payment|rate|terms?)|lender|servicer|principal balance|payoff (?:quote|amount)|interest rate|maturity date|extension option|debt-service reserve)\b/i;
 const EXPLICIT_WORK_TERMS =
@@ -164,13 +213,37 @@ const EXPLICIT_WORK_TERMS =
 
 function questionSubject(question) {
   const text = String(question || "");
-  const compliance = COMPLIANCE_TERMS.test(text);
+  const tenancyThing = TENANCY_TERMS.test(text);
+  //  A clock word with no tenancy noun beside it is Compliance's, exactly
+  //  as it has always been. With one, the lease owns it. Stated here so a
+  //  reader can see the tie-break instead of inferring it from two regexes.
+  const compliance = COMPLIANCE_TERMS.test(text) || (CLOCK_TERMS.test(text) && !tenancyThing);
   const utility = UTILITY_TERMS.test(text);
   const contractedService = CONTRACTED_SERVICE_TERMS.test(text);
   const equity = EQUITY_TERMS.test(text);
   const debt = DEBT_TERMS.test(text);
-  const work = EXPLICIT_WORK_TERMS.test(text) && !contractedService;
-  if ([compliance, utility, contractedService, debt, equity, work].filter(Boolean).length > 1) {
+  /*  ⚠ MERGE NOTE, AND A DISTINCTION I GOT WRONG ONCE HERE.
+   *
+   *  `main` added Debt while this branch added Tenancy. My first resolution
+   *  suppressed tenancy when debt matched — and that silently BROKE the
+   *  composition guard: "how many beds, and what is the loan balance"
+   *  routed to `debt` and got answered as a debt question, which is exactly
+   *  the composed answer §40.8 says nobody has authorised yet.
+   *
+   *  Suppression is for VOCABULARY OVERLAP, never for two domains genuinely
+   *  appearing in one sentence:
+   *
+   *    tenancy yields to contracted_service and equity  — shared words
+   *    work yields to every named domain                — generic words
+   *    tenancy does NOT yield to debt                   — different domains,
+   *                                                       so the composition
+   *                                                       guard must see both
+   */
+  const tenancy = tenancyThing && !contractedService && !equity;
+  const work = EXPLICIT_WORK_TERMS.test(text)
+    && !contractedService && !equity && !debt && !tenancy;
+  if ([compliance, utility, contractedService, debt, equity, tenancy, work]
+        .filter(Boolean).length > 1) {
     return "composition_unavailable";
   }
   if (compliance) return "compliance";
@@ -178,6 +251,7 @@ function questionSubject(question) {
   if (contractedService) return "contracted_service";
   if (debt) return "debt";
   if (equity) return "equity";
+  if (tenancy) return "tenancy";
   return "work";
 }
 
@@ -247,6 +321,7 @@ async function gatherFacts(db, {
   //  the SAME canonical service/read pair the Capital Stack UI calls,
   //  never a second reader built for Ask Spine.
   equityService = equityPositionService, equityRead = equityPositionRead,
+  tenancyReader = tenancyStandingRead,
 }) {
   const facts = {
     property_id,
@@ -447,6 +522,90 @@ async function gatherFacts(db, {
     }
   }
 
+  //  ⚠ THE SAME GOVERNED READER THE LEDGER USES, one step compressed.
+  //  readTenancyStanding calls datedPropertyPositions — the exact service
+  //  the Rent Roll screen reads — so there is no second occupancy logic and
+  //  no way for the sentence and the screen to disagree about the same
+  //  building on the same day. What arrives here is the compact standing
+  //  projection, not the 160-row payload: counts, unknowns and the nearest
+  //  dated change. Detail is a second read and is deliberately not offered.
+  //
+  //  NOT_ESTABLISHED and a failed read stay two different facts (§40.7): a
+  //  property with no inventory reads standing.truth_state ===
+  //  'NOT_ESTABLISHED'; a broken read reads read_state === 'READ_FAILED'.
+  //  Neither is ever collapsed into the other, and neither is a zero.
+  if (subject === "tenancy"
+      && ((allowed_modules || []).includes("leasing")
+          || (allowed_modules || []).includes("management"))) {
+    try {
+      const standing = await tenancyReader.readTenancyStanding(db, { property_id });
+      facts.tenancy = withoutDatabaseIds({ ...standing, read_state: "OK" });
+
+      /*  ── THE FORWARD CYCLE, ON THE SAME DOMAIN ──────────────────────
+       *  Forward Leasing and Forward Rent are the SAME property truth read
+       *  over an interval and then read economically. They are not a new
+       *  Ask Spine domain and must not become one — a second domain would
+       *  mean a second place entitlement, silence handling and truth walls
+       *  are implemented, and those diverge silently.
+       *
+       *  Attached only when the property has a GOVERNED cycle. No cycle
+       *  configured, or an ambiguous one, is a real answer and it is
+       *  carried as a truth state rather than a guessed interval. */
+      try {
+        const cyc = await leasingCycleConfig.resolveCycle(db, { property_id });
+        const fr = await forwardRentRead.forwardRent(db, {
+          property_id, cycle_start: cyc.cycle_start, cycle_end: cyc.cycle_end,
+          cycle_label: cyc.cycle_label,
+        });
+        facts.tenancy.forward = withoutDatabaseIds({
+          read_state: "OK",
+          cycle: { label: cyc.cycle_label, start: cyc.cycle_start, end: cyc.cycle_end,
+                   resolved_by: cyc.resolved_by },
+          position: fr.operating_position && fr.operating_position.read_state === "ok" ? {
+            beds: fr.forward_leasing.positions,
+            signed: fr.operating_position.per_tracker_signed,
+            pending: fr.operating_position.per_tracker_pending,
+            committed: fr.operating_position.per_tracker_committed,
+            remaining: fr.operating_position.remaining,
+            tied_to_canonical_lease: fr.operating_position.tied_to_canonical_lease,
+            awaiting_contractual_tie: fr.operating_position.awaiting_contractual_tie,
+            needs_review: fr.operating_position.needs_review,
+          } : { read_state: "READ_FAILED",
+                note: "The operating claim layer could not be read. This is NOT zero and NOT " +
+                      "the canonical count." },
+          rent: {
+            contractual: fr.committed_rent.contractual,
+            contractual_state: fr.committed_rent.contractual_state,
+            contractual_missing_positions: fr.committed_rent.contractual_missing_positions,
+            signed_rent_claims: fr.committed_rent.signed_rent_claims,
+            pending_rent_claims: fr.committed_rent.pending_rent_claims,
+            tracked_committed_rent: fr.committed_rent.tracked_committed_rent,
+            open_bed_assumption: fr.open_bed_assumption.monthly,
+            open_bed_lines: fr.open_bed_assumption.lines,
+            open_bed_unpriced: fr.open_bed_assumption.unpriced,
+            full_sell_out_run_rate: fr.full_sell_out_run_rate.monthly,
+            unscheduled_claims: fr.unscheduled_rent_claims,
+          },
+          dated_schedule: fr.dated_schedule.months,
+          vocabulary: fr.vocabulary,
+          coverage: fr.coverage,
+          does_not_establish: fr.does_not_establish,
+        });
+      } catch (fe) {
+        //  A missing or ambiguous cycle is a STATE, not a failure to hide.
+        facts.tenancy.forward = {
+          read_state: fe && /cycle/i.test(String(fe.code || "")) ? "NOT_ESTABLISHED" : "READ_FAILED",
+          reason: fe && (fe.publicMessage || fe.message) || null,
+          code: fe && fe.code || null,
+        };
+      }
+    } catch (e) {
+      const state = e && e.code === "READ_TIMED_OUT" ? "READ_TIMED_OUT" : "READ_FAILED";
+      facts.tenancy = { read_state: state, standing: null, position: null, unknowns: null };
+      failures.push(state === "READ_TIMED_OUT" ? "tenancy_timed_out" : "tenancy");
+    }
+  }
+
   // The same canonical Debt pipe as the Capital Stack screen. The model sees
   // the compact standing projection, never raw row identities or a second
   // conversational derivation.
@@ -571,8 +730,8 @@ function systemPrompt(subject = "work") {
     "4. Nothing being open is a real, good answer. Say it plainly and stop.",
     "   Do not manufacture concerns to seem useful.",
     "5. The FACTS contain only one authorized subject. Never combine Compliance,",
-    "   Utilities, Contracted Services, Debt, or Equity with work, residents, finances",
-    "   or any absent domain. Composition authority",
+    "   Utilities, Contracted Services, Debt, Equity or Tenancy with work, residents,",
+    "   finances or any absent domain. Composition authority",
     "   is not established merely because each domain could be read separately.",
     "6. For Compliance, item standing is not a property-wide legal conclusion.",
     "   An expiration date is not a renewal obligation, and a date-only next event",
@@ -621,6 +780,47 @@ function systemPrompt(subject = "work") {
     "18. For Equity, an unnamed holder or an unrecorded ownership percentage is a",
     "   coverage gap, not a property fact you may fill in. Never guess a holder's",
     "   identity or a missing percentage, and never imply a cap table is complete.",
+    "19. For Tenancy, these words are NOT interchangeable and the facts keep them",
+    "   apart: occupied is not paying — a position can be contractually occupied with",
+    "   no rent recorded at all, and that count is given to you. Rent not recorded is",
+    "   NEVER a rent of zero; say unknown. `open` means no lease spans that date and is",
+    "   NOT a claim the position can be marketed — availability is a different read",
+    "   with different inputs. A committed future position is not a locked one unless",
+    "   the facts say locked.",
+    "20. For Tenancy, NOT_ESTABLISHED means the property has recorded no rentable",
+    "   positions at all — it does NOT mean the building is empty, and it is not zero",
+    "   occupancy. A READ_FAILED tenancy read means Spine could not look; say that,",
+    "   and never report either one as a vacant building.",
+    "21. Tenancy answers retrieval only. Do not compare this property to another, to a",
+    "   prior period, or to a market, and do not explain WHY occupancy is where it is —",
+    "   no causal linkage is recorded. Do not compute a percentage the facts do not",
+    "   carry; the counts are given for a reason.",
+    "22. The FORWARD block is a different question from occupancy and the two are never",
+    "   quoted as each other. Occupancy is who is in the building today; forward is how",
+    "   much of a named future cycle has been sold. Never add them, subtract them, or",
+    "   answer one with the other.",
+    "23. Forward rent has FOUR words and they never merge. CONTRACTUAL is established by",
+    "   governing lease evidence. CLAIMED is what the operating tracker says and is NOT",
+    "   yet contractual truth. ASSUMED is an explicit asking rent for a bed that is still",
+    "   open. PROJECTED is arithmetic over those three. If asked how much rent is signed,",
+    "   give the CLAIMED figure and say it is claimed; give the contractual figure only",
+    "   when contractual_state is established. contractual_state NOT_ESTABLISHED means no",
+    "   governing lease carries an amount — it is not a rent of zero and not a property",
+    "   that earns nothing.",
+    "24. The full-sell-out run rate is a MONTHLY scenario at the stated asking rents. Never",
+    "   multiply it by twelve and never call it annual rent: terms differ, and the dated",
+    "   schedule is the only thing that knows which months a lease governs.",
+    "25. A commitment with no established term is UNSCHEDULED. Report its money and say the",
+    "   term is not established. Never place it in a month, and never infer a term from a",
+    "   cohort label like Full Year or Fall Only — that label is evidence about the term,",
+    "   not the term.",
+    "26. The open beds are NOT in the dated schedule and there is no dated forecast for",
+    "   them. Answering what a future month will earn once the open beds lease would",
+    "   require assuming what term each will sign, which nobody has stated. Say that.",
+    "27. When the forward block reports read_state NOT_ESTABLISHED, the property has no",
+    "   governed leasing cycle configured — say so and offer the dates instead. When it",
+    "   reports READ_FAILED, Spine could not look. Neither is an empty building and",
+    "   neither is zero rent.",
     "",
     "HOW TO SOUND:",
     "· Talk like a competent colleague, not a database. Short sentences.",
@@ -646,6 +846,7 @@ function systemPrompt(subject = "work") {
 async function answer(db, anthropic, {
   property_id, allowed_modules, question, mintComplianceReference, complianceReader,
   utilityReader, contractedServiceReader, debtService, debtRead, equityService, equityRead,
+  tenancyReader,
 }) {
   if (!property_id) throw new Error("ask_spine.answer requires a server-derived property_id");
 
@@ -664,12 +865,37 @@ async function answer(db, anthropic, {
   if (subject === "composition_unavailable") {
     return {
       outcome: "composition_unavailable",
-      answer: "I can answer about Debt, Equity, Compliance, Utilities, Contracted Services, or open work separately, but I can't combine them in one answer yet.",
+      //  A REFUSAL MUST NAME WHAT IT CAN DO. It listed three subjects while
+      //  the router had five, so someone asking about the rent roll AND
+      //  compliance was told Spine handles compliance, utilities, contracted
+      //  services and work — a list their own question was missing from,
+      //  which reads as "I don't do that" rather than "not both at once".
+      //  Debt and Tenancy both belong here now.
+      answer: "I can answer about the rent roll, Debt, Equity, Compliance, Utilities, " +
+              "Contracted Services, or open work separately, but I can't combine them in " +
+              "one answer yet.",
       grounded_on: null,
       references: [],
     };
   }
   const modules = Array.isArray(allowed_modules) ? allowed_modules.map(String) : [];
+  //  ENTITLEMENT PRECEDES INTELLIGENCE (§40.8). Refused HERE, before any
+  //  fact is read — never filtered out of an answer the model already saw.
+  //  Tenancy is entitled on the doors where the work actually happens:
+  //  Leasing records it, Management resolves it. Asset Management is
+  //  deliberately NOT sufficient — an asset manager without a leasing or
+  //  management assignment has no operating claim on resident-level tenancy
+  //  at this property, and widening that is a product decision, not a
+  //  convenience.
+  if (subject === "tenancy"
+      && !modules.includes("leasing") && !modules.includes("management")) {
+    return {
+      outcome: "not_authorized",
+      answer: "The rent roll is not available in your current access for this property.",
+      grounded_on: null,
+      references: [],
+    };
+  }
   if (["compliance", "utility", "contracted_service", "debt", "equity"].includes(subject)
       && !modules.includes("asset_management")) {
     const label = subject === "compliance" ? "Compliance"
@@ -696,7 +922,8 @@ async function answer(db, anthropic, {
   const facts = await gatherFacts(db, {
     property_id, allowed_modules: modules, subject,
     mintComplianceReference, complianceReader, utilityReader,
-    contractedServiceReader, debtService, debtRead, equityService, equityRead, question: q,
+    contractedServiceReader, debtService, debtRead, equityService, equityRead,
+    tenancyReader, question: q,
   });
 
   let text = "";
@@ -804,6 +1031,16 @@ async function answer(db, anthropic, {
       equity_read_state: facts.equity ? facts.equity.read_state : null,
       equity_coverage_gap_count: facts.equity && facts.equity.coverage_gaps
         ? facts.equity.coverage_gaps.length : null,
+      tenancy_standing: facts.tenancy && facts.tenancy.standing
+        ? facts.tenancy.standing.truth_state : null,
+      tenancy_read_state: facts.tenancy ? facts.tenancy.read_state : null,
+      tenancy_as_of: facts.tenancy ? facts.tenancy.as_of : null,
+      tenancy_rentable_positions: facts.tenancy && facts.tenancy.position
+        ? facts.tenancy.position.rentable_positions : null,
+      tenancy_forward_read_state: facts.tenancy && facts.tenancy.forward
+        ? facts.tenancy.forward.read_state : null,
+      tenancy_forward_cycle: facts.tenancy && facts.tenancy.forward && facts.tenancy.forward.cycle
+        ? facts.tenancy.forward.cycle.label : null,
       reads_that_failed: facts.reads_that_failed,
       gathered_at: facts.gathered_at,
     },
