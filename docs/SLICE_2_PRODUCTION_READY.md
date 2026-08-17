@@ -1,7 +1,12 @@
 # Slice 2 — Production Ready, and the one thing blocking the rung
 
-**Status: PRODUCTION READY. Not deployed, not established, not verified in
-production.** 2026-08-16.
+**Status: FROZEN LOCALLY · PRODUCTION READY. Not deployed, not established,
+not verified in production.** 2026-08-16.
+
+No further architecture, UI expansion or financial modelling. The next
+action is the release rail in §3, and nothing else. If production access
+stays unavailable, this stays where it is — the blocked time is not to be
+spent inventing more product.
 
 Everything in steps 1–11 of the ship sequence is built and proven locally,
 including the browser rung. Step 12 cannot start, for one reason, stated
@@ -132,14 +137,14 @@ proof drives, and it must be what runs.
 
 ```text
 PROVEN (real Postgres)
-  forward_rent.db.js               33/33
+  forward_rent.db.js               42/42
   forward_leasing_ledger.db.js     20/20
   tracker_intake.db.js             18/18
   gate_ask_spine_readers.js        73/73
   gate_person_ingress.js           10/10
 
 BROWSER VERIFIED (real app, real server, real import, real tracker)
-  forward_leasing_ledger.browser.js  65/65
+  forward_leasing_ledger.browser.js  77/77
   screenshots: docs/screenshots_forward_ledger/ (property-spine-app)
 
 NOT VERIFIED
@@ -150,6 +155,59 @@ NOT VERIFIED
 `tools/equity/establish_position.js`, inherited from `21e6812` and outside
 this lane by instruction. It listed that one consumer before this build and
 lists that one consumer after it.
+
+---
+
+## 4a · Three semantic corrections made before freeze
+
+Each closes a place where a correct number could still have been read as a
+different, stronger claim.
+
+**The schedule is a RATE, not earned rent.** `$815/mo` plus `starts
+2026-08-03` does not establish what August earns, and `ends 2027-07-26`
+does not establish a full July. Months in which a contributing term starts
+or ends part-way through are marked *rate only* and report
+`earned_rent_state: NOT_ESTABLISHED`; the figure is still shown, because it
+is the run rate the active terms genuinely support. On Skyline that flags
+August (87 terms start on the 3rd), December (40 end on the 28th), March,
+May and July (69 end on the 26th). The panel is titled *Forward rent
+schedule — scheduled rent run-rate by active term*, and says on the page
+that it is not recognised revenue and not GPR. Proration, billing
+convention, concessions and first/last-month treatment stay Money's.
+
+**One decomposition, no residue.** The panel used to say *"142 committed
+positions carry no established rent"* under a headline of 144, and nothing
+let a person reconcile them. Both numbers were right and neither said which
+question it answered. The set being partitioned is now the one the headline
+counts — the tracker's commitments — and it is shown adding up:
+
+```text
+Of the 144 committed
+  contractual rent established        0
+  rent claimed only                 142
+  rent missing                        0
+  claims not attached to a bed        2
+                                    ---
+                                    144
+```
+
+Zero buckets are printed, because *0 with contractual rent established* is
+the most important line on the panel today. Positions Spine holds a lease
+for that the tracker never mentions are real, are outside the 144, and get
+their own named line rather than being dropped — the same residue problem
+pointing the other way.
+
+**The two sixteens are two populations.** On this property both happen to
+number 16 and they are entirely different things. They are now side by side
+with the count and the reason on the same line:
+
+```text
+REMAINING BEDS                          COMMITTED CLAIMS · TERM NOT ESTABLISHED
+16                                      16
+inventory still to sell —               already counted inside the 144 committed —
+$13,345/mo at stated asking rents       $12,200/mo of claimed rent that cannot yet
+                                        be placed into months
+```
 
 ---
 

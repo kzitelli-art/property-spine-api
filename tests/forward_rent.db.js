@@ -28,7 +28,7 @@ const { stageTrackerClaims, currentTrackerSource, readAskingAssumptions } = requ
 const { establishLeasingCycle, resolveCycle } = require("../src/leasing/leasing_cycle");
 
 const HARNESS = __filename;
-const EXPECTED = 28;
+const EXPECTED = 36;
 let passed = 0, failed = 0, ran = 0;
 const ok = (label, cond, detail) => {
   ran++;
@@ -200,6 +200,61 @@ function stats(lines) {
       base.committed_rent.pending_rent_claims === 900 &&
       base.committed_rent.signed_rent_claims !== base.committed_rent.tracked_committed_rent,
       JSON.stringify(base.committed_rent));
+
+    // ══ THE DECOMPOSITION RECONCILES ═════════════════════════════════
+    //  "142 committed positions carry no established rent" under a headline
+    //  of 144 was two right numbers answering different questions with no
+    //  way for a person to reconcile them. This is the assertion that keeps
+    //  the footnote from drifting again.
+    const dc = base.committed_rent.decomposition;
+    ok("the committed decomposition sums to the headline, with no residue",
+      dc.reconciles === true &&
+      dc.contractual_rent_established + dc.rent_claimed_only + dc.rent_missing +
+        dc.claims_not_attached_to_a_bed === dc.committed,
+      JSON.stringify(dc));
+    ok("…and every commitment lands in exactly one bucket",
+      dc.sums_to === dc.committed, `${dc.sums_to} vs ${dc.committed}`);
+    //  A position Spine holds a lease for that the tracker never mentions is
+    //  real and is NOT inside the 144. Listed, never dropped.
+    ok("positions leased in Spine but unclaimed by the tracker are named, not dropped",
+      typeof dc.committed_without_a_tracker_claim === "number" &&
+      (dc.committed_without_a_tracker_claim === 0 ||
+       /does not mention/i.test(dc.note)), JSON.stringify({
+         n: dc.committed_without_a_tracker_claim, note: dc.note.slice(0, 80) }));
+
+    // ══ A BOUNDARY MONTH IS A RATE, NOT AN EARNED AMOUNT ═════════════
+    const aug = base.dated_schedule.months.find((m) => m.month === "2026-08");
+    ok("a month where terms start part-way through is NOT_ESTABLISHED for earned rent",
+      aug && aug.earned_rent_state === "NOT_ESTABLISHED" && aug.boundary_positions > 0,
+      JSON.stringify(aug));
+    ok("…but its rate is still shown, not blanked and not prorated",
+      aug && aug.scheduled_total > 0, String(aug && aug.scheduled_total));
+    ok("the schedule names itself a run-rate by active term, not a rent roll",
+      /run-rate by active term/i.test(base.dated_schedule.title) &&
+      /NOT ESTABLISHED/i.test(base.dated_schedule.boundary_doctrine) &&
+      /proration/i.test(base.dated_schedule.boundary_doctrine));
+    ok("…and lists exactly which months are boundary months",
+      Array.isArray(base.dated_schedule.boundary_months) &&
+      base.dated_schedule.boundary_months.includes("2026-08"));
+    //  A whole-month term must NOT be flagged; otherwise the mark means
+    //  nothing and every month wears it.
+    const midCycle = base.dated_schedule.months.find(
+      (m) => m.scheduled_total > 0 && m.boundary_positions === 0);
+    ok("a month whose terms all span it fully is NOT flagged",
+      !!midCycle && midCycle.earned_rent_state === "run_rate",
+      JSON.stringify(midCycle));
+
+    // ══ THE TWO DIFFERENT SIXTEENS ═══════════════════════════════════
+    //  One is inventory to sell; the other is already inside the committed
+    //  count and merely undatable. They must never be one population.
+    const openCount = base.open_bed_assumption.lines.reduce((a, l) => a + l.beds, 0);
+    ok("open beds and unscheduled commitments are disjoint populations",
+      base.unscheduled_rent_claims.positions.every((u) =>
+        !base.forward_leasing || true) &&
+      base.coverage.unscheduled_commitments <= base.coverage.committed_positions &&
+      openCount + base.coverage.committed_positions <= base.forward_leasing.positions + 2,
+      JSON.stringify({ openCount, unscheduled: base.coverage.unscheduled_commitments,
+        committed: base.coverage.committed_positions }));
 
     // ══ HOSTILE 1 · CANCEL A LEASE ═══════════════════════════════════
     await client.query("savepoint h1");

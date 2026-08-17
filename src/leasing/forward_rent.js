@@ -91,6 +91,33 @@ function governsMonth(lease, ym) {
   return ym >= s && ym <= e;
 }
 
+/*  ── A BOUNDARY MONTH IS NOT AN EARNED AMOUNT ────────────────────────
+ *  `$815/mo` plus `starts 2026-08-03` does NOT establish what August
+ *  earns. Neither does `ends 2027-07-26` establish a full July. The
+ *  monthly rate and the term dates are both real and they are still not
+ *  a charge: proration, the billing convention, concessions and the
+ *  first/last-month treatment are all Money's, and none of them is
+ *  recorded here.
+ *
+ *  So a month in which a contributing lease STARTS or ENDS part-way
+ *  through is flagged. The rate is still shown — it is the run rate the
+ *  active terms support — and the earned amount for that month is
+ *  reported NOT_ESTABLISHED rather than silently prorated or silently
+ *  presented as a full month's revenue. */
+function isBoundaryFor(lease, ym) {
+  if (!lease.term_start) return false;
+  const startsHere = monthKey(lease.term_start) === ym &&
+    Number(String(lease.term_start).slice(8, 10)) > 1;
+  if (startsHere) return true;
+  if (!lease.term_end) return false;
+  if (monthKey(lease.term_end) !== ym) return false;
+  //  Last day of that month, computed rather than assumed — a term ending
+  //  on the 31st of a 31-day month is a whole month and not a boundary.
+  const [y, m] = ym.split("-").map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return Number(String(lease.term_end).slice(8, 10)) < last;
+}
+
 async function forwardRent(pool, {
   property_id, cycle_start, cycle_end, cycle_label = null,
 } = {}) {
@@ -169,6 +196,10 @@ async function forwardRent(pool, {
   const schedule = months.map((ym) => ({
     month: ym, contractual: 0, signed_claim: 0, pending_claim: 0, scheduled_total: 0,
     positions: 0,
+    //  See isBoundaryFor(). A boundary month shows a RATE, not an earned
+    //  amount, and says so.
+    boundary_positions: 0,
+    earned_rent_state: "run_rate",
   }));
   const idx = new Map(schedule.map((s, i) => [s.month, i]));
 
@@ -196,6 +227,10 @@ async function forwardRent(pool, {
       s[klass] = money(s[klass] + amount);
       s.scheduled_total = money(s.scheduled_total + amount);
       s.positions += 1;
+      if (isBoundaryFor(r, s.month)) {
+        s.boundary_positions += 1;
+        s.earned_rent_state = "NOT_ESTABLISHED";
+      }
     }
   }
 
@@ -221,6 +256,70 @@ async function forwardRent(pool, {
       contractual_state: contractualRows.length === committed.length ? "established"
         : (contractualRows.length === 0 ? "NOT_ESTABLISHED" : "partially_established"),
       contractual_missing_positions: committed.length - contractualRows.length,
+
+      /*  ── ONE DECOMPOSITION, NO RESIDUE, NO OVERLAP ──────────────────
+       *  "142 committed positions carry no established rent" sat under a
+       *  headline reading 144, and the two could not be reconciled by a
+       *  person looking at the screen. The gap was real and boring: 142 is
+       *  the count of committed LEDGER ROWS, and two of the tracker's 144
+       *  commitments are the malformed-identity claims that never attached
+       *  to a bed. Both numbers were right and neither said which question
+       *  it answered.
+       *
+       *  So the decomposition is stated once, it sums to the committed
+       *  count the headline shows, and every commitment lands in exactly
+       *  one bucket. If it ever fails to add up, `reconciles` says so
+       *  rather than letting a footnote drift again. */
+      decomposition: (() => {
+        /*  ⚠ THE DENOMINATOR IS THE HEADLINE'S, and getting that wrong is
+         *  what produced the ambiguity in the first place.
+         *
+         *  Mike's question is "how many of these 144 have contractual rent
+         *  established?" — so the set being partitioned is the TRACKER's
+         *  committed commitments, which is what the headline counts. The
+         *  first version partitioned SPINE's committed ledger rows instead
+         *  and compared the total to the tracker's headline: at Skyline
+         *  both happen to cover every bed so it reconciled by luck, and on
+         *  a tracker covering part of a property it reported 129 against a
+         *  headline of 4.
+         *
+         *  Positions Spine holds a lease for that the tracker does not
+         *  claim are REAL and are not in the 144. They get their own line
+         *  rather than being dropped — dropping them would be the same
+         *  residue problem pointing the other way. */
+        const trackerCommitted = rows.filter(
+          (r) => r.claim_state === "signed" || r.claim_state === "pending");
+        const est = trackerCommitted.filter((r) => r.contracted_rent != null).length;
+        const claimedOnly = trackerCommitted.filter(
+          (r) => r.contracted_rent == null && r.claim_rent != null).length;
+        const missing = trackerCommitted.filter(
+          (r) => r.contracted_rent == null && r.claim_rent == null).length;
+        const unattachedCount = unattached.length;
+        const total = est + claimedOnly + missing + unattachedCount;
+        const headline = (position.operating_position || {}).per_tracker_committed;
+        //  Spine says committed, the tracker never mentioned it.
+        const leasedNotClaimed = committed.filter(
+          (r) => r.claim_state !== "signed" && r.claim_state !== "pending").length;
+        return {
+          committed: headline == null ? total : headline,
+          contractual_rent_established: est,
+          rent_claimed_only: claimedOnly,
+          rent_missing: missing,
+          //  Counted separately because they are commitments Spine cannot
+          //  place on a bed — not because they are less real.
+          claims_not_attached_to_a_bed: unattachedCount,
+          sums_to: total,
+          reconciles: headline == null || total === headline,
+          committed_without_a_tracker_claim: leasedNotClaimed,
+          note: "Every commitment the tracker counts appears in exactly one bucket, and the " +
+                "buckets sum to the committed figure in the headline. " +
+                (leasedNotClaimed
+                  ? leasedNotClaimed + " further positions carry a governed lease the tracker " +
+                    "does not mention; they are outside this decomposition and are listed here " +
+                    "rather than dropped."
+                  : "Every governed lease for this cycle is also claimed by the tracker."),
+        };
+      })(),
 
       //  What Mike is operating on.
       signed_rent_claims: money(signedClaimed + unattachedSigned),
@@ -252,11 +351,22 @@ async function forwardRent(pool, {
     },
 
     dated_schedule: {
+      //  ⚠ THE NAME IS PART OF THE HONESTY. This is not a rent roll, not
+      //  recognised revenue, and not GPR. It is the monthly RATE the
+      //  active governed terms support.
+      title: "Forward rent schedule — scheduled rent run-rate by active term",
       months: schedule,
       basis: "Positions with BOTH an amount and an established term. A claimed rent whose " +
              "lease dates are established IS scheduled — it stays claimed, its months are real.",
-      whole_months: "A lease governs a month if its term covers any part of it. No proration — " +
-             "that is an accounting decision this read has no authority to make.",
+      boundary_doctrine:
+        "Full-month rate shown where the governed term supports the whole period. " +
+        "BOUNDARY-MONTH EARNED RENT IS NOT ESTABLISHED unless contractual billing evidence " +
+        "exists: a $815/mo lease starting 2026-08-03 does not establish what August earns, " +
+        "and one ending 2027-07-26 does not establish a full July. Proration, billing " +
+        "convention, concessions and first/last-month treatment are Money's and are not " +
+        "recorded here.",
+      boundary_months: schedule.filter((s) => s.earned_rent_state === "NOT_ESTABLISHED")
+        .map((s) => s.month),
       //  NOT BUILT, and said so rather than left to be inferred from an
       //  empty column.
       open_beds_not_forecast: "The " + openBeds.length + " open beds are NOT placed into months. " +
