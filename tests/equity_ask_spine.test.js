@@ -37,7 +37,7 @@ function equityRead(overrides = {}) {
           position_id: "secret-position-id",
           position_class: "preferred",
           issuer_legal_entity_id: "secret-issuer-id",
-          holder: { legal_entity_id: "secret-holder-id" },
+          holder: { legal_entity_id: "secret-holder-id", legal_name: "MSC 4125 Chestnut LLC" },
           preferred: {
             terms: [{ term_source: "governing_document", source_authority: "governed_read",
               current_pay_rate_bp: 1250, compounding: "quarterly" }],
@@ -152,6 +152,7 @@ async function main() {
       const blob = JSON.stringify(facts.equity);
       assert(!/secret-position-id|secret-issuer-id|secret-holder-id/.test(blob),
         "no raw record id reached the gathered facts: " + blob);
+      assert.strictEqual(facts.equity.positions[0].holder.legal_name, "MSC 4125 Chestnut LLC");
       assert.strictEqual(facts.equity.positions[0].preferred.accrued_preferred_return.truth_state,
         NOT_ESTABLISHED);
       assert.strictEqual(facts.equity.coverage_gaps.length, 1);

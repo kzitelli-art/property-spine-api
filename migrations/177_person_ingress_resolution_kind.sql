@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════════
---  175_person_ingress_resolution_kind.sql
+--  177_person_ingress_resolution_kind.sql
 --
 --  ONE NULLABLE COLUMN, and it exists to record an INSTITUTIONAL FACT:
 --  when a human confirmed this proposal, did Spine CREATE a human from

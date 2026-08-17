@@ -229,7 +229,7 @@ async function stageTrackerClaims(client, {
    *  or none. The answer to "why this version?" is a sentence a person
    *  can read — "it is the accepted source; it superseded the 08-14
    *  upload" — and not `max(created_at)`, which is an authority rule
-   *  nobody ever stated. See migration 177.  */
+   *  nobody ever stated. See migration 179.  */
   const prior = (await client.query(
     `select id, source_label, accepted_at from activations
       where property_id=$1 and source_kind=$2 and status='activated'
@@ -239,7 +239,7 @@ async function stageTrackerClaims(client, {
   /*  ⚠ ORDER MATTERS, AND THE CONSTRAINT PROVED IT. Inserting the new
    *  row as `activated` first left TWO rows activated-and-unsuperseded for
    *  the length of one statement, and uq_activation_current_source
-   *  (migration 177) refused the write — correctly. The window was real:
+   *  (migration 179) refused the write — correctly. The window was real:
    *  a concurrent read in between would have seen two current sources.
    *
    *  So the new row is born `open`, the prior one is pointed at it, and

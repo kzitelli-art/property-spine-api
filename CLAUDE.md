@@ -239,11 +239,13 @@ ATTRIBUTION, SOURCE AUTHORITY, CURRENT STATE, RELEVANCE, OR CONFLICT.
 The rulings a builder trips over first:
 
 - **Facts carry authority in their shape** (§40.4). An envelope, never a bag:
-  `domain · concept · value|truth_state · source_authority · provenance · as_of ·
-  entitled reference`. `governed_read` outranks `transcript_claim`, `email_claim`,
-  `user_assertion`. Lower authority may **explain** canonical truth, never replace
-  it — *"I think the taxes were paid"* does not move `city_payment =
-  NOT_ESTABLISHED`.
+  `domain · concept · value|truth_state · source_class · epistemic_status ·
+  read_status · provenance · as_of · entitled reference`. `source_class` says
+  where evidence came from, `epistemic_status` says what it establishes, and
+  `read_status` says whether a governed read succeeded. These are separate
+  axes, not a single ladder. A transcript claim may explain canonical truth; it
+  never replaces it — *"I think the taxes were paid"* does not move
+  `city_payment = NOT_ESTABLISHED`.
 - **Truth walls are executable contracts** (§40.5), declared as data with the
   domain's collapsing vocabulary — *paid, current, covered, filed, funded,
   complete, done*. `escrow funded ≠ City paid` · `filed ≠ paid` ·

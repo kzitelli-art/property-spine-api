@@ -106,9 +106,12 @@ entirely is genuinely unknown from what has been read so far.
 
 `preferred_equity_terms.minimum_dividend_relationship_to_preferred_return`
 exists to hold exactly that unknown, and defaults to `'not_established'` in
-the schema itself — a caller may only move it to `additive` / `offset` /
-`other` once §1.49 itself has been read, never from the survey's paraphrase,
-however specific that paraphrase reads. This is §38 applied at the first
+the schema itself. The canonical writer will only accept `additive` /
+`offset` / `other` with governed-read authority, a non-secondary term
+source, and a retained artifact; the controlled establishment tool applies
+the same refusal before opening its transaction. For MSC, that means §1.49
+or a later governing instrument capable of establishing the mechanic, never
+the survey's paraphrase, however specific it reads. This is §38 applied at the first
 schema conversation: a recorded fact (12.5%, from the OA) and a derived
 attribution (what the Minimum Dividend *does* to it) are different kinds of
 thing, and only the first is governed here. The model this domain must be
@@ -418,7 +421,9 @@ survey. It computes no Equity value and reconciles no conflict.
 capital_stack_positions          ONE SHARED IDENTITY (Ruling 1). One row
                                  per holder-at-an-issuer, property-scoped,
                                  append-only, effective-dated, points
-                                 backward on transfer. position_class
+                                 backward on transfer. Once a successor is
+                                 effective, the reader retires the prior
+                                 holder without mutating history. position_class
                                  ('common'|'preferred') is an identity tag,
                                  not a table split. Holder is a legal
                                  entity XOR an attributed name (E1, E7).
@@ -460,6 +465,17 @@ capital_stack_conflicts          E6/E7 — two claims, same fact, disagreeing,
                                  both retained, kept as a durable table
                                  (Round 3) rather than a UI state.
 ```
+
+### Ownership reconciliation is derived, never authored
+
+The operator's cap-table question is answered per issuer, not by summing
+percentages across different LLC tiers. Each current position first receives
+an ownership reading: no claim is `NOT_ESTABLISHED`, disagreeing current source
+claims are `CONFLICTED`, and agreeing claims produce one established percentage.
+An issuer is `RECONCILED` only when every current position has an established
+percentage and those percentages total 100%. A partial, conflicting, 92%, or
+107% schedule remains explicitly unresolved; the reader never chooses a source,
+normalises the percentages, or manufactures a balancing holder.
 
 **⚠ Deliberately absent:** no `accrued_balance` column anywhere (E3). No
 member-loan/debt-shaped column anywhere (E5). No `capital_stack_evidence`

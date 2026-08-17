@@ -55,7 +55,7 @@ const MIGRATION = path.join(__dirname, "..", "migrations", "174_equity_positions
 const NE = read.NOT_ESTABLISHED;
 
 const url = receipt.harnessConnectionString();
-receipt.begin(__filename, { url, expected: 38 });
+receipt.begin(__filename, { url, expected: 58 });
 
 let pass = 0, fail = 0, ran = 0;
 function ok(label, cond, detail) {
@@ -87,13 +87,19 @@ const ART = "44444444-4444-4444-4444-444444444444";
     await db.query(`create extension if not exists pgcrypto`);
     await db.query(`create table users (id uuid primary key)`);
     await db.query(`create table properties (id uuid primary key)`);
-    await db.query(`create table legal_entities (id uuid primary key)`);
+    await db.query(`create table legal_entities (id uuid primary key, legal_name text not null)`);
     await db.query(`create table source_artifacts (id uuid primary key)`);
     for (const [t, v] of [["users", U], ["properties", P_4125], ["properties", P_SKYLINE],
-                          ["legal_entities", E_MSC], ["legal_entities", E_INTEREST_HOLDER],
-                          ["legal_entities", E_HOLDINGS], ["legal_entities", E_SKYLINE_MAJORITY],
                           ["source_artifacts", ART]]) {
       await db.query(`insert into ${t} values ($1)`, [v]);
+    }
+    for (const [id, legalName] of [
+      [E_MSC, "MSC 4125 Chestnut LLC"],
+      [E_INTEREST_HOLDER, "4125 Chestnut Interest Holder LLC"],
+      [E_HOLDINGS, "4125 Chestnut Holdings LLC"],
+      [E_SKYLINE_MAJORITY, "Skyline Majority Member LLC"],
+    ]) {
+      await db.query(`insert into legal_entities (id, legal_name) values ($1, $2)`, [id, legalName]);
     }
     await db.query(fs.readFileSync(MIGRATION, "utf8"));
 
@@ -358,6 +364,141 @@ const ART = "44444444-4444-4444-4444-444444444444";
     ok("amount_cents and ownership_percent are refused together — they are separate facts",
        bothValuesFailed);
 
+    console.log("\n  ── weak evidence cannot establish an ambiguous economic mechanic ──");
+    let ungovernedRelationshipFailed = false;
+    try {
+      await svc.addPreferredTerms(db, {
+        position_id: msc.id, term_source: "secondary_summary",
+        source_authority: "secondary_summary", current_pay_rate_bp: 1250,
+        minimum_dividend_schedule_text: "8% to 12.5%",
+        minimum_dividend_relationship_to_preferred_return: "additive",
+        effective_from: "2020-07-31", source_artifact_id: ART,
+        recorded_by_user_id: U,
+      });
+    } catch (e) {
+      ungovernedRelationshipFailed =
+        e.code === "EQUITY_MINIMUM_DIVIDEND_RELATIONSHIP_UNGOVERNED";
+    }
+    ok("a secondary summary cannot turn MSC's open Minimum Dividend relationship into 'additive'",
+       ungovernedRelationshipFailed);
+
+    console.log("\n  ── a spoken estimate must retain who said it ──");
+    let unattributedInternalNoteFailed = false;
+    try {
+      await svc.addCapitalAmountClaim(db, {
+        position_id: msc.id, claim_source: "internal_note", amount_cents: 370000000,
+        as_of_date: "2026-03-30", source_artifact_id: ART, recorded_by_user_id: U,
+      });
+    } catch (e) {
+      unattributedInternalNoteFailed =
+        e.code === "EQUITY_INTERNAL_NOTE_ATTRIBUTION_REQUIRED";
+    }
+    ok("an internal-note amount without a named speaker is refused",
+       unattributedInternalNoteFailed);
+
+    console.log("\n  ── subtype terms cannot be attached to the other position class ──");
+    let preferredOnCommonFailed = false;
+    try {
+      await svc.addPreferredTerms(db, {
+        position_id: holdings.id, term_source: "governing_document",
+        source_authority: "governed_read", current_pay_rate_bp: 1250,
+        effective_from: "2020-07-31", source_artifact_id: ART,
+        recorded_by_user_id: U,
+      });
+    } catch (e) {
+      preferredOnCommonFailed = e.code === "EQUITY_POSITION_CLASS_MISMATCH";
+    }
+    ok("preferred terms cannot be attached to Holdings' common position",
+       preferredOnCommonFailed);
+
+    let commonOverrideOnPreferredFailed = false;
+    try {
+      await svc.addPositionOverride(db, {
+        position_id: msc.id, override_kind: "other", override_text: "not applicable",
+        execution_status: "draft_unexecuted", source_authority: "governed_read",
+        effective_from: "2020-07-31", source_artifact_id: ART,
+        recorded_by_user_id: U,
+      });
+    } catch (e) {
+      commonOverrideOnPreferredFailed = e.code === "EQUITY_POSITION_CLASS_MISMATCH";
+    }
+    ok("common holder overrides cannot be attached to MSC's preferred position",
+       commonOverrideOnPreferredFailed);
+
+    console.log("\n  ── no Equity fact is written without provenance ──");
+    let unsourcedPositionFailed = false;
+    try {
+      await svc.addPosition(db, {
+        property_id: P_4125, issuer_legal_entity_id: E_INTEREST_HOLDER,
+        position_class: "common", holder_name_text: "UNSOURCED HOLDER",
+        effective_from: "2026-01-01", recorded_by_user_id: U,
+      });
+    } catch (e) {
+      unsourcedPositionFailed = e.code === "EQUITY_PROVENANCE_REQUIRED";
+    }
+    ok("an unsourced capital-stack position is refused", unsourcedPositionFailed);
+
+    let crossPropertySupersessionFailed = false;
+    try {
+      await svc.addPosition(db, {
+        property_id: P_4125, issuer_legal_entity_id: E_INTEREST_HOLDER,
+        position_class: "common", holder_name_text: "FALSE SUCCESSOR",
+        effective_from: "2026-01-01", supersedes_position_id: skylineGp.id,
+        source_artifact_id: ART, recorded_by_user_id: U,
+      });
+    } catch (e) {
+      crossPropertySupersessionFailed = e.code === "EQUITY_POSITION_SUPERSESSION_MISMATCH";
+    }
+    ok("a position cannot supersede a different property's capital-stack position",
+       crossPropertySupersessionFailed);
+
+    let ungovernedSupersessionFailed = false;
+    try {
+      await svc.addPosition(db, {
+        property_id: P_4125, issuer_legal_entity_id: E_INTEREST_HOLDER,
+        position_class: "common", holder_name_text: "UNPROVEN SUCCESSOR",
+        effective_from: "2026-01-01", supersedes_position_id: holdings.id,
+        provenance_note: "someone said ownership changed", recorded_by_user_id: U,
+      });
+    } catch (e) {
+      ungovernedSupersessionFailed =
+        e.code === "EQUITY_POSITION_SUPERSESSION_UNGOVERNED";
+    }
+    ok("a holder supersession without its transfer artifact is refused",
+       ungovernedSupersessionFailed);
+
+    console.log("\n  ── a governed transfer retires, rather than duplicates, the prior holder ──");
+    const successor = await svc.addPosition(db, {
+      property_id: P_4125, issuer_legal_entity_id: E_INTEREST_HOLDER,
+      position_class: "common", holder_name_text: "Successor Holdings LLC",
+      effective_from: "2027-01-01", supersedes_position_id: holdings.id,
+      source_artifact_id: ART, provenance_note: "executed assignment",
+      recorded_by_user_id: U,
+    });
+    const beforeTransfer = read.position(await svc.loadHistory(db, P_4125), "2026-12-31");
+    const afterTransfer = read.position(await svc.loadHistory(db, P_4125), "2027-01-01");
+    ok("the recorded holder remains current before the assignment's effective date",
+       beforeTransfer.positions.some((p) => p.position_id === holdings.id)
+       && !beforeTransfer.positions.some((p) => p.position_id === successor.id));
+    ok("the successor replaces the prior holder on the assignment's effective date",
+       afterTransfer.positions.some((p) => p.position_id === successor.id)
+       && !afterTransfer.positions.some((p) => p.position_id === holdings.id));
+
+    let crossPropertyConflictFailed = false;
+    try {
+      await svc.recordConflict(db, {
+        property_id: P_4125, position_id: skylineGp.id,
+        conflict_kind: "holder_identity",
+        claim_a_text: "4125 claim", claim_a_source_artifact_id: ART,
+        claim_b_text: "Skyline claim", claim_b_source_artifact_id: ART,
+        noted_as_of: "2026-01-01", recorded_by_user_id: U,
+      });
+    } catch (e) {
+      crossPropertyConflictFailed = e.code === "EQUITY_CONFLICT_PROPERTY_MISMATCH";
+    }
+    ok("a conflict cannot point at another property's position",
+       crossPropertyConflictFailed);
+
     /*  ══ NOW READ IT BACK — E1 THROUGH E10, AND THE ROUND-4 RULINGS ═ */
     const hist4125 = await svc.loadHistory(db, P_4125);
     const pos4125 = read.position(hist4125, "2026-08-15");
@@ -368,6 +509,8 @@ const ART = "44444444-4444-4444-4444-444444444444";
     const holdingsRead = pos4125.positions.find((p) => p.position_id === holdings.id);
     ok("MSC reads as preferred, with a `preferred` section and no `common` section",
        mscRead.position_class === "preferred" && mscRead.preferred && mscRead.common === null);
+    ok("MSC's governed legal name survives the canonical read; the UI never needs to print its UUID",
+       mscRead.holder.legal_name === "MSC 4125 Chestnut LLC");
     ok("Holdings reads as common, with a `common` section and no `preferred` section",
        holdingsRead.position_class === "common" && holdingsRead.common && holdingsRead.preferred === null);
 
@@ -407,6 +550,9 @@ const ART = "44444444-4444-4444-4444-444444444444";
     ok("Holdings' ownership percentage (77.57%) reads separately from its contribution amount",
        holdingsRead.capital_amounts.ownership_percent.some((c) => c.ownership_percent === 77.57)
        && holdingsRead.capital_amounts.contribution.some((c) => c.amount_cents === 904835000));
+    ok("4125's ownership schedule stays incomplete at 77.57%; no balancing holder is invented",
+       pos4125.ownership_reconciliation.truth_state === "INCOMPLETE"
+       && pos4125.ownership_reconciliation.current_total_percent === 77.57);
 
     console.log("\n  ── Round 3 · coverage_gaps, derived, no exposure table anywhere ──");
     ok("Holdings LLC's own common tier is a DERIVED gap — governed pref terms, zero named holders",
@@ -458,9 +604,9 @@ const ART = "44444444-4444-4444-4444-444444444444";
 
     console.log("\n  ── the standing projection stays honest at scale ──");
     const standing4125 = read.standingProjection(pos4125);
-    ok("4125's standing shows 2 positions, both named, 2 coverage gaps",
+    ok("4125's standing shows 2 positions, both named, 3 coverage gaps",
        standing4125.position_count === 2 && standing4125.named_holder_count === 2
-       && standing4125.coverage_gap_count === 2);
+       && standing4125.coverage_gap_count === 3);
     ok("...and next_milestone points at a coverage gap, never claims completeness",
        standing4125.next_milestone === "resolve the largest recorded coverage gap");
 
@@ -477,5 +623,5 @@ const ART = "44444444-4444-4444-4444-444444444444";
   }
   db.release();
   await pool.end();
-  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 38 }));
+  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 58 }));
 })();

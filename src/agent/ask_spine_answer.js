@@ -49,6 +49,8 @@ const workOrderRead = require("../surfaces/work_order_status_read");
 const complianceRead = require("../asset/compliance_read");
 const utilityAskRead = require("../asset/utility_ask_detail.js");
 const contractedServiceAskRead = require("../asset/contracted_service_ask_detail.js");
+const debtInstrumentService = require("../asset/debt_instrument_service.js");
+const debtPositionRead = require("../asset/debt_position_read.js");
 //  ⚠ THE SAME GOVERNED READER, NOT A NEW ONE. No equity_ask_detail.js
 //  exists and none is being added here — Ask Spine reads exactly the
 //  canonical loadHistory() + position() + standingProjection() the
@@ -128,7 +130,7 @@ const DECISION_SCHEMA = {
  *  Widening it is a product decision with its own facts to gather. It is
  *  not something a prompt edit should be able to do quietly.  */
 const SUPPORTED_SCOPE =
-  "the current open work and governed Compliance, Utility, Contracted Services, or " +
+  "the current open work and governed Compliance, Utility, Contracted Services, Debt, or " +
   "Preferred/Common Equity records at this property — " +
   "what work is open and who has it, or whether a recorded Compliance item is " +
   "current and why, or this property's governed Utility setup, providers, account and meter map, " +
@@ -151,7 +153,8 @@ const SUPPORTED_SCOPE =
 const OUT_OF_SCOPE_ANSWER =
   "I can only answer about " + SUPPORTED_SCOPE + ". " +
   "Ask me what needs attention, about a recorded Compliance item, how a Utility works here, " +
-  "what governs a contracted service, who holds equity here, or where the rent roll stands on a date.";
+  "what governs a contracted service, what the property owes its lender, who holds equity here, " +
+  "or where the rent roll stands on a date.";
 
 //  ⚠ EVERY NOUN HERE WAS SINGULAR-ONLY, AND NOBODY ASKS IN THE SINGULAR.
 //  `\b(licen[cs]e)\b` does not match "licenses" — the \b needs a non-word
@@ -203,6 +206,8 @@ const EQUITY_TERMS =
 //  make every such sentence look composed when it is only ambiguous.
 const TENANCY_TERMS =
   /\b(rent ?roll|occupanc(?:y|ies)|occupied|vacan(?:t|cy|cies)|leases?\b|leased|leasing|tenanc(?:y|ies)|residents?\b|move[- ]?(?:in|out)s?|beds?\b|who lives|how many (?:units|beds|positions|residents))\b/i;
+const DEBT_TERMS =
+  /\b(debt (?:position|service)|mortgage(?: loan)?|loan (?:balance|maturity|payment|rate|terms?)|lender|servicer|principal balance|payoff (?:quote|amount)|interest rate|maturity date|extension option|debt-service reserve)\b/i;
 const EXPLICIT_WORK_TERMS =
   /\b(work[ -]?order|repair|maintenance|technician|task|job|assigned|assignment)\b/i;
 
@@ -216,14 +221,35 @@ function questionSubject(question) {
   const utility = UTILITY_TERMS.test(text);
   const contractedService = CONTRACTED_SERVICE_TERMS.test(text);
   const equity = EQUITY_TERMS.test(text);
+  const debt = DEBT_TERMS.test(text);
+  /*  ⚠ MERGE NOTE, AND A DISTINCTION I GOT WRONG ONCE HERE.
+   *
+   *  `main` added Debt while this branch added Tenancy. My first resolution
+   *  suppressed tenancy when debt matched — and that silently BROKE the
+   *  composition guard: "how many beds, and what is the loan balance"
+   *  routed to `debt` and got answered as a debt question, which is exactly
+   *  the composed answer §40.8 says nobody has authorised yet.
+   *
+   *  Suppression is for VOCABULARY OVERLAP, never for two domains genuinely
+   *  appearing in one sentence:
+   *
+   *    tenancy yields to contracted_service and equity  — shared words
+   *    work yields to every named domain                — generic words
+   *    tenancy does NOT yield to debt                   — different domains,
+   *                                                       so the composition
+   *                                                       guard must see both
+   */
   const tenancy = tenancyThing && !contractedService && !equity;
-  const work = EXPLICIT_WORK_TERMS.test(text) && !contractedService && !equity && !tenancy;
-  if ([compliance, utility, contractedService, equity, tenancy, work].filter(Boolean).length > 1) {
+  const work = EXPLICIT_WORK_TERMS.test(text)
+    && !contractedService && !equity && !debt && !tenancy;
+  if ([compliance, utility, contractedService, debt, equity, tenancy, work]
+        .filter(Boolean).length > 1) {
     return "composition_unavailable";
   }
   if (compliance) return "compliance";
   if (utility) return "utility";
   if (contractedService) return "contracted_service";
+  if (debt) return "debt";
   if (equity) return "equity";
   if (tenancy) return "tenancy";
   return "work";
@@ -290,6 +316,7 @@ async function gatherFacts(db, {
   property_id, allowed_modules, subject = "work", mintComplianceReference,
   complianceReader = complianceRead, utilityReader = utilityAskRead,
   contractedServiceReader = contractedServiceAskRead, question = "",
+  debtService = debtInstrumentService, debtRead = debtPositionRead,
   //  Injectable for tests, same reasoning as the other readers above —
   //  the SAME canonical service/read pair the Capital Stack UI calls,
   //  never a second reader built for Ask Spine.
@@ -579,6 +606,42 @@ async function gatherFacts(db, {
     }
   }
 
+  // The same canonical Debt pipe as the Capital Stack screen. The model sees
+  // the compact standing projection, never raw row identities or a second
+  // conversational derivation.
+  if (subject === "debt" && (allowed_modules || []).includes("asset_management")) {
+    try {
+      const asOf = new Date().toISOString().slice(0, 10);
+      const ids = await debtService.listInstrumentsForProperty(db, property_id, asOf);
+      if (!ids.length) {
+        facts.debt = {
+          read_state: "OK",
+          as_of: asOf,
+          instrument_count: 0,
+          instruments: [],
+          standing: { truth_state: debtRead.NOT_ESTABLISHED,
+            why: "no debt instrument is established for this property in Spine" },
+        };
+      } else {
+        const instruments = [];
+        for (const id of ids) {
+          const history = await debtService.loadHistory(db, id);
+          if (!history) throw new Error("governed Debt instrument history is unavailable");
+          instruments.push(debtRead.standingProjection(debtRead.position(history, asOf)));
+        }
+        facts.debt = withoutDatabaseIds({
+          read_state: "OK",
+          as_of: asOf,
+          instrument_count: instruments.length,
+          instruments,
+        });
+      }
+    } catch (e) {
+      facts.debt = { read_state: "READ_FAILED" };
+      failures.push("debt");
+    }
+  }
+
   facts.reads_that_failed = failures;
   return facts;
 }
@@ -667,7 +730,7 @@ function systemPrompt(subject = "work") {
     "4. Nothing being open is a real, good answer. Say it plainly and stop.",
     "   Do not manufacture concerns to seem useful.",
     "5. The FACTS contain only one authorized subject. Never combine Compliance,",
-    "   Utilities, Contracted Services, Equity or Tenancy with work, residents,",
+    "   Utilities, Contracted Services, Debt, Equity or Tenancy with work, residents,",
     "   finances or any absent domain. Composition authority",
     "   is not established merely because each domain could be read separately.",
     "6. For Compliance, item standing is not a property-wide legal conclusion.",
@@ -693,40 +756,50 @@ function systemPrompt(subject = "work") {
     "10. Contracted Services comparison and causal explanation are unavailable unless",
     "   the governed read explicitly establishes that capability. Never infer performance,",
     "   price competitiveness, savings, or payment from the retained evidence.",
-    "11. For Equity, a position's accrued preferred balance is NEVER computed — it is",
+    "11. For Debt, lender-observed principal is not a payoff quote. Projected principal",
+    "   stays separate, retains its assumptions, and never replaces a stale observation.",
+    "12. For Debt, a scheduled payment is not proof it was paid. Principal-and-interest",
+    "   debt service excludes escrow and reserve funding unless those amounts are separately",
+    "   established. Never describe the contractual draft as the total cash requirement.",
+    "13. For Debt, contractual maturity is not an exercised extension. A recorded option",
+    "   remains an option until exercise is established, and a missing covenant determination",
+    "   remains not established rather than compliant.",
+    "14. For Debt, `next_milestone` is schedule-derived. State that basis when it matters,",
+    "   and preserve every `important_unknowns` item as unknown rather than none.",
+    "15. For Equity, a position's accrued preferred balance is NEVER computed — it is",
     "   always not established, even when a rate and a contribution amount are both",
     "   known. Do not multiply a rate by time or by an amount to produce one.",
-    "12. For Equity, a Minimum-Dividend-shaped schedule (a stepped rate observed from a",
+    "16. For Equity, a Minimum-Dividend-shaped schedule (a stepped rate observed from a",
     "   secondary source) is a different fact from the position's governed preferred",
     "   return. If its relationship to that return is not established, say exactly that —",
     "   never guess additive, offset, or any other relationship from the schedule's shape.",
-    "13. For Equity, an override or side letter that is recorded but not executed is a",
+    "17. For Equity, an override or side letter that is recorded but not executed is a",
     "   real fact you may mention, but it does not describe the position's current",
     "   settled terms. Say it is recorded and not yet applied; never describe it as",
     "   though it were in effect.",
-    "14. For Equity, an unnamed holder or an unrecorded ownership percentage is a",
+    "18. For Equity, an unnamed holder or an unrecorded ownership percentage is a",
     "   coverage gap, not a property fact you may fill in. Never guess a holder's",
     "   identity or a missing percentage, and never imply a cap table is complete.",
-    "15. For Tenancy, these words are NOT interchangeable and the facts keep them",
+    "19. For Tenancy, these words are NOT interchangeable and the facts keep them",
     "   apart: occupied is not paying — a position can be contractually occupied with",
     "   no rent recorded at all, and that count is given to you. Rent not recorded is",
     "   NEVER a rent of zero; say unknown. `open` means no lease spans that date and is",
     "   NOT a claim the position can be marketed — availability is a different read",
     "   with different inputs. A committed future position is not a locked one unless",
     "   the facts say locked.",
-    "16. For Tenancy, NOT_ESTABLISHED means the property has recorded no rentable",
+    "20. For Tenancy, NOT_ESTABLISHED means the property has recorded no rentable",
     "   positions at all — it does NOT mean the building is empty, and it is not zero",
     "   occupancy. A READ_FAILED tenancy read means Spine could not look; say that,",
     "   and never report either one as a vacant building.",
-    "17. Tenancy answers retrieval only. Do not compare this property to another, to a",
+    "21. Tenancy answers retrieval only. Do not compare this property to another, to a",
     "   prior period, or to a market, and do not explain WHY occupancy is where it is —",
     "   no causal linkage is recorded. Do not compute a percentage the facts do not",
     "   carry; the counts are given for a reason.",
-    "18. The FORWARD block is a different question from occupancy and the two are never",
+    "22. The FORWARD block is a different question from occupancy and the two are never",
     "   quoted as each other. Occupancy is who is in the building today; forward is how",
     "   much of a named future cycle has been sold. Never add them, subtract them, or",
     "   answer one with the other.",
-    "19. Forward rent has FOUR words and they never merge. CONTRACTUAL is established by",
+    "23. Forward rent has FOUR words and they never merge. CONTRACTUAL is established by",
     "   governing lease evidence. CLAIMED is what the operating tracker says and is NOT",
     "   yet contractual truth. ASSUMED is an explicit asking rent for a bed that is still",
     "   open. PROJECTED is arithmetic over those three. If asked how much rent is signed,",
@@ -734,17 +807,17 @@ function systemPrompt(subject = "work") {
     "   when contractual_state is established. contractual_state NOT_ESTABLISHED means no",
     "   governing lease carries an amount — it is not a rent of zero and not a property",
     "   that earns nothing.",
-    "20. The full-sell-out run rate is a MONTHLY scenario at the stated asking rents. Never",
+    "24. The full-sell-out run rate is a MONTHLY scenario at the stated asking rents. Never",
     "   multiply it by twelve and never call it annual rent: terms differ, and the dated",
     "   schedule is the only thing that knows which months a lease governs.",
-    "21. A commitment with no established term is UNSCHEDULED. Report its money and say the",
+    "25. A commitment with no established term is UNSCHEDULED. Report its money and say the",
     "   term is not established. Never place it in a month, and never infer a term from a",
     "   cohort label like Full Year or Fall Only — that label is evidence about the term,",
     "   not the term.",
-    "22. The open beds are NOT in the dated schedule and there is no dated forecast for",
+    "26. The open beds are NOT in the dated schedule and there is no dated forecast for",
     "   them. Answering what a future month will earn once the open beds lease would",
     "   require assuming what term each will sign, which nobody has stated. Say that.",
-    "23. When the forward block reports read_state NOT_ESTABLISHED, the property has no",
+    "27. When the forward block reports read_state NOT_ESTABLISHED, the property has no",
     "   governed leasing cycle configured — say so and offer the dates instead. When it",
     "   reports READ_FAILED, Spine could not look. Neither is an empty building and",
     "   neither is zero rent.",
@@ -772,7 +845,8 @@ function systemPrompt(subject = "work") {
  */
 async function answer(db, anthropic, {
   property_id, allowed_modules, question, mintComplianceReference, complianceReader,
-  utilityReader, contractedServiceReader, equityService, equityRead, tenancyReader,
+  utilityReader, contractedServiceReader, debtService, debtRead, equityService, equityRead,
+  tenancyReader,
 }) {
   if (!property_id) throw new Error("ask_spine.answer requires a server-derived property_id");
 
@@ -791,14 +865,15 @@ async function answer(db, anthropic, {
   if (subject === "composition_unavailable") {
     return {
       outcome: "composition_unavailable",
-      //  A REFUSAL MUST NAME WHAT IT CAN DO. This listed three subjects
-      //  while the router had five, so someone asking about the rent roll
-      //  AND compliance was told Spine handles compliance, utilities,
-      //  contracted services and work — a list their own question was
-      //  missing from, which reads as "I don't do that" rather than
-      //  "not both at once".
-      answer: "I can answer about the rent roll, Compliance, Utilities, Contracted Services, " +
-              "equity, or open work separately, but I can't combine them in one answer yet.",
+      //  A REFUSAL MUST NAME WHAT IT CAN DO. It listed three subjects while
+      //  the router had five, so someone asking about the rent roll AND
+      //  compliance was told Spine handles compliance, utilities, contracted
+      //  services and work — a list their own question was missing from,
+      //  which reads as "I don't do that" rather than "not both at once".
+      //  Debt and Tenancy both belong here now.
+      answer: "I can answer about the rent roll, Debt, Equity, Compliance, Utilities, " +
+              "Contracted Services, or open work separately, but I can't combine them in " +
+              "one answer yet.",
       grounded_on: null,
       references: [],
     };
@@ -821,10 +896,11 @@ async function answer(db, anthropic, {
       references: [],
     };
   }
-  if (["compliance", "utility", "contracted_service", "equity"].includes(subject)
+  if (["compliance", "utility", "contracted_service", "debt", "equity"].includes(subject)
       && !modules.includes("asset_management")) {
     const label = subject === "compliance" ? "Compliance"
       : subject === "utility" ? "Utilities"
+      : subject === "debt" ? "Debt"
       : subject === "equity" ? "Preferred Equity or Common Equity" : "Contracted Services";
     return {
       outcome: "not_authorized",
@@ -846,7 +922,8 @@ async function answer(db, anthropic, {
   const facts = await gatherFacts(db, {
     property_id, allowed_modules: modules, subject,
     mintComplianceReference, complianceReader, utilityReader,
-    contractedServiceReader, equityService, equityRead, tenancyReader, question: q,
+    contractedServiceReader, debtService, debtRead, equityService, equityRead,
+    tenancyReader, question: q,
   });
 
   let text = "";
@@ -945,6 +1022,11 @@ async function answer(db, anthropic, {
         ? facts.contracted_service.read_state : null,
       contracted_service_detail_mode: facts.contracted_service
         ? facts.contracted_service.detail_mode : null,
+      debt_instrument_count: facts.debt ? facts.debt.instrument_count : null,
+      debt_read_state: facts.debt ? facts.debt.read_state : null,
+      debt_important_unknown_count: facts.debt && facts.debt.instruments
+        ? facts.debt.instruments.reduce((count, instrument) =>
+            count + ((instrument.important_unknowns || []).length), 0) : null,
       equity_position_count: facts.equity ? facts.equity.positions.length : null,
       equity_read_state: facts.equity ? facts.equity.read_state : null,
       equity_coverage_gap_count: facts.equity && facts.equity.coverage_gaps

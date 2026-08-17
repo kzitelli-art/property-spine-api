@@ -420,6 +420,33 @@ function position(input, asOfInput) {
   };
 }
 
+/*  COMPACT STANDING PROJECTION (section 40.6)
+ *  This is the routine Debt answer: current position, important unknowns,
+ *  and the next contractual milestone. It only selects from position(); it
+ *  does not recalculate economics and it deliberately omits record ids,
+ *  collateral ids, and the longer party/detail history. */
+function standingProjection(reading) {
+  return {
+    as_of: reading.as_of,
+    instrument_kind: reading.instrument.instrument_kind,
+    loan_number: reading.instrument.loan_number,
+    current_position: {
+      observed_principal: reading.principal_position.observed,
+      projected_principal: reading.principal_position.projected,
+      payoff: reading.payoff,
+      rate: reading.rate_position,
+      principal_and_interest: reading.debt_service,
+      payment_standing: reading.payment_standing,
+      maturity: reading.contractual_maturity,
+      extension: reading.extension,
+    },
+    reserve_requirements: reading.reserve_requirements,
+    covenant_standing: reading.covenant_standing,
+    important_unknowns: reading.important_unknowns,
+    next_milestone: reading.next_requirement,
+  };
+}
+
 /*  ── PRINCIPAL AND INTEREST PAID OVER A PERIOD ──────────────────────
  *  The institutional question `position()` cannot answer, because it is a
  *  POINT reading and this is a PERIOD one. Forcing a period aggregate into
@@ -503,4 +530,6 @@ function paidOverPeriod(paymentObservations, periodStartISO, periodEndISO) {
   };
 }
 
-module.exports = { position, deriveSchedule, paidOverPeriod, NOT_ESTABLISHED, STALE_AFTER_DAYS };
+module.exports = {
+  position, standingProjection, deriveSchedule, paidOverPeriod, NOT_ESTABLISHED, STALE_AFTER_DAYS,
+};

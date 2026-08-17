@@ -174,23 +174,22 @@ position. That requires:
 
 ```text
 1  the real governing documents (Interest Holder LLC OA, Holdings LLC OA,
-   MSC's HoldCo Pay Schedule, and — critically — the actual §1.49 clause
-   for the Minimum Dividend question) retained as source_artifacts in
-   production, each hashed
+   and MSC's HoldCo Pay Schedule) retained as source_artifacts in
+   production, each hashed. The actual §1.49 clause is additionally
+   required before resolving the Minimum Dividend relationship; its
+   absence does not prevent an honest `not_established` position.
 2  a declaration file under tools/equity/declarations/, written the way
    tools/debt/declarations/4125_480010465.json was — one retained artifact
    per canonical row, real sha256 hashes, real locators
 3  tools/equity/establish_position.js run --declaration ... (dry-run
-   first, then --apply) — it refuses any hash not already retained, and
-   it separately REFUSES to set minimum_dividend_relationship_to_
-   preferred_return to anything other than 'not_established' unless that
-   row's own source_authority is 'governed_read' — i.e. unless OA §1.49
-   itself has actually been read. This is Round 4's frozen ruling
-   enforced mechanically, not just documented.
+   first, then --apply) — it refuses any hash not already retained. Both
+   the tool preflight and canonical writer REFUSE to set minimum_dividend_
+   relationship_to_preferred_return to anything other than
+   'not_established' unless the row has governed-read authority, a
+   non-secondary term source, and a retained source artifact. This is
+   Round 4's frozen ruling enforced mechanically, not just documented.
 ```
 
-Ask Spine follows the same governed read after that. Equity's registry
-entry in `tests/gate_ask_spine_readers.js` stays `pending` until it does —
-deliberately, matching Debt's own registry entry, which is also still
-`pending` at the time this card was written. Do not wire Ask Spine early
-just to change that count.
+Ask Spine now follows the same governed reader as the Equity screen. Its
+registration proves one read path, not that any production property has
+been established; an empty production read must remain `NOT_ESTABLISHED`.

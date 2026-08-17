@@ -146,9 +146,12 @@ function domainsFromFilenames(filenames) {
  *    pending     Eligible, not yet wired. Requires `owner` and `clears`.
  *    waived      Deliberately not conversational. Requires `reason`.
  *
- *  Compliance and Utilities are registered through governed readers. Insurance and
- *  Tax remain pending until cross-domain composition authorization is
- *  governed. A green gate reports this split; it does not erase it.  */
+ *  Compliance, Utilities, Contracted Services, Debt, and Equity are registered
+ *  through governed readers. Insurance and Tax remain pending until their
+ *  domain-specific conversational truth walls are built and proven. Cross-domain
+ *  composition authorization remains unsolved for every registered domain and
+ *  is enforced by the composer rather than used to block single-domain reads.
+ *  A green gate reports this split; it does not erase it.  */
 const REGISTRY = {
   compliance: {
     state: "registered",
@@ -197,14 +200,13 @@ const REGISTRY = {
   //  of discovering domains from disk rather than from a list. The rule
   //  worked before anyone had to obey it.
   //
-  //  `pending` is honest here and is NOT weakening the rule: Debt Build 1
-  //  deliberately stops at the canonical read, and W1–W9 are proven against
-  //  position() rather than against a conversation. Debt cannot claim
-  //  domain-level done until this reads `registered` and the gate proves an
-  //  actual gather. Do not wire Ask Spine early merely to improve this count.
+  //  Debt now gathers the same loadHistory() + position() +
+  //  standingProjection() pipe as the Capital Stack screen. The compact
+  //  projection preserves W1-W9 and entitlement is checked before the read.
+  //  Cross-domain composition remains unavailable, exactly as it does for
+  //  every other registered domain.
   debt: {
-    state: "pending",
-    owner: "asset management",
+    state: "registered",
     //  Matches docs/DEBT_READ_CONTRACT_AND_SCHEMA.md and the header of
     //  debt_routes.js exactly: retrieval claimed, comparison and causal
     //  explanation explicitly not — a portfolio comparison needs a basis
@@ -212,18 +214,7 @@ const REGISTRY = {
     //  recorded, and §38 forbids rendering it as a recorded fact.
     capability_classes: readerCapabilities.retrievalOnly(
       "canonical Debt standing — position(instrument, as_of) over governed history"),
-    //  Not solved locally, per ruling. /operator/debt/standing is scoped to
-    //  one property so there is no cross-property surface to aggregate over
-    //  today, but Debt is one of the domains a composed conversational
-    //  answer (debt + insurance + payroll + maintenance + resident history
-    //  in one answer) will pull, and the read seam does nothing to prevent
-    //  that once composition exists.
     composition_authorization: "unsolved_cross_domain",
-    clears: "Ask Spine gathers the governed Debt standing projection with the " +
-            "Debt truth walls preserved (principal ≠ payoff, scheduled ≠ paid, " +
-            "maturity ≠ extension, observed ≠ projected, debt service ≠ total " +
-            "draft) and entitlement applied before model context, after §40.8 " +
-            "cross-domain composition authorization is governed.",
   },
   //  ⚠ EQUITY IS NOW REGISTERED. The canonical read, the route, and the
   //  Capital Stack UI (split into Preferred Equity / Common Equity

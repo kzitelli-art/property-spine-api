@@ -1,5 +1,5 @@
 -- ════════════════════════════════════════════════════════════════════
---  177_activation_source_supersession.sql
+--  179_activation_source_supersession.sql
 --
 --  WHY IS *THIS* TRACKER VERSION THE OPERATING SOURCE?
 --
@@ -24,7 +24,7 @@
 --  operator, and silently promotes a mistaken re-upload over a reviewed
 --  one. This repo already has the right primitive for "this replaced
 --  that": SUPERSESSION, used by executed_lease_records, capital stack
---  positions, and the leasing cycles added in 176.
+--  positions, and the leasing cycles added in 178.
 --
 --  So: the operating source is the activation that is `activated` and
 --  NOT superseded. Exactly one, by construction, per property and source

@@ -70,6 +70,9 @@ docs/                 — Architecture docs and design specs
 | `ANTHROPIC_API_KEY` | Yes | Claude API key for document ingestion |
 | `OPERATOR_KEY` | Yes | Shared secret for operator API routes |
 | `OPERATOR_APP_ORIGIN` | Yes | Frontend origin for CORS (`https://your-app.onrender.com`) |
+| `READ_AI_CONNECTION_ID` | For Meeting Evidence | Stable UUID for the authorized Read AI connection |
+| `READ_AI_WEBHOOK_SIGNING_KEY` | For Meeting Evidence | Base64-encoded Read AI webhook signing key |
+| `MEETING_RECEIPT_MODEL` | No | Anthropic model override for receipt extraction |
 | `TWILIO_ACCOUNT_SID` | No | SMS OTP delivery |
 | `TWILIO_AUTH_TOKEN` | No | SMS OTP delivery |
 | `PLAID_CLIENT_ID` | No | Bank feed integration |
@@ -85,4 +88,6 @@ See [docs/deployment.md](docs/deployment.md) for full details.
 ./deploy.sh    # triggers a manual Render deploy via API
 ```
 
-Render also auto-deploys on every push to `main`. Migrations run automatically on startup via the `prestart` script.
+The production service currently has Render auto-deploy disabled. Merging to
+`main` does not release code by itself; run `./deploy.sh` deliberately.
+Migrations run automatically on startup via the `prestart` script.

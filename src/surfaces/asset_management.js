@@ -201,7 +201,7 @@ const ROOMS = Object.freeze([
       { key: "payroll_staffing", label: "Payroll & Staffing",
         note: "No governed payroll allocation yet" },
       { key: "utilities", label: "Utilities", derived: "utilities" },
-      { key: "contracted_services", label: "Contracted Services",
+      { key: "contracted_services", label: "Contracted Services", derived: "contracted_services",
         note: "No governed service contracts yet" },
       { key: "repairs_maintenance", label: "Repairs & Maintenance",
         note: "No governed repair or maintenance expense terms yet" },

@@ -33,7 +33,7 @@ const SCHEMA = "equity_routes_proof";
 const MIGRATION = path.join(__dirname, "..", "migrations", "174_equity_positions.sql");
 
 const URL_ = receipt.harnessConnectionString();
-receipt.begin(__filename, { url: URL_, expected: 14 });
+receipt.begin(__filename, { url: URL_, expected: 16 });
 
 let pass = 0, fail = 0, ran = 0;
 function ok(label, cond, detail) {
@@ -54,7 +54,7 @@ let server = null, scoped = null, admin = null;
     await c.query(`create extension if not exists pgcrypto`);
     await c.query(`create table users (id uuid primary key)`);
     await c.query(`create table properties (id uuid primary key default gen_random_uuid(), name text)`);
-    await c.query(`create table legal_entities (id uuid primary key default gen_random_uuid())`);
+    await c.query(`create table legal_entities (id uuid primary key default gen_random_uuid(), legal_name text not null)`);
     await c.query(`create table source_artifacts (id uuid primary key default gen_random_uuid())`);
     await c.query(fs.readFileSync(MIGRATION, "utf8"));
 
@@ -63,8 +63,10 @@ let server = null, scoped = null, admin = null;
     const prop = (await c.query(`insert into properties (name) values ('4125 Chestnut') returning id`)).rows[0].id;
     const other = (await c.query(`insert into properties (name) values ('4233 Chestnut') returning id`)).rows[0].id;
     const bare = (await c.query(`insert into properties (name) values ('No Equity Here') returning id`)).rows[0].id;
-    const msc = (await c.query(`insert into legal_entities default values returning id`)).rows[0].id;
-    const interestHolder = (await c.query(`insert into legal_entities default values returning id`)).rows[0].id;
+    const msc = (await c.query(
+      `insert into legal_entities (legal_name) values ('MSC 4125 Chestnut LLC') returning id`)).rows[0].id;
+    const interestHolder = (await c.query(
+      `insert into legal_entities (legal_name) values ('4125 Chestnut Interest Holder LLC') returning id`)).rows[0].id;
     const art = (await c.query(`insert into source_artifacts default values returning id`)).rows[0].id;
 
     //  ── 4125's MSC position, through the canonical writers. No write
@@ -84,7 +86,7 @@ let server = null, scoped = null, admin = null;
     await svc.addPosition(c, {
       property_id: other, issuer_legal_entity_id: interestHolder, position_class: "common",
       holder_name_text: "OTHER-PROPERTY-HOLDER-999", effective_from: "2022-01-01",
-      recorded_by_user_id: uid });
+      source_artifact_id: art, recorded_by_user_id: uid });
     c.release();
 
     // ── REAL HTTP, REAL ROUTER ────────────────────────────────────────
@@ -161,6 +163,8 @@ let server = null, scoped = null, admin = null;
     ok("the position is present", positions.length === 1 && positions[0].position_id === position.id);
     ok("MSC's position reads back preferred, by name",
        positions[0].position_class === "preferred");
+    ok("MSC's legal name is returned for institutional display rather than leaving only a UUID",
+       positions[0].holder.legal_name === "MSC 4125 Chestnut LLC");
     ok("...with its rate as-stated, quarterly, by source_authority — not a bare number",
        positions[0].preferred.terms[0].source_authority === "governed_read"
        && positions[0].preferred.terms[0].compounding === "quarterly");
@@ -168,6 +172,10 @@ let server = null, scoped = null, admin = null;
        positions[0].preferred.accrued_preferred_return.truth_state === "NOT_ESTABLISHED");
     ok("E9 · no pledge recorded reads NOT_ESTABLISHED, never a false 'unencumbered'",
        positions[0].encumbrance.truth_state === "NOT_ESTABLISHED");
+    ok("an absent percentage stays NOT_ESTABLISHED with no false 0% total over the wire",
+       positions[0].ownership.truth_state === "NOT_ESTABLISHED"
+       && st.json.ownership_reconciliation.truth_state === "NOT_ESTABLISHED"
+       && st.json.ownership_reconciliation.current_total_percent === null);
 
     await admin.query(`drop schema if exists ${SCHEMA} cascade`);
   } catch (e) {
@@ -179,5 +187,5 @@ let server = null, scoped = null, admin = null;
   if (server) server.close();
   if (scoped) await scoped.end();
   if (admin) await admin.end();
-  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 14 }));
+  process.exit(receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 16 }));
 })();
