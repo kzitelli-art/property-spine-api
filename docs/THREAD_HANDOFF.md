@@ -1807,6 +1807,19 @@ that it is the same.**
 different from the one being released. Feeding it a guess disarms the only
 guard that catches that.
 
+> **This paragraph was true of the intent and false of the code until
+> 2026-08-17.** `EXPECTED_SHA` was compared only against
+> `RENDER_GIT_COMMIT`, so releasing from anywhere that is not a Render
+> instance read the variable, compared it to nothing, and printed no error.
+> It now resolves the repository's git HEAD when `RENDER_GIT_COMMIT` is
+> absent, refuses a matching sha over a modified tracked tree, refuses a
+> pin it cannot verify at all, and refuses a prefix too short to pin
+> anything. Off Render the variable is still OPTIONAL — several Class-3
+> seeding tools release unpinned — but the release banner now says
+> `NOT PINNED — no build was authorised` in those words instead of printing
+> a reassuring blank. Proven in `tests/migration_release_gate.test.js`,
+> which is now registered in `verify_source_governance.js`.
+
 ### THE SEQUENCE — API #92, PATH A
 
 ```text

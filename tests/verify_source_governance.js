@@ -58,6 +58,13 @@ const GATES = [
   //  belong on the standard path rather than in a harness nobody runs.
   { file: "gate_migration_137_promotion.js",
     what: "migration 137 DDL is the proven scale payload, unchanged" },
+  //  The release guard stops production migrations, and until now the only
+  //  thing that ran its proof was somebody remembering to. It is DB-free
+  //  (it stubs `pg`) and builds its own scratch git repository, so it
+  //  belongs on the standard path. A safety check nobody runs is the exact
+  //  failure this harness was written for; it does not get to be the third.
+  { file: "migration_release_gate.test.js",
+    what: "EXPECTED_LEDGER_CEILING and EXPECTED_SHA are enforced, on Render and off it" },
   { file: "gate_completion_writers.js",
     what: "exactly the expected work-order completion writers; no third writer" },
   //  Boundary 8a lands the activation service and 8b turns the guard on.
