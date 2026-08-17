@@ -88,4 +88,6 @@ See [docs/deployment.md](docs/deployment.md) for full details.
 ./deploy.sh    # triggers a manual Render deploy via API
 ```
 
-Render also auto-deploys on every push to `main`. Migrations run automatically on startup via the `prestart` script.
+The production service currently has Render auto-deploy disabled. Merging to
+`main` does not release code by itself; run `./deploy.sh` deliberately.
+Migrations run automatically on startup via the `prestart` script.

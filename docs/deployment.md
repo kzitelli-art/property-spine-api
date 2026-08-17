@@ -4,7 +4,7 @@
 
 | Component | Service |
 |-----------|---------|
-| API server | [Render](https://render.com) — Web Service, auto-deploys on push to `main` |
+| API server | [Render](https://render.com) — Web Service, deliberate API-triggered deploys from `main` |
 | Database | [Neon](https://neon.tech) — serverless Postgres, connection pooling enabled |
 | SMS | Twilio (optional — OTP falls back gracefully when unconfigured) |
 | Bank feed | Plaid (optional) |
@@ -77,7 +77,7 @@ Files are numbered `001`, `002`, ..., `090`, etc. The `schema_migrations` table 
 
 1. Create `migrations/NNN_description.sql` (next number in sequence)
 2. Write idempotent SQL (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING`, etc.)
-3. Test locally, then push to `main` — Render will apply it on next deploy
+3. Test locally, merge to `main`, then trigger the Render deploy — startup applies it
 
 **Special case — `ALTER TYPE ... ADD VALUE`:** Postgres does not allow using a newly added enum value in the same transaction as an `INSERT` referencing it. Use a `DO $$ BEGIN ... EXCEPTION WHEN others THEN null; END $$;` block, then a separate `UPDATE` in the next statement. See `migrations/090_admin_users.sql` for the pattern.
 
@@ -90,6 +90,8 @@ Files are numbered `001`, `002`, ..., `090`, etc. The `schema_migrations` table 
 ```
 
 Requires `RENDER_API_KEY` and `RENDER_SERVICE_ID` in `.env` or environment.
+The production service currently has auto-deploy disabled, so merging to
+`main` without this step does not release the commit.
 
 ## Activating Read AI Meeting Evidence
 
