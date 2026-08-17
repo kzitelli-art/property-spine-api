@@ -1,5 +1,5 @@
 -- ============================================================================
---  180 - MEETING EVIDENCE BINDING, FINALITY, AND EXTRACTION LINEAGE
+--  181 - MEETING EVIDENCE BINDING, FINALITY, AND EXTRACTION LINEAGE
 --
 --  Closes the three gates that must hold before Receipt 001:
 --    1. one append-only, non-forking current property binding;
@@ -13,10 +13,10 @@
 
 do $$
 begin
-  if (select count(*) from schema_migrations where version in ('177','178','179')) <> 3 then
-    raise exception 'migration 180 requires migrations 177, 178, and 179 to land first'
+  if (select count(*) from schema_migrations where version in ('177','178','179','180')) <> 4 then
+    raise exception 'migration 181 requires migrations 177, 178, 179, and 180 to land first'
       using errcode = 'object_not_in_prerequisite_state',
-            detail = 'Meeting Evidence reserved 180 behind the concurrent Skyline onboarding migration range.';
+            detail = 'Meeting Evidence migration 181 follows the complete Skyline migration range, including inventory retirement at 180.';
   end if;
 end;
 $$;

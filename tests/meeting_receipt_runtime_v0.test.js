@@ -212,7 +212,7 @@ function modelOutput() {
   const serverSource = fs.readFileSync(path.join(root, "server.js"), "utf8");
   const migration = fs.readFileSync(path.join(root, "migrations", "176_meeting_receipt_v0.sql"), "utf8");
   const hardeningMigration = fs.readFileSync(
-    path.join(root, "migrations", "180_meeting_evidence_binding_finality_lineage.sql"), "utf8");
+    path.join(root, "migrations", "181_meeting_evidence_binding_finality_lineage.sql"), "utf8");
   includes("owner receipt generation endpoint is mounted", routesSource, "/owner-receipt");
   includes("property-scoped receipt read endpoint is mounted", routesSource, "/receipts/:id");
   includes("manual preview edit endpoint is mounted", routesSource, "/manual-edits");
@@ -233,8 +233,8 @@ function modelOutput() {
   includes("migration guards missed-item transcript evidence", migration, "trg_meeting_receipt_missed_item_guard");
   notIncludes("migration still does not write work orders", migration, "insert into work_orders");
   includes("hardening migration enforces one initial binding", hardeningMigration, "uq_meeting_binding_one_initial");
-  includes("hardening migration cannot leapfrog concurrent 177 through 179", hardeningMigration,
-    "requires migrations 177, 178, and 179 to land first");
+  includes("hardening migration cannot leapfrog Skyline 177 through 180", hardeningMigration,
+    "requires migrations 177, 178, 179, and 180 to land first");
   includes("hardening migration prevents binding forks", hardeningMigration, "uq_meeting_binding_one_successor");
   includes("hardening migration exposes only current finality", hardeningMigration, "meeting_provider_delivery_current_qualifications");
   includes("finality method is closed to manual exact-delivery review", hardeningMigration,
@@ -274,7 +274,7 @@ function modelOutput() {
     "receipt_sent_assertion_conflict"
   ));
 
-  const readinessRow = { ledger_ceiling: "180", migration_count: 168 };
+  const readinessRow = { ledger_ceiling: "181", migration_count: 168 };
   for (const table of release.REQUIRED_TABLES) readinessRow[`has_${table}`] = true;
   const db = {
     async query(sql) {

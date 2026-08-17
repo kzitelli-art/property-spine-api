@@ -103,7 +103,7 @@ function validOutput() {
   try {
     await client.query("begin");
     await client.query(
-      `insert into schema_migrations (version, name) values ('180','meeting_evidence_binding_finality_lineage')`
+      `insert into schema_migrations (version, name) values ('181','meeting_evidence_binding_finality_lineage')`
     );
     const relations = (await client.query(
       `select to_regclass('public.meeting_property_current_bindings') as binding_view,

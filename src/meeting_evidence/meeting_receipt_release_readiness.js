@@ -1,6 +1,6 @@
 "use strict";
 
-const REQUIRED_LEDGER_CEILING = "180";
+const REQUIRED_LEDGER_CEILING = "181";
 
 const REQUIRED_TABLES = Object.freeze([
   "meeting_evidence_meetings",
