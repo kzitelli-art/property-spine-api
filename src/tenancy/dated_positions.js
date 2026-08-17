@@ -205,6 +205,11 @@ function tenancyState(p) {
   //  produce `vacant` — see positionBasis: it is context, never a basis,
   //  and a bed offered on the strength of an undated unit-grain cache is
   //  the double-let this whole correction exists to prevent.
+  /*  A lease Spine holds over this bed but cannot classify means the bed
+   *  is not empty, whatever the baseline said. The bucket refuses it too;
+   *  this is the second wall, because "vacant" leaking out of the tenancy
+   *  axis is the value most likely to be trusted by a future reader.  */
+  if ((p.other_spanning_lease_positions || []).length) return "unresolved";
   if (claim(p._opening_space_claim) === "vacant") return "vacant";
   return "unresolved";                     // 'occupied' claim, or 'unknown'
 }
@@ -243,22 +248,47 @@ function rentRollBucketOf(p) {
    *  confident-wrong answer in its purest form — and dumping them into
    *  needs_review would be just as false, because nothing is in conflict.  */
   if (p.basis_state && p.basis_state !== "established") return null;
-  const contradicted = p.evidence_state === "disagrees"
-                    || p.evidence_state === "unreconciled";
-  if (p.tenancy_state === "contested" || contradicted) return "needs_review";
+
+  /*  ── STEP 1: EVERY CONTRADICTION, BEFORE ANY CLASSIFICATION ───────
+   *  ⚠ THIS ORDERING IS A SAFETY RULE, NOT A TRUTH HIERARCHY.
+   *
+   *  It exists so that a position with conflicting facts can never be
+   *  classified as though the conflict were absent. It emphatically does
+   *  NOT mean "whichever fact this function looks at first wins". An
+   *  operative lease plus a later source claiming the bed vacant, with no
+   *  correction and no supersession, is Needs Review — it does not become
+   *  Occupied merely because the lease check sits higher in the file.
+   *
+   *  Where effective dates settle a sequence, the dates settle it, in
+   *  evidenceState — not here, and not by ordering. Where an explicit
+   *  correction or supersession settles it, that settles it. Otherwise
+   *  the honest answer is that Spine cannot choose, and says so.  */
+  if (p.conflict_state === "conflicted") return "needs_review";
+  if (p.evidence_state === "disagrees") return "needs_review";
+  if (p.evidence_state === "unreconciled") return "needs_review";
+  //  A lease Spine holds over this bed whose status it cannot classify.
+  //  Fail closed: an unclassifiable lease is a reason to stop, never a
+  //  reason to offer the bed.
+  if (p.basis_type === "spanning_lease_outside_current_vocabulary") return "needs_review";
+  //  Someone is in the bed with no governing right on record. That is a
+  //  recorded fact AND an anomaly — not missing evidence.
+  if (p.basis_type === "recorded_possession") return "needs_review";
+
+  /*  ── STEP 2: POSITIVE CLASSIFICATION ──────────────────────────────
+   *  Reached only when nothing above is in conflict, so these are not
+   *  competing with anything — they are naming what is established.  */
   if (p.tenancy_state === "contractually_occupied") return "occupied";
   if (p.tenancy_state === "activation_pending") return "activation_pending";
-  //  ── OPEN NEEDS POSITIVE SUPPORT ──────────────────────────────────
-  //  The old defect was "not occupied = open". This must not become
-  //  "not otherwise classified = open". A bed is Open only when the dated
-  //  facts positively support it: an accepted vacancy at the baseline, no
-  //  governing tenancy fact spanning the date, and no unresolved
-  //  contradiction — all three already established above and here.
+  /*  OCCUPANCY WITHOUT TERMS. An established opening position accepted
+   *  this bed as occupied and nothing valid contradicts it. Spine knows
+   *  someone occupies the bed; it does not know the rent, term or legal
+   *  right governing that occupancy, and says so separately via
+   *  contractual_terms_state. "Occupied" must never secretly mean "a
+   *  canonical lease exists".  */
+  if (p.basis_type === "opening_claim_occupied") return "occupied";
+  //  Open is reached ONLY from a positive vacancy basis, and only after
+  //  every contradiction and every tenancy fact above has been consulted.
   if (p.tenancy_state === "vacant") return "open";
-  //  `unresolved` is NOT Open. No spanning lease, and opening truth that
-  //  never resolved or claims someone is there — that is a question, and a
-  //  question offered as available is how a bed gets double-let.
-  if (p.tenancy_state === "unresolved") return "needs_review";
   return "unclassified";
 }
 
@@ -288,7 +318,10 @@ function rentRollBucketOf(p) {
 const REASON = Object.freeze({
   OVERLAPPING_OPERATIVE_LEASES: "OVERLAPPING_OPERATIVE_LEASES",
   OPENING_VACANCY_CONFLICTS_WITH_OPERATIVE_LEASE: "OPENING_VACANCY_CONFLICTS_WITH_OPERATIVE_LEASE",
-  OPENING_OCCUPANCY_UNSUPPORTED_BY_LEASE: "OPENING_OCCUPANCY_UNSUPPORTED_BY_LEASE",
+  OPENING_OCCUPANCY_ACCEPTED_TERMS_UNKNOWN: "OPENING_OCCUPANCY_ACCEPTED_TERMS_UNKNOWN",
+  LATER_TENANCY_FACT_SUPERSEDES_BASELINE_VACANCY: "LATER_TENANCY_FACT_SUPERSEDES_BASELINE_VACANCY",
+  SPANNING_LEASE_STATUS_UNRECOGNISED: "SPANNING_LEASE_STATUS_UNRECOGNISED",
+  POSSESSION_WITHOUT_GOVERNING_LEASE: "POSSESSION_WITHOUT_GOVERNING_LEASE",
   OPENING_POSITION_UNRECONCILED: "OPENING_POSITION_UNRECONCILED",
   OPERATIVE_LEASE_SPANS_DATE: "OPERATIVE_LEASE_SPANS_DATE",
   COMMENCED_LEASE_NOT_ACTIVATED: "COMMENCED_LEASE_NOT_ACTIVATED",
@@ -333,6 +366,47 @@ function rentRollExplain(p, opts = {}) {
       conflicting_refs: openingRefs,
     };
   }
+  if (p.basis_type === "spanning_lease_outside_current_vocabulary") {
+    const l = (p.other_spanning_lease_positions || [])[0] || {};
+    return {
+      code: REASON.SPANNING_LEASE_STATUS_UNRECOGNISED,
+      sentence: `Spine holds lease ${l.lease_id} over this bed spanning${onDate}, but its ` +
+        `status "${l.lease_status}" is one Spine cannot classify — so it will not say the ` +
+        `bed is occupied and will not offer it as available.`,
+      supporting_refs: [ref("lease", l.lease_id, { lease_status: l.lease_status })].filter(Boolean),
+      conflicting_refs: [],
+    };
+  }
+  if (p.basis_type === "recorded_possession") {
+    return {
+      code: REASON.POSSESSION_WITHOUT_GOVERNING_LEASE,
+      sentence: `Possession of this bed is recorded from ` +
+        `${(p.current_possession && p.current_possession.since) || "an unstated date"}, but no ` +
+        `lease governs it${onDate}.`,
+      supporting_refs: [],
+      conflicting_refs: [],
+    };
+  }
+  if (p.evidence_state === "superseded_by_later_fact") {
+    return {
+      code: REASON.LATER_TENANCY_FACT_SUPERSEDES_BASELINE_VACANCY,
+      sentence: `The opening position${atBase} recorded this bed vacant, and lease ` +
+        `${cur.lease_id} began ${cur.start_date} — after that date. The later fact governs` +
+        `${onDate}; the two are a sequence, not a disagreement.`,
+      supporting_refs: [ref("lease", cur.lease_id, { lease_status: cur.lease_status }), ...openingRefs].filter(Boolean),
+      conflicting_refs: [],
+    };
+  }
+  if (p.evidence_state === "uncorroborated") {
+    return {
+      code: REASON.OPENING_OCCUPANCY_ACCEPTED_TERMS_UNKNOWN,
+      sentence: `The opening position${atBase} accepted this bed as occupied and nothing ` +
+        `contradicts that. Spine holds no lease for it, so the rent, term and legal right ` +
+        `governing the occupancy are not established.`,
+      supporting_refs: openingRefs,
+      conflicting_refs: [],
+    };
+  }
   if (p.evidence_state === "disagrees") {
     return cur ? {
       code: REASON.OPENING_VACANCY_CONFLICTS_WITH_OPERATIVE_LEASE,
@@ -342,7 +416,9 @@ function rentRollExplain(p, opts = {}) {
       supporting_refs: openingRefs,
       conflicting_refs: [ref("lease", cur.lease_id, { lease_status: cur.lease_status })].filter(Boolean),
     } : {
-      code: REASON.OPENING_OCCUPANCY_UNSUPPORTED_BY_LEASE,
+      //  Reached only for a non-'occupied' claim that a lease contradicts;
+      //  the accepted-occupied case is handled above as uncorroborated.
+      code: REASON.OPENING_OCCUPANCY_ACCEPTED_TERMS_UNKNOWN,
       sentence: `The opening position${atBase} records this bed as ${claim.value}, but no lease ` +
         `supports that${onDate}.`,
       supporting_refs: [],
@@ -400,6 +476,12 @@ const RENT_ROLL_LABELS = Object.freeze({
   unclassified: "Unclassified",
 });
 
+/*  What an operator reads when a position has NO basis. Deliberately not
+ *  in RENT_ROLL_LABELS: it is not one of the four, and putting it there
+ *  would invite a surface to render it as a fifth tenancy bucket.
+ *  "NOT_ESTABLISHED" is canonical/API vocabulary; this is the glass. */
+const NOT_ESTABLISHED_LABEL = "Occupancy Unconfirmed";
+
 /*  The four operator states, over the positions that HAVE a basis.
  *  `not_established` sits beside them, deliberately outside the four: it
  *  is not a tenancy state, so it is not a tenancy bucket. `total` is every
@@ -439,7 +521,8 @@ function rentRollBuckets(positions) {
 //   inconclusive   the claim is 'unknown'. Unknown CONTRADICTS NOTHING —
 //                  it is opening truth that never resolved, not a conflict.
 function evidenceState(p) {
-  const lease = !!p.current_lease_position;
+  const leaseObj = p.current_lease_position;
+  const lease = !!leaseObj;
   const c = occupancyClaim(p).value;
   //  A bed the opening position could not reconcile has no settled claim
   //  to agree or disagree WITH. It is not inconclusive either — that word
@@ -450,7 +533,50 @@ function evidenceState(p) {
   if (NON_REVENUE_CLAIMS.has(c)) return "confirmed";       // model/down is a use statement
   if (lease && c === "occupied") return "confirmed";
   if (!lease && c === "vacant") return "confirmed";
+
+  /*  ── ABSENCE OF A LEASE IS ABSENCE OF EVIDENCE ────────────────────
+   *  An accepted opening claim that a bed is occupied, with no lease on
+   *  record, used to read `disagrees` — which quietly turned MISSING
+   *  CONTRACTUAL DOCUMENTATION into CONTRADICTORY TENANCY EVIDENCE.
+   *  Nothing contradicts the claim; Spine simply has no lease for it.
+   *
+   *  The opening-position establishment was itself the governed act that
+   *  accepted the occupancy. That is sufficient authority for the fact it
+   *  established — someone occupies this bed — and no authority at all
+   *  for terms it never established. See contractualTermsState.  */
+  if (!lease && c === "occupied") return "uncorroborated";
+
+  /*  ── A SEQUENCE IS NOT A CONTRADICTION ────────────────────────────
+   *  A baseline that recorded this bed vacant on 31 July does not fight a
+   *  lease that STARTED on 5 August. Those two facts are about different
+   *  days and both are true; the later dated fact governs the read date.
+   *
+   *  Treating that as a conflict would put every ordinary new lease since
+   *  the baseline into Needs Review — and would make Spine unable to
+   *  record that anything ever happened after an opening position.
+   *
+   *  It IS a contradiction when the lease was already in force AT the
+   *  baseline date and the baseline still called the bed empty. That is
+   *  Skyline 109A: an April lease spanning 31 July, and a 31 July source
+   *  saying vacant. Two claims about the same day.  */
+  const baselineAsOf = p._opening_claim_source
+    && p._opening_claim_source.opening_position_as_of;
+  if (lease && c === "vacant" && baselineAsOf && leaseObj.start_date
+      && String(leaseObj.start_date) > String(baselineAsOf)) {
+    return "superseded_by_later_fact";
+  }
   return "disagrees";
+}
+
+/*  Occupancy and its TERMS are separate establishments. Spine may know
+ *  that someone occupies a bed without knowing the rent, term or legal
+ *  right governing that occupancy — and must not imply the second from
+ *  the first. "Occupied" may never secretly mean "a canonical lease
+ *  exists".  */
+function contractualTermsState(p) {
+  if (p.current_lease_position) return "established";
+  if (claim(p._opening_space_claim) === "occupied") return "not_established";
+  return "not_applicable";
 }
 
 // AXIS 3 — ECONOMICS COMPLETENESS. Independent of whether it is occupied.
@@ -590,7 +716,13 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
        *  for beds that were plainly Open. Wrong, and confidently so. */
       ...(() => {
         const basis = positionBasis(withDown);
-        const axes = { ...withDown, basis_state: basis.state,
+        /*  basis_TYPE travels with basis_STATE. Passing only the state
+         *  silently disabled every basis_type guard in rentRollBucketOf —
+         *  an accepted-occupied bed fell to `unclassified`, and a lease
+         *  with a status Spine cannot classify fell all the way through to
+         *  OPEN. The adversarial cases caught both; nothing else would
+         *  have, because the totals still added up.  */
+        const axes = { ...withDown, basis_state: basis.state, basis_type: basis.type,
           tenancy_state: tenancyState(withDown), evidence_state: evidenceState(withDown) };
         const why = rentRollExplain(axes,
           { as_of: asOf, baseline_as_of: sp.opening_baseline ? sp.opening_baseline.as_of_date : null });
@@ -600,6 +732,8 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
           basis_state: basis.state,
           basis_type: basis.type,
           basis_ref: basis.ref,
+          //  Occupancy and its TERMS are separate establishments.
+          contractual_terms_state: contractualTermsState(axes),
           bucket: b,
           bucket_label: b ? RENT_ROLL_LABELS[b] : null,
           bucket_reason_code: why.code,
@@ -864,7 +998,8 @@ module.exports = {
   //  Review shows the SAME four numbers. A second implementation of "what
   //  counts as Open" is how the subtraction got there in the first place.
   rentRollBuckets, rentRollBucketOf, rentRollExplain, REASON, positionBasis,
-  RENT_ROLL_LABELS, occupancyClaim,
+  contractualTermsState,
+  RENT_ROLL_LABELS, NOT_ESTABLISHED_LABEL, occupancyClaim,
   //  Re-exported so a surface can ask which baseline answers for a date
   //  without reaching into space_position for it.
   openingBaselineAsOf,

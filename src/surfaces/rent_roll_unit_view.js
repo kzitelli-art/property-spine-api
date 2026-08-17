@@ -115,6 +115,8 @@ function positionLine(p) {
     basis_state: p.basis_state,
     basis_type: p.basis_type,
     basis_ref: p.basis_ref,
+    //  Occupancy established does not mean TERMS established.
+    contractual_terms_state: p.contractual_terms_state,
     //  RELAYED, not recomputed. dated_positions decided all of it.
     //  The CODE and the REFS are the contract; the sentence is for a
     //  person. A surface that had to read the English to find out what

@@ -28,10 +28,29 @@
 
 "use strict";
 
-const TERMINAL_LEASE_STATUSES = new Set([
-  "cancelled", "terminated", "rescinded", "void", "expired", "superseded",
-]);
+/*  ONE declaration of "this lease no longer governs". lease_void_service
+ *  owns the list and documents it as "statuses the overlap check already
+ *  ignores"; operative_overlap.js imports it. This file used to restate
+ *  it — two declarations of one vocabulary, which is how the write side
+ *  and the read side come to disagree about what a retired lease is. */
+const { RETIRED_STATUSES } = require("./lease_void_service.js");
+const TERMINAL_LEASE_STATUSES = new Set(RETIRED_STATUSES);
+
+/*  Statuses under which a lease establishes CURRENT economic tenancy. */
 const CURRENT_ECONOMIC_STATUSES = new Set(["active", "commercial"]);
+
+/*  ── KNOWN, ON RECORD, NOT YET ACTIVATED ──────────────────────────────
+ *  A lease is on record for the bed, its start date has arrived, and the
+ *  requirements for Spine to establish current tenancy have not cleared.
+ *  That is Pending Activation, and it is the same condition whether the
+ *  status word is 'pending' or 'signed'.
+ *
+ *  'signed' used to be in NEITHER list — not terminal, not current, not
+ *  pending — so a signed lease spanning the date emitted nothing at all
+ *  and the bed was indistinguishable from an empty one. The fix is not to
+ *  add it to an allow-list of things that count as occupied; it is to
+ *  recognise that we understand exactly what a signed lease is. */
+const ACTIVATION_PENDING_STATUSES = new Set(["pending", "signed"]);
 
 function normalizedStatus(lease) {
   return String(lease && lease.lease_status || "").toLowerCase();
@@ -146,32 +165,25 @@ function classifyFutureCommitment(lease, personNames) {
 function classifyPosition(row, { asOf, personNames } = {}) {
   const leases = (row.leases || []).filter(leaseIsValid);
   const current = leases.find((lease) => CURRENT_ECONOMIC_STATUSES.has(normalizedStatus(lease)) && datesSpan(lease, asOf)) || null;
-  const activationPending = leases.find((lease) => normalizedStatus(lease) === "pending" && datesSpan(lease, asOf)) || null;
+  const activationPending = leases.find((lease) =>
+    ACTIVATION_PENDING_STATUSES.has(normalizedStatus(lease)) && datesSpan(lease, asOf)) || null;
   const future = leases.find((lease) => isFuture(lease, asOf)) || null;
 
-  /*  ── LEASES THAT SPAN D AND FIT NO BUCKET ─────────────────────────
-   *  CURRENT_ECONOMIC_STATUSES is an ALLOW list {active, commercial}
-   *  sitting beside a DENY list (TERMINAL_LEASE_STATUSES). A lease that
-   *  is in neither — 'signed' is live in this product
-   *  (src/surfaces/management.js:101) — spans D and emits NOTHING:
-   *  current is null, activation_pending is null, future is null,
-   *  economic_tenancy_state reads 'none' and availability_state reads
-   *  'ready_now'.
+  /*  ── A SPANNING LEASE WHOSE STATUS WE DO NOT UNDERSTAND ───────────
+   *  A DIAGNOSTIC, and a fail-closed one. Not a home for statuses we do
+   *  understand: 'signed' belongs in activation_pending above, because a
+   *  signed lease on record whose start date has arrived is exactly the
+   *  Pending Activation condition.
    *
-   *  So a SIGNED bed looked exactly like an empty one, and nothing
-   *  downstream could tell the difference or refuse to offer it. That is
-   *  the same allow-list-instead-of-deny-list defect already fixed on the
-   *  WRITE side in operative_overlap.js — still open on the read side.
-   *
-   *  These are emitted, not reinterpreted. This does NOT make them
-   *  occupancy: which statuses count as current economic tenancy is a
-   *  product ruling this classifier must not make on its own. It makes
-   *  them VISIBLE, so a reader can decline to call a bed empty when
-   *  Spine holds a lease over it. */
+   *  leases.lease_status has no CHECK constraint, so the vocabulary is
+   *  open and the next status somebody writes lands here by default. What
+   *  must never happen is that it lands in Open — a lease Spine holds
+   *  over a bed, whose meaning it cannot classify, is a reason to stop,
+   *  not a reason to offer the bed. */
   const otherSpanning = leases.filter((lease) =>
     datesSpan(lease, asOf)
     && !CURRENT_ECONOMIC_STATUSES.has(normalizedStatus(lease))
-    && normalizedStatus(lease) !== "pending");
+    && !ACTIVATION_PENDING_STATUSES.has(normalizedStatus(lease)));
 
   const events = row.possession_events || [];
   const ins = events.filter((e) => e.event_type === "move_in");
@@ -479,6 +491,7 @@ module.exports = {
   // shared vocabulary, exported so no caller redefines it
   TERMINAL_LEASE_STATUSES,
   CURRENT_ECONOMIC_STATUSES,
+  ACTIVATION_PENDING_STATUSES,
   leaseIsValid,
   datesSpan,
   isFuture,

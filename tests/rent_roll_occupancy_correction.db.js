@@ -52,7 +52,7 @@ const { datedPropertyPositions, intervalPropertyPositions, rentRollBuckets } =
 const { unitRentRoll } = require("../src/surfaces/rent_roll_unit_view.js");
 
 const HARNESS = "rent_roll_occupancy_correction.db.js";
-const EXPECTED = 71;
+const EXPECTED = 87;
 const AS_OF = "2026-08-17";
 const TERM  = { from: "2026-08-01", to: "2027-07-31" };
 const APRIL = { from: "2026-04-01", to: "2027-03-31" };   // the 109A lease
@@ -567,7 +567,137 @@ const note = (l) => console.log("        " + l);
       earlyRoll.totals.not_established === 159 && earlyRoll.totals.open === 0
       && earlyRoll.totals.needs_review === 0, JSON.stringify(earlyRoll.totals));
 
-    // ══ 11. INVENTORY INVARIANTS ════════════════════════════════════
+    // ══ 11. THE ADVERSARIAL SET ═════════════════════════════════════
+    /*  One isolated property, one bed per case, so no case can pass on
+     *  another's facts. Each is a rule the ruling states in words.  */
+    console.log("\n  ── the adversarial set ──");
+    const advProp = (await pool.query(
+      `insert into properties (name, address, organization_id, leasing_basis)
+       values ('Adversarial Property','3 Proof Way',$1,'bed') returning id`, [org])).rows[0].id;
+    await pool.query(
+      `insert into deal_intake_properties (intake_id,property_id,status) values ($1,$2,'current')`,
+      [deal, advProp]);
+    const advAct = (await pool.query(
+      `insert into activations (deal_id, property_id, status, source_as_of_date,
+                                import_batch_id, opened_by_user_id)
+       values ($1,$2,'activated','2026-07-31',$3,$4) returning id`,
+      [deal, advProp, batchId, user])).rows[0].id;
+
+    const advBed = async (unitNumber) => {
+      const u = (await pool.query(
+        `insert into units (property_id, unit_number) values ($1,$2) returning id`,
+        [advProp, unitNumber])).rows[0].id;
+      await pool.query(`delete from spaces where unit_id=$1 and space_label='(whole unit)'`, [u]);
+      const sp = (await pool.query(
+        `insert into spaces (unit_id, space_label) values ($1,'Room1') returning id`, [u])).rows[0].id;
+      return { unit: unitNumber, label: "Room1", space_id: sp };
+    };
+    const advLease = (b, status, from, to) => pool.query(
+      `insert into leases (property_id, space_id, rent, lease_status, start_date, end_date, tenant_ids)
+       values ($1,$2,900,$3,$4,$5,'{}') returning id`,
+      [advProp, b.space_id, status, from, to]).then((r) => r.rows[0].id);
+    const advClaim = (b, status, normalized) => pool.query(
+      `insert into proposed_records
+         (activation_id, property_id, module, target_type, natural_key, normalized_json, status)
+       values ($1,$2,'leasing','lease',$3,$4,$5)`,
+      [advAct, advProp, `${b.unit}|${b.label}`,
+       JSON.stringify({ unit_number: b.unit, space_label: b.label, ...normalized }), status]);
+
+    //  A · accepted opening OCCUPIED claim, no lease, nothing contradicting
+    const bA = await advBed("A1");
+    await advClaim(bA, "promoted", { tenant_name: "Claimed Resident", rent: 1200 });
+    //  B · SIGNED lease spanning D, activation not cleared
+    const bB = await advBed("B1");
+    const leaseB = await advLease(bB, "signed", TERM.from, TERM.to);
+    await advClaim(bB, "promoted", { is_vacant: true, market_rent: 1200 });
+    //  C · native ACTIVE tenancy, and NO opening claim for this bed at all
+    const bC = await advBed("C1");
+    const leaseC = await advLease(bC, "active", TERM.from, TERM.to);
+    //  D · nothing whatsoever
+    const bD = await advBed("D1");
+    //  E · accepted vacancy CONTRADICTED by a lease already in force at the
+    //      baseline date — a genuine two-claims-about-one-day conflict
+    const bE = await advBed("E1");
+    const leaseE = await advLease(bE, "active", APRIL.from, APRIL.to);
+    await advClaim(bE, "promoted", { is_vacant: true, market_rent: 900 });
+    //  F · established vacancy, no blocker at all
+    const bF = await advBed("F1");
+    await advClaim(bF, "promoted", { is_vacant: true, market_rent: 1200 });
+    //  G · TEMPORAL: July 31 vacant baseline, lease that BEGAN Aug 5.
+    //      Two facts about different days — a sequence, not a conflict.
+    const bG = await advBed("G1");
+    const leaseG = await advLease(bG, "active", "2026-08-05", "2027-08-04");
+    await advClaim(bG, "promoted", { is_vacant: true, market_rent: 1200 });
+    //  H · a lease status Spine does not understand, spanning D
+    const bH = await advBed("H1");
+    const leaseH = await advLease(bH, "escrowed_hold", TERM.from, TERM.to);
+    await advClaim(bH, "promoted", { is_vacant: true, market_rent: 1200 });
+
+    await pool.query(
+      `insert into opening_tenancy_positions
+         (property_id, deal_intake_id, activation_id, as_of_date,
+          positions_established, positions_unresolved, source_rows_read,
+          established_by_user_id, authority_basis, status)
+       values ($1,$2,$3,'2026-07-31',7,0,7,$4,'platform_role:super_admin','established')`,
+      [advProp, deal, advAct, user]);
+
+    const advRoll = await unitRentRoll(pool, { property_id: advProp, as_of: AS_OF });
+    const advRows = new Map(advRoll.units.flatMap((u) => u.positions)
+      .map((r) => [String(r.space_id), r]));
+    const R = (b) => advRows.get(String(b.space_id));
+    const show = (label, r) => note(`${label.padEnd(30)} ${String(r.basis_state).padEnd(16)} ` +
+      `${String(r.bucket)} · ${r.bucket_reason_code}`);
+    for (const [lbl, b] of [["A accepted occupied", bA], ["B signed", bB], ["C native lease", bC],
+      ["D nothing", bD], ["E contradicted vacancy", bE], ["F clean vacancy", bF],
+      ["G later lease", bG], ["H unknown status", bH]]) show(lbl, R(b));
+
+    ok("★ A · accepted occupied claim + no lease → Occupied, not review",
+      R(bA).bucket === "occupied"
+      && R(bA).bucket_reason_code === "OPENING_OCCUPANCY_ACCEPTED_TERMS_UNKNOWN",
+      `${R(bA).bucket} / ${R(bA).bucket_reason_code}`);
+    ok("★ A · …and its contractual terms are NOT established",
+      R(bA).contractual_terms_state === "not_established", R(bA).contractual_terms_state);
+    ok("★ B · signed lease spanning D → Pending Activation",
+      R(bB).bucket === "activation_pending"
+      && R(bB).bucket_reason_code === "COMMENCED_LEASE_NOT_ACTIVATED",
+      `${R(bB).bucket} / ${R(bB).bucket_reason_code}`);
+    ok("★ B · …and it is NOT Open", R(bB).bucket !== "open");
+    ok("★ C · native tenancy, no opening claim → Occupied",
+      R(bC).basis_state === "established" && R(bC).bucket === "occupied"
+      && R(bC).basis_type === "operative_lease",
+      `${R(bC).basis_type} / ${R(bC).bucket}`);
+    ok("★ C · …with contractual terms established",
+      R(bC).contractual_terms_state === "established");
+    ok("★ D · no fact of any kind → not_established, no bucket",
+      R(bD).basis_state === "not_established" && R(bD).bucket === null
+      && R(bD).bucket_reason_code === "NO_AUTHORITATIVE_BASIS",
+      `${R(bD).basis_state} / ${R(bD).bucket}`);
+    ok("★ E · vacancy contradicted by a lease in force at the baseline → Needs Review",
+      R(bE).bucket === "needs_review"
+      && R(bE).bucket_reason_code === "OPENING_VACANCY_CONFLICTS_WITH_OPERATIVE_LEASE",
+      `${R(bE).bucket} / ${R(bE).bucket_reason_code}`);
+    ok("★ E · THE GUARDRAIL — occupancy did NOT win by predicate order",
+      R(bE).bucket !== "occupied" && (R(bE).conflicting_refs || [])
+        .some((x) => String(x.id) === String(leaseE)),
+      JSON.stringify(R(bE).conflicting_refs));
+    ok("★ F · established vacancy, no blocker → Open",
+      R(bF).bucket === "open"
+      && R(bF).bucket_reason_code === "ESTABLISHED_VACANT_NO_LATER_BLOCKER",
+      `${R(bF).bucket} / ${R(bF).bucket_reason_code}`);
+    ok("★ G · TEMPORAL — a lease that began AFTER the baseline governs, not conflicts",
+      R(bG).bucket === "occupied"
+      && R(bG).bucket_reason_code === "LATER_TENANCY_FACT_SUPERSEDES_BASELINE_VACANCY",
+      `${R(bG).bucket} / ${R(bG).bucket_reason_code}`);
+    ok("★ G · …and it is NOT Needs Review merely because two dated facts differ",
+      R(bG).bucket !== "needs_review");
+    ok("★ H · an unrecognised spanning lease status → Needs Review, never Open",
+      R(bH).bucket === "needs_review"
+      && R(bH).bucket_reason_code === "SPANNING_LEASE_STATUS_UNRECOGNISED",
+      `${R(bH).bucket} / ${R(bH).bucket_reason_code}`);
+    ok("★ H · …and it did not fall through to Open",
+      R(bH).bucket !== "open" && R(bH).bucket !== null);
+
+    // ══ 12. INVENTORY INVARIANTS ════════════════════════════════════
     console.log("\n  ── the inventory did not move ──");
     const inv = (await pool.query(
       `select count(distinct u.id)::int units, count(distinct s.id)::int spaces,
