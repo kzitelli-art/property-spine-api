@@ -42,7 +42,8 @@
 
 "use strict";
 
-const { datedPropertyPositions, rentRollBuckets } = require("../tenancy/dated_positions");
+const { datedPropertyPositions, rentRollBuckets, rentRollBucketOf, RENT_ROLL_LABELS } =
+  require("../tenancy/dated_positions");
 
 const money = (n) => (n == null ? null : Math.round(Number(n) * 100) / 100);
 const firstTenant = (tenants) =>
@@ -105,7 +106,14 @@ function positionLine(p) {
     space_id: p.space_id,
     label: p.space_label,
     position_kind: p.position_kind,
+    /*  THE SERVER'S CLASSIFICATION, per row. The headline totals and this
+     *  field come from the same function, so a surface renders what Spine
+     *  decided rather than re-deriving Occupied/Open in the browser — which
+     *  is how a screen and its own header come to disagree. */
+    bucket: rentRollBucketOf(p),
+    bucket_label: RENT_ROLL_LABELS[rentRollBucketOf(p)],
     //  The position's own standing, in the vocabulary the classifier owns.
+    //  Carried for the detail view and for Ask Spine; NOT for the glass.
     tenancy_state: p.tenancy_state,
     economics_state: p.economics_state,
     evidence_state: p.evidence_state,
@@ -152,6 +160,41 @@ async function unitRentRoll(pool, { property_id, as_of = null } = {}) {
   if (!property_id) throw new Error("unitRentRoll requires property_id");
   const dp = await datedPropertyPositions(pool, { property_id, as_of });
 
+  /*  ── NOT ESTABLISHED IS A PROPERTY-LEVEL ANSWER ────────────────────
+   *  No opening tenancy baseline effective on or before this date means
+   *  there is no Current Rent Roll to state. It does NOT mean every bed is
+   *  a review exception: a property that has never been established has
+   *  one unmet precondition, not one conflict per position.
+   *
+   *  So the buckets are not computed at all here. Returning
+   *  `{occupied: 0, open: 160}` would be a confident wrong answer, and
+   *  returning `{needs_review: 160}` would manufacture 160 exceptions out
+   *  of a single absence. The inventory is still reported, because the
+   *  beds are real and known; what is missing is the tenancy baseline. */
+  if (!dp.opening_baseline) {
+    return {
+      property_id: dp.property_id,
+      as_of: dp.as_of,
+      established: false,
+      truth_state: "NOT_ESTABLISHED",
+      why: "No opening tenancy position has been established for this property " +
+           `on or before ${dp.as_of}, so Spine cannot state a current rent roll for it.`,
+      next_step: "Establish the opening tenancy position from a rent roll dated on or " +
+                 "before this date.",
+      opening_baseline: null,
+      opening_truth: dp.opening_truth,
+      retired_excluded: dp.retired_excluded,
+      //  The physical facts Spine DOES hold. Inventory is established even
+      //  when tenancy is not, and hiding it would be its own dishonesty.
+      inventory: {
+        units: new Set(dp.positions.map((p) => String(p.unit_id))).size,
+        rentable_positions: dp.positions.length,
+      },
+      totals: null,
+      units: [],
+    };
+  }
+
   const byUnit = new Map();
   for (const p of dp.positions) {
     if (!byUnit.has(p.unit_id)) {
@@ -191,6 +234,13 @@ async function unitRentRoll(pool, { property_id, as_of = null } = {}) {
   return {
     property_id: dp.property_id,
     as_of: dp.as_of,
+    established: true,
+    truth_state: "ESTABLISHED",
+    //  WHICH baseline answered. A rent roll that cannot say what it was
+    //  built on cannot be argued with, and after a later baseline is
+    //  established this is the field that shows a historical read is still
+    //  reading the right month.
+    opening_baseline: dp.opening_baseline,
     opening_truth: dp.opening_truth,
     totals: {
       units: units.length,

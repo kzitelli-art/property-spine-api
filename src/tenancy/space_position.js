@@ -159,7 +159,53 @@ async function recordEffectivePossession(client, {
  *  there were two loaders, they would eventually load two different things.
  *
  *  PURE LOADING. No meaning is decided here; that is the classifier's job. */
-async function loadSpaceRows(pool, property_id) {
+/*  ── THE BASELINE THAT ANSWERS FOR A DATE ───────────────────────────
+ *  An Opening Tenancy Position is a DURABLE AS-OF BASELINE, not a
+ *  lifecycle flag. `status` says which baseline is current; `as_of_date`
+ *  says which date a baseline speaks for. They are different questions
+ *  and only one of them is about time.
+ *
+ *  Selecting `where status = 'established'` answers neither correctly.
+ *  The moment an August 31 baseline is established, the July 31 row is
+ *  marked superseded — and a historical read at July 31 would then pick
+ *  up AUGUST'S claims, because August is the only established row. Not
+ *  merely forgetting July: applying the wrong month to it, silently, on
+ *  a read that used to be right.
+ *
+ *  So: the latest baseline whose as_of_date is on or before the read
+ *  date, superseded or not. Superseded means "not current"; it never
+ *  means "erased from history".
+ *
+ *  Ordering carries the correction case too. A baseline re-established
+ *  for the SAME as_of_date — a fix, not the passage of time — shares the
+ *  date and wins on established_at. Newer answer for that date, same
+ *  date, no ambiguity.
+ *
+ *  Returns null when the property has no baseline effective at that date.
+ *  Null is a PROPERTY-level fact — the Current Rent Roll is not
+ *  established — and callers must say that rather than manufacture one
+ *  review exception per bed. */
+async function openingBaselineAsOf(pool, property_id, as_of) {
+  if (!property_id) throw new Error("property_id required");
+  const asOf = as_of || new Date().toISOString().slice(0, 10);
+  return (await pool.query(
+    `select id, activation_id, status,
+            to_char(as_of_date,'YYYY-MM-DD') as as_of_date,
+            established_at, superseded_by_id,
+            positions_established, positions_unresolved, source_rows_read
+       from opening_tenancy_positions
+      where property_id = $1
+        and status in ('established','superseded')
+        and as_of_date <= $2::date
+      order by as_of_date desc, established_at desc
+      limit 1`, [property_id, asOf])).rows[0] || null;
+}
+
+/*  `baseline_id` is the row openingBaselineAsOf chose, or null. It is
+ *  resolved ONCE by the caller and passed in, rather than re-derived per
+ *  space: 160 correlated re-selections of the same baseline would be 160
+ *  chances to disagree with each other about which one it is. */
+async function loadSpaceRows(pool, property_id, baseline_id = null) {
   if (!property_id) throw new Error("property_id required");
   return (await pool.query(
     `select
@@ -254,8 +300,12 @@ async function loadSpaceRows(pool, property_id) {
               or (lower(btrim(pr.natural_key)) = lower(btrim(u.unit_number))
                   and (select count(*) from spaces s2 where s2.unit_id = u.id) = 1)
             )
-          where otp.property_id = u.property_id
-            and otp.status = 'established'
+          --  THE CHOSEN BASELINE, BY ID. Not "whichever row is currently
+          --  marked established" — see openingBaselineAsOf above. A null
+          --  baseline yields a null claim for every bed, which the reader
+          --  reports as a property-level NOT_ESTABLISHED rather than as
+          --  160 individual review exceptions.
+          where otp.id = $2::uuid
           order by case when lower(btrim(pr.natural_key))
                              = lower(btrim(u.unit_number || '|' || s.space_label))
                         then 0 else 1 end
@@ -265,7 +315,7 @@ async function loadSpaceRows(pool, property_id) {
      where u.property_id=$1
        and ${NOT_RETIRED_SQL("u")}
      order by u.unit_number, s.space_label`,
-    [property_id]
+    [property_id, baseline_id]
   )).rows;
 }
 
@@ -289,7 +339,10 @@ async function loadPersonNames(pool, rows) {
 async function spacePosition(pool, { property_id, as_of = null }) {
   if (!property_id) throw new Error("property_id required");
   const asOf = as_of || new Date().toISOString().slice(0, 10);
-  const rows = await loadSpaceRows(pool, property_id);
+  //  The baseline is chosen for THIS date, once, and its id is what the
+  //  loader reads claims from.
+  const baseline = await openingBaselineAsOf(pool, property_id, asOf);
+  const rows = await loadSpaceRows(pool, property_id, baseline ? baseline.id : null);
 
   const tenantIds = new Set();
   for (const row of rows) {
@@ -309,6 +362,19 @@ async function spacePosition(pool, { property_id, as_of = null }) {
   return {
     property_id,
     as_of: asOf,
+    //  WHICH BASELINE ANSWERED, or null. Null is a property-level fact —
+    //  the Current Rent Roll is not established at this date — and it is
+    //  reported as one rather than becoming a review exception per bed.
+    opening_baseline: baseline ? {
+      id: baseline.id,
+      activation_id: baseline.activation_id,
+      as_of_date: baseline.as_of_date,
+      status: baseline.status,
+      superseded_by_id: baseline.superseded_by_id || null,
+      positions_established: baseline.positions_established,
+      positions_unresolved: baseline.positions_unresolved,
+      source_rows_read: baseline.source_rows_read,
+    } : null,
     count: positions.length,
     positions,
     summary: {
@@ -321,6 +387,7 @@ async function spacePosition(pool, { property_id, as_of = null }) {
 }
 
 module.exports = {
+  openingBaselineAsOf,
   recordEffectivePossession,
   spacePosition,
   //  Exported so the interval reader loads the SAME rows rather than

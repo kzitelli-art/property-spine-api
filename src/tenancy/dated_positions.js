@@ -35,7 +35,8 @@
 
 "use strict";
 
-const { spacePosition, loadSpaceRows, loadPersonNames } = require("./space_position");
+const { spacePosition, loadSpaceRows, loadPersonNames, openingBaselineAsOf } =
+  require("./space_position");
 //  Same imported predicate as the loader — the attrs read must describe the
 //  same row set, or a retired unit contributes attributes to nothing.
 const { NOT_RETIRED_SQL, retiredExclusion } = require("./inventory_retirement");
@@ -127,22 +128,43 @@ function tenancyState(p) {
  *  Every position lands in exactly one bucket; `unclassified` exists so
  *  that if a future state escapes all four it shows up as a visible
  *  number rather than inflating Open.  */
+/*  ONE position, ONE bucket. The headline and the rows call the same
+ *  function, so a browser can never hold a second opinion about what Open
+ *  means — it consumes this, it does not re-derive it. */
+function rentRollBucketOf(p) {
+  const contradicted = p.evidence_state === "disagrees"
+                    || p.evidence_state === "unreconciled";
+  if (p.tenancy_state === "contested" || contradicted) return "needs_review";
+  if (p.tenancy_state === "contractually_occupied") return "occupied";
+  if (p.tenancy_state === "activation_pending") return "activation_pending";
+  //  ── OPEN NEEDS POSITIVE SUPPORT ──────────────────────────────────
+  //  The old defect was "not occupied = open". This must not become
+  //  "not otherwise classified = open". A bed is Open only when the dated
+  //  facts positively support it: an accepted vacancy at the baseline, no
+  //  governing tenancy fact spanning the date, and no unresolved
+  //  contradiction — all three already established above and here.
+  if (p.tenancy_state === "vacant") return "open";
+  //  `unresolved` is NOT Open. No spanning lease, and opening truth that
+  //  never resolved or claims someone is there — that is a question, and a
+  //  question offered as available is how a bed gets double-let.
+  if (p.tenancy_state === "unresolved") return "needs_review";
+  return "unclassified";
+}
+
+/*  The operator vocabulary, decided server-side. Internal words
+ *  (`contractually_occupied`, `unreconciled`) never reach the glass. */
+const RENT_ROLL_LABELS = Object.freeze({
+  occupied: "Occupied",
+  activation_pending: "Pending Activation",
+  open: "Open",
+  needs_review: "Needs Review",
+  unclassified: "Unclassified",
+});
+
 function rentRollBuckets(positions) {
   const t = { occupied: 0, activation_pending: 0, open: 0, needs_review: 0,
               unclassified: 0, total: positions.length };
-  for (const p of positions) {
-    const contradicted = p.evidence_state === "disagrees"
-                      || p.evidence_state === "unreconciled";
-    if (p.tenancy_state === "contested" || contradicted) t.needs_review++;
-    else if (p.tenancy_state === "contractually_occupied") t.occupied++;
-    else if (p.tenancy_state === "activation_pending") t.activation_pending++;
-    else if (p.tenancy_state === "vacant") t.open++;
-    //  `unresolved` is NOT Open. No spanning lease, and opening truth that
-    //  never resolved or claims someone is there — that is a question, and
-    //  a question offered as available is how a bed gets double-let.
-    else if (p.tenancy_state === "unresolved") t.needs_review++;
-    else t.unclassified++;
-  }
+  for (const p of positions) t[rentRollBucketOf(p)]++;
   return t;
 }
 
@@ -351,6 +373,18 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
     //  never a tidy zero.
     retired_excluded: await retiredExclusion(pool, property_id),
     opening_truth: await openingTruth(pool, property_id),
+    /*  WHICH BASELINE ANSWERED FOR THIS DATE, or null.
+     *
+     *  Null is a PROPERTY-level fact: no opening tenancy position has been
+     *  established effective on or before this date, so there is no
+     *  Current Rent Roll to state. It is NOT one review exception per bed.
+     *  A property that has never been established does not thereby acquire
+     *  283 individual tenancy conflicts — it has one unmet precondition,
+     *  and saying so is the honest blank (§5, and the NOT_ESTABLISHED
+     *  silence of §40.7).
+     *
+     *  Surfaces must branch on this BEFORE presenting buckets. */
+    opening_baseline: sp.opening_baseline,
     positions,
   };
 }
@@ -405,7 +439,11 @@ async function intervalPropertyPositions(pool, {
   const end = requested_end ? String(requested_end).slice(0, 10) : null;
 
   //  THE SAME ROWS THE RENT ROLL READS. Not a second query.
-  const rows = await loadSpaceRows(pool, property_id);
+  //  Evidence for an interval is judged AT requested_start (see the note
+  //  below), so the baseline is the one effective on/before that date —
+  //  not whichever row happens to be marked established today.
+  const baseline = await openingBaselineAsOf(pool, property_id, start);
+  const rows = await loadSpaceRows(pool, property_id, baseline ? baseline.id : null);
   const personNames = await loadPersonNames(pool, rows);
 
   const down = new Set((await pool.query(
@@ -528,5 +566,8 @@ module.exports = {
   //  Exported so every surface that shows Occupied/Pending/Open/Needs
   //  Review shows the SAME four numbers. A second implementation of "what
   //  counts as Open" is how the subtraction got there in the first place.
-  rentRollBuckets, occupancyClaim,
+  rentRollBuckets, rentRollBucketOf, RENT_ROLL_LABELS, occupancyClaim,
+  //  Re-exported so a surface can ask which baseline answers for a date
+  //  without reaching into space_position for it.
+  openingBaselineAsOf,
 };

@@ -52,7 +52,7 @@ const { datedPropertyPositions, intervalPropertyPositions, rentRollBuckets } =
 const { unitRentRoll } = require("../src/surfaces/rent_roll_unit_view.js");
 
 const HARNESS = "rent_roll_occupancy_correction.db.js";
-const EXPECTED = 37;
+const EXPECTED = 53;
 const AS_OF = "2026-08-17";
 const TERM  = { from: "2026-08-01", to: "2027-07-31" };
 const APRIL = { from: "2026-04-01", to: "2027-03-31" };   // the 109A lease
@@ -104,9 +104,16 @@ const note = (l) => console.log("        " + l);
     }
     ok("72 units / 160 beds / no whole-unit phantoms", beds.length === 160, String(beds.length));
 
+    const batchId = (await pool.query(
+      `insert into import_batches (property_id, source_type, source_file, source_as_of_date,
+                                   leasing_model, confidence, status)
+       values ($1,'rent_roll_ledger','RentRoll07.xlsx','2026-07-31','bed','extracted','committed')
+       returning id`, [prop])).rows[0].id;
     const act = (await pool.query(
-      `insert into activations (deal_id, property_id, status, source_as_of_date, opened_by_user_id)
-       values ($1,$2,'activated','2026-07-31',$3) returning id`, [deal, prop, user])).rows[0].id;
+      `insert into activations (deal_id, property_id, status, source_as_of_date,
+                                import_batch_id, opened_by_user_id)
+       values ($1,$2,'activated','2026-07-31',$3,$4) returning id`,
+      [deal, prop, batchId, user])).rows[0].id;
 
     const putLease = (space_id, status, from, to, tenants = "{}") => pool.query(
       `insert into leases (property_id, space_id, rent, lease_status, start_date, end_date, tenant_ids)
@@ -248,6 +255,27 @@ const note = (l) => console.log("        " + l);
       JSON.stringify(rr.totals));
     ok("rentable_positions is still 160", rr.totals.rentable_positions === 160);
     ok("units still read 72", rr.totals.units === 72, String(rr.totals.units));
+    //  ── ONE CLASSIFICATION, NOT TWO ──────────────────────────────────
+    //  The app re-derived Occupied/Unresolved/Contested in the browser
+    //  (PS_RR_FILTERS). Every row now carries the server's answer, and the
+    //  header is the tally of exactly those answers — so the two cannot
+    //  disagree even if a surface wanted them to.
+    const rows = rr.units.flatMap((u) => u.positions);
+    const rowTally = rows.reduce((a, r) => { a[r.bucket] = (a[r.bucket] || 0) + 1; return a; }, {});
+    ok("★ every row carries the server's bucket",
+      rows.length === 160 && rows.every((r) => !!r.bucket && !!r.bucket_label));
+    ok("★ the row buckets tally to the header exactly",
+      rowTally.occupied === 31 && rowTally.activation_pending === 22
+      && rowTally.open === 100 && rowTally.needs_review === 7,
+      JSON.stringify(rowTally));
+    ok("…and the glass labels carry no internal vocabulary",
+      rows.every((r) => ["Occupied", "Pending Activation", "Open", "Needs Review"]
+        .includes(r.bucket_label)),
+      [...new Set(rows.map((r) => r.bucket_label))].join(" | "));
+    const p109row = rows.find((r) => String(r.space_id) === String(bed109A.space_id));
+    ok("109A renders as Needs Review on the glass",
+      p109row.bucket_label === "Needs Review", p109row.bucket_label);
+
     //  Per-unit numbers must add up too, or the header and the rows disagree.
     const perUnit = rr.units.reduce((a, u) => ({
       occupied: a.occupied + u.occupied,
@@ -332,7 +360,105 @@ const note = (l) => console.log("        " + l);
     ok("a vacant row naming no bed on a multi-bed unit still promotes",
       looseOut.vacant === true, JSON.stringify(looseOut));
 
-    // ══ 9. INVENTORY INVARIANTS ═════════════════════════════════════
+    // ══ 9. NOT_ESTABLISHED IS NOT 160 EXCEPTIONS ════════════════════
+    /*  The ruling's first blocker. A property that has never had an
+     *  opening tenancy position established has ONE unmet precondition,
+     *  not one tenancy conflict per bed. Unknown is not Open — and it is
+     *  not 160 red rows either.  */
+    console.log("\n  ── a property with no opening baseline ──");
+    const bare = (await pool.query(
+      `insert into properties (name, address, organization_id, leasing_basis)
+       values ('No Baseline Property','2 Proof Way',$1,'bed') returning id`, [org])).rows[0].id;
+    {
+      const u = (await pool.query(
+        `insert into units (property_id, unit_number) values ($1,'A1') returning id`,
+        [bare])).rows[0].id;
+      await pool.query(`delete from spaces where unit_id=$1 and space_label='(whole unit)'`, [u]);
+      for (const r of ["Room1", "Room2", "Room3"]) {
+        await pool.query(`insert into spaces (unit_id, space_label) values ($1,$2)`, [u, r]);
+      }
+    }
+    const bareRoll = await unitRentRoll(pool, { property_id: bare, as_of: AS_OF });
+    ok("★ it is NOT_ESTABLISHED, not a wall of exceptions",
+      bareRoll.established === false && bareRoll.truth_state === "NOT_ESTABLISHED",
+      JSON.stringify({ e: bareRoll.established, t: bareRoll.truth_state }));
+    ok("…no buckets are stated at all", bareRoll.totals === null,
+      JSON.stringify(bareRoll.totals));
+    ok("…and it does NOT report 3 needs_review",
+      !bareRoll.totals || bareRoll.totals.needs_review !== 3);
+    ok("…the inventory Spine does hold is still reported",
+      bareRoll.inventory.units === 1 && bareRoll.inventory.rentable_positions === 3,
+      JSON.stringify(bareRoll.inventory));
+    ok("…and it says why, and what would resolve it",
+      /No opening tenancy position has been established/.test(bareRoll.why)
+      && /Establish the opening tenancy position/.test(bareRoll.next_step));
+
+    // ══ 10. THE BASELINE IS CHOSEN BY DATE, NOT BY LIFECYCLE FLAG ═══
+    /*  The ruling's second blocker, and the one my receipt under-ranked.
+     *  Selecting `status = 'established'` does not merely forget an older
+     *  baseline once a newer one lands — it applies the NEWER month's
+     *  claims to the OLDER date. Actively wrong, on a read that used to be
+     *  right.  */
+    console.log("\n  ── an August baseline must not rewrite July ──");
+    const julyRoll = await unitRentRoll(pool, { property_id: prop, as_of: AS_OF });
+    ok("before: the July baseline answers", julyRoll.opening_baseline
+      && julyRoll.opening_baseline.as_of_date === "2026-07-31",
+      JSON.stringify(julyRoll.opening_baseline));
+    const julyBuckets = JSON.stringify(julyRoll.totals);
+
+    //  Establish an August 31 baseline over the same property. Its
+    //  activation has NO proposals, so if a dated read ever selects it for
+    //  an August-17 question the claims vanish and the numbers collapse —
+    //  which is exactly the failure this asserts against.
+    //  Through the CANONICAL writer, not by hand. The first version of
+    //  this fixture flipped status with an UPDATE and the database refused
+    //  it — "a superseded position must name what superseded it, and when".
+    //  The deferred trigger was right, and emulating supersession would
+    //  have proved the selection rule against a shape the writer never
+    //  produces.
+    const actAug = (await pool.query(
+      `insert into activations (deal_id, property_id, status, source_as_of_date,
+                                import_batch_id, opened_by_user_id)
+       values ($1,$2,'open','2026-08-31',$3,$4) returning id`,
+      [deal, prop, batchId, user])).rows[0].id;
+    await pool.query(
+      `insert into proposed_records
+         (activation_id, property_id, module, target_type, natural_key, normalized_json, status)
+       values ($1,$2,'leasing','lease',$3,$4,'promoted')`,
+      [actAug, prop, `${openBeds[0].unit}|${openBeds[0].label}`,
+       JSON.stringify({ unit_number: openBeds[0].unit, space_label: openBeds[0].label,
+         is_vacant: true, market_rent: 1200 })]);
+    const augOut = await activation.establishOpeningPosition(pool,
+      { user_id: user, activation_id: actAug });
+    ok("the August baseline was established through the canonical writer",
+      !!augOut.opening_position && augOut.superseded !== null,
+      JSON.stringify({ id: augOut.opening_position && augOut.opening_position.id,
+        superseded: augOut.superseded }));
+
+    const julyAfter = await unitRentRoll(pool, { property_id: prop, as_of: AS_OF });
+    ok("★ the Aug-17 read still selects the JULY baseline",
+      julyAfter.opening_baseline && julyAfter.opening_baseline.as_of_date === "2026-07-31",
+      JSON.stringify(julyAfter.opening_baseline));
+    ok("…even though that baseline is now marked superseded",
+      julyAfter.opening_baseline.status === "superseded",
+      julyAfter.opening_baseline.status);
+    ok("★ and the four numbers are unchanged by the later establishment",
+      JSON.stringify(julyAfter.totals) === julyBuckets,
+      `${julyBuckets} → ${JSON.stringify(julyAfter.totals)}`);
+
+    //  On or after the August baseline's own date, IT answers.
+    const septRoll = await unitRentRoll(pool, { property_id: prop, as_of: "2026-09-15" });
+    ok("a September read selects the AUGUST baseline",
+      septRoll.opening_baseline && septRoll.opening_baseline.as_of_date === "2026-08-31",
+      JSON.stringify(septRoll.opening_baseline));
+
+    //  And before any baseline existed, the property was not established.
+    const earlyRoll = await unitRentRoll(pool, { property_id: prop, as_of: "2026-06-01" });
+    ok("★ a read BEFORE any baseline is NOT_ESTABLISHED, not empty buckets",
+      earlyRoll.established === false && earlyRoll.totals === null,
+      JSON.stringify({ e: earlyRoll.established, t: earlyRoll.totals }));
+
+    // ══ 11. INVENTORY INVARIANTS ════════════════════════════════════
     console.log("\n  ── the inventory did not move ──");
     const inv = (await pool.query(
       `select count(distinct u.id)::int units, count(distinct s.id)::int spaces,
