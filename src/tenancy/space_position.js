@@ -12,6 +12,25 @@
 
 "use strict";
 
+/*  ── ONE GENERAL RULE: RETIRED INVENTORY IS NOT CURRENT INVENTORY ────
+ *
+ *  This loader is the row set for the whole temporal tenancy family —
+ *  spacePosition, datedPropertyPositions, intervalPropertyPositions, and
+ *  everything above them. It used to be `where u.property_id = $1` and
+ *  nothing else, which is why Skyline read 391 rentable positions against
+ *  160 real beds: a 2020 source had modelled each bed as a unit, 159 of
+ *  those were promoted, and every reader counted them.
+ *
+ *  The predicate is IMPORTED, never restated. Written twice it drifts, and
+ *  it drifts silently — a reader missing the clause reports phantom
+ *  inventory and looks completely healthy doing it.
+ *
+ *  Provenance is not lost, only de-listed: inventory_retirements keeps the
+ *  unit, the actor, the time, the rationale and the promotion lineage, and
+ *  retirementProvenance() reads them back.
+ */
+const { NOT_RETIRED_SQL } = require("./inventory_retirement");
+
 const {
   classifyPosition,
   TERMINAL_LEASE_STATUSES, CURRENT_ECONOMIC_STATUSES,
@@ -193,6 +212,7 @@ async function loadSpaceRows(pool, property_id) {
       from spaces s
       join units u on u.id=s.unit_id
      where u.property_id=$1
+       and ${NOT_RETIRED_SQL("u")}
      order by u.unit_number, s.space_label`,
     [property_id]
   )).rows;

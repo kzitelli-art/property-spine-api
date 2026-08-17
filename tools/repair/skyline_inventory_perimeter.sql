@@ -6,9 +6,16 @@
 --   production ran), cross-checked against a live schema with ZERO
 --   parser gaps. Do not hand-maintain this list — regenerate it.
 --
---   Rows tagged EXPECTED are provenance, the demo harness, or the
---   structural parent link; non-zero there is normal. EVERY OTHER ROW
---   MUST BE 0 before anything is retired.
+--   THREE classes, not two — production taught the third:
+--     EXPECTED            provenance, demo harness, structural parent.
+--                         Non-zero is normal.
+--     PROVENANCE BLOCKER  non-zero BLOCKS deletion rather than
+--                         permitting it. ingest_candidates
+--                         .promoted_unit_id is ON DELETE SET NULL, so a
+--                         delete succeeds and silently nulls the pointer
+--                         from each promotion receipt to what it
+--                         created. RETIRE, do not delete.
+--     must be 0           everything else, before anything is touched.
 --  ════════════════════════════════════════════════════════════════
 
 with legacy_units as (
@@ -88,7 +95,7 @@ union all
 select 'import_source_rows.produced_unit_id         EXPECTED' as ref, count(*) as n
   from import_source_rows t join legacy_units g on g.id = t.produced_unit_id
 union all
-select 'ingest_candidates.promoted_unit_id          must be 0' as ref, count(*) as n
+select 'ingest_candidates.promoted_unit_id          PROVENANCE BLOCKER' as ref, count(*) as n
   from ingest_candidates t join legacy_units g on g.id = t.promoted_unit_id
 union all
 select 'lease_applications.unit_id                  must be 0' as ref, count(*) as n
@@ -196,33 +203,35 @@ order by 2 desc, 1;
 
 
 --  ════════════════════════════════════════════════════════════════
---   RUN THIS FIRST. It decomposes the 391 by ORIGIN, and it should
---   show that "the 231" is two different populations, not one.
+--   RUN THIS FIRST. It decomposes the 391 by ORIGIN.
 --
 --   001_baseline.sql creates trg_unit_space: an AFTER INSERT trigger on
 --   units that unconditionally inserts a '(whole unit)' space for every
 --   unit, with import_batch_id NULL and position_kind NULL. So a
 --   bed-grained property gets one whole-unit space per unit ON TOP of
---   its beds — and the arithmetic closes exactly:
+--   its beds, and the arithmetic closes exactly:
 --
---        160 bed spaces  (source-backed import)
---      +  72 whole-unit  (trigger, on the 72 REAL units)
---      + 159 whole-unit  (trigger, on the 159 LEGACY units)
+--        160 labelled bed spaces   source-backed import
+--      +  72 whole-unit            trigger, on the 72 REAL units
+--      + 159 whole-unit            trigger, on the 159 LEGACY units
 --      = 391
 --
---   If that is what this query shows, then retiring "the 231" would
---   delete 72 spaces belonging to the GOOD units — and the trigger
---   would recreate one for every unit a future rent roll imports.
+--   ⚠ count(*) HERE WAS A BUG, AND IT MATTERED. The left join to leases
+--   multiplies a space row once per attached lease, so the 160 good bed
+--   spaces reported as 202 on production purely because they carry 179
+--   leases. count(distinct …) is the fix. The diagnosis was right and the
+--   diagnostic was not — which is exactly why the receipt says where each
+--   number came from.
 --  ════════════════════════════════════════════════════════════════
 
 select coalesce(s.position_kind, '(null)')            as grain,
        case when s.space_label = '(whole unit)' then 'whole unit' else 'labelled' end as label_class,
        case when s.import_batch_id is null then 'no batch' else 'source-backed' end   as space_origin,
        case when u.import_batch_id is null then 'no batch' else 'source-backed' end   as unit_origin,
-       count(*) as spaces,
+       count(distinct s.id) as spaces,
        count(distinct u.id) as units,
-       min(u.unit_number) as example_unit,
-       count(l.id) as leases_on_them
+       min(u.unit_number)   as example_unit,
+       count(distinct l.id) as leases_on_them
   from spaces s
   join units u on u.id = s.unit_id
   left join leases l on l.space_id = s.id
@@ -230,5 +239,14 @@ select coalesce(s.position_kind, '(null)')            as grain,
  group by 1,2,3,4
  order by spaces desc;
 
---  And confirm the trigger is still armed in production:
+--  The trigger, still armed:
 select tgname, tgenabled from pg_trigger where tgname = 'trg_unit_space';
+
+--  And the promotion lineage the retirement must preserve, not erase:
+select ic.run_id, count(*)::int as candidates,
+       count(ic.promoted_unit_id)::int as still_pointing_at_a_unit,
+       min(ic.promoted_at) as promoted_at
+  from ingest_candidates ic
+  join units u on u.id = ic.promoted_unit_id
+ where u.property_id = '14e41b7c-e91c-49e8-9651-10c4908a8f6a'
+ group by ic.run_id order by candidates desc;

@@ -36,6 +36,9 @@
 "use strict";
 
 const { spacePosition, loadSpaceRows, loadPersonNames } = require("./space_position");
+//  Same imported predicate as the loader — the attrs read must describe the
+//  same row set, or a retired unit contributes attributes to nothing.
+const { NOT_RETIRED_SQL } = require("./inventory_retirement");
 //  The interval question is a CLASSIFICATION, so it lives with every other
 //  classification — pure, beside classifyPosition, sharing rangesOverlap and
 //  leaseIsValid rather than importing the vocabulary out of them.
@@ -177,7 +180,8 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
        from spaces s
        join units u on u.id = s.unit_id
        left join property_unit_types put on put.id = u.unit_type_id
-      where u.property_id = $1`, [property_id]
+      where u.property_id = $1
+        and ${NOT_RETIRED_SQL("u")}`, [property_id]
   )).rows.map((r) => [String(r.space_id), r]));
 
   const positions = sp.positions.map((p) => {
@@ -328,7 +332,8 @@ async function intervalPropertyPositions(pool, {
        from spaces s
        join units u on u.id = s.unit_id
        left join property_unit_types put on put.id = u.unit_type_id
-      where u.property_id = $1`, [property_id]
+      where u.property_id = $1
+        and ${NOT_RETIRED_SQL("u")}`, [property_id]
   )).rows.map((r) => [String(r.space_id), r]));
 
   const positions = rows.map((row) => {
