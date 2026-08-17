@@ -34,6 +34,26 @@
 const REASON_SUPERSEDED_GRAIN = "superseded_by_corrected_inventory_grain";
 const MIN_RATIONALE = 20;
 
+/*  ── A TRUTH WALL, NOT A LIST ────────────────────────────────────────
+ *
+ *  The loader excludes retired units at EVERY as_of, including dates
+ *  BEFORE retired_at. For the one reason that exists that is correct: a
+ *  2020 source that modelled beds as units was never a true description of
+ *  the building, so there is no date at which it was real inventory.
+ *
+ *  It would be WRONG for a reason like 'physically_removed' or
+ *  'converted_to_common_area', where the unit genuinely WAS inventory
+ *  until a date. Such a reason needs date-aware exclusion, and adding it
+ *  without noticing would silently rewrite history.
+ *
+ *  So the vocabulary is split by that property and asserted, rather than
+ *  left as a comment somebody may read. A new reason code goes red until
+ *  someone puts it on one side of this line deliberately.
+ */
+const REASONS_NEVER_WAS_INVENTORY = Object.freeze([REASON_SUPERSEDED_GRAIN]);
+const REASONS_DATE_SENSITIVE = Object.freeze([]);   //  none yet, deliberately
+const ALL_REASONS = Object.freeze([...REASONS_NEVER_WAS_INVENTORY, ...REASONS_DATE_SENSITIVE]);
+
 /*  The one predicate. Correlates on a unit alias the caller names, so a
  *  loader can drop it into an existing FROM without restructuring.
  *
@@ -42,9 +62,49 @@ const MIN_RATIONALE = 20;
  *  silently multiply rows the day retirement history is joined instead of
  *  the live view. This cannot.
  */
-const NOT_RETIRED_SQL = (unitAlias = "u") =>
-  `not exists (select 1 from inventory_retirements ir
+const NOT_RETIRED_SQL = (unitAlias = "u") => {
+  //  This interpolates into SQL. Every caller passes a literal today, and
+  //  "every caller does the right thing" is not a safety property — it is a
+  //  description of the present. Validated so it cannot become one.
+  if (!/^[a-z_][a-z0-9_]*$/i.test(String(unitAlias))) {
+    throw new Error(`NOT_RETIRED_SQL: '${unitAlias}' is not a SQL identifier`);
+  }
+  return `not exists (select 1 from inventory_retirements ir
                 where ir.unit_id = ${unitAlias}.id and ir.reversed_at is null)`;
+};
+
+/*  ── THE READ MUST SAY WHAT IT HID ───────────────────────────────────
+ *
+ *  A loader that silently drops rows is the same defect class as a gate
+ *  that scans less than it asserts: the output looks complete and is not.
+ *  Worse, an adversarial probe of the first version of this module found
+ *  that a REAL active lease attached to a retired unit returned count=0
+ *  from datedPropertyPositions — invisible, with no error anywhere. A later
+ *  rent roll naming a retired unit number would have done exactly that.
+ *
+ *  So the exclusion is REPORTED on every read, and the tenancy that should
+ *  not exist is reported as a CONFLICT rather than dropped.
+ */
+async function retiredExclusion(pool, property_id) {
+  const r = (await pool.query(
+    `select
+       count(*)::int as units,
+       (select count(*)::int
+          from inventory_retirements ir2
+          join spaces s on s.unit_id = ir2.unit_id
+          join leases l on l.space_id = s.id
+         where ir2.property_id = $1 and ir2.reversed_at is null) as leases_on_retired
+     from inventory_retirements ir
+    where ir.property_id = $1 and ir.reversed_at is null`, [property_id])).rows[0];
+  return {
+    units: r.units,
+    //  NOT zero-by-assumption. Non-zero means something attached tenancy to
+    //  inventory Spine had retired, and that lease is being hidden by this
+    //  read. It is an Exposure, not a tidy number.
+    leases_on_retired_inventory: r.leases_on_retired,
+    conflict: r.leases_on_retired > 0,
+  };
+}
 
 function err(code, message, extra) {
   const e = new Error(message);
@@ -95,6 +155,18 @@ async function retireInventoryUnits(client, {
     throw err("RETIREMENT_ACTOR_REQUIRED",
       "A retirement must name who made the correction. Pass actor.user_id, or " +
       "actor.system for an automated correction that names itself.");
+  }
+  if (!ALL_REASONS.includes(reason_code)) {
+    throw err("UNKNOWN_RETIREMENT_REASON",
+      `'${reason_code}' is not a governed retirement reason. Known: ${ALL_REASONS.join(", ")}.`);
+  }
+  //  A date-sensitive reason cannot be accepted while the loader excludes at
+  //  every as_of — it would rewrite history rather than record a change.
+  if (REASONS_DATE_SENSITIVE.includes(reason_code)) {
+    throw err("REASON_NEEDS_DATE_AWARE_EXCLUSION",
+      `'${reason_code}' describes inventory that genuinely WAS real until a date. ` +
+      `The canonical loader currently excludes retired inventory at every as_of, so ` +
+      `accepting this would rewrite history. Make the exclusion date-aware first.`);
   }
   if (!rationale || String(rationale).trim().length < MIN_RATIONALE) {
     throw err("RETIREMENT_RATIONALE_REQUIRED",
@@ -236,10 +308,28 @@ async function retirementProvenance(pool, { property_id }) {
     const k = String(r.promoted_from_ingest_run_id || "none");
     runs.set(k, (runs.get(k) || 0) + 1);
   }
+  //  Retired inventory that has ACQUIRED tenancy since retirement. The
+  //  writer refuses to retire a leased unit, so a non-zero here means a
+  //  later write attached to something already retired — and this read is
+  //  the only place it becomes visible.
+  const conflicts = (await pool.query(
+    `select u.unit_number, ir.retired_at, count(l.id)::int as leases
+       from inventory_retirements ir
+       join units u on u.id = ir.unit_id
+       join spaces s on s.unit_id = ir.unit_id
+       join leases l on l.space_id = s.id
+      where ir.property_id = $1 and ir.reversed_at is null
+      group by u.unit_number, ir.retired_at
+      order by u.unit_number`, [property_id])).rows;
+
   return {
     property_id,
     retired_now: live.length,
     reversed: rows.length - live.length,
+    //  An Exposure, in the shape the contract asks for: what it is about,
+    //  the magnitude, and that Spine cannot stand behind those positions.
+    tenancy_on_retired_inventory: conflicts,
+    has_conflict: conflicts.length > 0,
     by_ingest_run: [...runs.entries()].map(([run_id, units]) => ({ run_id, units })),
     identity_preserved: live.every((r) => r.unit_still_exists),
     lineage_intact: live.every((r) => r.candidate_pointer_intact || !r.promoted_from_candidate_id),
@@ -251,6 +341,10 @@ module.exports = {
   retireInventoryUnits,
   reinstateInventoryUnit,
   retirementProvenance,
+  retiredExclusion,
   NOT_RETIRED_SQL,
   REASON_SUPERSEDED_GRAIN,
+  REASONS_NEVER_WAS_INVENTORY,
+  REASONS_DATE_SENSITIVE,
+  ALL_REASONS,
 };

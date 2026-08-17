@@ -130,6 +130,56 @@ create index if not exists idx_inventory_retirement_property
 create index if not exists idx_inventory_retirement_run
   on inventory_retirements (promoted_from_ingest_run_id);
 
+--  ════════════════════════════════════════════════════════════════════
+--   A LEASE MAY NOT ATTACH TO RETIRED INVENTORY.
+--
+--   Found by probing this table's own first version adversarially. The
+--   loader hides retired units, so a lease attached to one is INVISIBLE in
+--   every canonical read — datedPropertyPositions returned count=0 with a
+--   real active lease sitting there, and no error anywhere. A later rent
+--   roll naming a retired unit number would have done exactly that: a
+--   write that succeeds and produces nothing anyone can see.
+--
+--   Reporting it is not enough. Many paths write leases — snapshot_loader,
+--   seed_snapshot, Deal Setup, repair tooling — and a rule enforced in one
+--   writer is a rule the other writers do not have. The database is the
+--   only place that covers all of them, so the invisible state is made
+--   IMPOSSIBLE rather than merely visible.
+--
+--   The escape hatch is reinstatement, which is the honest one: if this is
+--   real current inventory, say so and put it back in the reads.
+--
+--   `inventory_retirements` also refuses to retire a unit that already
+--   carries leases (in the canonical writer), so the two guards close the
+--   window from both sides.
+--  ════════════════════════════════════════════════════════════════════
+
+create or replace function refuse_lease_on_retired_inventory() returns trigger as $$
+declare
+  v_unit_number text;
+begin
+  select u.unit_number into v_unit_number
+    from spaces s
+    join units u on u.id = s.unit_id
+    join inventory_retirements ir on ir.unit_id = u.id and ir.reversed_at is null
+   where s.id = new.space_id
+   limit 1;
+
+  if v_unit_number is not null then
+    raise exception
+      'Unit % is retired from current inventory; a lease attached here would be '
+      'invisible in every canonical read. Reinstate the unit first if this is real '
+      'current inventory.', v_unit_number
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end; $$ language plpgsql;
+
+drop trigger if exists trg_refuse_lease_on_retired_inventory on leases;
+create trigger trg_refuse_lease_on_retired_inventory
+  before insert or update of space_id on leases
+  for each row execute function refuse_lease_on_retired_inventory();
+
 comment on table inventory_retirements is
   'A previously established inventory record retained as history but no longer '
   'participating in current rentable inventory. The unit is never deleted; '

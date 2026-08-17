@@ -44,11 +44,13 @@ const { Pool } = require("pg");
 const {
   retireInventoryUnits, reinstateInventoryUnit, retirementProvenance,
   REASON_SUPERSEDED_GRAIN,
+  retiredExclusion, ALL_REASONS, REASONS_NEVER_WAS_INVENTORY, REASONS_DATE_SENSITIVE,
 } = require("../src/tenancy/inventory_retirement.js");
+const { materializeRentableSpaces } = require("../src/tenancy/inventory_materialization.js");
 const { intervalPropertyPositions, datedPropertyPositions } = require("../src/tenancy/dated_positions.js");
 
 const HARNESS = "inventory_retirement.db.js";
-const EXPECTED = 33;
+const EXPECTED = 45;
 
 const REAL_UNITS = 72, BEDS_TOTAL = 160, LEGACY_UNITS = 159;
 const RATIONALE =
@@ -307,6 +309,106 @@ const ivlCount = async (pool, propertyId) => (await intervalPropertyPositions(po
       } finally { c3.release(); }
       ok("re-retiring after a reversal is allowed, and lands back on 160",
         await ivlCount(pool, propertyId) === BEDS_TOTAL, String(await ivlCount(pool, propertyId)));
+    }
+
+    // ══ 7b. THE HAZARDS THIS PRIMITIVE CREATES, AND THEIR GUARDS ═════
+    //
+    //  Found by probing the FIRST version of this module adversarially, not
+    //  by reviewing it. Hiding rows is a dangerous thing for a loader to do:
+    //  anything later attached to what is hidden becomes invisible, and a
+    //  write that succeeds and produces nothing anyone can see is worse than
+    //  an error. Each hazard is now a named assertion so it cannot silently
+    //  come back.
+    {
+      const retired = legacyUnitIds[2];
+
+      //  H1 — the raw unit lookup the import path uses STILL FINDS IT. This
+      //  is asserted as a KNOWN PROPERTY, not as an accident: the guards
+      //  below are what make it harmless, and if the lookup ever changes
+      //  this assertion should be revisited deliberately.
+      const found = (await pool.query(
+        `select id from units where property_id = $1 and unit_number = $2 limit 1`,
+        [propertyId, (await pool.query(`select unit_number from units where id=$1`, [retired])).rows[0].unit_number]
+      )).rows;
+      ok("H1 a raw unit_number lookup still resolves a retired unit — harmless only because of H2/H3",
+        found.length === 1);
+
+      //  H2 — the canonical inventory writer refuses. Before the guard it
+      //  created beds that no read could see.
+      const c = await pool.connect();
+      let h2 = null;
+      try { await c.query("begin"); await materializeRentableSpaces(c, { unit_id: retired, labels: ["Room1"], kind: "bed" }); await c.query("commit"); }
+      catch (e) { await c.query("rollback"); h2 = e.code; } finally { c.release(); }
+      ok("H2 materializing rentable positions onto retired inventory is REFUSED",
+        h2 === "UNIT_RETIRED_FROM_INVENTORY", String(h2));
+
+      //  H3 — THE DATABASE refuses a lease on retired inventory. Enforced in
+      //  Postgres and not in one writer, because many paths write leases and
+      //  a rule in one of them is a rule the others do not have.
+      const sp = (await pool.query(`select id from spaces where unit_id = $1 limit 1`, [retired])).rows[0];
+      let h3 = null, h3msg = "";
+      ok("the retired unit still HAS a space to attach to — the hazard is reachable", !!sp);
+      if (sp) {
+        try {
+          await pool.query(
+            `insert into leases (property_id, space_id, lease_status, start_date, end_date, rent)
+             values ($1,$2,'active','2026-08-01','2027-07-31',900)`, [propertyId, sp.id]);
+        } catch (e) { h3 = e.code; h3msg = String(e.message || ""); }
+      }
+      ok("H3 attaching a lease to retired inventory is REFUSED BY THE DATABASE",
+        h3 === "23514", String(h3));
+      //  A refusal a person can see is product copy. It must name the unit
+      //  and the next step, not just say no.
+      const retiredNumber = (await pool.query(
+        `select unit_number from units where id = $1`, [retired])).rows[0].unit_number;
+      ok("…and the refusal NAMES the unit and the next step",
+        h3msg.includes(retiredNumber) && /reinstate/i.test(h3msg), h3msg.slice(0, 160));
+
+      //  H3b — the read SAYS what it excluded. A silently shortened row set
+      //  is the same defect class as a gate that scans less than it asserts.
+      const dp = await datedPropertyPositions(pool, { property_id: propertyId, as_of: "2026-09-01" });
+      ok("the read REPORTS the exclusion rather than silently shortening",
+        dp.retired_excluded && dp.retired_excluded.units === LEGACY_UNITS,
+        JSON.stringify(dp.retired_excluded));
+      ok("…and reports zero hidden tenancy as a measured fact, not an assumption",
+        dp.retired_excluded.leases_on_retired_inventory === 0 && dp.retired_excluded.conflict === false);
+      const ivl = await intervalPropertyPositions(pool, {
+        property_id: propertyId, requested_start: "2026-08-01", requested_end: "2027-07-31" });
+      ok("…and the interval read carries the same contract",
+        ivl.retired_excluded && ivl.retired_excluded.units === LEGACY_UNITS);
+
+      //  H4 — THE TEMPORAL TRUTH WALL. The loader excludes at EVERY as_of,
+      //  including before retired_at. Correct for the one reason that
+      //  exists — a 2020 bed-as-unit source was never true inventory — and
+      //  WRONG for a reason like 'physically_removed'. The vocabulary is
+      //  split by that property so the next reason cannot be added without
+      //  confronting it.
+      const past = await datedPropertyPositions(pool, { property_id: propertyId, as_of: "2020-01-01" });
+      ok("H4 a date BEFORE retirement also excludes it — 'never was inventory' semantics",
+        past.count === BEDS_TOTAL || past.count === 0, String(past.count));
+      ok("…and every governed reason today is a 'never was inventory' reason",
+        REASONS_DATE_SENSITIVE.length === 0 &&
+        ALL_REASONS.length === REASONS_NEVER_WAS_INVENTORY.length && ALL_REASONS.length === 1,
+        JSON.stringify({ never: REASONS_NEVER_WAS_INVENTORY, dated: REASONS_DATE_SENSITIVE }));
+
+      //  A reason outside the vocabulary is refused by the WRITER, not only
+      //  by the CHECK constraint, so the refusal is sayable.
+      const c2 = await pool.connect();
+      let unknown = null;
+      try {
+        await c2.query("begin");
+        await retireInventoryUnits(c2, { property_id: propertyId, unit_ids: [legacyUnitIds[3]],
+          reason_code: "physically_removed", rationale: RATIONALE, actor: { user_id: userId } });
+        await c2.query("commit");
+      } catch (e) { await c2.query("rollback"); unknown = e.code; } finally { c2.release(); }
+      ok("an ungoverned reason code is REFUSED by the writer, before the CHECK",
+        unknown === "UNKNOWN_RETIREMENT_REASON", String(unknown));
+
+      //  And the predicate cannot be turned into an injection point.
+      let bad = null;
+      try { require("../src/tenancy/inventory_retirement.js").NOT_RETIRED_SQL("u; drop table units --"); }
+      catch (e) { bad = e.message; }
+      ok("NOT_RETIRED_SQL refuses an alias that is not an identifier", /not a SQL identifier/.test(String(bad)));
     }
 
     // ══ 8. THE RULE IS GENERAL ═══════════════════════════════════════
