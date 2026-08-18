@@ -243,4 +243,296 @@ async function effectivePropertyPricing(pool, { property_id, as_of = null } = {}
   };
 }
 
-module.exports = { effectivePropertyPricing, TRANSITIONAL_FEE_FACT_KEYS, CALENDAR_FREE_CONCESSIONS };
+
+// ════════════════════════════════════════════════════════════════════
+//  resolveSpaceEconomics — THE AUTHORIZED ASKING ECONOMICS FOR ONE BED
+//
+//  Migration 182 made an application carry an exact space. This answers the
+//  question that immediately follows it: given THAT bed, what is Spine
+//  authorized to ask for it?
+//
+//  ── IT IS NOT A SECOND PRICING SOURCE ───────────────────────────────
+//  It lives in this file deliberately. `effectivePropertyPricing` is the
+//  permanent owner of advertised economics, and the override columns
+//  (override_scope, override_ref) are read NOWHERE else in the repo. A
+//  resolver in another module would be a second thing that believes it knows
+//  the asking rent, which is the failure this file's own header forbids.
+//
+//  ── THE PRECEDENCE MIGRATION 101 ANTICIPATED ────────────────────────
+//  101 shipped the columns and said so in as many words:
+//
+//      "The eventual model is: property pricing version → unit-type default
+//       → optional later override → inventory cohort or specific space.
+//       This migration does NOT build cohort or space overrides. It only
+//       avoids making them impossible."
+//
+//  This is that resolution, and nothing more. No table, no column, no new
+//  vocabulary — the schema already carried the shape.
+//
+//      space override      most specific  (override_scope='space')
+//      inventory cohort                   (override_scope='inventory_cohort')
+//      unit-type default   least specific (override_scope is null)
+//
+//  ── WHAT IT REFUSES TO DO ───────────────────────────────────────────
+//   · never reads units.market_rent — a legacy column that disagreed with
+//     in-place rent in 105 of 114 studios measured, and is not authorised.
+//   · never borrows a sibling bed's price. Two beds in one unit share a
+//     price only because they share a TYPE and neither carries an override.
+//     Absent pricing is NOT_ESTABLISHED, never the bed next door.
+//   · never invents a term. A caller asking for a term nobody published gets
+//     a refusal naming the terms that ARE published.
+//   · never returns a number without saying what authorised it.
+// ════════════════════════════════════════════════════════════════════
+async function resolveSpaceEconomics(pool, {
+  property_id, space_id, lease_term_months = null, as_of = null,
+} = {}) {
+  if (!property_id) throw new Error("resolveSpaceEconomics requires a server-derived property_id");
+  if (!space_id) throw new Error("resolveSpaceEconomics requires a space_id");
+  const asOf = as_of || new Date().toISOString().slice(0, 10);
+
+  const unresolved = (reason, detail, extra = {}) => ({
+    property_id, space_id, as_of: asOf,
+    resolved: false, reason, detail,
+    rent: null, authority: null,
+    ...extra,
+  });
+
+  // ── THE BED, ITS UNIT AND ITS GOVERNED TYPE ───────────────────────
+  //  One read. property_id is checked HERE rather than trusted: a bed at
+  //  another property must never resolve economics under this property's
+  //  published version.
+  const bed = (await pool.query(
+    `select s.id space_id, s.space_label, s.use_type,
+            u.id unit_id, u.unit_number, u.unit_type_id,
+            u.property_id,
+            put.code unit_type_code, put.label unit_type_label
+       from spaces s
+       join units u on u.id = s.unit_id
+       left join property_unit_types put on put.id = u.unit_type_id
+      where s.id = $1`, [space_id]
+  )).rows[0];
+
+  if (!bed) return unresolved("space_not_found", "No such rentable space.");
+  if (String(bed.property_id) !== String(property_id)) {
+    return unresolved("space_not_at_property",
+      "That space is not at this property, so this property's published pricing does not govern it.");
+  }
+
+  const identity = {
+    unit_id: bed.unit_id, unit_number: bed.unit_number,
+    space_label: bed.space_label,
+    unit_type_id: bed.unit_type_id,
+    unit_type_code: bed.unit_type_code, unit_type_label: bed.unit_type_label,
+  };
+
+  //  A position with no governed type cannot receive type-based pricing, and
+  //  the completeness block of effectivePropertyPricing already counts these
+  //  as `unclassified_positions`. Saying so is the honest answer; picking the
+  //  property's only type would be a guess wearing a lookup's clothes.
+  if (!bed.unit_type_id) {
+    return unresolved("unit_type_not_established",
+      "This position carries no governed unit type, so no type-based price applies to it.",
+      { identity });
+  }
+
+  // ── THE PUBLISHED VERSION IN FORCE ON THIS DATE ───────────────────
+  const version = (await pool.query(
+    `select id, effective_from, effective_until, published_at, authority_basis
+       from property_pricing_versions
+      where property_id=$1 and status='published'
+        and effective_from <= $2::date
+        and (effective_until is null or effective_until >= $2::date)
+      order by effective_from desc limit 1`, [property_id, asOf]
+  )).rows[0] || null;
+
+  if (!version) {
+    return unresolved("no_published_pricing_version",
+      "No governed pricing version is published and effective for this property on this date.",
+      { identity });
+  }
+
+  // ── EVERY CANDIDATE ROW FOR THIS BED, AT EVERY SCOPE ──────────────
+  //  A space override names the bed; a cohort override names a cohort the
+  //  bed belongs to; a type default names the type. All three are read in
+  //  one statement so precedence is applied to a single consistent set.
+  const candidates = (await pool.query(
+    `select id, lease_term_months, base_rent, renewal_rent, immediate_move_in_rent,
+            offer_state, override_scope, override_ref
+       from pricing_terms
+      where pricing_version_id = $1
+        and unit_type_id = $2
+        and (override_scope is null
+             or (override_scope = 'space' and override_ref = $3))
+      order by lease_term_months`,
+    [version.id, bed.unit_type_id, space_id]
+  )).rows;
+
+  //  'inventory_cohort' is a DECLARED scope with no cohort membership model
+  //  in the schema yet. It is neither read nor silently ignored: a cohort row
+  //  reaching this bed's type is reported as unresolvable rather than skipped,
+  //  because skipping it would quietly answer with the type default while a
+  //  narrower authorised row existed.
+  const cohortRows = (await pool.query(
+    `select count(*)::int n from pricing_terms
+      where pricing_version_id=$1 and unit_type_id=$2 and override_scope='inventory_cohort'`,
+    [version.id, bed.unit_type_id]
+  )).rows[0].n;
+  if (cohortRows > 0) {
+    return unresolved("inventory_cohort_override_not_resolvable",
+      "This type carries an inventory-cohort pricing override, and cohort membership is not modelled, "
+      + "so Spine cannot tell whether it applies to this bed. Resolve the cohort before quoting.",
+      { identity, published_version_id: version.id });
+  }
+
+  if (!candidates.length) {
+    return unresolved("unit_type_not_addressed",
+      "The published pricing version does not address this unit type.",
+      { identity, published_version_id: version.id });
+  }
+
+  // ── TERM ──────────────────────────────────────────────────────────
+  //  A term is CHOSEN, never defaulted to 12. Twelve is the commonest lease
+  //  and that is exactly why defaulting to it is dangerous: it would quote a
+  //  term the operator never selected and the version may never have
+  //  published. With no term supplied the answer is the published menu.
+  const publishedTerms = [...new Set(candidates.map((c) => c.lease_term_months))].sort((a, b) => a - b);
+  if (lease_term_months == null) {
+    return unresolved("lease_term_not_selected",
+      "A lease term must be selected before an asking rent can be authorised.",
+      { identity, published_version_id: version.id, published_terms: publishedTerms });
+  }
+  const forTerm = candidates.filter((c) => Number(c.lease_term_months) === Number(lease_term_months));
+  if (!forTerm.length) {
+    return unresolved("lease_term_not_published",
+      `No published pricing for a ${lease_term_months}-month term on this unit type.`,
+      { identity, published_version_id: version.id, published_terms: publishedTerms });
+  }
+
+  // ── PRECEDENCE: the narrowest authorised row wins ─────────────────
+  const spaceRow = forTerm.find((c) => c.override_scope === "space");
+  const typeRow = forTerm.find((c) => c.override_scope === null);
+  const chosen = spaceRow || typeRow;
+  if (!chosen) {
+    return unresolved("no_applicable_pricing_row",
+      "No pricing row at any applicable scope governs this bed for that term.",
+      { identity, published_version_id: version.id, published_terms: publishedTerms });
+  }
+
+  //  offer_state is a published statement, not an absence. `not_offered` and
+  //  `pricing_unavailable` are answers the version gave on purpose, and they
+  //  are reported as themselves rather than flattened into "no price".
+  if (chosen.offer_state !== "offered") {
+    return unresolved("not_offered",
+      chosen.offer_state === "pricing_unavailable"
+        ? "The published version states that pricing is unavailable for this unit type."
+        : "The published version states that this unit type is not offered.",
+      { identity, published_version_id: version.id, offer_state: chosen.offer_state,
+        published_terms: publishedTerms });
+  }
+  if (chosen.base_rent == null) {
+    return unresolved("published_row_carries_no_rent",
+      "The published row for this type and term carries no base rent.",
+      { identity, published_version_id: version.id, published_terms: publishedTerms });
+  }
+
+  // ── DEPOSIT AND FEES — the one live source, per-bed aware ──────────
+  //  agent_facts is the transitional owner of fee and deposit quoting, and it
+  //  carries an optional space_id. A bed-specific approved fact therefore
+  //  outranks the property-level one; both are reported so a reader can see
+  //  which applied and why. This file still does not OWN them, and says so.
+  const facts = (await pool.query(
+    `select fact_key, rendered_text, source_type, confirmed_at, space_id
+       from agent_facts
+      where property_id=$1 and status='active'
+        and (space_id is null or space_id = $2)
+        and fact_key = any($3::text[])
+        and (effective_until is null or effective_until > now())`,
+    [property_id, space_id, TRANSITIONAL_FEE_FACT_KEYS]
+  )).rows;
+  const byKey = new Map();
+  for (const f of facts) {
+    const prior = byKey.get(f.fact_key);
+    if (!prior || (prior.space_id == null && f.space_id != null)) byKey.set(f.fact_key, f);
+  }
+  const factOut = (key) => {
+    const f = byKey.get(key);
+    if (!f) return { established: false, text: null, scope: null };
+    return {
+      established: true, text: f.rendered_text,
+      scope: f.space_id ? "space" : "property",
+      source_type: f.source_type, confirmed_at: f.confirmed_at,
+    };
+  };
+
+  // ── CONCESSIONS APPLICABLE TO THIS BED ────────────────────────────
+  //  Same rule the property read applies: a concession may not be advertised
+  //  unless its economic consequence is computable. Scope is honoured, and
+  //  `bed_type` is a declared scope with no bed-type model, so it is reported
+  //  as inapplicable rather than assumed to apply.
+  const { IMPLEMENTED_TIMING_PROFILES } = require("./pricing_publication_contract");
+  const policies = (await pool.query(
+    `select * from concession_policies
+      where pricing_version_id=$1 and active=true and lease_type='new'`, [version.id]
+  )).rows;
+  const advertisable = [];
+  const withheld = [];
+  for (const p of policies) {
+    const scopeApplies =
+      p.scope === "property" ? true
+      : p.scope === "unit_type" ? String(p.scope_ref) === String(bed.unit_type_code)
+      : p.scope === "unit" ? String(p.scope_ref) === String(bed.unit_number)
+      : false;                                   // 'bed_type' — no model, never assumed
+    if (!scopeApplies) continue;
+    if (p.required_term_months != null && Number(p.required_term_months) !== Number(lease_term_months)) continue;
+    const computable = CALENDAR_FREE_CONCESSIONS.has(p.concession_type)
+      || IMPLEMENTED_TIMING_PROFILES.includes(p.timing_profile);
+    (computable ? advertisable : withheld).push({
+      concession_type: p.concession_type,
+      value: p.value == null ? null : Number(p.value),
+      fee_category: p.fee_category,
+      scope: p.scope,
+      reason: computable ? null : "timing_profile_not_implemented",
+    });
+  }
+
+  return {
+    property_id, space_id, as_of: asOf,
+    resolved: true, reason: null, detail: null,
+    identity,
+    lease_term_months: Number(lease_term_months),
+    published_terms: publishedTerms,
+    rent: {
+      new_lease_rent: Number(chosen.base_rent),
+      renewal_rent: chosen.renewal_rent == null ? null : Number(chosen.renewal_rent),
+      immediate_move_in_rent: chosen.immediate_move_in_rent == null ? null : Number(chosen.immediate_move_in_rent),
+    },
+    //  WHAT AUTHORISED THE NUMBER. A rent with no stated basis is a number a
+    //  surface can render and nobody can defend.
+    authority: {
+      published_version_id: version.id,
+      authority_basis: version.authority_basis || null,
+      published_at: version.published_at,
+      pricing_term_id: chosen.id,
+      //  'space_override' means THIS BED is priced differently from its type.
+      //  'unit_type_default' means it shares its type's published price — which
+      //  is a governed statement, not an inherited guess.
+      basis: spaceRow ? "space_override" : "unit_type_default",
+    },
+    deposit: factOut("pricing_security_deposit"),
+    fees: {
+      source: "agent_facts",
+      ownership: "transitional_external",
+      application_fee: factOut("pricing_application_fee"),
+      amenity_fee: factOut("pricing_amenity_fee"),
+      admin_fee: factOut("pricing_admin_fee"),
+      telecom_fee: factOut("pricing_telecom_fee"),
+    },
+    concessions: { advertisable, withheld },
+    proof: {
+      never_reads: ["units.market_rent", "window.__pricingStore", "rent_survey_observations"],
+      never_borrows: "a sibling bed's price",
+    },
+  };
+}
+
+module.exports = { effectivePropertyPricing, resolveSpaceEconomics, TRANSITIONAL_FEE_FACT_KEYS, CALENDAR_FREE_CONCESSIONS };

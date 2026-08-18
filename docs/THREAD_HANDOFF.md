@@ -1,6 +1,127 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  A BED NOW RESOLVES ITS OWN AUTHORIZED ASKING ECONOMICS.
+##  MIGRATION 183 IS WRITTEN AND NOT RELEASED. 2026-08-18. NOT DEPLOYED.
+##  NO SKYLINE PRICING HAS BEEN PUBLISHED — see "what is missing".
+## ══════════════════════════════════════════════════════════════════
+
+**Branch:** `claude/property-spine-orientation-cso2ao` (API). Follows the
+application-space-grain banner below; same lane.
+
+### The question this answers
+
+182 made an application carry an exact bed. This answers what immediately
+follows: *given THAT bed, what is Spine authorized to ask for it?*
+
+```text
+space → unit → units.unit_type_id → published version → pricing_terms
+                                     ↳ space override   (narrowest wins)
+                                     ↳ unit-type default
+```
+
+`resolveSpaceEconomics()` lives **inside `effective_pricing.js`** deliberately.
+That file is the permanent owner of advertised economics, and the override
+columns are read nowhere else in the repo. A resolver in another module would
+be a second thing that believes it knows the asking rent.
+
+### ⚠ THE DEFECT 183 CORRECTS — 101 CLOSED ITS OWN DOOR
+
+Migration 101 added `override_scope` / `override_ref` and said it was *"leaving
+room for overrides, without building them … it only avoids making them
+impossible."* In the same file it created:
+
+```sql
+uq_pricing_terms_version_type_term
+  on (pricing_version_id, unit_type_id, lease_term_months)
+```
+
+A space override **is** a second row for that combination — that is what
+override means — so the index made them impossible. Found by attempting a real
+by-the-bed override against real Postgres:
+
+```text
+duplicate key value violates unique constraint "uq_pricing_terms_version_type_term"
+```
+
+183 splits it into two partial indexes: **one default** per
+(version, type, term), **one override** per (version, type, term, scope, ref).
+101's rule is preserved, not weakened — a second *default* is still refused.
+A plain five-column unique index would NOT work: NULLs do not collide in
+Postgres, so every default row would become mutually unique and the default
+rule would silently stop being enforced.
+
+### Three governance facts the fixture had to obey
+
+Found by writing it, not by reading about it. All three shape how Skyline
+pricing gets activated:
+
+```text
+published terms are IMMUTABLE (102)   a bed override is a NEW VERSION, never
+                                      an edit to a live one
+one published version per property    uq_ppv_one_published — repricing retires
+                                      its predecessor
+statuses are draft|published|retired  there is no "amend"
+```
+
+### What is resolved, and what refuses
+
+```text
+RESOLVES   type default · space override (narrowest wins, siblings unmoved)
+REFUSES    no published version · unit type not established · type not
+           addressed · term not selected · term not published · not_offered ·
+           pricing_unavailable · row carries no rent · bed at another property ·
+           inventory-cohort override present (membership is not modelled, so it
+           is refused rather than skipped — skipping would answer with the type
+           default while a narrower authorised row existed)
+NEVER      units.market_rent · a sibling bed's price · a defaulted 12-month term
+```
+
+Deposit and the four fees come from `agent_facts`, which is the transitional
+owner and says so. `agent_facts` carries an optional `space_id`, so a bed-
+specific approved fact outranks the property-level one; both scopes are
+reported. `pricing_terms.fee_terms` is still NOT read as authority — two
+independently quotable fee values must never exist.
+
+Concessions honour `property` / `unit_type` / `unit` scope. `bed_type` is a
+declared scope with no bed-type model and is never assumed to apply. Only
+calendar-free concessions are advertisable; the timing engine still does not
+exist.
+
+### Proven
+
+```text
+tests/space_economics.db.js   19/19   real Postgres 16, Skyline-shaped fixture
+                                      (one 3-bed unit, three beds, one type)
+npm run verify                36/36
+```
+
+### ⚠ WHAT IS MISSING IS DATA, NOT ARCHITECTURE
+
+**Skyline has no published pricing version, and this session did not create
+one.** Publishing is a governed act — it needs a real publisher, a real
+`authority_basis`, and real rents that a human decided. Inventing them would
+be exactly the confident-wrong this rail exists to prevent, and
+`units.market_rent` is explicitly not a fallback.
+
+So the checkpoint *Jane → 3B Bed B → $1,025 → Send Application* is **blocked on
+a pricing decision, not on code.** What activation requires, in order:
+
+```text
+1  governed unit types exist for Skyline and every rentable position carries
+   one (units.unit_type_id) — unclassified positions resolve to
+   `unit_type_not_established` by design
+2  a human publishes a pricing version with a base_rent per (type, term)
+3  any bed that legitimately differs gets a `space` override row in that SAME
+   version — it cannot be added to a published one
+4  deposit + fee facts approved in agent_facts (property or per bed)
+```
+
+Steps 2–4 are decisions with dollar amounts on them. They are the owner's,
+not the developer's.
+
+
+## ══════════════════════════════════════════════════════════════════
 ##  THE APPLICATION NOW FOLLOWS THE EXACT BED. MIGRATION 182 IS
 ##  WRITTEN AND NOT RELEASED. 2026-08-18. NOT DEPLOYED.
 ##  READ THIS BEFORE TOUCHING APPLICATIONS OR THE LEASE RAIL.
