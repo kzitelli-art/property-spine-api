@@ -175,6 +175,13 @@ const GATES = [
   //  a new operator the demo name on their first contact with the product.
   { file: "staff_invite_display_name.test.js",
     what: "staff invite + OTP speak the operator's name for the building, never the internal one" },
+  //  Exercises the OTP send path end to end with a mocked transport. Added
+  //  to the gate because the display_name change above rewrote the OTP
+  //  body's property read, this test's mock matched the OLD column list and
+  //  went dead, and nothing caught it — it was not in this list. Green is a
+  //  claim about what was measured; this makes the OTP path measured.
+  { file: "teamaccess_sms_delivery.test.js",
+    what: "staff OTP send path: assignment selection, canonical line, refuse-before-mint" },
 ];
 
 const bar = "════════════════════════════════════════════════════════════════";

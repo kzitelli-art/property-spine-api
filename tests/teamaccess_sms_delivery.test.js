@@ -46,7 +46,12 @@ const ok = (label, condition) => {
           otp_sent_at: null,
         }] };
       }
-      if (/select name, sms_number from properties/i.test(text)) {
+      //  Matches the OTP-body property read. It now selects
+      //  `coalesce(display_name, name) as name` so the operator sees the
+      //  building's name, not its internal one — anchor the mock on
+      //  `sms_number from properties where id`, which is unique to this read
+      //  and survives the aliasing rather than pinning the old column list.
+      if (/sms_number\s+from properties\s+where id/i.test(text)) {
         return { rows: [{ name: "Property with line", sms_number: "+12155550121" }] };
       }
       return { rows: [] };
