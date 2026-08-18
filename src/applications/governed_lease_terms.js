@@ -2,8 +2,15 @@
 //  governed_lease_terms.js — WHAT SPINE CAN STAND BEHIND FOR ONE LEASE
 //
 //  The lease bridge is: application + exact bed + governed economics →
-//  a real governing lease → an e-sign provider → resident signature →
-//  company signature → executed_lease_service → the tenancy anchor.
+//  a governing lease IN SPINE → resident signature IN SPINE → company
+//  signature IN SPINE → executed lease truth → the tenancy anchor.
+//
+//  ⚠ CORRECTED. This header previously routed the middle of that sentence
+//  through "an e-sign provider". That was wrong: Property Spine owns the
+//  resident and company signing workflow, and nobody should have to leave
+//  Spine to complete an ordinary lease. External execution
+//  (`execution_channel: 'paper' | 'external_esign'`) remains an INTAKE
+//  capability for leases executed elsewhere; it is not the new-leasing path.
 //
 //  This is the FIRST link and only the first link. It answers one
 //  question and writes nothing:
@@ -19,15 +26,16 @@
 //      space_id · rent · security_deposit · lease_start_date ·
 //      lease_end_date · executed_at · signers · execution_channel
 //
-//  So the bridge's job is to produce exactly those from governed truth,
-//  hand them to whoever performs the signature ceremony, and feed the
-//  provider's evidence back into that same service. Deriving the list
-//  from the destination is what keeps the bridge from becoming a second
-//  lease architecture with its own idea of what a lease needs.
+//  So the bridge's job is to produce exactly those from governed truth and
+//  carry them through Spine's own execution into that same service.
+//  Deriving the list from the destination is what keeps the bridge from
+//  becoming a second lease architecture with its own idea of what a lease
+//  needs — whoever performs the signing.
 //
 //  ── IT PRODUCES NO DOCUMENT, AND MUST NOT ───────────────────────────
-//  No template, no legal language, no assembled instrument. The Skyline
-//  lease FORM is an external input owned by the business and legal side;
+//  No template, no legal language, no assembled instrument. This module
+//  supplies the FACTS; the governing body comes from the Skyline lease form,
+//  which is an external input owned by the business and legal side;
 //  a developer inventing lease language is the confident-wrong this whole
 //  codebase refuses, at the altitude where it is least recoverable.
 //  This module supplies VALUES for a form it never sees.

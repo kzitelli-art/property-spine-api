@@ -1,6 +1,142 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  ⚠ WITHDRAWN: THE EXTERNAL E-SIGN DIRECTION. 2026-08-18.
+##  READ BEFORE THE LEASE-BRIDGE BANNER BELOW, WHICH IT CORRECTS.
+## ══════════════════════════════════════════════════════════════════
+
+> **The Dropbox Sign/external-provider direction from the prior lease-bridge
+> banner is withdrawn. Property Spine owns the resident and company signing
+> workflow. Historical external-execution support may remain as an intake
+> capability, but it is not the primary new-leasing operating path.**
+
+Owner ruling. Nobody should have to leave Property Spine to complete the
+ordinary lease workflow. The target is:
+
+```text
+application → exact bed → governed economics → governing lease IN SPINE
+  → resident signs IN SPINE → company signs IN SPINE → executed lease truth
+  → tenancy
+```
+
+**Do not build** an external signing workflow, an external operator login, a
+provider account dependency, a provider webhook architecture, or a second
+document system. `executed_lease_service`'s `execution_channel` already admits
+`paper` and `external_esign`; those stay as INTAKE for leases executed
+elsewhere. They are not the new-leasing path.
+
+### The mechanism already exists, and one thing made it non-governing
+
+Migration 034 built it: packet versioning, `rendered_snapshot_hash`, tokenized
+resident access (`tenant_token_hash`, hashed, raw returned once), field-level
+`initial` / `signature` / `acknowledgment` capture, and per-field
+`session_id` / `ip_address` / `user_agent` / `clause_hash` audit evidence.
+
+What made it non-governing is named in its own schema:
+
+```text
+is_placeholder  boolean not null default true
+  "TRUE until a real lease template fills the body. The tenant UI renders a
+   loud placeholder banner while this is true. Generation refuses to pretend
+   otherwise."
+```
+
+There was no governing instrument, so there was nothing honest to sign. That
+is also exactly why `/applications/:id/sign` was retired — its own tombstone
+says *"There is no signature system today, so there is no honest thing for
+this route to record."* **That is a capability statement, not a statement that
+signing belongs outside Spine.** Recovering the mechanism is therefore
+consistent with the retirement, not a reversal of it.
+
+### The three structural limits to lift
+
+```text
+1  lease_packet_fields.signer_role  check (signer_role in ('tenant'))
+     — a company signer cannot exist at all today.
+2  lease_packets.status stops at 'submitted'
+     — "Activation is not a packet concept." True then; a company-execution
+       state is needed now.
+3  the counsel note: field metadata is "audit, not legal proof"
+     — WHAT EVIDENCE MAKES AN IN-SPINE ELECTRONIC SIGNATURE LEGALLY
+       SUFFICIENT IS A LEGAL/PRODUCT RULING, NOT AN ENGINEERING FACT.
+       Named here rather than guessed. See "open rulings" below.
+```
+
+### ⚠ THE ONE EXTERNAL INPUT — searched for, not assumed absent
+
+**The Skyline lease form of record is not in either repository or the session
+uploads.** Searched both repos and `/root/.claude/uploads` for lease-shaped
+`.pdf`/`.docx`/`.html`/`.txt` and for residential-lease language
+(`lessor`, `landlord and tenant agree`, `residential lease agreement`): the
+only hit is `src/applications/tenant_lease_packet.html`, which is the
+demonstration terms-review page and says so.
+
+Everything that does not require lease language is being built around it.
+`is_placeholder` cannot go false until the real form arrives, and the schema
+now refuses to execute a placeholder.
+
+### What migration 184 landed
+
+It EVOLVES 034; it replaces nothing. Every 034 primitive is untouched —
+versioning, `rendered_snapshot_hash`, `tenant_token_hash`, the field-level
+initial/signature/acknowledgment capture, session/IP/user-agent/clause-hash
+evidence, `lease_packet_documents`, `lease_packet_audit_events`.
+
+```text
+instrument identity      instrument_form_code · instrument_form_version ·
+                         instrument_body_sha256 · instrument_established_at
+                         — the FORM the body came from, which is a different
+                         fact from rendered_snapshot_hash (that hashes what
+                         was rendered, placeholder included)
+company signer may EXIST signer_role check widened tenant → tenant|guarantor|
+                         company. 034 allowed 'tenant' ONLY, so no company
+                         row was insertable at all. guarantor is admitted
+                         because 034's obligation vocabulary already names
+                         guarantor_signature.
+who signed               signed_by_user_id / signed_by_person_id — a durable
+                         identity, not a typed name
+execution states         'resident_executed' then 'executed', APPENDED to
+                         034's lifecycle. 'submitted' keeps its exact meaning.
+                         resident_executed_at · company_executed_at
+```
+
+**The guard is the point.** `trg_lease_packet_execution_guard` refuses, in
+Postgres:
+
+```text
+a placeholder cannot be executed                 (is_placeholder = true)
+an instrument with no identifying hash cannot    (a signature is a signature
+  be signed                                       ON something, and "the
+                                                  packet" is not specific
+                                                  enough when packets version)
+the company cannot sign before the resident      (the business's own wall,
+                                                  not a UI concern)
+```
+
+In the database rather than one writer, because more than one path will move
+a packet — the same reasoning as `trg_refuse_lease_on_retired_inventory`.
+That trigger is what converts 034's honest placeholder into an honest
+instrument: the mechanism no longer depends on a caller remembering the body
+is fake.
+
+Proven: `tests/governing_lease_execution.db.js` **15/15** against real
+Postgres 16, including that a placeholder can still be voided (034's
+lifecycle survives) and that an unknown signer role is still refused.
+
+### Open rulings — legal/product, not engineering
+
+```text
+R1  what evidence makes an in-Spine electronic signature legally sufficient
+    for a Pennsylvania residential lease — consent-to-electronic-business
+    record, signer authentication strength, tamper-evident sealing, the
+    retained audit trail, and what the resident must be shown and when
+R2  who is authorised to bind the company on a lease. Module entitlement
+    says who may OPERATE; it does not say who may BIND.
+R3  which addenda the Skyline form requires, and their jurisdiction triggers
+```
+
+
+## ══════════════════════════════════════════════════════════════════
 ##  THE LEASE BRIDGE — FIRST LINK ONLY. 2026-08-18. NO DOCUMENT IS
 ##  PRODUCED AND NO PROVIDER IS INTEGRATED. TWO EXTERNAL INPUTS BLOCK
 ##  THE REST; THEY ARE NAMED BELOW AND ARE NOT ENGINEERING WORK.
