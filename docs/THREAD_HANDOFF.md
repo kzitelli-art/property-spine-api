@@ -75,7 +75,21 @@ is not a human.
 
 ```text
 tests/governed_lease_terms.db.js   24/24   real Postgres 16
-npm run verify                     37/37
+npm run verify                     36/36
+```
+
+⚠ **This block first said `37/37` and was wrong.** The number was typed from
+expectation rather than read from the runner. The two new harnesses are
+`.db.js` — they need a real database and are therefore correctly NOT on the
+source-governance chain, so the chain count did not move. Corrected against
+the runner's own output. The commit that introduced the error carries it in
+its message, which is immutable; this is the correction of record.
+
+**Both new proofs run separately**, per `docs/DB_HARNESS_ISOLATION.md`:
+
+```bash
+HARNESS_DATABASE_URL=postgres://…/spine_proof node tests/space_economics.db.js
+HARNESS_DATABASE_URL=postgres://…/spine_proof node tests/governed_lease_terms.db.js
 ```
 
 
