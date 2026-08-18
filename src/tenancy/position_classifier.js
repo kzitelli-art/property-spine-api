@@ -242,15 +242,61 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     proof_basis: proofBasis(lease),
   } : null;
 
-  // CONFLICT: a contested position. Which lease governs is unknown, so it
-  // must never be silently resolved to the first match.
+  /*  ── CONFLICT: A CONTESTED POSITION *ON THIS DATE* ─────────────────
+   *  Which lease governs is unknown, so it must never be silently
+   *  resolved to the first match.
+   *
+   *  ⚠ THIS USED TO ASK THE WRONG QUESTION, AND PRODUCTION CAUGHT IT.
+   *  It ran over every non-retired lease on the bed and asked whether any
+   *  two overlapped EACH OTHER — `asOf` never entered the computation.
+   *  Every other axis on this position is date-scoped (`current` and
+   *  `activationPending` use datesSpan, `future` uses isFuture); this one
+   *  was not. So two leases that overlapped in April made the bed read
+   *  contested in August, long after the earlier one had ended.
+   *
+   *  On Skyline that showed up as beds the Rent Roll called Needs Review
+   *  for OVERLAPPING_OPERATIVE_LEASES while the canonical writer's own
+   *  wall saw exactly ONE operative lease on the same bed and date. Both
+   *  were right about different questions. The July activation truthfully
+   *  recorded two operative leases THEN; the reader was reporting that
+   *  July condition on an August date.
+   *
+   *      CURRENT CONFLICT @ D
+   *        = >= 2 DISTINCT operative leases
+   *          that BOTH span D
+   *          on the same canonical bed
+   *
+   *  Historical overlap stays historical truth. It does not make today's
+   *  bed contested — and it is not erased either: the leases are still
+   *  loaded, still readable, and a read taken at a date they both span
+   *  still reports the conflict. The rule is date-scoped, not amnesiac.
+   *
+   *  Restricting the population to leases that span D also means this
+   *  agrees with operative_overlap.competingOperativeLeases by
+   *  construction — the writer refuses to CREATE exactly the state the
+   *  reader now refuses to hide. One definition of a contested bed. */
+  const spanning = leases.filter((lease) => datesSpan(lease, asOf));
   const conflicting = [];
-  for (let i = 0; i < leases.length; i++) {
-    for (let j = i + 1; j < leases.length; j++) {
-      if (rangesOverlap(leases[i], leases[j])) conflicting.push(leases[i].id, leases[j].id);
+  for (let i = 0; i < spanning.length; i++) {
+    for (let j = i + 1; j < spanning.length; j++) {
+      /*  DEFENSIVE, and it has already mattered once. The loader
+       *  aggregates leases through a LEFT JOIN to executed_lease_records,
+       *  whose lease_id index is not unique — two verified evidence rows
+       *  for one lease emit that lease twice. Two array slots holding the
+       *  SAME lease trivially "overlap", and `new Set` then collapses the
+       *  pair to a single id, so the position reads contested with ONE
+       *  conflicting lease. A lease can never conflict with itself. */
+      if (String(spanning[i].id) === String(spanning[j].id)) continue;
+      if (rangesOverlap(spanning[i], spanning[j])) {
+        conflicting.push(spanning[i].id, spanning[j].id);
+      }
     }
   }
-  const conflict_ids = [...new Set(conflicting)];
+  /*  A conflict needs TWO sides. One distinct id is not a contest, it is
+   *  a bug upstream, and reporting it as a contest is how that bug stayed
+   *  invisible. */
+  const distinctConflicting = [...new Set(conflicting)];
+  const conflict_ids = distinctConflicting.length >= 2 ? distinctConflicting : [];
 
   // SUCCESSOR of the lease governing as_of: the earliest non-terminal lease
   // starting at or after it ends, that does NOT overlap it (an overlapping
