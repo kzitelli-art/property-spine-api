@@ -784,6 +784,11 @@ async function datedPropertyPositions(pool, { property_id, as_of = null } = {}) 
       // commenced or how it is proven, and availability would have had to
       // re-query leases to find out. shapeLease already carries proof_basis.
       activation_pending_lease_position: p.activation_pending_lease_position,
+      //  Carried for inspection: a reader (or a trace) must be able to see
+      //  WHICH lease governs and under what status without re-querying
+      //  `leases` and deciding a second time.
+      current_lease_position: p.current_lease_position,
+      other_spanning_lease_positions: p.other_spanning_lease_positions || [],
       conflict_state: p.conflict_state,
       conflicting_lease_ids: p.conflicting_lease_ids,
 
