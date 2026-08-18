@@ -3,7 +3,7 @@
 const statusModel = require("../governance/status_model");
 
 const CONTRACT_REVISION = "meeting-receipt-v0-r4";
-const PROMPT_REVISION = "meeting-receipt-extractor-v0";
+const PROMPT_REVISION = "meeting-receipt-extractor-v1";
 const OWNER_GRAMMAR_REVISION = "owner-receipt-v0";
 
 const OCCURRED_AT_SOURCES = Object.freeze([

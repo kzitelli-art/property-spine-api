@@ -36,13 +36,17 @@ const EXTRACTOR_OUTPUT_SCHEMA = Object.freeze({
           owner_status: { type: "string", enum: contract.OWNER_STATUSES },
           owner_label: { type: ["string", "null"] },
           owner_resolution_status: { type: ["string", "null"], enum: [...contract.RESOLUTION_STATUSES, null] },
-          relevant_time: { type: ["string", "null"] },
+          relevant_time: {
+            type: ["string", "null"],
+            description: "When non-null, support must include temporal_basis for the transcript segment establishing this time.",
+          },
           material_qualifiers: { type: "array", items: { type: "string" } },
           material: { type: "boolean" },
           personal: { type: "boolean" },
           supersedes_candidate_key: { type: ["string", "null"] },
           support: {
             type: "array",
+            description: "Evidence roles are additive: one segment may appear more than once with different roles. relevant_time requires temporal_basis; reported_claim requires claim_basis and attribution; decision requires decision_basis; instruction requires instruction_basis; commitment requires commitment_basis or instruction_basis; proposal requires proposal_basis; constraint requires observation_basis.",
             items: {
               type: "object",
               properties: {
@@ -146,6 +150,13 @@ function buildExtractorPrompt({ meeting, segments, speakerLabels = [] }) {
     "- Preserve every material branch of a conditional decision and every material hedge on an unconfirmed statement.",
     "- A superseded candidate must appear earlier in candidates than the candidate that supersedes it.",
     "- Personal chatter can be retained for exclusion by setting personal=true.",
+    "- If relevant_time is non-null, support must include temporal_basis. The same segment may carry temporal_basis and another required role.",
+    "- A decision requires decision_basis support.",
+    "- An instruction requires instruction_basis support.",
+    "- A commitment requires commitment_basis or instruction_basis support.",
+    "- A reported_claim requires both claim_basis and attribution support; observation_basis does not substitute for either role.",
+    "- A proposal requires proposal_basis support.",
+    "- A constraint requires observation_basis support.",
     "",
     `Meeting: ${meeting && meeting.property_name ? meeting.property_name : "Property"} ${meeting && meeting.meeting_occurred_at ? meeting.meeting_occurred_at : ""}`,
     `Property people labels (names only, no ids): ${speakerLabels.length ? speakerLabels.join(" | ") : "none supplied"}`,

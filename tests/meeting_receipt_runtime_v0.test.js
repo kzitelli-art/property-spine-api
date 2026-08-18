@@ -13,7 +13,7 @@ const meetingReceiptService = require("../src/meeting_evidence/meeting_receipt_s
 const meetingEvidenceRoutes = require("../src/meeting_evidence/meeting_evidence_routes");
 const release = require("../src/meeting_evidence/meeting_receipt_release_readiness");
 
-const EXPECTED = 75;
+const EXPECTED = 80;
 let passed = 0;
 let failed = 0;
 
@@ -170,6 +170,22 @@ function modelOutput() {
     normalized_text: "avry handled saturday coverage.",
   }];
   const speakerPeople = [{ person_id: uuid(5), label: "Anne-Marie" }];
+  const preparedExtraction = extractorRunner.prepareMeetingReceiptExtraction({
+    meeting, transcriptVersion, segments, speakerPeople,
+  });
+  const preparedPrompt = preparedExtraction.prompt;
+  includes("prompt requires temporal evidence for every relevant time", preparedPrompt,
+    "If relevant_time is non-null, support must include temporal_basis");
+  includes("prompt requires both evidence roles for a reported claim", preparedPrompt,
+    "A reported_claim requires both claim_basis and attribution support");
+  includes("prompt says one segment may satisfy multiple evidence roles", preparedPrompt,
+    "The same segment may carry temporal_basis and another required role");
+  includes("schema repeats the temporal evidence requirement",
+    JSON.stringify(preparedExtraction.schema.properties.candidates.items.properties.relevant_time),
+    "support must include temporal_basis");
+  includes("schema repeats the reported-claim evidence requirement",
+    JSON.stringify(preparedExtraction.schema.properties.candidates.items.properties.support),
+    "reported_claim requires claim_basis and attribution");
   let runnerInput = null;
   const scripted = async (args) => { runnerInput = args.input; return modelOutput(); };
   const run1 = await extractorRunner.runMeetingReceiptExtractor({
