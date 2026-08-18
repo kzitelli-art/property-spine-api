@@ -136,6 +136,23 @@ const PRODUCTION_APPROVED = [
    *  from some earlier branch deploy, which is precisely how 121 and 126
    *  got into production. Neither direction has ever been measured.
    *  Registered WITH the tool this time, not after a gate caught it. */
+  /*  ── CLASSIFIED WRITE-CAPABLE BY A WORD IN A COMMENT ──────────────
+   *  This tool runs no statement but SELECT. It matched WRITES on the
+   *  prose `\bcommit\b` — its header explains why it sits outside
+   *  DB_HARNESS_ISOLATION.md, which blocks harnesses that commit.
+   *
+   *  Worth registering rather than rewording. The gate's sibling lesson
+   *  is that a MENTION IS NOT A GUARD; the same detector reads a mention
+   *  as a WRITE, and editing English to dodge a regex would leave the
+   *  next author to rediscover it. CLAUDE.md already says to strip
+   *  comments before scanning — recorded here, not fixed here, because
+   *  changing the classifier reclassifies files in a lane this slice did
+   *  not open.
+   *
+   *  It belongs on this list on its own merits either way: it is
+   *  production-facing BY DESIGN, exactly like gate1 below. */
+  { file: "tools/property_authority_preflight.js",
+    reason: "Property-identity blocker diagnostic — must read PRODUCTION because the question is which staff_sessions rows exist for a real operator right now and whether a real assignment is active; no harness target holds that. SELECT only; proven read-only via _readonly.js BEFORE its first read, so it cannot write whatever the source says. Prints sha256(token_digest) prefixes only — never a token — so the browser table and this one name the same session row without either holding a credential. Falsified both directions against a local Postgres: it names multiple live sessions when present and refuses to call single-session agreement an answer when absent" },
   { file: "tools/release0/gate1_production_census.js",
     reason: "Release 0 Gate 1 — must read the PRODUCTION ledger to answer whether the deployed schema can boot this build at all; the question is about production's schema, so no harness target can answer it. Reuses migrations/ledger_verdict.js, the same classifier prestart runs, so it cannot hold a second opinion the deploy disagrees with. Proven read-only via _readonly.js before any read; connection errors are sanitised because the output is meant to be pasted" },
   { file: "tools/activation/supersede_operations_line.js",
