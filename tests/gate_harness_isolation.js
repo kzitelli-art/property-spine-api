@@ -151,6 +151,16 @@ const PRODUCTION_APPROVED = [
    *
    *  It belongs on this list on its own merits either way: it is
    *  production-facing BY DESIGN, exactly like gate1 below. */
+  /*  WRITE-CAPABLE BY DESIGN, tightly bounded — the third such entry, in
+   *  the lineage of supersede_operations_line.js. It writes exactly one
+   *  communication_lines row for exactly one property (the canonical
+   *  Skyline id; any other property id is refused), and only when four
+   *  refusal conditions and a live-schema self-check all pass. Dry-run is
+   *  the default; a write requires --commit. It is the deliberate
+   *  replacement for the deleted POST /properties/:id/sms-number route, and
+   *  is itself Class 2 — deleted when API-driven provisioning exists. */
+  { file: "tools/activate_property_line.js",
+    reason: "Class 2 property-line activation adapter — WRITE-CAPABLE BY DESIGN: writes one canonical communication_lines row for the exact Skyline UUID (refuses any other property), with outbound_policy='proactive' matching every other property line, only after verifying the live schema walls exist (pg_constraint/pg_indexes/pg_trigger) and all four refusals pass (property exists, is canonical Skyline, has no active property line, number not active elsewhere). Dry-run by default; --commit to write; --retire to roll back to status='retired' which clears the projection. Reads back both communication_lines and properties.sms_number and fails unless they agree. Proven against a faithful local schema built from migrations 130+132: dry-run/commit/retire and all refusals plus the schema-verify-refuses-before-write path" },
   { file: "tools/property_authority_preflight.js",
     reason: "Property-identity blocker diagnostic — must read PRODUCTION because the question is which staff_sessions rows exist for a real operator right now and whether a real assignment is active; no harness target holds that. SELECT only; proven read-only via _readonly.js BEFORE its first read, so it cannot write whatever the source says. Prints sha256(token_digest) prefixes only — never a token — so the browser table and this one name the same session row without either holding a credential. Falsified both directions against a local Postgres: it names multiple live sessions when present and refuses to call single-session agreement an answer when absent" },
   { file: "tools/release0/gate1_production_census.js",
