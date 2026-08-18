@@ -174,6 +174,90 @@ the session stays where it was, which is the reported shape.
 Whether `_egAuthScope` was actually null in the observed session is **NOT
 established** — that is a browser fact and it is column 5 of the table.
 
+### 4.4 A Class 1 enforcer can confirm a scope the server never confirmed
+
+`property-spine-app/authoritative-property-context.js` is the module whose
+whole job is that "every visible property label must reflect the property
+returned by the server's /operator/me handshake." It overwrites `#appbarDeal`
+and `#crumbMDeal` from a MutationObserver, so **in a signed-in session it wins
+over `crumbPropertyName()`** — which refines §4.1: the inversion there is real
+in that function, and masked in practice by this module. The Skyline wordmark
+almost certainly came from here, not from the fixture lookup.
+
+That makes what this module treats as confirmed the load-bearing question, and
+`refreshFromServer()` (line 323) answers it in an order that has a hole:
+
+```text
+323  async function refreshFromServer() {
+326    var existing = scopeFromExistingGrant();   // = normalizeScope(_egAuthScope)
+327    if (existing) applyScope(existing);        // ← stamps it as CONFIRMED,
+                                                 //   BEFORE asking the server
+335    var verification = await __psLive.verifySession();
+336    if (!verification || verification.ok !== true) {
+337      if (!existing) applyUnavailable();
+338      return existing;                          // ← the unverified value STANDS
+```
+
+`applyScope()` sets `confirmedScope = scope` (222) **and writes the name and id
+back into `_egAuthScope`** (229–234). So the chain closes on itself:
+
+```text
+_egAuthScope → applyScope → confirmedScope → writes back to _egAuthScope
+                          ↑
+                    no server in this loop
+```
+
+Whenever `verifySession()` returns anything other than `ok:true` — a network
+blip, a 401 on one call, an unreadable body — a stale `_egAuthScope` is promoted
+to `confirmedScope` and then re-projected onto the chrome by the observer
+indefinitely. The module is honest when there is nothing to fall back on
+(`applyUnavailable()`); the hole is only on the path where a stale value exists,
+which is the path that matters.
+
+**The module already documents this exact failure mode in its own words**, in
+the `switchProperty` wrapper at line 421:
+
+> *"After a successful switch that cached scope is STALE, so those wrappers
+> immediately drag the chrome back to the previous property — producing a live
+> Skyline session rendering Demo Building's name, which is precisely the
+> disagreement this file exists to prevent."*
+
+The fix applied there was `await refreshFromServer()` after the switch. The
+observed blocker is the **same failure, mirrored** — a live Solo session
+rendering Skyline's name — and the repair depends on the one function whose
+failure path returns the stale value.
+
+There is a second ordering hazard in the same wrapper. It wraps
+`loadProperties`, `refreshPropSwitcher`, `psSyncLiveCrumb`, `syncCrumbLabels`
+and `renderHome` to call `scheduleApply()`. The real `switchProperty` calls
+`refreshPropSwitcher()` and `loadApp()` **before** the wrapper's trailing
+`refreshFromServer()` runs — so mid-switch, those wrappers re-project the still
+stale `confirmedScope` and write it back over the `_egAuthScope` the switch just
+set correctly. It is repaired a moment later *if* `refreshFromServer()`
+succeeds.
+
+```text
+SUSPECT MECHANISM, NOT ESTABLISHED
+
+  operator switches SKYLINE → SOLO
+  → selectProperty mints the Solo session; _staffToken = Solo
+  → switchProperty sets _egAuthScope = Solo
+  → wrapped refreshPropSwitcher/loadApp fire scheduleApply()
+  → the enforcer re-projects the STALE Skyline confirmedScope
+    and writes Skyline back into _egAuthScope
+  → the trailing refreshFromServer() fails or returns not-ok
+  → Skyline stands as "confirmed" over a Solo session
+
+  RESULT   chrome + _egAuthScope = Skyline
+           sessionMeta + rent roll = Solo
+           which is the reported table, exactly
+```
+
+This is a **suspect with line numbers, not a diagnosis.** It predicts one thing
+the browser can check: `__psAuthoritativePropertyContext.getConfirmedScope()`
+will disagree with `await window.__psLive.verifySession()`. If they agree, this
+mechanism did not produce the observed state and this section is wrong.
+
 ## 5. What is not established
 
 ```text
