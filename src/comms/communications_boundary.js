@@ -90,12 +90,12 @@ module.exports = function communicationsBoundary({ pool, sms }) {
   ]);
 
   // ── PROPERTY LINE (server-derived `from`) ──────────────────────────
-  //  The ONLY place a property's SMS line is resolved for sending.
-  //  Internal detail of the boundary; business modules never call it.
-  async function propertyLine(q, propertyId) {
-    const r = await q.query(`select sms_number from properties where id = $1`, [propertyId]);
-    return r.rows.length ? r.rows[0].sms_number : null;
-  }
+  //  REMOVED: propertyLine(). It read properties.sms_number — the legacy
+  //  projection — to resolve a property's send line. sendPropertySms now
+  //  goes through resolveOutboundLine() against the canonical
+  //  communication_lines model, the same path sendOperationsReply uses.
+  //  A helper that reads the projection is the reader this change exists to
+  //  delete, so it is deleted rather than left dormant for the next caller.
 
   // ── PROPERTY OPERATING AUTHORITY (094) ─────────────────────────────
   //  propertyHasCapability — the ONE reader of property_channel_capabilities.
@@ -542,14 +542,28 @@ module.exports = function communicationsBoundary({ pool, sms }) {
       }
     }
 
-    // Server-derived property line. No line → NO SEND, never a
-    // Messaging Service default fallback.
-    const from = await propertyLine(q, property_id);
-    if (!from) {
-      await stamp("refused", "gate:no_property_line");
-      console.error(`sendPropertySms REFUSED property=${property_id} purpose=${purpose} reason=no_property_line`);
-      return { sent: false, reason: "no_property_line", sid: null };
+    //  THE CANONICAL LINE, not the projection. This used to read
+    //  propertyLine(), which selects properties.sms_number — the legacy
+    //  projected column. That made this the ONE outbound path in this file
+    //  that trusted the projection while sendOperationsReply already asked
+    //  the canonical model through resolveOutboundLine(). Two sources of
+    //  truth about which number a property sends from, and the projection
+    //  is the one a stale trigger or a bad direct write could corrupt.
+    //
+    //  resolveOutboundLine reads communication_lines directly and enforces
+    //  policy: it refuses no_property_line, and outbound_not_enabled for a
+    //  'disabled' line — so a line that must not send cannot send here even
+    //  if its projected number is non-null. A property_facing line is
+    //  'proactive' and passes; the refusal is the honest answer, not a
+    //  fallback Messaging-Service default that would appear to come from a
+    //  building it did not come from.
+    const resolved = await lines.resolveOutboundLine(q, { propertyId: property_id });
+    if (!resolved.line) {
+      await stamp("refused", `gate:${resolved.refusal}`);
+      console.error(`sendPropertySms REFUSED property=${property_id} purpose=${purpose} reason=${resolved.refusal} policy=${resolved.policy}`);
+      return { sent: false, reason: resolved.refusal, sid: null };
     }
+    const from = resolved.line.e164;
 
     const elig = await canSendSmsForRecord(
       { property_id, recipient, person_id, purpose, from }, q

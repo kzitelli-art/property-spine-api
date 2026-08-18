@@ -182,6 +182,8 @@ const GATES = [
   //  claim about what was measured; this makes the OTP path measured.
   { file: "teamaccess_sms_delivery.test.js",
     what: "staff OTP send path: assignment selection, canonical line, refuse-before-mint" },
+  { file: "governed_send_path_and_line_activation.test.js",
+    what: "sendPropertySms resolves the canonical line not the projection; the sms-number route is removed; the activation tool writes proactive and refuses non-Skyline" },
 ];
 
 const bar = "════════════════════════════════════════════════════════════════";
