@@ -137,6 +137,26 @@ npm install                node_modules is empty. meeting_evidence_ingress
                            and again the runner stops.
 ```
 
+**Unshallow BOTH repos before believing any ancestry question.** The gate
+failure above is the polite version of this trap: it stops. The dangerous
+version answers.
+
+```text
+in a shallow app clone   git merge-base --is-ancestor c6769ba origin/main
+                         → false
+                         git log --oneline origin/main..HEAD
+                         → ~100 commits
+                         reading: "the live app head is not on main, and
+                         main is a hundred commits behind production"
+
+after --unshallow        c6769ba IS origin/main. Identical. Zero either way.
+```
+
+Nothing errored. The history simply was not there, and `..` over a missing
+ancestor produced a confident, alarming, false answer — the shape §5 is about,
+arriving through git rather than through a test. This was hit for real while
+writing this file.
+
 With both done: **`npm run verify` → 35/35 source-governance gates pass.**
 
 That is a claim about *source governance* — grep-level rules over the source
