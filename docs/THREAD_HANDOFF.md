@@ -1,6 +1,177 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  CURRENT RENT ROLL CORRECTION IS SHIPPED AND LIVE. 2026-08-18.
+##  API 3efffb63 · APP c6769ba6 · SCHEMA 181 · NO MIGRATION.
+##  ONE BLOCKER IS OPEN AND IT IS NOT THE RENT ROLL: A SIGNED-IN
+##  SESSION REPORTED SKYLINE WHILE BEING SERVED SOLO'S RENT ROLL.
+##  READ THAT SECTION BEFORE TOUCHING PROPERTY IDENTITY OR THE CHOOSER.
+## ══════════════════════════════════════════════════════════════════
+
+### What shipped
+
+Three defects, one product outcome: the Rent Roll no longer calls a bed
+Open unless Spine can positively say it is free.
+
+```
+1  OPEN BY SUBTRACTION (server)    rent_roll_unit_view computed Open as
+                                   positions − occupied. Committed,
+                                   contested and unestablished beds all
+                                   became Open. Open is now a bucket a
+                                   position is classified INTO.
+
+2  A SECOND CLASSIFIER (browser)   psRruStatus re-derived the bucket from
+                                   current/next/conflict_state and ended
+                                   `return 'open'`. The headline came from
+                                   the server while the rows came from the
+                                   browser, so the page could disagree with
+                                   its own header and nothing would throw.
+                                   The browser now relays p.bucket.
+
+3  UNDATED CONFLICT (server)       the conflict loop asked whether any two
+                                   leases on a bed overlapped EACH OTHER.
+                                   asOf never entered it, while every other
+                                   axis was date-scoped. Two leases that
+                                   overlapped in April made the bed read
+                                   contested in August.
+```
+
+The rule now, and it is the one to protect:
+
+```
+CURRENT CONFLICT @ D
+  = >= 2 DISTINCT operative leases that BOTH span D on the same bed
+```
+
+Historical overlap stays historical truth and is **not erased** — read at
+a date both leases span, the conflict is still reported. Date-scoped, not
+amnesiac. `tests/dated_conflict_scope.test.js` asserts both halves; a fix
+that merely stopped reporting conflicts would pass a one-sided test and
+lose a real double-booking.
+
+### Production standing, measured not assumed
+
+Skyline at 2026-08-17, recomputed read-only against the shipped reader:
+
+```
+160 rentable · 160 established · 0 not established · 0 unclassified
+
+ 31  Occupied
+  9  Pending Activation
+100  Open
+ 20  Needs Review
+       14  OVERLAPPING_OPERATIVE_LEASES
+        5  OPENING_POSITION_UNRECONCILED
+        1  OPENING_VACANCY_CONFLICTS_WITH_OPERATIVE_LEASE
+```
+
+Solo on Chestnut, live in the browser, is the unplanned cross-property
+proof: `154 + 90 + 2 + 37 = 283`, with **Not Established surviving to the
+glass as "Occupancy Unconfirmed"** — outside the four tenancy buckets,
+not laundered into Open. On a property with zero Open positions the Open
+chip is not offered at all, because a filter appears only when the server
+counted something for it.
+
+**Do not restore `22 Pending Activation`.** That number was never proven;
+the dated rule is what can prove or disprove it, and with the rule in
+place those beds stayed out because their second lease genuinely spans the
+date. Do not clean the 20 exceptions to make the Rent Roll prettier —
+they are the next rail, not a defect in this one.
+
+### ⚠ THE OPEN BLOCKER — property identity disagrees with itself
+
+Acceptance could not be completed on Skyline. A signed-in session showed:
+
+```
+/operator/rent-roll/units      served SOLO's data (283 units, Solo workbook)
+Rent Roll heading              "Solo on Chestnut"   (from sessionMeta)
+app bar wordmark               "SKYLINE"            (from _egAuthScope, via /operator/me)
+property pill highlight        skyline              (from active_property_id,
+                                                     via /operator/properties)
+```
+
+The endpoint takes no property parameter — the server resolves it from the
+session. So the identity endpoints and the rent-roll read gave **different
+answers for one session**. That is a §21 problem and no browser fix
+touches it.
+
+**Which side is wrong is NOT established.** If the identity endpoints are
+right, then a signed-in operator was served another property's rent roll,
+which is far more serious than a chrome bug. Settle it first, with this in
+the browser console on the affected page:
+
+```js
+window.__psLive.sessionMeta()
+_egAuthScope
+await window.__psLive.verifySession()
+```
+
+Whichever disagrees with the other two is the culprit. Do not patch the
+glass before that returns.
+
+Note: signing out and back in bound the session correctly. The pills call
+the real server switch (`switchProperty` → `selectProperty` →
+`POST /operator/properties/select`), so they are not a preview control.
+
+### Open items, named and scoped
+
+```
+1  property identity disagreement          THE BLOCKER — above
+2  crumbPropertyName consults __OFFLINE_DEALS BEFORE the server-confirmed
+   scope, and only falls through to frontPropertyName() last. Latent, not
+   the cause of (1): it survives today only because server ids are UUIDs
+   and do not match fixture ids. A §21 inversion; fix it.
+3  status text is clipped on the glass — "PENDING ACTIVAT",
+   "OCCUPANCY UNCOM". The label is the operator's only word for the state.
+4  the 20 Skyline exceptions                a tenancy-reconciliation rail
+5  109 source-to-canonical lineage          unresolved; do NOT guess that
+   Room1 means A. Establish it through activation lineage.
+6  loader dedupe                            space_position aggregates leases
+   through a LEFT JOIN to executed_lease_records, whose lease_id index is
+   NOT unique, so two verified evidence rows emit one lease twice. The
+   classifier now defends against it (a lease cannot conflict with itself,
+   and a conflict needs >=2 distinct ids). The loader contract itself is
+   untouched: one canonical lease_id should mean one object in leases[].
+```
+
+### Method — what this rail cost, so the next one does not
+
+Days went into Render-shell forensics: build manifests, acquisition
+fallbacks, a one-bed adjudication harness, a one-lease trace. Some of it
+was necessary — production found two real defects that no local fixture
+had. Most of it was **proving the proof harness instead of fixing the
+product**, and the correction that mattered was ultimately one rule in one
+function, found by reading the source alongside a production receipt.
+
+Three things that did earn their cost, and are worth repeating:
+
+- **Falsify every ratchet.** Both new suites were proven by reintroducing
+  the defect — 8 red for the dated rule, 11 for the browser relay. A test
+  that has never failed is not a ratchet.
+- **Let production vote, with no expected number in the script.** The
+  recompute encoded no headline. It is what disproved `22 Pending` instead
+  of arguing about it.
+- **Say what the gate measured.** The production gate proved each overlap
+  names >=2 *distinct* lease ids; that both span the date is true by
+  construction and covered by unit assertions, but was never re-derived
+  against production. That limit is disclosed rather than implied.
+
+And one that did not: `git status | head -5` is not a proof, an assertion
+list of status literals cannot tell classification from relay, and
+`dupes.length` does not prove *which* lease was duplicated. Every one of
+those looked green while proving nothing.
+
+### Where the receipts live
+
+```
+docs/RENT_ROLL_CORRECTION_RELEASE_PACKET.md   in property-spine-app
+tests/dated_conflict_scope.test.js            the dated rule, 24 assertions
+tests/rent_roll_occupancy_correction.db.js    the reader correction, 87
+rent_roll_server_classification.test.js       the browser relay, 67 (app repo)
+```
+
+
+## ══════════════════════════════════════════════════════════════════
 ##  ⚠ SKYLINE HOLDS TWO INVENTORY REPRESENTATIONS. EVERY CANONICAL
 ##  TENANCY READ OF IT RETURNS 391 POSITIONS AGAINST 160 REAL BEDS.
 ##  MIGRATION 180 IS WRITTEN AND NOT RELEASED. 2026-08-17.
