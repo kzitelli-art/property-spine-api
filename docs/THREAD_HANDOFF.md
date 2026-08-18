@@ -1,6 +1,85 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  THE LEASE BRIDGE — FIRST LINK ONLY. 2026-08-18. NO DOCUMENT IS
+##  PRODUCED AND NO PROVIDER IS INTEGRATED. TWO EXTERNAL INPUTS BLOCK
+##  THE REST; THEY ARE NAMED BELOW AND ARE NOT ENGINEERING WORK.
+## ══════════════════════════════════════════════════════════════════
+
+`src/applications/governed_lease_terms.js` answers one question and writes
+nothing: **for this application, which fields of the governing lease can Spine
+supply from governed truth, and which are not established?**
+
+### The field list is not invented
+
+It is `executed_lease_service.verifyExecutedLease`'s own required input set,
+read backwards — `space_id · rent · security_deposit · lease_start_date ·
+lease_end_date · executed_at · signers · execution_channel`. Deriving the list
+from the destination is what stops the bridge growing a second idea of what a
+lease needs. The module states `produces_document: false` in its own output.
+
+### What it establishes, and what it refuses
+
+```text
+ESTABLISHED   the bed (182 lineage) · the resident (durable person) ·
+              the landlord (legal_entity_properties, relationship_type
+              'owner' matched EXACTLY) · term + start (operator selection) ·
+              end date (DERIVED from start + term, never asked twice) ·
+              rent/deposit/fees/concessions (via resolveSpaceEconomics)
+REFUSES       no bed aimed · no durable person · no owner entity ·
+              TWO owner entities (ambiguous, never first-row-wins) ·
+              term not selected (never defaulted to 12) · every pricing
+              refusal, carried through UNCHANGED so one fact keeps one
+              vocabulary
+NAMED, NOT OMITTED
+              required_addenda      — Spine has no model of which addenda a
+                                      jurisdiction or lease form requires
+              company_signer        — module entitlement says who may OPERATE;
+                                      it does not say who may BIND the company
+```
+
+An omitted field reads as "not needed". These are needed and absent, which is
+a different fact and the one the bridge must not paper over. `ready` is
+**computed** from the fields, never asserted.
+
+### ⚠ THE TWO EXTERNAL PREREQUISITES — not engineering
+
+```text
+1  THE SKYLINE LEASE FORM. Owned by the business/legal side. Spine supplies
+   VALUES for a form it never sees; a developer inventing lease language is
+   the confident-wrong this codebase refuses, at the altitude where it is
+   least recoverable. Until the form exists, `required_addenda` cannot be
+   modelled and the field map cannot be completed.
+2  DROPBOX SIGN. No account, no credentials, and outbound egress to external
+   hosts is blocked from this environment (verified: 403 at the CONNECT).
+   What the integration needs FROM the provider is already known — immutable
+   envelope/document id, per-signer identities and timestamps, the final
+   executed PDF, and an authenticated webhook — because
+   executed_lease_service already accepts exactly that shape via
+   `execution_channel: 'external_esign'`.
+```
+
+### The contract change step 3 will require
+
+`executed_lease_service` says *"Property Spine signs nothing. An authorized
+staff member ATTESTS that a governing lease exists."* Execution evidence enters
+today ONLY as a human attestation. The ruling is that Mike must not countersign
+and then separately click "verify this lease", so the service must admit
+**authenticated provider evidence as a peer source of execution truth** — not
+a faked attestation. That is a deliberate contract change, and it lands on the
+unresolved source-vocabulary question (`source_authority` vs
+`status_model.js`), because a webhook is the first execution-truth source that
+is not a human.
+
+### Proven
+
+```text
+tests/governed_lease_terms.db.js   24/24   real Postgres 16
+npm run verify                     37/37
+```
+
+
+## ══════════════════════════════════════════════════════════════════
 ##  A BED NOW RESOLVES ITS OWN AUTHORIZED ASKING ECONOMICS.
 ##  MIGRATION 183 IS WRITTEN AND NOT RELEASED. 2026-08-18. NOT DEPLOYED.
 ##  NO SKYLINE PRICING HAS BEEN PUBLISHED — see "what is missing".
