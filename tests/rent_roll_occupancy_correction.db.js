@@ -684,11 +684,11 @@ const note = (l) => console.log("        " + l);
       R(bF).bucket === "open"
       && R(bF).bucket_reason_code === "ESTABLISHED_VACANT_NO_LATER_BLOCKER",
       `${R(bF).bucket} / ${R(bF).bucket_reason_code}`);
-    ok("★ G · TEMPORAL — a lease that began AFTER the baseline governs, not conflicts",
+    ok("★ G · TEMPORAL — a lease begun after the baseline GOVERNS the later date",
       R(bG).bucket === "occupied"
-      && R(bG).bucket_reason_code === "LATER_TENANCY_FACT_SUPERSEDES_BASELINE_VACANCY",
+      && R(bG).bucket_reason_code === "POST_BASELINE_OPERATIVE_LEASE_GOVERNS_DATE",
       `${R(bG).bucket} / ${R(bG).bucket_reason_code}`);
-    ok("★ G · …and it is NOT Needs Review merely because two dated facts differ",
+    ok("★ G · …not Needs Review, and the baseline is not called wrong",
       R(bG).bucket !== "needs_review");
     ok("★ H · an unrecognised spanning lease status → Needs Review, never Open",
       R(bH).bucket === "needs_review"

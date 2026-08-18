@@ -319,7 +319,7 @@ const REASON = Object.freeze({
   OVERLAPPING_OPERATIVE_LEASES: "OVERLAPPING_OPERATIVE_LEASES",
   OPENING_VACANCY_CONFLICTS_WITH_OPERATIVE_LEASE: "OPENING_VACANCY_CONFLICTS_WITH_OPERATIVE_LEASE",
   OPENING_OCCUPANCY_ACCEPTED_TERMS_UNKNOWN: "OPENING_OCCUPANCY_ACCEPTED_TERMS_UNKNOWN",
-  LATER_TENANCY_FACT_SUPERSEDES_BASELINE_VACANCY: "LATER_TENANCY_FACT_SUPERSEDES_BASELINE_VACANCY",
+  POST_BASELINE_OPERATIVE_LEASE_GOVERNS_DATE: "POST_BASELINE_OPERATIVE_LEASE_GOVERNS_DATE",
   SPANNING_LEASE_STATUS_UNRECOGNISED: "SPANNING_LEASE_STATUS_UNRECOGNISED",
   POSSESSION_WITHOUT_GOVERNING_LEASE: "POSSESSION_WITHOUT_GOVERNING_LEASE",
   OPENING_POSITION_UNRECONCILED: "OPENING_POSITION_UNRECONCILED",
@@ -387,12 +387,13 @@ function rentRollExplain(p, opts = {}) {
       conflicting_refs: [],
     };
   }
-  if (p.evidence_state === "superseded_by_later_fact") {
+  if (p.evidence_state === "governed_by_later_fact") {
     return {
-      code: REASON.LATER_TENANCY_FACT_SUPERSEDES_BASELINE_VACANCY,
-      sentence: `The opening position${atBase} recorded this bed vacant, and lease ` +
-        `${cur.lease_id} began ${cur.start_date} — after that date. The later fact governs` +
-        `${onDate}; the two are a sequence, not a disagreement.`,
+      code: REASON.POST_BASELINE_OPERATIVE_LEASE_GOVERNS_DATE,
+      sentence: `The opening position${atBase} recorded this bed vacant, and that remains true ` +
+        `for${atBase}. Lease ${cur.lease_id} began ${cur.start_date}, after it, so the lease is ` +
+        `the fact that governs${onDate}. A sequence, not a disagreement — and the baseline is ` +
+        `not corrected or erased by it.`,
       supporting_refs: [ref("lease", cur.lease_id, { lease_status: cur.lease_status }), ...openingRefs].filter(Boolean),
       conflicting_refs: [],
     };
@@ -549,7 +550,13 @@ function evidenceState(p) {
   /*  ── A SEQUENCE IS NOT A CONTRADICTION ────────────────────────────
    *  A baseline that recorded this bed vacant on 31 July does not fight a
    *  lease that STARTED on 5 August. Those two facts are about different
-   *  days and both are true; the later dated fact governs the read date.
+   *  days and both are true.
+   *
+   *  ⚠ THE LATER FACT GOVERNS THE LATER DATE. It does NOT supersede the
+   *  baseline, and the baseline was not wrong: 31 July still reads vacant
+   *  for 31 July. "Governs" and "supersedes" are different words on
+   *  purpose — supersession is a governed corrective act, and nothing
+   *  corrective happened here. Time passed.
    *
    *  Treating that as a conflict would put every ordinary new lease since
    *  the baseline into Needs Review — and would make Spine unable to
@@ -563,7 +570,7 @@ function evidenceState(p) {
     && p._opening_claim_source.opening_position_as_of;
   if (lease && c === "vacant" && baselineAsOf && leaseObj.start_date
       && String(leaseObj.start_date) > String(baselineAsOf)) {
-    return "superseded_by_later_fact";
+    return "governed_by_later_fact";
   }
   return "disagrees";
 }
