@@ -146,7 +146,7 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
       }
 
       const prop = (await pool.query(
-        "select id, name, sms_number, organization_id from properties where id=$1", [propertyId])).rows[0];
+        "select id, coalesce(display_name, name) as name, sms_number, organization_id from properties where id=$1", [propertyId])).rows[0];
       if (!prop) return res.status(404).json({ error: "property not found" });
 
       const actor = (await pool.query(
@@ -373,7 +373,20 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
           where id=$3`,
         [otpHash(code, inviteRow.token), String(OTP_TTL_MIN), inviteRow.id]);
 
-      const prop = (await pool.query("select name, sms_number from properties where id=$1", [inviteRow.property_id])).rows[0];
+      const prop = (await pool.query(
+        "select coalesce(display_name, name) as name, sms_number from properties where id=$1", [inviteRow.property_id])).rows[0];
+      /*  DISPLAY NAME, NOT THE INTERNAL ONE. operator.js already states the
+       *  rule — "display_name (migration 060) is what humans call the
+       *  property; the internal name is load-bearing plumbing" — and this
+       *  path did not follow it.
+       *
+       *  It is not cosmetic here. In production the Solo property's `name`
+       *  is literally 'Property Spine Demo Building' and its display_name
+       *  is 'Solo on Chestnut', so a new operator's FIRST contact with
+       *  Property Spine was a text message reading "Your Property Spine
+       *  Demo Building access code is ...". An SMS a person can see is
+       *  product copy, and this one carried demo vocabulary into the live
+       *  onboarding path (§17: demo data may exist, demo paths may not).  */
       const body = `Your ${prop.name} access code is ${code}. It expires in ${OTP_TTL_MIN} minutes.`;
 
       // COMMUNICATIONS BOUNDARY: staff OTP is explicitly classified
@@ -494,7 +507,7 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
         const sessionToken = issued.session_token;
 
         const propRow = (await client.query(
-          `select id, name from properties where id=$1`, [inv.property_id])).rows[0];
+          `select id, coalesce(display_name, name) as name from properties where id=$1`, [inv.property_id])).rows[0];
         const prRow = (await client.query(
           `select platform_role from users where id=$1`, [user.id])).rows[0];
 
@@ -563,7 +576,7 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
       const sessionToken = issued.session_token;
 
       const propRow2 = (await client.query(
-        `select id, name from properties where id=$1`, [inv.property_id])).rows[0];
+        `select id, coalesce(display_name, name) as name from properties where id=$1`, [inv.property_id])).rows[0];
       const prRow2 = (await client.query(
         `select platform_role from users where id=$1`, [user.id])).rows[0];
 
@@ -594,7 +607,8 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
   router.get("/properties/:id/team", async (req, res) => {
     const propertyId = req.params.id;
     try {
-      const prop = (await pool.query("select id, name from properties where id=$1", [propertyId])).rows[0];
+      const prop = (await pool.query(
+        "select id, coalesce(display_name, name) as name from properties where id=$1", [propertyId])).rows[0];
       if (!prop) return res.status(404).json({ error: "property not found" });
 
       const rows = (await pool.query(

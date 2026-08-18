@@ -125,7 +125,59 @@ through `crumbPropertyName()`, which resolves in this order:
 misses. The row is right about where Skyline's wordmark came from and wrong as
 a general rule — and the difference is per-property, which is §4.2.
 
-### 4.2 The stated reason this is safe is FALSE for Solo
+### 4.2 ⚠ CORRECTED 2026-08-18 — THIS SECTION WAS WRONG
+
+**Production was read, and it does not say what this section claimed.** The
+six property rows matching `solo|skyline`:
+
+```text
+14e41b7c-e91c-49e8-9651-10c4908a8f6a  'skyline'                       (null)                231 units
+a50fbdd0-3642-431e-b532-0dcd6ab8a4fe  'Property Spine Demo Building'  'Solo on Chestnut'    283 units
+f681948d-32c9-440e-baa1-8dab7b86d9e0  'Skyline'                       (null)                  0
+17edd345-d437-47fd-bcd2-434230c58662  'Skyline'                       (null)                  0
+79a5a8d1-57c4-4a11-a5b3-3529bc45f620  'Solo on Chestnut'              (null)                  0
+21197bb1-e760-4c9a-831d-c98a924e7099  'Solo on Chestnut'              (null)                  0
+```
+
+`SOLO_ID = '9e2bb96e-08e2-41db-81c2-91055ceb50a3'` **is not among them.** The
+real Solo property is `a50fbdd0-…`. So the fixture id does NOT collide with a
+server id, the handoff's original reasoning was right, and the claim below —
+that the guard is false for Solo — is **the error, not the correction**.
+
+It was reasoned from `SOLO_ID` and `SOLO_PROPERTY_ID` being the same constant
+inside `index.html`, which is true and proves only that the app is internally
+consistent about a fixture. Two identifiers agreeing with each other is not
+either of them agreeing with the database. **The database was not read before
+the claim was made, and it should have been.**
+
+What survives: the `crumbPropertyName` inversion is real as an ordering defect
+and the fix stands on §21 — server-confirmed identity must win in a signed-in
+session, and preview infrastructure must not sit ahead of it. But it was
+**latent, exactly as the handoff filed it**, not actively firing.
+
+Two things the same read did establish, and they matter more:
+
+```text
+KZ's Skyline assignment is ACTIVE          the handoff says active = false.
+                                           It is true, with leasing among the
+                                           modules. Skyline is operable today.
+Tom holds an INACTIVE Skyline assignment   same modules, active = false.
+Mike has NO staff user at all              not an inactive one. None.
+FOUR EMPTY DUPLICATE PROPERTIES            two 'Skyline', two 'Solo on
+                                           Chestnut', 0 units each.
+THE REAL SOLO IS NAMED 'Property Spine Demo Building'
+                                           display_name carries the operator's
+                                           name. Any read using bare `name`
+                                           shows an operator the demo name —
+                                           which the staff invite and OTP SMS
+                                           were doing, on a new operator's very
+                                           first contact with the product.
+```
+
+The original text follows, retained so the error is legible rather than
+disappeared.
+
+### 4.2 (SUPERSEDED) The stated reason this is safe is FALSE for Solo
 
 The handoff records item 2 as latent, surviving "only because server ids are
 UUIDs and do not match fixture ids." That guard does not hold:

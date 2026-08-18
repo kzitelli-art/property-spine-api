@@ -170,6 +170,11 @@ const GATES = [
     what: "Insurance + Tax readers: retrieval declared; comparison and cause not claimed" },
   { file: "compliance_user_journey.test.js",
     what: "Compliance user journey: six natural questions, honest attention, server-minted openers" },
+  //  Production's Solo property is NAMED 'Property Spine Demo Building'
+  //  with display_name 'Solo on Chestnut', so the invite path was texting
+  //  a new operator the demo name on their first contact with the product.
+  { file: "staff_invite_display_name.test.js",
+    what: "staff invite + OTP speak the operator's name for the building, never the internal one" },
 ];
 
 const bar = "════════════════════════════════════════════════════════════════";
