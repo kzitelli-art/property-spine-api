@@ -285,3 +285,44 @@ crumbPropertyName __OFFLINE_DEALS  Class 4 — delete-on-activation scaffolding
 switchProperty preview path        Class 3 today, and reachable from a
   (§4.3)                           signed-in shell, which is the defect.
 ```
+
+---
+
+## 7. Adjacent, reproduced, and NOT fixed here
+
+`THREAD_HANDOFF.md` records that a from-scratch rebuild "still fails at old
+migration `012`", with "magnitude: unknown until someone actually needs a clean
+rebuild." Needed one, so here is the magnitude.
+
+```text
+001_baseline.sql   create table if not exists vendors (
+                     id, name, trade, phone, email, preferred, … )
+                   ↑ the MAINTENANCE vendor
+
+012_bank_intake.sql
+                   create table if not exists vendors (
+                     id, canonical_name, yardi_code, vendor_type, … )
+                   ↑ the CANONICAL PAYEE — a different table wearing the
+                     same name
+
+On a blank database 001 wins, 012's `if not exists` silently does
+nothing, and the next statement dies:
+
+    create unique index uq_vendors_yardi_code on vendors (yardi_code)
+    ✗ column "yardi_code" does not exist
+```
+
+**`create table if not exists` on a name another migration already created is
+not idempotence — it is a silent divergence.** The failure is loud only because
+an index followed. Had 012 ended at the table, the rebuild would have succeeded
+and produced a database that quietly disagrees with production about what
+`vendors` is.
+
+Not fixed here. `add column if not exists` would get past the error and would
+not answer the real question — which shape production actually holds, and
+therefore which of the two tables the last 158 migrations have been building
+on. That needs a production comparison and is its own slice.
+
+**What it cost today:** the from-scratch route to a real API for the switch
+proof. Recorded rather than chased (CLAUDE.md, *when you find an adjacent
+defect*).
