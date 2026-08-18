@@ -197,7 +197,9 @@ function normalizeCandidate(raw, {
     });
   }
   const ownerResolutionStatus = raw.owner_resolution_status || null;
-  const ownerPerson = ownerResolutionStatus && raw.owner_status === "named"
+  const ownerPerson = ownerResolutionStatus &&
+      ownerResolutionStatus !== "unresolved" &&
+      raw.owner_status === "named"
     ? resolvePersonLabel(raw.owner_label, ownerResolutionStatus, personIndex, "owner")
     : null;
   return {

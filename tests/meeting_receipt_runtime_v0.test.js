@@ -13,7 +13,7 @@ const meetingReceiptService = require("../src/meeting_evidence/meeting_receipt_s
 const meetingEvidenceRoutes = require("../src/meeting_evidence/meeting_evidence_routes");
 const release = require("../src/meeting_evidence/meeting_receipt_release_readiness");
 
-const EXPECTED = 73;
+const EXPECTED = 75;
 let passed = 0;
 let failed = 0;
 
@@ -197,6 +197,15 @@ function modelOutput() {
   ok("unresolved resolution cannot smuggle a resolved label", await rejects(Promise.resolve().then(() =>
     extractorRunner.compileExtractorOutput(unresolvedWithLabel, { meeting, transcriptVersion, segments, speakerPeople })
   ), "extractor_unresolved_label_forbidden"));
+  const unresolvedNamedOwner = modelOutput();
+  unresolvedNamedOwner.candidates[0].owner_status = "named";
+  unresolvedNamedOwner.candidates[0].owner_label = "Katie Leung";
+  unresolvedNamedOwner.candidates[0].owner_resolution_status = "unresolved";
+  const unresolvedNamedOwnerRun = extractorRunner.compileExtractorOutput(unresolvedNamedOwner, {
+    meeting, transcriptVersion, segments, speakerPeople,
+  });
+  ok("transcript-named owner may remain unresolved", unresolvedNamedOwnerRun.candidates[0].owner_label === "Katie Leung");
+  ok("unresolved named owner receives no person id", unresolvedNamedOwnerRun.candidates[0].owner_person_id === null);
   const forward = modelOutput();
   forward.candidates[0].supersedes_candidate_key = "later";
   forward.candidates.push({ ...forward.candidates[0], candidate_key: "later", supersedes_candidate_key: null });
