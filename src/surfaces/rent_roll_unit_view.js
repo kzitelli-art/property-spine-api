@@ -42,7 +42,7 @@
 
 "use strict";
 
-const { datedPropertyPositions } = require("../tenancy/dated_positions");
+const { datedPropertyPositions, rentRollBuckets } = require("../tenancy/dated_positions");
 
 const money = (n) => (n == null ? null : Math.round(Number(n) * 100) / 100);
 const firstTenant = (tenants) =>
@@ -105,7 +105,30 @@ function positionLine(p) {
     space_id: p.space_id,
     label: p.space_label,
     position_kind: p.position_kind,
+    /*  THE SERVER'S CLASSIFICATION, per row. The headline totals and this
+     *  field come from the same function, so a surface renders what Spine
+     *  decided rather than re-deriving Occupied/Open in the browser — which
+     *  is how a screen and its own header come to disagree. */
+    //  THE PRIOR QUESTION: does Spine hold any authoritative fact about
+    //  this position? Relayed so a caller can tell "we know nothing here"
+    //  apart from "we know two things and they fight".
+    basis_state: p.basis_state,
+    basis_type: p.basis_type,
+    basis_ref: p.basis_ref,
+    //  Occupancy established does not mean TERMS established.
+    contractual_terms_state: p.contractual_terms_state,
+    //  RELAYED, not recomputed. dated_positions decided all of it.
+    //  The CODE and the REFS are the contract; the sentence is for a
+    //  person. A surface that had to read the English to find out what
+    //  happened would make the copy an API.
+    bucket: p.bucket,
+    bucket_label: p.bucket_label,
+    bucket_reason_code: p.bucket_reason_code,
+    bucket_reason: p.bucket_reason,
+    supporting_refs: p.supporting_refs,
+    conflicting_refs: p.conflicting_refs,
     //  The position's own standing, in the vocabulary the classifier owns.
+    //  Carried for the detail view and for Ask Spine; NOT for the glass.
     tenancy_state: p.tenancy_state,
     economics_state: p.economics_state,
     evidence_state: p.evidence_state,
@@ -166,7 +189,7 @@ async function unitRentRoll(pool, { property_id, as_of = null } = {}) {
   }
 
   const units = [...byUnit.values()].map((u) => {
-    const occupied = u.positions.filter((x) => x.tenancy_state === "contractually_occupied").length;
+    const t = rentRollBuckets(u.positions);
     const committed = u.positions.filter((x) => x.next).length;
     return {
       ...u,
@@ -174,30 +197,96 @@ async function unitRentRoll(pool, { property_id, as_of = null } = {}) {
       //  Counts only — no percentage, because a percentage of three beds
       //  is a number that looks more precise than it is.
       rentable_positions: u.positions.length,
-      occupied,
-      open: u.positions.length - occupied,
+      occupied: t.occupied,
+      activation_pending: t.activation_pending,
+      open: t.open,
+      needs_review: t.needs_review,
+      //  Outside the four: not a tenancy state, so not a tenancy bucket.
+      not_established: t.not_established,
+      established: t.established,
       with_next_known: committed,
     };
   }).sort((a, b) => String(a.unit_number).localeCompare(String(b.unit_number), undefined, { numeric: true }));
 
   const positions = units.flatMap((u) => u.positions);
-  const occupied = positions.filter((p) => p.tenancy_state === "contractually_occupied").length;
+  const totals = rentRollBuckets(positions);
   const withNext = positions.filter((p) => p.next).length;
   const rentUnknown = positions.filter(
     (p) => p.current && p.current.rent.state === "not_in_source").length;
 
+  /*  ── THE PROPERTY STATE IS DERIVED FROM ITS POSITIONS ──────────────
+   *  It was briefly "does an opening tenancy baseline exist?", which was
+   *  a prerequisite this product never had: before this branch no reader
+   *  consulted opening_tenancy_positions at all. That gate blanked a
+   *  whole property — totals null, units empty — on the absence of ONE
+   *  kind of source, and would have blanked a property whose every lease
+   *  was signed natively through Spine.
+   *
+   *  A position needs an established BASIS, not a particular source. So
+   *  the property state is the roll-up of its positions and nothing else:
+   *
+   *      every position has a basis   →  ESTABLISHED
+   *      some do                      →  PARTIALLY_ESTABLISHED
+   *      none do                      →  NOT_ESTABLISHED
+   *
+   *  PARTIALLY_ESTABLISHED is not a hedge; CLAUDE.md already carries it as
+   *  a first-class state and caps Property Expenses there for exactly this
+   *  reason — a room may not manufacture an establishment its children
+   *  cannot support. Same cap, one level down.
+   *
+   *  `totals` and `units` are NEVER null or empty here. The state rides
+   *  ALONGSIDE the data rather than replacing it: a property with 140
+   *  established beds and 20 without a basis must show 140 and say 20,
+   *  not refuse to answer.  */
+  const truthState = totals.established === totals.total ? "ESTABLISHED"
+    : (totals.established > 0 ? "PARTIALLY_ESTABLISHED" : "NOT_ESTABLISHED");
+
   return {
     property_id: dp.property_id,
     as_of: dp.as_of,
+    established: truthState === "ESTABLISHED",
+    truth_state: truthState,
+    //  Said only when it is true, and only about the positions it is true of.
+    why: truthState === "ESTABLISHED" ? null
+      : `${totals.not_established} of ${totals.total} rentable positions have no ` +
+        `authoritative fact establishing them${dp.as_of ? ` on ${dp.as_of}` : ""}.`,
+    next_step: truthState === "ESTABLISHED" ? null
+      : "Establish those positions — from an opening tenancy position, a recorded " +
+        "lease, or a recorded possession fact.",
+    //  WHICH baseline answered. A rent roll that cannot say what it was
+    //  built on cannot be argued with, and after a later baseline is
+    //  established this is the field that shows a historical read is still
+    //  reading the right month.
+    opening_baseline: dp.opening_baseline,
     opening_truth: dp.opening_truth,
     totals: {
       units: units.length,
       rentable_positions: positions.length,
-      occupied,
+      occupied: totals.occupied,
+      //  Committed and awaiting economic activation. Spoken for, and never
+      //  Open — offering one of these to a prospect is the expensive
+      //  mistake the subtraction used to make silently.
+      activation_pending: totals.activation_pending,
       //  NOT "vacant". A position with no lease spanning this date is open
       //  ON THIS DATE; whether it can be marketed is a different question
       //  with different inputs, and this read does not answer it.
-      open: positions.length - occupied,
+      //
+      //  And NOT `positions.length - occupied`. That subtraction was the
+      //  defect: it swept committed, contested and unreconciled beds into
+      //  Open because they were not Occupied. Open is now a state a
+      //  position is classified INTO, so it can never absorb a bed nobody
+      //  classified.
+      open: totals.open,
+      //  Contested claims and beds whose accepted opening evidence
+      //  contradicts the lease record. Spine has no basis to choose, and
+      //  will not.
+      needs_review: totals.needs_review,
+      //  Outside the four. A position with no basis is not a tenancy
+      //  state, so it is not a tenancy bucket — it is counted here and
+      //  the four still balance against `established`.
+      not_established: totals.not_established,
+      established: totals.established,
+      unclassified: totals.unclassified,
       with_next_known: withNext,
       //  Stated rather than hidden: on a source that carries no forward
       //  rents this is most of the building, and an operator seeing many

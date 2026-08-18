@@ -142,7 +142,27 @@ async function cleanup(pool) {
     ok("every unit carries its own positions",
       rr.units.every((u) => u.positions.length === u.rentable_positions));
     ok(`occupied agrees with the file (${totals.occupied})`, rr.totals.occupied === totals.occupied, String(rr.totals.occupied));
-    ok("open = positions - occupied", rr.totals.open === 160 - totals.occupied, String(rr.totals.open));
+    /*  ⚠ THIS ASSERTED THE SUBTRACTION AND WAS RIGHT ABOUT THE OLD RULE.
+     *  It read `open === 160 - totals.occupied` — Open as a remainder,
+     *  written down as the intended behaviour. Everything that was not
+     *  Occupied became Open: committed beds, contested beds, and beds
+     *  Spine holds no fact about.
+     *
+     *  This fixture establishes no opening tenancy position, so there is
+     *  no accepted per-space vacancy claim anywhere in it — and a lease
+     *  proves occupancy while nothing proves vacancy. The un-leased beds
+     *  are therefore Not Established, not Open. Same 160 beds, same
+     *  arithmetic closing; the difference is that Spine no longer offers
+     *  a bed it has no evidence is empty.  */
+    ok("Open is 0 — this fixture holds no positive vacancy evidence",
+      rr.totals.open === 0, String(rr.totals.open));
+    ok("the un-leased beds are not_established, not Open",
+      rr.totals.not_established === 160 - totals.occupied,
+      `${rr.totals.not_established} vs ${160 - totals.occupied}`);
+    ok("the four buckets plus not_established still account for 160",
+      rr.totals.occupied + rr.totals.activation_pending + rr.totals.open
+      + rr.totals.needs_review + rr.totals.not_established + rr.totals.unclassified === 160,
+      JSON.stringify(rr.totals));
     ok("units are ordered the way a person reads them",
       rr.units[0].unit_number === "1417-101", rr.units[0].unit_number);
 

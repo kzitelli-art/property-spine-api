@@ -43,7 +43,7 @@ const { OPERATIVE_OVERLAP_SQL, RETIRED_STATUSES } =
   require("../src/tenancy/operative_overlap.js");
 
 const HARNESS = "confirm_proposal_operative_overlap.db.js";
-const EXPECTED = 45;
+const EXPECTED = 48;
 
 let passed = 0, failed = 0;
 const ok = (label, cond, detail) => {
@@ -207,17 +207,54 @@ const TERM = { from: "2026-08-01", to: "2027-07-31" };
       !!gr.err && gr.err.message.includes("Unit 108") && gr.err.message.includes("Room1"),
       gr.err ? gr.err.message : "");
 
-    // ══ 7. VACANT ROWS ARE UNAFFECTED ════════════════════════════════
-    console.log("\n  ── vacant rows are untouched by any of this ──");
+    // ══ 7. VACANT ROWS ════════════════════════════════════════════════
+    /*  ⚠ THIS SECTION ASSERTED THE OPPOSITE AND WAS WRONG.
+     *
+     *  It read "a vacant row on an OCCUPIED bed still promotes", and that
+     *  passed, because at the time it was true. It was also the Skyline
+     *  109A defect written down as intended behaviour: the July source
+     *  called the bed empty, an April lease in force said someone lived
+     *  there, and Spine confirmed the vacancy without saying the two
+     *  disagreed.
+     *
+     *  A vacancy is a CLAIM. It can be contradicted, and being contradicted
+     *  by a lease in force is not a detail — it is the whole question. The
+     *  vacant path now refuses exactly as the occupied path does.
+     *
+     *  What has NOT changed, and is still asserted below: the wall is about
+     *  contradiction, not about vacancy. A vacant row on a FREE bed
+     *  promotes exactly as it always did, and still creates no lease.  */
+    console.log("\n  ── a vacancy contradicted by a lease in force ──");
     const vacantBefore = await leaseCount("101");
     const vac = await propose("101", { tenant_name: null, is_vacant: true });
     const vr = await confirm(vac);
-    ok("a vacant row on an OCCUPIED bed still promotes", !!vr.out && vr.out.vacant === true,
-      vr.err ? vr.err.reason : "");
-    ok("…and creates no lease", vr.out && vr.out.lease_id === null
-      && (await leaseCount("101")) === vacantBefore);
+    ok("a vacant row on an OCCUPIED bed is REFUSED, not promoted",
+      !vr.out && vr.err && vr.err.reason === "vacancy_contradicted_by_operative_lease",
+      vr.err ? vr.err.reason : "it promoted");
+    ok("…it is needs_review, not promoted",
+      (await statusOf(vac)).status === "needs_review");
+    ok("…and it still created no lease", (await leaseCount("101")) === vacantBefore);
+
+    console.log("\n  ── a vacancy nobody contradicts is untouched ──");
+    //  109 is a bed this harness never put a lease on.
+    const freeUnit = "109";
+    {
+      const u = (await pool.query(
+        `insert into units (property_id, unit_number) values ($1,$2) returning id`,
+        [prop, freeUnit])).rows[0].id;
+      await pool.query(`delete from spaces where unit_id=$1 and space_label='(whole unit)'`, [u]);
+      const sp = (await pool.query(
+        `insert into spaces (unit_id, space_label) values ($1,'Room1') returning id`, [u])).rows[0].id;
+      bedOf.set(freeUnit, sp);
+    }
+    const vac2 = await propose(freeUnit, { tenant_name: null, is_vacant: true });
+    const vr2 = await confirm(vac2);
+    ok("a vacant row on a FREE bed still promotes", !!vr2.out && vr2.out.vacant === true,
+      vr2.err ? vr2.err.reason : "");
+    ok("…and creates no lease", vr2.out && vr2.out.lease_id === null
+      && (await leaseCount(freeUnit)) === 0);
     ok("…and is 'promoted', so it counts as established",
-      (await statusOf(vac)).status === "promoted");
+      (await statusOf(vac2)).status === "promoted");
 
     // ══ 8. THE STATEMENT CAN SEE THEM ════════════════════════════════
     //  The whole point of needs_review over staged/rejected:
@@ -232,7 +269,7 @@ const TERM = { from: "2026-08-01", to: "2027-07-31" };
          count(*)::int as total
        from proposed_records where activation_id=$1`, [activationId])).rows[0];
     ok("every blocked row is counted as unresolved, none invisible",
-      tally.unresolved === 5, JSON.stringify(tally));
+      tally.unresolved === 6, JSON.stringify(tally));
     ok("no row was left 'staged' by a refusal", tally.staged === 0, JSON.stringify(tally));
     ok("established + unresolved accounts for every proposal",
       tally.established + tally.unresolved === tally.total, JSON.stringify(tally));

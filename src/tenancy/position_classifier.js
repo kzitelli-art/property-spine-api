@@ -28,10 +28,29 @@
 
 "use strict";
 
-const TERMINAL_LEASE_STATUSES = new Set([
-  "cancelled", "terminated", "rescinded", "void", "expired", "superseded",
-]);
+/*  ONE declaration of "this lease no longer governs". lease_void_service
+ *  owns the list and documents it as "statuses the overlap check already
+ *  ignores"; operative_overlap.js imports it. This file used to restate
+ *  it — two declarations of one vocabulary, which is how the write side
+ *  and the read side come to disagree about what a retired lease is. */
+const { RETIRED_STATUSES } = require("./lease_void_service.js");
+const TERMINAL_LEASE_STATUSES = new Set(RETIRED_STATUSES);
+
+/*  Statuses under which a lease establishes CURRENT economic tenancy. */
 const CURRENT_ECONOMIC_STATUSES = new Set(["active", "commercial"]);
+
+/*  ── KNOWN, ON RECORD, NOT YET ACTIVATED ──────────────────────────────
+ *  A lease is on record for the bed, its start date has arrived, and the
+ *  requirements for Spine to establish current tenancy have not cleared.
+ *  That is Pending Activation, and it is the same condition whether the
+ *  status word is 'pending' or 'signed'.
+ *
+ *  'signed' used to be in NEITHER list — not terminal, not current, not
+ *  pending — so a signed lease spanning the date emitted nothing at all
+ *  and the bed was indistinguishable from an empty one. The fix is not to
+ *  add it to an allow-list of things that count as occupied; it is to
+ *  recognise that we understand exactly what a signed lease is. */
+const ACTIVATION_PENDING_STATUSES = new Set(["pending", "signed"]);
 
 function normalizedStatus(lease) {
   return String(lease && lease.lease_status || "").toLowerCase();
@@ -146,8 +165,25 @@ function classifyFutureCommitment(lease, personNames) {
 function classifyPosition(row, { asOf, personNames } = {}) {
   const leases = (row.leases || []).filter(leaseIsValid);
   const current = leases.find((lease) => CURRENT_ECONOMIC_STATUSES.has(normalizedStatus(lease)) && datesSpan(lease, asOf)) || null;
-  const activationPending = leases.find((lease) => normalizedStatus(lease) === "pending" && datesSpan(lease, asOf)) || null;
+  const activationPending = leases.find((lease) =>
+    ACTIVATION_PENDING_STATUSES.has(normalizedStatus(lease)) && datesSpan(lease, asOf)) || null;
   const future = leases.find((lease) => isFuture(lease, asOf)) || null;
+
+  /*  ── A SPANNING LEASE WHOSE STATUS WE DO NOT UNDERSTAND ───────────
+   *  A DIAGNOSTIC, and a fail-closed one. Not a home for statuses we do
+   *  understand: 'signed' belongs in activation_pending above, because a
+   *  signed lease on record whose start date has arrived is exactly the
+   *  Pending Activation condition.
+   *
+   *  leases.lease_status has no CHECK constraint, so the vocabulary is
+   *  open and the next status somebody writes lands here by default. What
+   *  must never happen is that it lands in Open — a lease Spine holds
+   *  over a bed, whose meaning it cannot classify, is a reason to stop,
+   *  not a reason to offer the bed. */
+  const otherSpanning = leases.filter((lease) =>
+    datesSpan(lease, asOf)
+    && !CURRENT_ECONOMIC_STATUSES.has(normalizedStatus(lease))
+    && !ACTIVATION_PENDING_STATUSES.has(normalizedStatus(lease)));
 
   const events = row.possession_events || [];
   const ins = events.filter((e) => e.event_type === "move_in");
@@ -206,15 +242,61 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     proof_basis: proofBasis(lease),
   } : null;
 
-  // CONFLICT: a contested position. Which lease governs is unknown, so it
-  // must never be silently resolved to the first match.
+  /*  ── CONFLICT: A CONTESTED POSITION *ON THIS DATE* ─────────────────
+   *  Which lease governs is unknown, so it must never be silently
+   *  resolved to the first match.
+   *
+   *  ⚠ THIS USED TO ASK THE WRONG QUESTION, AND PRODUCTION CAUGHT IT.
+   *  It ran over every non-retired lease on the bed and asked whether any
+   *  two overlapped EACH OTHER — `asOf` never entered the computation.
+   *  Every other axis on this position is date-scoped (`current` and
+   *  `activationPending` use datesSpan, `future` uses isFuture); this one
+   *  was not. So two leases that overlapped in April made the bed read
+   *  contested in August, long after the earlier one had ended.
+   *
+   *  On Skyline that showed up as beds the Rent Roll called Needs Review
+   *  for OVERLAPPING_OPERATIVE_LEASES while the canonical writer's own
+   *  wall saw exactly ONE operative lease on the same bed and date. Both
+   *  were right about different questions. The July activation truthfully
+   *  recorded two operative leases THEN; the reader was reporting that
+   *  July condition on an August date.
+   *
+   *      CURRENT CONFLICT @ D
+   *        = >= 2 DISTINCT operative leases
+   *          that BOTH span D
+   *          on the same canonical bed
+   *
+   *  Historical overlap stays historical truth. It does not make today's
+   *  bed contested — and it is not erased either: the leases are still
+   *  loaded, still readable, and a read taken at a date they both span
+   *  still reports the conflict. The rule is date-scoped, not amnesiac.
+   *
+   *  Restricting the population to leases that span D also means this
+   *  agrees with operative_overlap.competingOperativeLeases by
+   *  construction — the writer refuses to CREATE exactly the state the
+   *  reader now refuses to hide. One definition of a contested bed. */
+  const spanning = leases.filter((lease) => datesSpan(lease, asOf));
   const conflicting = [];
-  for (let i = 0; i < leases.length; i++) {
-    for (let j = i + 1; j < leases.length; j++) {
-      if (rangesOverlap(leases[i], leases[j])) conflicting.push(leases[i].id, leases[j].id);
+  for (let i = 0; i < spanning.length; i++) {
+    for (let j = i + 1; j < spanning.length; j++) {
+      /*  DEFENSIVE, and it has already mattered once. The loader
+       *  aggregates leases through a LEFT JOIN to executed_lease_records,
+       *  whose lease_id index is not unique — two verified evidence rows
+       *  for one lease emit that lease twice. Two array slots holding the
+       *  SAME lease trivially "overlap", and `new Set` then collapses the
+       *  pair to a single id, so the position reads contested with ONE
+       *  conflicting lease. A lease can never conflict with itself. */
+      if (String(spanning[i].id) === String(spanning[j].id)) continue;
+      if (rangesOverlap(spanning[i], spanning[j])) {
+        conflicting.push(spanning[i].id, spanning[j].id);
+      }
     }
   }
-  const conflict_ids = [...new Set(conflicting)];
+  /*  A conflict needs TWO sides. One distinct id is not a contest, it is
+   *  a bug upstream, and reporting it as a contest is how that bug stayed
+   *  invisible. */
+  const distinctConflicting = [...new Set(conflicting)];
+  const conflict_ids = distinctConflicting.length >= 2 ? distinctConflicting : [];
 
   // SUCCESSOR of the lease governing as_of: the earliest non-terminal lease
   // starting at or after it ends, that does NOT overlap it (an overlapping
@@ -264,7 +346,19 @@ function classifyPosition(row, { asOf, personNames } = {}) {
     // availability_read consumes this instead of assuming committed_future
     // implies locked, so no availability state can be stronger than its proof.
     future_commitment: classifyFutureCommitment(future, personNames),
+    /*  Valid leases spanning asOf that fit none of the buckets above.
+     *  Never occupancy on their own; they exist so a reader can refuse to
+     *  call a bed empty while Spine holds a lease over it. */
+    other_spanning_lease_positions: otherSpanning.map(shapeLease),
     _compat_occupancy: row.compat_occupancy,
+    //  The per-SPACE claim the chosen opening baseline accepted, when there
+    //  is one, WITH the proposal that supplied it. Carried beside the
+    //  unit-level column rather than replacing it, so "which evidence
+    //  answered this" stays readable instead of one silently shadowing the
+    //  other — and so a reader can point at the record, not just repeat
+    //  its verdict.
+    _opening_space_claim: (row.opening_space_claim && row.opening_space_claim.claim) || null,
+    _opening_claim_source: row.opening_space_claim || null,
   };
 }
 
@@ -443,6 +537,7 @@ module.exports = {
   // shared vocabulary, exported so no caller redefines it
   TERMINAL_LEASE_STATUSES,
   CURRENT_ECONOMIC_STATUSES,
+  ACTIVATION_PENDING_STATUSES,
   leaseIsValid,
   datesSpan,
   isFuture,

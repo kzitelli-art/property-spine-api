@@ -61,6 +61,12 @@ const artifacts = require("./source_artifact_service.js");
 const dealService = require("./deal_service.js");
 const { competingOperativeLeases, describeCompeting, asDate } =
   require("../tenancy/operative_overlap.js");
+//  Hoisted to module scope. It was required inline further down inside
+//  confirmProposal, which put the whole function body in that binding's
+//  temporal dead zone — the vacant-path guard above it would have thrown
+//  ReferenceError before it could refuse anything. snapshot_loader does
+//  not require this module back, so there is no cycle to avoid here.
+const { resolveCurrentUnitId } = require("../shared/snapshot_loader.js");
 
 function refusal(status, reason, receipt, extra = {}) {
   const e = new Error(receipt);
@@ -439,6 +445,69 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
     //  omission from it — and inventing a lease for it would be the
     //  wrong-confident value this whole path exists to prevent.
     if (n.is_vacant || !n.tenant_name) {
+      /*  ── A VACANCY IS A CLAIM, AND IT CAN BE CONTRADICTED ───────────
+       *  Confirming "this bed is empty" while a lease in force says
+       *  someone lives there accepts one of two contradicting sources
+       *  without saying so. Skyline 109A is exactly that: the July rent
+       *  roll called the bed vacant, an April lease says Navraj Julka is
+       *  active at $825, and the vacancy was confirmed straight through —
+       *  after which the Rent Roll had two answers and showed one.
+       *
+       *  The occupied path already refuses this (§2c). The vacant path did
+       *  not, because it returns before any space is resolved. So the
+       *  space is resolved HERE, and resolved NON-FATALLY: a vacant row
+       *  the source never tied to a specific bed still promotes exactly as
+       *  it did before. Only a row that DOES resolve to a bed, and finds
+       *  an operative lease on it, becomes an exception.
+       *
+       *  Spine does not choose the winner. It stops claiming there is no
+       *  contest.  */
+      const vacantUnitId = await resolveCurrentUnitId(client, propertyId, String(n.unit_number));
+      let vacantSpace = null;
+      if (vacantUnitId) {
+        const vs = (await client.query(
+          "select id, space_label from spaces where unit_id=$1 order by created_at", [vacantUnitId])).rows;
+        const namedLabel = n.space_label ? String(n.space_label).trim() : "";
+        if (namedLabel) {
+          vacantSpace = vs.find((s) => String(s.space_label || "").trim().toLowerCase()
+                                       === namedLabel.toLowerCase()) || null;
+        } else if (vs.length === 1) {
+          vacantSpace = vs[0];
+        }
+      }
+
+      if (vacantSpace) {
+        const competing = await competingOperativeLeases(client, {
+          space_id: vacantSpace.id,
+          start_date: n.start_date ?? null,
+          end_date: n.end_date ?? null,
+        });
+        if (competing.length) {
+          await client.query("rollback");
+          const where = `Unit ${n.unit_number}` +
+            (vacantSpace.space_label ? ` · ${vacantSpace.space_label}` : "");
+          await db.query(
+            `update proposed_records
+                set status='needs_review', status_reason=$2, updated_at=now()
+              where id=$1`,
+            [proposed_id,
+             `${where} is reported empty by this source, but ${competing.length === 1
+               ? "a lease in force says it is occupied"
+               : `${competing.length} leases in force say it is occupied`}: ` +
+             `${describeCompeting(competing)}. Spine has no basis to choose between the ` +
+             `source and the lease record, so this row was not confirmed.`]);
+          throw refusal(409, "vacancy_contradicted_by_operative_lease",
+            `${where} is shown as empty on this rent roll, but Spine holds a lease in force ` +
+            `for it. One of the two is out of date and Spine cannot tell which, so this row ` +
+            `is marked for review — check whether the resident moved out, and retire or ` +
+            `correct the lease if they did.`,
+            { competing: competing.map((l) => ({
+                lease_id: l.id, lease_status: l.lease_status,
+                start_date: l.start_date, end_date: l.end_date,
+                tenant_ids: l.tenant_ids || [] })) });
+        }
+      }
+
       await client.query(
         `update proposed_records
             set status='promoted', promoted_record_id=null,
@@ -456,7 +525,6 @@ async function confirmProposal(db, { user_id, proposed_id } = {}) {
     //  uses. Without it, staging was retirement-aware and promotion could
     //  still land on an obsolete representation whenever a current and a
     //  retired unit share a unit number.
-    const { resolveCurrentUnitId } = require("../shared/snapshot_loader.js");
     const currentUnitId = await resolveCurrentUnitId(client, propertyId, String(n.unit_number));
     let unit = currentUnitId
       ? (await client.query(`select * from units where id=$1`, [currentUnitId])).rows[0]
