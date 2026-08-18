@@ -1,6 +1,132 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  THE APPLICATION NOW FOLLOWS THE EXACT BED. MIGRATION 182 IS
+##  WRITTEN AND NOT RELEASED. 2026-08-18. NOT DEPLOYED.
+##  READ THIS BEFORE TOUCHING APPLICATIONS OR THE LEASE RAIL.
+## ══════════════════════════════════════════════════════════════════
+
+**Branch:** `claude/property-spine-orientation-cso2ao` (API). **App: unchanged
+— deliberately.** The new API works against the deployed app; see the contract
+note below. Migration **182**, chosen as the next free number after `main`'s
+181. **Read the ledger from the database before releasing it** — 177–181 are
+themselves unreleased (see the Skyline banner below), so the live ceiling is
+NOT 181 and this number may need to move forward.
+
+### What closed
+
+`application_invitations` and `lease_applications` were durably UNIT-grained.
+`leases.space_id` is NOT NULL and `executed_lease_service` REQUIRES a space, so
+the bed first entered the record at the LAST step, asserted by an operator from
+browser state, with no lineage back to what was applied for. One fact derived
+twice, nothing joining them.
+
+`application_target_authority.js` had already stated its own removal condition —
+*"A space choice cannot be offered unless the complete durable chain can
+preserve it"* — and refused every multi-space unit with a 409. Every Skyline
+unit is multi-bed, so **Skyline was structurally refused.** 182 gives the chain
+the ability, which is the condition that lifts the refusal. Nothing else lifts
+it: that file already rejects "pick the marketable one" as *"select the first
+marketable space wearing a different hat."*
+
+```text
+prospect → exact bed → invitation → application → lease → executed lease → tenancy
+                       space_id      space_id      NOT NULL   REQUIRED
+```
+
+### The five rulings frozen with this build
+
+```text
+1  The application carries the exact space FROM THE AIM, not from the lease.
+2  space_id is NULLABLE. Application access is permissive and a prospect may
+   apply before a bed is settled; NOT NULL would force an invented bed (§5).
+   The requirement belongs to lease generation, not to this column.
+3  The SERVER derives unit_id from the space. A caller may supply both; they
+   are checked against each other and a contradiction is REFUSED, never
+   silently resolved in favour of whichever was read first.
+4  Whole-unit behaviour is UNCHANGED — same server-side derivation, same
+   `sole_space_unit` basis. The only difference is that the derived value is
+   now written down instead of discarded.
+5  A bed is never guessed. A multi-space unit with no bed chosen still
+   refuses; the refusal changed MEANING (from "unsupported" to "unchosen"),
+   not existence.
+```
+
+### ⚠ THE REFUSAL SENTENCE IS A CONTRACT — PROSE, NOT ONLY CODES
+
+The deployed app branches on refusal **text**:
+
+```text
+/space_grain_not_supported|became_ambiguous|more than one rentable space|not supported for this unit/
+  → "Individual-space application links are not supported for this unit yet."
+```
+
+That sentence is **false after 182**. So:
+
+- `space_grain_not_supported` is **retained and no longer emitted.** It stays
+  defined because the deployed app and an app harness both match it (Open
+  Ruling 2 — the app leads, the API may not break it alone).
+  **Removal condition:** no deployed app matches the token.
+- The new `space_choice_required` sentence deliberately avoids every fragment
+  of that regex, so an old app shows it verbatim (plain, but true) rather than
+  confidently saying something untrue.
+- `application_space_grain.test.js` runs **the app's own regex** against the new
+  sentences, so the API cannot drift back into the false branch.
+
+Do not reword those sentences toward the old phrasing without moving the app
+first.
+
+### What is built and proven
+
+```text
+migration 182 (2 columns, 1 trigger fn, 2 triggers)  WRITTEN — not released
+  applied to a disposable local Postgres 16 and FALSIFIED 8 ways, including
+  the UPDATE path: cross-property bed, wrong-unit bed, nonexistent bed all
+  refused with named messages; null bed and derivable bed accepted.
+grain authority        src/applications/application_target_authority.js
+  resolveGrain() EXTRACTED and exported, mirroring evaluateOfferability's
+  existing "isolated so it can be proven directly" treatment.
+birth door             application_lifecycle.js — space_id in BIRTH_FIELDS,
+  deriveSpaceGrain() derives the parent and refuses a contradiction.
+lineage link           applicationSubmission.js — the invitation's bed becomes
+  the application's bed at consume. Without that line the aim is recorded at
+  the invitation and lost at the application, which is the gap itself.
+operator doors         both prepare routes carry the operator's bed choice.
+tests/application_space_grain.test.js   24/24, ON the governance chain
+  FALSIFIED THREE WAYS: whole-unit basis drift → RED; guessing an unchosen
+  bed → RED; refusal prose drifting into the app's false branch → RED.
+npm run verify                          36/36 gates (was 35)
+property-spine-app suite                34 harnesses · 1435 passed · 0 failed
+                                        UNCHANGED — no app edit was needed
+```
+
+### NOT done, and why
+
+```text
+NOT  a bed picker in the operator UI. That is the operator-experience build,
+     and the API is deliberately usable by the deployed app without it.
+NOT  browser verification. Blocked upstream: Skyline's canonical read still
+     returns 391 positions against 160 real beds until migration 180 is
+     released, and aiming an application at a bed is exactly what must not be
+     proven against ambiguous inventory. Code is not blocked; PROOF is.
+NOT  backfill of historical rows. A unit may have GAINED a space since;
+     backfilling would assert today's sole space as a bed nobody stated.
+     Historical rows keep null and read as "not recorded", which is true.
+NOT  the lease-generation precondition ("a governing lease requires a bed").
+     It belongs to the lease-execution rail, not to this column.
+```
+
+### One thing this build deliberately did not copy
+
+Five historical migrations (076, 077, 079, 083, 084) insert their **own**
+`schema_migrations` row. The runner also records every file it applies, so on
+a fresh build the two collide on `schema_migrations_pkey` and the runner then
+prints *"FAILED — rolled back. Nothing from this file was applied"* for a file
+whose objects were in fact created. Measured, not inferred. **182 does not
+self-record.** Do not copy that pattern forward.
+
+
+## ══════════════════════════════════════════════════════════════════
 ##  ⚠ SKYLINE HOLDS TWO INVENTORY REPRESENTATIONS. EVERY CANONICAL
 ##  TENANCY READ OF IT RETURNS 391 POSITIONS AGAINST 160 REAL BEDS.
 ##  MIGRATION 180 IS WRITTEN AND NOT RELEASED. 2026-08-17.

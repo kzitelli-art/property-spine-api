@@ -3567,9 +3567,9 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   //
   //  The return shape keeps `offerable` so existing call sites are untouched;
   //  callers that want to explain the refusal read refusal_code/refusal_reason.
-  async function unitOfferableState(property_id, unit_id, q = pool) {
+  async function unitOfferableState(property_id, unit_id, q = pool, space_id = null) {
     return applicationTargetAuthority.resolveApplicationTarget(q, {
-      property_id, unit_id, require_offerable: true,
+      property_id, unit_id, space_id, require_offerable: true,
     });
   }
 
@@ -3671,7 +3671,11 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       return res.status(503).json({ error: "applicant_link_origin_not_configured",
         receipt: "APP_BASE_URL is not set. Refusing to create an invitation whose applicant link cannot be built." });
     }
-    const { prepare_obligation_id, unit_id, expires_at = null } = req.body || {};
+    //  (182) space_id is the operator's BED CHOICE. Optional: a whole-unit
+    //  property never sends one and the server derives the sole space exactly
+    //  as before. For a by-the-bed unit it is required, and the authority
+    //  refuses with space_choice_required when it is missing.
+    const { prepare_obligation_id, unit_id, space_id = null, expires_at = null } = req.body || {};
     if (!prepare_obligation_id) return res.status(400).json({ error: "prepare_obligation_id is required — prepare acts on the exact open commitment." });
     if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
     const client = await pool.connect();
@@ -3686,10 +3690,10 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       const gate = await applicationBirthGate(req, ob.person_id, client);
       if (!gate.ok) { await client.query("rollback"); return res.status(gate.status).json(gate); }
       const out = await applicationInvitations.prepareApplicationLinkForObligation(client, {
-        prepare_obligation_id, unit_id, expires_at,
+        prepare_obligation_id, unit_id, space_id, expires_at,
         actor_user_id: req.operator.id,
-        unitOfferable: async (c, { property_id, unit_id }) =>
-          unitOfferableState(property_id, unit_id, c),
+        unitOfferable: async (c, { property_id, unit_id, space_id }) =>
+          unitOfferableState(property_id, unit_id, c, space_id),
       });
       await client.query("commit");
       out.link = `${APPLICANT_ORIGIN}/t/application/${out.token}`;
@@ -3705,7 +3709,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   router.post("/operator/leasing/application-invitations/send", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     if (!svcGuard(res, "dispatchPreparedLinkProvider")) return;
-    const { prepare_obligation_id, unit_id, expires_at = null, message_prefix = "" } = req.body || {};
+    const { prepare_obligation_id, unit_id, space_id = null, expires_at = null, message_prefix = "" } = req.body || {};
     if (!prepare_obligation_id) return res.status(400).json({ error: "prepare_obligation_id is required." });
     if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
     const client = await pool.connect();
@@ -3721,10 +3725,10 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       const gate = await applicationBirthGate(req, ob.person_id, client);
       if (!gate.ok) { await client.query("rollback"); return res.status(gate.status).json(gate); }
       prepared = await applicationInvitations.prepareApplicationLinkForObligation(client, {
-        prepare_obligation_id, unit_id, expires_at,
+        prepare_obligation_id, unit_id, space_id, expires_at,
         actor_user_id: req.operator.id,
-        unitOfferable: async (c, { property_id, unit_id }) =>
-          unitOfferableState(property_id, unit_id, c),
+        unitOfferable: async (c, { property_id, unit_id, space_id }) =>
+          unitOfferableState(property_id, unit_id, c, space_id),
       });
       await client.query("commit");
     } catch (e) {

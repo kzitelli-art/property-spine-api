@@ -7,31 +7,46 @@
 //      May an application be aimed at this unit right now, and which
 //      exact space would it land on?
 //
-//  ── THE GOVERNING GRAIN BOUNDARY ─────────────────────────────────────
-//  The application segment is durably UNIT-GRAINED. Verified at schema:
-//
-//      application_invitations   property_id, unit_id   NO space_id
-//      lease_applications        property_id, unit_id   NO space_id
-//      lifecycle BIRTH_FIELDS    unit_id                NO space_id
-//
-//  Space grain begins downstream, at executed_lease_records and leases
-//  (leases.space_id is NOT NULL). So the durable chain from invitation to
-//  application birth CANNOT carry a space choice.
+//  ── THE GOVERNING GRAIN BOUNDARY — WIDENED AT MIGRATION 182 ──────────
+//  This section previously read "the application segment is durably
+//  UNIT-GRAINED", and stated its own removal condition:
 //
 //      A space choice cannot be offered unless the complete durable chain
 //      can preserve it.
 //
-//  Therefore:
+//  Migration 182 gave the chain that ability. Verified at schema:
+//
+//      application_invitations   property_id, unit_id, space_id   (nullable)
+//      lease_applications        property_id, unit_id, space_id   (nullable)
+//      lifecycle BIRTH_FIELDS    unit_id, space_id
+//      leases                    space_id NOT NULL
+//      executed_lease_records    space_id REQUIRED
+//
+//  So the aim now survives from invitation to executed lease as ONE fact
+//  instead of being re-asserted at the end from browser state. Therefore:
+//
 //      unit with exactly one space   → supported, space derived SERVER-SIDE
-//      unit with more than one space → controlled refusal, 409
+//      unit with >1 space, space CHOSEN   → supported, choice VALIDATED
+//      unit with >1 space, no space given → refused: a bed must be chosen
 //      unit with zero spaces         → unconfigured, refused
 //
-//  ── resolved_space_id IS A VALIDATION RECEIPT, NOT LINEAGE ───────────
-//  It exists so the server can prove WHICH space it evaluated availability
-//  against. It is NOT the application's space and MUST NOT be persisted as
-//  though it were — not in captured JSON, notes, unit_label, event text,
-//  obligation metadata, or browser state presented as durable truth. The
-//  application record keeps unit grain; nothing here widens it.
+//  The multi-space refusal did not disappear — it changed meaning. It used
+//  to say "this shape is not supported"; it now says "you have not told me
+//  which bed". The first was a statement about Spine, the second is a
+//  statement about the request, and they are different refusals (§40.7's
+//  discipline, one altitude down).
+//
+//  ── resolved_space_id IS NOW LINEAGE, DELIBERATELY ───────────────────
+//  It was "a VALIDATION RECEIPT, NOT LINEAGE … MUST NOT be persisted as
+//  though it were", because the chain could not carry it and a persisted
+//  receipt would have been a bed nobody could prove was chosen. That
+//  reasoning was correct and is now spent: the chain carries it, so the
+//  value callers persist is the same value availability was evaluated
+//  against. Callers write it to space_id; nothing derives it a second time.
+//
+//  What has NOT changed: the browser never supplies a space that is trusted
+//  unchecked. A chosen space is validated against the unit and the property
+//  here, and again by trg_lease_application_space_grain in Postgres.
 //
 //  ── WHY NOT "PICK THE RENTABLE ONE" ──────────────────────────────────
 //  A two-space unit where only one space is currently marketable is STILL
@@ -99,7 +114,19 @@ const FUTURE_DATED_STATES = new Set(["upcoming", "turnover_required"]);
 const REFUSAL = {
   NOT_AT_PROPERTY:        "not_at_property",
   UNCONFIGURED:           "application_target_unconfigured",
+  //  RETAINED, NO LONGER EMITTED (182). The deployed app branches on this
+  //  string and an app harness pins it, so removing it is a contract change
+  //  the API may not make alone (Open Ruling 2 — the app leads). It stays
+  //  defined and stops being reachable: after 182 a multi-space unit is not
+  //  unsupported, it is unchosen, and SPACE_CHOICE_REQUIRED says so.
+  //  REMOVAL CONDITION: delete when no deployed app matches this token.
   MULTI_SPACE:            "space_grain_not_supported",
+  //  NEW (182). A statement about the REQUEST, not about Spine.
+  SPACE_CHOICE_REQUIRED:  "space_choice_required",
+  //  NEW (182). A supplied space that does not belong to the stated unit or
+  //  property. Never silently corrected — a caller aiming at the wrong bed
+  //  must learn that, not be redirected to a bed it did not name.
+  SPACE_NOT_IN_UNIT:      "space_not_in_unit",
   NOT_OFFERABLE:          "not_offerable",
   // CAPABILITY refusal, not an availability statement. The position may be
   // perfectly real and coming available on a governed date; what is missing is
@@ -117,6 +144,17 @@ const REFUSAL_TEXT = {
   [REFUSAL.NOT_AT_PROPERTY]:      "That unit is not at this property.",
   [REFUSAL.UNCONFIGURED]:         "This unit has no rentable space configured, so an application cannot be aimed at it yet.",
   [REFUSAL.MULTI_SPACE]:          "Individual-space application links are not supported for this unit yet.",
+  //  ⚠ WORDING IS A CONTRACT HERE. The deployed app matches refusal PROSE,
+  //  not only codes: /more than one rentable space|not supported for this unit/
+  //  routes to "Individual-space application links are not supported" — which
+  //  is FALSE after 182. This sentence deliberately avoids both fragments, so
+  //  an old app falls through to showing it verbatim (honest, if plain) rather
+  //  than confidently saying something untrue. Do not reword it toward those
+  //  phrases without moving the app first.
+  [REFUSAL.SPACE_CHOICE_REQUIRED]:
+    "This unit has more than one bed. Choose which bed this application is for.",
+  [REFUSAL.SPACE_NOT_IN_UNIT]:
+    "That bed is not part of this unit at this property.",
   [REFUSAL.NOT_OFFERABLE]:        "This unit cannot be offered right now.",
   // Describes the LINEAGE limitation. It must not say the position is
   // unavailable — it may be genuinely coming available on a governed date, and
@@ -150,6 +188,56 @@ const ymd = (d) => {
   return String(d).slice(0, 10);
 };
 
+// ── WHICH BED — ISOLATED SO IT CAN BE PROVEN DIRECTLY (182) ──────────
+//  Same treatment evaluateOfferability already gets, and for the same
+//  reason: this is the decision 182 changed, and it must be testable
+//  without standing up availability_read and the dated-positions chain
+//  behind it. Grain is "which bed"; offerability is "may it be offered".
+//  They were one block and are now two, which is also why a grain refusal
+//  can be returned before any availability work happens at all.
+//
+//  Returns { ok:true, space_id, resolution_basis } or { ok:false, refusal }.
+async function resolveGrain(q, { property_id, unit_id, chosen_space_id, space_count }) {
+  if (chosen_space_id) {
+    //  VALIDATE, NEVER TRUST. A bed supplied by a browser is a request; the
+    //  server confirms it belongs to this unit at this property before it can
+    //  become lineage. Postgres refuses it again at write time.
+    const s = (await q.query(
+      `select s.id from spaces s
+         join units u on u.id = s.unit_id
+        where s.id = $1 and s.unit_id = $2 and u.property_id = $3`,
+      [chosen_space_id, unit_id, property_id]
+    )).rows[0];
+    if (!s) {
+      return { ok: false, refusal: refuse(REFUSAL.SPACE_NOT_IN_UNIT, {
+        property_id, unit_id, resolved_space_id: null,
+        rentable_space_count: space_count, httpStatus: 409,
+      }) };
+    }
+    return { ok: true, space_id: s.id, resolution_basis: "chosen_space" };
+  }
+
+  if (space_count === 1) {
+    //  SOLE SPACE — DERIVED SERVER-SIDE, NEVER SUPPLIED. Unchanged from
+    //  before 182. A whole-unit property never chooses a bed and never sees a
+    //  bed picker; the mapping is a total function and the server still
+    //  performs it. The only difference is that callers may now persist what
+    //  was already derived.
+    const sole = (await q.query(
+      `select id from spaces where unit_id = $1`, [unit_id]
+    )).rows[0].id;
+    return { ok: true, space_id: sole, resolution_basis: "sole_space_unit" };
+  }
+
+  //  THE REFUSAL THAT REPLACED "NOT SUPPORTED". The unit can carry an
+  //  application at a bed; this request did not say which one. Refusing is
+  //  still the right answer — "pick the marketable one" remains rejected for
+  //  exactly the reason it always was.
+  return { ok: false, refusal: refuse(REFUSAL.SPACE_CHOICE_REQUIRED, {
+    property_id, unit_id, rentable_space_count: space_count, httpStatus: 409,
+  }) };
+}
+
 /**
  * Resolve where an application may be aimed.
  *
@@ -158,18 +246,43 @@ const ymd = (d) => {
  *                     transaction gets a target resolved against the SAME
  *                     snapshot as the write it is about to make.
  * @param property_id  SERVER-DERIVED property scope. Never a browser value.
- * @param unit_id      null ⇒ untargeted (see below).
+ * @param unit_id      null ⇒ untargeted, UNLESS space_id is given, in which
+ *                     case the unit is DERIVED from the space (182).
+ * @param space_id     the exact bed this application is aimed at. Optional.
+ *                     Supplied by an operator choosing among a unit's beds; it
+ *                     is VALIDATED against the unit and the property here and
+ *                     never trusted as given. Absent on a single-space unit
+ *                     means "derive it", which is the pre-182 behaviour and is
+ *                     unchanged. Absent on a multi-space unit is a refusal.
  * @param require_offerable when false, resolve the space and REPORT
  *                     offerability without refusing on it. Grain refusals
- *                     (multi-space, unconfigured, not-at-property) still
+ *                     (unchosen space, unconfigured, not-at-property) still
  *                     refuse — they are structural, not a policy opinion.
  */
 async function resolveApplicationTarget(q, {
   property_id,
   unit_id = null,
+  space_id: chosen_space_id = null,
   require_offerable = true,
 } = {}) {
   if (!property_id) throw new Error("resolveApplicationTarget requires a server-derived property_id");
+
+  // ── A BED IMPLIES ITS UNIT (182) ──────────────────────────────────
+  //  The server derives the parent rather than letting a caller assert both
+  //  and trusting whichever it read first. A caller that supplies both still
+  //  gets them checked against each other below.
+  if (chosen_space_id && !unit_id) {
+    const owner = (await q.query(
+      `select unit_id from spaces where id = $1`, [chosen_space_id]
+    )).rows[0];
+    if (!owner) {
+      return refuse(REFUSAL.SPACE_NOT_IN_UNIT, {
+        property_id, unit_id: null, resolved_space_id: null,
+        rentable_space_count: null, httpStatus: 404,
+      });
+    }
+    unit_id = owner.unit_id;
+  }
 
   // ── UNTARGETED ────────────────────────────────────────────────────
   //  An honest result, NOT an invitation to make every path untargeted.
@@ -219,19 +332,11 @@ async function resolveApplicationTarget(q, {
     });
   }
 
-  if (u.space_count > 1) {
-    // THE CONTROLLED REFUSAL. Not a bug, not a missing selection the operator
-    // could make — the durable chain cannot preserve a space choice, so the
-    // honest answer is that this shape is not supported yet.
-    return refuse(REFUSAL.MULTI_SPACE, {
-      property_id, unit_id, rentable_space_count: u.space_count, httpStatus: 409,
-    });
-  }
-
-  // ── SOLE SPACE — DERIVED SERVER-SIDE, NEVER SUPPLIED ──────────────
-  const space_id = (await q.query(
-    `select id from spaces where unit_id = $1`, [unit_id]
-  )).rows[0].id;
+  const grain = await resolveGrain(q, {
+    property_id, unit_id, chosen_space_id, space_count: u.space_count,
+  });
+  if (!grain.ok) return grain.refusal;
+  const { space_id, resolution_basis } = grain;
 
   // ── CANONICAL AVAILABILITY FOR THAT EXACT SPACE ───────────────────
   const avail = await availabilityRead(q, { property_id });
@@ -242,7 +347,7 @@ async function resolveApplicationTarget(q, {
     // read gap, not evidence of availability. Refuse rather than assume.
     return refuse(REFUSAL.NOT_OFFERABLE, {
       property_id, unit_id, resolved_space_id: space_id,
-      rentable_space_count: 1, marketing_state: null,
+      rentable_space_count: u.space_count, marketing_state: null,
       available_from: null, availability_confidence: null, httpStatus: 409,
     });
   }
@@ -250,10 +355,13 @@ async function resolveApplicationTarget(q, {
   const base = {
     property_id,
     unit_id,
-    resolved_space_id: space_id,          // VALIDATION RECEIPT — never lineage
-    resolution_basis: "sole_space_unit",
+    //  LINEAGE as of 182 — callers persist this as space_id. It is the same
+    //  value availability was evaluated against, so the bed that was checked
+    //  and the bed that is recorded cannot diverge.
+    resolved_space_id: space_id,
+    resolution_basis,                     // 'chosen_space' | 'sole_space_unit'
     targeted: true,
-    rentable_space_count: 1,
+    rentable_space_count: u.space_count,
     unit_number: row.unit_number,
     space_label: row.space_label,
     position_kind: row.position_kind,
@@ -325,13 +433,28 @@ function evaluateOfferability(row) {
 //  preparation is not "unsupported" the way a two-space unit is at preparation
 //  time — it CHANGED under an open invitation, and the operator needs to be
 //  told that rather than that the shape was never allowed.
-async function resolveSubmissionTarget(q, { property_id, unit_id } = {}) {
+//  ── WHAT 182 CHANGED HERE, AND WHY IT IS A REAL IMPROVEMENT ─────────
+//  An invitation that carries a bed is no longer made ambiguous by its unit
+//  gaining a space. That was the whole content of BECAME_AMBIGUOUS: the unit
+//  changed shape under an open invitation and nothing on the invitation could
+//  say which space it had meant. Now it can, so the question does not arise
+//  and the applicant's link keeps working — which is the correct outcome for
+//  someone who chose bed B before the landlord split bed A in two.
+//
+//  The refusal is RETAINED for invitations with no bed on them: those are
+//  genuinely ambiguous, and the pre-182 reasoning applies to them unchanged.
+async function resolveSubmissionTarget(q, { property_id, unit_id, space_id = null } = {}) {
   const target = await resolveApplicationTarget(q, {
-    property_id, unit_id, require_offerable: false,
+    property_id, unit_id, space_id, require_offerable: false,
   });
 
   if (!target.ok) {
-    if (target.refusal_code === REFUSAL.MULTI_SPACE) {
+    //  MULTI_SPACE is no longer emitted by resolveApplicationTarget; an
+    //  unchosen bed now returns SPACE_CHOICE_REQUIRED. Both map to the same
+    //  submission-time meaning — this link cannot be attributed to a space —
+    //  and MULTI_SPACE stays in the test so a reintroduction is still caught.
+    if (target.refusal_code === REFUSAL.MULTI_SPACE
+        || target.refusal_code === REFUSAL.SPACE_CHOICE_REQUIRED) {
       return {
         ...target,
         refusal_code: REFUSAL.BECAME_AMBIGUOUS,
@@ -372,6 +495,7 @@ async function resolveSubmissionTarget(q, { property_id, unit_id } = {}) {
 
 module.exports = {
   resolveApplicationTarget,
+  resolveGrain,
   resolveSubmissionTarget,
   evaluateOfferability,
   REFUSAL,

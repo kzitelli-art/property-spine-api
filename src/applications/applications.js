@@ -344,7 +344,7 @@ module.exports = function applicationsModule(deps) {
 
   // ─────────────── create (intake record) ───────────────
   router.post("/properties/:propertyId/applications", async (req, res) => {
-    const { applicant_name, unit_id = null, unit_label = null, rent = null, deposit = null,
+    const { applicant_name, unit_id = null, space_id = null, unit_label = null, rent = null, deposit = null,
             guarantor_name = null, person_id = null, captured = {} } = req.body || {};
     if (!applicant_name) return res.status(400).json({ receipt: "applicant_name is required." });
 
@@ -374,8 +374,13 @@ module.exports = function applicationsModule(deps) {
       // route supplies no lead, source or conversion; those fields are simply
       // omitted from the insert so their column defaults survive, rather than
       // being overwritten with an explicit null.
+      //  (182) space_id is optional here exactly as it is at the schema. This
+      //  is the staff/import door: a historical application whose bed was never
+      //  stated lands with null, which is the honest record. A supplied bed is
+      //  validated against the unit and property by the lifecycle authority
+      //  and again by trg_lease_application_space_grain.
       const born = await lifecycle.createSubmittedApplication(client, {
-        property_id: req.params.propertyId, unit_id, person_id, applicant_name,
+        property_id: req.params.propertyId, unit_id, space_id, person_id, applicant_name,
         unit_label, rent, deposit, guarantor_name, captured: captured || {},
       });
       const app = born.application;

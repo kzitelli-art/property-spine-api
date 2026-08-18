@@ -182,7 +182,7 @@ module.exports = function applicationSubmissionModule(deps) {
   //    • spawn the application_approval gate (leasing_manager)
   // ════════════════════════════════════════════════════════════════════
   async function submitApplicationService(client, {
-    property_id, person_id = null, unit_id = null, unit_label = null,
+    property_id, person_id = null, unit_id = null, space_id = null, unit_label = null,
     applicant_name, rent = null, deposit = null, guarantor_name = null,
     captured = {}, source = "applicant",
     conversion_id = null,
@@ -230,14 +230,24 @@ module.exports = function applicationSubmissionModule(deps) {
     //  application nobody can attribute to a space, and lease_applications has
     //  no space_id to attribute it with. Offerability for the public token
     //  door is enforced by its own submission-time revalidation.
-    if (unit_id) {
+    //  (182) The bed travels with the aim. A single-space unit resolves
+    //  exactly as it did before and now records the space it always derived;
+    //  a multi-space unit resolves the CHOSEN bed, or refuses because the
+    //  request never said which. Historical import keeps working: source
+    //  'import' passes no space and lands with space_id null, which is the
+    //  honest record of an application whose bed was never stated.
+    let resolvedSpaceId = null;
+    let resolvedUnitId = unit_id;
+    if (unit_id || space_id) {
       const target = await applicationTarget.resolveApplicationTarget(client, {
-        property_id, unit_id, require_offerable: false });
+        property_id, unit_id, space_id, require_offerable: false });
       if (!target.ok) {
         throw httpErr(target.httpStatus || 409,
           target.refusal_reason || "That unit cannot carry an application.",
           target.refusal_code);
       }
+      resolvedSpaceId = target.resolved_space_id;
+      resolvedUnitId = target.unit_id;
     }
 
     let resolvedLeasingLeadId = leasing_lead_id || await resolveOpenLeasingLeadId(client, { property_id, person_id });
@@ -260,7 +270,8 @@ module.exports = function applicationSubmissionModule(deps) {
     //    The payload is a closed allowlist: this caller cannot name a
     //    lifecycle column, and unknown keys are refused rather than ignored.
     const born = await lifecycle.createSubmittedApplication(client, {
-      property_id, unit_id, person_id, leasing_lead_id: resolvedLeasingLeadId,
+      property_id, unit_id: resolvedUnitId, space_id: resolvedSpaceId,
+      person_id, leasing_lead_id: resolvedLeasingLeadId,
       applicant_name, unit_label, rent, deposit, guarantor_name,
       captured: captured || {}, source, conversion_id,
     });
@@ -366,7 +377,7 @@ module.exports = function applicationSubmissionModule(deps) {
   // staff-session operator route call this ONE service — no duplicated logic.
   async function createPreparedInvitation(client, {
     conversion_id = null, person_id = null, property_id, unit_id = null,
-    expires_at = null, created_by_user_id = null,
+    space_id = null, expires_at = null, created_by_user_id = null,
   }) {
     if (!property_id) throw httpErr(400, "property_id is required.");
     const prop = (await client.query("select id from properties where id=$1", [property_id])).rows[0];
@@ -382,9 +393,9 @@ module.exports = function applicationSubmissionModule(deps) {
     //  REFUSAL HAPPENS BEFORE THE INSERT. No invitation row, no token, no
     //  comm_event follows a refused target.
     let target = null;
-    if (unit_id) {
+    if (unit_id || space_id) {
       target = await applicationTarget.resolveApplicationTarget(client, {
-        property_id, unit_id, require_offerable: true,
+        property_id, unit_id, space_id, require_offerable: true,
       });
       if (!target.ok) {
         throw httpErr(target.httpStatus || 409, target.refusal_reason || "That unit cannot be used for an application.",
@@ -395,18 +406,25 @@ module.exports = function applicationSubmissionModule(deps) {
     const tokenDigest = digestToken(rawToken);
     const inv = (await client.query(
       `insert into application_invitations
-         (token_digest, conversion_id, person_id, property_id, unit_id, status, expires_at, created_by_user_id)
-       values ($1,$2,$3,$4,$5,'prepared',$6,$7) returning *`,
-      [tokenDigest, conversion_id, person_id, property_id, unit_id, expires_at, created_by_user_id]
+         (token_digest, conversion_id, person_id, property_id, unit_id, space_id, status, expires_at, created_by_user_id)
+       values ($1,$2,$3,$4,$5,$6,'prepared',$7,$8) returning *`,
+      //  THE RESOLVED BED IS WHAT IS WRITTEN (182) — not the caller's request.
+      //  A single-space unit therefore persists the derived space with no
+      //  behaviour change; a chosen bed persists the one availability was
+      //  actually evaluated against.
+      [tokenDigest, conversion_id, person_id, property_id,
+       target ? target.unit_id : unit_id,
+       target ? target.resolved_space_id : null,
+       expires_at, created_by_user_id]
     )).rows[0];
     return {
       receipt: "Invitation prepared. Send it through the real channel, then call /mark-sent to attest the send.",
       invitation_id: inv.id,
       token: rawToken,          // RAW token returned ONCE — digest-only at rest.
       status: inv.status,
-      // VALIDATION RECEIPT, NOT LINEAGE. Proves which space availability was
-      // evaluated against. Deliberately NOT written to application_invitations
-      // — the invitation is unit-grained and stays that way.
+      // LINEAGE as of 182. This is now written to application_invitations
+      // .space_id above, and carried forward to the application at submission,
+      // so the bed availability was checked against is the bed on the record.
       resolved_space_id: target ? target.resolved_space_id : null,
       resolution_basis: target ? target.resolution_basis : null,
     };
@@ -432,7 +450,7 @@ module.exports = function applicationSubmissionModule(deps) {
   //    stays 'prepared' with an honest receipt and NO sent-state.
   //  prepared ≠ dispatched · transport-accepted ≠ received. Both kept.
   async function createAndDispatchApplicationInvitation({
-    property_id, person_id, unit_id = null, conversion_id = null,
+    property_id, person_id, unit_id = null, space_id = null, conversion_id = null,
     expires_at = null, created_by_user_id = null, message_prefix = null,
     resume_invitation_id = null,
   }) {
@@ -472,9 +490,10 @@ module.exports = function applicationSubmissionModule(deps) {
       //  a new offer — the unit may well have become unmarketable BECAUSE of
       //  this very applicant, and demanding marketability would make a
       //  legitimate resume impossible. Only structural grain failures refuse.
-      if (inv.unit_id) {
+      if (inv.unit_id || inv.space_id) {
         const still = await applicationTarget.resolveApplicationTarget(pool, {
-          property_id: inv.property_id, unit_id: inv.unit_id, require_offerable: false });
+          property_id: inv.property_id, unit_id: inv.unit_id, space_id: inv.space_id,
+          require_offerable: false });
         if (!still.ok) {
           return { dispatched: false, reason: still.refusal_code, invitation_id: inv.id,
                    status: inv.status, receipt: still.refusal_reason };
@@ -525,21 +544,25 @@ module.exports = function applicationSubmissionModule(deps) {
       //  unit_id. The refusal lands BEFORE the invitation insert, before the
       //  comm_event insert, and therefore before any wire attempt. The prior
       //  check was a property wall only.
-      if (unit_id) {
-        const target = await applicationTarget.resolveApplicationTarget(client, {
-          property_id, unit_id, require_offerable: true });
-        if (!target.ok) {
-          throw httpErr(target.httpStatus || 409,
-            target.refusal_reason || "That unit cannot be used for an application.",
-            target.refusal_code);
+      let dispatchTarget = null;
+      if (unit_id || space_id) {
+        dispatchTarget = await applicationTarget.resolveApplicationTarget(client, {
+          property_id, unit_id, space_id, require_offerable: true });
+        if (!dispatchTarget.ok) {
+          throw httpErr(dispatchTarget.httpStatus || 409,
+            dispatchTarget.refusal_reason || "That unit cannot be used for an application.",
+            dispatchTarget.refusal_code);
         }
       }
       const rawToken = crypto.randomBytes(24).toString("base64url");
       const inv = (await client.query(
         `insert into application_invitations
-           (token_digest, conversion_id, person_id, property_id, unit_id, status, expires_at, created_by_user_id)
-         values ($1,$2,$3,$4,$5,'prepared',$6,$7) returning *`,
-        [digestToken(rawToken), conversion_id, person_id, property_id, unit_id, expires_at, created_by_user_id]
+           (token_digest, conversion_id, person_id, property_id, unit_id, space_id, status, expires_at, created_by_user_id)
+         values ($1,$2,$3,$4,$5,$6,'prepared',$7,$8) returning *`,
+        [digestToken(rawToken), conversion_id, person_id, property_id,
+         dispatchTarget ? dispatchTarget.unit_id : unit_id,
+         dispatchTarget ? dispatchTarget.resolved_space_id : null,
+         expires_at, created_by_user_id]
       )).rows[0];
       const url = `${base}/t/application/${rawToken}`;
       const body = `${message_prefix ? message_prefix + " " : ""}Here's your secure application link: ${url}`;
@@ -887,9 +910,9 @@ module.exports = function applicationSubmissionModule(deps) {
     //
     //  The invitation is NOT converted to another unit and no new space is
     //  selected. A target that no longer holds is refused, never re-aimed.
-    if (inv.unit_id) {
+    if (inv.unit_id || inv.space_id) {
       const still = await applicationTarget.resolveSubmissionTarget(client, {
-        property_id: inv.property_id, unit_id: inv.unit_id });
+        property_id: inv.property_id, unit_id: inv.unit_id, space_id: inv.space_id });
       if (!still.ok) {
         throw httpErr(still.httpStatus || 409,
           still.refusal_reason || "This application link can no longer be used.",
@@ -917,6 +940,11 @@ module.exports = function applicationSubmissionModule(deps) {
 
     const out = await submitApplicationService(client, {
       property_id: inv.property_id, person_id: inv.person_id, unit_id: inv.unit_id,
+      //  (182) THE LINEAGE LINK. The bed the invitation was aimed at becomes
+      //  the bed the application carries. Without this line the aim would be
+      //  recorded at the invitation and lost at the application, which is the
+      //  gap this build exists to close.
+      space_id: inv.space_id,
       applicant_name: name, rent, deposit, guarantor_name, captured,
       source: "applicant",
       conversion_id: inv.conversion_id,
@@ -2096,7 +2124,7 @@ module.exports = function applicationSubmissionModule(deps) {
   //  authority, opens the invitation-specific send child. Parent untouched,
   //  stage NOT advanced.
   async function prepareApplicationLinkForObligation(client, {
-    prepare_obligation_id, unit_id = null, expires_at = null,
+    prepare_obligation_id, unit_id = null, space_id = null, expires_at = null,
     actor_user_id, unitOfferable = null,
   }) {
     if (!prepare_obligation_id) throw httpErr(400, "prepare_obligation_id is required.");
@@ -2142,11 +2170,11 @@ module.exports = function applicationSubmissionModule(deps) {
     //  override; when absent this now falls back to the canonical authority
     //  rather than skipping validation entirely. Preparation cannot proceed
     //  on an unresolved target.
-    if (unit_id) {
+    if (unit_id || space_id) {
       const verdict = unitOfferable
-        ? await unitOfferable(client, { property_id: conv.property_id, unit_id })
+        ? await unitOfferable(client, { property_id: conv.property_id, unit_id, space_id })
         : await applicationTarget.resolveApplicationTarget(client, {
-            property_id: conv.property_id, unit_id, require_offerable: true });
+            property_id: conv.property_id, unit_id, space_id, require_offerable: true });
       if (!verdict || verdict.offerable === false || verdict.ok === false) {
         const why = verdict && (verdict.refusal_reason || verdict.reason);
         throw httpErr(
@@ -2160,7 +2188,7 @@ module.exports = function applicationSubmissionModule(deps) {
     try {
       made = await createPreparedInvitation(client, {
         conversion_id, person_id: conv.person_id, property_id: conv.property_id,
-        unit_id, expires_at, created_by_user_id: actor_user_id,
+        unit_id, space_id, expires_at, created_by_user_id: actor_user_id,
       });
     } catch (e) {
       if (e && e.code === "23505") {
