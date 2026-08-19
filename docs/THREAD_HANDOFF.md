@@ -49,6 +49,20 @@ Release     ◑  REHEARSED, NOT RELEASED. 182-187 applied to a database
                UPGRADED schema. Production itself is untouched.
 ```
 
+### Skyline activation: the pricing blocker is authority, not numbers
+
+`SKYLINE_ACTIVATION_PREREQUISITES.md` — written by asking the running
+system, not by reading source. The headline, from
+`GET /operator/pricing/authority`: **`properties_with_publish_authority: 0`**
+across every property, `grants_total: 0`, and the seeded operator denies
+with `session_identity_not_linked_to_a_person`. Handed the real Skyline
+rent sheet today, nobody could publish it. Also recorded there: publishing
+by *grant* requires two people while publishing by *assignment* does not —
+an open ruling nobody has made, adjacent to R2. And a proof gap: the e2e
+fixture publishes pricing with raw SQL, so the publish doors have never
+been exercised by any proof, on the one step that stands between the frozen
+leasing rail and a real lease.
+
 ### The release is blocked on where, not on whether
 
 `main`'s migration ceiling is **181**. Migrations 182-187 exist only on
