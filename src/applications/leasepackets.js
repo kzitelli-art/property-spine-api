@@ -241,7 +241,15 @@ module.exports = function leasePacketsModule(deps) {
       { key: "parties", title: "Parties & Unit", ack: false, body: [
         `Owner: ${cfg.landlord_entity}.`,
         `Resident(s): ${terms.resident_names}${terms.guarantor_required ? " (a guarantor is named on this application)" : ""}.`,
-        `Unit: ${terms.unit_label || terms.unit_number}, ${terms.property_address}.`,
+        //  THE INSTRUMENT NAMES WHAT IS BEING LET. In a unit let by the
+        //  bed, "Unit 3B" is not what this resident is taking — they are
+        //  taking one space inside it, and a lease that names only the unit
+        //  is ambiguous about the thing it governs. The bed is appended
+        //  only when the packet actually carries one, so a whole-unit lease
+        //  reads exactly as it does today.
+        terms.space_label
+          ? `Unit: ${terms.unit_label || terms.unit_number}, ${terms.space_label}, ${terms.property_address}.`
+          : `Unit: ${terms.unit_label || terms.unit_number}, ${terms.property_address}.`,
       ] },
       { key: "term", title: "Lease Dates", ack: true, body: [
         `Proposed start: ${terms.lease_start_date}.`,
@@ -417,6 +425,22 @@ module.exports = function leasePacketsModule(deps) {
     };
   }
 
+  //  WHAT THE RESIDENT IS SHOWN. The packet holds every signature field,
+  //  including the company's; the resident is shown only their own. This is
+  //  ONE projection rather than a filter at one route, because the tenant
+  //  surface answers from three places — the initial load, every field
+  //  completion, and the final submit — and a filter applied to one of them
+  //  is a rule the other two do not have. That is exactly what happened:
+  //  the load was filtered, the completion response was not, and the
+  //  landlord's "Sign" control reappeared on the resident's page the moment
+  //  they acknowledged anything. Found by clicking through it in a browser.
+  function residentPacket(bundle) {
+    return publicPacket({
+      ...bundle,
+      fields: (bundle.fields || []).filter((f) => f.signer_role !== "company"),
+    });
+  }
+
   // ════════════════════════════════════════════════════════════════
   //  OPERATOR ROUTES  (global gate applies — no local auth here)
   // ════════════════════════════════════════════════════════════════
@@ -516,6 +540,15 @@ module.exports = function leasePacketsModule(deps) {
       unitLabel = (u && u.unit_number) || "";
     }
 
+    //  The bed's own label, read from inventory rather than trusted from a
+    //  denormalised column, so the instrument can name it.
+    let spaceLabel = "";
+    if (app.space_id) {
+      const sp = (await client.query(
+        `select space_label from spaces where id=$1`, [app.space_id])).rows[0];
+      spaceLabel = (sp && sp.space_label) || "";
+    }
+
     const captured = app.captured || {};
     const terms = {
       property_address: prop.address || captured.property_address || "[property address pending]",
@@ -531,6 +564,7 @@ module.exports = function leasePacketsModule(deps) {
       //  that is the difference between a lease and an ambiguity, and the
       //  adapter refused it rather than guess. Found by running the path.
       space_id: app.space_id || null,
+      space_label: spaceLabel,
       unit_label: unitLabel,
       unit_number: unitLabel,
       monthly_rent: confirmation.rent != null ? confirmation.rent : "",
@@ -1075,7 +1109,15 @@ module.exports = function leasePacketsModule(deps) {
         [sha256(req.params.token)])).rows[0]?.id;
       if (!id) return res.status(404).json({ receipt: "Lease link is invalid or expired." });
       const bundle = await getBundle(pool, id);
-      res.json({ packet: publicPacket(bundle) });
+      //  THE RESIDENT SEES ONLY THE RESIDENT'S SIGNATURES.
+      //  The company signature field lives on the same packet, and rendering
+      //  it here put a "Sign" control for the LANDLORD on the resident's own
+      //  page. It could never have worked — the completion route only touches
+      //  required fields and the company's is not required — but an
+      //  unusable control inviting a resident to sign as the company is not
+      //  a cosmetic problem. Found by looking at the page in a browser, not
+      //  by reading the field list.
+      res.json({ packet: residentPacket(bundle) });
     } catch (e) {
       res.status(500).json({ receipt: "Could not load the lease packet.", error: e.message });
     }
@@ -1138,7 +1180,7 @@ module.exports = function leasePacketsModule(deps) {
         { field_key: field.field_key, field_type: field.field_type });
       await client.query("commit");
       const bundle = await getBundle(pool, pk.id);
-      res.json({ packet: publicPacket(bundle) });
+      res.json({ packet: residentPacket(bundle) });
     } catch (e) {
       await client.query("rollback").catch(() => {});
       res.status(500).json({ receipt: "Could not record that field.", error: e.message });
@@ -1290,7 +1332,7 @@ module.exports = function leasePacketsModule(deps) {
         satisfied_obligation_inputs: satisfied,
         application_next: "Executed lease required",
         note: "This document is a demonstration summary of proposed terms, not the governing lease. Nothing further happens until a real lease execution exists.",
-        packet: publicPacket(bundle),
+        packet: residentPacket(bundle),
       });
     } catch (e) {
       await client.query("rollback").catch(() => {});
