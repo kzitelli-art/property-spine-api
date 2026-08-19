@@ -31,9 +31,30 @@ DB          ✔  schema built from the real migration chain, ceiling 187
 HTTP        ✔  every step above, real server, real Postgres
 Browser     ◑  the RESIDENT signing page only. The operator shell is NOT
                proven and was deliberately not forced — see "do not touch"
-Production  ✘  ZERO CONTACT. No claim in this document describes the
-               deployed system.
+CI          ◑  workflow committed and running on GitHub. NOT yet green.
+               A committed workflow is not a working CI system.
+Deployed    ✘  the build identity endpoint exists and works on a runner,
+               but has NOT been read from the Render runtime
+Production  ✘  the migration LEDGER has been read (ceiling 181, complete).
+               Nothing else about the deployed system is proven.
 ```
+
+### Production, as read 19 August 2026
+
+```text
+ceiling 181 · 169 entries · complete (the 12 gaps are numbering skips)
+177–181 ARE RELEASED — the "unreleased landmines" note was wrong
+release set = exactly 182–187 · no collisions · preflight clean (6 × 0)
+
+pricing_terms  0     ← no governed pricing published AT ALL
+lease_packets  4     executed_lease_records 2     leases 834
+```
+
+834 tenancies against 4 packets: production's leases came from import, not
+from this rail. And with zero pricing terms the governed price step cannot
+resolve for any space, so releasing the schema is safe AND insufficient —
+the path will fail closed at economics until pricing is published, which
+is a business act rather than a deployment.
 
 ### ⚠ THE DOMINANT RISK
 
