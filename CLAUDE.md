@@ -1,6 +1,29 @@
 # Property Spine — API
 
-**Before doing anything, read [`docs/THREAD_HANDOFF.md`](docs/THREAD_HANDOFF.md).** It is the current deployed state — what is live, what is draft, what is blocked, and the traps that cost time. Do not reconstruct it from git history.
+> ## ⛔ BEFORE YOU BUILD ANYTHING, READ [`docs/CURRENT_STATE.md`](docs/CURRENT_STATE.md)
+>
+> **Threads keep rebuilding things that already exist.** Renewals, turnovers, an
+> obligations queue, a follow-up ladder and a person-correction path were each
+> built, then later described as missing. Search that file for the thing you are
+> about to build:
+>
+> ```bash
+> grep -in "renewal\|turnover\|notice" docs/CURRENT_STATE.md
+> ```
+>
+> If it appears there, your job is almost certainly to **extend or connect** it,
+> not to write it again. Absence from that file is **not** evidence something is
+> missing — only ~60% of the codebase is surveyed. Search the source, then add
+> what you find.
+
+**Read [`docs/THREAD_HANDOFF.md`](docs/THREAD_HANDOFF.md) for HISTORY** — what happened, why, and the traps that cost time. It is 3,992 lines across 50 dated banners with 34 supersession notices, so **its present-tense claims may be stale and it is not current-state authority**. Do not reconstruct history from git.
+
+Resolution order for any present-tense question:
+
+```text
+CURRENT SOURCE / RUNTIME  →  CURRENT_STATE.md  →  PHILOSOPHY  →  THREAD_HANDOFF
+   (always wins)              (what exists)       (meaning)      (history only)
+```
 
 **Before modifying any product behavior, read the governing doctrine: [`docs/PHILOSOPHY.md`](docs/PHILOSOPHY.md).** It defines what the product is and how to decide whether a feature belongs. It is doctrine, not style.
 
