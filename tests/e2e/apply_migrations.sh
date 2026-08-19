@@ -36,6 +36,22 @@ FAILED=0
 for f in $(ls migrations/*.sql | grep -vE '000_schema_migrations' | sort); do
   v=$(basename "$f" | cut -c1-3)
   if psql "$E" -tAc "select 1 from schema_migrations where version='$v'" 2>/dev/null | grep -q 1; then continue; fi
+  #  DATA-DEPENDENT MIGRATIONS. A few refuse unless rows already exist —
+  #  correct behaviour for a backfill or an authority grant, and the reason
+  #  a from-empty build stops where production sails past. The precondition
+  #  fixture for a version, if there is one, is applied immediately before
+  #  it. See tests/e2e/preconditions/README.md.
+  pre="$ROOT/tests/e2e/preconditions/$v.sql"
+  #  A PRECONDITION THAT FAILS SILENTLY IS WORSE THAN NONE: the migration
+  #  then refuses for its own reason and the real cause is invisible. Errors
+  #  are surfaced, and the fixture must satisfy the schema AS IT IS AT THIS
+  #  POINT IN THE CHAIN — not as it looks at the top.
+  if [ -f "$pre" ]; then
+    if ! psql "$E" -q -v ON_ERROR_STOP=1 -f "$pre" >/tmp/pre.log 2>&1; then
+      echo "   PRECONDITION FAILED for $v"
+      grep -oE 'ERROR:.*' /tmp/pre.log | head -2 | sed 's/^/        /'
+    fi
+  fi
   if psql "$E" -q -v ON_ERROR_STOP=1 -f "$f" >/tmp/mig.log 2>&1; then
     psql "$E" -q -c "insert into schema_migrations (version,name) values ('$v','$(basename "$f")') on conflict do nothing" >/dev/null 2>&1
   else

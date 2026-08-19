@@ -17,6 +17,10 @@ was invisible in source and obvious the moment the path was driven.
 | `resident_signing.browser.js` | real Chromium at a phone viewport on the real tenant page; the resident executes the instrument and it lands in Postgres |
 | `leasing_e2e_lib.js` | shared harness (session, fixtures, path to a sent packet) |
 | `apply_migrations.sh` | builds the schema from the real migration chain; idempotent, resumes from the ledger |
+| `property_fixture.sql` | the Skyline-SHAPED test property: a unit let by the bed, its operator, and a lease configuration |
+| `preconditions/` | the rows a few data-dependent migrations need before they will apply |
+| `release_reconcile.js` | 177–187 against a REAL ledger; refuses to guess what is live |
+| `release_rehearsal.sh` | build to a live ceiling, apply only the release set, then run these same proofs |
 
 ## Fixtures are fixtures
 
@@ -78,3 +82,46 @@ The operator shell. Its live loader is pinned to `PRODUCTION_ORIGIN` by
 deliberate design — *"NO test mode, NO override controls, NO token injector.
 Frozen."* Pointing it at a local API would mean editing the session-confirmation
 path. Not done, on purpose.
+
+
+## Landing: reconcile, then rehearse
+
+Two tools for getting this branch into production without losing what it proved.
+
+**`release_reconcile.js`** answers the eight release questions per migration —
+what fact, dependencies, already released, still required, superseded,
+collides, additive, which proof depends on it. Three of those are facts about
+production and it **refuses to guess them**, printing `UNKNOWN — needs ledger`
+and exiting non-zero. Give it the real ledger and it becomes a decision:
+
+```sh
+node tests/e2e/release_reconcile.js --ledger-file live_ledger.txt
+node tests/e2e/release_reconcile.js --db "$PROD_READONLY_URL"
+```
+
+It also emits a **preflight query per migration** for the only three things
+that can refuse a migration against real rows: a UNIQUE index over existing
+duplicates, a NOT NULL added to a populated table, a CHECK over rows that
+already violate it. Those must be run against production before release. All
+25 generated queries were executed to prove they parse — a preflight check
+nobody can run is one that gets skipped rather than fixed.
+
+**`release_rehearsal.sh`** builds a schema to a stated live ceiling, applies
+only the proposed release set, and leaves it ready for these proofs:
+
+```sh
+./tests/e2e/release_rehearsal.sh 181 182,183,184,185,186,187
+psql "$E2E_DATABASE_URL" -f tests/e2e/property_fixture.sql
+psql "$E2E_DATABASE_URL" -f tests/e2e/fixtures.sql
+node tests/e2e/instrument_fixture.js
+E2E_DATABASE_URL=... ./tests/e2e/boot.sh &
+# then every proof above
+```
+
+This matters because the e2e schema is built from empty straight to the top,
+so a migration is never applied onto a schema that stopped somewhere else
+first. Production HAS stopped somewhere else.
+
+**What the rehearsal still does not prove:** its schema is empty of production
+data, so it cannot exercise the three data preconditions above. A green
+rehearsal plus unrun preflight queries is not a release decision.
