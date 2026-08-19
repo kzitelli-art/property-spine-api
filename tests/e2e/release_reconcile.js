@@ -167,11 +167,22 @@ function readLedger(argv) {
     console.log(`  ledger read from the database: ${ledger.length} entries\n`);
   }
   const known = ledger ? new Set(ledger.map((v) => String(Number(v)))) : null;
-  const ceiling = ledger ? Math.max(...ledger.map(Number).filter(Number.isFinite)) : null;
+  const nums = ledger ? ledger.map(Number).filter(Number.isFinite) : [];
+  const ceiling = ledger ? Math.max(...nums) : null;
+  //  ⚠ A PARTIAL LEDGER IS NOT A LEDGER OF ABSENCES.
+  //  A `limit 25` dump answers "what is the ceiling" perfectly and answers
+  //  "is migration 034 applied" not at all. Reporting an unseen prerequisite
+  //  as NOT IN LEDGER reads as MISSING, which is the opposite of unknown and
+  //  would send someone hunting a dependency that is almost certainly there.
+  //  A ledger that does not reach down to 001 is treated as partial, and
+  //  prerequisite status below its floor is reported as unknown.
+  const floor = ledger ? Math.min(...nums) : null;
+  const partial = ledger ? floor > 1 : false;
 
   console.log("═".repeat(78));
   console.log("  RELEASE RECONCILIATION  ·  migrations 177–187");
   console.log(ledger ? `  live ledger supplied · ceiling ${ceiling} · ${ledger.length} entries`
+                       + (partial ? `\n  ⚠ PARTIAL LEDGER (floor ${floor}) — prerequisite status below ${floor} is UNKNOWN.\n    Supply the full list for a complete answer: select version from schema_migrations;` : "")
                      : "  ⚠ NO LEDGER SUPPLIED — three columns cannot be answered and are not guessed");
   console.log("═".repeat(78));
 
@@ -192,13 +203,16 @@ function readLedger(argv) {
         ? "VERSION NUMBER TAKEN — compare content before assuming it is the same migration"
         : (ceiling >= n ? `number is BELOW the live ceiling (${ceiling}) — renumber if branch-only` : "no");
     }
-    const missingPrereq = known ? prereqs.filter((p) => !known.has(String(Number(p)))) : [];
+    const absent = known ? prereqs.filter((p) => !known.has(String(Number(p)))) : [];
+    const unseen = absent.filter((p) => partial && Number(p) < floor);
+    const missingPrereq = absent.filter((p) => !unseen.includes(p));
 
     console.log(`\n── ${n}  ${path.basename(f)}`);
     console.log(`   lane          ${info.lane}`);
     console.log(`   fact          ${info.fact}`);
     console.log(`   dependencies  ${prereqs.length ? prereqs.join(", ") : "none declared"}` +
-                (missingPrereq.length ? `   ⚠ NOT IN LEDGER: ${missingPrereq.join(", ")}` : ""));
+                (missingPrereq.length ? `   ⚠ ABSENT FROM LEDGER: ${missingPrereq.join(", ")}` : "") +
+                (unseen.length ? `   (below the supplied ledger's floor of ${floor} — UNKNOWN, not missing)` : ""));
     console.log(`   already live  ${released}`);
     console.log(`   collides      ${collides}`);
     console.log(`   additive      ${additive(sql)}`);
