@@ -11,6 +11,9 @@ was invisible in source and obvious the moment the path was driven.
 |---|---|
 | `leasing_path.e2e.js` | the clean path: lead → tour + outcome → application at an exact bed → governed price → instrument → resident signs → company signs → executed lease → tenancy → five downstream reads |
 | `leasing_hostile.e2e.js` | ten deliberate falsifications; every one must be REFUSED |
+| `leasing_reconciliation.e2e.js` | **the drift gate** — five lifecycle states × four surfaces × nine governed concepts; every surface that answers a concept must give the same answer |
+| `leasing_standing_probe.e2e.js` | Review vs the standing read, next-action code/state/blocker |
+| `leasing_ask_spine.e2e.js` | Ask Spine routing, entitlement, addressing, the four silences |
 | `resident_signing.browser.js` | real Chromium at a phone viewport on the real tenant page; the resident executes the instrument and it lands in Postgres |
 | `leasing_e2e_lib.js` | shared harness (session, fixtures, path to a sent packet) |
 
@@ -40,6 +43,31 @@ Deliberately NOT named `*.test.js`: `run_harnesses.sh` globs that pattern and
 reads exit codes, and these need a live server, a seeded database and (for the
 browser rung) Chromium. Including them there would turn the suite red on any
 machine without all three. Same reasoning as the existing `*.browser.js` files.
+
+## The reconciliation gate
+
+`leasing_reconciliation.e2e.js` is the one to keep green. It does not compare
+prose — it asks each surface what it believes about a CONCEPT (the exact
+space, whether the resident signed, what is blocking) and fails when two
+surfaces answer differently.
+
+**Abstention is not disagreement.** A surface that does not carry a concept
+returns undefined and is skipped for it. Application Review abstains on
+`position` and `owner` because relationship stage and obligation ownership
+belong to other owners and Review has never claimed them. That distinction is
+the design: forcing every surface to answer everything would push business
+meaning into surfaces, which is the failure this gate exists to catch.
+
+**A disagreement is never fixed by adding logic to a surface.** It means one
+surface bypassed the owner of that concept. The fix is to make it read the
+owner. Both fixes made while building this gate were exactly that: Review was
+given the exact space from `spaces` and the execution timestamps from the
+packet it already loaded.
+
+It has been FALSIFIED TWICE and went red both times, naming the surface that
+lied: Review reporting the unit where the bed belongs, and the standing read
+hiding a resident signature. A gate that has never been seen to fail is not
+known to be measuring anything.
 
 ## What it does not prove
 

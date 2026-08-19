@@ -281,6 +281,17 @@ function questionSubject(question) {
 
 function withoutDatabaseIds(value) {
   if (Array.isArray(value)) return value.map(withoutDatabaseIds);
+  //  ⚠ A DATE IS AN OBJECT WITH NO OWN ENUMERABLE KEYS.
+  //  Recursing into one produced `{}` — so every timestamp a reader returned
+  //  as a Date rather than a string was SILENTLY DESTROYED on its way into
+  //  the model's context. In leasing that meant `resident_executed_at`, the
+  //  fact that proves a resident signed the lease, arrived as an empty
+  //  object: the Person Card said SIGNED and Ask Spine could not tell. This
+  //  is not leasing-specific — it applies to every domain whose reader hands
+  //  back a Date, and it fails in the worst direction, by removing evidence
+  //  while looking like it removed nothing. Found by reconciling the
+  //  surfaces against each other, not by any single one of them failing.
+  if (value instanceof Date) return isNaN(value) ? null : value.toISOString();
   if (!value || typeof value !== "object") return value;
   const clean = {};
   for (const [key, child] of Object.entries(value)) {

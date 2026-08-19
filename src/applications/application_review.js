@@ -80,7 +80,18 @@ async function concessionDetail(client, app) {
 }
 
 async function loadScopedApp(client, applicationId, propertyId) {
-  const q = await client.query(`select * from lease_applications where id = $1`, [applicationId]);
+  //  The inventory LABELS travel with the application. lease_applications
+  //  carries unit_id and space_id, but its denormalised unit_label is not
+  //  populated by the writers — so this read named neither the unit nor the
+  //  bed for an application at an exact space, while the Person Card and the
+  //  standing read both named "Unit 3B · Bed B". Same fact, two stories.
+  //  Joined from `units` and `spaces`, which own those labels.
+  const q = await client.query(
+    `select a.*, u.unit_number as inventory_unit_label, s.space_label as inventory_space_label
+       from lease_applications a
+       left join units  u on u.id = a.unit_id
+       left join spaces s on s.id = a.space_id
+      where a.id = $1`, [applicationId]);
   const app = q.rows[0];
   if (!app) return { app: null, reason: "not_found" };
   if (String(app.property_id) !== String(propertyId)) return { app: null, reason: "cross_property" };
@@ -348,7 +359,14 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
   return {
     application_id: app.id,
     applicant: { name: app.applicant_name || null, person_id: app.person_id || null },
-    unit: { unit_id: app.unit_id || null, unit_label: app.unit_label || null },
+    unit: { unit_id: app.unit_id || null,
+            unit_label: app.unit_label || app.inventory_unit_label || null },
+    //  THE EXACT SPACE THIS APPLICATION IS FOR. Distinct from `unit_spaces`
+    //  below, which is the MENU of spaces in the unit — a menu is not a
+    //  choice, and reading one as the other is how a bed-level application
+    //  gets reported as a whole-unit one.
+    space: { space_id: app.space_id || null,
+             space_label: app.inventory_space_label || null },
     status: app.status,
     next_action, // Slice 1: the server-authored operating instruction (null when resolver unwired)
     // 088: the execution seam, always visible — absent, verified+admitted,
@@ -388,6 +406,14 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
       sent_at: packet ? (packet.sent_at || null) : null,
       tenant_token_expires_at: packet ? (packet.tenant_token_expires_at || null) : null,
       tenant_submitted_at: packet ? (packet.tenant_submitted_at || null) : null,
+      //  WHO HAS EXECUTED THE INSTRUMENT. 184 records both acts on the
+      //  packet and this read already loads them; not projecting them meant
+      //  the operator's review screen could not say whether the resident had
+      //  signed, while three other surfaces could.
+      carries_governing_instrument: packet ? !!packet.instrument_body_sha256 : null,
+      instrument_form_code: packet ? (packet.instrument_form_code || null) : null,
+      resident_executed_at: packet ? (packet.resident_executed_at || null) : null,
+      company_executed_at: packet ? (packet.company_executed_at || null) : null,
       voided_at: packet ? (packet.voided_at || null) : null,
       drifted_fields: currency.drifted_fields,
       is_placeholder: packet ? !!packet.is_placeholder : null,
