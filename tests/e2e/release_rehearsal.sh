@@ -71,15 +71,101 @@ for f in $(ls migrations/*.sql | grep -vE '000_schema_migrations' | sort); do
 done
 echo "   at ceiling: $(psql "$E" -tAc 'select max(version::int) from schema_migrations')"
 
-echo "── applying the release set: $RELEASE ──"
-IFS=',' read -ra SET <<< "$RELEASE"
-for v in "${SET[@]}"; do
-  f=$(ls migrations/${v}_*.sql 2>/dev/null | head -1)
-  [ -z "$f" ] && { echo "   no file for $v"; exit 1; }
-  apply "$f" || exit 1
-  echo "   applied $(basename "$f")"
-done
+#  ── THE RELEASE SET GOES IN THROUGH THE REAL RELEASE COMMAND ────────
+#  The ceiling above is simulated history and raw psql is right for it.
+#  The release set is the thing UNDER TEST, so it must arrive the way it
+#  will arrive in production — through migrate.js --apply, with its
+#  ceiling pin, its sha pin, and its refusals. Applying it with psql here
+#  would rehearse everything except the command we are about to run.
+START_CEILING=$(psql "$E" -tAc 'select max(version::int) from schema_migrations')
+#  The entry COUNT is captured here, before anything is applied, because
+#  the --after verdict asserts the ledger grew by exactly the release set
+#  and nothing else rode along. Hardcoding it would make the assertion
+#  true by construction at every ceiling except the one it was written for.
+START_ENTRIES=$(psql "$E" -tAc 'select count(*) from schema_migrations')
+echo "── releasing $RELEASE through migrate.js --apply (ceiling $START_CEILING, $START_ENTRIES entries) ──"
+
+#  The BEFORE gate is part of the ceremony, so it is part of the rehearsal.
+if ! node tests/e2e/verify_release_182_187.js --db "$E" --before >/tmp/rehearse_before.log 2>&1; then
+  echo "   ✗ NOT SAFE TO APPLY"; tail -12 /tmp/rehearse_before.log | sed 's/^/        /'; exit 1
+fi
+echo "   before gate: safe to apply"
+
+#  EXPECTED_SHA is only meaningful over a clean tree — migrate.js refuses
+#  a pin that does not describe the working tree, and it is RIGHT to. In a
+#  rehearsal a dirty tree is normal, so the pin is passed when it can be
+#  honoured and its absence is stated rather than papered over.
+SHA_ARG=""
+if [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+  SHA_ARG="EXPECTED_SHA=$(git rev-parse HEAD)"
+  echo "   pinning $(git rev-parse --short HEAD)"
+else
+  echo "   NOT PINNED — working tree is dirty (fine here, refused in production)"
+fi
+
+if ! env DATABASE_URL="$E" MIGRATION_RELEASE=1 \
+     EXPECTED_LEDGER_CEILING="$START_CEILING" $SHA_ARG \
+     node migrations/migrate.js --apply > /tmp/rehearse_release.log 2>&1; then
+  echo "   ✗ RELEASE REFUSED"; tail -20 /tmp/rehearse_release.log | sed 's/^/        /'; exit 1
+fi
+grep -E '^  (→|    ✓)' /tmp/rehearse_release.log | sed 's/^/   /'
 echo "   new ceiling: $(psql "$E" -tAc 'select max(version::int) from schema_migrations')"
+
+#  ── THE PROOFS. NOT AN INSTRUCTION TO RUN THEM ──────────────────────
+#  This script used to end by PRINTING "now seed fixtures and run the same
+#  proofs". A sentence telling a person to verify something is not
+#  verification, and a rehearsal that stops one step short of the only
+#  question that matters — does the UPGRADED schema behave like the one we
+#  proved? — is a rehearsal of the easy half.
 echo
-echo "Now seed fixtures and run the SAME proofs against $E."
-echo "The release candidate must reproduce the behaviour already proven — not a lighter version of it."
+echo "── the same proofs, against the upgraded schema ──"
+FAILED=0
+rstep () { local label="$1"; shift
+  printf '   %-30s ' "$label"
+  if "$@" >/tmp/rehearse_step.log 2>&1; then echo "PASS"; else
+    echo "FAIL"; FAILED=1; tail -12 /tmp/rehearse_step.log | sed 's/^/        /'; fi
+}
+
+export E2E_DATABASE_URL="$E"
+rstep "property fixture"   psql "$E" -q -v ON_ERROR_STOP=1 -f tests/e2e/property_fixture.sql
+rstep "pricing fixture"    psql "$E" -q -v ON_ERROR_STOP=1 -f tests/e2e/fixtures.sql
+rstep "instrument fixture" node tests/e2e/instrument_fixture.js
+
+. ./tests/e2e/port_guard.sh
+if port_busy 3000; then
+  echo "   ✗ port 3000 already in use — refusing to rehearse against a server we did not start"
+  port_busy_message 3000 | sed 's/^/     /'
+  exit 1
+fi
+./tests/e2e/boot.sh > /tmp/rehearse_server.log 2>&1 &
+BOOT_PID=$!
+#  The liveness check is the point: if boot.sh refused the port, health
+#  will still answer — from the server we did NOT start, against a schema
+#  this rehearsal knows nothing about.
+UP=0
+for _ in $(seq 1 40); do
+  if ! kill -0 "$BOOT_PID" 2>/dev/null; then break; fi
+  curl -sf --noproxy '*' http://127.0.0.1:3000/health >/dev/null 2>&1 && { UP=1; break; }
+  sleep 0.5
+done
+if [ "$UP" != "1" ]; then
+  echo "   ✗ our server never came up — NOT trusting whatever else may answer"
+  tail -15 /tmp/rehearse_server.log | sed 's/^/        /'
+  kill $BOOT_PID 2>/dev/null; exit 1
+fi
+
+rstep "release verdict"    env EXPECTED_START_ENTRIES="$START_ENTRIES" node tests/e2e/verify_release_182_187.js --db "$E" --after
+for t in leasing_path leasing_hostile leasing_standing_probe leasing_ask_spine leasing_reconciliation; do
+  rstep "$t" node "tests/e2e/${t}.e2e.js"
+done
+kill $BOOT_PID 2>/dev/null
+
+echo
+if [ "$FAILED" -eq 0 ]; then
+  echo "   ✓ REHEARSAL GREEN — the upgraded schema carries the proven behaviour."
+  echo "     This proves the MECHANISM. It cannot prove production's DATA:"
+  echo "     run release_reconcile.js preflight against production for that."
+else
+  echo "   ✗ REHEARSAL FAILED — do not release."
+fi
+exit "$FAILED"

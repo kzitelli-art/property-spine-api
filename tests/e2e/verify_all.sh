@@ -52,10 +52,25 @@ step "pricing fixture"      psql "$E2E_DATABASE_URL" -q -v ON_ERROR_STOP=1 -f te
 step "instrument fixture"   node tests/e2e/instrument_fixture.js
 
 # ── the real server, the real HTTP door ─────────────────────────────
+#  ASK BEFORE LAUNCHING. Polling /health afterwards cannot distinguish
+#  our server from a stale one — see tests/e2e/port_guard.sh.
+. ./tests/e2e/port_guard.sh
+if port_busy 3000; then
+  echo "── server                             FAIL (port 3000 already in use)"
+  port_busy_message 3000 | sed 's/^/      /'
+  FAILED=1; SERVER_PID=""
+else
 ./tests/e2e/boot.sh > /tmp/verify_server.log 2>&1 &
 SERVER_PID=$!
+#  A 200 FROM /health IS NOT ENOUGH. It says a server answered, not that
+#  OUR server answered — and a stale one on the same port, pointed at a
+#  different database, will answer just as cheerfully and let this whole
+#  suite report green about a schema it never touched. boot.sh now refuses
+#  an occupied port; this loop's job is to notice that it did, instead of
+#  polling happily against the impostor.
 UP=0
 for _ in $(seq 1 30); do
+  if ! kill -0 "$SERVER_PID" 2>/dev/null; then break; fi
   [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/health 2>/dev/null)" = "200" ] && { UP=1; break; }
   sleep 1
 done
@@ -78,6 +93,7 @@ else
     SKIPPED="browser rung"
   fi
   kill "$SERVER_PID" 2>/dev/null
+fi
 fi
 
 echo "════════════════════════════════════════════════════════════"

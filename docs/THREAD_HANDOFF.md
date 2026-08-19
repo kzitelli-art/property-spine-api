@@ -42,7 +42,27 @@ Production schema      ✔  OBSERVED, not inferred: ceiling 181, ledger
                a blank.
 Production behaviour   ✘  no application path has been exercised there.
                Nothing about how the deployed system BEHAVES is proven.
+Release     ◑  REHEARSED, NOT RELEASED. 182-187 applied to a database
+               held at production's exact position (ceiling 181, 169
+               entries), verifier green, both gates deliberately
+               falsified, and all five leasing proofs pass on the
+               UPGRADED schema. Production itself is untouched.
 ```
+
+### The release is blocked on where, not on whether
+
+`main`'s migration ceiling is **181**. Migrations 182-187 exist only on
+this branch. The Render box has no `.git` (`git rev-parse` fails there) —
+it is a built artifact, so its `migrations/` holds exactly the files of
+the commit that built it. `npm run release:migrate` on that shell would
+therefore find nothing to apply.
+
+The order is NOT open: running the new build against schema 181 is
+refused by prestart, verified by running it. **Schema goes first**, and
+for this particular six that is safe under the code `main` is running —
+each of the six was checked against main's actual writers, not assumed
+from the DDL's shape. See `RELEASE_182_187_CEREMONY.md`, which now opens
+with the stop and the evidence.
 
 ### Production, as read 19 August 2026
 
