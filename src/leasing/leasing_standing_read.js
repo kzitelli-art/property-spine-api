@@ -245,4 +245,57 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
   };
 }
 
-module.exports = { readLeasingStanding };
+
+// ════════════════════════════════════════════════════════════════════
+//  WHO IS BEING ASKED ABOUT — ADDRESSING, NOT INFERENCE.
+//
+//  A leasing question names a person ("where is Jane", "has she signed").
+//  Answering it requires turning that name into a person, and there is
+//  exactly one honest way to do that here: ask the DATABASE which of THIS
+//  PROPERTY'S people appear in the sentence. The model never picks.
+//
+//  Matching is on word boundaries so a short name cannot match inside a
+//  longer word ("Al" in "already"), and no part of a name is ever treated
+//  as a pattern, so a person called "A." cannot become a wildcard.
+//
+//  Three outcomes, kept apart — collapsing them is how a surface answers
+//  confidently about the wrong human:
+//      { resolved: false, reason: "no_person_named"  }
+//      { resolved: false, reason: "ambiguous", candidates: [...] }
+//      { resolved: true,  person: { id, name } }
+//
+//  Scoped to the SERVER-DERIVED property. A person with no presence here
+//  is not a candidate, so this can never address someone at another
+//  property even if the sentence names them.
+// ════════════════════════════════════════════════════════════════════
+async function resolveLeasingSubject(db, { property_id, text } = {}) {
+  if (!property_id) throw new Error("resolveLeasingSubject requires a server-derived property_id");
+  const q = String(text || "").trim();
+  if (!q) return { resolved: false, reason: "no_person_named", candidates: [] };
+
+  const rows = (await db.query(
+    `select distinct p.id, p.name
+       from persons p
+      where p.name is not null and length(btrim(p.name)) >= 3
+        and (exists (select 1 from leasing_leads   l where l.person_id=p.id and l.property_id=$2)
+          or exists (select 1 from conversations   c where c.person_id=p.id and c.property_id=$2)
+          or exists (select 1 from lease_applications a where a.person_id=p.id and a.property_id=$2)
+          or exists (select 1 from leasing_conversions v where v.person_id=p.id and v.property_id=$2))
+        --  Both sides are normalised to space-separated alphanumerics and
+        --  compared with a PADDED LIKE. That is a true word-boundary match
+        --  with no pattern escaping anywhere: a person named "A." or
+        --  "O'Brien" cannot become a wildcard, because no part of the name
+        --  is ever interpreted as a pattern.
+        and (' ' || lower(regexp_replace($1, '[^a-zA-Z0-9]+', ' ', 'g')) || ' ')
+            like ('% ' || lower(regexp_replace(p.name, '[^a-zA-Z0-9]+', ' ', 'g')) || ' %')
+      limit 25`, [q, property_id])).rows;
+
+  if (!rows.length) return { resolved: false, reason: "no_person_named", candidates: [] };
+  if (rows.length > 1) {
+    return { resolved: false, reason: "ambiguous",
+             candidates: rows.map((r) => ({ id: r.id, name: r.name })) };
+  }
+  return { resolved: true, person: { id: rows[0].id, name: rows[0].name } };
+}
+
+module.exports = { readLeasingStanding, resolveLeasingSubject };

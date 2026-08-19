@@ -7,6 +7,11 @@ const CONN = process.env.E2E_DATABASE_URL || "postgres://postgres:spineproof@127
 const BASE = "http://127.0.0.1:3000";
 const pool = new Pool({ connectionString: CONN });
 const q = (s, p) => pool.query(s, p);
+//  A DISTINGUISHABLE person per run. Reusing one name made every harness
+//  person literally the same human, and leasing addressing correctly
+//  refused all of them as ambiguous — the right answer to a wrong fixture.
+let __n = 0;
+const HOSTILE_NAME = () => `Probe Tester ${Date.now().toString(36)}${(++__n)}`;
 
 async function api(method, path, { token, body, key } = {}) {
   const h = { "content-type": "application/json" };
@@ -42,16 +47,17 @@ async function ctx({ wipe = true } = {}) {
 
 /*  Drives lead → application@bed → approve → terms → packet → send.
     Returns { appId, packetId, rawTok }.  Stops before the resident signs.  */
-async function toPacket(C, { bed, rent = 1025 } = {}) {
+async function toPacket(C, { bed, rent = 1025, name = null } = {}) {
+  const __name = name || HOSTILE_NAME();
   const phone = "+1215555" + String(Math.floor(1000 + Math.random() * 8999));
   const intake = await api("POST", "/leasing/intake", { key: "e2e-key", body: {
-    intake_secret: "e2e-intake", property_id: C.prop, name: "Hostile Tester",
+    intake_secret: "e2e-intake", property_id: C.prop, name: __name,
     phone, email: `h${Date.now()}${Math.floor(Math.random()*999)}@example.com`, source: "e2e" }});
   if (intake.status >= 400) throw new Error("intake: " + JSON.stringify(intake.body));
   const person = intake.body.person_id;
   const unitOf = (await q("select unit_id from spaces where id=$1", [bed])).rows[0].unit_id;
   const sub = await api("POST", `/properties/${C.prop}/applications`, { token: C.token, key: "e2e-key", body: {
-    applicant_name: "Hostile Tester", person_id: person, unit_id: unitOf, space_id: bed,
+    applicant_name: __name, person_id: person, unit_id: unitOf, space_id: bed,
     rent, deposit: rent }});
   if (sub.status >= 400) throw new Error("apply: " + JSON.stringify(sub.body));
   const appId = sub.body.application && sub.body.application.id;
@@ -82,4 +88,4 @@ async function residentSigns(rawTok) {
   return api("POST", `/t/lease/${rawTok}/submit`, { body: {} });
 }
 
-module.exports = { pool, q, api, ctx, toPacket, residentSigns };
+module.exports = { pool, q, api, ctx, toPacket, residentSigns, HOSTILE_NAME };
