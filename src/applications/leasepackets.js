@@ -452,7 +452,13 @@ module.exports = function leasePacketsModule(deps) {
     }
 
     const prop = (await client.query(
-      `select id, name, canonical_key, address from properties where id=$1`,
+      //  lease_config is SELECTED, not just referenced (186). leaseConfigFor
+      //  reads `property.lease_config` first by design, but this explicit
+      //  column list omitted it — so the durable path could never resolve
+      //  even once the column existed, and every property fell through to
+      //  the Class-2 EXTERNAL_LEASE_CONFIG map that holds Demo Building
+      //  alone. Found by running the real path, not by reading it.
+      `select id, name, canonical_key, address, lease_config from properties where id=$1`,
       [app.property_id]
     )).rows[0] || {};
 
