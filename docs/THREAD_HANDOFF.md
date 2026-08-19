@@ -63,7 +63,24 @@ fixture publishes pricing with raw SQL, so the publish doors have never
 been exercised by any proof, on the one step that stands between the frozen
 leasing rail and a real lease.
 
-### The release is blocked on where, not on whether
+### The release's shape is now set by a measured fact
+
+**182–187 are runtime-compatible with the running old process and
+restart-incompatible with the old build.** Verified by running `main`'s own
+prestart against a database at 187 — it refuses, because its ledger check
+runs in both directions. The same build serves fine once already started.
+
+So the old build keeps working until something restarts it, and then never
+again; and reverting is blocked by the same guard. Schema-first-with-a-gap
+is therefore not an acceptable ceremony. The release now runs as a Render
+**pre-deploy gate** (`tools/release/predeploy_release_gate.js`), which
+removes the gap rather than shortening it. Recovery is forward-only by
+decision — no down-migrations.
+
+Blocked on three dashboard facts: paid vs Free, auto-deploy state, and
+pre-deploy availability. See `RELEASE_182_187_CEREMONY.md`.
+
+### The earlier framing: blocked on where, not on whether
 
 `main`'s migration ceiling is **181**. Migrations 182-187 exist only on
 this branch. The Render box has no `.git` (`git rev-parse` fails there) —

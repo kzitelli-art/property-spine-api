@@ -8,60 +8,135 @@ Do not bypass `no_published_pricing_version` to make anything demo.
 
 ---
 
-## ⛔ STOP — this ceremony cannot be run as written, and here is why
+## ⛔ THE FINDING THAT SET THIS RELEASE'S SHAPE
 
-**The release files are not on `main`.** Migrations 182–187 exist only on
-`claude/property-spine-orientation-cso2ao`. `main`'s migration ceiling is
-181 — the same as production's.
+Migrations 182–187 are **runtime-compatible with the already-running old
+process, and restart-incompatible with the old build.**
 
-```
-$ git ls-tree -r --name-only origin/main -- migrations | grep -oP 'migrations/\K[0-9]+' | sort -n | tail -1
-181
-```
-
-That matters because of a fact we read off the Render box directly: `git
-rev-parse` **fails** there. The box is a built artifact, not a checkout.
-Its `migrations/` directory contains exactly the files of the commit that
-built it, and nothing else. So `npm run release:migrate` on the Render
-shell today would find nothing to apply — not because the schema is
-current, but because the files are absent.
-
-### The order is settled; only the location is open
-
-It is tempting to read this as "deploy the code first, then migrate."
-**That is the one order that causes an outage**, and the codebase already
-refuses it. Run the current build against production's schema and:
+Measured, not reasoned. A database was built to production's exact position
+and `main`'s **own** prestart verifier run against it after the release:
 
 ```
-✗ REFUSING TO START — the schema does not match this code.
-  6 migration(s) in this build are NOT applied to the target database:
-    · 182_application_space_grain.sql … 187_lease_security_deposit.sql
-  Ledger ceiling is 181. This code expects those migrations to exist.
+185  the ledger says: spine_execution_basis
+     -> migrations/185_*.sql does not exist in this build.
+The database contains changes this codebase cannot describe
+EXIT 1
 ```
 
-Verified by running it, against a database held at ceiling 181. The guard
-is doing its job: **schema goes first.**
+The verifier checks the ledger in **both** directions, so entries whose
+files a build does not carry stop it. Then `main`'s server was booted
+directly against the same 187 database and served `/health` normally.
 
-### Schema-first is safe here — checked, not assumed
+Both halves matter:
 
-Applying 182–187 while production still runs `main` is the expand phase,
-and it is safe for this particular six. Each claim below was checked
-against `origin/main`'s source, not inferred from the DDL's shape:
-
-| # | why it is safe under old code |
+| | after 182–187 land |
 |---|---|
-| 182 | Adds nullable `space_id` + indexes. Its trigger returns immediately when `space_id is null`, and old code cannot set a column it does not know. |
-| 183 | Replaces one unique index with two partial ones. The default-scope index has the *same* columns as the one it drops, so old inserts behave identically. Production holds `pricing_terms = 0` regardless. |
-| 184 | Widens two CHECKs (widening never rejects an existing row) and adds a trigger that returns unless status is `resident_executed`/`executed`. **No writer on `main` ever sets either** — the only writers are in `leasepackets.js`, and `submitted` is documented there as the terminal state. |
-| 185 | `ck_elr_spine_instrument_lineage` **is validated against existing rows.** Production's 2 rows backfill to `staff_attestation` + NULL packet, so they must not be `spine_esign` — which is exactly what preflight check 6 asks, and it returned **0**. |
-| 186 | `add column if not exists properties.lease_config`. |
-| 187 | `add column if not exists leases.security_deposit`. |
+| the process already running | keeps serving — the guard is at startup, not per-request |
+| that same build, restarted | **cannot start**, ever again |
+| reverting to that build | blocked by the same guard |
 
-So the remaining question is not *when* but **where** `--apply` can run,
-given that the box holding the credential does not hold the files. That is
-an infrastructure decision, and it is deliberately left to the operator.
-`migrate.js` requires `EXPECTED_SHA` when it detects a deployed build, so
-whichever site is chosen still has to name the code it is releasing.
+So a schema-first release **with a gap** leaves production alive on borrowed
+time: no restart recovery, no code rollback. Any deploy, manual restart,
+host migration, OOM kill — or, on a Free instance, an idle period — ends it.
+
+**That is why this release runs as a pre-deploy gate rather than as two
+steps.** The gap is not shortened; it is removed. The schema moves and the
+build that understands it starts, inside one deploy.
+
+### The write side, which does hold — checked at source boundaries
+
+The old build keeps *writing* correctly against 187, and that is not an
+assumption:
+
+| # | why old code cannot trip it |
+|---|---|
+| 182 | `main`'s own source says so: *"lease_applications — property_id, unit_id, NO space_id."* Never writes the column, so the trigger short-circuits. |
+| 183 | Both of main's `pricing_terms` inserts write default scope only; `override_scope` is read and filtered, never written. Write-neutral. |
+| 184 | No writer on main sets `resident_executed` or `executed`; `submitted` is documented there as terminal. |
+| 185 | `executed_lease_service.js:169` validates the channel against exactly `paper|external_esign|other` and 400s anything else. `spine_esign` is **unwritable** by old code, so the lineage constraint cannot be violated. |
+
+### Forward recovery, deliberately — no down-migrations
+
+Discovering there is no rollback is not a reason to write six hurried
+reverse migrations for constraint and execution-semantics changes; that
+would add risk we could not trust under pressure. The recovery model is
+**forward**: rehearse the exact upgrade, have the verified build ready,
+collapse schema and code into one deploy, and fix forward from a known
+deployed SHA.
+
+---
+
+## The release architecture
+
+```
+exact reviewed commit
+  → build succeeds
+  → PRE-DEPLOY GATE  (tools/release/predeploy_release_gate.js)
+        read the production ledger
+        assert ceiling exactly 181 and 169 entries
+        assert none of 182–187 already present
+        run the six preflights against real rows — every one 0
+        apply 182–187 through migrate.js --apply, pinned to RENDER_GIT_COMMIT
+        run verify_release_182_187 --after
+  → only on exit 0 does the new build start
+  → its own startup verifier now agrees with the ledger it just moved
+  → /health proves the deployed SHA
+```
+
+A non-zero exit aborts the deploy: the new build never starts, the old one
+keeps serving, and **the schema was not changed**.
+
+### Three facts to establish in the Render dashboard first
+
+1. **Is this service paid or Free?** Free web services spin down after
+   ~15 minutes without traffic and may be restarted at any time — which
+   makes any borrowed-time window unacceptable, and makes the pre-deploy
+   architecture mandatory rather than merely preferable.
+2. **Is auto-deploy enabled?** It must be **off** before a pinned release.
+   Pinning a commit through the API does not disable it; Render treats them
+   as separate settings, so a later push could replace what was pinned.
+3. **Is a pre-deploy command available on this service?** It is offered on
+   paid web services, private services and background workers.
+
+Configure the gate as the pre-deploy command for **this release only**, then
+remove it. It is safe if left in place by accident — a second run finds the
+release already applied, re-verifies the shape and exits 0 — but a deploy
+step that silently migrates is not the standing arrangement we want.
+
+### The gate, falsified before being trusted
+
+| attempt | outcome |
+|---|---|
+| no `RENDER_GIT_COMMIT` / `EXPECTED_SHA` | REFUSED, exit 1, ledger untouched |
+| ledger not at the expected start ceiling | REFUSED, exit 1, ledger untouched |
+| a real duplicate that 183 would reject | REFUSED naming that check, exit 1, ledger untouched |
+| clean 181 → 187 | applied and verified, exit 0 |
+| re-run at 187 | already-released, shape re-verified, exit 0 |
+
+### W-9 in miniature, three times in one afternoon
+
+The dirty-preflight falsification above **silently passed twice before it
+was real.** Its setup SQL failed on a wrong table name, then on a wrong
+column name; each time the transaction rolled back, the gate ran against a
+still-clean database, and printed a reassuring `✓ RELEASE VERIFIED`. A
+third instance the same afternoon: a probe written specifically to test
+whether old code could still write against the new schema reported
+`✓ lease_applications row written by OLD code` while reading a row that was
+**five hours old**, from an earlier run.
+
+None of the three was caught by the test reporting a failure. Two were
+caught because a *number* contradicted the analysis — a non-null column
+that had to be null — and one because the setup's error scrolled past above
+a green.
+
+The rule that came out of it, and is now enforced in the falsification
+harness: **a test must prove its own action created the state it then
+measures**, and must abort rather than proceed when its setup did not take.
+A test written specifically to detect false confidence produced false
+confidence. That is exactly why §41 says run, observe, and believe the
+actual first red.
+
+---
 
 ## ✔ Rehearsed end to end against production's exact ledger position
 
@@ -124,6 +199,15 @@ anything. Falsified deliberately in both scripts — with a stale server
 held on 3000, each refuses up front, runs no proof at all, and exits 1.
 
 ---
+
+## The manual ceremony below is the FALLBACK
+
+Sections 1–8 are the hand-run sequence, kept because it is what the
+pre-deploy gate automates and because it is the only path if this service
+cannot take a pre-deploy command. **Run by hand it reintroduces the gap**
+described at the top — old build alive but unable to restart — so if it is
+used, the verified new build must be ready to deploy immediately, and
+nothing else may be deployed or restarted in between.
 
 ## Before you start
 
