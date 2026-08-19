@@ -67,14 +67,40 @@ jobs:
       - name: Install dependencies
         run: npm ci || npm install
 
-      - name: Install psql client
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      #  ── DO NOT REACH FOR THE NETWORK IF THE TOOL IS ALREADY HERE ──────
+      #  This step used to be an unconditional `apt-get update && install`.
+      #  On 19 Aug 2026 it hung on two independent runners; the job's
+      #  30-minute timeout fired at 29.8 minutes and EVERY proof was
+      #  skipped. Two commits learned nothing, and the failure had nothing
+      #  to do with the code.
+      #
+      #  The GitHub runner image already ships psql. So: use it, and only
+      #  fall back to apt when it is genuinely absent — bounded by a hard
+      #  timeout so this step can never again consume the job. A red here
+      #  is fine and informative; a 30-minute hang is neither.
+      - name: Ensure psql client
+        run: |
+          if command -v psql >/dev/null 2>&1; then
+            echo "psql already present: $(psql --version)"
+            exit 0
+          fi
+          echo "psql not on the image — falling back to apt (bounded)"
+          timeout 300 sudo apt-get -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
+          timeout 300 sudo apt-get -o Acquire::Retries=3 install -y postgresql-client
+          psql --version
 
       #  The browser rung RUNS in CI rather than being skipped. A rung that
       #  is always skipped is a rung nobody has, and the resident signing
       #  page is the one surface real people touch unauthenticated.
+      #  `--with-deps` is ALSO apt, so it can hang exactly the same way — and
+      #  fixing only the step above would have moved the hang rather than
+      #  removed it. The browser and its OS libraries are fetched inside a
+      #  bounded window; if that window is exceeded the step fails fast and
+      #  verify_all reports the browser rung honestly instead of the job
+      #  dying with every proof unrun.
       - name: Install Chromium for the browser rung
-        run: npx playwright install --with-deps chromium
+        run: timeout 600 npx playwright install --with-deps chromium
 
       - name: Locate Chromium
         run: echo "CHROMIUM=$(find ~/.cache/ms-playwright -name chrome -type f | head -1)" >> "$GITHUB_ENV"
