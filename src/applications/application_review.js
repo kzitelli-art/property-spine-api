@@ -90,9 +90,16 @@ async function loadScopedApp(client, applicationId, propertyId) {
 async function latestPacket(client, applicationId) {
   // Canonical current packet: the non-superseded head, highest version.
   const q = await client.query(
+    //  The instrument columns are SELECTED, not merely present. Without
+    //  them this read cannot tell a packet that carries a real governing
+    //  instrument from one that does not, and it offered "Verify Executed
+    //  Lease" — the outside-attestation door — for a lease Spine itself is
+    //  holding and waiting on the resident to sign.
     `select id, version, status, terms_json, is_placeholder,
             sent_at, tenant_token_expires_at, tenant_submitted_at,
             voided_at, void_reason, superseded_at,
+            instrument_form_code, instrument_body_sha256,
+            resident_executed_at, company_executed_at,
             proposed_terms_confirmation_id, created_at, updated_at
        from lease_packets
       where application_id = $1
@@ -204,8 +211,33 @@ async function loadExecutedLease(client, app) {
 
 // The one primary action an operator should take next on this application,
 // as far as the execution seam is concerned. Honest about all three states.
-function executionPrimaryAction(app, exec, leaseId) {
+function executionPrimaryAction(app, exec, leaseId, packet) {
   if (!exec || exec.unavailable) return null;
+
+  //  ── SPINE IS HOLDING A SIGNED INSTRUMENT ──────────────────────────
+  //  When the resident has executed the governing instrument inside Spine,
+  //  the next act is the COMPANY SIGNATURE — not a staff attestation that
+  //  an outside lease exists. Offering "Verify Executed Lease" here pointed
+  //  the operator at the attestation door for a lease Spine itself
+  //  witnessed: the wrong button, and the "verify what I just signed"
+  //  ceremony this product exists to remove. It would also have recorded
+  //  the execution as staff_attestation when spine_instrument is the truth.
+  //  Found by driving a resident signature and reading what the surface
+  //  then told the operator to do.
+  if (!leaseId && packet && packet.status === "resident_executed") {
+    return { action: "company_execute_lease", label: "Sign for the Company",
+      reason: "The resident has executed the governing instrument. The authorised company signer signs to complete it.",
+      method: "POST",
+      endpoint: `/operator/leasing/lease-packets/${packet.id}/company-sign` };
+  }
+  //  Awaiting the resident on an instrument Spine holds — nothing for the
+  //  company to do yet, and nothing to attest to.
+  if (!leaseId && packet && packet.instrument_body_sha256
+      && ["sent", "in_progress", "tenant_in_progress", "draft"].includes(packet.status)) {
+    return { action: "await_resident_execution", label: "Awaiting the Resident",
+      reason: "The resident has not yet executed the governing instrument.",
+      method: null, endpoint: null };
+  }
   // A lease already exists for this application: confirm-term has run and the
   // tenancy anchor is created. Offering it again authors an action the server
   // will refuse. The next work is move-in, which the move-in read authors.
@@ -301,6 +333,12 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
         packet,
         currency_status: currency.status,
         lineage_matches_current_confirmation: packet ? lineageMatches : null,
+        //  THE EXECUTION SEAM, ALREADY LOADED HERE.
+        //  Without it the resolver cannot tell a lease waiting for the
+        //  company's signature from one that was never executed at all, and
+        //  answered "Executed lease required" to both. It is passed rather
+        //  than re-queried so the resolver stays a pure interpreter.
+        executed_lease,
       });
     } catch (e) {
       console.error("application-review resolveNext failed (non-fatal):", e.message);
@@ -316,7 +354,7 @@ async function buildReviewDetail(client, applicationId, propertyId, resolvers) {
     // 088: the execution seam, always visible — absent, verified+admitted,
     // or verified+blocked with its reasons and one clear primary action.
     executed_lease,
-    execution_primary_action: executionPrimaryAction(app, executed_lease, lease_id),
+    execution_primary_action: executionPrimaryAction(app, executed_lease, lease_id, packet),
     // lease-keyed surfaces (move-in state) hang off this; null until confirm-term
     lease_id,
     unit_spaces,

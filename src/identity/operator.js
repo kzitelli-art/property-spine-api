@@ -2247,6 +2247,29 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   });
 
   // ══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════
+  //  GET /operator/leasing/standing — LEASING'S §40.6 STANDING PROJECTION
+  //  for one person at the session's property. Same read the Person Card
+  //  composes and the same one Ask Spine answers from, so a surface cannot
+  //  drift from the others by holding its own copy. Property is
+  //  SERVER-DERIVED; a client-supplied property is never honoured.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/leasing/standing", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const personId = req.query && req.query.person_id;
+    if (!personId) return res.status(400).json({ error: "person_id required" });
+    try {
+      const { readLeasingStanding } = require("../leasing/leasing_standing_read");
+      const standing = await readLeasingStanding(pool, {
+        person_id: personId, property_id: req.operator.property_id,
+        as_of: (req.query && req.query.as_of) || null,
+      });
+      return res.json({ leasing_standing: standing });
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    }
+  });
+
   // GET /operator/leasing/person-card — THE PERSON × PROPERTY CARD READ.
   //
   // The card is a LENS, not a table: it assembles attributed entries from
@@ -2676,6 +2699,29 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         if (rs && rs.stage) { stage = rs.stage; stage_basis = rs.basis; }
       } catch (_) { /* keep the inline stage — honest, just less specific */ }
 
+      // ── LEASING STANDING — the domain's own projection, not a second
+      //    opinion. The card previously showed a person who had SIGNED THE
+      //    LEASE exactly as it showed one who had not: same stage, same
+      //    application status, nothing about the instrument, the company
+      //    signature, the executed lease, or a blocked activation. This band
+      //    is leasing_standing_read composed in, so the card reports what
+      //    the domain already knows instead of re-deriving any of it.
+      //    Fail-soft: the card degrades to null rather than 500ing, and the
+      //    projection reports its own read failures inside `uncertainty`.
+      let leasing = null;
+      try {
+        const { readLeasingStanding } = require("../leasing/leasing_standing_read");
+        const st = await readLeasingStanding(client, { person_id: personId, property_id: propertyId });
+        leasing = {
+          target: st.target,
+          lease: st.lease,
+          tenancy: st.tenancy,
+          economics: st.economics,
+          uncertainty: st.uncertainty,
+          settled: st.settled,
+        };
+      } catch (_) { /* honest null — the rest of the card is still true */ }
+
       return res.json({
         person: { id: p.id, name: p.name },
         property_id: propertyId,
@@ -2685,6 +2731,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         stage_basis,                           // the evidence behind it, or null
         relationship: { vitals, recent_messages: recent, conversation_id: conversation ? conversation.id : null },
         application,                           // compact Application band, or null (honestly not applied yet)
+        leasing_standing: leasing,             // instrument, signatures, execution, tenancy, uncertainty
         next,                                  // empty array = honestly nothing pending
         history: entries,                      // occurred_at ASC; empty = honestly nothing yet
       });

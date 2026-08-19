@@ -19,7 +19,12 @@
 // =============================================================
 
 const path = require("path");
-const applicationsModule = require(path.join(__dirname, "..", "..", "applications.js"));
+//  ⚠ PATH REPAIRED. This resolved to the repository ROOT, where
+//  applications.js lived before the domain reorganisation moved it to
+//  src/applications/. The oracle has therefore thrown on require since
+//  that commit — it was not guarding the resolver it exists to guard,
+//  and nothing said so because it is not in the *.test.js glob.
+const applicationsModule = require(path.join(__dirname, "..", "applications", "applications.js"));
 
 // stub deps — the factory never touches them for pure resolver calls
 const stub = {

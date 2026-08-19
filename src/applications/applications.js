@@ -227,6 +227,32 @@ module.exports = function applicationsModule(deps) {
       return out("executed_lease_required",
         "Executed lease required. (Legacy activation gate — a terms acknowledgment is not an executed lease.)");
     }
+    //  ── THE INSTRUMENT SPINE HOLDS, BEFORE THE OLD DEAD-END ───────────
+    //  "Executed lease required" was the honest answer while Spine could not
+    //  execute anything: the terms-review gate closed and an outside lease
+    //  was the only way forward. It is now WRONG for three distinct states,
+    //  and each was answering with that same sentence — a resident who had
+    //  signed, a company that still had to, and a signed lease whose
+    //  activation was blocked all read as "no lease exists yet".
+    //  These branches sit ahead of the dead-end and only fire on facts the
+    //  caller supplied; a two-argument caller is unchanged.
+    const exec = rv ? (rv.executed_lease || null) : null;
+    if (pk && pk.status === "resident_executed") {
+      return out("company_execute_lease",
+        "The resident has executed the instrument — the company signs to complete it.",
+        { group_code: "executed_lease_required" });
+    }
+    if (pk && pk.status === "executed" && exec && exec.present) {
+      if (exec.activation_status === "blocked") {
+        return out("resolve_execution_conflict",
+          "The lease is executed and stands. Activation is blocked — resolve the conflict.",
+          { group_code: "executed_lease_required", state: "blocked",
+            blocker_code: (exec.blockers && exec.blockers[0] && exec.blockers[0].code) || "activation_blocked" });
+      }
+      return out("executed_lease_recorded",
+        "The lease is executed and recorded.",
+        { group_code: "executed_lease_required", state: "complete" });
+    }
     if (gateClosed) return out("executed_lease_required", "Executed lease required.");
     if (pk && PK_AWAITING.includes(pk.status)) {
       // Already issued. Nothing is pending, so there is NO blocker — the resident
@@ -243,10 +269,17 @@ module.exports = function applicationsModule(deps) {
           warning = "issued_packet_stale";
         }
       }
+      //  A packet carrying a governing instrument is awaiting a SIGNATURE,
+      //  not an acknowledgment. Calling a signature an acknowledgment is the
+      //  exact false equivalence the terms-review correction removed, and it
+      //  would have crept back in through this label.
+      const awaiting = (pk && pk.instrument_body_sha256)
+        ? "Awaiting the resident's signature on the lease."
+        : "Awaiting the resident's terms acknowledgment.";
       return rv
-        ? out("await_resident_acknowledgment", "Awaiting the resident's terms acknowledgment.",
+        ? out("await_resident_acknowledgment", awaiting,
               { group_code: "awaiting_acknowledgment", state: "waiting", warning_code: warning })
-        : out("awaiting_acknowledgment", "Awaiting the resident's terms acknowledgment.", { state: "waiting" });
+        : out("awaiting_acknowledgment", awaiting, { state: "waiting" });
     }
     if (pk && pk.status === "submitted") return out("executed_lease_required", "Executed lease required.");
 
@@ -312,6 +345,14 @@ module.exports = function applicationsModule(deps) {
       case "awaiting_acknowledgment": return "approved_awaiting_acknowledgment";
       case "executed_lease_required":
         return (gate && gate.gate_kind === "legacy_activation") ? "legacy_pre_execution" : "terms_acknowledged_execution_required";
+      //  ⚠ applicationPosition calls applicationNext with TWO arguments, so it
+      //  never sees execution facts and cannot reach the new codes above. They
+      //  are mapped anyway: a `default` that answers "pre_approval" for an
+      //  unknown code would report a person who has signed a lease as being
+      //  before approval, which is the worst possible wrong answer here.
+      case "company_execute_lease": return "resident_executed_company_pending";
+      case "resolve_execution_conflict": return "executed_activation_blocked";
+      case "executed_lease_recorded": return "executed";
       default: return "pre_approval";
     }
   }
