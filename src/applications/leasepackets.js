@@ -925,6 +925,35 @@ module.exports = function leasePacketsModule(deps) {
         });
       }
 
+      //  EACH REFUSAL NAMES ITS OWN REASON. A single "the resident has not
+      //  executed" for every non-signable packet is false on three of these
+      //  four paths — an operator told that about a packet the resident
+      //  definitely signed would go looking for the wrong thing. Caught by
+      //  reading what the hostile replay and supersession cases actually
+      //  reported, not by the fact that they refused.
+      if (pk.voided_at || pk.status === "voided") {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "packet_voided",
+          receipt: "This lease packet was voided and cannot be executed.",
+        });
+      }
+      if (pk.superseded_at) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "packet_superseded",
+          receipt: "This packet was superseded by a later version. Execute the current version; "
+                 + "this one remains evidence of what was issued.",
+        });
+      }
+      if (pk.status === "executed") {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "packet_already_executed",
+          receipt: "This packet is already executed. It is not signed twice.",
+          company_executed_at: pk.company_executed_at,
+        });
+      }
       //  THE RESIDENT SIGNS FIRST. 184's trigger enforces this in Postgres;
       //  refusing here too means the operator gets an explanation instead of
       //  a constraint violation.
