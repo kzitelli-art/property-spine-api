@@ -2263,7 +2263,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       const standing = await readLeasingStanding(pool, {
         person_id: personId, property_id: req.operator.property_id,
         as_of: (req.query && req.query.as_of) || null,
-      });
+      }, { applicationsService });
       return res.json({ leasing_standing: standing });
     } catch (e) {
       return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
@@ -2711,12 +2711,14 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       let leasing = null;
       try {
         const { readLeasingStanding } = require("../leasing/leasing_standing_read");
-        const st = await readLeasingStanding(client, { person_id: personId, property_id: propertyId });
+        const st = await readLeasingStanding(client, { person_id: personId, property_id: propertyId },
+                                             { applicationsService });
         leasing = {
           target: st.target,
           lease: st.lease,
           tenancy: st.tenancy,
           economics: st.economics,
+          next: st.next,
           uncertainty: st.uncertainty,
           settled: st.settled,
         };

@@ -347,6 +347,10 @@ async function gatherFacts(db, {
   equityService = equityPositionService, equityRead = equityPositionRead,
   tenancyReader = tenancyStandingRead,
   leasingReader = leasingStandingRead,
+  //  The canonical application lifecycle service. Accepted as a value OR a
+  //  thunk: ask_spine mounts in server.js ABOVE the applications module, so
+  //  a value captured at mount time would be undefined forever.
+  applicationsService = null,
 }) {
   const facts = {
     property_id,
@@ -587,7 +591,7 @@ async function gatherFacts(db, {
       } else {
         const standing = await leasingReader.readLeasingStanding(db, {
           person_id: subj.person.id, property_id,
-        });
+        }, { applicationsService: (typeof applicationsService === "function" ? applicationsService() : applicationsService) });
         facts.leasing_person = withoutDatabaseIds({
           ...standing, subject_name: subj.person.name, read_state: "OK",
         });
@@ -913,7 +917,7 @@ function systemPrompt(subject = "work") {
 async function answer(db, anthropic, {
   property_id, allowed_modules, question, mintComplianceReference, complianceReader,
   utilityReader, contractedServiceReader, debtService, debtRead, equityService, equityRead,
-  tenancyReader,
+  tenancyReader, applicationsService,
 }) {
   if (!property_id) throw new Error("ask_spine.answer requires a server-derived property_id");
 
@@ -991,6 +995,7 @@ async function answer(db, anthropic, {
     mintComplianceReference, complianceReader, utilityReader,
     contractedServiceReader, debtService, debtRead, equityService, equityRead,
     tenancyReader, question: q,
+    applicationsService,
   });
 
   let text = "";

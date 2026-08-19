@@ -60,8 +60,12 @@ async function attempt(label, fn, notes) {
  * @param db          pool or client
  * @param person_id   the person
  * @param property_id SERVER-DERIVED. Never accepted from a browser.
- * @param deps        { executedLease, applicationsService } — the canonical
- *                    services, injected so this file owns neither.
+ * @param deps        { applicationsService } — the canonical application
+ *                    lifecycle service, injected so this file owns none of
+ *                    its meaning. Optional: without it the standing read
+ *                    still answers everything else and says plainly that
+ *                    the next action was not resolved, rather than guessing
+ *                    one from the same tables the resolver reads.
  */
 async function readLeasingStanding(db, { person_id, property_id, as_of = null } = {}, deps = {}) {
   if (!person_id || !property_id) {
@@ -95,15 +99,23 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
 
   // ── THE INSTRUMENT AND WHO HAS SIGNED IT ──────────────────────────
   const packet = app ? await attempt("lease_packet", async () => (await db.query(
+    //  proposed_terms_confirmation_id is SELECTED — lineage is compared on
+    //  it. Omitting it made every packet look lineage-unproven and this read
+    //  reported a blocked next action against the review's available one.
     `select id, version, status, is_placeholder, superseded_at,
             instrument_form_code, instrument_body_sha256,
-            resident_executed_at, company_executed_at
+            resident_executed_at, company_executed_at,
+            proposed_terms_confirmation_id
        from lease_packets
       where application_id=$1 and superseded_at is null
       order by version desc limit 1`, [app.id])).rows[0] || null, notes) : null;
 
   const executed = app ? await attempt("executed_lease", async () => (await db.query(
+    //  admission_blockers is read, not re-derived. The admission evaluator
+    //  authored those codes; naming a generic "activation_blocked" beside
+    //  its specific one would be a second opinion about the same conflict.
     `select id, verification_basis, execution_channel, admission_status,
+            admission_blockers,
             document_sha256, executed_at, source_lease_packet_id
        from executed_lease_records
       where application_id=$1 and voided_at is null
@@ -123,7 +135,12 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
   //  confirmation named — so it is READ, and when nothing has been confirmed
   //  the answer stays honestly unresolved.
   const confirmation = app ? await attempt("proposed_terms", async () => (await db.query(
-    `select rent, security_deposit, lease_start_date, lease_end_date, concession_status
+    //  `id` is SELECTED. Lineage is compared on it, and without it every
+    //  packet looked like a lineage mismatch — this read reported a blocked
+    //  next action where the review reported an available one, which is the
+    //  exact two-surfaces-disagree failure this projection exists to remove.
+    //  Caught by running both surfaces against the same application.
+    `select id, rent, security_deposit, lease_start_date, lease_end_date, concession_status
        from application_proposed_terms_confirmations
       where application_id=$1 order by created_at desc limit 1`, [app.id])).rows[0] || null, notes) : null;
 
@@ -171,14 +188,67 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
       order by o.created_at desc limit 5`,
     [app ? app.id : null, conversion ? conversion.id : null])).rows, notes) : [];
 
+  const parsedBlockers = (() => {
+    if (!executed || executed.admission_blockers == null) return [];
+    if (Array.isArray(executed.admission_blockers)) return executed.admission_blockers;
+    try { return JSON.parse(executed.admission_blockers) || []; } catch (_) { return []; }
+  })();
+
+  // ── WHAT SHOULD HAPPEN NEXT — THE LIFECYCLE'S OWN ANSWER ──────────
+  //  applicationNext is a PURE interpreter of already-loaded facts, so it is
+  //  handed the same packet and execution facts this read already has. It is
+  //  not called with a second, differently-shaped set of facts: that is how
+  //  two surfaces come to disagree about one application.
+  let nextAction = null;
+  const appsSvc = deps.applicationsService || null;
+  if (app && appsSvc && typeof appsSvc.applicationNext === "function") {
+    nextAction = await attempt("next_action", async () => {
+      const gate = typeof appsSvc.outstanding === "function"
+        ? await appsSvc.outstanding(db, app) : null;
+      const n = appsSvc.applicationNext(app, gate, {
+        packet,
+        confirmation,
+        //  PACKET CURRENCY IS NOT EVALUATED HERE, and that is stated rather
+        //  than implied. Application Review computes it by comparing the
+        //  packet's frozen terms against the current structured columns;
+        //  re-implementing that comparison would be a second opinion about
+        //  drift. Passing null means the resolver does not treat the packet
+        //  as stale — so this read can say a packet is issuable when Review,
+        //  which does evaluate currency, would add a staleness blocker. The
+        //  note below makes that limit visible instead of silent.
+        currency_status: null,
+        lineage_matches_current_confirmation:
+          packet && confirmation && packet.proposed_terms_confirmation_id
+            ? String(packet.proposed_terms_confirmation_id) === String(confirmation.id)
+            : (packet ? null : undefined),
+        executed_lease: executed
+          ? { present: true, activation_status: executed.admission_status || null,
+              blockers: parsedBlockers }
+          : { present: false },
+      });
+      return n ? { code: n.code, label: n.label, state: n.state,
+                   blocker_code: n.blocker_code || null, warning_code: n.warning_code || null } : null;
+    }, notes);
+  } else if (app) {
+    notes.push({ kind: "not_established", subject: "next_action",
+      detail: "The application lifecycle service is not wired into this read, so no next action is resolved." });
+  }
+
   // ── UNCERTAINTY, KEPT APART FROM ABSENCE ──────────────────────────
+  //  (packet currency — see the note at the resolver call above)
   const uncertainty = notes.slice();
   if (executed && executed.admission_status === "blocked") {
     uncertainty.push({ kind: "blocked", subject: "activation",
-      detail: "The lease is executed and stands; operational activation is blocked." });
+      detail: "The lease is executed and stands; operational activation is blocked.",
+      codes: parsedBlockers.map((b) => (b && b.code) || String(b)) });
   }
   if (app && app.space_id && asking && asking.resolved === false) {
     uncertainty.push({ kind: "not_established", subject: "asking_economics", detail: asking.detail || asking.reason });
+  }
+  if (packet && packet.status === "draft") {
+    uncertainty.push({ kind: "not_established", subject: "packet_currency",
+      detail: "This read does not evaluate whether the draft packet's frozen terms still match "
+            + "the current application terms. Application Review owns that comparison." });
   }
   if (app && !app.space_id) {
     uncertainty.push({ kind: "not_established", subject: "target_space",
@@ -232,6 +302,11 @@ async function readLeasingStanding(db, { person_id, property_id, as_of = null } 
       ? { state: lease.lease_status, lease_id: lease.id, space_id: lease.space_id }
       : { state: "none", lease_id: null, space_id: null },
     next: {
+      //  WHAT SHOULD HAPPEN NEXT — asked of the application lifecycle's own
+      //  next-action authority, never re-derived here. That resolver already
+      //  separates "what is next" from "why it is blocked", and duplicating
+      //  either would create the second opinion this file exists to avoid.
+      action: nextAction,
       //  Owned work, from the obligation engine. UNASSIGNED is stated, never
       //  implied by an absent name.
       open_work: (openWork || []).map((o) => ({

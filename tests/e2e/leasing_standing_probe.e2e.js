@@ -5,6 +5,17 @@ const { pool, q, api, ctx, toPacket, residentSigns } = require("./leasing_e2e_li
 const { resolveRelationshipStage } = require("../../src/shared/relationship_stage.js");
 
 const row = (label, vals) => console.log("  " + label.padEnd(26) + vals);
+let disagreements = 0;
+
+//  THE POINT OF THIS FILE. Two surfaces may word things differently; they
+//  may not tell different stories. Application Review and the Leasing
+//  standing read are asked the same question about the same application and
+//  must return the SAME next-action code, state and blocker.
+function reconcile(name, r) {
+  const a = r.review_next, b = r.standing_next;
+  if (a !== b) { disagreements++; console.log(`  \u2717 DISAGREEMENT in ${name}\n      review   ${a}\n      standing ${b}`); }
+  else console.log(`  \u2713 review and standing agree: ${a}`);
+}
 
 async function askSurfaces(C, S) {
   const app = (await q(`select id, status, person_id, space_id from lease_applications where id=$1`, [S.appId])).rows[0];
@@ -35,6 +46,8 @@ async function askSurfaces(C, S) {
     exec_action: rvExec ? `${rvExec.action}` : "(none)",
     standing: S2 ? `${S2.lease ? S2.lease.packet_status : "-"} · resident ${S2.lease && S2.lease.resident_executed_at ? "SIGNED" : "-"} · company ${S2.lease && S2.lease.company_executed_at ? "SIGNED" : "-"} · exec ${S2.lease && S2.lease.executed_lease.present ? S2.lease.executed_lease.admission_status : "none"} · tenancy ${S2.tenancy.state}` : `(${stand.status})`,
     standing_unc: S2 ? (S2.uncertainty.length ? S2.uncertainty.map(u=>u.kind+":"+u.subject).join(",") : "settled") : "-",
+    standing_next: S2 && S2.next && S2.next.action ? `${S2.next.action.code}/${S2.next.action.state}${S2.next.action.blocker_code ? " ⛔"+S2.next.action.blocker_code : ""}` : "(none)",
+    standing_owner: S2 && S2.next ? (S2.next.open_work.length ? S2.next.open_work.map(w=>w.type+"→"+(w.owner==="UNASSIGNED"?"UNASSIGNED":w.owner.name)).join(", ") : "(no open work)") : "-",
     card_has_standing: cardLs ? (cardLs.lease ? `${cardLs.lease.packet_status} · exec ${cardLs.lease.executed_lease.present}` : "no lease band") : "ABSENT",
   };
 }
@@ -51,7 +64,10 @@ function report(name, r) {
   row("Review → next action", r.review_next);
   row("Review → execution button", String(r.exec_action));
   row("Leasing standing", String(r.standing));
+  row("  next action", String(r.standing_next));
+  row("  owned work", String(r.standing_owner));
   row("  uncertainty", String(r.standing_unc));
+  reconcile(name, r);
   row("Person Card → standing", String(r.card_has_standing));
 }
 
@@ -76,5 +92,11 @@ function report(name, r) {
   await api("POST", `/operator/leasing/applications/${D.appId}/lease-packet`, { token: C.token, key: "e2e-key", body: { create_new_version: true } });
   report("STATE 5 · packet superseded", await askSurfaces(C, D));
 
+  console.log(`\n${"=".repeat(62)}`);
+  console.log(disagreements
+    ? `  ${disagreements} SURFACE DISAGREEMENT(S) — one person, two stories.`
+    : "  ALL SURFACES RECONCILE — one leasing truth, read five ways.");
+  console.log("=".repeat(62));
   await pool.end();
+  process.exit(disagreements ? 2 : 0);
 })().catch(async (e) => { console.log("DIED: " + e.stack); try { await pool.end(); } catch(_){} process.exit(1); });

@@ -3182,7 +3182,12 @@ app.use("/", require("./src/surfaces/asset_management")({ pool, fileToText }));
 //  the operator session. No proposals, no confirmations, no writes, and the
 //  question is not recorded as a staff-agent message. It shares the authority
 //  seam above and nothing else.
-app.use("/", require("./src/agent/ask_spine")({ pool, anthropic }));
+app.use("/", require("./src/agent/ask_spine")({ pool, anthropic,
+  //  A THUNK, read at request time. Ask Spine mounts here; the
+  //  applications module is composed further down, so a value captured
+  //  now would be undefined forever. Same reason as the lease-packet
+  //  execution services above.
+  applicationsService: () => __applications && __applications._service })); 
 
 // ── MEETING EVIDENCE — governed capture binding/read surface ─────────
 //  The provider webhook is mounted above express.json(); these operator
