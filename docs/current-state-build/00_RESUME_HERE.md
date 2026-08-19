@@ -1,5 +1,20 @@
 # RESUME HERE — building `docs/CURRENT_STATE.md`
 
+> ## ▶ TO RESTART, PASTE THIS
+> ```
+> Read docs/current-state-build/00_RESUME_HERE.md on branch
+> claude/philosophy-doctrine-essence-ae6xni and continue that work.
+> ```
+> That is the whole restart. Everything needed is in this folder. Do not ask the
+> owner to re-explain the plan — it is written down below and was agreed already.
+>
+> **First three moves, in order:** (1) re-fetch both repos and re-stamp the SHAs in
+> "State stamp" below, assuming drift; (2) re-run `wave1_new_domains.js` and
+> `wave2_coverage_gaps.js` against fresh worktrees at current main; (3) bring the
+> owner the consolidated row set and settle taxonomy **with them**, before writing
+> anything.
+
+
 **Paused 2026-08-19 mid-inventory. Nothing has been written to the product yet.**
 This folder is working material for ONE deliverable: a `docs/CURRENT_STATE.md` that
 answers *"what is true now?"* so a new thread stops having to reconstruct it.
