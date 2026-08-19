@@ -33,8 +33,13 @@ jobs:
           POSTGRES_PASSWORD: spineproof
           POSTGRES_USER: postgres
         ports: ["5432:5432"]
+        #  `-U postgres`: the health check runs as root inside the container
+        #  and there is no `root` role, so a bare `pg_isready` logged FATAL
+        #  every ten seconds for the whole job. The comment lives HERE, above
+        #  the key — inside the `>-` block below a `#` is literal text and
+        #  would be handed to docker as part of the options string.
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U postgres"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
@@ -43,7 +48,17 @@ jobs:
       E2E_DATABASE_URL: postgres://postgres:spineproof@127.0.0.1:5432/spine_verify
 
     steps:
+      #  FULL HISTORY, NOT A SHALLOW CLONE.
+      #  conversation_intent_extraction.test.js proves a boundary against a
+      #  specific historical commit (`git show 1454330:...`). With GitHub's
+      #  default fetch-depth of 1 that read fails, and the test does the
+      #  RIGHT thing — it reports the check NOT PROVEN and exits 3 rather
+      #  than assuming it away. Shallow history was the defect; the test was
+      #  not. Giving CI the history it needs strengthens the proof; skipping
+      #  the check would have weakened it.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
