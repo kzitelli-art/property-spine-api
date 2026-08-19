@@ -76,3 +76,34 @@ asks whether a temporary thing has outlived its reason. Both are gates about
 the verification system rather than the product, and both came from the same
 root cause — this codebase produces unverified intent faster than it verifies
 it.
+
+---
+
+## W-4 · The migration runner tells its operator the opposite of the truth
+
+**Status: OPEN. Deliberately not closed by the release verifier.**
+
+Five migrations — 076, 077, 079, 083, 084 — record themselves into
+`schema_migrations` inside their own transaction. The runner then reports:
+
+> FAILED — rolled back. Nothing from this file was applied
+
+while the objects were in fact created and persist. An operator is told the
+opposite of the truth at the moment they most need accuracy: mid-release,
+deciding whether to retry.
+
+**The release verifier does not fix this.** `tests/e2e/verify_release_182_187.js`
+protects ONE release by making the database, rather than the runner's prose,
+the verdict. The runner still lies to everyone else, on every other release.
+
+**This violates the same doctrine the product is held to.** A release tool
+that reports confident failure over a successful commit is exactly the
+"confident wrong" the product refuses to emit. We do not accept it from
+`applicationNext` or from Ask Spine; we should not accept it from the thing
+that changes the schema.
+
+**The fix, after 182–187 have safely landed:** correct the EXISTING runner's
+reporting so its message agrees with database reality — distinguish "the
+file's work did not land" from "the file recorded itself and the ledger
+insert conflicted". **Do not build a second migration mechanism.** One
+canonical runner, telling the truth.
