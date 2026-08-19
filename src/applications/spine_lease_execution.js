@@ -99,6 +99,14 @@ async function executeSpineLease(client, { lease_packet_id, company_signer_user_
   }
   const executedLease = deps.executedLease;
   const confirmTerm = deps.confirmTerm;
+  //  The admission engine spawns the term_required obligation through
+  //  this helper and REFUSES the lifecycle transition without it — an
+  //  executed lease that can never reach term confirmation. It is
+  //  forwarded explicitly rather than by passing this adapter's own
+  //  deps object through, which is what happened before: the service
+  //  received { executedLease, confirmTerm }, found no spawner, and
+  //  every execution blocked on term_required_obligation_required.
+  const spawnObligationFromEvent = deps.spawnObligationFromEvent || null;
   if (!executedLease || typeof executedLease.verifyExecutedLease !== "function") {
     throw svcErr(503, { receipt: "Executed-lease service is not wired on this deploy." });
   }
@@ -244,7 +252,12 @@ async function executeSpineLease(client, { lease_packet_id, company_signer_user_
     //  The bed travels from the packet, which took it from the application
     //  (182). It is never re-asserted by a browser at execution time.
     space_id: need("space_id"),
-    rent: need("rent"),
+    //  THE PACKET'S OWN VOCABULARY, NOT AN ASSUMED ONE. terms_json is
+    //  written by generateLeasePacket and rendered to the resident as
+    //  `monthly_rent`; this mapping read `rent`, a name the signed snapshot
+    //  has never used, so it refused every real packet. The snapshot is the
+    //  established owner of what was signed — the mapping was wrong, not it.
+    rent: need("monthly_rent"),
     security_deposit: terms.security_deposit == null ? null : terms.security_deposit,
     lease_start_date: need("lease_start_date"),
     lease_end_date: need("lease_end_date"),
@@ -264,7 +277,7 @@ async function executeSpineLease(client, { lease_packet_id, company_signer_user_
     source_lease_packet_id: lease_packet_id,
     //  One execution per packet, so a replay converges instead of duplicating.
     idempotency_key: `spine_packet:${lease_packet_id}`,
-  }, deps);
+  }, { spawnObligationFromEvent });
 
   // ── ADMITTED → THE TENANCY, IN THE SAME WORKFLOW ──────────────────
   //  The company signature was the human decision. Asking that person to

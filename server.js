@@ -3207,7 +3207,20 @@ app.use("/", require("./src/surfaces/unit_turn")({
 }));
 // applications module mounted lower (after the conversion + submission services exist,
 // so /approve can close the leasing_manager application_approval gate). See below.
-const __leasePackets = leasePacketsModule({ pool, satisfyObligation, completeObligation });
+const __leasePackets = leasePacketsModule({
+  pool, satisfyObligation, completeObligation,
+  staffSessions: require("./src/identity/staff_session_service"),
+  //  LATE-BOUND ON PURPOSE. This module mounts here, but the executed-lease
+  //  service and the tenancy anchor are composed ~230 lines below. A value
+  //  captured now would be undefined forever; a thunk reads them at request
+  //  time, after composition. The mount order is not disturbed — legacy and
+  //  operator doors still share this one packet service instance.
+  executionServices: () => ({
+    executedLease: __executedLease,
+    confirmTerm: __tenancyAnchor && __tenancyAnchor.confirmTermService,
+    spawnObligationFromEvent,
+  }),
+});
 app.use("/", __leasePackets); // ONE packet service instance; legacy + operator doors share _service
 // ── DOWN UNITS MODULE (isolated; same injection pattern) ──
 app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));
