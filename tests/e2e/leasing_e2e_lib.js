@@ -25,7 +25,20 @@ async function api(method, path, { token, body, key } = {}) {
 async function ctx({ wipe = true } = {}) {
   const prop = (await q("select id from properties where name='Skyline E2E' order by created_at desc limit 1")).rows[0].id;
   const unit = (await q("select id from units where property_id=$1 order by created_at limit 1", [prop])).rows[0].id;
-  const beds = (await q("select id, space_label from spaces where unit_id=$1 order by space_label", [unit])).rows;
+  //  ⚠ SPACES ARE CHOSEN BY NAME, NEVER BY SORT POSITION.
+  //  This took `order by space_label` and then beds[0] / beds[1], which
+  //  makes the identity of "the bed" depend on COLLATION. "(whole unit)"
+  //  and "Bed B" order differently under different glibc versions, so the
+  //  local run picked Bed B and CI picked the whole unit — and the Ask
+  //  Spine proof failed on `the bed is named` for a reason that had
+  //  nothing to do with the product. Found by CI; no local run could show
+  //  it, because locally the collation happened to be favourable.
+  const beds = (await q("select id, space_label from spaces where unit_id=$1", [unit])).rows;
+  const byLabel = (want) => {
+    const hit = beds.find((b) => String(b.space_label).trim() === want);
+    if (!hit) throw new Error(`fixture: no space labelled "${want}" — found: ${beds.map((b) => b.space_label).join(", ")}`);
+    return hit.id;
+  };
   if (wipe) {
     await q(`update lease_applications set executed_lease_record_id=null where property_id=$1`, [prop]);
     await q(`delete from executed_lease_admission_evaluations
@@ -42,7 +55,9 @@ async function ctx({ wipe = true } = {}) {
     token = s.session_token || s.token;
     await c.query("commit");
   } finally { c.release(); }
-  return { prop, unit, bedA: beds[0].id, bedB: (beds[1] || beds[0]).id, mike, token };
+  //  bedA is the whole-unit position, bedB the named bed. Both by label, so
+  //  the harness means the same thing on every machine.
+  return { prop, unit, bedA: byLabel("(whole unit)"), bedB: byLabel("Bed B"), mike, token };
 }
 
 /*  Drives lead → application@bed → approve → terms → packet → send.
