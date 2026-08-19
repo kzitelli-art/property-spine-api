@@ -109,7 +109,10 @@ Files are numbered `001`, `002`, ..., `090`, etc. The `schema_migrations` table 
 
 1. Create `migrations/NNN_description.sql` (next number in sequence)
 2. Write idempotent SQL (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING`, etc.)
-3. Test locally, merge to `main`, then trigger the Render deploy — startup applies it
+3. Test locally and merge to `main`. Then RELEASE THE SCHEMA FIRST (startup
+   does not apply it — see "Startup sequence" above), and deploy the code
+   second. A deploy of code whose migrations are unreleased will refuse to
+   start, and the previous instance keeps serving.
 
 **Special case — `ALTER TYPE ... ADD VALUE`:** Postgres does not allow using a newly added enum value in the same transaction as an `INSERT` referencing it. Use a `DO $$ BEGIN ... EXCEPTION WHEN others THEN null; END $$;` block, then a separate `UPDATE` in the next statement. See `migrations/090_admin_users.sql` for the pattern.
 

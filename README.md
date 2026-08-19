@@ -16,7 +16,7 @@ npm install
 cp .env.example .env   # or create .env manually — see docs/deployment.md
 
 # 3. Run migrations and start the server
-npm start              # prestart runs migrations automatically
+npm start              # prestart VERIFIES the schema; it applies nothing
 ```
 
 The server starts on port 3000. `GET /health` returns `{ ok: true }` when the DB is reachable.

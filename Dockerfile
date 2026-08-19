@@ -11,5 +11,8 @@ COPY . .
 
 EXPOSE 3000
 
-# prestart runs migrations, then starts the server
+# prestart VERIFIES the schema and REFUSES TO START on mismatch — it does
+# not apply anything. Releasing schema is a separate, deliberate act; see
+# docs/deployment.md. A container that exits here has not failed to boot,
+# it has declined to run new code against an older database.
 CMD ["npm", "start"]
