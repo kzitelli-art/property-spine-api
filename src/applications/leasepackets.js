@@ -29,7 +29,9 @@
 //   Acknowledgment = review/intent only (Option A). The captured value is
 //   audit evidence, NOT a legally-binding signature on the final lease. It
 //   records that the resident reviewed the demonstration terms; the complete
-//   lease and required addenda (delivered separately) govern, and a tenancy
+//   lease and required addenda govern — delivered separately when the
+//   property has no governing instrument on file, and carried BY the packet
+//   when it does (184) — and a tenancy
 //   begins only through the governed countersign/activation path.
 //
 //   Injection (server.js), mounted AFTER applications.js so the packet sits
@@ -686,7 +688,17 @@ module.exports = function leasePacketsModule(deps) {
 
     await client.query(`delete from lease_packet_documents where lease_packet_id=$1`, [pk.id]);
     const docs = [
-      { document_type: "lease_body", title: "Complete Lease & Required Addenda (governing — delivered separately)", required_acknowledgment: false },
+      //  THE TITLE STATES WHAT IS ACTUALLY TRUE OF THIS PACKET.
+      //  "delivered separately" was correct while Spine held no instrument.
+      //  On a packet that CARRIES the governing instrument the resident is
+      //  signing, it is a false statement on a resident-facing document —
+      //  and the one most likely to be relied on. Found in the lifecycle
+      //  drift audit, not by a test failing.
+      { document_type: "lease_body",
+        title: instrument
+          ? `Complete Lease & Required Addenda (governing — ${instrument.form_code})`
+          : "Complete Lease & Required Addenda (governing — delivered separately)",
+        required_acknowledgment: false },
       { document_type: "rental_license", title: "Rental License", required_acknowledgment: true },
       { document_type: "rental_suitability", title: "Certificate of Rental Suitability", required_acknowledgment: true },
     ];
