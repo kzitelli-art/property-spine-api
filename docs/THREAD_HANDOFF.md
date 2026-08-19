@@ -36,8 +36,12 @@ CI          ✔  GREEN ON GITHUB — run 4, commit 4c88d7f, all twelve
                attempt; runs 1–3 each failed for a different real reason.
 Deployed    ✘  the build identity endpoint exists and works on a runner,
                but has NOT been read from the Render runtime
-Production  ✘  the migration LEDGER has been read (ceiling 181, complete).
-               Nothing else about the deployed system is proven.
+Production schema      ✔  OBSERVED, not inferred: ceiling 181, ledger
+               reconstructed to exactly 169 entries, six preflight checks
+               all 0. This is earned proof and must not be collapsed into
+               a blank.
+Production behaviour   ✘  no application path has been exercised there.
+               Nothing about how the deployed system BEHAVES is proven.
 ```
 
 ### Production, as read 19 August 2026

@@ -32,7 +32,29 @@
     ════════════════════════════════════════════════════════════════════ */
 "use strict";
 const path = require("path");
-const { Pool } = require(path.join(__dirname, "..", "..", "node_modules", "pg"));
+//  ── RUNNABLE FROM ANYWHERE, INCLUDING A BOX WITHOUT THIS REPO ────────
+//  The release is verified from wherever the operator can reach the
+//  database, which may be a production shell that has node_modules but
+//  not this checkout. A hardcoded ../../node_modules path would make the
+//  verifier unusable in exactly the situation it exists for. Tries the
+//  repo-relative copy, then the ambient resolution, then a deployed app's
+//  own node_modules — and says plainly what to do if none works.
+function loadPg() {
+  const candidates = [
+    path.join(__dirname, "..", "..", "node_modules", "pg"),
+    "pg",
+    "/opt/render/project/src/node_modules/pg",
+    path.join(process.cwd(), "node_modules", "pg"),
+  ];
+  for (const c of candidates) {
+    try { return require(c); } catch (_) { /* try the next */ }
+  }
+  console.error("DIED: cannot load the `pg` driver.\n" +
+    "  Run this from a directory whose node_modules has pg, or set NODE_PATH.\n" +
+    "  Tried: " + candidates.join("  ·  "));
+  process.exit(70);
+}
+const { Pool } = loadPg();
 
 const RELEASE = ["182", "183", "184", "185", "186", "187"];
 const START_CEILING = 181;
