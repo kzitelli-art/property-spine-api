@@ -16,6 +16,7 @@ was invisible in source and obvious the moment the path was driven.
 | `leasing_ask_spine.e2e.js` | Ask Spine routing, entitlement, addressing, the four silences |
 | `resident_signing.browser.js` | real Chromium at a phone viewport on the real tenant page; the resident executes the instrument and it lands in Postgres |
 | `leasing_e2e_lib.js` | shared harness (session, fixtures, path to a sent packet) |
+| `apply_migrations.sh` | builds the schema from the real migration chain; idempotent, resumes from the ledger |
 
 ## Fixtures are fixtures
 
@@ -30,7 +31,9 @@ the mechanism can be exercised where a business fact is unavailable.
 ## Running it
 
 ```sh
-createdb spine_e2e && ./apply_migrations.sh        # a schema built from the real chain
+createdb spine_e2e
+export E2E_DATABASE_URL=postgres://postgres:PASS@127.0.0.1:5432/spine_e2e
+./tests/e2e/apply_migrations.sh                    # builds from the REAL chain
 psql "$E2E_DATABASE_URL" -f tests/e2e/fixtures.sql
 node tests/e2e/instrument_fixture.js
 ./tests/e2e/boot.sh &                              # real server.js on :3000

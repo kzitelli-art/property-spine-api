@@ -1,6 +1,120 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  START HERE. LEASING IS FROZEN AND PROVEN LOCALLY. NOTHING IS
+##  DEPLOYED. 2026-08-19. Branch `claude/property-spine-orientation-cso2ao`.
+## ══════════════════════════════════════════════════════════════════
+
+**If you read one section, read this one.** Everything below it is history,
+newest first, and much of it predates the two overnights summarised here.
+
+### What is true now
+
+The leasing machine runs end to end against a real `server.js` and a real
+Postgres, and every leasing surface tells the same story about it.
+
+```text
+WRITE  lead → tour + outcome → application at an EXACT bed → governed price
+       → governing instrument → resident signs → company signs
+       → executed lease (spine_instrument / spine_esign) → pending tenancy
+
+READ   the same lifecycle reads coherently through Application Review, the
+       leasing standing read, the Person Card, Rent Roll / availability, and
+       Ask Spine's governed fact envelope
+```
+
+### Proof level — state these separately, never as one word
+
+```text
+Source      ✔  drift audit done; findings classified, not globally replaced
+DB          ✔  schema built from the real migration chain, ceiling 187
+HTTP        ✔  every step above, real server, real Postgres
+Browser     ◑  the RESIDENT signing page only. The operator shell is NOT
+               proven and was deliberately not forced — see "do not touch"
+Production  ✘  ZERO CONTACT. No claim in this document describes the
+               deployed system.
+```
+
+### ⚠ THE DOMINANT RISK
+
+**Six migrations (182–187) and nine commits of proven work sit ahead of the
+deployed schema, and the live migration ledger has never been read from any
+recent thread.** Both Render hosts refuse the connection here and there is no
+`DATABASE_URL`. Migration 187's NUMBER is provisional for that reason.
+
+The next serious lane is **landing and activation, not more product**:
+establish the real ledger, reconcile 177–187 against it, get the Skyline
+config/form/legal rulings, release safely, then run the same suite against the
+real environment. Do not add leasing functionality first.
+
+### Reproduce it in one sitting
+
+```sh
+createdb spine_e2e
+export E2E_DATABASE_URL=postgres://postgres:PASS@127.0.0.1:5432/spine_e2e
+./tests/e2e/apply_migrations.sh                    # builds from the REAL chain
+psql "$E2E_DATABASE_URL" -f tests/e2e/fixtures.sql
+node tests/e2e/instrument_fixture.js
+./tests/e2e/boot.sh &                              # real server.js on :3000
+node tests/e2e/leasing_path.e2e.js                 # the clean path
+node tests/e2e/leasing_reconciliation.e2e.js       # THE DRIFT GATE
+node tests/e2e/leasing_hostile.e2e.js              # ten falsifications
+node tests/e2e/leasing_ask_spine.e2e.js
+node tests/e2e/resident_signing.browser.js         # needs Chromium
+node src/shared/proof_next_action_resolver.js      # 84-assertion oracle
+node tests/verify_source_governance.js             # 36 gates
+```
+
+See `tests/e2e/README.md`. **The fixtures are fixtures** — invented pricing,
+an invented property lease configuration, and a stand-in governing lease body
+whose sha256 is a real hash of its own bytes. None of it is Skyline truth,
+production readiness, or legal sufficiency.
+
+### The one gate to keep green
+
+`tests/e2e/leasing_reconciliation.e2e.js` — five lifecycle states × four
+surfaces × nine governed concepts. It compares CONCEPTS, not prose, and fails
+when two surfaces answer the same question differently. **A disagreement is
+never fixed by adding logic to a surface**; it means one surface bypassed the
+owner of that concept, and the fix is to make it read the owner. It has been
+falsified twice and went red both times.
+
+### Do not touch
+
+```text
+· the operator shell's PRODUCTION_ORIGIN pin and the sign-in / staff-OTP path
+  — deliberate architecture, and owned by another thread
+· communication_lines, properties.sms_number, Twilio config, SMS_*/TWILIO_*
+· src/comms/communications_boundary.js, src/comms/tenantlink.js,
+  src/identity/teamaccess.js
+```
+
+### The systemic lesson from both overnights
+
+**This codebase produces unverified intent faster than it verifies it.** Every
+significant defect found was invisible in source and obvious the moment the
+path was run: a service with 24 passing tests and no caller; a tenancy writer
+inserting a column no migration ever created, so it had never once worked; a
+column read-first by design and created by nothing; a regression oracle
+throwing on `require` since a refactor, guarding nothing, silently. Related:
+comments here are load-bearing contracts, and at least one was stale — a guard
+was built on 034's stated meaning of `is_placeholder` and the live writer
+meant something else.
+
+Corollary, recorded as backlog G1 in `docs/ENGINEERING_GATE_BACKLOG.md`:
+*a test that is never invoked is functionally not a test.*
+
+### Open rulings — legal/product, not engineering
+
+```text
+R1  what makes an electronic signature legally sufficient here
+R2  who may bind the company (the code records who DID; it decides nothing)
+R3  the Skyline lease form of record — an external input, never authored here
+```
+
+---
+
+## ══════════════════════════════════════════════════════════════════
 ##  SPINE'S OWN EXECUTED INSTRUMENT NOW REACHES CANONICAL TRUTH.
 ##  MIGRATION 185 WRITTEN, NOT RELEASED. 2026-08-18. NOT DEPLOYED.
 ## ══════════════════════════════════════════════════════════════════
