@@ -115,3 +115,77 @@ them.
 - **Rule #11:** read the real GitHub file before building. Never trust a
   handoff — or this file's memory of the code — over the live file. A
   "deployed" claim is unsupported until tied to a commit.
+- **Rule #12:** existing mechanism first. Before declaring a capability
+  missing or designing its replacement, recover the intended operator
+  experience, inspect the current mechanism and its relevant history, explain
+  exactly why it stops, and name what survives. Absence at the current call
+  site is not proof that the product never solved the problem.
+
+## 9. Anti-drift — intention before implementation
+
+> **Never design from the gap outward until we have designed from product
+> intention inward.**
+
+Property Spine exists to collapse seams, preserve context, and keep work and
+truth in one operating system. A technically plausible solution can therefore
+be wrong even when every local service is clean. If it sends the operator into
+another operating surface, asks them to re-enter something Spine already knows,
+creates another workflow owner or source of truth, or forces Spine to reconstruct
+what happened later, it is presumptively drifting away from the product.
+
+Before a meaningful build, produce this receipt:
+
+```text
+INTENTION
+What should the operator experience? What product boundary must remain true?
+
+CURRENT MECHANISM
+What current source, schema, runtime, UI call sites and tests already exist?
+
+HISTORY
+What relevant mechanism existed before, and why was it changed, retired or
+narrowed?
+
+CLASSIFICATION
+Is the capability live, dormant, partial, deliberately retired, wrong, or
+genuinely missing?
+
+STOP REASON
+At what exact point does the existing mechanism stop, and why?
+
+PRESERVE
+Which durable primitives and canonical owners survive the correction?
+
+MISSING PIECE
+Only now: what is the smallest new work required to complete the intended path?
+```
+
+Current source and runtime answer **what is true now**. Repository history
+answers **why we got here**. Handoffs and memory are navigation aids, not
+substitutes for either. A retired path is not automatically a rejected product
+idea; sometimes one false premise was removed while the useful mechanism around
+it remains the right mechanism.
+
+The search is not archaeology for its own sake. Stop once the chain can be
+stated plainly:
+
+```text
+intent → existing mechanism → why it stops → what survives → actual missing piece
+```
+
+Then continue building depth-first.
+
+Before accepting any proposal, ask:
+
+```text
+Does this make a person leave Spine to do ordinary work?
+Does it ask them to re-enter a fact Spine already holds?
+Does it create another operating workflow or source of truth?
+Does Spine have to reconstruct the event afterward?
+Does it replace a durable primitive without evidence that the primitive is wrong?
+```
+
+If any answer is yes, stop and require an explicit product ruling before
+building. "Conventional software does it this way" is not evidence. Familiar
+vendor architecture is especially dangerous when it recreates the exact seams
+Property Spine exists to remove.

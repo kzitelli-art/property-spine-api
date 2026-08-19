@@ -2132,3 +2132,114 @@ remembered to add to it cannot detect the omission it exists to prevent.
 This is doctrine's own lesson applied to itself: a rule that lives only in a
 document decays under schedule pressure, and *"we will wire it to the real path
 later"* is a stop-sign phrase (§32).
+
+## 41. Existing Mechanism First — Intent Before Gap
+
+Property Spine is now large enough that a missing live path, a retired writer,
+or an unfamiliar service is **not evidence that the product never solved the
+problem**. The repository contains product memory: current source, schema,
+migrations, tests, UI call sites, retired paths, and the history explaining why
+they changed.
+
+That memory must be used without letting history become current truth.
+
+```text
+CURRENT SOURCE + RUNTIME    what is true now
+REPOSITORY HISTORY          why we got here
+HANDOFFS + MEMORY            navigation aids, never authority over either
+```
+
+A mechanism may have been narrowed or retired because **one premise underneath
+it was wrong while the rest of the mechanism remained useful**. Treating
+"retired" as "rejected" can cause Spine to rebuild its own capability under a
+new name. Treating "I do not see the current call site" as "missing" can create
+a second canonical path beside one that already exists.
+
+The hard rule is:
+
+> **Never design from the gap outward until we have designed from product
+> intention inward.**
+
+Before proposing a meaningful build, recover this chain in plain English:
+
+```text
+INTENTION
+What should the person doing the work experience?
+What boundary of Property Spine must remain true?
+
+EXISTING MECHANISM
+What current source, schema, runtime, UI callers and tests already implement
+some or all of that experience?
+
+HISTORY
+What relevant mechanism existed before, and why was it changed, narrowed or
+retired?
+
+CLASSIFICATION
+Is what we found live, dormant, partial, deliberately retired, wrong, or
+genuinely missing?
+
+STOP REASON
+Where exactly does the existing mechanism stop, and why?
+
+PRESERVE
+Which durable primitives and canonical owners survive?
+
+ACTUAL MISSING PIECE
+Only now: what is the smallest correction or addition required to finish the
+intended operating path?
+```
+
+This is **existing-mechanism-first**, not archaeology-first. The purpose of the
+search is to stop rebuilding what Spine already knows how to do. Once the chain
+can be stated as:
+
+```text
+intent → existing mechanism → why it stops → what survives → actual missing piece
+```
+
+stop searching and continue the vertical build.
+
+### Product intention outranks implementation convenience
+
+A locally clean architecture can still be globally wrong for Property Spine.
+Before accepting a proposal, ask:
+
+```text
+Does this make a person leave Spine to do ordinary work?
+Does it ask them to re-enter a fact Spine already holds?
+Does it create another operating workflow or source of truth?
+Does Spine have to reconstruct the event afterward?
+Does it replace a durable primitive without evidence that the primitive is wrong?
+```
+
+Any `yes` is a stop sign requiring an explicit product ruling before build.
+
+This matters because conventional software is full of familiar answers to local
+problems: another portal, another provider console, another workflow system,
+another status mirror. Those answers can be technically mature and still
+recreate the exact seams Property Spine exists to collapse.
+
+**"Conventional software does it this way" is not evidence.** Familiarity is
+especially dangerous when it causes the implementation to drift away from the
+product's reason for existing.
+
+### The pre-build receipt
+
+From this point forward, a meaningful Property Spine build is not ready to hand
+to a developer until it can show:
+
+```text
+intent
+→ evidence of the current mechanism
+→ relevant history and the reason it changed
+→ classification of what exists
+→ exact stop reason
+→ primitives preserved
+→ smallest missing piece
+→ forbidden second path
+```
+
+The final line matters. Every build should name the parallel path it must **not**
+create. That is how the product protects itself from competent local decisions
+that slowly assemble a second operating system beside the first.
