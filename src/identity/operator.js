@@ -2560,11 +2560,21 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       let stage = "prospect";                     // default lifecycle read for a card
       try {
         const app = (await client.query(
-          `select id, status, unit_label, unit_id, applicant_name, captured,
-                  created_at, updated_at
-             from lease_applications
-            where person_id=$1 and property_id=$2
-            order by created_at desc limit 1`,
+          //  THE CARD NAMES WHAT WAS APPLIED FOR, INCLUDING THE BED.
+          //  `unit_label` on the application is not populated by the writers,
+          //  so the card rendered "Application submitted" with no unit at all;
+          //  and since 182 an application carries an exact space, which was
+          //  never read here. In a unit let by the bed, a card that shows the
+          //  unit and not the bed names the wrong thing. Both are joined from
+          //  the inventory rather than trusted from a denormalised column.
+          `select a.id, a.status, a.unit_label, a.unit_id, a.space_id,
+                  a.applicant_name, a.captured, a.created_at, a.updated_at,
+                  u.unit_number, s.space_label
+             from lease_applications a
+             left join units  u on u.id = a.unit_id
+             left join spaces s on s.id = a.space_id
+            where a.person_id=$1 and a.property_id=$2
+            order by a.created_at desc limit 1`,
           [personId, propertyId])).rows[0];
         if (app) {
           let cap = app.captured || {};
@@ -2578,7 +2588,8 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
             application_id: app.id,
             status: statusMap[app.status] || app.status || null,
             raw_status: app.status || null,
-            unit_label: app.unit_label || null,
+            unit_label: app.unit_label || app.unit_number || null,
+            space_label: app.space_label || null,
             submitted_at: app.created_at || null,
             // compact, reviewable facts only — pulled from captured, honest nulls
             intended_move_in: cap.desired_move_in || cap.move_in || null,
@@ -2601,9 +2612,11 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
             occurred_at: app.created_at, recorded_at: app.created_at,
             source: "application", verb: "submitted",
             actor: { id: null, name: app.applicant_name || (p.name || "Applicant"), kind: "person" },
-            summary: `Application submitted${app.unit_label ? ` — Unit ${app.unit_label}` : ""}`,
+            summary: `Application submitted${(app.unit_label || app.unit_number) ? ` — Unit ${app.unit_label || app.unit_number}` : ""}${app.space_label ? ` · ${app.space_label}` : ""}`,
             claim_strength: "proven",
-            detail: { application_id: app.id, status: app.status || null, unit_label: app.unit_label || null },
+            detail: { application_id: app.id, status: app.status || null,
+                      unit_label: app.unit_label || app.unit_number || null,
+                      space_label: app.space_label || null },
             supersedes: null,
           });
           // keep History in occurred_at order now that the application entry is in.
