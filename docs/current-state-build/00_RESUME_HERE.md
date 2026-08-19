@@ -13,6 +13,13 @@
 > `wave2_coverage_gaps.js` against fresh worktrees at current main; (3) bring the
 > owner the consolidated row set and settle taxonomy **with them**, before writing
 > anything.
+>
+> ### ⚠ TOKEN BUDGET — the owner watches this
+> The two research waves are the expensive part (wave 2 alone spawns ten agents).
+> **Run ONE wave, report, then ask before running the second.** Do not launch both
+> at once. If the owner says they are near a limit, stop all background tasks
+> immediately (`TaskStop`) rather than only saving files — a paused conversation
+> does not pause a running workflow.
 
 
 **Paused 2026-08-19 mid-inventory. Nothing has been written to the product yet.**
