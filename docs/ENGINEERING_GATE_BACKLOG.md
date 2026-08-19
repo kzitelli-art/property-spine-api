@@ -48,3 +48,31 @@ system itself*, which is currently the least-verified part of the repo.
 
 **Do not** turn this into a general test-framework project. It is one
 report: which proofs are unreachable, and which are reachable but broken.
+
+---
+
+## G2 · Notice when a removal condition has come true
+
+**Status:** backlog. Recorded when PHILOSOPHY.md was tightened to say it:
+
+> *A removal condition without a mechanism that notices when it has become
+> true is a promise, not a control.*
+
+**The failure that produced it.** `properties.lease_config` was named, in
+writing, as the exact replacement condition for the Class-2
+`EXTERNAL_LEASE_CONFIG` map — a hardcoded list holding one property. Nobody
+executed it, nothing noticed, and the adapter quietly became the
+architecture: no property but the internal demo could generate a resident
+lease packet at all. The condition was written correctly and read by no one.
+
+**What the gate should do.** Collect declared Class 2 / Class 4 removal
+conditions, and report which are now SATISFIED — the named column exists, the
+named table is populated, the named integration is live — so the adapter is
+due for deletion. Conditions too vague to check are themselves the finding:
+a removal condition that cannot be evaluated is not a control either.
+
+**Related but distinct from G1.** G1 asks whether a proof is reachable. G2
+asks whether a temporary thing has outlived its reason. Both are gates about
+the verification system rather than the product, and both came from the same
+root cause — this codebase produces unverified intent faster than it verifies
+it.

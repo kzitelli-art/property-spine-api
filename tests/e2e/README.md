@@ -35,8 +35,10 @@ the mechanism can be exercised where a business fact is unavailable.
 ## Running it
 
 ```sh
-createdb spine_e2e
 export E2E_DATABASE_URL=postgres://postgres:PASS@127.0.0.1:5432/spine_e2e
+# `createdb spine_e2e` prompts for a password wherever auth is required; use
+# the connection string, which is the same credential the rest of these use.
+psql "${E2E_DATABASE_URL%/*}/postgres" -c "create database spine_e2e"
 ./tests/e2e/apply_migrations.sh                    # builds from the REAL chain
 psql "$E2E_DATABASE_URL" -f tests/e2e/fixtures.sql
 node tests/e2e/instrument_fixture.js

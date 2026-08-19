@@ -50,10 +50,13 @@ real environment. Do not add leasing functionality first.
 ### Reproduce it in one sitting
 
 ```sh
-createdb spine_e2e
 export E2E_DATABASE_URL=postgres://postgres:PASS@127.0.0.1:5432/spine_e2e
+# `createdb spine_e2e` prompts for a password wherever auth is required; use
+# the connection string, which is the same credential the rest of these use.
+psql "${E2E_DATABASE_URL%/*}/postgres" -c "create database spine_e2e"
 ./tests/e2e/apply_migrations.sh                    # builds from the REAL chain
-psql "$E2E_DATABASE_URL" -f tests/e2e/fixtures.sql
+psql "$E2E_DATABASE_URL" -f tests/e2e/property_fixture.sql   # the test property
+psql "$E2E_DATABASE_URL" -f tests/e2e/fixtures.sql           # pricing
 node tests/e2e/instrument_fixture.js
 ./tests/e2e/boot.sh &                              # real server.js on :3000
 node tests/e2e/leasing_path.e2e.js                 # the clean path
@@ -64,6 +67,25 @@ node tests/e2e/resident_signing.browser.js         # needs Chromium
 node src/shared/proof_next_action_resolver.js      # 84-assertion oracle
 node tests/verify_source_governance.js             # 36 gates
 ```
+
+Every line above was executed against a database created empty for the
+purpose — not checked for plausibility. The `createdb` form originally
+written here did not run, which is exactly what "a command must run" is for.
+
+### Landing — the tools that exist for it
+
+```sh
+node tests/e2e/release_reconcile.js                      # refuses without a ledger, exit 2
+node tests/e2e/release_reconcile.js --db "$READONLY_URL" # answers every column, exit 0
+./tests/e2e/release_rehearsal.sh 181 182,183,184,185,186,187
+```
+
+`release_reconcile` also emits the preflight query for every UNIQUE index,
+NOT NULL and CHECK in the range — the only three things that can refuse a
+migration against rows that already exist. Our schemas are built empty, so
+none of them are exercised locally. **Those queries must be run against
+production, and a green rehearsal with unrun preflight queries is not a
+release decision.**
 
 See `tests/e2e/README.md`. **The fixtures are fixtures** — invented pricing,
 an invented property lease configuration, and a stand-in governing lease body
