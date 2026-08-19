@@ -1,0 +1,78 @@
+# ════════════════════════════════════════════════════════════════════
+#  The proofs that already matter, made unavoidable.
+#
+#  This workflow deliberately contains NO test logic. It provisions a
+#  database and calls tests/e2e/verify_all.sh — the SAME file a developer
+#  runs locally. A pipeline that lists the steps itself drifts from what a
+#  person runs, and then "green in CI" and "green on my machine" stop
+#  meaning the same thing.
+#
+#  It exists because this repository has repeatedly accumulated intent
+#  faster than executable proof: a service with passing tests and no
+#  caller, a writer inserting a column no migration created, a regression
+#  oracle that threw on import for months while guarding nothing. Every
+#  one was invisible in source and obvious the moment something ran.
+# ════════════════════════════════════════════════════════════════════
+name: verify
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: spineproof
+          POSTGRES_USER: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      E2E_DATABASE_URL: postgres://postgres:spineproof@127.0.0.1:5432/spine_verify
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      #  The browser rung RUNS in CI rather than being skipped. A rung that
+      #  is always skipped is a rung nobody has, and the resident signing
+      #  page is the one surface real people touch unauthenticated.
+      - name: Install Chromium for the browser rung
+        run: npx playwright install --with-deps chromium
+
+      - name: Locate Chromium
+        run: echo "CHROMIUM=$(find ~/.cache/ms-playwright -name chrome -type f | head -1)" >> "$GITHUB_ENV"
+
+      - name: Run every proof
+        run: ./tests/e2e/verify_all.sh
+
+      #  Retained whether the run passed or failed — a failed run's logs are
+      #  the ones worth reading.
+      - name: Upload server log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-log
+          path: /tmp/verify_server.log
+          if-no-files-found: ignore

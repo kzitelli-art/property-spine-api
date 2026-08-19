@@ -9,7 +9,8 @@
     "release:migrate": "node migrations/migrate.js --apply",
     "verify": "node tests/verify_source_governance.js",
     "pretest": "node tests/verify_source_governance.js",
-    "test": "echo \"source-governance gates passed; database proofs run separately \u2014 see docs/DB_HARNESS_ISOLATION.md\" && exit 0"
+    "test": "echo \"source-governance gates passed; database proofs run separately \u2014 see docs/DB_HARNESS_ISOLATION.md\" && exit 0",
+    "verify:all": "./tests/e2e/verify_all.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

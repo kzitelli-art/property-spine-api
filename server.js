@@ -282,13 +282,41 @@ const {
 
 
 // ── health: confirms server is up AND can reach the database ──
+//  ── WHAT EXACT CODE IS RUNNING ──────────────────────────────────────
+//  /health is where a person looks first, and it is the one door reachable
+//  without a session — which is precisely why the build identity belongs
+//  here. Until this question could be answered from the running
+//  application, `deployed` was an assumption: Render ships a build
+//  artifact with no .git, so `git rev-parse` on the box fails and nothing
+//  else stated the commit.
+//
+//  Only the SHORT sha and how it was resolved are exposed. That answers
+//  "is the running build the commit I think it is" without publishing
+//  more of the repository's shape than the question needs. When nothing
+//  identifies the build the field is null and `build_identified` is false
+//  — an honest blank, never a plausible-looking sha.
+const { buildIdentity } = require("./src/shared/build_identity");
 app.get("/health", async (_req, res) => {
+  const id = buildIdentity();
+  const build = {
+    build_identified: !!id.commit,
+    commit_short: id.short,
+    resolved_from: id.resolved_from,
+    started_at: id.started_at,
+  };
   try {
     const r = await pool.query("select now() as time");
-    res.json({ ok: true, db_time: r.rows[0].time });
+    res.json({ ok: true, db_time: r.rows[0].time, build });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: e.message, build });
   }
+});
+
+//  The full record — including the untruncated commit — behind the
+//  operator gate, for anyone reconciling a deployment against a branch.
+app.get("/operator/build", (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ build: buildIdentity() });
 });
 
 // ── create a property ──────────────────────────────────────────────
