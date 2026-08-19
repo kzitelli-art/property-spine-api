@@ -31,8 +31,9 @@ DB          ✔  schema built from the real migration chain, ceiling 187
 HTTP        ✔  every step above, real server, real Postgres
 Browser     ◑  the RESIDENT signing page only. The operator shell is NOT
                proven and was deliberately not forced — see "do not touch"
-CI          ◑  workflow committed and running on GitHub. NOT yet green.
-               A committed workflow is not a working CI system.
+CI          ✔  GREEN ON GITHUB — run 4, commit 4c88d7f, all twelve
+               proofs including the browser rung. Earned on the fourth
+               attempt; runs 1–3 each failed for a different real reason.
 Deployed    ✘  the build identity endpoint exists and works on a runner,
                but has NOT been read from the Render runtime
 Production  ✘  the migration LEDGER has been read (ceiling 181, complete).
