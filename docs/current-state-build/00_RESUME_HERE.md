@@ -56,9 +56,12 @@ CURRENT SOURCE / RUNTIME → CURRENT_STATE.md → PHILOSOPHY (meaning) → THREA
 API origin/main   77f93f5   2026-08-18
 APP origin/main   c6769ba   2026-08-18
 Working branch    claude/philosophy-doctrine-essence-ae6xni
-Production DB     ledger ceiling 174 (owner-observed on Neon)
-Migrations on main    181  →  SEVEN UNRELEASED: 175,176,177,178,179,180,181
+Production DB     ledger ceiling 176 (deployed sha e5497a4 — corrected by wave 1)
+Migrations on main    181  →  FIVE UNRELEASED: 177,178,179,180,181
 ```
+⚠ Corrected by `03_WAVE1_RESULTS.md`: 175/176 (Meeting Evidence, Meeting Receipt)
+ARE released. The "seven unreleased" figure originally in this file was itself
+wrong — re-verify before quoting either number again.
 
 ⚠ **Both repos moved during the paused session.** API gained 124 files / 32,208
 insertions after this thread's first look. Re-fetch and re-stamp before trusting any
