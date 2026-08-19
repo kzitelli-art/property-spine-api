@@ -1,6 +1,111 @@
 # Property Spine — Thread Handoff
 
 ## ══════════════════════════════════════════════════════════════════
+##  SPINE'S OWN EXECUTED INSTRUMENT NOW REACHES CANONICAL TRUTH.
+##  MIGRATION 185 WRITTEN, NOT RELEASED. 2026-08-18. NOT DEPLOYED.
+## ══════════════════════════════════════════════════════════════════
+
+```text
+executed lease packet (034+184) → verifyExecutedLease (088) → admission
+   → clean: confirmTermService (the canonical tenancy writer), automatically
+   → blocked: the executed lease STANDS and the conflict is named
+```
+
+**No second architecture.** Both owners were already settled and neither was
+reopened: `executed_lease_service` is the one executed-lease record and
+admission engine, `tenancy_anchor_service.confirmTermService` is the one
+tenancy-anchor writer. `src/applications/spine_lease_execution.js` is an
+ADAPTER over both. The broad source-authority question stays closed.
+
+### Why it stopped, and what actually changed
+
+`verifyExecutedLease` required `verified_by_user_id` because *"Verification is
+an attested act by a real staff user."* Right when Spine RECEIVES an outside
+lease; wrong when Spine watched both parties sign the instrument it holds.
+
+**`verified_by_user_id` is neither faked nor dropped.** For the in-Spine path
+the verifier IS the authorised company signer — a real person who performed the
+consequential act. 185 adds `verification_basis` so the two acts can never read
+as the same claim, plus `source_lease_packet_id` lineage, and `spine_esign` as
+a channel rather than hiding a first-party execution under `other`.
+
+`ck_elr_spine_instrument_lineage` makes the basis and its evidence inseparable:
+a `spine_instrument` claim without a packet, a hash, and the `spine_esign`
+channel is refused, and a `staff_attestation` may not claim a packet.
+`uq_elr_source_lease_packet` gives one executed record per packet.
+
+### ⚠ THREE DEFECTS FOUND BY RUNNING IT, NOT BY READING IT
+
+```text
+1  185 first dropped `executed_lease_records_execution_channel_check`, a name
+   Postgres never generated — 088 declared it inline as
+   `executed_lease_channel_ck`. DROP … IF EXISTS succeeded silently, the new
+   permissive constraint was added beside the real one, and the real one kept
+   rejecting spine_esign. A migration that appears to apply and changes
+   nothing. Caught by inserting a spine_esign row and reading which
+   constraint actually fired.
+
+2  The service ALSO carried a JS-level channel allowlist
+   ["paper","external_esign","other"]. Widening only the schema would have
+   left the code refusing a channel the database accepts. Both now agree.
+
+3  ⚠ THE ONE THAT WOULD HAVE BLOCKED EVERY IN-SPINE EXECUTION.
+   computeAdmissionBlockers looked for the acknowledged terms on a packet with
+   `status='submitted'`. That was an EXACT proxy for "the resident finished
+   this packet" while 'submitted' was the furthest a packet could go. 184 lets
+   a packet continue to 'resident_executed' and 'executed', so the lookup
+   silently missed it and fell through to `no_acknowledged_terms` for every
+   in-Spine execution. The intent is unchanged; the state list now matches the
+   states that satisfy it.
+```
+
+### The ceremony that was removed
+
+The company signature is the human decision. On a clean admission the adapter
+invokes `confirmTermService` in the same governed workflow — no second
+"confirm term" click. Internally it still travels
+`executed → admitted → accepted_term_required → confirmTermService → pending
+lease anchor`; internal architecture may have intermediate states, it may not
+have a second human act.
+
+### Proven
+
+```text
+tests/spine_lease_execution.db.js   24/24   real Postgres 16
+  refuses: not-executed packet · no company signer · missing resident
+  signature · missing company signature · a DIFFERENT user recording someone
+  else's signature · no instrument hash
+  records: basis spine_instrument · channel spine_esign · packet lineage ·
+  document_sha256 == instrument_body_sha256 · verifier IS the signer · bed and
+  economics from the SIGNED packet, not a request body · both sides' signer
+  evidence with IP and session
+  chain:  clean admission invokes the canonical tenancy writer automatically,
+  with a server-derived confirmer · replay converges to ONE record · a paper
+  lease still verifies by staff attestation with no packet lineage
+npm run verify                      36/36
+app suite                           34 harnesses · 1435 passed
+```
+
+**What is real and what is not, said plainly.** `verifyExecutedLease` is the
+REAL service against a real database, and the obligation spawner is a REAL
+inserter of real `obligations` rows — so the admission engine and its lifecycle
+transition are genuinely exercised. `confirmTermService` is a RECORDING STUB:
+the production one is constructed in `server.js` with the obligation engine
+injected. So what is proven is that the adapter INVOKES the canonical writer
+with server-derived arguments on a clean admission and does NOT invoke it when
+blocked. That the writer then creates exactly one pending lease is that
+service's own proof, and an HTTP-level run through `server.js` is what closes
+the last link.
+
+### Still open, unchanged
+
+R1 legal sufficiency of the signature evidence · R2 who may BIND the company
+(the eventual company-sign route needs a real authority check; inspect existing
+authority primitives before inventing one) · R3 the Skyline form, which keeps
+`is_placeholder=false` unreachable on the real runtime.
+
+
+## ══════════════════════════════════════════════════════════════════
 ##  ⚠ WITHDRAWN: THE EXTERNAL E-SIGN DIRECTION. 2026-08-18.
 ##  READ BEFORE THE LEASE-BRIDGE BANNER BELOW, WHICH IT CORRECTS.
 ## ══════════════════════════════════════════════════════════════════
