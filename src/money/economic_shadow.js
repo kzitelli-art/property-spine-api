@@ -11,15 +11,18 @@
 //  point. Those are cadence, applicability and precision disagreements, and
 //  a dollar-only comparison would call them identical.
 //
-//  The live side is MODELLED from the two sources agent.js actually reads —
-//  units.market_rent and the approved fact set — and every row says so.
+//  ── THE "LIVE" SIDE IS A PRE-CUTOVER BASELINE ────────────────────────
+//  It is MODELLED from units.market_rent and the approved fact set — the two
+//  sources agent.js read UNTIL 2026-08-20, when it was rewired to quote only
+//  through the governed pricing adapter. Every row says so. Judge a proposed
+//  sheet against this; do not read it as what production says today.
 // ════════════════════════════════════════════════════════════════════
 
 "use strict";
 
 const { effectiveEconomicPicture } = require("./economic_picture");
 const { moneyFactContradictions } = require("./money_fact_contradictions");
-const { liveAnswerForType } = require("./shadow_quote_simulator");
+const { liveAnswerForType, PRE_CUTOVER_NOTE } = require("./shadow_quote_simulator");
 const { compileSchedule } = require("./concession_schedule_compiler");
 
 const FACT_SCENARIOS = [
@@ -244,8 +247,8 @@ async function economicShadowReport(pool, { property_id, other_property_id = nul
     guarantees: ["no outbound message", "no comm_event", "no conversation mutated",
                  "no person, obligation, offer or lease economic line created",
                  "no pricing version or charge published"],
-    live_path_note: "The live side is MODELLED from the two sources agent.js reads " +
-                    "(units.market_rent ordered ascending, and the approved fact set).",
+    live_path_note: "The \"live\" side is MODELLED from units.market_rent (ordered ascending) " +
+                    "and the approved fact set. " + PRE_CUTOVER_NOTE,
     comparisons: rows,
     summary: {
       compared: rows.length,

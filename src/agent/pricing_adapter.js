@@ -1,16 +1,24 @@
 // ════════════════════════════════════════════════════════════════════
 //  pricing_adapter.js — THE AI's ONLY ROUTE TO PRICING
 //
-//  DARK BY CONSTRUCTION. Nothing calls this yet, and when it is called it
-//  can only answer from a published governed version. Until one exists it
+//  LIVE AS OF 2026-08-20. This was built dormant and stayed dormant, which
+//  is its own kind of failure: the wall existed, the defect it was built to
+//  stop was still running, and the source looked like the problem was
+//  solved. agent.js now calls this on BOTH prospect-facing pricing reads —
+//  the linked-unit context and the inventory list — and reads
+//  units.market_rent on neither. tests/e2e/agent_pricing_wall.e2e.js proves
+//  that from both directions and runs in verify_all.sh; if this paragraph
+//  ever stops being true, that proof fails first.
+//
+//  It can only answer from a published governed version. Until one exists it
 //  returns an honest handoff — which is the correct behaviour, not a
 //  placeholder.
 //
 //  The AI is a CONSUMER of the Pricing & Concessions truth sheet, never a
-//  holder of pricing. Today the agent quotes units.market_rent directly at
-//  agent.js:294 — a legacy per-unit column that disagreed with the sheet on
-//  unit 530 by $237 and went to nine real phones. This adapter is what
-//  replaces that, and it is written so it CANNOT repeat it:
+//  holder of pricing. The agent used to quote units.market_rent directly — a
+//  legacy per-unit column that disagreed with the sheet on unit 530 by $237
+//  and went to nine real phones. This adapter is what replaced that, and it
+//  is written so it CANNOT repeat it:
 //
 //    · never reads units.market_rent
 //    · never reads the client-side pricing store

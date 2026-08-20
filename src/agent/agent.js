@@ -25,6 +25,12 @@
 const crypto = require("crypto");
 // The ONE governed-charge language producer. Every quotable surface uses it;
 // there is no second wording helper anywhere in a call path.
+//  THE ONLY ROUTE TO A QUOTABLE PRICE. Never units.market_rent, never the
+//  client store, never a rent-survey observation. When it cannot answer it
+//  hands off in its own words — an honest handoff beats a confident wrong
+//  price said to a real prospect.
+const { quotablePricing } = require("./pricing_adapter");
+const { effectivePropertyPricing } = require("../money/effective_pricing");
 const { renderChargeTerms } = require("../money/governed_charge_language");
 const { termsDigest } = require("../money/governed_charge_cutover");
 const { compareEconomicSources, staleReasonForOperator } =
@@ -368,16 +374,41 @@ module.exports = function agentModule(deps) {
       });
     }
 
+    //  ── THE PRICE A PROSPECT HEARS COMES FROM THE GOVERNED VERSION ───
+    //  This read used to select units.market_rent and hand it to the model.
+    //  That is a legacy per-unit column with no publish step, no version and
+    //  no review between it and someone's phone — and it has already been
+    //  wrong once in production: it disagreed with the sheet on unit 530 by
+    //  $237 and reached nine real people.
+    //
+    //  market_rent is NOT selected here any more. The governed adapter is the
+    //  only route to a quotable number, and when it cannot answer it hands
+    //  off in its own words rather than letting the model improvise one.
     let unit = null;
     if (unit_id) {
       const u = (await client.query(
-        "select unit_number, bedrooms, bathrooms, square_feet, market_rent from units where id=$1",
+        "select unit_number, bedrooms, bathrooms, square_feet, unit_type_id from units where id=$1",
         [unit_id]
       )).rows[0];
-      if (u) unit = {
-        unit_number: u.unit_number, bedrooms: u.bedrooms, bathrooms: u.bathrooms,
-        square_feet: u.square_feet, market_rent: u.market_rent,
-      };
+      if (u) {
+        let pricing = null;
+        try {
+          pricing = await quotablePricing(client, {
+            property_id, unit_type_id: u.unit_type_id, intent: "new_lease" });
+        } catch (e) {
+          //  A pricing fault must never take the conversation down, and it
+          //  must never silently become "no rent on file" either — that
+          //  reads as an inventory fact rather than a system failure.
+          console.error("[agent] quotablePricing failed", e && e.message);
+          pricing = { quotable: false, reason: "pricing_read_failed",
+            detail: "The governed pricing read failed.",
+            say: "I want to give you an exact number rather than guess — let me confirm the current pricing with the leasing office and come straight back to you." };
+        }
+        unit = {
+          unit_number: u.unit_number, bedrooms: u.bedrooms, bathrooms: u.bathrooms,
+          square_feet: u.square_feet, pricing,
+        };
+      }
     }
     return { facts, unit };
   }
@@ -474,9 +505,18 @@ module.exports = function agentModule(deps) {
     const factLines = facts.length
       ? facts.map(f => `- ${f.fact_key} (${f.category}; source: ${f.source}): ${f.rendered_text}`).join("\n")
       : "(no curated facts are on file for this property)";
+    //  A NUMBER OR AN INSTRUCTION NOT TO INVENT ONE — never a bare blank.
+    //  "rent not on the unit record" read as an inventory fact and left the
+    //  model free to fill the gap. When pricing is not quotable the model is
+    //  told so explicitly and given the exact sentence to use.
+    const p = unit && unit.pricing;
+    const rentPart = !p ? ""
+      : p.quotable
+        ? `, rent $${p.rent}/mo on a ${p.lease_term_months}-month term (governed published pricing)`
+        : `. PRICING IS NOT QUOTABLE (${p.reason}). Do NOT state, estimate or imply any rent figure. ` +
+          `If the prospect asks about price, reply with exactly: "${p.say}"`;
     const unitLine = unit
-      ? `Unit ${unit.unit_number || "(unnamed)"}: ${unit.bedrooms ?? "?"}bd/${unit.bathrooms ?? "?"}ba` +
-        (unit.market_rent != null ? `, rent $${unit.market_rent}` : ", rent not on the unit record")
+      ? `Unit ${unit.unit_number || "(unnamed)"}: ${unit.bedrooms ?? "?"}bd/${unit.bathrooms ?? "?"}ba` + rentPart
       : "(no specific unit is linked to this inquiry yet)";
 
     const system =
@@ -1307,10 +1347,52 @@ Reply with ONLY the message text.`;
                 max_rent: invUse.input && invUse.input.max_rent,
               }, qc);
             } finally { qc.release(); }
-            offeredUnits = found.units.map(u => ({
-              id: u.id, unit_number: u.unit_number, bedrooms: u.bedrooms,
-              bathrooms: u.bathrooms, square_feet: u.square_feet, market_rent: u.market_rent,
-            }));
+            //  ── THE SECOND LEAK, AND THE WORSE ONE ──────────────────
+            //  This carried market_rent per unit into the tool result at the
+            //  `units:` line below, which strips only `id` — so a LIST of
+            //  legacy rents reached the model. Same defect as the unit line,
+            //  multiplied by however many units matched.
+            //
+            //  The governed picture is loaded ONCE and passed to the adapter
+            //  via opts.picture — the seam the adapter exposes for exactly
+            //  this, so one refusal path serves both callers rather than a
+            //  copy of it per caller.
+            let picture = null;
+            try { picture = await effectivePropertyPricing(pool, { property_id: tx1.property_id }); }
+            catch (e) { console.error("[agent] pricing picture failed", e && e.message); }
+            const typeByUnit = new Map();
+            if (found.units.length) {
+              const qt = await pool.connect();
+              try {
+                const rows = (await qt.query(
+                  "select id, unit_type_id from units where id = any($1)",
+                  [found.units.map((u) => u.id)])).rows;
+                for (const r of rows) typeByUnit.set(String(r.id), r.unit_type_id);
+              } finally { qt.release(); }
+            }
+            offeredUnits = [];
+            for (const u of found.units) {
+              let q = null;
+              try {
+                q = await quotablePricing(pool, {
+                  property_id: tx1.property_id,
+                  unit_type_id: typeByUnit.get(String(u.id)) || null,
+                  //  Said out loud rather than left to the adapter's default:
+                  //  new-lease and renewal are different prices and this list
+                  //  goes to a prospect.
+                  intent: "new_lease",
+                }, picture ? { picture } : {});
+              } catch (e) { console.error("[agent] quotablePricing (inventory) failed", e && e.message); }
+              offeredUnits.push({
+                id: u.id, unit_number: u.unit_number, bedrooms: u.bedrooms,
+                bathrooms: u.bathrooms, square_feet: u.square_feet,
+                //  Governed rent or an explicit refusal. Never the legacy column.
+                rent: q && q.quotable ? q.rent : null,
+                lease_term_months: q && q.quotable ? q.lease_term_months : null,
+                pricing_status: q && q.quotable ? "governed_published_pricing"
+                                                : `not_quotable:${(q && q.reason) || "pricing_read_failed"}`,
+              });
+            }
             /*  ⚠ "NO UNITS MATCH" IS AN ANSWER ABOUT INVENTORY. A refusal
              *  is not. This hardcoded an inventory answer for every empty
              *  result, so the containment in leasing_inventory — which
