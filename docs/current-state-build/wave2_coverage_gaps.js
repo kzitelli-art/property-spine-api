@@ -16,7 +16,7 @@ THE ONE RULE: report only what repo evidence supports. Never infer, never recall
 plausible guess. Where you cannot find evidence, write exactly NOT_FOUND.
 
 Two git worktrees, both at CURRENT main. Read ONLY these paths:
-  API repo: ${API}   (DEPLOYED sha 30cb992 — this is what production runs; 39 commits AHEAD of main, carrying migrations 182-187 that main does not have)
+  API repo: ${API}   (main = 9e09a64, includes PR #123/#124: docs/CURRENT_STATE.md now exists — read it first to see what prior waves already found, so this pass adds to it rather than re-deriving)
   APP repo: ${APP}   (main = c6769ba)
 
 DO NOT IMPROVE THE TAXONOMY. Describe what exists at the grain the evidence supports. If a directory holds
@@ -259,7 +259,7 @@ const missed = critics.filter(Boolean).flatMap((c) => c.missed || [])
 log(`completeness critics surfaced ${missed.length} unlisted items`)
 
 return {
-  api_main: '30cb992 (deployed, ahead of main 77f93f5)',
+  api_main: '9e09a64',
   app_main: 'c6769ba',
   wave2_capability_count: all.length,
   wave2_capabilities: all,
