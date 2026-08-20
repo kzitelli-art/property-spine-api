@@ -175,9 +175,12 @@ const wroteAnything = (log) => log.some((s) => s.startsWith("insert into"));
   ok("no insert ran for a dateless transcript", !wroteAnything(r.executed), r.executed.join(" | "));
   ok("the transaction rolled back", r.executed.includes("rollback"), r.executed.join(" | "));
 
+  //  A real Read AI export opens with title + date, so that shape is now
+  //  READ rather than refused. A THIRD unexplained line above the first
+  //  block is a format nobody has observed and still refuses whole.
   r = await post(base, { session: "tok", fields: { meeting_date: "2026-08-11" },
-    file: "Weekly Solo — August\n\n0:03 - Robert\nMorning." });
-  ok("a file with content above the first block is refused → 400",
+    file: "Weekly Solo\nThu, Aug 20, 2026\nExtra unexplained line\n\n0:03 - Robert\nMorning." });
+  ok("an unrecognised header shape is refused → 400",
     r.status === 400 && r.body.error === "content_before_first_block",
     r.status + " " + (r.body && r.body.error));
   ok("a partially-readable file writes NOTHING", !wroteAnything(r.executed),
