@@ -404,7 +404,21 @@ function arg(name) {
     }
 
     await c.query("commit");
-    console.log(`\nAPPLIED — ${typeIdByCode.size} governed unit types, ${assigned} units assigned, ${kinded} positions classified.`);
+    //  ── COUNT THE ROWS, NOT THE LOOKUP KEYS ────────────────────────
+    //  This printed typeIdByCode.size, which is a routing table and not an
+    //  inventory: STU00015 and STU00017 both resolve to 3BR-1BA, so three
+    //  source codes plus one extra_type make four keys pointing at three
+    //  rows. The production run reported "4 governed unit types" when it had
+    //  created three, and the only reason that was caught is that the e2e
+    //  counts the table instead and disagreed.
+    //
+    //  A receipt that overstates by one is a small lie in the exact place a
+    //  reader is trusting the tool most — the line they screenshot. So it
+    //  asks the table.
+    const typeCount = (await c.query(
+      "select count(*)::int n from property_unit_types where property_id = $1",
+      [propertyId])).rows[0].n;
+    console.log(`\nAPPLIED — ${typeCount} governed unit types, ${assigned} units assigned, ${kinded} positions classified.`);
     console.log(`Provenance recorded on every row: ${RECEIPT}\n`);
   } catch (e) {
     await c.query("rollback");
