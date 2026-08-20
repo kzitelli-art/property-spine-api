@@ -227,6 +227,44 @@ Re-runnable research: `docs/current-state-build/wave2_coverage_gaps.js`
 
 ---
 
+## ⛔ CLOSING A THREAD — DO THIS BEFORE YOU STOP
+
+**This file goes stale the moment a thread ships something and does not say so.**
+`docs/CODEBASE_STATE.md` (5 Aug) proved it — stamped one commit, silently wrong
+two weeks later. The only thing preventing a repeat is the step below.
+
+Run this before ending any thread that touched `src/`, `migrations/` or `server.js`:
+
+```text
+1. WHAT CHANGED?      git diff --stat origin/main...HEAD -- src/ migrations/ server.js
+2. FOR EACH ONE:      does a row exist here?
+                        yes → update its rung, files and note
+                        no  → add a row, at the grain the evidence supports
+3. RUNG CHECK:        did the proof rung actually MOVE? Opening a test is the only
+                      way to know. A rung is never upgraded because the code looks
+                      finished — only because the next rung was OBSERVED.
+4. DEFECTS:           did you fix one of the KNOWN LIVE DEFECTS? Remove it.
+                      Did you find a new one? Add it.
+5. SNAPSHOT:          update STATE SNAPSHOT if you verified against a newer SHA.
+                      Leave it alone if you did not — a false stamp is worse
+                      than an old one.
+6. NOTHING CHANGED?   Say so in the commit. That is a valid outcome.
+```
+
+**Paste this at the end of a thread to run the ritual:**
+
+```
+Close out this thread: update docs/CURRENT_STATE.md for anything we built,
+connected, proved or disproved. Open the tests before changing any proof rung.
+If nothing changed, say so rather than editing.
+```
+
+**The rule that keeps this honest:** a thread updates rows for what it *did*.
+It does not re-survey the whole repo, and it does not upgrade a row it did not
+personally verify.
+
+---
+
 ## HOW TO ADD A ROW
 
 1. **Open the test.** Do not trust the filename.

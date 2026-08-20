@@ -25,6 +25,22 @@ CURRENT SOURCE / RUNTIME  →  CURRENT_STATE.md  →  PHILOSOPHY  →  THREAD_HA
    (always wins)              (what exists)       (meaning)      (history only)
 ```
 
+## Every thread: open and close
+
+```text
+OPEN    1. docs/CURRENT_STATE.md   search it for what you are about to build
+        2. docs/PHILOSOPHY.md      the doctrine governing whether it belongs
+
+CLOSE   update docs/CURRENT_STATE.md for whatever you built, connected,
+        proved or disproved — see its "CLOSING A THREAD" section
+```
+
+**The close is not optional bookkeeping — it is the only thing preventing this
+from becoming another stale state document.** `docs/CODEBASE_STATE.md` (5 Aug)
+was stamped to one commit and was silently wrong two weeks later. A thread
+updates rows for what *it* did; it does not re-survey the repo, and it never
+upgrades a rung it did not personally observe.
+
 **Before modifying any product behavior, read the governing doctrine: [`docs/PHILOSOPHY.md`](docs/PHILOSOPHY.md).** It defines what the product is and how to decide whether a feature belongs. It is doctrine, not style.
 
 ## North Star
