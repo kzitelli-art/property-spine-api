@@ -285,6 +285,23 @@ function arg(name) {
       } else {
         missing++;
         console.log(`     ✗ unit ${o.unit_number.padEnd(8)} → ${o.code.padEnd(11)} MATCHES ${hit.length} UNITS — the named list and inventory disagree`);
+        //  A refusal that only says "no" leaves the operator to go hunting in
+        //  a database for the spelling this tool wanted. It already knows the
+        //  property, so it can show what IS there and let the difference be
+        //  read directly. Suggesting is not guessing: nothing is written on
+        //  the strength of a near match.
+        const near = (await c.query(
+          `select unit_number from units
+            where property_id = $1 and unit_number like '%' || $2 || '%'
+            order by unit_number limit 8`, [propertyId, o.unit_number])).rows;
+        if (near.length) {
+          console.log(`        inventory has: ${near.map((r) => JSON.stringify(r.unit_number)).join(", ")}`);
+        } else {
+          const any = (await c.query(
+            `select unit_number from units where property_id=$1 order by unit_number limit 5`,
+            [propertyId])).rows;
+          console.log(`        nothing contains "${o.unit_number}". unit_number looks like: ${any.map((r) => JSON.stringify(r.unit_number)).join(", ")}`);
+        }
       }
     }
     if (missing) {
