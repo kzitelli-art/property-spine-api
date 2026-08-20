@@ -57,15 +57,18 @@ const RULINGS = [
   {
     receipt: "reviewed_mapping_receipt_2026-07-27",
     note: "Eight residential floorplan codes plus commercial. See header.",
+    //  This property's source codes ARE its canonical codes — that is how it
+    //  was approved and nothing here changes it. source_code is stated
+    //  explicitly so the two roles are visible even where they coincide.
     codes: [
-      { code: "S.1UN_02", label: "Studio",            sort: 10, use: "residential" },
-      { code: "S.1FN_02", label: "Furnished Studio",  sort: 20, use: "residential" },
-      { code: "1.1UN_02", label: "1 Bed",             sort: 30, use: "residential" },
-      { code: "1.1FN_02", label: "Furnished 1 Bed",   sort: 40, use: "residential" },
-      { code: "1.1DN_02", label: "1 Bed + Den",       sort: 50, use: "residential" },
-      { code: "2.2UN_02", label: "2 Bed / 2 Bath",    sort: 60, use: "residential" },
-      { code: "3.2UN_02", label: "3 Bed / 2 Bath",    sort: 70, use: "residential" },
-      { code: "3.3UN_02", label: "3 Bed / 3 Bath",    sort: 80, use: "residential" },
+      { source_code: "S.1UN_02", code: "S.1UN_02", label: "Studio",            sort: 10, use: "residential" },
+      { source_code: "S.1FN_02", code: "S.1FN_02", label: "Furnished Studio",  sort: 20, use: "residential" },
+      { source_code: "1.1UN_02", code: "1.1UN_02", label: "1 Bed",             sort: 30, use: "residential" },
+      { source_code: "1.1FN_02", code: "1.1FN_02", label: "Furnished 1 Bed",   sort: 40, use: "residential" },
+      { source_code: "1.1DN_02", code: "1.1DN_02", label: "1 Bed + Den",       sort: 50, use: "residential" },
+      { source_code: "2.2UN_02", code: "2.2UN_02", label: "2 Bed / 2 Bath",    sort: 60, use: "residential" },
+      { source_code: "3.2UN_02", code: "3.2UN_02", label: "3 Bed / 2 Bath",    sort: 70, use: "residential" },
+      { source_code: "3.3UN_02", code: "3.3UN_02", label: "3 Bed / 3 Bath",    sort: 80, use: "residential" },
       { code: "comm",     label: "Commercial Space",  sort: 90, use: "commercial"  },
     ],
   },
@@ -93,10 +96,26 @@ const RULINGS = [
     //  evidence, the evidence is not in the rent roll.
     receipt: "skyline_owner_statement_2026-08-20_source_silent_on_bath_distinction",
     note: "Skyline (1417 N 15th), bed-grained. Room grain corroborated by source; bath distinction is owner knowledge, not in the source.",
+    //  ── OUR VOCABULARY, NOT THE VENDOR'S ──────────────────────────
+    //  STU00015/16/17 are Yardi's "Unit/Room Type" strings. They are how the
+    //  SOURCE names a floorplan; they are not how Spine should. A canonical
+    //  identity inherited from an export is a vendor's opaque handle sitting
+    //  in the middle of our own vocabulary, and it becomes load-bearing the
+    //  moment anything reads or displays it.
+    //
+    //  So the two roles are separated: source_code is matched against
+    //  raw->>'unit_type' and is recorded as provenance in source_note; code
+    //  is ours and is what the rest of the system carries. Nothing is lost —
+    //  the line back to RentRoll07_1417.xlsx is explicit rather than implied
+    //  by a shared string.
+    //
+    //  SKYLINE IS PRICED PER BED, ALWAYS. 72 units are an inventory fact;
+    //  160 rentable positions are the economic unit, and no surface should
+    //  imply a per-unit price for this property.
     codes: [
-      { code: "STU00016", label: "2 Bedroom",              sort: 10, use: "residential" },
-      { code: "STU00015", label: "3 Bedroom / 1 Bath",     sort: 20, use: "residential" },
-      { code: "STU00017", label: "3 Bedroom / 1.5 Bath",   sort: 30, use: "residential" },
+      { source_code: "STU00016", code: "2BR",       label: "2 Bedroom",            sort: 10, use: "residential" },
+      { source_code: "STU00015", code: "3BR-1BA",   label: "3 Bedroom / 1 Bath",   sort: 20, use: "residential" },
+      { source_code: "STU00017", code: "3BR-1.5BA", label: "3 Bedroom / 1.5 Bath", sort: 30, use: "residential" },
     ],
   },
 ];
@@ -147,9 +166,9 @@ function arg(name) {
     console.error("REFUSING: no source row carries a 'unit_type' code for this property.");
     await c.end(); process.exit(1);
   }
-  const covering = RULINGS.filter((r) => present.every((k) => r.codes.some((m) => m.code === k)));
+  const covering = RULINGS.filter((r) => present.every((k) => r.codes.some((m) => m.source_code === k)));
   if (covering.length === 0) {
-    const near = RULINGS.map((r) => `${r.receipt}: missing ${present.filter((k) => !r.codes.some((m) => m.code === k)).join(", ")}`);
+    const near = RULINGS.map((r) => `${r.receipt}: missing ${present.filter((k) => !r.codes.some((m) => m.source_code === k)).join(", ")}`);
     console.error("REFUSING: no approved ruling covers this property's source codes.");
     console.error("  present: " + present.join(", "));
     near.forEach((n) => console.error("  " + n));
@@ -183,8 +202,8 @@ function arg(name) {
   const unmapped = allSpaces.filter((s) => !bySpace.has(s.id));
 
   for (const m of MAPPING) {
-    const rows = byCode.get(m.code) || [];
-    console.log(`  ${m.code.padEnd(10)} → ${m.label.padEnd(20)} ${String(rows.length).padStart(3)} positions   use_type=${m.use}`);
+    const rows = byCode.get(m.source_code) || [];
+    console.log(`  source ${m.source_code.padEnd(10)} → ${m.code.padEnd(10)} ${m.label.padEnd(22)} ${String(rows.length).padStart(3)} positions   use_type=${m.use}`);
   }
   console.log(`\n  positions with a deterministic code : ${bySpace.size}`);
   console.log(`  positions left "Not configured"      : ${unmapped.length}`
@@ -216,14 +235,19 @@ function arg(name) {
            set label = excluded.label, sort_order = excluded.sort_order,
                source_note = excluded.source_note, updated_at = now()
          returning id`,
-        [propertyId, m.code, m.label, m.sort, `${RECEIPT}: source code ${m.code}`, actor]);
-      typeIdByCode.set(m.code, r.rows[0].id);
+        [propertyId, m.code, m.label, m.sort,
+         //  PROVENANCE, EXPLICIT. The vendor's string lives here, where it is
+         //  a recorded origin, rather than in `code`, where it would be our
+         //  identity for a thing we did not name.
+         `${RECEIPT}: source code ${m.source_code}`, actor]);
+      //  keyed by SOURCE code — that is what the rows carry.
+      typeIdByCode.set(m.source_code, r.rows[0].id);
     }
 
     let assigned = 0, kinded = 0, used = 0;
     for (const [code, rows] of byCode) {
       const typeId = typeIdByCode.get(code);
-      const use = MAPPING.find((m) => m.code === code).use;
+      const use = MAPPING.find((m) => m.source_code === code).use;
       for (const row of rows) {
         const u = await c.query(
           `update units set unit_type_id=$1, unit_type_source=$2,

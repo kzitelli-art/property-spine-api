@@ -125,7 +125,8 @@ function runTool(args) {
       join spaces s on s.unit_id = u.id
      where put.property_id=$1 group by 1,2 order by units desc`, [prop])).rows;
   console.log("     " + byType.map((r) => `${r.code}=${r.label} ${r.units}u/${r.positions}p`).join("   "));
-  const expect = { STU00016: [56, 112], STU00015: [12, 36], STU00017: [4, 12] };
+  //  Keyed by OUR code now, not the vendor's — that separation is the point.
+  const expect = { "2BR": [56, 112], "3BR-1BA": [12, 36], "3BR-1.5BA": [4, 12] };
   let distOk = byType.length === 3;
   for (const r of byType) {
     const e = expect[r.code];
