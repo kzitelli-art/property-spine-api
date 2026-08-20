@@ -126,26 +126,11 @@ app.set("trust proxy", 1); // Render = one proxy hop: makes req.ip the real clie
 // in Render — NEVER hardcoded here. Neon requires SSL.
 //
 //  ── SSL IS ON EVERYWHERE EXCEPT A LOCAL HOST ────────────────────────
-//  This was unconditional, which is correct for every deployed
-//  environment and wrong for exactly one case: a Postgres that does not
-//  speak SSL at all. The distinction had never surfaced because this
-//  machine's Postgres has `ssl = on`, while the postgres:16 container CI
-//  provisions does not — so the server came up, failed its first query
-//  with "The server does not support SSL connections", and never became
-//  healthy. Found by CI on its first real run; no amount of local
-//  testing would have shown it.
-//
-//  PRODUCTION BEHAVIOUR IS UNCHANGED. Neon is not a local host, so it
-//  still gets SSL with the same options it always had. Only a connection
-//  to 127.0.0.1 / localhost / a unix socket relaxes, and only because
-//  such a host is by definition not crossing a network.
-function databaseSsl(url) {
-  try {
-    const host = new URL(String(url || "")).hostname;
-    if (["127.0.0.1", "localhost", "::1", ""].includes(host)) return false;
-  } catch (_) { /* unparseable — fall through to the safe default */ }
-  return { rejectUnauthorized: false };
-}
+//  The rule used to live here as a private function, which meant nothing
+//  else could reach it — and a tool that needed the same rule hardcoded
+//  SSL instead and took CI red. It now lives in src/shared/database_ssl.js,
+//  once, with the full account of why. Behaviour here is unchanged.
+const { databaseSsl } = require("./src/shared/database_ssl");
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: databaseSsl(process.env.DATABASE_URL),

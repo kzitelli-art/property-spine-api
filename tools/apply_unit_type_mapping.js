@@ -40,6 +40,7 @@
 
 "use strict";
 const { Client } = require("pg");
+const { databaseSsl } = require("../src/shared/database_ssl");
 
 //  ── RULINGS, ONE BLOCK PER PROPERTY VOCABULARY ───────────────────────
 //  This was a single module-level MAPPING for one property's floorplan
@@ -137,7 +138,17 @@ function arg(name) {
   if (!process.env.DATABASE_URL) { console.error("Set DATABASE_URL."); process.exit(2); }
   if (!propertyId) { console.error("Set --property <uuid>."); process.exit(2); }
 
-  const c = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  //  SSL COMES FROM THE ONE RULE, NOT FROM AN ASSUMPTION HERE.
+  //  This line read `ssl: { rejectUnauthorized: false }`, which is right
+  //  for Neon and for a developer machine whose Postgres has ssl = on, and
+  //  fatal against CI's postgres:16 container, which does not speak SSL at
+  //  all: "The server does not support SSL connections". Two e2e proofs
+  //  shell out to this tool, so both went red in CI while passing locally
+  //  — for four runs, on a defect that no local run could show.
+  const c = new Client({
+    connectionString: process.env.DATABASE_URL,
+    ssl: databaseSsl(process.env.DATABASE_URL),
+  });
   await c.connect();
 
   console.log(`\n${apply ? "APPLYING" : "DRY RUN"}`);

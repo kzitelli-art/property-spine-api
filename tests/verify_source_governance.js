@@ -45,6 +45,13 @@ const fs = require("fs");
 const GATES = [
   { file: "gate_harness_isolation.js",
     what: "no new unguarded DATABASE_URL consumer; debt register accurate" },
+  //  Twice now a file has decided SSL for itself: server.js, which never
+  //  became healthy in CI, and tools/apply_unit_type_mapping.js, which took
+  //  CI red for four runs while the suite passed on every developer machine.
+  //  A local Postgres has ssl = on and CI's container does not, so this is
+  //  invisible everywhere except the one place it matters.
+  { file: "gate_ci_path_ssl.js",
+    what: "nothing on the CI path hardcodes SSL; the one rule still answers correctly" },
   { file: "gate_closure_boundary.js",
     what: "closure boundary" },
   { file: "gate_no_raw_bridge_joins.js",
