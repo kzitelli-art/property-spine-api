@@ -1,0 +1,114 @@
+#!/usr/bin/env node
+/*  ════════════════════════════════════════════════════════════════════
+    skyline_authority_dryrun.js — WHAT STANDS BETWEEN YOU AND SKYLINE
+    PRICING AUTHORITY, ASKED THROUGH THE CANONICAL MECHANISM.
+
+    READ ONLY. resolveAuthority is called with apply = false, which its own
+    code answers as "dry_run_no_write_performed". It writes nothing.
+
+    WHY THIS AND NOT AN INSERT. src/identity/authority_resolution.js is the
+    governed door for conferring pricing authority: seven preconditions, a
+    receipt, and exactly one write when it does apply. An insert into
+    `assignments` would produce the same row while skipping every check —
+    the precise defect class the audit named, where the canonical mechanism
+    exists and the real path goes around it.
+
+    IT HAS NO HTTP ROUTE. Nothing in the server reaches resolveAuthority, so
+    this script is currently the only way to ask it anything. That gap is
+    worth recording; going around the resolver because it lacks a door is
+    not.
+
+        DATABASE_URL="..." node tools/release/skyline_authority_dryrun.js
+        DATABASE_URL="..." PERSON_QUERY=zitelli node tools/release/skyline_authority_dryrun.js
+    ════════════════════════════════════════════════════════════════════ */
+"use strict";
+const path = require("path");
+const ROOT = path.join(__dirname, "..", "..");
+const { Pool } = require(path.join(ROOT, "node_modules", "pg"));
+const { resolveAuthority, ASSIGNABLE_ROLES } = require(path.join(ROOT, "src/identity/authority_resolution.js"));
+
+const SKYLINE = process.env.SKYLINE_ID || "14e41b7c-e91c-49e8-9651-10c4988a8f6a";
+const QUERY   = process.env.PERSON_QUERY || "zitelli";
+const ROLE    = process.env.REQUESTED_ROLE || "asset_manager";
+
+const url = process.env.DATABASE_URL;
+if (!url) { console.error("DATABASE_URL is required."); process.exit(64); }
+let ssl = { rejectUnauthorized: false };
+try { const h = new URL(url).hostname;
+      if (["127.0.0.1","localhost","::1",""].includes(h)) ssl = false; } catch (_) {}
+const pool = new Pool({ connectionString: url, ssl });
+
+const L = (s="") => console.log(s);
+const rule = () => L("════════════════════════════════════════════════════════════════");
+
+(async () => {
+  rule(); L("  SKYLINE PRICING AUTHORITY — DRY RUN  ·  writes nothing"); rule();
+
+  const prop = (await pool.query("select id, name, address from properties where id=$1", [SKYLINE])).rows[0];
+  if (!prop) { L(`  no property ${SKYLINE}`); await pool.end(); return; }
+  L(`  property   ${prop.name}  —  ${prop.address || "(no address)"}`);
+  L(`  role asked ${ROLE}   (authority-bearing roles: ${[...ASSIGNABLE_ROLES].join(", ")})`);
+  L(`  searching for people matching "${QUERY}"\n`);
+
+  const persons = (await pool.query(
+    `select id, name, email, lifecycle_status, source from persons
+      where name ilike $1 or coalesce(email,'') ilike $1 order by name limit 10`,
+    [`%${QUERY}%`])).rows;
+  const users = (await pool.query(
+    `select id, name, email, account_kind, person_id, is_active from users
+      where name ilike $1 or coalesce(email,'') ilike $1 order by name limit 10`,
+    [`%${QUERY}%`])).rows;
+
+  L("  ── candidate persons ──");
+  if (!persons.length) L("     (none)");
+  for (const p of persons) L(`     ${p.id}  ${p.name || "(unnamed)"}  ${p.email || ""}  [${p.lifecycle_status}]`);
+  L("  ── candidate logins ──");
+  if (!users.length) L("     (none)");
+  for (const u of users)
+    L(`     ${u.id}  ${u.name || "(unnamed)"}  ${u.email || ""}  kind=${u.account_kind} ` +
+      `person_id=${u.person_id || "NONE"} active=${u.is_active}`);
+
+  //  Prefer a login already governed-linked to a person: that pair is the
+  //  one the resolver can actually act on.
+  let pair = null;
+  for (const u of users) {
+    if (u.person_id && persons.some((p) => String(p.id) === String(u.person_id))) { pair = { u, p: persons.find((p) => String(p.id) === String(u.person_id)) }; break; }
+  }
+  if (!pair && users.length && users[0].person_id) {
+    const p = (await pool.query("select id, name from persons where id=$1", [users[0].person_id])).rows[0];
+    if (p) pair = { u: users[0], p };
+  }
+  if (!pair && users.length && persons.length) pair = { u: users[0], p: persons[0] };
+  if (!pair) { L("\n  cannot form a (login, person) pair to ask about."); await pool.end(); return; }
+
+  L(`\n  asking about: login ${pair.u.name || pair.u.id}  ×  person ${pair.p.name || pair.p.id}\n`);
+
+  let out;
+  try {
+    out = await resolveAuthority(pool, {
+      spec: { user_id: pair.u.id, person_id: pair.p.id, property_id: SKYLINE,
+              requested_role: ROLE, reviewer_user_id: pair.u.id,
+              reason: "dry run: establish Skyline pricing authority" },
+      apply: false,
+    });
+  } catch (e) { L(`  resolveAuthority threw: ${e.message}`); await pool.end(); return; }
+
+  L("  ── the resolver's verdict ──");
+  L(`     mode         ${out.mode}`);
+  L(`     disposition  ${out.disposition}`);
+  L(`     WOULD APPLY  ${out.would_apply ? "YES" : "NO"}`);
+  if ((out.blocking || []).length) L(`     blocking     ${out.blocking.join(", ")}`);
+
+  const ev = (out.receipt && out.receipt.evidence) || [];
+  if (ev.length) {
+    L("\n  ── every precondition, and why ──");
+    for (const c of ev) L(`     ${c.passed ? "✓" : "✗"} ${String(c.id).padEnd(30)} ${c.detail || ""}`);
+  }
+  if ((out.outstanding_sequence_steps || []).length) {
+    L("\n  ── what must happen first, in order ──");
+    out.outstanding_sequence_steps.forEach((s, i) => L(`     ${i + 1}. ${s}`));
+  }
+
+  L(); rule(); L("  dry run complete — nothing was written."); rule();
+  await pool.end();
+})().catch((e) => { console.error("DIED:", e && e.stack ? e.stack : e); process.exit(1); });
