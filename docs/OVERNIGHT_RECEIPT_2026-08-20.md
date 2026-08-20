@@ -351,6 +351,26 @@ because the cascade removes the version row before the terms trigger reads
 its status. **That is a hole in the immutability rule.** It is documented in
 the test and left alone. Closing it is a schema question, not a pricing fix.
 
+### The sibling proof was already falling through that hole
+
+CI's Postgres log for the green run carried this, while
+`skyline_pricing_publication.e2e.js` reported a clean 14/14:
+
+```text
+ERROR:  the terms of a published pricing version are immutable
+STATEMENT:  delete from pricing_terms where property_id=$1
+```
+
+Its teardown's first three deletes were `.catch(()=>{})`. The first was
+failing on **every run**; the second then succeeded through the cascade hole
+and took the terms with it, so the suite cleaned up and nobody saw anything.
+A test that hides its own failure was depending on a defect in the exact rule
+the file above proves.
+
+Same fix: retire first, and delete the catches, because with the retire in
+place they hide nothing worth hiding. Falsified by removing the retire — what
+was silent is now `DIED`, exit 1.
+
 ## Two tools were describing a live path that no longer exists
 
 `shadow_quote_simulator.js` and `economic_shadow.js` model the legacy answer

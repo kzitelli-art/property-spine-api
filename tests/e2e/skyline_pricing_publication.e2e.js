@@ -207,10 +207,28 @@ const PLAN = [
       : bad("no authority basis on the quoted number");
   }
 
-  //  cleanup
-  await pool.query("delete from pricing_terms where property_id=$1", [prop]).catch(()=>{});
-  await pool.query("delete from property_pricing_versions where property_id=$1", [prop]).catch(()=>{});
-  await pool.query("delete from pricing_review_receipts where property_id=$1", [prop]).catch(()=>{});
+  //  CLEANUP — retire first, and do not swallow.
+  //
+  //  These three deletes used to be .catch(()=>{}) and the first one was
+  //  FAILING on every run: trg_pricing_terms_frozen refuses to delete the
+  //  terms of a published version, and CI's Postgres log recorded the raise
+  //  on 2026-08-20 while this proof reported a clean 14/14. The suite then
+  //  cleaned up anyway — but only through a hole. property_pricing_versions
+  //  cascades to pricing_terms, and a cascade gets past the frozen trigger
+  //  because it removes the version row before the terms trigger reads its
+  //  status. So the teardown was quietly depending on a defect in the very
+  //  rule the file above proves.
+  //
+  //  Retiring is the one transition the immutability rule permits, and it is
+  //  what actually makes these deletes legal. With that line present the
+  //  catches are not needed, so they are gone: a cleanup that hides its own
+  //  failure is how this stayed invisible.
+  await pool.query(
+    "update property_pricing_versions set status='retired' where property_id=$1 and status='published'",
+    [prop]);
+  await pool.query("delete from pricing_terms where property_id=$1", [prop]);
+  await pool.query("delete from property_pricing_versions where property_id=$1", [prop]);
+  await pool.query("delete from pricing_review_receipts where property_id=$1", [prop]);
   await pool.query("delete from assignments where property_id=$1", [prop]);
   await pool.query("delete from person_contexts where person_id=$1", [person]);
   await pool.query("delete from import_source_rows where import_batch_id=$1", [batch]);
