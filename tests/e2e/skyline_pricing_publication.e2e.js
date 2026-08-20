@@ -40,7 +40,11 @@ const LEGACY_SENTINEL = 999999;   // what units.market_rent will carry
 const PLAN = [
   { code: "STU00016", units: 56, beds: 2, bedrooms: 2, bathrooms: 1 },
   { code: "STU00015", units: 12, beds: 3, bedrooms: 3, bathrooms: 1 },
-  { code: "STU00017", units: 4,  beds: 3, bedrooms: 3, bathrooms: 1.5 },
+  //  Real numbers: the ruling lifts 116 and 416 to 3BR-1.5BA BY NAME, because
+  //  STU00017 is not a bath count. A synthetic number matches no override and
+  //  the tool refuses — correctly. See skyline_unit_type_mapping.e2e.js.
+  { code: "STU00017", units: 4,  beds: 3, bedrooms: 3, bathrooms: 1,
+    numbers: ["116", "216", "316", "416"] },
 ];
 
 (async () => {
@@ -60,7 +64,8 @@ const PLAN = [
     const u = (await pool.query(
       `insert into units (property_id, unit_number, bedrooms, bathrooms, square_feet, market_rent)
        values ($1,$2,$3,$4,$5,$6) returning id`,
-      [prop, `S-${1000 + n}`, g.bedrooms, g.bathrooms, 800, LEGACY_SENTINEL])).rows[0].id;
+      [prop, g.numbers ? g.numbers[i] : `S-${1000 + n}`,
+       g.bedrooms, g.bathrooms, 800, LEGACY_SENTINEL])).rows[0].id;
     await pool.query(`delete from spaces where unit_id=$1 and space_label='(whole unit)'`, [u]);
     for (let b = 0; b < g.beds; b++) {
       const s = (await pool.query(
@@ -69,7 +74,8 @@ const PLAN = [
       await pool.query(
         `insert into import_source_rows (import_batch_id, row_index, raw, produced_unit_id, produced_space_id)
          values ($1,$2,$3,$4,$5)`,
-        [batch, ix++, JSON.stringify({ unit_type: g.code, unit_number: `S-${1000 + n}`, status: "occupied" }), u, s]);
+        [batch, ix++, JSON.stringify({ unit_type: g.code,
+          unit_number: g.numbers ? g.numbers[i] : `S-${1000 + n}`, status: "occupied" }), u, s]);
     }
   }
   execFileSync(process.execPath, [path.join(ROOT, "tools/apply_unit_type_mapping.js"), "--property", prop, "--apply"],

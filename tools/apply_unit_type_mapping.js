@@ -116,7 +116,36 @@ const RULINGS = [
     codes: [
       { source_code: "STU00016", code: "2BR",       label: "2 Bedroom",            sort: 10, use: "residential" },
       { source_code: "STU00015", code: "3BR-1BA",   label: "3 Bedroom / 1 Bath",   sort: 20, use: "residential" },
-      { source_code: "STU00017", code: "3BR-1.5BA", label: "3 Bedroom / 1.5 Bath", sort: 30, use: "residential" },
+      //  ⛔ STU00017 IS NOT A BATH COUNT. It maps to 3BR-1BA like STU00015.
+      //  This line used to say 3BR-1.5BA. Physical inspection by Mike Grivna
+      //  established that only 116 and 416 are 1.5 bath, while STU00017 sits
+      //  on FIVE units in the May 2026 rent roll (116, 216, 316, 405, 416)
+      //  and four in the April import batch. Applying the code as a bath
+      //  count would have given three units a bathroom they do not have, and
+      //  then published pricing against it.
+      //
+      //  The first receipt recorded that the source was SILENT on the bath
+      //  distinction. It is now known to CONTRADICT it, which is stronger: a
+      //  silence invites a careful inference, a contradiction forbids one.
+      { source_code: "STU00017", code: "3BR-1BA",   label: "3 Bedroom / 1 Bath",   sort: 20, use: "residential" },
+    ],
+
+    //  ── A TYPE NO SOURCE CODE PRODUCES ────────────────────────────
+    //  3BR-1.5BA exists physically and is derivable from nothing in the
+    //  export. It is created here so pricing has something to attach to,
+    //  and populated only by the named list below.
+    extra_types: [
+      { code: "3BR-1.5BA", label: "3 Bedroom / 1.5 Bath", sort: 30, use: "residential" },
+    ],
+
+    //  ── THE ONLY 1.5-BATH UNITS, BY NAME ──────────────────────────
+    //  Confirmed by physical inspection, not derived. Every entry must
+    //  match a real unit or the whole run refuses — a unit_number typo'd
+    //  here would otherwise leave that unit silently typed 1BA, which is
+    //  the exact failure this list exists to prevent.
+    unit_overrides: [
+      { unit_number: "116", code: "3BR-1.5BA", why: "physical inspection 2026-08-20 (M. Grivna)" },
+      { unit_number: "416", code: "3BR-1.5BA", why: "physical inspection 2026-08-20 (M. Grivna)" },
     ],
   },
 ];
@@ -125,6 +154,9 @@ const RULINGS = [
 //  same as it always did.
 let MAPPING = null;
 let RECEIPT = null;
+//  The whole selected ruling — extra_types and unit_overrides live on it,
+//  not on the codes array.
+let RULING = null;
 
 function arg(name) {
   const i = process.argv.indexOf(name);
@@ -190,8 +222,9 @@ function arg(name) {
     covering.forEach((r) => console.error("  " + r.receipt));
     await c.end(); process.exit(1);
   }
-  MAPPING = covering[0].codes;
-  RECEIPT = covering[0].receipt;
+  RULING  = covering[0];
+  MAPPING = RULING.codes;
+  RECEIPT = RULING.receipt;
   console.log(`ruling: ${RECEIPT}`);
   console.log(`        ${covering[0].note}\n`);
 
@@ -255,6 +288,19 @@ function arg(name) {
       typeIdByCode.set(m.source_code, r.rows[0].id);
     }
 
+    //  Types with no source code still need their row.
+    for (const t of (RULING.extra_types || [])) {
+      const r = await c.query(
+        `insert into property_unit_types (property_id, code, label, sort_order, source_note, created_by_user_id)
+         values ($1,$2,$3,$4,$5,$6)
+         on conflict (property_id, code) do update
+           set label = excluded.label, sort_order = excluded.sort_order,
+               source_note = excluded.source_note, updated_at = now()
+         returning id`,
+        [propertyId, t.code, t.label, t.sort, `${RECEIPT}: not derivable from any source code`, actor]);
+      typeIdByCode.set("code:" + t.code, r.rows[0].id);
+    }
+
     let assigned = 0, kinded = 0, used = 0;
     for (const [code, rows] of byCode) {
       const typeId = typeIdByCode.get(code);
@@ -276,6 +322,33 @@ function arg(name) {
         kinded += s.rowCount; used += s.rowCount;
       }
     }
+
+    //  ── NAMED EXCEPTIONS WIN, AND MUST ALL LAND ───────────────────
+    //  Applied after the source-code pass so they override it. The count is
+    //  asserted: an override that matched no unit means the list disagrees
+    //  with inventory, and continuing would leave a unit typed by a code
+    //  that is known not to describe it.
+    let overridden = 0;
+    for (const o of (RULING.unit_overrides || [])) {
+      const typeId = typeIdByCode.get("code:" + o.code);
+      if (!typeId) throw new Error(`override names type ${o.code}, which this ruling does not create`);
+      const u = await c.query(
+        `update units set unit_type_id=$1, unit_type_source=$2,
+                          unit_type_assigned_by_user_id=$3, unit_type_assigned_at=now()
+          where property_id=$4 and unit_number=$5 returning id`,
+        [typeId, `${RECEIPT}: ${o.why}`, actor, propertyId, o.unit_number]);
+      if (u.rowCount !== 1) {
+        throw new Error(
+          `override for unit ${o.unit_number} matched ${u.rowCount} units, expected exactly 1 — ` +
+          `the named list and the inventory disagree, so nothing is written`);
+      }
+      overridden += u.rowCount;
+      console.log(`  override unit ${o.unit_number.padEnd(6)} → ${o.code.padEnd(10)} ${o.why}`);
+    }
+    if (overridden !== (RULING.unit_overrides || []).length) {
+      throw new Error("not every named override landed — refusing to commit a partial mapping");
+    }
+
     await c.query("commit");
     console.log(`\nAPPLIED — ${typeIdByCode.size} governed unit types, ${assigned} units assigned, ${kinded} positions classified.`);
     console.log(`Provenance recorded on every row: ${RECEIPT}\n`);

@@ -25,10 +25,25 @@ const ok  = (l, d="") => { pass++; console.log(`  ✓ ${l}${d ? "  — " + d : "
 const bad = (l, d="") => { fail++; console.log(`  ✗ ${l}${d ? "  — " + d : ""}`); };
 
 //  production's real distribution
+//  ── THE REPLICA CARRIES REAL UNIT NUMBERS WHERE THE RULING NAMES THEM ──
+//  STU00017 is NOT a bath count. It covers four units in the committed July
+//  batch, and physical inspection established that only 116 and 416 are 1.5
+//  bath — so the ruling types the code as 3BR-1BA and lifts those two by
+//  name. A replica with synthetic unit numbers cannot exercise that: the
+//  named override would match nothing, which is precisely the condition the
+//  tool now refuses on. So the STU00017 units are numbered as they really
+//  are, and the proof covers the path production will take.
+//
+//  The arithmetic closes exactly against the owner-confirmed mix:
+//      56 × 2BR                                        =  56 units, 112 beds
+//      12 × STU00015  +  2 × STU00017 (not overridden)  =  14 units,  42 beds
+//                        2 × STU00017 (overridden)      =   2 units,   6 beds
+//                                                          72 units, 160 beds
 const PLAN = [
   { code: "STU00016", units: 56, beds: 2, bedrooms: 2, bathrooms: 1 },
   { code: "STU00015", units: 12, beds: 3, bedrooms: 3, bathrooms: 1 },
-  { code: "STU00017", units: 4,  beds: 3, bedrooms: 3, bathrooms: 1.5 },
+  { code: "STU00017", units: 4,  beds: 3, bedrooms: 3, bathrooms: 1,
+    numbers: ["116", "216", "316", "416"] },
 ];
 
 function runTool(args) {
@@ -59,7 +74,8 @@ function runTool(args) {
       const u = (await pool.query(
         `insert into units (property_id, unit_number, bedrooms, bathrooms, square_feet)
          values ($1,$2,$3,$4,$5) returning id`,
-        [prop, `S-${1000 + n}`, g.bedrooms, g.bathrooms, 800 + g.beds * 100])).rows[0].id;
+        [prop, g.numbers ? g.numbers[i] : `S-${1000 + n}`,
+         g.bedrooms, g.bathrooms, 800 + g.beds * 100])).rows[0].id;
       //  trg_unit_space adds a '(whole unit)' placeholder; production carries
       //  none after re-graining, so it goes.
       await pool.query(`delete from spaces where unit_id=$1 and space_label='(whole unit)'`, [u]);
@@ -72,7 +88,7 @@ function runTool(args) {
           `insert into import_source_rows (import_batch_id, row_index, raw, produced_unit_id, produced_space_id)
            values ($1,$2,$3,$4,$5)`,
           [batch, rowIx++, JSON.stringify({
-            unit_type: g.code, unit_number: `S-${1000 + n}`,
+            unit_type: g.code, unit_number: g.numbers ? g.numbers[i] : `S-${1000 + n}`,
             space_label: `Bed ${String.fromCharCode(65 + b)}`,
             sqft: String(800 + g.beds * 100), is_commercial: "false", status: "occupied",
           }), u, s]);
@@ -126,7 +142,9 @@ function runTool(args) {
      where put.property_id=$1 group by 1,2 order by units desc`, [prop])).rows;
   console.log("     " + byType.map((r) => `${r.code}=${r.label} ${r.units}u/${r.positions}p`).join("   "));
   //  Keyed by OUR code now, not the vendor's — that separation is the point.
-  const expect = { "2BR": [56, 112], "3BR-1BA": [12, 36], "3BR-1.5BA": [4, 12] };
+  //  3BR-1BA absorbs the two STU00017 units that are NOT 1.5 bath; only the
+  //  two named units land in 3BR-1.5BA. These are the owner-confirmed totals.
+  const expect = { "2BR": [56, 112], "3BR-1BA": [14, 42], "3BR-1.5BA": [2, 6] };
   let distOk = byType.length === 3;
   for (const r of byType) {
     const e = expect[r.code];
