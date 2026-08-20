@@ -266,6 +266,35 @@ function arg(name) {
     console.log( "  decided from the status string.");
   }
 
+  //  ── THE NAMED OVERRIDES, PREVIEWED AND CHECKED BEFORE ANY WRITE ──
+  //  These are the rows that do NOT follow from a source code — the whole
+  //  reason the run can be right about 70 units and wrong about two. Showing
+  //  them only inside --apply would mean the operator approves the mapping
+  //  without ever seeing its least derivable part. Each is resolved against
+  //  real inventory here, so a unit_number that matches nothing is visible
+  //  now rather than as an abort halfway through the write.
+  if ((RULING.unit_overrides || []).length) {
+    console.log("\n  ── named overrides (not derived from any source code) ──");
+    let missing = 0;
+    for (const o of RULING.unit_overrides) {
+      const hit = (await c.query(
+        `select unit_number from units where property_id=$1 and unit_number=$2`,
+        [propertyId, o.unit_number])).rows;
+      if (hit.length === 1) {
+        console.log(`     ✓ unit ${o.unit_number.padEnd(8)} → ${o.code.padEnd(11)} ${o.why}`);
+      } else {
+        missing++;
+        console.log(`     ✗ unit ${o.unit_number.padEnd(8)} → ${o.code.padEnd(11)} MATCHES ${hit.length} UNITS — the named list and inventory disagree`);
+      }
+    }
+    if (missing) {
+      console.error(`\nREFUSING: ${missing} named override(s) match no unit. Nothing was written.`);
+      console.error("  The list is physical truth; if inventory disagrees, one of them is wrong");
+      console.error("  and guessing which would put a bathroom on the wrong apartment.\n");
+      await c.end(); process.exit(1);
+    }
+  }
+
   if (!apply) { console.log("\nDry run only. Re-run with --apply to write.\n"); await c.end(); return; }
 
   await c.query("begin");
