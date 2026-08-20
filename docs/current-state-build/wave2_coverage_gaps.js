@@ -16,7 +16,7 @@ THE ONE RULE: report only what repo evidence supports. Never infer, never recall
 plausible guess. Where you cannot find evidence, write exactly NOT_FOUND.
 
 Two git worktrees, both at CURRENT main. Read ONLY these paths:
-  API repo: ${API}   (main = 77f93f5)
+  API repo: ${API}   (DEPLOYED sha 30cb992 — this is what production runs; 39 commits AHEAD of main, carrying migrations 182-187 that main does not have)
   APP repo: ${APP}   (main = c6769ba)
 
 DO NOT IMPROVE THE TAXONOMY. Describe what exists at the grain the evidence supports. If a directory holds
@@ -47,6 +47,27 @@ For each capability also determine:
 
 Most files carry a doctrine header stating what the file is and its CLASS/release status. Read those headers —
 they are the most reliable single source, and they frequently self-declare dormancy.
+
+=== ALSO VERIFY THESE CLAIMS FROM AN INTERNAL ARCHITECTURE MAP ===
+The owner maintains a map of believed state. It is INTENT, never a source for a row. Treat each claim below as a
+QUESTION to answer from code, and report which of three buckets it lands in:
+  CONFIRMED (map right) · NEVER_BUILT (map claims it, code lacks it) · BUILT_UNMAPPED (code has it, map missed it)
+The map has already been proven wrong in BOTH directions, so do not defer to it and do not dismiss it.
+
+Claims relevant to your assignment (skip any outside your area):
+ · "Non-KZ staff invite -> session -> correct property: MISSING (unproven). Mike has never passed through it."
+ · "Exclusion wall (a user WITHOUT Skyline is kept out): UNPROVEN, gate only tested from inside."
+ · "beginDemoSession / 2026letsgo bootstrap: RETIRE-ON-ACTIVATION, class 2 adapter."
+ · "13+ raw comm_events insert sites vs 1 canonical: write-path sprawl is the root condition."
+ · "Operations line campaign: PARTIAL, rejected twice."
+ · "COMMITMENT_LEDGER_MODE=enabled: OPEN RISK, write surface open while doctrine says fail-closed."
+ · "Money Inbox: MISSING, 3 phantom endpoints, unbuilt cluster."
+ · "Marketing (pricing/survey/listings): BUILT/fixtures, likely fixture-only, no API calls."
+ · "Renewals front end: BUILT/fixtures, full 3-bucket dash, no renewal service on API."
+ · "Rent Roll (current): PARTIAL, legacy operator-key routes -> fixture fallback, no session-scoped live read."
+ · "28 phantom endpoints, 4 unbuilt clusters" — COUNT the phantom endpoints you can actually find in your area
+    (an app call to a route the API does not define, or a route defined but unreachable).
+ · "Field search + reach-the-tenant: MISSING, residents have ~0 phones."
 `
 
 const SCHEMA = {
@@ -238,7 +259,7 @@ const missed = critics.filter(Boolean).flatMap((c) => c.missed || [])
 log(`completeness critics surfaced ${missed.length} unlisted items`)
 
 return {
-  api_main: '77f93f5',
+  api_main: '30cb992 (deployed, ahead of main 77f93f5)',
   app_main: 'c6769ba',
   wave2_capability_count: all.length,
   wave2_capabilities: all,
