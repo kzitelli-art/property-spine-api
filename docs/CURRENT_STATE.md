@@ -43,7 +43,10 @@ PRODUCTION DEPLOYED     30cb992     2026-08-19  ← 39 commits AHEAD of main
 APP verified against    c6769ba     2026-08-18
 Production ledger       ceiling 187 (schema), 175 (ledger entries) — see note
 Migrations on main      181         → main is BEHIND production by 6 migrations
-Surveyed / verified     2026-08-19 (wave 1) · 2026-08-20 (Codex PR review, AM domains)
+Surveyed / verified     2026-08-19 (wave 1) · 2026-08-20 (Codex PR review, AM
+                        domains) · 2026-08-20 (wave 2, 148 capabilities:
+                        teams/access, management door, onboarding intake,
+                        money/pricing, app repo, server.js inline, tools/)
 ```
 
 ⚠ **Production does not run `main`.** The deployed commit `30cb992` lives only on
@@ -99,7 +102,13 @@ with evidence — which is the failure this file exists to end.
 | 4 | **A test defaults to hitting PRODUCTION**, with no run receipt anywhere. | `tests/full_lifecycle_arc.js:47` |
 | 5 | **Ask Spine has two obligation readers** (§7 violation). Its own header: *"Its QUERY LOGIC is sound and is re-expressed here."* | `src/agent/ask_spine_service.js` |
 | 6 | **The §40.11 gate scans 2 of ~15 domain dirs** — `["src/asset","src/tenancy"]`. Leasing, applications, maintenance, technician, comms, obligations, money, onboarding, **and now `src/meeting_evidence/`** cannot fail it. | `tests/gate_ask_spine_readers.js:100` |
-| 7 | **Production does not run `main`.** Deployed `30cb992` lives only on `claude/property-spine-orientation-cso2ao`, 39 commits ahead, carrying migrations 182–187 that `main` lacks. A deploy of `main` today should refuse to start on schema mismatch — confirm before assuming `main` is deployable, and land that branch before the gap widens further. | `git merge-base --is-ancestor 30cb992 origin/main` → **NO** |
+| 7 | **Production does not run `main`.** Deployed `30cb992` lives only on `claude/property-spine-orientation-cso2ao`, 39+ commits ahead, carrying migrations 182–187 that `main` lacks. ⚠ That branch has since moved a further 15 commits (to `3afb3ee`) — **not confirmed whether that newer tip is what's actually deployed**, only that the gap from `main` hasn't closed. A deploy of `main` today should refuse to start on schema mismatch — confirm before assuming `main` is deployable, and land that branch before the gap widens further. | `git merge-base --is-ancestor 30cb992 origin/main` → **NO** |
+| 8 | **A signed-in operator's Invite button silently fakes success.** The app only calls the real invite route `if(key())` — a hidden, `aria-hidden` field populated *only* from an internal-only key in `localStorage` that the real SMS sign-in flow never sets. Without it, the button pushes a fake row and shows: *"Demo invite pending locally. Add an operator key to create a live invite."* This is the exact mechanism behind "no staff member other than the account owner has ever completed a real invite," and it's a direct violation of CLAUDE.md's own non-negotiable — *"Never fixture-fallback... in a signed-in operator workflow."* | `main-app/index.html:12152-12178` (`inviteTeamMember`), `:5953` (`#opKey`), `:8024` (`key()`) |
+| 9 | **The team roster read has no property-scope check — unlike every sibling route in the same file.** `GET /properties/:id/team` sits behind the shared `x-operator-key` gate (not public), but performs *no* staff-session resolution and *no* check that the key-holder has any relationship to the `:id` in the URL. Any operator-key holder can read any property's full roster — names, phones, emails — by changing the URL. | `src/identity/teamaccess.js` — roster handler, compare to `my-access`'s enforced *"BRICK ONE property wall"* two routes below it |
+| 10 | **Two inbound Twilio SMS webhooks, two different security postures.** `/communications/inbound-sms` documents itself as fail-closed on signature verification. `/intake/twilio` (a second, separate webhook) is gated only by a phone-number allowlist (`INTAKE_ALLOWED_NUMBERS`) — no signature check found. | `src/onboarding/intake.js:220` vs `src/comms/communications_boundary.js` |
+| 11 | **`CLAUDE.md`'s own deploy description doesn't match reality.** States *"Deploys to Render on merge to main,"* which reads as automatic push-to-deploy. The actual mechanism is `deploy.sh` — a manual script calling Render's API directly, run by a human. If it's meant to be automatic, it currently isn't. | `deploy.sh` vs `CLAUDE.md`'s "Repo orientation" section |
+
+**Correction, not a new defect — the exclusion wall is better than earlier feared, for one route.** `tests/phase_zero_property_boundary.db.js` genuinely proves, with real Postgres and real HTTP, that a second real user without a property assignment is refused by the property-switcher (`GET/POST /operator/properties[/select]`). The earlier "only tested from inside" concern was wrong for *that* route — but confirmed true, and worse than described, for the roster route above (defect #9): not "only tested from inside," not tested at all, and structurally missing the check its own sibling routes have.
 
 ---
 
@@ -244,20 +253,65 @@ producing a valid completion through it is not.
 
 ---
 
+## Teams / Access / Roles — `src/identity/`
+
+**The highest-value gap in the original survey, now covered.** 148 capabilities
+surveyed across this and six other areas (wave 2, 2026-08-20) — full detail in
+`docs/current-state-build/05_WAVE2_RESULTS.md`. Rows below are the ones that
+change what you should believe about the system; everything else is in that file.
+
+| Capability | Rung | Note |
+|---|---|---|
+| Staff invite creation — `POST /properties/:id/team-invites` | `LOCALLY_EXERCISED` | Double-gated (session + shared key). Correctly derives the granting actor server-side, refuses a client-supplied one (PR #38 rule). **See defect #8** — the app's own button mostly doesn't call this |
+| **Team invite UI silently fakes success** | **REPORTED (dead-in-practice)** | **Defect #8.** The real reason invites don't work in practice |
+| OTP send — `POST /auth/sms/start` | `LOCALLY_EXERCISED` | One route, two branches (invite-accept / re-login). Honest 503 if SMS transport doesn't confirm send — tested only against a fake pool |
+| OTP verify → session mint — `POST /auth/sms/verify` | `REPORTED` | **Zero test files reference this route at all** — not even the fake-pool pattern. The actual moment a session is minted has no automated evidence |
+| Team roster read — `GET /properties/:id/team` | `REPORTED` | **Defect #9** — no property-scope check |
+| Current-access read — `GET /properties/:id/my-access` | `BUILT_BUT_DORMANT` | Fully implemented, has the property wall its sibling routes lack, **the app never calls it** |
+| Assignment edit — `PATCH /property-team-assignments/:id` | `BUILT_BUT_DORMANT` | Implemented, correctly gated, **orphaned — app never calls it** |
+| Staff session mint/resolve/revoke | `HTTP_PROVEN` | *"Class 1 permanent product primitive."* The actually solid part of this whole area |
+| Property switcher — `GET/POST /operator/properties[/select]` | `HTTP_PROVEN` | **Genuinely proven**, real Postgres + real HTTP, a real second user without access is refused. See the correction above defects #9-10 |
+| Super-admin surface — `super_admin.js` (`/admin/*`) | `REPORTED` | Extensively used by the app; **zero automated test evidence at any rung** |
+| Org-scoped admin surface — `org_admin.js` (`/org/*`) | `BUILT_BUT_DORMANT` | Fully parallel to super-admin, **entirely unreachable from the app** — nothing calls it |
+| Module vocabulary mismatch — `'capital'` vs `'asset_management'` | `REPORTED` | Different grant paths use different names for what's supposed to be the same module; one silently strips the other |
+| Demo session bootstrap — `POST /demo/operator-session` | `HTTP_PROVEN` | Correctly fail-closed (403/503 without config). Site map's *"RETIRE-ON-ACTIVATION"* framing **not found anywhere in source** — no such trigger exists, map was wrong on this specific point |
+| Team/assignment schema (4 tables) | `DEPLOYED` | `property_team_assignments` is the one authority row; a partial unique index was added defensively in migration 070 after a live-duplicate risk |
+
+## Newly discovered — on nobody's map until this pass
+
+Found by the completeness critics, not by searching for something already
+suspected. Full detail in `05_WAVE2_RESULTS.md`.
+
+| What | Note |
+|---|---|
+| **The Decision Rail** — `src/leasing/decisions.js` | A whole governed money-decision domain (migration 059, its own obligation routing, its own approval-cap authority) sitting in `src/leasing/` where nobody would look for it under "money" |
+| **AI leasing operating rules** — `ai_leasing_operating_rules` table (migration 121) | Writes governance rules that constrain **live prospect-facing AI output**, real HTTP routes, actively read on every AI-generated lease response — zero prior visibility |
+| **`source_artifacts`** — migration 153 | Cross-cutting primitive, heavily used across Utilities/Compliance/Debt/Equity/onboarding, real and tested — *"exists in the database and in nobody's map"* until now |
+| **Outlook/Acuity Microsoft Graph sync** | A complete external integration (OAuth, migration, seven env vars) exists in source — **but its mount file is literally named `outlookAcuityMount.example.js`**, never required by `server.js`. Built, not live |
+| **Seven independent property-scoped feature flags** | Each gates a different live capability by property-UUID allowlist. Nothing in either repo enumerates the current set — only readable by checking Render directly alongside seven separate source files |
+| **`TWILIO_FROM_NUMBER`** | Documented in `docs/deployment.md` as a settable env var. **Does nothing in code** — *"a mention is not a guard,"* exactly the trap this repo's own doctrine warns about |
+| **10 consecutive missing migration numbers** — 141 through 149 | Between `140_post_activation_completion_guard.sql` and `150_canonical_property_creation.sql`. Not previously documented anywhere |
+| **No scheduler/cron infrastructure exists in either repo** | Several capabilities (`followup_runner.js` among them) are structurally built to need a periodic trigger. None exists — confirmed absence, not oversight |
+
+---
+
 ## NOT YET SURVEYED — do not read absence as absence
 
-| Area | Why it matters |
-|---|---|
-| **Teams / access / invites / roles** | **Highest-value gap.** An internal note records that no staff member other than the account owner has ever completed sign-in, and the exclusion path was *"only tested from inside."* |
-| Management door (`surfaces/management*.js`) | One of the four operating doors |
-| Onboarding & rent-roll intake internals | Parsing, field mapping, import batches |
-| Money / pricing at real grain | ~26 files currently one row |
-| **The entire app repo** | Every browser proof lives there; several use `fakePool()` |
-| `server.js` inline routes | 3,000+ lines; a `src/`-only search misses it — this is exactly how a prior build miscounted its own doors |
-| `tools/` | Which have ever actually been *run* |
-| Cron · webhooks · env flags | Two flags already found switching off real capability |
+Wave 2 (2026-08-20) closed every area listed here as of the prior version of
+this file. What's left is depth, not breadth:
 
-Re-runnable research: `docs/current-state-build/wave2_coverage_gaps.js`
+| Area | Status |
+|---|---|
+| Money / pricing (42 capabilities found) | Surveyed at headline grain; full 42-row detail in `05_WAVE2_RESULTS.md`, not yet promoted into this file's index |
+| `server.js` inline routes (25 found, 23 flagged) | Confirmed CLAUDE.md's own warning — a `src/`-only search would have missed a legacy Persons CRUD, a "contained not deleted" bare lease writer, and an inline AI rent-roll pipeline. Full detail in `05_WAVE2_RESULTS.md` |
+| `tools/` (16 found) | Which have been actually *run* vs. written — detail in `05_WAVE2_RESULTS.md` |
+| App repo doors (25 found) | Detail in `05_WAVE2_RESULTS.md` |
+| Onboarding/rent-roll intake (12 found) | Detail in `05_WAVE2_RESULTS.md` |
+| Management door (11 found) | Detail in `05_WAVE2_RESULTS.md` |
+
+Re-runnable research: `docs/current-state-build/wave1_new_domains.js`,
+`docs/current-state-build/wave2_coverage_gaps.js`. Full wave 2 output:
+`docs/current-state-build/05_WAVE2_RESULTS.md`.
 
 ---
 
