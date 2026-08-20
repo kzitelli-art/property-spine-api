@@ -287,3 +287,130 @@ Skyline's `units.bedrooms`, `units.bathrooms` and `square_feet` are empty
 across all 72 units. Nothing on the pricing path needed them, so nothing was
 done about it. It is recorded here because a leasing surface that wants to
 say "3 bed, 1.5 bath" to a prospect currently has nowhere to read it from.
+
+---
+
+# Defect #1 closed: the price a prospect hears
+
+The audit's highest-severity finding. `src/agent/agent.js` read
+`units.market_rent` — a legacy per-unit column with no publish step, no
+version and no review between it and someone's phone — and handed it to the
+model. It had already been wrong in production: $237 off on unit 530, said
+to nine real people.
+
+`src/agent/pricing_adapter.js` was built to stop exactly this, and then sat
+dormant. That is its own kind of failure and worth naming: the wall existed,
+the defect kept running, and the source read as though the problem were
+solved. This is the shape the directive warned about — *source existing is
+not runtime truth.*
+
+## What changed
+
+There were **two** leaks, not one.
+
+| Leak | Was | Now |
+|---|---|---|
+| linked-unit context (`resolveContext`) | selected `market_rent`, put it in the system prompt | selects `unit_type_id`, asks `quotablePricing` |
+| inventory list (`offeredUnits`) | carried `market_rent` **per unit** into the tool result | governed rent, term, and an explicit `pricing_status` per unit |
+
+The second was the worse one: the `units:` line strips only `id`, so a
+*list* of ungoverned rents reached the model — the same defect multiplied by
+however many units matched.
+
+The refusal wording changed too. `", rent not on the unit record"` read as an
+*inventory fact* and left the model free to fill the gap. When pricing is not
+quotable the model is now told so explicitly and handed the exact sentence to
+use.
+
+## What proves it
+
+`tests/e2e/agent_pricing_wall.e2e.js` — 11 assertions, wired into
+`verify_all.sh`, therefore into CI. It proves the wall from **both**
+directions, because proving one would be half a proof:
+
+- with no published pricing → the agent quotes nothing and hands off
+- with pricing published through the real workflow → it quotes the governed
+  number, and states its basis
+- a sentinel value sits on `units.market_rent` throughout and appears in
+  neither
+
+Falsified by removing the rewire: the sentinel reaches the quote.
+
+## The teardown obeys the rule it just proved
+
+Published terms are frozen by `trg_pricing_terms_frozen`, and there is
+deliberately **no** governed operation that deletes a published version —
+published pricing is a permanent record. The test retires its version first,
+which is the one transition the immutability rule permits, rather than
+routing around the freeze. Remove that line and the teardown refuses again;
+that was checked, not assumed.
+
+A second route exists and is deliberately unused: `delete from properties`
+cascades through versions to terms without the frozen trigger refusing,
+because the cascade removes the version row before the terms trigger reads
+its status. **That is a hole in the immutability rule.** It is documented in
+the test and left alone. Closing it is a schema question, not a pricing fix.
+
+## Two tools were describing a live path that no longer exists
+
+`shadow_quote_simulator.js` and `economic_shadow.js` model the legacy answer
+so a proposed sheet can be judged against it. Both told an operator that
+`agent.js` reads `units.market_rent` **today**. After the rewire that is
+false, and it is the kind of false that changes decisions. Both now name
+themselves a **pre-cutover baseline**; the shared sentence is defined once
+instead of duplicated. Their `live_*` field names are unchanged — renaming an
+operator-facing API shape does not get smuggled into a pricing fix.
+
+## What is NOT proven
+
+- **Not proven in production.** Local and CI only, against no Skyline data.
+- **Four pinning proofs under `tests/` record the inversion but nothing runs
+  them.** They are pinned to a hardcoded demo UUID
+  (`a50fbdd0-…`) and fail on fixtures alone — identically before and after
+  this change, which was verified by stashing. Their assertions are
+  documented intent, not proof. Making them runnable means decoupling them
+  from that UUID.
+
+---
+
+# The CI failure underneath it
+
+CI had been **red for four consecutive runs** while the full suite passed on
+every developer machine:
+
+```text
+FATAL: The server does not support SSL connections
+```
+
+`tools/apply_unit_type_mapping.js` hardcoded `ssl: { rejectUnauthorized:
+false }`. Correct for Neon. Correct for a developer machine, whose Postgres
+has `ssl = on`. Fatal against CI's `postgres:16` container, which does not
+speak SSL at all. Two e2e proofs shell out to that tool, so both went red in
+the one environment nobody can see from their own terminal.
+
+`server.js` already knew the rule — it had learned it the same way, from CI —
+and kept it as a private function where nothing else could reach it. **That
+is the actual defect.** Not the tool's line: a rule that has to be remembered
+per file.
+
+- `src/shared/database_ssl.js` states it once
+- `server.js` and the tool both take their answer from it; production
+  behaviour is unchanged, since Neon is not a local host
+- `tests/gate_ci_path_ssl.js` stops a third file, and **discovers** its
+  subjects by reading what the e2e proofs actually shell out to rather than
+  carrying a list that would go stale the same silent way
+
+Extracting the rule surfaced a defect inside it: `URL.hostname` keeps the
+brackets on an IPv6 literal — `"[::1]"`, not `"::1"` — so the `::1` entry
+never matched and IPv6 loopback was still being told to use SSL. Found by
+checking the rule's answers one at a time instead of trusting that a list
+membership test did what it read like.
+
+The gate was made to fail three ways before being trusted, and passes 12/12
+restored.
+
+**Not reproduced locally.** This machine's Postgres has `ssl = on` and the
+sandbox refused both routes to a server without it. What is proven locally is
+the decision function on seven URLs, the gate's three falsifications, and the
+full suite green with loopback now resolving to `ssl: false`. CI is the
+falsifier for the other half.
