@@ -101,12 +101,48 @@ async function verifyExecutedLease(client, {
   document_version = 1,
   executed_at, effective_date = null, signers, execution_channel,
   verified_by_user_id,
+  //  (185) HOW this execution was verified. Defaults to the original path so
+  //  every existing caller is unchanged. 'spine_instrument' means Spine
+  //  witnessed both signatures on the instrument it holds, and then
+  //  verified_by_user_id is the AUTHORISED COMPANY SIGNER rather than an
+  //  attestor — a real person who performed the consequential act, not an
+  //  invented attestation. The database refuses the claim without its
+  //  lineage (ck_elr_spine_instrument_lineage).
+  verification_basis = "staff_attestation",
+  source_lease_packet_id = null,
   supersedes_record_id = null,
   idempotency_key = null,
 }, deps = {}) {
   if (!application_id) throw badRequest("application_id_required");
   if (!verified_by_user_id) throw badRequest("verified_by_user_id_required",
-    "Verification is an attested act by a real staff user.");
+    verification_basis === "spine_instrument"
+      ? "The authorised company signer is required — the human who executed the instrument."
+      : "Verification is an attested act by a real staff user.");
+  if (!["staff_attestation", "spine_instrument"].includes(String(verification_basis))) {
+    throw badRequest("verification_basis_unknown",
+      "verification_basis must be staff_attestation or spine_instrument.");
+  }
+  //  Refused HERE as well as in the schema so the caller gets a sentence
+  //  rather than a constraint name. The schema is still the authority.
+  if (verification_basis === "spine_instrument") {
+    if (!source_lease_packet_id) {
+      throw badRequest("spine_instrument_requires_packet",
+        "An in-Spine execution must name the lease packet it executed.");
+    }
+    if (!document_sha256) {
+      throw badRequest("spine_instrument_requires_hash",
+        "An in-Spine execution must carry the hash of the instrument that was signed.");
+    }
+    if (execution_channel !== "spine_esign") {
+      throw badRequest("spine_instrument_channel_mismatch",
+        "An in-Spine execution is channel 'spine_esign'; it must stay distinguishable "
+        + "from an execution imported from elsewhere.");
+    }
+  } else if (source_lease_packet_id) {
+    throw badRequest("attestation_cannot_claim_packet",
+      "A staff attestation describes an instrument executed elsewhere and has no Spine "
+      + "packet. Claiming one would invent lineage.");
+  }
 
   // ── the application, locked ──
   const app = (await client.query(
@@ -166,7 +202,11 @@ async function verifyExecutedLease(client, {
         "Each signer needs at least { name, capacity }.");
     }
   }
-  if (!["paper", "external_esign", "other"].includes(String(execution_channel))) {
+  //  (185) `spine_esign` joins the vocabulary here as well as in the schema.
+  //  Widening only the check constraint would leave this allowlist refusing a
+  //  channel the database accepts — a migration that appears to apply and
+  //  changes nothing at runtime.
+  if (!["paper", "external_esign", "spine_esign", "other"].includes(String(execution_channel))) {
     throw badRequest("execution_channel_invalid",
       "execution_channel must be paper | external_esign | other.");
   }
@@ -258,8 +298,9 @@ async function verifyExecutedLease(client, {
         document_reference, document_sha256, provider_name,
         provider_document_id, provider_version_id, document_version,
         executed_at, effective_date, signers, execution_channel,
-        verified_by_user_id, event_id, supersedes_record_id, idempotency_key)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+        verified_by_user_id, event_id, supersedes_record_id, idempotency_key,
+        verification_basis, source_lease_packet_id)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
      returning *`,
     [application_id, app.property_id, space_id,
      canonical.rent, canonical.security_deposit,
@@ -268,7 +309,8 @@ async function verifyExecutedLease(client, {
      document_reference, document_sha256, provider_name,
      provider_document_id, provider_version_id, document_version,
      executed_at, effective_date, JSON.stringify(signers), execution_channel,
-     verified_by_user_id, ev.id, supersedes_record_id || null, idempotency_key]
+     verified_by_user_id, ev.id, supersedes_record_id || null, idempotency_key,
+     verification_basis, source_lease_packet_id]
   )).rows[0];
 
   await client.query(
@@ -350,12 +392,22 @@ async function computeAdmissionBlockers(client, { application_id }) {
   };
 
   // ── 1. what the TENANT ACKNOWLEDGED — the primary baseline ──
-  // Prefer the confirmation bound to the SUBMITTED packet (what they
-  // actually saw) over the application's current pointer, which may
-  // have moved since acknowledgment.
+  // Prefer the confirmation bound to the packet the resident actually
+  // completed, over the application's current pointer, which may have
+  // moved since acknowledgment.
+  //
+  //  ⚠ THE STATE LIST, NOT status='submitted' ALONE (184). 'submitted' was a
+  //  proxy for "the resident finished this packet", and it was an exact one
+  //  while that was the furthest a packet could go. Migration 184 lets a
+  //  packet continue to 'resident_executed' and 'executed', so a packet the
+  //  resident completed no longer reads as 'submitted' — and this lookup
+  //  silently missed it, falling through to `no_acknowledged_terms` for every
+  //  in-Spine execution. The INTENT is unchanged; the state list now matches
+  //  the states that satisfy it.
   const pk = (await client.query(
     `select proposed_terms_confirmation_id from lease_packets
-      where application_id=$1 and status='submitted'
+      where application_id=$1
+        and status in ('submitted','resident_executed','executed')
       order by created_at desc limit 1`, [application_id])).rows[0];
   const confirmationId = (pk && pk.proposed_terms_confirmation_id)
     || app.proposed_terms_confirmation_id || null;

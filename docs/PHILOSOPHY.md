@@ -577,9 +577,12 @@ For every temporary component, answer:
 
 ```text
 What exact condition causes this to be removed?
+How will the system or release process notice when that condition becomes true?
 ```
 
 Convenience is not a replacement condition.
+
+**A removal condition without a mechanism that notices when it has become true is a promise, not a control.** For a Class 2 or Class 4 component, the replacement condition should have an executable gate where practical. Where a gate would be disproportionate, name the release or audit checkpoint that must re-evaluate it. A load-bearing temporary adapter may not become permanent merely because nobody remembered to reread its comment.
 
 ## 19. Live-First Operator Experience
 
@@ -953,17 +956,21 @@ Build one narrow, real, vertically complete slice at a time.
 The standard sequence is:
 
 ```text
-design discussion
-→ scope agreement
-→ inspect current source
-→ confirm current schema and runtime
-→ classify every component
-→ implement one canonical slice
+state the product intention
+→ inspect current source and relevant history
+→ run the existing path as far as it will go
+→ identify the first actual break
+→ confirm current schema and runtime around that break
+→ scope the smallest correction
+→ classify any new component
+→ implement through the existing canonical owner
 → prove against real Postgres
-→ prove through real HTTP
+→ prove through the real HTTP entry path
 → verify in the browser
 → preserve a run receipt or screenshot
 ```
+
+**When an existing path can be exercised, an observed first red outranks an inferred missing capability.** Do not design a replacement because a call site, route, column, or screen appears absent. Drive the path first. The running system may reveal that the capability exists one layer down and is merely unwired, stale, dormant, or blocked by a narrower defect.
 
 Do not build from stale handoffs.
 Do not treat old migration numbers as deployment authority.
@@ -1042,27 +1049,49 @@ the static page looks correct
 the fixture demonstration works
 ```
 
-The appropriate proof levels are:
+The proof ladder is explicit. A higher rung may rely on lower-rung evidence, but it may never be named as though the higher rung was observed:
 
 ```text
 Reported
-→ claimed in a handoff but not independently verified
+→ claimed in a handoff or receipt but not independently verified
 
 Locally exercised
-→ source inspection, fixture use, mock, or static test
+→ an isolated service, fixture, mock, static test, or local function behaves as expected
 
 Built but dormant
-→ code exists but no real path invokes it
+→ implementation exists, and may have passing tests, but no real application path invokes it
 
-Proven
-→ real database, real service, and real HTTP behavior with evidence
+Wired / reachable
+→ the actual application composition has a real entry path capable of invoking it
+
+HTTP proven
+→ the real entry door traverses the real server composition and real database with evidence
 
 Browser verified
-→ the actual user path was clicked and observed
+→ the actual user path was clicked and observed in a real browser
+
+Deployed
+→ the exact code and required schema exist in the deployed environment
+
+Production proven
+→ the deployed path itself was exercised and observed in production
 ```
 
-Do not call something live, deployed, or enforced without the corresponding evidence.
-For operator workflows, browser verification is part of completion.
+**A service-level harness cannot earn HTTP-proven status.** The proof must enter through the real application door that is supposed to call the service. A component with passing tests and no caller is *Built but dormant*, not working product behavior.
+
+Do not call something live, deployed, enforced, or production-proven without the corresponding evidence. For operator workflows, browser verification is part of completion. Deployment is not proof that the deployed path works; production proof requires observation there.
+
+### Prose is a claim, not proof
+
+Comments, module headers, handoffs, runbooks, paths, commands, and reproduction instructions describe intended reality. They are claims about the system, not an authority over its behavior.
+
+When prose is safety-critical, workflow-critical, or used to tell the next person how to reproduce a proof, verify it against executable behavior before relying on it. A named path must exist. A command must run. A removal condition must still describe the live mechanism. If prose and behavior disagree, the disagreement is itself a defect; do not choose whichever version is more convenient.
+
+### Read everywhere also means reconcile everywhere
+
+When several surfaces read the same governed concepts, Definition of Done includes a reconciliation proof across representative and hostile states. Compare governed concepts, not wording. A Person Card, operator review, standing projection, reporting read, and Ask Spine envelope may compress differently; they may not disagree about the underlying fact.
+
+A reconciliation gate must be falsified deliberately at least once before it is trusted. A green gate that has never been shown capable of going red is evidence of nothing more than a green run.
 
 ### A domain is not done until Ask Spine can read it
 
@@ -1113,23 +1142,28 @@ this paragraph being remembered (§40.11).
 When working on Property Spine:
 
 1. Read the governing doctrine before modifying product behavior.
-2. Inspect the current repository source rather than relying on stale copies or handoffs.
-3. Confirm the live schema and migration state before applying database changes.
-4. Preserve existing durable primitives unless direct evidence shows they are incorrect.
-5. Identify the single real-world fact the slice records.
-6. Find or define the one canonical service that owns that fact.
-7. Keep authentication, property authority, ownership, and attribution server-derived.
-8. Keep product behavior identical across production, Solo, Demo Building, and controlled QA.
-9. Never introduce fixture fallback into a signed-in operator workflow.
-10. Never create a Solo-specific business branch.
-11. Classify all temporary work and state the exact removal condition.
-12. Write the durable fact once and update boards, Person Cards, and reports through projections.
-13. Preserve append-only history and explicit corrections.
-14. Show uncertainty, absence, failure, and unassigned work honestly.
-15. Change one independently verifiable seam at a time.
-16. Prove the slice against real data and real HTTP behavior.
-17. Verify the final path in the browser.
-18. Report what is proven, what remains uncertain, and what should happen next without overstating completion.
+2. State the intended operator experience and the product boundary that must remain true.
+3. Inspect the current repository source **and relevant history** rather than relying on stale copies, handoffs, or conventional-industry assumptions.
+4. If an existing path can be exercised, **run it before designing**. Record the last green step and first actual red; observed failure outranks an inferred gap.
+5. Confirm the live schema and migration state before applying database changes. Do not infer a production ledger from filenames or memory.
+6. Preserve existing durable primitives unless direct evidence shows they are incorrect.
+7. Identify the single real-world fact the slice records and the one canonical service that owns that fact.
+8. Before adding a service, route, table, status, store, resolver, or workflow, prove why the existing owner cannot truthfully carry the need.
+9. Keep authentication, property authority, ownership, and attribution server-derived.
+10. Keep product behavior identical across production, Solo, Demo Building, and controlled QA.
+11. Never introduce fixture fallback into a signed-in operator workflow.
+12. Never create a Solo-specific business branch.
+13. Classify all temporary work, state the exact removal condition, and state how that condition will be noticed.
+14. Write the durable fact once and update boards, Person Cards, reports, and Ask Spine through governed reads/projections.
+15. Preserve append-only history and explicit corrections.
+16. Show uncertainty, absence, failure, and unassigned work honestly.
+17. Change one independently verifiable seam at a time; after each fix, rerun the same path rather than switching to a new theory.
+18. Prove reachability through the real application composition. Passing isolated tests do not prove the feature is callable.
+19. Prove the slice against real data and the real HTTP entry path, then verify the final user path in the browser.
+20. When multiple surfaces read the same concepts, reconcile them structurally and falsify the reconciliation test at least once.
+21. Verify critical comments, paths, commands, and reproduction instructions before publishing them to the next thread.
+22. Report proof levels separately: written, locally exercised, reachable, HTTP proven, browser verified, deployed, production proven.
+23. Report what remains uncertain without overstating completion. If production was not observed, say so plainly.
 
 ## 35. Final Standard
 
@@ -2132,3 +2166,122 @@ remembered to add to it cannot detect the omission it exists to prevent.
 This is doctrine's own lesson applied to itself: a rule that lives only in a
 document decays under schedule pressure, and *"we will wire it to the real path
 later"* is a stop-sign phrase (§32).
+
+## 41. Existing Mechanism First — Intent Before Gap
+
+Property Spine is now large enough that a missing live path, a retired writer,
+or an unfamiliar service is **not evidence that the product never solved the
+problem**. The repository contains product memory: current source, schema,
+migrations, tests, UI call sites, retired paths, and the history explaining why
+they changed.
+
+That memory must be used without letting history become current truth.
+
+```text
+CURRENT SOURCE + RUNTIME    what is true now
+REPOSITORY HISTORY          why we got here
+HANDOFFS + MEMORY            navigation aids, never authority over either
+```
+
+A mechanism may have been narrowed or retired because **one premise underneath
+it was wrong while the rest of the mechanism remained useful**. Treating
+"retired" as "rejected" can cause Spine to rebuild its own capability under a
+new name. Treating "I do not see the current call site" as "missing" can create
+a second canonical path beside one that already exists.
+
+The hard rule is:
+
+> **Never design from the gap outward until we have designed from product
+> intention inward.**
+
+Before proposing a meaningful build, recover this chain in plain English:
+
+```text
+INTENTION
+What should the person doing the work experience?
+What boundary of Property Spine must remain true?
+
+EXISTING MECHANISM
+What current source, schema, runtime, UI callers and tests already implement
+some or all of that experience?
+
+HISTORY
+What relevant mechanism existed before, and why was it changed, narrowed or
+retired?
+
+RUN
+If the path can be exercised, how far does the existing system actually run?
+What is the last green step and the first observed red?
+
+CLASSIFICATION
+Is what we found live, reachable, dormant, partial, deliberately retired,
+wrong, or genuinely missing?
+
+STOP REASON
+What evidence explains the stop? Distinguish an observed runtime break from an
+inferred absence that has not been exercised.
+
+PRESERVE
+Which durable primitives and canonical owners survive?
+
+ACTUAL MISSING PIECE
+Only now: what is the smallest correction or addition required to finish the
+intended operating path?
+```
+
+When the path can be exercised, **the first observed red outranks the inferred gap**. Do not keep designing outward from a theory after the running system has named a narrower failure. Fix the first real break inside its existing owner, rerun the same path, and continue until it works or reaches a genuine product, authority, legal, data, or infrastructure stop.
+
+This is **existing-mechanism-first**, not archaeology-first. The purpose of the
+search is to stop rebuilding what Spine already knows how to do. Once the chain
+can be stated as:
+
+```text
+intent → existing mechanism → observed stop → why it stops → what survives → actual missing piece
+```
+
+stop searching and continue the vertical build.
+
+### Product intention outranks implementation convenience
+
+A locally clean architecture can still be globally wrong for Property Spine.
+Before accepting a proposal, ask:
+
+```text
+Does this make a person leave Spine to do ordinary work?
+Does it ask them to re-enter a fact Spine already holds?
+Does it create another operating workflow or source of truth?
+Does Spine have to reconstruct the event afterward?
+Does it replace a durable primitive without evidence that the primitive is wrong?
+```
+
+Any `yes` is a stop sign requiring an explicit product ruling before build.
+
+This matters because conventional software is full of familiar answers to local
+problems: another portal, another provider console, another workflow system,
+another status mirror. Those answers can be technically mature and still
+recreate the exact seams Property Spine exists to collapse.
+
+**"Conventional software does it this way" is not evidence.** Familiarity is
+especially dangerous when it causes the implementation to drift away from the
+product's reason for existing.
+
+### The pre-build receipt
+
+From this point forward, a meaningful Property Spine build is not ready to hand
+to a developer until it can show:
+
+```text
+intent
+→ evidence of the current mechanism
+→ relevant history and the reason it changed
+→ observed run / first red when runnable
+→ classification of what exists
+→ exact stop reason
+→ primitives preserved
+→ smallest missing piece
+→ forbidden second path
+```
+
+The final line matters. Every build should name the parallel path it must **not**
+create. That is how the product protects itself from competent local decisions
+that slowly assemble a second operating system beside the first.

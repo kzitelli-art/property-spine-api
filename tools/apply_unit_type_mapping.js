@@ -40,22 +40,91 @@
 
 "use strict";
 const { Client } = require("pg");
+const { databaseSsl } = require("../src/shared/database_ssl");
 
-// THE APPROVED MAPPING. Distinctions are preserved, not normalised away:
-// furnished, den and bath-count variants are real leasing categories.
-const MAPPING = [
-  { code: "S.1UN_02", label: "Studio",            sort: 10, use: "residential" },
-  { code: "S.1FN_02", label: "Furnished Studio",  sort: 20, use: "residential" },
-  { code: "1.1UN_02", label: "1 Bed",             sort: 30, use: "residential" },
-  { code: "1.1FN_02", label: "Furnished 1 Bed",   sort: 40, use: "residential" },
-  { code: "1.1DN_02", label: "1 Bed + Den",       sort: 50, use: "residential" },
-  { code: "2.2UN_02", label: "2 Bed / 2 Bath",    sort: 60, use: "residential" },
-  { code: "3.2UN_02", label: "3 Bed / 2 Bath",    sort: 70, use: "residential" },
-  { code: "3.3UN_02", label: "3 Bed / 3 Bath",    sort: 80, use: "residential" },
-  { code: "comm",     label: "Commercial Space",  sort: 90, use: "commercial"  },
+//  ── RULINGS, ONE BLOCK PER PROPERTY VOCABULARY ───────────────────────
+//  This was a single module-level MAPPING for one property's floorplan
+//  codes. A second property with a different vocabulary could not be
+//  classified at all — the tool refused every code as unapproved, which
+//  was the right refusal and the wrong dead end.
+//
+//  The mapping IS the ruling record, so a second property gets a second
+//  ruling block with its own receipt and date, and neither can silently
+//  become the other. Selection is by COVERAGE, not by a flag: the tool
+//  picks the one ruling whose codes cover every code the property's source
+//  actually carries, refuses when none does (naming the unmapped codes, as
+//  before), and refuses when more than one does rather than guessing.
+const RULINGS = [
+  {
+    receipt: "reviewed_mapping_receipt_2026-07-27",
+    note: "Eight residential floorplan codes plus commercial. See header.",
+    //  This property's source codes ARE its canonical codes — that is how it
+    //  was approved and nothing here changes it. source_code is stated
+    //  explicitly so the two roles are visible even where they coincide.
+    codes: [
+      { source_code: "S.1UN_02", code: "S.1UN_02", label: "Studio",            sort: 10, use: "residential" },
+      { source_code: "S.1FN_02", code: "S.1FN_02", label: "Furnished Studio",  sort: 20, use: "residential" },
+      { source_code: "1.1UN_02", code: "1.1UN_02", label: "1 Bed",             sort: 30, use: "residential" },
+      { source_code: "1.1FN_02", code: "1.1FN_02", label: "Furnished 1 Bed",   sort: 40, use: "residential" },
+      { source_code: "1.1DN_02", code: "1.1DN_02", label: "1 Bed + Den",       sort: 50, use: "residential" },
+      { source_code: "2.2UN_02", code: "2.2UN_02", label: "2 Bed / 2 Bath",    sort: 60, use: "residential" },
+      { source_code: "3.2UN_02", code: "3.2UN_02", label: "3 Bed / 2 Bath",    sort: 70, use: "residential" },
+      { source_code: "3.3UN_02", code: "3.3UN_02", label: "3 Bed / 3 Bath",    sort: 80, use: "residential" },
+      { code: "comm",     label: "Commercial Space",  sort: 90, use: "commercial"  },
+    ],
+  },
+  {
+    //  ⚠ BASIS: OWNER STATEMENT. SOURCE CORROBORATION WAS RUN AND FAILED.
+    //
+    //  What the committed source DOES establish, and it is not nothing:
+    //    · the room grain — STU00016 carries Room1/Room2, STU00015 and
+    //      STU00017 carry Room1/Room2/Room3 — which is why the bed counts
+    //      reconcile to 112 / 36 / 12 exactly;
+    //    · is_commercial = false on every row, supporting `residential`;
+    //    · the April rent roll agrees, but only by repeating the SAME code.
+    //
+    //  What it does NOT establish, checked rather than assumed:
+    //    · units.bedrooms and units.bathrooms are NULL for all 72 units;
+    //    · square footage is null/0 throughout;
+    //    · the rent roll's column is literally "Unit/Room Type" and carries
+    //      the bare code with no expansion, legend or lookup anywhere;
+    //    · nothing separates STU00015 from STU00017. Both are three-room,
+    //      both non-commercial, both carrying market_rent 875 in sample rows.
+    //
+    //  So "1 Bath" vs "1.5 Bath" is the OWNER'S KNOWLEDGE, recorded as such.
+    //  It is not a derivation, and this file must not let a later reader
+    //  mistake it for one. If the distinction ever needs to be defended from
+    //  evidence, the evidence is not in the rent roll.
+    receipt: "skyline_owner_statement_2026-08-20_source_silent_on_bath_distinction",
+    note: "Skyline (1417 N 15th), bed-grained. Room grain corroborated by source; bath distinction is owner knowledge, not in the source.",
+    //  ── OUR VOCABULARY, NOT THE VENDOR'S ──────────────────────────
+    //  STU00015/16/17 are Yardi's "Unit/Room Type" strings. They are how the
+    //  SOURCE names a floorplan; they are not how Spine should. A canonical
+    //  identity inherited from an export is a vendor's opaque handle sitting
+    //  in the middle of our own vocabulary, and it becomes load-bearing the
+    //  moment anything reads or displays it.
+    //
+    //  So the two roles are separated: source_code is matched against
+    //  raw->>'unit_type' and is recorded as provenance in source_note; code
+    //  is ours and is what the rest of the system carries. Nothing is lost —
+    //  the line back to RentRoll07_1417.xlsx is explicit rather than implied
+    //  by a shared string.
+    //
+    //  SKYLINE IS PRICED PER BED, ALWAYS. 72 units are an inventory fact;
+    //  160 rentable positions are the economic unit, and no surface should
+    //  imply a per-unit price for this property.
+    codes: [
+      { source_code: "STU00016", code: "2BR",       label: "2 Bedroom",            sort: 10, use: "residential" },
+      { source_code: "STU00015", code: "3BR-1BA",   label: "3 Bedroom / 1 Bath",   sort: 20, use: "residential" },
+      { source_code: "STU00017", code: "3BR-1.5BA", label: "3 Bedroom / 1.5 Bath", sort: 30, use: "residential" },
+    ],
+  },
 ];
 
-const RECEIPT = "reviewed_mapping_receipt_2026-07-27";
+//  Chosen per run, below. Declared here so the rest of the file reads the
+//  same as it always did.
+let MAPPING = null;
+let RECEIPT = null;
 
 function arg(name) {
   const i = process.argv.indexOf(name);
@@ -69,10 +138,20 @@ function arg(name) {
   if (!process.env.DATABASE_URL) { console.error("Set DATABASE_URL."); process.exit(2); }
   if (!propertyId) { console.error("Set --property <uuid>."); process.exit(2); }
 
-  const c = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+  //  SSL COMES FROM THE ONE RULE, NOT FROM AN ASSUMPTION HERE.
+  //  This line read `ssl: { rejectUnauthorized: false }`, which is right
+  //  for Neon and for a developer machine whose Postgres has ssl = on, and
+  //  fatal against CI's postgres:16 container, which does not speak SSL at
+  //  all: "The server does not support SSL connections". Two e2e proofs
+  //  shell out to this tool, so both went red in CI while passing locally
+  //  — for four runs, on a defect that no local run could show.
+  const c = new Client({
+    connectionString: process.env.DATABASE_URL,
+    ssl: databaseSsl(process.env.DATABASE_URL),
+  });
   await c.connect();
 
-  console.log(`\n${apply ? "APPLYING" : "DRY RUN"} — classification receipt ${RECEIPT}`);
+  console.log(`\n${apply ? "APPLYING" : "DRY RUN"}`);
   console.log(`property ${propertyId}\n`);
 
   // ── what the source deterministically says, via the durable relationship ──
@@ -92,11 +171,29 @@ function arg(name) {
     byCode.get(r.code).push(r);
   }
 
-  const unknown = [...byCode.keys()].filter((k) => !MAPPING.some((m) => m.code === k));
-  if (unknown.length) {
-    console.error("REFUSING: source codes with no approved mapping: " + unknown.join(", "));
+  //  ── SELECT THE RULING BY COVERAGE, NEVER BY GUESS ────────────────
+  const present = [...byCode.keys()];
+  if (!present.length) {
+    console.error("REFUSING: no source row carries a 'unit_type' code for this property.");
     await c.end(); process.exit(1);
   }
+  const covering = RULINGS.filter((r) => present.every((k) => r.codes.some((m) => m.source_code === k)));
+  if (covering.length === 0) {
+    const near = RULINGS.map((r) => `${r.receipt}: missing ${present.filter((k) => !r.codes.some((m) => m.source_code === k)).join(", ")}`);
+    console.error("REFUSING: no approved ruling covers this property's source codes.");
+    console.error("  present: " + present.join(", "));
+    near.forEach((n) => console.error("  " + n));
+    await c.end(); process.exit(1);
+  }
+  if (covering.length > 1) {
+    console.error("REFUSING: more than one ruling covers these codes — ambiguous, and this tool does not guess.");
+    covering.forEach((r) => console.error("  " + r.receipt));
+    await c.end(); process.exit(1);
+  }
+  MAPPING = covering[0].codes;
+  RECEIPT = covering[0].receipt;
+  console.log(`ruling: ${RECEIPT}`);
+  console.log(`        ${covering[0].note}\n`);
 
   // A position claimed by two different codes is a conflict, not a mapping.
   const bySpace = new Map();
@@ -116,8 +213,8 @@ function arg(name) {
   const unmapped = allSpaces.filter((s) => !bySpace.has(s.id));
 
   for (const m of MAPPING) {
-    const rows = byCode.get(m.code) || [];
-    console.log(`  ${m.code.padEnd(10)} → ${m.label.padEnd(20)} ${String(rows.length).padStart(3)} positions   use_type=${m.use}`);
+    const rows = byCode.get(m.source_code) || [];
+    console.log(`  source ${m.source_code.padEnd(10)} → ${m.code.padEnd(10)} ${m.label.padEnd(22)} ${String(rows.length).padStart(3)} positions   use_type=${m.use}`);
   }
   console.log(`\n  positions with a deterministic code : ${bySpace.size}`);
   console.log(`  positions left "Not configured"      : ${unmapped.length}`
@@ -149,14 +246,19 @@ function arg(name) {
            set label = excluded.label, sort_order = excluded.sort_order,
                source_note = excluded.source_note, updated_at = now()
          returning id`,
-        [propertyId, m.code, m.label, m.sort, `${RECEIPT}: source code ${m.code}`, actor]);
-      typeIdByCode.set(m.code, r.rows[0].id);
+        [propertyId, m.code, m.label, m.sort,
+         //  PROVENANCE, EXPLICIT. The vendor's string lives here, where it is
+         //  a recorded origin, rather than in `code`, where it would be our
+         //  identity for a thing we did not name.
+         `${RECEIPT}: source code ${m.source_code}`, actor]);
+      //  keyed by SOURCE code — that is what the rows carry.
+      typeIdByCode.set(m.source_code, r.rows[0].id);
     }
 
     let assigned = 0, kinded = 0, used = 0;
     for (const [code, rows] of byCode) {
       const typeId = typeIdByCode.get(code);
-      const use = MAPPING.find((m) => m.code === code).use;
+      const use = MAPPING.find((m) => m.source_code === code).use;
       for (const row of rows) {
         const u = await c.query(
           `update units set unit_type_id=$1, unit_type_source=$2,

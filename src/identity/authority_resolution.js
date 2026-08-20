@@ -71,9 +71,21 @@ async function resolveAuthority(pool, { spec = {}, apply = false } = {}) {
   const person = person_id ? (await pool.query(
     `select id, name, email, phone, primary_phone_e164, lifecycle_status, source, created_at
        from persons where id = $1`, [person_id])).rows[0] || null : null;
+  //  ── A WITHDRAWN CONTEXT IS NOT A CONTEXT ────────────────────────
+  //  This read had no active_to filter, so a staff context that had been
+  //  CLOSED still satisfied both person_is_classified_staff and
+  //  person_entitled_to_property. Revoking someone's entitlement did not
+  //  revoke it for the purpose of granting them authority.
+  //
+  //  Found by falsification, not by review: a chain proof withdrew the
+  //  context it had just been granted and required the grantor to refuse
+  //  again. It did not. staffbridge — which OWNS this table — filters
+  //  `active_to is null` everywhere; this consumer did not, and the two
+  //  disagreed about who is staff.
   const staffCtx = person ? (await pool.query(
     `select id, context_type, property_id from person_contexts
-      where person_id = $1 and context_type = 'staff'`, [person.id])).rows : [];
+      where person_id = $1 and context_type = 'staff'
+        and active_to is null`, [person.id])).rows : [];
   const accountStaff = user && user.account_kind === "human_staff";
   push(check("person_is_classified_staff", !!person && staffCtx.length > 0 && accountStaff,
     !person ? "No such person."

@@ -429,7 +429,25 @@ const section = (s) => console.log("\n== " + s + " ==");
     "commercial pricing remains not applicable");
   ok(!JSON.stringify({ ...eff, proof: null }).includes("market_rent"), "legacy $0 never becomes an offer");
   const agentSrc = fs.readFileSync(path.join(REPO, "src/agent/agent.js"), "utf8");
-  ok(!/pricing_adapter|quotablePricing/.test(agentSrc), "no live agent path reads the governed adapter yet");
+  //  ── INVERTED 2026-08-20, DELIBERATELY ────────────────────────────
+  //  This asserted the OPPOSITE: that the live agent does NOT read the
+  //  governed adapter. That was an accurate description of a defect, pinned
+  //  as though it were an invariant.
+  //
+  //  The agent read units.market_rent — a legacy per-unit column with no
+  //  publish step, no version and no review between it and a prospect's
+  //  phone — and put it straight into the model's context. It had already
+  //  been wrong in production once: $237 off on unit 530, to nine real
+  //  people. While these four assertions stood, fixing that made the suite
+  //  red, so the tests were protecting the defect.
+  //
+  //  The rule that survives is the one that always mattered: the agent must
+  //  never read the LEGACY COLUMN. That is now asserted directly, which is
+  //  stronger than asserting the absence of the adapter — it forbids the
+  //  actual failure rather than one symptom of it.
+  ok(/quotablePricing/.test(agentSrc), "the live agent DOES reach the governed adapter");
+  ok(!/select[^;]*market_rent[^;]*from units/i.test(agentSrc),
+    "the live agent never selects the legacy units.market_rent column");
   const appHtml = fs.readFileSync(path.join(REPO, "../app/index.html"), "utf8");
   ok(/_rrSignedIn\(\)\) return \{ unit_types: \[\] \}/.test(appHtml),
     "no signed-in path reads the retired client store");

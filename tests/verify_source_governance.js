@@ -45,6 +45,13 @@ const fs = require("fs");
 const GATES = [
   { file: "gate_harness_isolation.js",
     what: "no new unguarded DATABASE_URL consumer; debt register accurate" },
+  //  Twice now a file has decided SSL for itself: server.js, which never
+  //  became healthy in CI, and tools/apply_unit_type_mapping.js, which took
+  //  CI red for four runs while the suite passed on every developer machine.
+  //  A local Postgres has ssl = on and CI's container does not, so this is
+  //  invisible everywhere except the one place it matters.
+  { file: "gate_ci_path_ssl.js",
+    what: "nothing on the CI path hardcodes SSL; the one rule still answers correctly" },
   { file: "gate_closure_boundary.js",
     what: "closure boundary" },
   { file: "gate_no_raw_bridge_joins.js",
@@ -140,6 +147,8 @@ const GATES = [
   //  Slice 2's primitive is PURE, which is why its whole edge-case surface
   //  runs here in milliseconds instead of behind a Postgres. The DB rung
   //  (interval_positions.db.js) proves the same states on 160 real beds.
+  { file: "application_space_grain.test.js",
+    what: "Application space grain (182): the bed is durable from the aim, whole-unit behaviour is unchanged, a bed is never guessed, and the refusal prose stays out of the deployed app's false branch" },
   { file: "interval_position_hostile.test.js",
     what: "Interval tenancy: closed-interval arithmetic, which rights count, honest refusals, and the line it does not cross" },
   { file: "meeting_evidence_ingress.test.js",

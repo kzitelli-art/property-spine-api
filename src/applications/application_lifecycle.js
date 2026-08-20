@@ -243,8 +243,13 @@ async function requireObligation(client, { obligationId, applicationId, type, st
 //     caller-controlled string ever reaches the SQL text: the column list is
 //     assembled from BIRTH_FIELDS, a module constant.
 // ════════════════════════════════════════════════════════════════════
+//  space_id joined this list at migration 182 — the exact rentable space the
+//  application is aimed at, durable from the aim rather than first appearing
+//  at the lease. It is OPTIONAL: an application may be born before a bed is
+//  settled, and null is the honest record of that (§5). What it may never be
+//  is a bed nobody chose, which is what deriveSpaceGrain below enforces.
 const BIRTH_FIELDS = Object.freeze([
-  "property_id", "unit_id", "person_id", "leasing_lead_id", "applicant_name",
+  "property_id", "unit_id", "space_id", "person_id", "leasing_lead_id", "applicant_name",
   "unit_label", "rent", "deposit", "guarantor_name", "captured", "source",
   "conversion_id",
 ]);
@@ -258,8 +263,59 @@ function normalizeCaptured(v) {
   try { return JSON.stringify(v); } catch (_) { return null; }
 }
 
-async function createSubmittedApplication(client, payload = {}) {
+// ── SPACE GRAIN AT BIRTH (182) ───────────────────────────────────────
+//  THE SERVER DERIVES THE PARENT FROM THE SPACE. It never lets a caller
+//  assert both independently and then trusts whichever it read first.
+//
+//    space present, unit absent      → unit derived from the space
+//    space present, unit agrees      → unchanged
+//    space present, unit disagrees   → REFUSED, named
+//    space absent                    → unchanged (permissive; bed not chosen)
+//
+//  The database trigger trg_lease_application_space_grain enforces the same
+//  three rules and is the real authority — it has to be, because more than one
+//  path writes. This function exists so the ordinary case fails with a sentence
+//  a person can act on instead of a raw constraint violation, and so unit_id is
+//  DERIVED rather than demanded. A guard here and a guard in Postgres are not
+//  duplication: one is a message, the other is the wall.
+async function deriveSpaceGrain(client, payload) {
+  if (payload.space_id == null) return payload;
+
+  const s = (await client.query(
+    `select s.id, s.unit_id, u.property_id
+       from spaces s join units u on u.id = s.unit_id
+      where s.id = $1`,
+    [payload.space_id]
+  )).rows[0];
+
+  if (!s) {
+    throw refuse("birth_space_unknown",
+      "That space does not exist, so an application cannot be aimed at it.");
+  }
+  if (payload.property_id != null && String(s.property_id) !== String(payload.property_id)) {
+    throw refuse("birth_space_property_mismatch",
+      "That space is not at this property.");
+  }
+  if (payload.unit_id != null && String(s.unit_id) !== String(payload.unit_id)) {
+    throw refuse("birth_space_unit_mismatch",
+      "The unit and the space disagree. An application is aimed at one space; "
+      + "its unit is derived from that space, never asserted beside it.");
+  }
+  // Derived, not demanded. A caller that knew only the bed gets the parent for free.
+  return { ...payload, unit_id: payload.unit_id != null ? payload.unit_id : s.unit_id };
+}
+
+async function createSubmittedApplication(client, rawPayload = {}) {
   assertClient(client);
+
+  // Unknown-key refusal runs FIRST, on the caller's own object, so a typo is
+  // still reported as a typo rather than surviving into the derived payload.
+  const unknownEarly = Object.keys(rawPayload).filter((k) => !BIRTH_FIELDS.includes(k));
+  if (unknownEarly.length) {
+    throw refuse("birth_payload_unknown_field",
+      `Unknown application field(s): ${unknownEarly.join(", ")}. Lifecycle columns are authored by this module, never supplied.`);
+  }
+  const payload = await deriveSpaceGrain(client, rawPayload);
 
   const unknown = Object.keys(payload).filter((k) => !BIRTH_FIELDS.includes(k));
   if (unknown.length) {
@@ -532,6 +588,9 @@ async function markTerminal(client, {
 }
 
 module.exports = {
+  //  (182) exported for the grain test — the same function birth uses, not a
+  //  reimplementation of it. A test that re-derives the rule proves the test.
+  deriveSpaceGrain,
   // read-only vocabulary
   STATUS, LADDER,
   SUBMISSION_REACHED, APPROVAL_REACHED, TERMINAL, TERMINAL_ORIGINS, ADMISSION_ORIGINS,

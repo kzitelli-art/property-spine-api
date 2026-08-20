@@ -124,9 +124,16 @@ app.set("trust proxy", 1); // Render = one proxy hop: makes req.ip the real clie
 
 // The database connection. DATABASE_URL is set as an environment variable
 // in Render — NEVER hardcoded here. Neon requires SSL.
+//
+//  ── SSL IS ON EVERYWHERE EXCEPT A LOCAL HOST ────────────────────────
+//  The rule used to live here as a private function, which meant nothing
+//  else could reach it — and a tool that needed the same rule hardcoded
+//  SSL instead and took CI red. It now lives in src/shared/database_ssl.js,
+//  once, with the full account of why. Behaviour here is unchanged.
+const { databaseSsl } = require("./src/shared/database_ssl");
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
+  ssl: databaseSsl(process.env.DATABASE_URL),
 });
 
 // ── READ AI WEBHOOK — raw bytes before JSON middleware ───────────────
@@ -282,13 +289,41 @@ const {
 
 
 // ── health: confirms server is up AND can reach the database ──
+//  ── WHAT EXACT CODE IS RUNNING ──────────────────────────────────────
+//  /health is where a person looks first, and it is the one door reachable
+//  without a session — which is precisely why the build identity belongs
+//  here. Until this question could be answered from the running
+//  application, `deployed` was an assumption: Render ships a build
+//  artifact with no .git, so `git rev-parse` on the box fails and nothing
+//  else stated the commit.
+//
+//  Only the SHORT sha and how it was resolved are exposed. That answers
+//  "is the running build the commit I think it is" without publishing
+//  more of the repository's shape than the question needs. When nothing
+//  identifies the build the field is null and `build_identified` is false
+//  — an honest blank, never a plausible-looking sha.
+const { buildIdentity } = require("./src/shared/build_identity");
 app.get("/health", async (_req, res) => {
+  const id = buildIdentity();
+  const build = {
+    build_identified: !!id.commit,
+    commit_short: id.short,
+    resolved_from: id.resolved_from,
+    started_at: id.started_at,
+  };
   try {
     const r = await pool.query("select now() as time");
-    res.json({ ok: true, db_time: r.rows[0].time });
+    res.json({ ok: true, db_time: r.rows[0].time, build });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: e.message, build });
   }
+});
+
+//  The full record — including the untruncated commit — behind the
+//  operator gate, for anyone reconciling a deployment against a branch.
+app.get("/operator/build", (_req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ build: buildIdentity() });
 });
 
 // ── create a property ──────────────────────────────────────────────
@@ -3182,7 +3217,12 @@ app.use("/", require("./src/surfaces/asset_management")({ pool, fileToText }));
 //  the operator session. No proposals, no confirmations, no writes, and the
 //  question is not recorded as a staff-agent message. It shares the authority
 //  seam above and nothing else.
-app.use("/", require("./src/agent/ask_spine")({ pool, anthropic }));
+app.use("/", require("./src/agent/ask_spine")({ pool, anthropic,
+  //  A THUNK, read at request time. Ask Spine mounts here; the
+  //  applications module is composed further down, so a value captured
+  //  now would be undefined forever. Same reason as the lease-packet
+  //  execution services above.
+  applicationsService: () => __applications && __applications._service })); 
 
 // ── MEETING EVIDENCE — governed capture binding/read surface ─────────
 //  The provider webhook is mounted above express.json(); these operator
@@ -3207,7 +3247,20 @@ app.use("/", require("./src/surfaces/unit_turn")({
 }));
 // applications module mounted lower (after the conversion + submission services exist,
 // so /approve can close the leasing_manager application_approval gate). See below.
-const __leasePackets = leasePacketsModule({ pool, satisfyObligation, completeObligation });
+const __leasePackets = leasePacketsModule({
+  pool, satisfyObligation, completeObligation,
+  staffSessions: require("./src/identity/staff_session_service"),
+  //  LATE-BOUND ON PURPOSE. This module mounts here, but the executed-lease
+  //  service and the tenancy anchor are composed ~230 lines below. A value
+  //  captured now would be undefined forever; a thunk reads them at request
+  //  time, after composition. The mount order is not disturbed — legacy and
+  //  operator doors still share this one packet service instance.
+  executionServices: () => ({
+    executedLease: __executedLease,
+    confirmTerm: __tenancyAnchor && __tenancyAnchor.confirmTermService,
+    spawnObligationFromEvent,
+  }),
+});
 app.use("/", __leasePackets); // ONE packet service instance; legacy + operator doors share _service
 // ── DOWN UNITS MODULE (isolated; same injection pattern) ──
 app.use("/", downUnitsModule({ pool, spawnObligationFromEvent }));

@@ -51,11 +51,43 @@ RENDER_SERVICE_ID=srv-...
 Every deploy runs:
 ```
 npm start
-  → prestart: node migrations/migrate.js   (runs any unapplied migrations)
+  → prestart: node migrations/migrate.js   (VERIFIES the schema — applies nothing)
   → node server.js                         (starts Express on port 3000)
 ```
 
-Migrations are idempotent — running them on a database that's already up to date is safe.
+**A DEPLOY DOES NOT MIGRATE.** This line used to read "runs any unapplied
+migrations", and that sentence was the single most dangerous one in this
+file: it describes the opposite of what the mechanism does, about the one
+mechanism that protects production.
+
+`prestart` is verify-only. If the build carries migrations the target
+database does not have, it **refuses to start** and exits non-zero:
+
+```
+✗ REFUSING TO START — the schema does not match this code.
+  6 migration(s) in this build are NOT applied to the target database
+  Ledger ceiling is 181. This code expects those migrations to exist.
+```
+
+The deploy then fails and the **previous instance keeps serving**. That is
+the guard working — but it means a pending schema change looks like a
+healthy system with a failed deploy, not like an outage. Read the deploy
+log, not the health check.
+
+Releasing schema is a separate, deliberate act:
+
+```bash
+MIGRATION_RELEASE=1 EXPECTED_LEDGER_CEILING=<what the ledger says> \
+  EXPECTED_SHA=<sha of the code being released> node migrations/migrate.js --apply
+```
+
+Because schema goes first and code second, the release command must run
+from somewhere that HAS the migration files. A host built from a commit
+that predates them does not have them, however current its credentials
+are — see `RELEASE_182_187_CEREMONY.md`.
+
+Applying is idempotent — releasing against a database already at that
+ceiling applies nothing and is safe.
 
 ---
 
@@ -77,7 +109,10 @@ Files are numbered `001`, `002`, ..., `090`, etc. The `schema_migrations` table 
 
 1. Create `migrations/NNN_description.sql` (next number in sequence)
 2. Write idempotent SQL (`IF NOT EXISTS`, `ON CONFLICT DO NOTHING`, etc.)
-3. Test locally, merge to `main`, then trigger the Render deploy — startup applies it
+3. Test locally and merge to `main`. Then RELEASE THE SCHEMA FIRST (startup
+   does not apply it — see "Startup sequence" above), and deploy the code
+   second. A deploy of code whose migrations are unreleased will refuse to
+   start, and the previous instance keeps serving.
 
 **Special case — `ALTER TYPE ... ADD VALUE`:** Postgres does not allow using a newly added enum value in the same transaction as an `INSERT` referencing it. Use a `DO $$ BEGIN ... EXCEPTION WHEN others THEN null; END $$;` block, then a separate `UPDATE` in the next statement. See `migrations/090_admin_users.sql` for the pattern.
 

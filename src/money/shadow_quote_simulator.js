@@ -16,10 +16,19 @@
 //  Nothing compared that number to anything before it was said. This is that
 //  comparison, run before a cutover rather than discovered after one.
 //
-//  The live side is modelled from units.market_rent and the approved fact
-//  set — the same two sources agent.js actually reads. It is a MODEL of the
-//  live path, not the live path itself, and it says so on every row, because
-//  claiming to have executed the live agent would overstate the proof.
+//  ── THE "LIVE" SIDE IS NOW HISTORY, AND SAYS SO ──────────────────────
+//  This side is modelled from units.market_rent and the approved fact set —
+//  the two sources agent.js read UNTIL 2026-08-20. On that date the agent
+//  was rewired to quote only through pricing_adapter.quotablePricing, and it
+//  reads market_rent on no prospect-facing path at all.
+//
+//  So this is a PRE-CUTOVER BASELINE, not a description of production. It is
+//  still the right thing to judge a proposed sheet against — it is what
+//  prospects were actually told — but a reader who takes it for current
+//  behaviour would be reading a claim about production that is false. Every
+//  row and the report note say which one it is. The field names still begin
+//  `live_` for the operator screen that consumes them; renaming that shape
+//  is a change to an API and is not smuggled into a pricing fix.
 // ════════════════════════════════════════════════════════════════════
 
 "use strict";
@@ -27,6 +36,14 @@
 const { effectivePropertyPricing } = require("./effective_pricing");
 const { moneyFactContradictions } = require("./money_fact_contradictions");
 const { quotablePricing } = require("../agent/pricing_adapter");
+
+//  Said once, exported, and read by economic_shadow.js too — the previous
+//  wording was duplicated in both files and so went stale in both.
+const PRE_CUTOVER_NOTE =
+  "It is not an execution of the live agent, and since the 2026-08-20 cutover it is not a " +
+  "description of the live agent either: agent.js quotes only through the governed pricing " +
+  "adapter and reads units.market_rent on no prospect-facing path. Read this side as the " +
+  "PRE-CUTOVER BASELINE — what prospects were told before — never as current behaviour.";
 
 const SCENARIOS = [
   { key: "each_governed_type", note: "Every governed residential unit type, new lease and renewal." },
@@ -39,9 +56,10 @@ const SCENARIOS = [
 ];
 
 /**
- * Model what the CURRENT live path would answer for a unit type. Reads the
- * same two sources agent.js reads today: units.market_rent (ordered ascending,
- * which is what surfaced unit 530) and the approved fact set.
+ * Model what the PRE-CUTOVER path answered for a unit type: units.market_rent
+ * ordered ascending (the ordering that surfaced unit 530) and the approved
+ * fact set. agent.js has read neither since 2026-08-20 — see this file's
+ * header. This is a baseline, not current behaviour.
  */
 async function liveAnswerForType(pool, property_id, unitTypeId) {
   const rows = (await pool.query(
@@ -141,7 +159,7 @@ async function shadowQuoteReport(pool, { property_id, proposed_picture = null } 
       scenario: "unclassified_position",
       unit_type: `unit ${unclassified.unit_number} (no governed type)`, intent: "new_lease",
       live_answer: null, live_source: "units.market_rent",
-      live_would_say: "The live path would quote this unit's own market_rent row if it were offerable.",
+      live_would_say: "Before the 2026-08-20 cutover this unit's own market_rent row would have been quoted if it were offerable.",
       governed_answer: null, governed_would_say: g.say, governed_refusal: g.reason,
       dollar_difference: null, refusal_difference: null,
       becomes_unavailable_after_cutover: false, unsupported_precision: null,
@@ -202,9 +220,8 @@ async function shadowQuoteReport(pool, { property_id, proposed_picture = null } 
       "no person or lead created", "no pricing row written",
     ],
     live_path_note:
-      "The live side is MODELLED from the two sources agent.js reads (units.market_rent ordered " +
-      "ascending, and the approved fact set). It is not an execution of the live agent, and no " +
-      "row here should be read as one.",
+      "The \"live\" side is MODELLED from units.market_rent (ordered ascending) and the approved " +
+      "fact set. " + PRE_CUTOVER_NOTE,
     scenarios: SCENARIOS,
     comparisons: all,
     summary: {
@@ -219,4 +236,5 @@ async function shadowQuoteReport(pool, { property_id, proposed_picture = null } 
   };
 }
 
-module.exports = { shadowQuoteReport, liveAnswerForType, SCENARIOS };
+module.exports = {
+  PRE_CUTOVER_NOTE, shadowQuoteReport, liveAnswerForType, SCENARIOS };

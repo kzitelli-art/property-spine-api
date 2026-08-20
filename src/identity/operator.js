@@ -2247,6 +2247,29 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   });
 
   // ══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════
+  //  GET /operator/leasing/standing — LEASING'S §40.6 STANDING PROJECTION
+  //  for one person at the session's property. Same read the Person Card
+  //  composes and the same one Ask Spine answers from, so a surface cannot
+  //  drift from the others by holding its own copy. Property is
+  //  SERVER-DERIVED; a client-supplied property is never honoured.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/leasing/standing", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const personId = req.query && req.query.person_id;
+    if (!personId) return res.status(400).json({ error: "person_id required" });
+    try {
+      const { readLeasingStanding } = require("../leasing/leasing_standing_read");
+      const standing = await readLeasingStanding(pool, {
+        person_id: personId, property_id: req.operator.property_id,
+        as_of: (req.query && req.query.as_of) || null,
+      }, { applicationsService });
+      return res.json({ leasing_standing: standing });
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
+    }
+  });
+
   // GET /operator/leasing/person-card — THE PERSON × PROPERTY CARD READ.
   //
   // The card is a LENS, not a table: it assembles attributed entries from
@@ -2560,11 +2583,21 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       let stage = "prospect";                     // default lifecycle read for a card
       try {
         const app = (await client.query(
-          `select id, status, unit_label, unit_id, applicant_name, captured,
-                  created_at, updated_at
-             from lease_applications
-            where person_id=$1 and property_id=$2
-            order by created_at desc limit 1`,
+          //  THE CARD NAMES WHAT WAS APPLIED FOR, INCLUDING THE BED.
+          //  `unit_label` on the application is not populated by the writers,
+          //  so the card rendered "Application submitted" with no unit at all;
+          //  and since 182 an application carries an exact space, which was
+          //  never read here. In a unit let by the bed, a card that shows the
+          //  unit and not the bed names the wrong thing. Both are joined from
+          //  the inventory rather than trusted from a denormalised column.
+          `select a.id, a.status, a.unit_label, a.unit_id, a.space_id,
+                  a.applicant_name, a.captured, a.created_at, a.updated_at,
+                  u.unit_number, s.space_label
+             from lease_applications a
+             left join units  u on u.id = a.unit_id
+             left join spaces s on s.id = a.space_id
+            where a.person_id=$1 and a.property_id=$2
+            order by a.created_at desc limit 1`,
           [personId, propertyId])).rows[0];
         if (app) {
           let cap = app.captured || {};
@@ -2578,7 +2611,8 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
             application_id: app.id,
             status: statusMap[app.status] || app.status || null,
             raw_status: app.status || null,
-            unit_label: app.unit_label || null,
+            unit_label: app.unit_label || app.unit_number || null,
+            space_label: app.space_label || null,
             submitted_at: app.created_at || null,
             // compact, reviewable facts only — pulled from captured, honest nulls
             intended_move_in: cap.desired_move_in || cap.move_in || null,
@@ -2601,9 +2635,11 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
             occurred_at: app.created_at, recorded_at: app.created_at,
             source: "application", verb: "submitted",
             actor: { id: null, name: app.applicant_name || (p.name || "Applicant"), kind: "person" },
-            summary: `Application submitted${app.unit_label ? ` — Unit ${app.unit_label}` : ""}`,
+            summary: `Application submitted${(app.unit_label || app.unit_number) ? ` — Unit ${app.unit_label || app.unit_number}` : ""}${app.space_label ? ` · ${app.space_label}` : ""}`,
             claim_strength: "proven",
-            detail: { application_id: app.id, status: app.status || null, unit_label: app.unit_label || null },
+            detail: { application_id: app.id, status: app.status || null,
+                      unit_label: app.unit_label || app.unit_number || null,
+                      space_label: app.space_label || null },
             supersedes: null,
           });
           // keep History in occurred_at order now that the application entry is in.
@@ -2663,6 +2699,31 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         if (rs && rs.stage) { stage = rs.stage; stage_basis = rs.basis; }
       } catch (_) { /* keep the inline stage — honest, just less specific */ }
 
+      // ── LEASING STANDING — the domain's own projection, not a second
+      //    opinion. The card previously showed a person who had SIGNED THE
+      //    LEASE exactly as it showed one who had not: same stage, same
+      //    application status, nothing about the instrument, the company
+      //    signature, the executed lease, or a blocked activation. This band
+      //    is leasing_standing_read composed in, so the card reports what
+      //    the domain already knows instead of re-deriving any of it.
+      //    Fail-soft: the card degrades to null rather than 500ing, and the
+      //    projection reports its own read failures inside `uncertainty`.
+      let leasing = null;
+      try {
+        const { readLeasingStanding } = require("../leasing/leasing_standing_read");
+        const st = await readLeasingStanding(client, { person_id: personId, property_id: propertyId },
+                                             { applicationsService });
+        leasing = {
+          target: st.target,
+          lease: st.lease,
+          tenancy: st.tenancy,
+          economics: st.economics,
+          next: st.next,
+          uncertainty: st.uncertainty,
+          settled: st.settled,
+        };
+      } catch (_) { /* honest null — the rest of the card is still true */ }
+
       return res.json({
         person: { id: p.id, name: p.name },
         property_id: propertyId,
@@ -2672,6 +2733,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
         stage_basis,                           // the evidence behind it, or null
         relationship: { vitals, recent_messages: recent, conversation_id: conversation ? conversation.id : null },
         application,                           // compact Application band, or null (honestly not applied yet)
+        leasing_standing: leasing,             // instrument, signatures, execution, tenancy, uncertainty
         next,                                  // empty array = honestly nothing pending
         history: entries,                      // occurred_at ASC; empty = honestly nothing yet
       });
@@ -3567,9 +3629,9 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   //
   //  The return shape keeps `offerable` so existing call sites are untouched;
   //  callers that want to explain the refusal read refusal_code/refusal_reason.
-  async function unitOfferableState(property_id, unit_id, q = pool) {
+  async function unitOfferableState(property_id, unit_id, q = pool, space_id = null) {
     return applicationTargetAuthority.resolveApplicationTarget(q, {
-      property_id, unit_id, require_offerable: true,
+      property_id, unit_id, space_id, require_offerable: true,
     });
   }
 
@@ -3671,7 +3733,11 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       return res.status(503).json({ error: "applicant_link_origin_not_configured",
         receipt: "APP_BASE_URL is not set. Refusing to create an invitation whose applicant link cannot be built." });
     }
-    const { prepare_obligation_id, unit_id, expires_at = null } = req.body || {};
+    //  (182) space_id is the operator's BED CHOICE. Optional: a whole-unit
+    //  property never sends one and the server derives the sole space exactly
+    //  as before. For a by-the-bed unit it is required, and the authority
+    //  refuses with space_choice_required when it is missing.
+    const { prepare_obligation_id, unit_id, space_id = null, expires_at = null } = req.body || {};
     if (!prepare_obligation_id) return res.status(400).json({ error: "prepare_obligation_id is required — prepare acts on the exact open commitment." });
     if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
     const client = await pool.connect();
@@ -3686,10 +3752,10 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       const gate = await applicationBirthGate(req, ob.person_id, client);
       if (!gate.ok) { await client.query("rollback"); return res.status(gate.status).json(gate); }
       const out = await applicationInvitations.prepareApplicationLinkForObligation(client, {
-        prepare_obligation_id, unit_id, expires_at,
+        prepare_obligation_id, unit_id, space_id, expires_at,
         actor_user_id: req.operator.id,
-        unitOfferable: async (c, { property_id, unit_id }) =>
-          unitOfferableState(property_id, unit_id, c),
+        unitOfferable: async (c, { property_id, unit_id, space_id }) =>
+          unitOfferableState(property_id, unit_id, c, space_id),
       });
       await client.query("commit");
       out.link = `${APPLICANT_ORIGIN}/t/application/${out.token}`;
@@ -3705,7 +3771,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
   router.post("/operator/leasing/application-invitations/send", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     if (!svcGuard(res, "dispatchPreparedLinkProvider")) return;
-    const { prepare_obligation_id, unit_id, expires_at = null, message_prefix = "" } = req.body || {};
+    const { prepare_obligation_id, unit_id, space_id = null, expires_at = null, message_prefix = "" } = req.body || {};
     if (!prepare_obligation_id) return res.status(400).json({ error: "prepare_obligation_id is required." });
     if (!unit_id) return res.status(400).json({ error: "A unit is required to send an application." });
     const client = await pool.connect();
@@ -3721,10 +3787,10 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       const gate = await applicationBirthGate(req, ob.person_id, client);
       if (!gate.ok) { await client.query("rollback"); return res.status(gate.status).json(gate); }
       prepared = await applicationInvitations.prepareApplicationLinkForObligation(client, {
-        prepare_obligation_id, unit_id, expires_at,
+        prepare_obligation_id, unit_id, space_id, expires_at,
         actor_user_id: req.operator.id,
-        unitOfferable: async (c, { property_id, unit_id }) =>
-          unitOfferableState(property_id, unit_id, c),
+        unitOfferable: async (c, { property_id, unit_id, space_id }) =>
+          unitOfferableState(property_id, unit_id, c, space_id),
       });
       await client.query("commit");
     } catch (e) {

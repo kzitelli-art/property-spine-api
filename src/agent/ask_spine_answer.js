@@ -62,6 +62,11 @@ const equityPositionRead = require("../asset/equity_position_read.js");
 const tenancyStandingRead = require("../tenancy/tenancy_position_read.js");
 const forwardRentRead = require("../leasing/forward_rent.js");
 const leasingCycleConfig = require("../leasing/leasing_cycle.js");
+//  ⚠ THE SAME PROJECTION THE PERSON CARD AND THE OPERATOR DOOR READ.
+//  Not an Ask-Spine copy of leasing truth: a second reader would mean a
+//  second place where entitlement, the four silences and the truth walls
+//  are implemented, and those diverge silently.
+const leasingStandingRead = require("../leasing/leasing_standing_read.js");
 
 const MODEL = process.env.ASK_SPINE_MODEL || "claude-opus-5";
 /*  THINKING AND THE ANSWER SHARE THIS CEILING. On this model family
@@ -135,7 +140,11 @@ const SUPPORTED_SCOPE =
   "what work is open and who has it, or whether a recorded Compliance item is " +
   "current and why, or this property's governed Utility setup, providers, account and meter map, " +
   "responsibility and recovery arrangement, statement history, known gaps, and " +
-  "same-account statement comparisons, or governed service providers, scope, price, term, " +
+  "same-account statement comparisons, or where one named person stands in leasing at this "
+  + "property — the exact space they are pursuing, what is currently being asked for it, "
+  + "whether they have signed the governing instrument and whether the company has, whether "
+  + "an executed lease exists, whether a tenancy is committed, and what is blocking it, or "
+  + "governed service providers, scope, price, term, " +
   "notice decisions, retained evidence, financial observations, and known contract gaps, or " +
   "this property's governed tenancy standing — how many rentable positions there are, how " +
   "many are occupied or open on a date, what is committed next, and what Spine does not know " +
@@ -206,6 +215,19 @@ const EQUITY_TERMS =
 //  make every such sentence look composed when it is only ambiguous.
 const TENANCY_TERMS =
   /\b(rent ?roll|occupanc(?:y|ies)|occupied|vacan(?:t|cy|cies)|leases?\b|leased|leasing|tenanc(?:y|ies)|residents?\b|move[- ]?(?:in|out)s?|beds?\b|who lives|how many (?:units|beds|positions|residents))\b/i;
+//  ⚠ A PERSON'S LEASING STANDING IS A DIFFERENT QUESTION FROM THE RENT
+//  ROLL'S. "How many beds are open" is Tenancy — a property-level count.
+//  "Which bed did Marisol apply for, and has she signed" is about ONE
+//  PERSON moving through leasing, and answering it from the rent roll
+//  would answer a different question confidently.
+//
+//  These two overlap heavily in vocabulary (bed, lease, leasing), so the
+//  tie-break is stated rather than left to regex order: a sentence with
+//  person-leasing vocabulary in it belongs to Leasing, and Tenancy yields
+//  — the same suppression rule already used for contracted_service and
+//  equity, and for the same reason: shared words, different domains.
+const LEASING_PERSON_TERMS =
+  /\b(appl(?:y|ie[sd]|ication|icant)s?|sign(?:s|ed|ing|ature|atures)?|countersign|execut(?:e[sd]?|ing|ion)|where is|where'?s|holding (?:this|it|things) up|what'?s holding|who (?:needs to|owns|has to)|committed yet|prospects?|toured?|packets?)\b/i;
 const DEBT_TERMS =
   /\b(debt (?:position|service)|mortgage(?: loan)?|loan (?:balance|maturity|payment|rate|terms?)|lender|servicer|principal balance|payoff (?:quote|amount)|interest rate|maturity date|extension option|debt-service reserve)\b/i;
 const EXPLICIT_WORK_TERMS =
@@ -239,10 +261,11 @@ function questionSubject(question) {
    *                                                       so the composition
    *                                                       guard must see both
    */
-  const tenancy = tenancyThing && !contractedService && !equity;
+  const leasingPerson = LEASING_PERSON_TERMS.test(text) && !contractedService && !equity && !debt;
+  const tenancy = tenancyThing && !contractedService && !equity && !leasingPerson;
   const work = EXPLICIT_WORK_TERMS.test(text)
-    && !contractedService && !equity && !debt && !tenancy;
-  if ([compliance, utility, contractedService, debt, equity, tenancy, work]
+    && !contractedService && !equity && !debt && !tenancy && !leasingPerson;
+  if ([compliance, utility, contractedService, debt, equity, tenancy, leasingPerson, work]
         .filter(Boolean).length > 1) {
     return "composition_unavailable";
   }
@@ -251,12 +274,24 @@ function questionSubject(question) {
   if (contractedService) return "contracted_service";
   if (debt) return "debt";
   if (equity) return "equity";
+  if (leasingPerson) return "leasing_person";
   if (tenancy) return "tenancy";
   return "work";
 }
 
 function withoutDatabaseIds(value) {
   if (Array.isArray(value)) return value.map(withoutDatabaseIds);
+  //  ⚠ A DATE IS AN OBJECT WITH NO OWN ENUMERABLE KEYS.
+  //  Recursing into one produced `{}` — so every timestamp a reader returned
+  //  as a Date rather than a string was SILENTLY DESTROYED on its way into
+  //  the model's context. In leasing that meant `resident_executed_at`, the
+  //  fact that proves a resident signed the lease, arrived as an empty
+  //  object: the Person Card said SIGNED and Ask Spine could not tell. This
+  //  is not leasing-specific — it applies to every domain whose reader hands
+  //  back a Date, and it fails in the worst direction, by removing evidence
+  //  while looking like it removed nothing. Found by reconciling the
+  //  surfaces against each other, not by any single one of them failing.
+  if (value instanceof Date) return isNaN(value) ? null : value.toISOString();
   if (!value || typeof value !== "object") return value;
   const clean = {};
   for (const [key, child] of Object.entries(value)) {
@@ -322,6 +357,11 @@ async function gatherFacts(db, {
   //  never a second reader built for Ask Spine.
   equityService = equityPositionService, equityRead = equityPositionRead,
   tenancyReader = tenancyStandingRead,
+  leasingReader = leasingStandingRead,
+  //  The canonical application lifecycle service. Accepted as a value OR a
+  //  thunk: ask_spine mounts in server.js ABOVE the applications module, so
+  //  a value captured at mount time would be undefined forever.
+  applicationsService = null,
 }) {
   const facts = {
     property_id,
@@ -534,6 +574,48 @@ async function gatherFacts(db, {
   //  property with no inventory reads standing.truth_state ===
   //  'NOT_ESTABLISHED'; a broken read reads read_state === 'READ_FAILED'.
   //  Neither is ever collapsed into the other, and neither is a zero.
+  // ── LEASING, AT THE GRAIN OF ONE PERSON ────────────────────────────
+  //  Entitlement FIRST, exactly as every other domain: no leasing fact
+  //  reaches the model's context without it. Then ADDRESSING — the
+  //  database decides which of this property's people the sentence names,
+  //  never the model — and only then the standing projection.
+  //
+  //  The four silences stay apart (§40.7). "Nobody by that name here",
+  //  "more than one person by that name", "the read failed" and "there is
+  //  nothing outstanding" are four different answers, and a surface that
+  //  collapses them answers confidently about the wrong human.
+  if (subject === "leasing_person"
+      && ((allowed_modules || []).includes("leasing")
+          || (allowed_modules || []).includes("management"))) {
+    try {
+      const subj = await leasingReader.resolveLeasingSubject(db, { property_id, text: question });
+      if (!subj.resolved) {
+        facts.leasing_person = {
+          read_state: subj.reason === "ambiguous" ? "AMBIGUOUS_SUBJECT" : "NO_SUBJECT",
+          //  Names, never database ids — the model must not be handed
+          //  identifiers it could echo into an answer.
+          candidates: (subj.candidates || []).map((c) => c.name),
+          note: subj.reason === "ambiguous"
+            ? "More than one person at this property matches that name. Spine will not guess which."
+            : "No person at this property matches a name in that question.",
+        };
+      } else {
+        const standing = await leasingReader.readLeasingStanding(db, {
+          person_id: subj.person.id, property_id,
+        }, { applicationsService: (typeof applicationsService === "function" ? applicationsService() : applicationsService) });
+        facts.leasing_person = withoutDatabaseIds({
+          ...standing, subject_name: subj.person.name, read_state: "OK",
+        });
+      }
+    } catch (e) {
+      failures.push({ domain: "leasing_person", detail: e.message });
+      facts.leasing_person = { read_state: "READ_FAILED", detail: e.message };
+    }
+  } else if (subject === "leasing_person") {
+    facts.leasing_person = { read_state: "NOT_AUTHORIZED",
+      note: "This session does not hold the leasing or management entitlement at this property." };
+  }
+
   if (subject === "tenancy"
       && ((allowed_modules || []).includes("leasing")
           || (allowed_modules || []).includes("management"))) {
@@ -846,7 +928,7 @@ function systemPrompt(subject = "work") {
 async function answer(db, anthropic, {
   property_id, allowed_modules, question, mintComplianceReference, complianceReader,
   utilityReader, contractedServiceReader, debtService, debtRead, equityService, equityRead,
-  tenancyReader,
+  tenancyReader, applicationsService,
 }) {
   if (!property_id) throw new Error("ask_spine.answer requires a server-derived property_id");
 
@@ -924,6 +1006,7 @@ async function answer(db, anthropic, {
     mintComplianceReference, complianceReader, utilityReader,
     contractedServiceReader, debtService, debtRead, equityService, equityRead,
     tenancyReader, question: q,
+    applicationsService,
   });
 
   let text = "";

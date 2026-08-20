@@ -21,6 +21,800 @@
 > not read its present tense as current.
 
 ## ══════════════════════════════════════════════════════════════════
+##  START HERE. LEASING IS FROZEN AND PROVEN LOCALLY. NOTHING IS
+##  DEPLOYED. 2026-08-19. Branch `claude/property-spine-orientation-cso2ao`.
+## ══════════════════════════════════════════════════════════════════
+
+**If you read one section, read this one.** Everything below it is history,
+newest first, and much of it predates the two overnights summarised here.
+
+### What is true now
+
+The leasing machine runs end to end against a real `server.js` and a real
+Postgres, and every leasing surface tells the same story about it.
+
+```text
+WRITE  lead → tour + outcome → application at an EXACT bed → governed price
+       → governing instrument → resident signs → company signs
+       → executed lease (spine_instrument / spine_esign) → pending tenancy
+
+READ   the same lifecycle reads coherently through Application Review, the
+       leasing standing read, the Person Card, Rent Roll / availability, and
+       Ask Spine's governed fact envelope
+```
+
+### Proof level — state these separately, never as one word
+
+```text
+Source      ✔  drift audit done; findings classified, not globally replaced
+DB          ✔  schema built from the real migration chain, ceiling 187
+HTTP        ✔  every step above, real server, real Postgres
+Browser     ◑  the RESIDENT signing page only. The operator shell is NOT
+               proven and was deliberately not forced — see "do not touch"
+CI          ✔  GREEN ON GITHUB — run 4, commit 4c88d7f, all twelve
+               proofs including the browser rung. Earned on the fourth
+               attempt; runs 1–3 each failed for a different real reason.
+Deployed    ✘  the build identity endpoint exists and works on a runner,
+               but has NOT been read from the Render runtime
+Production schema      ✔  OBSERVED, not inferred: ceiling 181, ledger
+               reconstructed to exactly 169 entries, six preflight checks
+               all 0. This is earned proof and must not be collapsed into
+               a blank.
+Production behaviour   ✘  no application path has been exercised there.
+               Nothing about how the deployed system BEHAVES is proven.
+Release     ◑  REHEARSED, NOT RELEASED. 182-187 applied to a database
+               held at production's exact position (ceiling 181, 169
+               entries), verifier green, both gates deliberately
+               falsified, and all five leasing proofs pass on the
+               UPGRADED schema. Production itself is untouched.
+```
+
+### Skyline activation: the pricing blocker is authority, not numbers
+
+`SKYLINE_ACTIVATION_PREREQUISITES.md` — written by asking the running
+system, not by reading source. The headline, from
+`GET /operator/pricing/authority`: **`properties_with_publish_authority: 0`**
+across every property, `grants_total: 0`, and the seeded operator denies
+with `session_identity_not_linked_to_a_person`. Handed the real Skyline
+rent sheet today, nobody could publish it. Also recorded there: publishing
+by *grant* requires two people while publishing by *assignment* does not —
+an open ruling nobody has made, adjacent to R2. And a proof gap: the e2e
+fixture publishes pricing with raw SQL, so the publish doors have never
+been exercised by any proof, on the one step that stands between the frozen
+leasing rail and a real lease.
+
+### The release's shape is now set by a measured fact
+
+**182–187 are runtime-compatible with the running old process and
+restart-incompatible with the old build.** Verified by running `main`'s own
+prestart against a database at 187 — it refuses, because its ledger check
+runs in both directions. The same build serves fine once already started.
+
+So the old build keeps working until something restarts it, and then never
+again; and reverting is blocked by the same guard. Schema-first-with-a-gap
+is therefore not an acceptable ceremony. The release now runs as a Render
+**pre-deploy gate** (`tools/release/predeploy_release_gate.js`), which
+removes the gap rather than shortening it. Recovery is forward-only by
+decision — no down-migrations.
+
+Blocked on three dashboard facts: paid vs Free, auto-deploy state, and
+pre-deploy availability. See `RELEASE_182_187_CEREMONY.md`.
+
+### The earlier framing: blocked on where, not on whether
+
+`main`'s migration ceiling is **181**. Migrations 182-187 exist only on
+this branch. The Render box has no `.git` (`git rev-parse` fails there) —
+it is a built artifact, so its `migrations/` holds exactly the files of
+the commit that built it. `npm run release:migrate` on that shell would
+therefore find nothing to apply.
+
+The order is NOT open: running the new build against schema 181 is
+refused by prestart, verified by running it. **Schema goes first**, and
+for this particular six that is safe under the code `main` is running —
+each of the six was checked against main's actual writers, not assumed
+from the DDL's shape. See `RELEASE_182_187_CEREMONY.md`, which now opens
+with the stop and the evidence.
+
+### Production, as read 19 August 2026
+
+```text
+ceiling 181 · 169 entries · complete (the 12 gaps are numbering skips)
+177–181 ARE RELEASED — the "unreleased landmines" note was wrong
+release set = exactly 182–187 · no collisions · preflight clean (6 × 0)
+
+pricing_terms  0     ← no governed pricing published AT ALL
+lease_packets  4     executed_lease_records 2     leases 834
+```
+
+834 tenancies against 4 packets: production's leases came from import, not
+from this rail. And with zero pricing terms the governed price step cannot
+resolve for any space, so releasing the schema is safe AND insufficient —
+the path will fail closed at economics until pricing is published, which
+is a business act rather than a deployment.
+
+### ⚠ THE DOMINANT RISK
+
+**Six migrations (182–187) and nine commits of proven work sit ahead of the
+deployed schema, and the live migration ledger has never been read from any
+recent thread.** Both Render hosts refuse the connection here and there is no
+`DATABASE_URL`. Migration 187's NUMBER is provisional for that reason.
+
+The next serious lane is **landing and activation, not more product**:
+establish the real ledger, reconcile 177–187 against it, get the Skyline
+config/form/legal rulings, release safely, then run the same suite against the
+real environment. Do not add leasing functionality first.
+
+### Reproduce it in one sitting
+
+```sh
+export E2E_DATABASE_URL=postgres://postgres:PASS@127.0.0.1:5432/spine_e2e
+# `createdb spine_e2e` prompts for a password wherever auth is required; use
+# the connection string, which is the same credential the rest of these use.
+psql "${E2E_DATABASE_URL%/*}/postgres" -c "create database spine_e2e"
+./tests/e2e/apply_migrations.sh                    # builds from the REAL chain
+psql "$E2E_DATABASE_URL" -f tests/e2e/property_fixture.sql   # the test property
+psql "$E2E_DATABASE_URL" -f tests/e2e/fixtures.sql           # pricing
+node tests/e2e/instrument_fixture.js
+./tests/e2e/boot.sh &                              # real server.js on :3000
+node tests/e2e/leasing_path.e2e.js                 # the clean path
+node tests/e2e/leasing_reconciliation.e2e.js       # THE DRIFT GATE
+node tests/e2e/leasing_hostile.e2e.js              # ten falsifications
+node tests/e2e/leasing_ask_spine.e2e.js
+node tests/e2e/resident_signing.browser.js         # needs Chromium
+node src/shared/proof_next_action_resolver.js      # 84-assertion oracle
+node tests/verify_source_governance.js             # 36 gates
+```
+
+Every line above was executed against a database created empty for the
+purpose — not checked for plausibility. The `createdb` form originally
+written here did not run, which is exactly what "a command must run" is for.
+
+### Landing — the tools that exist for it
+
+```sh
+node tests/e2e/release_reconcile.js                      # refuses without a ledger, exit 2
+node tests/e2e/release_reconcile.js --db "$READONLY_URL" # answers every column, exit 0
+./tests/e2e/release_rehearsal.sh 181 182,183,184,185,186,187
+```
+
+`release_reconcile` also emits the preflight query for every UNIQUE index,
+NOT NULL and CHECK in the range — the only three things that can refuse a
+migration against rows that already exist. Our schemas are built empty, so
+none of them are exercised locally. **Those queries must be run against
+production, and a green rehearsal with unrun preflight queries is not a
+release decision.**
+
+See `tests/e2e/README.md`. **The fixtures are fixtures** — invented pricing,
+an invented property lease configuration, and a stand-in governing lease body
+whose sha256 is a real hash of its own bytes. None of it is Skyline truth,
+production readiness, or legal sufficiency.
+
+### The one gate to keep green
+
+`tests/e2e/leasing_reconciliation.e2e.js` — five lifecycle states × four
+surfaces × nine governed concepts. It compares CONCEPTS, not prose, and fails
+when two surfaces answer the same question differently. **A disagreement is
+never fixed by adding logic to a surface**; it means one surface bypassed the
+owner of that concept, and the fix is to make it read the owner. It has been
+falsified twice and went red both times.
+
+### Do not touch
+
+```text
+· the operator shell's PRODUCTION_ORIGIN pin and the sign-in / staff-OTP path
+  — deliberate architecture, and owned by another thread
+· communication_lines, properties.sms_number, Twilio config, SMS_*/TWILIO_*
+· src/comms/communications_boundary.js, src/comms/tenantlink.js,
+  src/identity/teamaccess.js
+```
+
+### The systemic lesson from both overnights
+
+**This codebase produces unverified intent faster than it verifies it.** Every
+significant defect found was invisible in source and obvious the moment the
+path was run: a service with 24 passing tests and no caller; a tenancy writer
+inserting a column no migration ever created, so it had never once worked; a
+column read-first by design and created by nothing; a regression oracle
+throwing on `require` since a refactor, guarding nothing, silently. Related:
+comments here are load-bearing contracts, and at least one was stale — a guard
+was built on 034's stated meaning of `is_placeholder` and the live writer
+meant something else.
+
+Corollary, recorded as backlog G1 in `docs/ENGINEERING_GATE_BACKLOG.md`:
+*a test that is never invoked is functionally not a test.*
+
+### Open rulings — legal/product, not engineering
+
+```text
+R1  what makes an electronic signature legally sufficient here
+R2  who may bind the company (the code records who DID; it decides nothing)
+R3  the Skyline lease form of record — an external input, never authored here
+```
+
+---
+
+## ══════════════════════════════════════════════════════════════════
+##  SPINE'S OWN EXECUTED INSTRUMENT NOW REACHES CANONICAL TRUTH.
+##  MIGRATION 185 WRITTEN, NOT RELEASED. 2026-08-18. NOT DEPLOYED.
+## ══════════════════════════════════════════════════════════════════
+
+```text
+executed lease packet (034+184) → verifyExecutedLease (088) → admission
+   → clean: confirmTermService (the canonical tenancy writer), automatically
+   → blocked: the executed lease STANDS and the conflict is named
+```
+
+**No second architecture.** Both owners were already settled and neither was
+reopened: `executed_lease_service` is the one executed-lease record and
+admission engine, `tenancy_anchor_service.confirmTermService` is the one
+tenancy-anchor writer. `src/applications/spine_lease_execution.js` is an
+ADAPTER over both. The broad source-authority question stays closed.
+
+### Why it stopped, and what actually changed
+
+`verifyExecutedLease` required `verified_by_user_id` because *"Verification is
+an attested act by a real staff user."* Right when Spine RECEIVES an outside
+lease; wrong when Spine watched both parties sign the instrument it holds.
+
+**`verified_by_user_id` is neither faked nor dropped.** For the in-Spine path
+the verifier IS the authorised company signer — a real person who performed the
+consequential act. 185 adds `verification_basis` so the two acts can never read
+as the same claim, plus `source_lease_packet_id` lineage, and `spine_esign` as
+a channel rather than hiding a first-party execution under `other`.
+
+`ck_elr_spine_instrument_lineage` makes the basis and its evidence inseparable:
+a `spine_instrument` claim without a packet, a hash, and the `spine_esign`
+channel is refused, and a `staff_attestation` may not claim a packet.
+`uq_elr_source_lease_packet` gives one executed record per packet.
+
+### ⚠ THREE DEFECTS FOUND BY RUNNING IT, NOT BY READING IT
+
+```text
+1  185 first dropped `executed_lease_records_execution_channel_check`, a name
+   Postgres never generated — 088 declared it inline as
+   `executed_lease_channel_ck`. DROP … IF EXISTS succeeded silently, the new
+   permissive constraint was added beside the real one, and the real one kept
+   rejecting spine_esign. A migration that appears to apply and changes
+   nothing. Caught by inserting a spine_esign row and reading which
+   constraint actually fired.
+
+2  The service ALSO carried a JS-level channel allowlist
+   ["paper","external_esign","other"]. Widening only the schema would have
+   left the code refusing a channel the database accepts. Both now agree.
+
+3  ⚠ THE ONE THAT WOULD HAVE BLOCKED EVERY IN-SPINE EXECUTION.
+   computeAdmissionBlockers looked for the acknowledged terms on a packet with
+   `status='submitted'`. That was an EXACT proxy for "the resident finished
+   this packet" while 'submitted' was the furthest a packet could go. 184 lets
+   a packet continue to 'resident_executed' and 'executed', so the lookup
+   silently missed it and fell through to `no_acknowledged_terms` for every
+   in-Spine execution. The intent is unchanged; the state list now matches the
+   states that satisfy it.
+```
+
+### The ceremony that was removed
+
+The company signature is the human decision. On a clean admission the adapter
+invokes `confirmTermService` in the same governed workflow — no second
+"confirm term" click. Internally it still travels
+`executed → admitted → accepted_term_required → confirmTermService → pending
+lease anchor`; internal architecture may have intermediate states, it may not
+have a second human act.
+
+### Proven
+
+```text
+tests/spine_lease_execution.db.js   24/24   real Postgres 16
+  refuses: not-executed packet · no company signer · missing resident
+  signature · missing company signature · a DIFFERENT user recording someone
+  else's signature · no instrument hash
+  records: basis spine_instrument · channel spine_esign · packet lineage ·
+  document_sha256 == instrument_body_sha256 · verifier IS the signer · bed and
+  economics from the SIGNED packet, not a request body · both sides' signer
+  evidence with IP and session
+  chain:  clean admission invokes the canonical tenancy writer automatically,
+  with a server-derived confirmer · replay converges to ONE record · a paper
+  lease still verifies by staff attestation with no packet lineage
+npm run verify                      36/36
+app suite                           34 harnesses · 1435 passed
+```
+
+**What is real and what is not, said plainly.** `verifyExecutedLease` is the
+REAL service against a real database, and the obligation spawner is a REAL
+inserter of real `obligations` rows — so the admission engine and its lifecycle
+transition are genuinely exercised. `confirmTermService` is a RECORDING STUB:
+the production one is constructed in `server.js` with the obligation engine
+injected. So what is proven is that the adapter INVOKES the canonical writer
+with server-derived arguments on a clean admission and does NOT invoke it when
+blocked. That the writer then creates exactly one pending lease is that
+service's own proof, and an HTTP-level run through `server.js` is what closes
+the last link.
+
+### Still open, unchanged
+
+R1 legal sufficiency of the signature evidence · R2 who may BIND the company
+(the eventual company-sign route needs a real authority check; inspect existing
+authority primitives before inventing one) · R3 the Skyline form, which keeps
+`is_placeholder=false` unreachable on the real runtime.
+
+
+## ══════════════════════════════════════════════════════════════════
+##  ⚠ WITHDRAWN: THE EXTERNAL E-SIGN DIRECTION. 2026-08-18.
+##  READ BEFORE THE LEASE-BRIDGE BANNER BELOW, WHICH IT CORRECTS.
+## ══════════════════════════════════════════════════════════════════
+
+> **The Dropbox Sign/external-provider direction from the prior lease-bridge
+> banner is withdrawn. Property Spine owns the resident and company signing
+> workflow. Historical external-execution support may remain as an intake
+> capability, but it is not the primary new-leasing operating path.**
+
+Owner ruling. Nobody should have to leave Property Spine to complete the
+ordinary lease workflow. The target is:
+
+```text
+application → exact bed → governed economics → governing lease IN SPINE
+  → resident signs IN SPINE → company signs IN SPINE → executed lease truth
+  → tenancy
+```
+
+**Do not build** an external signing workflow, an external operator login, a
+provider account dependency, a provider webhook architecture, or a second
+document system. `executed_lease_service`'s `execution_channel` already admits
+`paper` and `external_esign`; those stay as INTAKE for leases executed
+elsewhere. They are not the new-leasing path.
+
+### The mechanism already exists, and one thing made it non-governing
+
+Migration 034 built it: packet versioning, `rendered_snapshot_hash`, tokenized
+resident access (`tenant_token_hash`, hashed, raw returned once), field-level
+`initial` / `signature` / `acknowledgment` capture, and per-field
+`session_id` / `ip_address` / `user_agent` / `clause_hash` audit evidence.
+
+What made it non-governing is named in its own schema:
+
+```text
+is_placeholder  boolean not null default true
+  "TRUE until a real lease template fills the body. The tenant UI renders a
+   loud placeholder banner while this is true. Generation refuses to pretend
+   otherwise."
+```
+
+There was no governing instrument, so there was nothing honest to sign. That
+is also exactly why `/applications/:id/sign` was retired — its own tombstone
+says *"There is no signature system today, so there is no honest thing for
+this route to record."* **That is a capability statement, not a statement that
+signing belongs outside Spine.** Recovering the mechanism is therefore
+consistent with the retirement, not a reversal of it.
+
+### The three structural limits to lift
+
+```text
+1  lease_packet_fields.signer_role  check (signer_role in ('tenant'))
+     — a company signer cannot exist at all today.
+2  lease_packets.status stops at 'submitted'
+     — "Activation is not a packet concept." True then; a company-execution
+       state is needed now.
+3  the counsel note: field metadata is "audit, not legal proof"
+     — WHAT EVIDENCE MAKES AN IN-SPINE ELECTRONIC SIGNATURE LEGALLY
+       SUFFICIENT IS A LEGAL/PRODUCT RULING, NOT AN ENGINEERING FACT.
+       Named here rather than guessed. See "open rulings" below.
+```
+
+### ⚠ THE ONE EXTERNAL INPUT — searched for, not assumed absent
+
+**The Skyline lease form of record is not in either repository or the session
+uploads.** Searched both repos and `/root/.claude/uploads` for lease-shaped
+`.pdf`/`.docx`/`.html`/`.txt` and for residential-lease language
+(`lessor`, `landlord and tenant agree`, `residential lease agreement`): the
+only hit is `src/applications/tenant_lease_packet.html`, which is the
+demonstration terms-review page and says so.
+
+Everything that does not require lease language is being built around it.
+`is_placeholder` cannot go false until the real form arrives, and the schema
+now refuses to execute a placeholder.
+
+### What migration 184 landed
+
+It EVOLVES 034; it replaces nothing. Every 034 primitive is untouched —
+versioning, `rendered_snapshot_hash`, `tenant_token_hash`, the field-level
+initial/signature/acknowledgment capture, session/IP/user-agent/clause-hash
+evidence, `lease_packet_documents`, `lease_packet_audit_events`.
+
+```text
+instrument identity      instrument_form_code · instrument_form_version ·
+                         instrument_body_sha256 · instrument_established_at
+                         — the FORM the body came from, which is a different
+                         fact from rendered_snapshot_hash (that hashes what
+                         was rendered, placeholder included)
+company signer may EXIST signer_role check widened tenant → tenant|guarantor|
+                         company. 034 allowed 'tenant' ONLY, so no company
+                         row was insertable at all. guarantor is admitted
+                         because 034's obligation vocabulary already names
+                         guarantor_signature.
+who signed               signed_by_user_id / signed_by_person_id — a durable
+                         identity, not a typed name
+execution states         'resident_executed' then 'executed', APPENDED to
+                         034's lifecycle. 'submitted' keeps its exact meaning.
+                         resident_executed_at · company_executed_at
+```
+
+**The guard is the point.** `trg_lease_packet_execution_guard` refuses, in
+Postgres:
+
+```text
+a placeholder cannot be executed                 (is_placeholder = true)
+an instrument with no identifying hash cannot    (a signature is a signature
+  be signed                                       ON something, and "the
+                                                  packet" is not specific
+                                                  enough when packets version)
+the company cannot sign before the resident      (the business's own wall,
+                                                  not a UI concern)
+```
+
+In the database rather than one writer, because more than one path will move
+a packet — the same reasoning as `trg_refuse_lease_on_retired_inventory`.
+That trigger is what converts 034's honest placeholder into an honest
+instrument: the mechanism no longer depends on a caller remembering the body
+is fake.
+
+Proven: `tests/governing_lease_execution.db.js` **15/15** against real
+Postgres 16, including that a placeholder can still be voided (034's
+lifecycle survives) and that an unknown signer role is still refused.
+
+### Open rulings — legal/product, not engineering
+
+```text
+R1  what evidence makes an in-Spine electronic signature legally sufficient
+    for a Pennsylvania residential lease — consent-to-electronic-business
+    record, signer authentication strength, tamper-evident sealing, the
+    retained audit trail, and what the resident must be shown and when
+R2  who is authorised to bind the company on a lease. Module entitlement
+    says who may OPERATE; it does not say who may BIND.
+R3  which addenda the Skyline form requires, and their jurisdiction triggers
+```
+
+
+## ══════════════════════════════════════════════════════════════════
+##  THE LEASE BRIDGE — FIRST LINK ONLY. 2026-08-18. NO DOCUMENT IS
+##  PRODUCED AND NO PROVIDER IS INTEGRATED. TWO EXTERNAL INPUTS BLOCK
+##  THE REST; THEY ARE NAMED BELOW AND ARE NOT ENGINEERING WORK.
+## ══════════════════════════════════════════════════════════════════
+
+`src/applications/governed_lease_terms.js` answers one question and writes
+nothing: **for this application, which fields of the governing lease can Spine
+supply from governed truth, and which are not established?**
+
+### The field list is not invented
+
+It is `executed_lease_service.verifyExecutedLease`'s own required input set,
+read backwards — `space_id · rent · security_deposit · lease_start_date ·
+lease_end_date · executed_at · signers · execution_channel`. Deriving the list
+from the destination is what stops the bridge growing a second idea of what a
+lease needs. The module states `produces_document: false` in its own output.
+
+### What it establishes, and what it refuses
+
+```text
+ESTABLISHED   the bed (182 lineage) · the resident (durable person) ·
+              the landlord (legal_entity_properties, relationship_type
+              'owner' matched EXACTLY) · term + start (operator selection) ·
+              end date (DERIVED from start + term, never asked twice) ·
+              rent/deposit/fees/concessions (via resolveSpaceEconomics)
+REFUSES       no bed aimed · no durable person · no owner entity ·
+              TWO owner entities (ambiguous, never first-row-wins) ·
+              term not selected (never defaulted to 12) · every pricing
+              refusal, carried through UNCHANGED so one fact keeps one
+              vocabulary
+NAMED, NOT OMITTED
+              required_addenda      — Spine has no model of which addenda a
+                                      jurisdiction or lease form requires
+              company_signer        — module entitlement says who may OPERATE;
+                                      it does not say who may BIND the company
+```
+
+An omitted field reads as "not needed". These are needed and absent, which is
+a different fact and the one the bridge must not paper over. `ready` is
+**computed** from the fields, never asserted.
+
+### ⚠ THE TWO EXTERNAL PREREQUISITES — not engineering
+
+```text
+1  THE SKYLINE LEASE FORM. Owned by the business/legal side. Spine supplies
+   VALUES for a form it never sees; a developer inventing lease language is
+   the confident-wrong this codebase refuses, at the altitude where it is
+   least recoverable. Until the form exists, `required_addenda` cannot be
+   modelled and the field map cannot be completed.
+2  DROPBOX SIGN. No account, no credentials, and outbound egress to external
+   hosts is blocked from this environment (verified: 403 at the CONNECT).
+   What the integration needs FROM the provider is already known — immutable
+   envelope/document id, per-signer identities and timestamps, the final
+   executed PDF, and an authenticated webhook — because
+   executed_lease_service already accepts exactly that shape via
+   `execution_channel: 'external_esign'`.
+```
+
+### The contract change step 3 will require
+
+`executed_lease_service` says *"Property Spine signs nothing. An authorized
+staff member ATTESTS that a governing lease exists."* Execution evidence enters
+today ONLY as a human attestation. The ruling is that Mike must not countersign
+and then separately click "verify this lease", so the service must admit
+**authenticated provider evidence as a peer source of execution truth** — not
+a faked attestation. That is a deliberate contract change, and it lands on the
+unresolved source-vocabulary question (`source_authority` vs
+`status_model.js`), because a webhook is the first execution-truth source that
+is not a human.
+
+### Proven
+
+```text
+tests/governed_lease_terms.db.js   24/24   real Postgres 16
+npm run verify                     36/36
+```
+
+⚠ **This block first said `37/37` and was wrong.** The number was typed from
+expectation rather than read from the runner. The two new harnesses are
+`.db.js` — they need a real database and are therefore correctly NOT on the
+source-governance chain, so the chain count did not move. Corrected against
+the runner's own output. The commit that introduced the error carries it in
+its message, which is immutable; this is the correction of record.
+
+**Both new proofs run separately**, per `docs/DB_HARNESS_ISOLATION.md`:
+
+```bash
+HARNESS_DATABASE_URL=postgres://…/spine_proof node tests/space_economics.db.js
+HARNESS_DATABASE_URL=postgres://…/spine_proof node tests/governed_lease_terms.db.js
+```
+
+
+## ══════════════════════════════════════════════════════════════════
+##  A BED NOW RESOLVES ITS OWN AUTHORIZED ASKING ECONOMICS.
+##  MIGRATION 183 IS WRITTEN AND NOT RELEASED. 2026-08-18. NOT DEPLOYED.
+##  NO SKYLINE PRICING HAS BEEN PUBLISHED — see "what is missing".
+## ══════════════════════════════════════════════════════════════════
+
+**Branch:** `claude/property-spine-orientation-cso2ao` (API). Follows the
+application-space-grain banner below; same lane.
+
+### The question this answers
+
+182 made an application carry an exact bed. This answers what immediately
+follows: *given THAT bed, what is Spine authorized to ask for it?*
+
+```text
+space → unit → units.unit_type_id → published version → pricing_terms
+                                     ↳ space override   (narrowest wins)
+                                     ↳ unit-type default
+```
+
+`resolveSpaceEconomics()` lives **inside `effective_pricing.js`** deliberately.
+That file is the permanent owner of advertised economics, and the override
+columns are read nowhere else in the repo. A resolver in another module would
+be a second thing that believes it knows the asking rent.
+
+### ⚠ THE DEFECT 183 CORRECTS — 101 CLOSED ITS OWN DOOR
+
+Migration 101 added `override_scope` / `override_ref` and said it was *"leaving
+room for overrides, without building them … it only avoids making them
+impossible."* In the same file it created:
+
+```sql
+uq_pricing_terms_version_type_term
+  on (pricing_version_id, unit_type_id, lease_term_months)
+```
+
+A space override **is** a second row for that combination — that is what
+override means — so the index made them impossible. Found by attempting a real
+by-the-bed override against real Postgres:
+
+```text
+duplicate key value violates unique constraint "uq_pricing_terms_version_type_term"
+```
+
+183 splits it into two partial indexes: **one default** per
+(version, type, term), **one override** per (version, type, term, scope, ref).
+101's rule is preserved, not weakened — a second *default* is still refused.
+A plain five-column unique index would NOT work: NULLs do not collide in
+Postgres, so every default row would become mutually unique and the default
+rule would silently stop being enforced.
+
+### Three governance facts the fixture had to obey
+
+Found by writing it, not by reading about it. All three shape how Skyline
+pricing gets activated:
+
+```text
+published terms are IMMUTABLE (102)   a bed override is a NEW VERSION, never
+                                      an edit to a live one
+one published version per property    uq_ppv_one_published — repricing retires
+                                      its predecessor
+statuses are draft|published|retired  there is no "amend"
+```
+
+### What is resolved, and what refuses
+
+```text
+RESOLVES   type default · space override (narrowest wins, siblings unmoved)
+REFUSES    no published version · unit type not established · type not
+           addressed · term not selected · term not published · not_offered ·
+           pricing_unavailable · row carries no rent · bed at another property ·
+           inventory-cohort override present (membership is not modelled, so it
+           is refused rather than skipped — skipping would answer with the type
+           default while a narrower authorised row existed)
+NEVER      units.market_rent · a sibling bed's price · a defaulted 12-month term
+```
+
+Deposit and the four fees come from `agent_facts`, which is the transitional
+owner and says so. `agent_facts` carries an optional `space_id`, so a bed-
+specific approved fact outranks the property-level one; both scopes are
+reported. `pricing_terms.fee_terms` is still NOT read as authority — two
+independently quotable fee values must never exist.
+
+Concessions honour `property` / `unit_type` / `unit` scope. `bed_type` is a
+declared scope with no bed-type model and is never assumed to apply. Only
+calendar-free concessions are advertisable; the timing engine still does not
+exist.
+
+### Proven
+
+```text
+tests/space_economics.db.js   19/19   real Postgres 16, Skyline-shaped fixture
+                                      (one 3-bed unit, three beds, one type)
+npm run verify                36/36
+```
+
+### ⚠ WHAT IS MISSING IS DATA, NOT ARCHITECTURE
+
+**Skyline has no published pricing version, and this session did not create
+one.** Publishing is a governed act — it needs a real publisher, a real
+`authority_basis`, and real rents that a human decided. Inventing them would
+be exactly the confident-wrong this rail exists to prevent, and
+`units.market_rent` is explicitly not a fallback.
+
+So the checkpoint *Jane → 3B Bed B → $1,025 → Send Application* is **blocked on
+a pricing decision, not on code.** What activation requires, in order:
+
+```text
+1  governed unit types exist for Skyline and every rentable position carries
+   one (units.unit_type_id) — unclassified positions resolve to
+   `unit_type_not_established` by design
+2  a human publishes a pricing version with a base_rent per (type, term)
+3  any bed that legitimately differs gets a `space` override row in that SAME
+   version — it cannot be added to a published one
+4  deposit + fee facts approved in agent_facts (property or per bed)
+```
+
+Steps 2–4 are decisions with dollar amounts on them. They are the owner's,
+not the developer's.
+
+
+## ══════════════════════════════════════════════════════════════════
+##  THE APPLICATION NOW FOLLOWS THE EXACT BED. MIGRATION 182 IS
+##  WRITTEN AND NOT RELEASED. 2026-08-18. NOT DEPLOYED.
+##  READ THIS BEFORE TOUCHING APPLICATIONS OR THE LEASE RAIL.
+## ══════════════════════════════════════════════════════════════════
+
+**Branch:** `claude/property-spine-orientation-cso2ao` (API). **App: unchanged
+— deliberately.** The new API works against the deployed app; see the contract
+note below. Migration **182**, chosen as the next free number after `main`'s
+181. **Read the ledger from the database before releasing it** — 177–181 are
+themselves unreleased (see the Skyline banner below), so the live ceiling is
+NOT 181 and this number may need to move forward.
+
+### What closed
+
+`application_invitations` and `lease_applications` were durably UNIT-grained.
+`leases.space_id` is NOT NULL and `executed_lease_service` REQUIRES a space, so
+the bed first entered the record at the LAST step, asserted by an operator from
+browser state, with no lineage back to what was applied for. One fact derived
+twice, nothing joining them.
+
+`application_target_authority.js` had already stated its own removal condition —
+*"A space choice cannot be offered unless the complete durable chain can
+preserve it"* — and refused every multi-space unit with a 409. Every Skyline
+unit is multi-bed, so **Skyline was structurally refused.** 182 gives the chain
+the ability, which is the condition that lifts the refusal. Nothing else lifts
+it: that file already rejects "pick the marketable one" as *"select the first
+marketable space wearing a different hat."*
+
+```text
+prospect → exact bed → invitation → application → lease → executed lease → tenancy
+                       space_id      space_id      NOT NULL   REQUIRED
+```
+
+### The five rulings frozen with this build
+
+```text
+1  The application carries the exact space FROM THE AIM, not from the lease.
+2  space_id is NULLABLE. Application access is permissive and a prospect may
+   apply before a bed is settled; NOT NULL would force an invented bed (§5).
+   The requirement belongs to lease generation, not to this column.
+3  The SERVER derives unit_id from the space. A caller may supply both; they
+   are checked against each other and a contradiction is REFUSED, never
+   silently resolved in favour of whichever was read first.
+4  Whole-unit behaviour is UNCHANGED — same server-side derivation, same
+   `sole_space_unit` basis. The only difference is that the derived value is
+   now written down instead of discarded.
+5  A bed is never guessed. A multi-space unit with no bed chosen still
+   refuses; the refusal changed MEANING (from "unsupported" to "unchosen"),
+   not existence.
+```
+
+### ⚠ THE REFUSAL SENTENCE IS A CONTRACT — PROSE, NOT ONLY CODES
+
+The deployed app branches on refusal **text**:
+
+```text
+/space_grain_not_supported|became_ambiguous|more than one rentable space|not supported for this unit/
+  → "Individual-space application links are not supported for this unit yet."
+```
+
+That sentence is **false after 182**. So:
+
+- `space_grain_not_supported` is **retained and no longer emitted.** It stays
+  defined because the deployed app and an app harness both match it (Open
+  Ruling 2 — the app leads, the API may not break it alone).
+  **Removal condition:** no deployed app matches the token.
+- The new `space_choice_required` sentence deliberately avoids every fragment
+  of that regex, so an old app shows it verbatim (plain, but true) rather than
+  confidently saying something untrue.
+- `application_space_grain.test.js` runs **the app's own regex** against the new
+  sentences, so the API cannot drift back into the false branch.
+
+Do not reword those sentences toward the old phrasing without moving the app
+first.
+
+### What is built and proven
+
+```text
+migration 182 (2 columns, 1 trigger fn, 2 triggers)  WRITTEN — not released
+  applied to a disposable local Postgres 16 and FALSIFIED 8 ways, including
+  the UPDATE path: cross-property bed, wrong-unit bed, nonexistent bed all
+  refused with named messages; null bed and derivable bed accepted.
+grain authority        src/applications/application_target_authority.js
+  resolveGrain() EXTRACTED and exported, mirroring evaluateOfferability's
+  existing "isolated so it can be proven directly" treatment.
+birth door             application_lifecycle.js — space_id in BIRTH_FIELDS,
+  deriveSpaceGrain() derives the parent and refuses a contradiction.
+lineage link           applicationSubmission.js — the invitation's bed becomes
+  the application's bed at consume. Without that line the aim is recorded at
+  the invitation and lost at the application, which is the gap itself.
+operator doors         both prepare routes carry the operator's bed choice.
+tests/application_space_grain.test.js   24/24, ON the governance chain
+  FALSIFIED THREE WAYS: whole-unit basis drift → RED; guessing an unchosen
+  bed → RED; refusal prose drifting into the app's false branch → RED.
+npm run verify                          36/36 gates (was 35)
+property-spine-app suite                34 harnesses · 1435 passed · 0 failed
+                                        UNCHANGED — no app edit was needed
+```
+
+### NOT done, and why
+
+```text
+NOT  a bed picker in the operator UI. That is the operator-experience build,
+     and the API is deliberately usable by the deployed app without it.
+NOT  browser verification. Blocked upstream: Skyline's canonical read still
+     returns 391 positions against 160 real beds until migration 180 is
+     released, and aiming an application at a bed is exactly what must not be
+     proven against ambiguous inventory. Code is not blocked; PROOF is.
+NOT  backfill of historical rows. A unit may have GAINED a space since;
+     backfilling would assert today's sole space as a bed nobody stated.
+     Historical rows keep null and read as "not recorded", which is true.
+NOT  the lease-generation precondition ("a governing lease requires a bed").
+     It belongs to the lease-execution rail, not to this column.
+```
+
+### One thing this build deliberately did not copy
+
+Five historical migrations (076, 077, 079, 083, 084) insert their **own**
+`schema_migrations` row. The runner also records every file it applies, so on
+a fresh build the two collide on `schema_migrations_pkey` and the runner then
+prints *"FAILED — rolled back. Nothing from this file was applied"* for a file
+whose objects were in fact created. Measured, not inferred. **182 does not
+self-record.** Do not copy that pattern forward.
+
+
+## ══════════════════════════════════════════════════════════════════
 ##  ⚠ SKYLINE HOLDS TWO INVENTORY REPRESENTATIONS. EVERY CANONICAL
 ##  TENANCY READ OF IT RETURNS 391 POSITIONS AGAINST 160 REAL BEDS.
 ##  MIGRATION 180 IS WRITTEN AND NOT RELEASED. 2026-08-17.

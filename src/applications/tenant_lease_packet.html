@@ -265,7 +265,12 @@
       document.getElementById('progressText').textContent=`${done.length} / ${req.length}`;
       document.getElementById('meter').style.width=pct+'%';
       document.getElementById('todos').innerHTML=req.map(f=>`<div class="todo ${f.completed?'done':''}" data-jump="${esc(f.id)}"><i class="dot"></i><b>${esc(f.label)}</b><span>${f.completed?'done':'open'}</span></div>`).join('');
-      const submitted = packet.status==='submitted';
+      // A packet whose property carries a governing instrument comes to rest
+      // in 'resident_executed' (184), not 'submitted'. Reading only the old
+      // name left the button live on a packet the resident had already
+      // signed, inviting a second submit. Found in a browser, not in source.
+      const submitted = packet.status==='submitted'
+        || packet.status==='resident_executed' || packet.status==='executed';
       document.getElementById('submitBtn').disabled = done.length!==req.length || submitted;
       if(submitted) showSubmitted();
     }

@@ -12,6 +12,38 @@
 //   orgchart.register(app, { pool });
 // ============================================================
 
+//  ── THE AUTHORITY-BEARING ROLES ARE NOT THIS MODULE'S TO CONFER ──────
+//  Imported, never re-listed. A copied set is a second definition that
+//  drifts the day the first one changes, and this module refusing a role
+//  the pricing resolver still honours would be worse than not refusing.
+const { FULL_AUTHORITY_ROLES } = require('../money/pricing_authority.js');
+
+//  Why these are refused here at all: `owner` and `asset_manager` confer
+//  may_prepare / may_review / may_publish pricing through
+//  pricingAuthority, which reads `assignments` directly and never consults
+//  person_contexts. This route wrote exactly that row behind the shared
+//  OPERATOR_KEY, with no person-level check and NO ACTOR RECORDED — its
+//  provenance says only whether caps were confirmed or assumed.
+//
+//  Measured, not argued: on a disposable database, a person the governed
+//  grantor refused (blocking person_is_classified_staff,
+//  person_entitled_to_property, person_is_not_a_counterparty) received
+//  may_publish_pricing = true the moment this INSERT shape ran.
+//
+//  So the consequential write goes to the canonical resolver
+//  (src/identity/authority_resolution.js) and this route fails closed for
+//  those two roles. The org chart keeps every non-authority role it always
+//  had; nothing else about it changes, and no second governed
+//  implementation is created here.
+const AUTHORITY_REFUSAL = (role) => ({
+  error: 'authority_bearing_role_not_conferrable_here',
+  receipt: `'${role}' confers pricing authority and cannot be created from the org chart. ` +
+           `It is granted through the governed resolver, which requires a classified staff ` +
+           `person, an entitling staff context at this property, and a named reviewer — ` +
+           `none of which this route can establish.`,
+  canonical_owner: 'src/identity/authority_resolution.js  resolveAuthority()',
+});
+
 // ---- fixed role vocabulary (regional_manager OUT for v1) ----------
 const ROLES = ['property_manager','maintenance','leasing','bookkeeper','asset_manager','owner','reporting','capital'];
 const SCOPES = ['all','maintenance','leasing','accounting','management'];
@@ -46,6 +78,9 @@ function orgchart({ pool }) {
     if (!person_id) return res.status(400).json({ error: 'person_id required' });
     if (!ROLES.includes(role)) {
       return res.status(400).json({ error: 'invalid role', allowed: ROLES });
+    }
+    if (FULL_AUTHORITY_ROLES.has(role)) {
+      return res.status(409).json(AUTHORITY_REFUSAL(role));
     }
 
     const d = ROLE_DEFAULTS[role];
@@ -194,6 +229,9 @@ function orgchart({ pool }) {
       if (!ROLES.includes(req.body.role)) {
         return res.status(400).json({ error: 'invalid role', allowed: ROLES });
       }
+      if (FULL_AUTHORITY_ROLES.has(req.body.role)) {
+        return res.status(409).json(AUTHORITY_REFUSAL(req.body.role));
+      }
       set('role', req.body.role);
     }
     if (req.body.scope !== undefined) {
@@ -207,6 +245,19 @@ function orgchart({ pool }) {
     if (req.body.is_active !== undefined)    set('is_active', !!req.body.is_active);
 
     try {
+      //  ── AN EXISTING AUTHORITY ROW IS NOT EDITABLE FROM HERE EITHER ──
+      //  Guarding only req.body.role would leave the larger hole open:
+      //  a deactivated asset_manager row could be handed straight back its
+      //  authority with { "is_active": true } and no role in the body at
+      //  all. pricingAuthority reads `where is_active = true`, so that
+      //  single flag is the whole grant. Read what the row IS, not just
+      //  what the request says.
+      const existing = await pool.query('SELECT role FROM assignments WHERE id = $1', [id]);
+      if (existing.rowCount === 0) return res.status(404).json({ error: 'assignment not found' });
+      if (FULL_AUTHORITY_ROLES.has(existing.rows[0].role)) {
+        return res.status(409).json(AUTHORITY_REFUSAL(existing.rows[0].role));
+      }
+
       // escalation change: must point at an assignment at the same property
       if (req.body.escalates_to_assignment_id !== undefined) {
         const target = req.body.escalates_to_assignment_id;

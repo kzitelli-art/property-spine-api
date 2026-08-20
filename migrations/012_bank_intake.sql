@@ -40,6 +40,24 @@ create table if not exists vendors (
                        'utility','insurance','lender','bank','software','merchant','unknown')),
   created_at      timestamptz not null default now()
 );
+--  ⚠ TWO DOMAINS CLAIMED THE NAME `vendors`, AND `if not exists` HID IT.
+--  001_baseline already creates a MAINTENANCE vendor
+--  (id, name, trade, phone, email, preferred, insurance_status, note).
+--  The `create table if not exists` above is therefore a SILENT NO-OP on any
+--  database that ran 001 — the payee columns are never created — and the
+--  index below then fails with `column "yardi_code" does not exist`,
+--  stopping EVERY from-scratch build at this file. Measured, not inferred.
+--
+--  Fixed additively rather than by renaming either table: these three columns
+--  are exactly what the declaration above intended, they are `if not exists`
+--  so a database where 012 genuinely created the table is untouched, and no
+--  data is read, written or moved. Whether the two `vendors` concepts should
+--  eventually be separated is a real question and deliberately NOT answered
+--  here — this only stops the chain being unbuildable.
+alter table vendors add column if not exists canonical_name text;
+alter table vendors add column if not exists yardi_code     text;
+alter table vendors add column if not exists vendor_type    text not null default 'vendor';
+
 create unique index if not exists uq_vendors_yardi_code
   on vendors (yardi_code) where yardi_code is not null;
 create unique index if not exists uq_vendors_name_nocode

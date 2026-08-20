@@ -1,0 +1,119 @@
+# ════════════════════════════════════════════════════════════════════
+#  The proofs that already matter, made unavoidable.
+#
+#  This workflow deliberately contains NO test logic. It provisions a
+#  database and calls tests/e2e/verify_all.sh — the SAME file a developer
+#  runs locally. A pipeline that lists the steps itself drifts from what a
+#  person runs, and then "green in CI" and "green on my machine" stop
+#  meaning the same thing.
+#
+#  It exists because this repository has repeatedly accumulated intent
+#  faster than executable proof: a service with passing tests and no
+#  caller, a writer inserting a column no migration created, a regression
+#  oracle that threw on import for months while guarding nothing. Every
+#  one was invisible in source and obvious the moment something ran.
+# ════════════════════════════════════════════════════════════════════
+name: verify
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: spineproof
+          POSTGRES_USER: postgres
+        ports: ["5432:5432"]
+        #  `-U postgres`: the health check runs as root inside the container
+        #  and there is no `root` role, so a bare `pg_isready` logged FATAL
+        #  every ten seconds for the whole job. The comment lives HERE, above
+        #  the key — inside the `>-` block below a `#` is literal text and
+        #  would be handed to docker as part of the options string.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      E2E_DATABASE_URL: postgres://postgres:spineproof@127.0.0.1:5432/spine_verify
+
+    steps:
+      #  FULL HISTORY, NOT A SHALLOW CLONE.
+      #  conversation_intent_extraction.test.js proves a boundary against a
+      #  specific historical commit (`git show 1454330:...`). With GitHub's
+      #  default fetch-depth of 1 that read fails, and the test does the
+      #  RIGHT thing — it reports the check NOT PROVEN and exits 3 rather
+      #  than assuming it away. Shallow history was the defect; the test was
+      #  not. Giving CI the history it needs strengthens the proof; skipping
+      #  the check would have weakened it.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      #  ── DO NOT REACH FOR THE NETWORK IF THE TOOL IS ALREADY HERE ──────
+      #  This step used to be an unconditional `apt-get update && install`.
+      #  On 19 Aug 2026 it hung on two independent runners; the job's
+      #  30-minute timeout fired at 29.8 minutes and EVERY proof was
+      #  skipped. Two commits learned nothing, and the failure had nothing
+      #  to do with the code.
+      #
+      #  The GitHub runner image already ships psql. So: use it, and only
+      #  fall back to apt when it is genuinely absent — bounded by a hard
+      #  timeout so this step can never again consume the job. A red here
+      #  is fine and informative; a 30-minute hang is neither.
+      - name: Ensure psql client
+        run: |
+          if command -v psql >/dev/null 2>&1; then
+            echo "psql already present: $(psql --version)"
+            exit 0
+          fi
+          echo "psql not on the image — falling back to apt (bounded)"
+          timeout 300 sudo apt-get -o Acquire::Retries=3 \
+            -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 update
+          timeout 300 sudo apt-get -o Acquire::Retries=3 install -y postgresql-client
+          psql --version
+
+      #  The browser rung RUNS in CI rather than being skipped. A rung that
+      #  is always skipped is a rung nobody has, and the resident signing
+      #  page is the one surface real people touch unauthenticated.
+      #  `--with-deps` is ALSO apt, so it can hang exactly the same way — and
+      #  fixing only the step above would have moved the hang rather than
+      #  removed it. The browser and its OS libraries are fetched inside a
+      #  bounded window; if that window is exceeded the step fails fast and
+      #  verify_all reports the browser rung honestly instead of the job
+      #  dying with every proof unrun.
+      - name: Install Chromium for the browser rung
+        run: timeout 600 npx playwright install --with-deps chromium
+
+      - name: Locate Chromium
+        run: echo "CHROMIUM=$(find ~/.cache/ms-playwright -name chrome -type f | head -1)" >> "$GITHUB_ENV"
+
+      - name: Run every proof
+        run: ./tests/e2e/verify_all.sh
+
+      #  Retained whether the run passed or failed — a failed run's logs are
+      #  the ones worth reading.
+      - name: Upload server log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-log
+          path: /tmp/verify_server.log
+          if-no-files-found: ignore

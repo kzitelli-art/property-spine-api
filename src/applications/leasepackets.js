@@ -29,7 +29,9 @@
 //   Acknowledgment = review/intent only (Option A). The captured value is
 //   audit evidence, NOT a legally-binding signature on the final lease. It
 //   records that the resident reviewed the demonstration terms; the complete
-//   lease and required addenda (delivered separately) govern, and a tenancy
+//   lease and required addenda govern — delivered separately when the
+//   property has no governing instrument on file, and carried BY the packet
+//   when it does (184) — and a tenancy
 //   begins only through the governed countersign/activation path.
 //
 //   Injection (server.js), mounted AFTER applications.js so the packet sits
@@ -46,9 +48,19 @@ const crypto = require("crypto");
 
 module.exports = function leasePacketsModule(deps) {
   const { pool, satisfyObligation, completeObligation } = deps;
+  //  The canonical staff-session resolver and the canonical execution
+  //  services. `executionServices` is a THUNK, not a value: this module is
+  //  mounted before executed_lease_service and tenancy_anchor_service are
+  //  composed in server.js, so a value captured now would be undefined
+  //  forever. Called per request, the closure reads them after composition.
+  //  Both are optional — without them the company-signature door reports
+  //  itself unwired rather than half-working.
+  const staffSessions = deps.staffSessions || null;
+  const executionServices = typeof deps.executionServices === "function" ? deps.executionServices : null;
   if (typeof satisfyObligation !== "function" || typeof completeObligation !== "function") {
     throw new Error("leasePacketsModule requires { satisfyObligation, completeObligation } — the shared engine helpers. v3: submit satisfies AND completes the terms_review obligation in one transaction (§5b atomicity). Refusing to run a parallel path.");
   }
+  const { executeSpineLease } = require("./spine_lease_execution");
   const router = express.Router();
   router.use(express.json({ limit: "2mb" }));
 
@@ -231,7 +243,15 @@ module.exports = function leasePacketsModule(deps) {
       { key: "parties", title: "Parties & Unit", ack: false, body: [
         `Owner: ${cfg.landlord_entity}.`,
         `Resident(s): ${terms.resident_names}${terms.guarantor_required ? " (a guarantor is named on this application)" : ""}.`,
-        `Unit: ${terms.unit_label || terms.unit_number}, ${terms.property_address}.`,
+        //  THE INSTRUMENT NAMES WHAT IS BEING LET. In a unit let by the
+        //  bed, "Unit 3B" is not what this resident is taking — they are
+        //  taking one space inside it, and a lease that names only the unit
+        //  is ambiguous about the thing it governs. The bed is appended
+        //  only when the packet actually carries one, so a whole-unit lease
+        //  reads exactly as it does today.
+        terms.space_label
+          ? `Unit: ${terms.unit_label || terms.unit_number}, ${terms.space_label}, ${terms.property_address}.`
+          : `Unit: ${terms.unit_label || terms.unit_number}, ${terms.property_address}.`,
       ] },
       { key: "term", title: "Lease Dates", ack: true, body: [
         `Proposed start: ${terms.lease_start_date}.`,
@@ -286,18 +306,53 @@ module.exports = function leasePacketsModule(deps) {
     ];
   }
 
-  // Acknowledgment fields — review/intent only. NOT obligation inputs, NOT a
-  // legal signature on the final instrument. Guarantor acknowledgment added
-  // when a guarantor is named.
-  function requiredFieldsFor(terms) {
+  //  THE GOVERNING INSTRUMENT, WHEN THE PROPERTY HAS ONE.
+  //  Read from the property's own lease configuration — the same durable
+  //  object requireLeaseConfig already validates. It is OPTIONAL by design:
+  //  a property with no lease form of record keeps exactly the behaviour it
+  //  has today, a demonstration summary that is acknowledged and not signed.
+  //  Both halves are required together; a form named without the hash of its
+  //  bytes cannot be signed ON anything, which is the one thing 184's guard
+  //  exists to refuse.
+  function governingInstrumentFrom(cfg) {
+    const gi = cfg && cfg.governing_instrument;
+    if (!gi || typeof gi !== "object") return null;
+    const form_code = String(gi.form_code || "").trim();
+    const body_sha256 = String(gi.body_sha256 || "").trim();
+    if (!form_code || !body_sha256) return null;
+    return { form_code, form_version: String(gi.form_version || "").trim() || null, body_sha256 };
+  }
+
+  // Fields carried by a packet, as [key, section, label, type, signer_role].
+  //
+  // WITHOUT a governing instrument these are acknowledgment fields — review
+  // and intent only, not a signature on a final instrument. That was the
+  // whole truth while no instrument could exist.
+  //
+  // WITH one, the packet also carries the signatures that instrument is
+  // signed by. The schema has admitted both since 034 (field_type
+  // 'signature') and 184 (signer_role 'company'); only this builder never
+  // reached for them, so 184's execution states and the whole execution rail
+  // behind them were unreachable. Found by driving the path, not reading it.
+  //
+  //   · the resident signature is REQUIRED, so the resident's own submit
+  //     gate refuses until it is made;
+  //   · the company signature is NOT required, because the company signs
+  //     AFTER the resident and a required field would deadlock that gate
+  //     against the order 184's trigger enforces.
+  function requiredFieldsFor(terms, instrument) {
     const base = [
-      ["ack_term",    "term",    "Lease dates",              "acknowledgment"],
-      ["ack_rent",    "rent",    "Monthly rent",             "acknowledgment"],
-      ["ack_deposit", "deposit", "Security deposit",         "acknowledgment"],
-      ["ack_terms",   "ack",     "Demonstration terms",      "acknowledgment"],
+      ["ack_term",    "term",    "Lease dates",              "acknowledgment", "tenant"],
+      ["ack_rent",    "rent",    "Monthly rent",             "acknowledgment", "tenant"],
+      ["ack_deposit", "deposit", "Security deposit",         "acknowledgment", "tenant"],
+      ["ack_terms",   "ack",     "Demonstration terms",      "acknowledgment", "tenant"],
     ];
     if (terms.guarantor_required) {
-      base.push(["ack_guarantor", "ack", "Guarantor acknowledgment", "acknowledgment"]);
+      base.push(["ack_guarantor", "ack", "Guarantor acknowledgment", "acknowledgment", "tenant"]);
+    }
+    if (instrument) {
+      base.push(["sign_resident", "ack", "Resident signature",  "signature", "tenant"]);
+      base.push(["sign_company",  "ack", "Company signature",   "signature", "company"]);
     }
     return base;
   }
@@ -370,6 +425,22 @@ module.exports = function leasePacketsModule(deps) {
         acknowledged_at: d.acknowledged_at,
       })),
     };
+  }
+
+  //  WHAT THE RESIDENT IS SHOWN. The packet holds every signature field,
+  //  including the company's; the resident is shown only their own. This is
+  //  ONE projection rather than a filter at one route, because the tenant
+  //  surface answers from three places — the initial load, every field
+  //  completion, and the final submit — and a filter applied to one of them
+  //  is a rule the other two do not have. That is exactly what happened:
+  //  the load was filtered, the completion response was not, and the
+  //  landlord's "Sign" control reappeared on the resident's page the moment
+  //  they acknowledged anything. Found by clicking through it in a browser.
+  function residentPacket(bundle) {
+    return publicPacket({
+      ...bundle,
+      fields: (bundle.fields || []).filter((f) => f.signer_role !== "company"),
+    });
   }
 
   // ════════════════════════════════════════════════════════════════
@@ -452,7 +523,13 @@ module.exports = function leasePacketsModule(deps) {
     }
 
     const prop = (await client.query(
-      `select id, name, canonical_key, address from properties where id=$1`,
+      //  lease_config is SELECTED, not just referenced (186). leaseConfigFor
+      //  reads `property.lease_config` first by design, but this explicit
+      //  column list omitted it — so the durable path could never resolve
+      //  even once the column existed, and every property fell through to
+      //  the Class-2 EXTERNAL_LEASE_CONFIG map that holds Demo Building
+      //  alone. Found by running the real path, not by reading it.
+      `select id, name, canonical_key, address, lease_config from properties where id=$1`,
       [app.property_id]
     )).rows[0] || {};
 
@@ -465,6 +542,15 @@ module.exports = function leasePacketsModule(deps) {
       unitLabel = (u && u.unit_number) || "";
     }
 
+    //  The bed's own label, read from inventory rather than trusted from a
+    //  denormalised column, so the instrument can name it.
+    let spaceLabel = "";
+    if (app.space_id) {
+      const sp = (await client.query(
+        `select space_label from spaces where id=$1`, [app.space_id])).rows[0];
+      spaceLabel = (sp && sp.space_label) || "";
+    }
+
     const captured = app.captured || {};
     const terms = {
       property_address: prop.address || captured.property_address || "[property address pending]",
@@ -472,6 +558,15 @@ module.exports = function leasePacketsModule(deps) {
       property_name: prop.name || "",
       resident_names: app.applicant_name || captured.resident_names || "",
       unit_id: app.unit_id || null,
+      //  THE EXACT BED TRAVELS INTO THE SIGNED SNAPSHOT (182).
+      //  The application has carried a space since 182 and the execution
+      //  adapter states that the bed "travels from the packet, which took it
+      //  from the application" — but this builder never took it, so every
+      //  signed snapshot named a unit and no bed. In a unit let by the bed
+      //  that is the difference between a lease and an ambiguity, and the
+      //  adapter refused it rather than guess. Found by running the path.
+      space_id: app.space_id || null,
+      space_label: spaceLabel,
       unit_label: unitLabel,
       unit_number: unitLabel,
       monthly_rent: confirmation.rent != null ? confirmation.rent : "",
@@ -492,6 +587,19 @@ module.exports = function leasePacketsModule(deps) {
       );
     }
 
+    //  THE INSTRUMENT IS KNOWN BEFORE THE PACKET IS BUILT, NOT AFTER.
+    //  Three pieces of the existing machinery force this order, and none of
+    //  them is being changed:
+    //    · fields are deleted and re-created on every generation, so a field
+    //      set is born with a packet and is never bolted onto a live one;
+    //    · packets are VERSIONED with supersession, which exists so a sent
+    //      packet is never mutated in place — a packet generated before the
+    //      form existed is superseded by the next version, not upgraded;
+    //    · rendered_snapshot_hash is computed HERE. An instrument attached
+    //      afterwards would not be what was rendered and hashed, and the
+    //      signer would not be signing the exact hashed instrument, which is
+    //      the single guarantee 184 exists to make.
+    const instrument = governingInstrumentFrom(check.cfg);
     const rendered = buildRendered(terms, check.cfg);
     const renderedHash = stableHash(rendered);
     // Already read and already assessed by the predicate above.
@@ -503,9 +611,15 @@ module.exports = function leasePacketsModule(deps) {
         `update lease_packets
             set terms_json=$2, rendered_snapshot=$3, rendered_snapshot_hash=$4,
                 proposed_terms_confirmation_id=$5,
+                instrument_form_code=$6, instrument_form_version=$7,
+                instrument_body_sha256=$8,
+                instrument_established_at = case when $8::text is null then null else now() end,
                 is_placeholder=false, updated_at=now()
           where id=$1 returning *`,
-        [current.id, terms, rendered, renderedHash, confirmation.id]
+        [current.id, terms, rendered, renderedHash, confirmation.id,
+         instrument ? instrument.form_code : null,
+         instrument ? instrument.form_version : null,
+         instrument ? instrument.body_sha256 : null]
       )).rows[0];
       await audit(client, auditContext, pk.id, "system", "draft_regenerated", {
         rendered_snapshot_hash: renderedHash,
@@ -521,12 +635,18 @@ module.exports = function leasePacketsModule(deps) {
         `insert into lease_packets
            (property_id, application_id, unit_id, version, status, terms_json,
             rendered_snapshot, rendered_snapshot_hash, is_placeholder,
-            supersedes_packet_id, proposed_terms_confirmation_id)
-         values ($1,$2,$3,$4,'draft',$5,$6,$7,false,$8,$9)
+            supersedes_packet_id, proposed_terms_confirmation_id,
+            instrument_form_code, instrument_form_version, instrument_body_sha256,
+            instrument_established_at)
+         values ($1,$2,$3,$4,'draft',$5,$6,$7,false,$8,$9,$10,$11,$12,
+                 case when $12::text is null then null else now() end)
          returning *`,
         [
           app.property_id, app.id, terms.unit_id, newVersion, terms,
           rendered, renderedHash, supersedes, confirmation.id,
+          instrument ? instrument.form_code : null,
+          instrument ? instrument.form_version : null,
+          instrument ? instrument.body_sha256 : null,
         ]
       )).rows[0];
       if (supersedes) {
@@ -546,24 +666,39 @@ module.exports = function leasePacketsModule(deps) {
     }
 
     await client.query(`delete from lease_packet_fields where lease_packet_id=$1`, [pk.id]);
-    const requiredFields = requiredFieldsFor(terms);
+    const requiredFields = requiredFieldsFor(terms, instrument);
     for (let i = 0; i < requiredFields.length; i++) {
-      const [fk, sk, label, ft] = requiredFields[i];
+      const [fk, sk, label, ft, role] = requiredFields[i];
       const clauseHash = stableHash(
         rendered.sections.find((s) => s.key === sk) || { sk, label }
       );
+      //  The company signature is the one field that is NOT required: the
+      //  resident's submit gate counts required-and-incomplete fields, and
+      //  the company signs after the resident (184's trigger). Requiring it
+      //  would deadlock the gate against the order the business performs.
+      const isRequired = !(ft === "signature" && role === "company");
       await client.query(
         `insert into lease_packet_fields
            (lease_packet_id, field_key, section_key, label, field_type,
             signer_role, required, clause_hash, display_order)
-         values ($1,$2,$3,$4,$5,'tenant',true,$6,$7)`,
-        [pk.id, fk, sk, label, ft, clauseHash, i + 1]
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [pk.id, fk, sk, label, ft, role, isRequired, clauseHash, i + 1]
       );
     }
 
     await client.query(`delete from lease_packet_documents where lease_packet_id=$1`, [pk.id]);
     const docs = [
-      { document_type: "lease_body", title: "Complete Lease & Required Addenda (governing — delivered separately)", required_acknowledgment: false },
+      //  THE TITLE STATES WHAT IS ACTUALLY TRUE OF THIS PACKET.
+      //  "delivered separately" was correct while Spine held no instrument.
+      //  On a packet that CARRIES the governing instrument the resident is
+      //  signing, it is a false statement on a resident-facing document —
+      //  and the one most likely to be relied on. Found in the lifecycle
+      //  drift audit, not by a test failing.
+      { document_type: "lease_body",
+        title: instrument
+          ? `Complete Lease & Required Addenda (governing — ${instrument.form_code})`
+          : "Complete Lease & Required Addenda (governing — delivered separately)",
+        required_acknowledgment: false },
       { document_type: "rental_license", title: "Rental License", required_acknowledgment: true },
       { document_type: "rental_suitability", title: "Certificate of Rental Suitability", required_acknowledgment: true },
     ];
@@ -775,6 +910,160 @@ module.exports = function leasePacketsModule(deps) {
     }
   });
 
+  // ── THE COMPANY SIGNATURE — ONE ACT ─────────────────────────────
+  //  The company signs, and that single act carries the instrument to
+  //  canonical truth. That is the adapter's own stated contract:
+  //
+  //      "THE OPERATOR EXPERIENCES ONE ACT. Company signs. Internally that
+  //       still travels executed → admitted → accepted_term_required →
+  //       confirmTermService → pending lease anchor... What it may not have
+  //       is a second human click."
+  //
+  //  This route OWNS NOTHING. It completes an existing signature field on an
+  //  existing packet using columns 184 added, moves the packet through states
+  //  184 defined, and delegates to executeSpineLease — which in turn composes
+  //  the ONE executed-lease service and the ONE tenancy writer. No second
+  //  execution path, no second tenancy writer, no new evidence model.
+  //
+  //  WHO MAY BIND THE COMPANY IS NOT DECIDED HERE. That is an open ruling
+  //  (R2). The gate is the EXISTING leasing/management entitlement, and the
+  //  record names the human who acted — 184's column says exactly this:
+  //  "this column records who did, it does not decide who may."
+  router.post("/operator/leasing/lease-packets/:id/company-sign", async (req, res) => {
+    if (!staffSessions || !executionServices) {
+      return res.status(503).json({
+        error: "execution_not_wired",
+        receipt: "In-Spine lease execution is not wired on this deploy.",
+      });
+    }
+    let operator;
+    try {
+      operator = await staffSessions.resolveStaffSession(pool, req.headers["x-staff-session"]);
+    } catch (e) {
+      return res.status(500).json({ error: "session_resolution_failed", receipt: "The operator session could not be resolved." });
+    }
+    if (!operator) {
+      return res.status(401).json({ error: "no_operator_session", receipt: "No valid operator session. Sign in." });
+    }
+    const modules = Array.isArray(operator.allowed_modules) ? operator.allowed_modules : [];
+    if (!modules.includes("leasing") && !modules.includes("management")) {
+      return res.status(403).json({
+        error: "module_not_authorized",
+        receipt: "Your assignment at this property does not authorize signing a lease for the company.",
+      });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      const pk = (await client.query(
+        `select * from lease_packets where id=$1 for update`, [req.params.id])).rows[0];
+      if (!pk) { await client.query("rollback"); return res.status(404).json({ receipt: "No lease packet with that id." }); }
+
+      //  THE SESSION'S PROPERTY IS THE WALL. A packet at another property is
+      //  not this operator's to sign, and the property comes from the session
+      //  rather than the request.
+      if (String(pk.property_id) !== String(operator.property_id)) {
+        await client.query("rollback");
+        return res.status(403).json({
+          error: "packet_not_at_your_property",
+          receipt: "That lease packet belongs to another property.",
+        });
+      }
+
+      //  EACH REFUSAL NAMES ITS OWN REASON. A single "the resident has not
+      //  executed" for every non-signable packet is false on three of these
+      //  four paths — an operator told that about a packet the resident
+      //  definitely signed would go looking for the wrong thing. Caught by
+      //  reading what the hostile replay and supersession cases actually
+      //  reported, not by the fact that they refused.
+      if (pk.voided_at || pk.status === "voided") {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "packet_voided",
+          receipt: "This lease packet was voided and cannot be executed.",
+        });
+      }
+      if (pk.superseded_at) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "packet_superseded",
+          receipt: "This packet was superseded by a later version. Execute the current version; "
+                 + "this one remains evidence of what was issued.",
+        });
+      }
+      if (pk.status === "executed") {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "packet_already_executed",
+          receipt: "This packet is already executed. It is not signed twice.",
+          company_executed_at: pk.company_executed_at,
+        });
+      }
+      //  THE RESIDENT SIGNS FIRST. 184's trigger enforces this in Postgres;
+      //  refusing here too means the operator gets an explanation instead of
+      //  a constraint violation.
+      if (pk.status !== "resident_executed") {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "resident_has_not_executed",
+          receipt: `This packet is '${pk.status}'. The resident signs the instrument before the company does.`,
+        });
+      }
+
+      const field = (await client.query(
+        `update lease_packet_fields
+            set completed=true, completed_at=now(), field_value=$3,
+                signed_by_user_id=$4, session_id=$5, ip_address=$6, user_agent=$7
+          where lease_packet_id=$1 and field_key=$2
+            and field_type='signature' and signer_role='company'
+            and completed=false
+          returning *`,
+        [pk.id, "sign_company", operator.name || "the authorised company signer",
+         operator.id, operator.session_id || null, clientIp(req),
+         (req.headers && req.headers["user-agent"]) || null])).rows[0];
+      if (!field) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "no_company_signature_field",
+          receipt: "This packet carries no outstanding company signature. It may already be executed, or it was generated before the property had a governing instrument.",
+        });
+      }
+
+      await client.query(
+        `update lease_packets
+            set status='executed',
+                company_executed_at = coalesce(company_executed_at, now()),
+                updated_at=now()
+          where id=$1`, [pk.id]);
+      await audit(client, req, pk.id, "operator", "company_executed", {
+        signed_by_user_id: operator.id,
+        instrument_body_sha256: pk.instrument_body_sha256,
+      });
+
+      //  ── AND THE SAME ACT REACHES CANONICAL TRUTH ──────────────────
+      const svcs = executionServices() || {};
+      const out = await executeSpineLease(
+        client,
+        { lease_packet_id: pk.id, company_signer_user_id: operator.id },
+        { executedLease: svcs.executedLease, confirmTerm: svcs.confirmTerm,
+          spawnObligationFromEvent: svcs.spawnObligationFromEvent }
+      );
+      await client.query("commit");
+      return res.status(201).json({
+        receipt: out.tenancy_error
+          ? "Lease executed and recorded. Activation is blocked — the executed lease stands and names the conflict."
+          : "Lease executed. The signed instrument is canonical truth.",
+        ...out,
+      });
+    } catch (e) {
+      await client.query("rollback").catch(() => {});
+      if (e && e.svc) return res.status(e.http || 409).json(e.body);
+      console.error("company-sign:", e);
+      return res.status(500).json({ receipt: "Could not execute the lease.", error: e.message });
+    } finally { client.release(); }
+  });
+
   // ════════════════════════════════════════════════════════════════
   //  TENANT ROUTES  (under /t/ — globally exempt from operator gate)
   // ════════════════════════════════════════════════════════════════
@@ -832,7 +1121,15 @@ module.exports = function leasePacketsModule(deps) {
         [sha256(req.params.token)])).rows[0]?.id;
       if (!id) return res.status(404).json({ receipt: "Lease link is invalid or expired." });
       const bundle = await getBundle(pool, id);
-      res.json({ packet: publicPacket(bundle) });
+      //  THE RESIDENT SEES ONLY THE RESIDENT'S SIGNATURES.
+      //  The company signature field lives on the same packet, and rendering
+      //  it here put a "Sign" control for the LANDLORD on the resident's own
+      //  page. It could never have worked — the completion route only touches
+      //  required fields and the company's is not required — but an
+      //  unusable control inviting a resident to sign as the company is not
+      //  a cosmetic problem. Found by looking at the page in a browser, not
+      //  by reading the field list.
+      res.json({ packet: residentPacket(bundle) });
     } catch (e) {
       res.status(500).json({ receipt: "Could not load the lease packet.", error: e.message });
     }
@@ -846,7 +1143,7 @@ module.exports = function leasePacketsModule(deps) {
       const pk = (await client.query(
         `select * from lease_packets
           where tenant_token_hash=$1 and tenant_token_expires_at > now()
-            and status not in ('submitted','voided')
+            and status not in ('submitted','resident_executed','executed','voided')
           for update`,
         [sha256(req.params.token)])).rows[0];
       if (!pk) { await client.query("rollback"); return res.status(404).json({ receipt: "Lease link is invalid, expired, or already submitted." }); }
@@ -854,14 +1151,37 @@ module.exports = function leasePacketsModule(deps) {
       const value = String(req.body?.value || "").trim();
       if (!value) { await client.query("rollback"); return res.status(400).json({ receipt: "An acknowledgment value is required." }); }
 
+      //  WHO SIGNED IS SERVER-DERIVED, NEVER SUPPLIED. 184 added
+      //  signed_by_person_id precisely so a signature names a durable
+      //  identity rather than a typed string; this writer never used it, so
+      //  every resident signature landed anonymous and the execution adapter
+      //  refused it as signer_identity_missing. The identity comes from the
+      //  application this packet belongs to — the token proves it is that
+      //  resident, and a body-supplied name would be a claim, not evidence.
+      const holder = (await client.query(
+        `select person_id from lease_applications where id=$1`, [pk.application_id])).rows[0];
+      const signerPersonId = holder ? holder.person_id : null;
+
       const field = (await client.query(
         `update lease_packet_fields
             set completed=true, completed_at=now(),
-                field_value=$3, session_id=$4, ip_address=$5, user_agent=$6
+                field_value=$3, session_id=$4, ip_address=$5, user_agent=$6,
+                signed_by_person_id = case when field_type='signature'
+                                           then $7::uuid else signed_by_person_id end
           where id=$1 and lease_packet_id=$2 and required=true
           returning *`,
-        [req.params.field_id, pk.id, value, req.body?.session_id || null, clientIp(req), req.headers["user-agent"] || null])).rows[0];
+        [req.params.field_id, pk.id, value, req.body?.session_id || null, clientIp(req), req.headers["user-agent"] || null, signerPersonId])).rows[0];
       if (!field) { await client.query("rollback"); return res.status(404).json({ receipt: "No such field on this packet." }); }
+
+      //  A signature with no identifiable signer is evidence of nothing. Fail
+      //  here rather than let it reach canonical truth anonymous.
+      if (field.field_type === "signature" && !signerPersonId) {
+        await client.query("rollback");
+        return res.status(409).json({
+          error: "signer_identity_unavailable",
+          receipt: "This application names no person, so a signature on it cannot record who signed.",
+        });
+      }
 
       await client.query(
         `update lease_packets
@@ -872,7 +1192,7 @@ module.exports = function leasePacketsModule(deps) {
         { field_key: field.field_key, field_type: field.field_type });
       await client.query("commit");
       const bundle = await getBundle(pool, pk.id);
-      res.json({ packet: publicPacket(bundle) });
+      res.json({ packet: residentPacket(bundle) });
     } catch (e) {
       await client.query("rollback").catch(() => {});
       res.status(500).json({ receipt: "Could not record that field.", error: e.message });
@@ -894,7 +1214,7 @@ module.exports = function leasePacketsModule(deps) {
       const pk = (await client.query(
         `select * from lease_packets
           where tenant_token_hash=$1 and tenant_token_expires_at > now()
-            and status not in ('submitted','voided')
+            and status not in ('submitted','resident_executed','executed','voided')
           for update`,
         [sha256(req.params.token)])).rows[0];
       if (!pk) { await client.query("rollback"); return res.status(404).json({ receipt: "Lease link is invalid, expired, or already submitted." }); }
@@ -984,12 +1304,30 @@ module.exports = function leasePacketsModule(deps) {
         }
       }
 
-      // mark the packet submitted — its terminal state. Application status,
-      // classification, leases, tenancy, occupancy: ALL untouched (§3).
+      //  THE PACKET'S STATE DEPENDS ON WHAT IT ACTUALLY IS.
+      //  With no governing instrument this is a terms acknowledgment and
+      //  'submitted' remains its terminal state — unchanged, and still the
+      //  honest dead-end for every existing packet.
+      //  With one, the resident has signed the exact hashed instrument, and
+      //  184 added 'resident_executed' for precisely that fact. Application
+      //  status, classification, leases, tenancy and occupancy stay untouched
+      //  either way (§3): this records who signed what, nothing downstream.
+      const residentSigned = (await client.query(
+        `select 1 from lease_packet_fields
+          where lease_packet_id=$1 and field_type='signature'
+            and signer_role in ('tenant','guarantor') and completed=true limit 1`,
+        [pk.id])).rows.length > 0;
+      const executesHere = !!pk.instrument_body_sha256 && residentSigned;
+
       await client.query(
         `update lease_packets
-            set status='submitted', tenant_submitted_at = coalesce(tenant_submitted_at, now()), updated_at=now()
-          where id=$1`, [pk.id]);
+            set status = $2,
+                tenant_submitted_at = coalesce(tenant_submitted_at, now()),
+                resident_executed_at = case when $2='resident_executed'
+                                            then coalesce(resident_executed_at, now())
+                                            else resident_executed_at end,
+                updated_at=now()
+          where id=$1`, [pk.id, executesHere ? "resident_executed" : "submitted"]);
 
       // v3: NO stamping of applicant_signed_at/guarantor_signed_at — those
       // columns are signature evidence, and this was never a signature. The
@@ -1006,7 +1344,7 @@ module.exports = function leasePacketsModule(deps) {
         satisfied_obligation_inputs: satisfied,
         application_next: "Executed lease required",
         note: "This document is a demonstration summary of proposed terms, not the governing lease. Nothing further happens until a real lease execution exists.",
-        packet: publicPacket(bundle),
+        packet: residentPacket(bundle),
       });
     } catch (e) {
       await client.query("rollback").catch(() => {});

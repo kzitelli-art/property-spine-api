@@ -110,6 +110,9 @@ module.exports = function askSpine(deps) {
         allowed_modules: req.operator.allowed_modules,
         question: (req.body && req.body.question) || "",
         mintComplianceReference: complianceReferences.mintReference,
+        //  Late-bound: this module mounts above the applications module in
+        //  server.js, so the service is read at request time, not at mount.
+        applicationsService: options.applicationsService || null,
       });
 
       //  200 for every OUTCOME, including `unavailable`. The request was
