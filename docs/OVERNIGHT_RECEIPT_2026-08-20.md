@@ -133,3 +133,106 @@ unrepaired until something actually blocks on them.
 
 No production writes were made. No entitlement granted. No pricing
 published. No Mike activation. No identity or property cleanup.
+
+
+---
+
+# Second overnight pass — the rail runs end to end
+
+```text
+AUTHORITY
+existing mechanism:  staffbridge (person_contexts) · resolveAuthority (assignments)
+                     orgchart was a PARALLEL writer of the same authority row
+first red:           a person resolveAuthority refused got may_publish_pricing=true
+                     the instant an assignments row appeared — pricingAuthority
+                     reads assignments and never consults person_contexts
+fix:                 staffbridge.grantStaffContext (+ one route) for an
+                     already-linked person; orgchart fails closed for owner and
+                     asset_manager, guarding the EXISTING row's role too;
+                     authority_resolution now filters active_to is null
+hostile proof:       authority_chain.e2e.js — 16/16, in CI
+status:              CLOSED. One governed path, falsified.
+
+UNIT TYPES
+source evidence:     three codes reconcile exactly to production's canonical
+                     shape — STU00016 56u/112p, STU00015 12u/36p, STU00017 4u/12p
+                     = 72 units / 160 positions, zero unmapped
+STU00016:            2 Bedroom · residential
+STU00015:            3 Bedroom / 1 Bath · residential
+STU00017:            3 Bedroom / 1.5 Bath · residential
+unresolved:          THE BATH DISTINCTION IS AN OWNER STATEMENT, NOT YET
+                     CORROBORATED AGAINST THE SOURCE. Encoded under the receipt
+                     `skyline_owner_statement_2026-08-20_pending_source_corroboration`.
+                     tools/release/unit_type_evidence.js is built and pushed to
+                     check it against the July rows AND the April batch's own
+                     independent `type` values. NOT YET RUN — production read.
+mapping proof:       skyline_unit_type_mapping.e2e.js — 12/12, in CI.
+                     Dry run wrote nothing; apply covered 72/160 with 0 unmapped,
+                     exactly 3 types, distribution identical to production,
+                     idempotent, no retired inventory reintroduced.
+
+PRICING
+canonical mechanism: pricing_lifecycle — saveDraft → submitReview → publishVersion,
+                     gated by pricing_publication_contract
+how far it ran:      ALL THE WAY. Draft saved, review approved, version PUBLISHED,
+                     3 terms written, and resolveSpaceEconomics then quoted
+                     new_lease_rent=1100 citing the governed pricing_term and its
+                     published version — not the 999999 legacy market_rent sentinel
+                     deliberately planted on every unit.
+first observed red:  none left in the mechanism. The reds found were:
+                       · reviewer must ALSO hold governed authority (correct;
+                         satisfied by the one-asset-manager ruling, since
+                         self-review is permitted only on an `assignment:` basis)
+                       · `receipt_reviewed` is a caller-supplied proposal flag the
+                         preview takes on trust — the real gate is inside
+                         publishVersion, which re-reads the receipt, requires
+                         decision='approved', and compares proposalDigest
+                       · published ≠ effective: a version dated ahead correctly
+                         refuses to quote until its effective_from
+smallest missing:    real Skyline numbers. The rents used are mechanism-proving
+                     placeholders on a disposable database and are not fit to be
+                     copied anywhere.
+business ruling:     per unit type — the actual new-lease rent, the renewal rent,
+                     offered vs not-offered, lease term(s), and the effective date.
+                     Nine numbers and three decisions.
+
+PRODUCTION
+writes made:         NONE
+```
+
+## What the publication contract already refuses
+
+Worth knowing before the numbers arrive — the contract is strict, and one of
+its rules is the audit's §3.3 defect class guarded at the boundary:
+
+```text
+market_rent_promotion          a legacy units.market_rent value cannot be
+                               promoted into published pricing
+client_store_promotion         nor can the browser-side pricing store
+legacy_text_as_key             legacy unit_type text is provenance, not a key
+marketable_type_not_addressed  every marketable type must be priced or
+                               explicitly marked unavailable
+offered_without_new_lease_rent an offered type must state a rent
+renewal_pricing_not_addressed  renewal must be explicit, never inherited
+publisher_lacks_authority      read from assignments, never from the request
+```
+
+A term absent from a proposal is absent from the draft — nothing is carried
+forward from a prior version, because a stale price outliving the decision
+that made it is how the wrong number reaches a real phone.
+
+## One vacuous assertion, caught
+
+The first version of the §3.3 check compared `econ.rent` to the sentinel and
+passed. `rent` is an OBJECT (`{new_lease_rent, renewal_rent, …}`), so it can
+never equal a number — the assertion could not fail. It now reads
+`rent.new_lease_rent`, proves it is finite, proves it differs from the
+sentinel, and proves it equals the `pricing_terms.base_rent` of the term the
+resolver itself names. Fourth instance this week of a green that had never
+been made to fail.
+
+## Still untouched, still deliberate
+
+160 positions with no `classification_source`, six unresolved 31-July baseline
+positions, duplicate KZ person rows, two empty Skyline property records. None
+appeared in any red on this path. They stay logged.

@@ -41,21 +41,59 @@
 "use strict";
 const { Client } = require("pg");
 
-// THE APPROVED MAPPING. Distinctions are preserved, not normalised away:
-// furnished, den and bath-count variants are real leasing categories.
-const MAPPING = [
-  { code: "S.1UN_02", label: "Studio",            sort: 10, use: "residential" },
-  { code: "S.1FN_02", label: "Furnished Studio",  sort: 20, use: "residential" },
-  { code: "1.1UN_02", label: "1 Bed",             sort: 30, use: "residential" },
-  { code: "1.1FN_02", label: "Furnished 1 Bed",   sort: 40, use: "residential" },
-  { code: "1.1DN_02", label: "1 Bed + Den",       sort: 50, use: "residential" },
-  { code: "2.2UN_02", label: "2 Bed / 2 Bath",    sort: 60, use: "residential" },
-  { code: "3.2UN_02", label: "3 Bed / 2 Bath",    sort: 70, use: "residential" },
-  { code: "3.3UN_02", label: "3 Bed / 3 Bath",    sort: 80, use: "residential" },
-  { code: "comm",     label: "Commercial Space",  sort: 90, use: "commercial"  },
+//  ── RULINGS, ONE BLOCK PER PROPERTY VOCABULARY ───────────────────────
+//  This was a single module-level MAPPING for one property's floorplan
+//  codes. A second property with a different vocabulary could not be
+//  classified at all — the tool refused every code as unapproved, which
+//  was the right refusal and the wrong dead end.
+//
+//  The mapping IS the ruling record, so a second property gets a second
+//  ruling block with its own receipt and date, and neither can silently
+//  become the other. Selection is by COVERAGE, not by a flag: the tool
+//  picks the one ruling whose codes cover every code the property's source
+//  actually carries, refuses when none does (naming the unmapped codes, as
+//  before), and refuses when more than one does rather than guessing.
+const RULINGS = [
+  {
+    receipt: "reviewed_mapping_receipt_2026-07-27",
+    note: "Eight residential floorplan codes plus commercial. See header.",
+    codes: [
+      { code: "S.1UN_02", label: "Studio",            sort: 10, use: "residential" },
+      { code: "S.1FN_02", label: "Furnished Studio",  sort: 20, use: "residential" },
+      { code: "1.1UN_02", label: "1 Bed",             sort: 30, use: "residential" },
+      { code: "1.1FN_02", label: "Furnished 1 Bed",   sort: 40, use: "residential" },
+      { code: "1.1DN_02", label: "1 Bed + Den",       sort: 50, use: "residential" },
+      { code: "2.2UN_02", label: "2 Bed / 2 Bath",    sort: 60, use: "residential" },
+      { code: "3.2UN_02", label: "3 Bed / 2 Bath",    sort: 70, use: "residential" },
+      { code: "3.3UN_02", label: "3 Bed / 3 Bath",    sort: 80, use: "residential" },
+      { code: "comm",     label: "Commercial Space",  sort: 90, use: "commercial"  },
+    ],
+  },
+  {
+    //  ⚠ BASIS: OWNER STATEMENT, SOURCE CORROBORATION PENDING.
+    //  The bed counts are arithmetic from the committed July rent roll
+    //  (56 × 2 beds, 12 × 3 beds, 4 × 3 beds = 72 units / 160 positions).
+    //  What separates the two THREE-BED codes is an owner statement made
+    //  2026-08-20 — "12 are 3 bed 1 bath, 4 are 3 bed 1.5 baths" — not
+    //  something this tool derived. tools/release/unit_type_evidence.js
+    //  exists to corroborate it against the source and the April batch's
+    //  independent `type` values BEFORE this ruling is applied anywhere
+    //  that matters. If corroboration fails, the labels change here; the
+    //  mechanism does not.
+    receipt: "skyline_owner_statement_2026-08-20_pending_source_corroboration",
+    note: "Skyline (1417 N 15th), bed-grained. Bath distinction from owner statement.",
+    codes: [
+      { code: "STU00016", label: "2 Bedroom",              sort: 10, use: "residential" },
+      { code: "STU00015", label: "3 Bedroom / 1 Bath",     sort: 20, use: "residential" },
+      { code: "STU00017", label: "3 Bedroom / 1.5 Bath",   sort: 30, use: "residential" },
+    ],
+  },
 ];
 
-const RECEIPT = "reviewed_mapping_receipt_2026-07-27";
+//  Chosen per run, below. Declared here so the rest of the file reads the
+//  same as it always did.
+let MAPPING = null;
+let RECEIPT = null;
 
 function arg(name) {
   const i = process.argv.indexOf(name);
@@ -72,7 +110,7 @@ function arg(name) {
   const c = new Client({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
   await c.connect();
 
-  console.log(`\n${apply ? "APPLYING" : "DRY RUN"} — classification receipt ${RECEIPT}`);
+  console.log(`\n${apply ? "APPLYING" : "DRY RUN"}`);
   console.log(`property ${propertyId}\n`);
 
   // ── what the source deterministically says, via the durable relationship ──
@@ -92,11 +130,29 @@ function arg(name) {
     byCode.get(r.code).push(r);
   }
 
-  const unknown = [...byCode.keys()].filter((k) => !MAPPING.some((m) => m.code === k));
-  if (unknown.length) {
-    console.error("REFUSING: source codes with no approved mapping: " + unknown.join(", "));
+  //  ── SELECT THE RULING BY COVERAGE, NEVER BY GUESS ────────────────
+  const present = [...byCode.keys()];
+  if (!present.length) {
+    console.error("REFUSING: no source row carries a 'unit_type' code for this property.");
     await c.end(); process.exit(1);
   }
+  const covering = RULINGS.filter((r) => present.every((k) => r.codes.some((m) => m.code === k)));
+  if (covering.length === 0) {
+    const near = RULINGS.map((r) => `${r.receipt}: missing ${present.filter((k) => !r.codes.some((m) => m.code === k)).join(", ")}`);
+    console.error("REFUSING: no approved ruling covers this property's source codes.");
+    console.error("  present: " + present.join(", "));
+    near.forEach((n) => console.error("  " + n));
+    await c.end(); process.exit(1);
+  }
+  if (covering.length > 1) {
+    console.error("REFUSING: more than one ruling covers these codes — ambiguous, and this tool does not guess.");
+    covering.forEach((r) => console.error("  " + r.receipt));
+    await c.end(); process.exit(1);
+  }
+  MAPPING = covering[0].codes;
+  RECEIPT = covering[0].receipt;
+  console.log(`ruling: ${RECEIPT}`);
+  console.log(`        ${covering[0].note}\n`);
 
   // A position claimed by two different codes is a conflict, not a mapping.
   const bySpace = new Map();
