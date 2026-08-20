@@ -134,8 +134,12 @@ console.log("\n══ REFUSAL — a file that cannot be fully read is refused WH
 const cases = [
   ["an empty file", "", "empty_transcript"],
   ["prose with no timed blocks", "We talked about the elevator.\nIt is fixed.", "no_recognisable_blocks"],
-  ["a title line above the first block",
-    "Weekly Solo — August\n\n0:03 - Robert\nMorning.", "content_before_first_block"],
+  //  A real Read AI export opens with exactly title + date, so that shape
+  //  is now READ. A THIRD line above the first block is a format nobody
+  //  has observed, and it still refuses rather than guessing.
+  ["a third unexplained line above the first block",
+    "Title\nThu, Aug 20, 2026\nExtra line\n\n0:03 - Robert\nMorning.",
+    "content_before_first_block"],
   ["timestamps that go backwards",
     "0:03 - A\nOne.\n\n5:00 - B\nTwo.\n\n1:00 - C\nThree.", "timestamps_go_backwards"],
   ["a block with a speaker and nothing said",
@@ -169,6 +173,20 @@ ok("no refusal receipt leaks an internal identifier",
 ok("every refusal receipt names something to do",
   receipts.every((r) => /Choose|Export|Upload|Remove|Re-export|Enter/.test(r)),
   receipts.find((r) => !/Choose|Export|Upload|Remove|Re-export|Enter/.test(r)));
+
+console.log("\n══ THE PROVIDER HEADER — observed, not assumed ══");
+const withHeader = parser.parse(
+  "Temple Properties - Weekly Update\nThu, Aug 20, 2026\n\n0:03 - A\nOne.\n");
+ok("a real export's title+date header parses instead of refusing",
+  withHeader.block_count === 1);
+ok("the title is kept exactly as provided",
+  withHeader.header.title_as_provided === "Temple Properties - Weekly Update");
+ok("the provider's date string is kept verbatim",
+  withHeader.header.date_as_provided === "Thu, Aug 20, 2026");
+ok("and is offered as ISO for reconciliation, not substitution",
+  withHeader.header.date_iso === "2026-08-20");
+ok("a transcript with no header reports header:null rather than a guess",
+  parser.parse("0:03 - A\nOne.").header === null);
 
 console.log("\n══ THE MEETING DATE IS REQUIRED, AND IS NOT THE UPLOAD DATE ══");
 

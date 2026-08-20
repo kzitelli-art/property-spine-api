@@ -43,10 +43,22 @@
 //     is a display fact. Nothing may key, sort-tiebreak or mint a
 //     reference from the timestamp.
 //
-//  2. THERE IS NO DATE IN THE FILE. Timestamps are relative to the start
-//     of the meeting. The meeting date cannot be parsed out and must be
-//     supplied by whoever uploads it — enforced by the caller and by the
-//     database, not here.
+//  2. THE DATE IS IN THE FILE — AND THIS COMMENT SAID THE OPPOSITE.
+//     For three commits it read "THERE IS NO DATE IN THE FILE", and a
+//     required-meeting-date rule was built on that. It was true of a
+//     transcript pasted into a chat message and FALSE of the artifact
+//     Read actually exports, which opens with:
+//
+//         Temple Properties - Weekly Update
+//         Thu, Aug 20, 2026
+//
+//     Twice now this file has asserted something about a provider format
+//     nobody had looked at. The turn timestamps ARE relative to the start
+//     of the recording — that part held — but the meeting date is
+//     provider-stated, and provider-stated beats human-remembered.
+//     It is read and RETURNED, never silently trusted: the caller
+//     surfaces disagreement with what an operator supplied rather than
+//     picking a winner.
 //
 //  3. CONSECUTIVE BLOCKS FROM ONE SPEAKER ARE ORDINARY, AND ARE NEVER
 //     MERGED. 12:26 → 12:34 → 12:38 is three blocks from one person.
@@ -164,12 +176,55 @@ function parse(text) {
       "Upload a single meeting rather than a combined export.");
   }
 
-  //  ── ANYTHING BEFORE THE FIRST HEADER IS UNACCOUNTED-FOR CONTENT ───
+  //  ── THE PROVIDER HEADER — MEASURED, NOT ASSUMED ───────────────────
+  //  A real Read AI export opens with two lines and a blank:
+  //
+  //      Temple Properties - Weekly Update
+  //      Thu, Aug 20, 2026
+  //
+  //  This file previously refused that outright, and the refusal was
+  //  CORRECT — it caught a real structural fact rather than guessing at
+  //  one. Now that the shape is observed rather than imagined, it is read.
+  //
+  //  ⚠ THE DATE IS IN THE FILE. This parser's header said for three
+  //  commits that "THERE IS NO DATE IN THE FILE" and built a required-
+  //  meeting-date rule on top of it. That was true of text pasted into a
+  //  chat message and false of the artifact Read actually produces.
+  //  Provider-stated beats human-remembered every time, so the date is
+  //  now READ FROM THE SOURCE and returned for the caller to reconcile.
+  //
+  //  It is returned, never silently trusted: the caller compares it with
+  //  what the operator supplied and surfaces disagreement rather than
+  //  picking a winner.
+  let header = null;
+  if (heads[0].line >= 1) {
+    const pre = lines.slice(0, heads[0].line).filter((l) => l.trim() !== "");
+    //  EXACTLY the observed shape: a title, then a date. Anything else
+    //  above the first block is still unaccounted-for content and still
+    //  refuses — a third line is a fact about the export we have not seen.
+    if (pre.length >= 1 && pre.length <= 2) {
+      const title = pre[0].trim();
+      const dateLine = pre.length === 2 ? pre[1].trim() : null;
+      let iso = null;
+      if (dateLine) {
+        //  "Thu, Aug 20, 2026". Parsed in UTC and round-tripped, so an
+        //  unparseable or impossible date yields null rather than a
+        //  plausible guess.
+        const d = new Date(dateLine + " UTC");
+        if (!Number.isNaN(d.getTime())) iso = d.toISOString().slice(0, 10);
+      }
+      header = { title_as_provided: title, date_as_provided: dateLine,
+                 date_iso: iso };
+    }
+  }
+
+  //  ── ANYTHING ELSE BEFORE THE FIRST HEADER IS UNACCOUNTED-FOR ──────
   //  A title line, an attendee list, a tool's preamble. Each is real
   //  content that would be silently discarded, and silently discarding
   //  part of a record is how a transcript comes to be missing a passage
   //  nobody knows is missing.
-  const preamble = lines.slice(0, heads[0].line).find((l) => l.trim() !== "");
+  const preamble = header ? undefined
+    : lines.slice(0, heads[0].line).find((l) => l.trim() !== "");
   if (preamble !== undefined) {
     throw refusal("content_before_first_block",
       `That file begins with text that is not a timed speaker block ("${preamble.trim().slice(0, 60)}"). ` +
@@ -242,6 +297,9 @@ function parse(text) {
 
   return {
     segments,
+    //  What the provider said about the meeting, as written. NEVER
+    //  substituted for what an operator supplied — surfaced beside it.
+    header,
     block_count: segments.length,
     //  Sorted for a stable receipt. Sorting the REPORT of the labels does
     //  not touch the labels stored on the segments.
