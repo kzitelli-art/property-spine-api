@@ -80,6 +80,7 @@ if [ "$UP" != "1" ]; then
   FAILED=1
 else
   echo "── server                             UP  ($(curl -s http://localhost:3000/health | head -c 120))"
+  step "authority chain"             node tests/e2e/authority_chain.e2e.js
   step "leasing clean path"          node tests/e2e/leasing_path.e2e.js
   step "hostile falsifications"      node tests/e2e/leasing_hostile.e2e.js
   step "cross-surface reconciliation" node tests/e2e/leasing_reconciliation.e2e.js

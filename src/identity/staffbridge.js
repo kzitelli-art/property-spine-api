@@ -232,6 +232,92 @@ module.exports = function buildStaffBridge({ pool }) {
              receipt: `${u.name} ${isRelink ? "re-linked" : "linked"} to person ${targetPersonId}. Audited.` };
   }
 
+  /*  ── ADD A PROPERTY-SCOPED STAFF CONTEXT TO AN EXISTING STAFF PERSON ──
+   *
+   *  THE GAP THIS CLOSES. person_contexts had exactly one writer — this
+   *  module — and only two paths into it: createStaffPerson, which writes a
+   *  SCOPED context but only while creating a NEW person, and linkBridge,
+   *  which writes an UNSCOPED one and refuses outright for a person already
+   *  linked ("already linked to this person — nothing to change").
+   *
+   *  So an established staff person could never gain a context at a SECOND
+   *  property. That is not a schema limit: uq_person_context_active is
+   *  unique on (person_id, context_type, coalesce(property_id, zero-uuid)),
+   *  so one active row per property plus one unscoped row is already legal.
+   *  Nothing exercised it, and resolveAuthority's person_entitled_to_property
+   *  check therefore could not be satisfied for a real second property.
+   *
+   *  WHAT IT DELIBERATELY DOES NOT DO. It creates no person, touches no
+   *  users.person_id, closes no bridge audit range, and confers no authority.
+   *  Entitlement and authority are two facts and stay two writes — this one
+   *  only says "this staff person is entitled to operate at this property".
+   *
+   *  IDEMPOTENT. A repeat is a replay, not a second row and not an error:
+   *  the partial unique index is the guard, and the conflict is read rather
+   *  than assumed.
+   *
+   *  ATTRIBUTED. created_by_user_id is the acting admin, server-derived at
+   *  the route. This is the same attribution column createStaffPerson uses;
+   *  no second audit mechanism is invented for the same fact.              */
+  async function grantStaffContext(client, {
+    person_id, property_id, performed_by_user_id, reason_detail = null,
+  } = {}) {
+    if (!person_id)  throw httpErr(400, "person_id is required");
+    if (!property_id) throw httpErr(400, "property_id is required — an unscoped context is granted by linkBridge, not here");
+    if (!performed_by_user_id) throw httpErr(400, "performed_by_user_id is required");
+
+    const person = (await client.query(
+      `select id, name from persons where id = $1 for update`, [person_id])).rows[0];
+    if (!person) throw httpErr(404, "person not found");
+
+    const property = (await client.query(
+      `select id, name from properties where id = $1`, [property_id])).rows[0];
+    if (!property) throw httpErr(404, "property not found");
+
+    //  ESTABLISHED STAFF ONLY. Staffness is a governed fact written at
+    //  classification; this widens an existing one and must never be the
+    //  thing that first makes someone staff. A person with no active staff
+    //  context belongs in the link/classify path, not here.
+    const existing = (await client.query(
+      `select id, property_id from person_contexts
+        where person_id = $1 and context_type = 'staff' and active_to is null`,
+      [person_id])).rows;
+    if (!existing.length) {
+      throw httpErr(409,
+        "this person holds no active staff context, so there is nothing to widen. " +
+        "Classify and bridge them first — becoming staff is a different act from " +
+        "being entitled to another property.");
+    }
+
+    if (existing.some((c) => c.property_id === null)) {
+      return { replayed: true, already: "unscoped",
+        receipt: `${person.name} already holds an UNSCOPED staff context, which covers every property including ${property.name}. Nothing to add.` };
+    }
+    const here = existing.find((c) => String(c.property_id) === String(property_id));
+    if (here) {
+      return { replayed: true, already: "scoped", context_id: here.id,
+        receipt: `${person.name} is already entitled at ${property.name}. Unchanged.` };
+    }
+
+    const ctx = (await client.query(
+      `insert into person_contexts (person_id, context_type, property_id, created_by_user_id)
+       values ($1, 'staff', $2, $3)
+       on conflict do nothing
+       returning id`, [person_id, property_id, performed_by_user_id])).rows[0];
+    if (!ctx) {
+      //  The index refused and the reads above did not predict it. Say so
+      //  rather than reporting a success nobody performed.
+      throw httpErr(409, "the staff context was refused by the uniqueness guard and no existing row explains it");
+    }
+
+    return {
+      replayed: false, context_id: ctx.id, person_id, property_id,
+      reason_detail: reason_detail || null,
+      receipt: `${person.name} is now entitled to operate at ${property.name}. ` +
+               `This is entitlement only — it confers no pricing or approval authority.`,
+    };
+  }
+
   async function unlinkBridge(client, { user_id, reason_code, reason_detail = null,
                                         performed_by_user_id, request_id = null }) {
     if (!reason_code) throw httpErr(400, "reason_code is required");
@@ -368,6 +454,25 @@ module.exports = function buildStaffBridge({ pool }) {
     } catch (e) { return send(res, e); }
   });
 
+  //  Entitlement, not authority. The acting admin comes from the session.
+  router.post("/operator/admin/bridge/staff-context", requireBridgeAdmin, async (req, res) => {
+    const c = await pool.connect();
+    try {
+      await c.query("begin");
+      const out = await grantStaffContext(c, {
+        person_id: (req.body || {}).person_id,
+        property_id: (req.body || {}).property_id,
+        reason_detail: (req.body || {}).reason_detail || null,
+        performed_by_user_id: req.bridgeAdmin.id,   // SERVER-DERIVED, never body-supplied
+      });
+      await c.query("commit");
+      return res.json(out);
+    } catch (e) {
+      await c.query("rollback");
+      return res.status(e.httpStatus || 500).json({ error: e.message });
+    } finally { c.release(); }
+  });
+
   router.post("/operator/admin/bridge/unlink", requireBridgeAdmin, async (req, res) => {
     try {
       const out = await tx((c) => unlinkBridge(c, {
@@ -381,7 +486,7 @@ module.exports = function buildStaffBridge({ pool }) {
   });
 
   // service layer exposed for the proof harness + the audited demo seed
-  router._service = { classifyAccount, createStaffPerson, linkBridge, unlinkBridge,
+  router._service = { classifyAccount, createStaffPerson, linkBridge, unlinkBridge, grantStaffContext,
                       bridgeCandidates, coverageReport };
   router._internal = { resolveAdmin, requireBridgeAdmin };
   return router;
