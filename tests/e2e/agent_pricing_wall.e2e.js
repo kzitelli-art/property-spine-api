@@ -140,6 +140,72 @@ const bad = (l, d="") => { fail++; console.log(`  ✗ ${l}${d ? "  — " + d : "
     ? ok("the sentinel appears nowhere in the quote")
     : bad("THE SENTINEL IS IN THE QUOTE");
 
+  //  ── 5 · WITH TWO TERMS PUBLISHED, IT OFFERS THE CHOICE ─────────────
+  //  Defect #14. terms[0] is deterministically the SHORTEST term, which is
+  //  the dearest, so an unqualified price question was answered with the
+  //  highest number on the sheet. Publishing a second term is what makes it
+  //  fire, so the test publishes one.
+  console.log("\n── 5 · two published terms → the menu, not the dearest ──");
+  //  A published version's terms are frozen, so a second term cannot be added
+  //  to the one above — trg_pricing_terms_frozen refuses the INSERT, which is
+  //  correct. Two terms therefore means a version published WITH two, on its
+  //  own property, rather than a rule bent to make a test convenient.
+  const SHORT_RENT = GOVERNED + 150;
+  const prop2 = (await pool.query(
+    `insert into properties (name,address,leasing_basis) values ($1,'2 Wall St','bed') returning id`,
+    [tag + " Wall Two"])).rows[0].id;
+  const ut2 = (await pool.query(
+    `insert into property_unit_types (property_id, code, label, sort_order)
+     values ($1,'2BR','2 Bedroom',10) returning id`, [prop2])).rows[0].id;
+  const unit2 = (await pool.query(
+    `insert into units (property_id, unit_number, bedrooms, bathrooms, market_rent, unit_type_id)
+     values ($1,'W2-1',2,1,$2,$3) returning id`, [prop2, SENTINEL, ut2])).rows[0].id;
+  await pool.query(`delete from spaces where unit_id=$1 and space_label='(whole unit)'`, [unit2]);
+  await pool.query(`insert into spaces (unit_id, space_label, use_type, position_kind)
+                    values ($1,'Bed A','residential','bed')`, [unit2]);
+  await pool.query(`insert into person_contexts (person_id,context_type,property_id,created_by_user_id)
+                    values ($1,'staff',$2,$3)`, [person, prop2, admin]);
+  await resolveAuthority(pool, { spec: { user_id:user, person_id:person, property_id:prop2,
+    requested_role:"asset_manager", reviewer_user_id:admin, reason:"multi-term proof" }, apply:true });
+
+  const proposal2 = { publisher_person_id: person, effective_from: "2026-01-01",
+    terms: [
+      { unit_type_id: ut2, lease_term_months: 12, base_rent: GOVERNED,   renewal_rent: GOVERNED,   offer_state: "offered" },
+      { unit_type_id: ut2, lease_term_months:  5, base_rent: SHORT_RENT, renewal_rent: SHORT_RENT, offer_state: "offered" },
+    ] };
+  const d2 = await saveDraft(pool, { property_id: prop2, user_id: user, proposal: proposal2 });
+  const draftId2 = d2.draft_version_id || d2.version_id || d2.id;
+  const rec2 = await submitReview(pool, { property_id: prop2, user_id: user,
+    draft_version_id: draftId2, proposal: proposal2, decision: "approved", note: "multi-term proof" });
+  await publishVersion(pool, { property_id: prop2, user_id: user, draft_version_id: draftId2,
+    proposal: { ...proposal2, receipt_reviewed: true },
+    review_receipt_id: rec2.review_receipt_id, dry_run: false });
+  ok("a two-term version is published", `${GOVERNED} on 12mo, ${SHORT_RENT} on 5mo`);
+
+  const q4 = await quotablePricing(pool, { property_id: prop2, unit_type_id: ut2 });
+  q4.quotable === false
+    ? ok("an unqualified question is no longer answered with a number", q4.reason)
+    : bad("STILL GUESSES A TERM", `${q4.rent} for ${q4.lease_term_months}mo`);
+  q4.reason === "lease_term_not_selected"
+    ? ok("and agrees with effective_pricing's own reason", q4.reason)
+    : bad("wrong reason", String(q4.reason));
+  Number(q4.rent) !== SHORT_RENT && !JSON.stringify(q4).includes(`"rent":${SHORT_RENT}`)
+    ? ok("the dearest term is NOT quoted", `$${SHORT_RENT} withheld`)
+    : bad("QUOTED THE SHORTEST/DEAREST TERM ANYWAY");
+  Array.isArray(q4.published_terms) && q4.published_terms.join(",") === "5,12"
+    ? ok("it returns the menu", `[${q4.published_terms}]`)
+    : bad("no menu", JSON.stringify(q4.published_terms));
+  /which length are you looking for/.test(q4.say || "")
+    ? ok("and asks the prospect to choose") : bad("no question to the prospect", String(q4.say).slice(0,90));
+
+  //  naming a term still works, and each returns its OWN rent
+  const q5 = await quotablePricing(pool, { property_id: prop2, unit_type_id: ut2, lease_term_months: 12 });
+  const q6 = await quotablePricing(pool, { property_id: prop2, unit_type_id: ut2, lease_term_months: 5 });
+  q5.quotable && Number(q5.rent) === GOVERNED
+    ? ok("naming 12 months quotes the 12-month rent", `${q5.rent}`) : bad("12-month wrong", JSON.stringify(q5).slice(0,90));
+  q6.quotable && Number(q6.rent) === SHORT_RENT
+    ? ok("naming 5 months quotes the 5-month rent", `${q6.rent}`) : bad("5-month wrong", JSON.stringify(q6).slice(0,90));
+
   //  CLEANUP — unswallowed, and it obeys the rule it just proved.
   //
   //  A published version's terms are frozen by trg_pricing_terms_frozen, so
@@ -166,9 +232,20 @@ const bad = (l, d="") => { fail++; console.log(`  ✗ ${l}${d ? "  — " + d : "
   //  receipt, so versions go before receipts. A cleanup that hides its own
   //  failure produced a confusing FK error three lines later instead of
   //  saying what went wrong — hence no .catch() anywhere in here.)
-  await pool.query(
-    "update property_pricing_versions set status='retired' where property_id=$1 and status='published'",
-    [prop]);
+  for (const pid of [prop, prop2]) {
+    await pool.query(
+      "update property_pricing_versions set status='retired' where property_id=$1 and status='published'",
+      [pid]);
+    await pool.query("delete from pricing_terms where property_id=$1",[pid]);
+    await pool.query("delete from property_pricing_versions where property_id=$1",[pid]);
+    await pool.query("delete from pricing_review_receipts where property_id=$1",[pid]);
+    await pool.query("delete from assignments where property_id=$1",[pid]);
+    await pool.query("delete from person_contexts where property_id=$1",[pid]);
+    await pool.query("delete from spaces where unit_id in (select id from units where property_id=$1)",[pid]);
+    await pool.query("update units set unit_type_id=null where property_id=$1",[pid]);
+    await pool.query("delete from units where property_id=$1",[pid]);
+    await pool.query("delete from property_unit_types where property_id=$1",[pid]);
+  }
   await pool.query("delete from pricing_terms where property_id=$1",[prop]);
   await pool.query("delete from property_pricing_versions where property_id=$1",[prop]);
   await pool.query("delete from pricing_review_receipts where property_id=$1",[prop]);
