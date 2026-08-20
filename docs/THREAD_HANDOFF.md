@@ -1,5 +1,25 @@
 # Property Spine — Thread Handoff
 
+> # ⛔ THIS FILE IS HISTORY. IT IS NOT CURRENT-STATE AUTHORITY.
+>
+> **For what exists right now, read [`CURRENT_STATE.md`](CURRENT_STATE.md).**
+>
+> Everything below is a dated record of what happened and why — invaluable for
+> understanding decisions, unreliable for answering *"is this live?"*. This file
+> is 3,992 lines across 50 dated banners carrying 34 supersession notices
+> (*"this section wins," "that sentence is now false"*), so present-tense claims
+> here may have been true when written and false now.
+>
+> **Two demonstrated failures, in this file, right now:**
+> - The banner immediately below says **"EQUITY IS LIVE"**. Equity is merged and
+>   **not production-verified**. Two hundred lines down, the Debt banner states
+>   the honest standard. One file, two meanings of "live."
+> - That same banner says **"PRODUCTION DB AT 174."** The ledger is at **176**
+>   (deployed sha `e5497a4`).
+>
+> Do not delete the history below — the rulings in it are load-bearing. Just do
+> not read its present tense as current.
+
 ## ══════════════════════════════════════════════════════════════════
 ##  ⚠ SKYLINE HOLDS TWO INVENTORY REPRESENTATIONS. EVERY CANONICAL
 ##  TENANCY READ OF IT RETURNS 391 POSITIONS AGAINST 160 REAL BEDS.
