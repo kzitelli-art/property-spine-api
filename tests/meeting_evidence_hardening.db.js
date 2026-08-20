@@ -4,12 +4,14 @@
 const crypto = require("crypto");
 const { Pool } = require("pg");
 const receipt = require("./_run_receipt");
+const { databaseSsl } = require("../src/shared/database_ssl");
 const evidence = require("../src/meeting_evidence/meeting_evidence_service");
+const passageScope = require("../src/meeting_evidence/meeting_passage_scope_service");
 const receipts = require("../src/meeting_evidence/meeting_receipt_service");
 const workflow = require("../src/meeting_evidence/meeting_receipt_workflow");
 
 const HARNESS = __filename;
-const EXPECTED = 48;
+const EXPECTED = 49;
 let passed = 0;
 let failed = 0;
 let ran = 0;
@@ -88,7 +90,7 @@ function validOutput() {
 (async () => {
   const url = receipt.harnessConnectionString();
   receipt.begin(HARNESS, { url, expected: EXPECTED });
-  const pool = new Pool({ connectionString: url, ssl: { rejectUnauthorized: false }, max: 1 });
+  const pool = new Pool({ connectionString: url, ssl: databaseSsl(url), max: 1 });
   const client = await pool.connect();
   const db = { query: (...args) => client.query(...args) };
 
@@ -103,7 +105,9 @@ function validOutput() {
   try {
     await client.query("begin");
     await client.query(
-      `insert into schema_migrations (version, name) values ('181','meeting_evidence_binding_finality_lineage')`
+      `insert into schema_migrations (version, name)
+       values ('181','meeting_evidence_binding_finality_lineage')
+       on conflict (version) do nothing`
     );
     const relations = (await client.query(
       `select to_regclass('public.meeting_property_current_bindings') as binding_view,
@@ -182,6 +186,15 @@ function validOutput() {
               (select count(*) from obligations)::int as obligations,
               (select count(*) from leases)::int as leases`
     )).rows[0];
+
+    const singlePropertyScope = await passageScope.classifyProviderMeetingScope(db, {
+      providerMeetingId,
+      scopeMode: "single_property",
+      classificationBasis: "de-identified proof meeting is explicitly single-property",
+      classifiedByUserId: actor,
+    });
+    ok("whole-meeting binding first earns a single-property classification",
+      singlePropertyScope.scope_mode === "single_property");
 
     const initialBinding = await evidence.bindProviderMeeting(db, {
       providerMeetingId,

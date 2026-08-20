@@ -409,6 +409,17 @@ async function bindProviderMeeting(db, {
     )).rows[0];
     if (!meeting) throw serviceError(404, "provider_meeting_not_found", "Provider meeting not found.");
 
+    const scopeClassification = (await client.query(
+      `select scope_classification_id, scope_mode
+         from meeting_provider_current_scope_classifications
+        where provider_meeting_id = $1`,
+      [providerMeetingId]
+    )).rows[0] || null;
+    if (scopeClassification && scopeClassification.scope_mode !== "single_property") {
+      throw serviceError(409, "whole_meeting_binding_refused_for_mixed_scope",
+        "A mixed or unresolved provider meeting cannot be bound wholesale to one property; scope exact passages instead.");
+    }
+
     const current = (await client.query(
       `select b.id, b.provider_meeting_id, b.property_id, b.bound_by_user_id,
               b.bound_at, b.binding_basis, b.binding_kind, b.correction_reason,
@@ -428,6 +439,10 @@ async function bindProviderMeeting(db, {
       }
       throw serviceError(409, "provider_meeting_binding_correction_required",
         "Provider meeting is already bound to another property; use an explicit binding correction.");
+    }
+    if (!scopeClassification) {
+      throw serviceError(409, "meeting_scope_classification_required",
+        "Classify this provider meeting as single-property before creating a whole-meeting binding.");
     }
 
     const row = (await client.query(
@@ -473,6 +488,17 @@ async function correctProviderMeetingBinding(db, {
   }
 
   return withTransaction(db, async (client) => {
+    const scopeClassification = (await client.query(
+      `select scope_mode
+         from meeting_provider_current_scope_classifications
+        where provider_meeting_id = $1`,
+      [providerMeetingId]
+    )).rows[0] || null;
+    if (scopeClassification && scopeClassification.scope_mode !== "single_property") {
+      throw serviceError(409, "whole_meeting_binding_refused_for_mixed_scope",
+        "A mixed or unresolved provider meeting cannot receive a whole-meeting binding correction.");
+    }
+
     const current = (await client.query(
       `select b.*
          from meeting_property_bindings b

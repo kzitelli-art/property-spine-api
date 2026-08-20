@@ -70,6 +70,7 @@ function makeFakeDb(connectionId) {
     deliveries: [],
     meetings: [],
     bindings: [],
+    scopeClassifications: [],
     next: 200,
   };
 
@@ -160,6 +161,11 @@ function makeFakeDb(connectionId) {
     }
     if (q.includes("from meeting_provider_meetings") && q.includes("where id = $1")) {
       const row = state.meetings.find((m) => m.id === params[0]);
+      return { rows: row ? [row] : [] };
+    }
+    if (q.includes("from meeting_provider_current_scope_classifications")) {
+      const row = state.scopeClassifications.find((classification) =>
+        classification.provider_meeting_id === params[0]);
       return { rows: row ? [row] : [] };
     }
     if (q.startsWith("insert into meeting_property_bindings")) {
@@ -430,6 +436,12 @@ function makeFakeDb(connectionId) {
   });
   eq("authentic payload without session_id is unresolved identity",
     unresolvedReceipt.body.status, "verified_unresolved_identity");
+
+  fakeDb.state.scopeClassifications.push({
+    scope_classification_id: uuid(299),
+    provider_meeting_id: firstReceipt.body.provider_meeting_id,
+    scope_mode: "single_property",
+  });
 
   const binding = await service.bindProviderMeeting(fakeDb, {
     providerMeetingId: firstReceipt.body.provider_meeting_id,
