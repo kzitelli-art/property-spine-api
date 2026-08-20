@@ -1,147 +1,119 @@
-# RESUME HERE — `docs/CURRENT_STATE.md` is LIVE. This folder is its build history.
+# RESUME HERE — `docs/CURRENT_STATE.md` is LIVE and current through 2026-08-20.
 
 > ## ▶ TO RESTART, PASTE THIS
 > ```
-> Read docs/current-state-build/00_RESUME_HERE.md on main and continue that work.
+> Read docs/CURRENT_STATE.md and docs/current-state-build/00_RESUME_HERE.md
+> on main, then continue that work.
 > ```
-> **The deliverable already shipped.** `docs/CURRENT_STATE.md` exists on `main`
-> (merged PR #123, `d9b827e`, 2026-08-20). `CLAUDE.md` already routes every new
-> thread to it. What's left is **extending coverage**, not building the thing.
->
-> **First move: re-fetch and re-stamp.** Do not trust any SHA below without
-> checking. Both repos moved substantially during the build of this file —
-> assume they've moved again.
->
-> ### ⚠ TOKEN BUDGET — the owner watches this
-> Wave 2 (below) is the expensive remaining piece — ten agents. **Run it, report,
-> then ask before running anything bigger.** If the owner says they're near a
-> limit, stop all background tasks immediately (`TaskStop`) rather than only
-> saving files — a paused conversation does not pause a running workflow. This
-> was a real mistake made once already in this build; don't repeat it.
+> The deliverable shipped, survived a full audit cycle, and just closed out a
+> real production incident end to end. This is not a "pick up where we left
+> off" file anymore — it's a living document with a working close ritual.
+> Read `CURRENT_STATE.md` itself first; this file is only about what's left.
 
 ---
 
-## WHAT'S ACTUALLY LEFT — one job, clearly
+## WHAT'S ACTUALLY LEFT — three things, none urgent
 
-**Run `wave2_coverage_gaps.js`.** It was started twice and stopped twice (once
-for a token pause, once because the user went to sleep) — it has **never
-completed**. It covers: Teams/access/invites/roles (the single highest-value
-gap — see below), the Management door, onboarding & rent-roll intake internals,
-money/pricing at real grain, the entire app repo, `server.js`'s inline routes,
-and `tools/` — plus three completeness critics hunting for files, database
-tables, and env flags/integrations that nothing else has found yet.
+1. **`docs/CURRENT_STATE.md` defects #12, #13, #14 are still open.** All three
+   need an owner decision, not more code from a thread:
+   - #12 — a real hole in published-pricing immutability (schema-level)
+   - #13 — four dead falsification tests, claimed then dropped, open for anyone
+   - #14 — which lease term to quote when a prospect doesn't name one. A cheap
+     third option now exists (present the published menu, zero schema change)
+     but it's still the owner's call
+2. **The gate doesn't exist yet.** Nothing mechanically fails if a thread ships
+   a domain and skips its `CURRENT_STATE.md` row. The close ritual is a
+   convention, proven to work today by two independent threads following it
+   correctly under real pressure — but still not enforced.
+3. **~40% of the codebase remains at headline-only survey depth.** Wave 2 found
+   148 capabilities across teams/access, management, onboarding, money/pricing,
+   the app repo, `server.js`, and `tools/` — full detail is in
+   `05_WAVE2_RESULTS.md`, not yet promoted row-by-row into the main index.
 
-The script hardcodes worktree paths that won't exist in a fresh container.
-Recreate first:
-```bash
-git worktree add <scratch>/main-api origin/main     # in property-spine-api
-git worktree add <scratch>/main-app origin/main     # in property-spine-app
-```
-Update the `API` / `APP` constants at the top of the script, then:
-```
-Workflow({scriptPath: "docs/current-state-build/wave2_coverage_gaps.js"})
-```
+None of these block anything. They're the next things to pick up, not gaps
+blocking today's close.
 
-**⚠ Survey against the DEPLOYED commit, not `main`, if they've diverged again.**
-As of this writing production runs `30cb992` (branch
-`claude/property-spine-orientation-cso2ao`), 39 commits ahead of `main`, and
-that fact is recorded as defect #7 in `CURRENT_STATE.md` itself. Check
-`CURRENT_STATE.md`'s own STATE SNAPSHOT section for the current answer — it
-should already say which commit is actually running in production.
+## WHAT SHIPPED TODAY (2026-08-19 → 2026-08-20), in order
 
-**When wave 2 lands: fold it into `docs/CURRENT_STATE.md` directly**, following
-that file's own "CLOSING A THREAD" section. Do not write a new numbered results
-file in this folder the way wave 1 did — that pattern was reasonable when the
-target file didn't exist yet; now that it does, findings belong in it directly,
-not in a growing pile of build artifacts nobody will re-read.
+- `docs/CURRENT_STATE.md` built, merged to `main`, `CLAUDE.md` and
+  `THREAD_HANDOFF.md` updated to route every new thread to it (PR #123).
+- The open/close ritual: a `SessionStart` hook that fires automatically, and a
+  paste-able closing prompt written into the file itself.
+- Wave 1 (44 capabilities, adversarially verified) and a second independent
+  PR-level review by Codex, both folded in.
+- Wave 2 completed on the third attempt (started/stopped twice before) — 148
+  capabilities across the areas listed above, plus three completeness critics
+  that found 8 things nobody had mapped, including a real security gap in a
+  team-roster route with no property-scope check (defect #9) and a UI button
+  that silently fakes success instead of sending a real invite (defect #8).
+- **A real production incident, closed end to end, coordinated across two
+  Claude threads with zero silent overwrites**: the `market_rent` pricing bug
+  (defect #1) was fixed, proven with a real CI test, merged to `main` — which
+  also resolved defect #7 (production had drifted 39+ commits ahead of `main`)
+  — then deployed and confirmed live by the owner. A privilege-escalation path
+  in `orgchart.js` (defect #15) got closed in the same deploy, found by the
+  fixing thread as a byproduct, not gone looking for.
+- **A live Neon credential, pasted into a chat during this work, rotated and
+  confirmed** (defect #16).
+- **I corrected two of my own mistakes on the record, in place**, rather than
+  letting them stand: I initially under-rated defect #14's severity (called it
+  "disclosed, not the same as #1" before checking the actual sort order and
+  real numbers — it's actually the highest price on the sheet, not an
+  arbitrary one), and I introduced a real self-contradiction in this file's
+  own snapshot section (said "resolved" in one line, "not resolved" two lines
+  below) which a disk-change diff caught before it could confuse anyone.
 
-## THE OTHER OPEN ITEM: THE GATE
+## THE COORDINATION PATTERN THAT WORKED
 
-`CURRENT_STATE.md`'s close ritual is currently **honor-system only**. Nothing
-mechanically fails if a thread ships a domain and doesn't add a row. The file
-itself says so. A test that discovers domains (the way
-`tests/gate_ask_spine_readers.js` discovers Ask Spine registrations) and fails
-when one has no corresponding row would close that gap. Not built. Worth doing
-before this decays the way `docs/CODEBASE_STATE.md` did.
+Two separate Claude threads touched this same file today without either one
+silently overwriting the other. What made that work, concretely:
+- Every claim from the other thread got independently re-verified against
+  actual source before being recorded — never taken on trust, including once
+  finding a claim was right but incomplete (the #14 severity correction).
+- The other thread did the same back — re-ran my checks rather than trusting
+  my report, and caught nothing wrong, which is itself informative.
+- A hard boundary was stated and held: neither thread would trigger a deploy
+  without the owner saying so explicitly. Merging to `main` and deploying to
+  production stayed two separate, distinct actions the whole time.
+- When a message arrived cut off mid-sentence (the #14 finding, first pass),
+  the instinct was to go read the actual code rather than guess or wait
+  around — and to say plainly "your message cut off here" rather than
+  silently fill the gap with something invented.
 
----
+This is worth preserving as the model for the next time two threads need to
+coordinate on the same file, not just as a one-off story.
 
-## WHY THIS EXISTS (unchanged — still the reason any of this matters)
+## KNOWN COVERAGE GAPS — still true, unchanged from before
 
-Threads kept losing track of what was built. Renewals, turnovers, an
-obligations queue, a follow-up ladder and a person-correction path were each
-built, then later described as missing in a subsequent thread. Root cause:
-**a historical narrative was being asked to answer a current-state question.**
-
-`docs/THREAD_HANDOFF.md`, measured 2026-08-19: 3,992 lines, 50 banner sections,
-34 instances of supersession language. Its own top banner said "EQUITY IS
-LIVE" while Equity was merged and not production-verified — the file
-demonstrated the exact problem it was being asked to solve. It's now
-relabelled as history at the top of the file itself; the rulings inside it are
-kept, its present tense is not to be trusted.
-
-## WHAT SHIPPED (2026-08-19 → 2026-08-20)
-
-- `docs/CURRENT_STATE.md` — ~114 capability rows, each with proof rung, file
-  path, and evidence. Explicit "not yet surveyed" section so absence is never
-  read as absence. **~60% coverage, stated up front, not hidden.**
-- `CLAUDE.md` — opens by routing to it, grep-first, before `PHILOSOPHY.md` and
-  before `THREAD_HANDOFF.md`.
-- `docs/THREAD_HANDOFF.md` — relabelled as history, its own two stale
-  present-tense claims named inline as the demonstration. All 3,992 lines and
-  every ruling preserved.
-- `.claude/hooks/session_start.sh` + `.claude/settings.json` — fires
-  automatically at the start of every thread, prints the three-document
-  priority order, and runs the staleness check itself.
-- The close ritual, written directly into `CURRENT_STATE.md`'s own
-  "CLOSING A THREAD" section, with a paste-able prompt.
-- Wave 1 complete: 44 capabilities, independently adversarially verified (40
-  had a claim corrected on review — mostly downgraded one rung, two reversed
-  outright, one *upgraded* to `PRODUCTION_PROVEN`). Folded into the file.
-- A second, independent PR-level review by Codex on the Asset Management and
-  Meeting Evidence domains, spot-checked (4/5 claims confirmed against real
-  source) and folded in — including the second and third genuinely
-  `PRODUCTION_PROVEN` findings in the whole system (Meeting Evidence webhook
-  ingress; binding/finality), both stated narrowly next to the fact that the
-  pipeline downstream of them still produces zero receipts.
-- The pricing bug (`agent.js` quoting `units.market_rent` directly to real
-  prospects, unit-530 incident, $237 off, nine phones) documented in full and
-  handed to a separate thread to fix. Recorded as defect #1.
-- A shareable findings report (`04_FINDINGS_REPORT.md`) written for an
-  audience outside this repo.
-
-## KNOWN GAPS — stated, not hidden
-
-- **~40% of the codebase is unsurveyed.** See "WHAT'S ACTUALLY LEFT" above.
-- **The gate doesn't exist yet.** The close ritual is a convention, not an
-  enforcement mechanism.
-- **Production may still not run `main`.** Check `CURRENT_STATE.md`'s own
-  snapshot for the current answer before assuming this is resolved.
-- **The pricing bug's fix status** lives in whatever thread is handling it,
-  not here — check `CURRENT_STATE.md` defect #1 for its current state.
+- Roughly 40% of the codebase is at headline survey depth or unsurveyed.
+- The close ritual is not mechanically enforced.
+- App-repo doors, `server.js`'s legacy inline surfaces, and `tools/` have
+  real detail sitting in `05_WAVE2_RESULTS.md` that hasn't been promoted.
 
 ---
 
 ## STANDING CONSTRAINTS (unchanged)
 
-- **No product code changes from this build effort.** This is documentation
-  and one hook. If a thread working from this file starts editing `src/`, it
-  has drifted from the assignment — that belongs to whatever thread owns the
-  actual fix (pricing, teams, etc.), not to the CURRENT_STATE.md build.
+- **No product code changes from work on this file.** Everything here is
+  documentation and one hook. Code fixes belong to whatever thread owns that
+  fix, coordinated through `CURRENT_STATE.md`, not made here.
 - **No taxonomy improvement without the owner.** Evidence grain first, always.
-- **Never upgrade a row because code looks finished.** Only an observed proof
-  rung upgrades a row.
+- **Never upgrade a row because code looks finished, or because a deploy
+  happened.** Only an actual observation moves a rung — see defect #1's own
+  entry for the live example: deployed and not yet `PRODUCTION_PROVEN`,
+  stated plainly, on purpose.
 - **`NOT_FOUND` over a plausible guess**, always.
+- **Verify before recording, in both directions.** Every cross-thread report
+  today was checked against real source before being written down, and at
+  least one of those checks corrected the checker, not just the report.
 
-## HISTORICAL BUILD ARTIFACTS IN THIS FOLDER
-
-Kept for provenance, not required reading to continue the work:
+## FILES IN THIS FOLDER
 
 | File | What it is |
 |---|---|
 | `01_DESIGN_SPEC.md` | The three rules locked with the owner, before any row was written |
 | `02_INVENTORY_DRAFT.md` | The raw evidence-grain draft that became `CURRENT_STATE.md` |
-| `03_WAVE1_RESULTS.md` | Full wave 1 detail — all 44 capabilities, claimed vs. adversarially-verified rung |
+| `03_WAVE1_RESULTS.md` | Full wave 1 detail — 44 capabilities, claimed vs. verified rung |
 | `04_FINDINGS_REPORT.md` | The shareable version, written for an outside audience |
-| `wave1_new_domains.js` | Re-runnable — already run once, results are in `CURRENT_STATE.md` |
-| `wave2_coverage_gaps.js` | Re-runnable — **not yet run to completion**, this is the actual next step |
+| `05_WAVE2_RESULTS.md` | Full wave 2 detail — 148 capabilities, not yet promoted row-by-row |
+| `wave1_new_domains.js` / `wave2_coverage_gaps.js` | Both re-runnable; both already run to completion once |
