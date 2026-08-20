@@ -54,30 +54,48 @@ There is no pricing difference between layouts within a physical unit type.
 
 ## PRICING — PER BED PER MONTH
 
-Effective for **Spring 2027** and **2027–28 leasing**.
+**Only the 12-month term is published.** Confirmed 2026-08-20.
 
-| Type | Standard | Short-term (+$150) |
-|---|---:|---:|
-| 2BR / 1BA | $850 | $1,000 |
-| 3BR / 1BA | $750 | $900 |
-| 3BR / 1.5BA | $775 | $925 |
+| Type | Published rent (12 months) |
+|---|---:|
+| 2BR / 1BA | **$850** |
+| 3BR / 1BA | **$750** |
+| 3BR / 1.5BA | **$775** |
 
-Renewal rent equals new-lease rent.
+Renewal rent equals new-lease rent. Effective for **Spring 2027** and
+**2027–28 leasing**.
 
-> **⚠ Open: what counts as "short term."** The system stores a rent per
-> `(unit_type, lease_term_months)` pair. Skyline's live book contains 12-month,
-> ~10-month (to May 31), ~7-month (spring), and ~5-month (fall-only) leases. The
-> +$150 needs to name **which term lengths it applies to** before pricing can be
-> published — a row per term, or a rule that maps term length to standard vs
-> short.
+### Short terms are a negotiation, not a published price
 
-> **⚠ Publishing two price levels activates defect #14.** When a prospect asks a
-> price without naming a term, `pricing_adapter.js:101` takes `terms[0]`, which
-> is deterministically the **shortest** term — the $1,000/$900/$925 column. The
-> most common question in leasing would be answered with the highest number on
-> the sheet. This must be resolved before publication, not after.
+7-month and 5-month leases are **short**. They carry **+$150/bed**, and they are
+**deliberately not published**: they are not preferred inventory, they are taken
+when leasing is slow, and the premium is upsold by a person.
 
----
+**What that makes the system do, which is exactly right:**
+
+- Asked a price with no term named, the agent quotes **$850 / $750 / $775** —
+  the only published term, so nothing is being guessed.
+- Asked about a 5- or 7-month lease, the adapter finds no published row for that
+  term and returns `term_not_published` — an honest handoff, not a number. The
+  conversation reaches a human, which is where an upsell belongs.
+- **No AI surface can quote the +$150.** It exists in this document and in the
+  leasing team's heads, and nowhere the software can reach. That is the correct
+  containment for a discretionary price.
+
+> ### Defect #14 does not fire at Skyline
+>
+> `pricing_adapter.js:101` takes `terms[0]` when no term is named, which is
+> deterministically the **shortest** published term. With three terms published
+> that would have quoted the short-term premium to everyone who asked a plain
+> price question — the commonest question in leasing, answered with the dearest
+> number on the sheet.
+>
+> Publishing one term removes the ambiguity at its source rather than papering
+> over it: with a single row there is no wrong row to pick.
+>
+> **The defect is still latent.** It bites the first property that publishes two
+> terms. It is not fixed, and this decision is not a fix — it is Skyline
+> declining to stand in front of it.
 
 ## FEES
 

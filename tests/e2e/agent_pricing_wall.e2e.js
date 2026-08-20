@@ -117,6 +117,25 @@ const bad = (l, d="") => { fail++; console.log(`  ✗ ${l}${d ? "  — " + d : "
       ? ok("the number states its basis", q2.proof.basis)
       : bad("no proof of basis", JSON.stringify(q2.proof));
   }
+  //  ── 4 · A TERM THAT WAS NOT PUBLISHED IS REFUSED, NOT SUBSTITUTED ──
+  //  Skyline publishes ONE term (12 months) and treats 5- and 7-month leases
+  //  as an upsell a person negotiates. That only holds if asking for an
+  //  unpublished term produces a handoff rather than the published number
+  //  quietly standing in for it — a prospect asking about a 5-month lease and
+  //  hearing the 12-month rate has been misquoted just as surely as by a
+  //  legacy column.
+  console.log("\n── 4 · an UNPUBLISHED term is refused, not substituted ──");
+  const q3 = await quotablePricing(pool, { property_id: prop, unit_type_id: ut, lease_term_months: 5 });
+  q3.quotable === false
+    ? ok("a 5-month term is not quotable", q3.reason)
+    : bad("QUOTED AN UNPUBLISHED TERM", `${q3.rent} for ${q3.lease_term_months}mo`);
+  q3.reason === "term_not_published"
+    ? ok("and it names why", q3.reason)
+    : bad("wrong refusal reason", String(q3.reason));
+  !JSON.stringify(q3).includes(String(GOVERNED))
+    ? ok("the published 12-month rent does not leak into the refusal")
+    : bad("THE 12-MONTH RENT APPEARS IN A 5-MONTH REFUSAL");
+
   !JSON.stringify(q2).includes(String(SENTINEL))
     ? ok("the sentinel appears nowhere in the quote")
     : bad("THE SENTINEL IS IN THE QUOTE");
