@@ -83,36 +83,68 @@ const rule = () => L("═══════════════════�
   L(`  role asked ${ROLE}   (authority-bearing roles: ${[...ASSIGNABLE_ROLES].join(", ")})`);
   L(`  searching for people matching "${QUERY}"\n`);
 
+  //  ── FIND THE IDENTITIES BY PROVEN AUTHORITY, NOT BY NAME ──────────
+  //  Name matching failed once already: four person rows carry "Zitelli"
+  //  (one a tenant, two duplicate staff rows, one a different human) and
+  //  the login is called "KZ", so a name search found no login at all.
+  //  A person who ALREADY holds an authority-bearing assignment somewhere
+  //  is governed-staff by evidence rather than by spelling.
+  const authPeople = (await pool.query(`
+    select p.id as person_id, p.name as person_name, p.email, p.lifecycle_status,
+           pr.name as holds_on, a.role,
+           u.id as user_id, u.name as user_name, u.account_kind, u.is_active
+      from assignments a
+      join persons p on p.id = a.person_id
+      join properties pr on pr.id = a.property_id
+      left join users u on u.person_id = p.id
+     where a.is_active and a.role in ('owner','asset_manager')
+     order by p.name`)).rows;
+
+  L("  ── people who already hold authority somewhere (governed by evidence) ──");
+  if (!authPeople.length) L("     (nobody holds an authority-bearing assignment anywhere)");
+  for (const r of authPeople)
+    L(`     ${r.person_name || "(unnamed)"} — ${r.role} on ${r.holds_on}\n` +
+      `        person ${r.person_id}  [${r.lifecycle_status}]  ${r.email || ""}\n` +
+      `        login  ${r.user_id ? r.user_id + "  " + (r.user_name || "") + "  kind=" + r.account_kind : "NOT LINKED TO ANY LOGIN"}`);
+
+  //  Optional name searches, kept for context only.
   const persons = (await pool.query(
-    `select id, name, email, lifecycle_status, source from persons
+    `select id, name, email, lifecycle_status from persons
       where name ilike $1 or coalesce(email,'') ilike $1 order by name limit 10`,
     [`%${QUERY}%`])).rows;
+  const uq = process.env.USER_QUERY || QUERY;
   const users = (await pool.query(
     `select id, name, email, account_kind, person_id, is_active from users
       where name ilike $1 or coalesce(email,'') ilike $1 order by name limit 10`,
-    [`%${QUERY}%`])).rows;
-
-  L("  ── candidate persons ──");
+    [`%${uq}%`])).rows;
+  L(`\n  ── persons matching "${QUERY}" ──`);
   if (!persons.length) L("     (none)");
-  for (const p of persons) L(`     ${p.id}  ${p.name || "(unnamed)"}  ${p.email || ""}  [${p.lifecycle_status}]`);
-  L("  ── candidate logins ──");
+  for (const p2 of persons) L(`     ${p2.id}  ${p2.name || "(unnamed)"}  ${p2.email || ""}  [${p2.lifecycle_status}]`);
+  L(`  ── logins matching "${uq}" ──`);
   if (!users.length) L("     (none)");
   for (const u of users)
-    L(`     ${u.id}  ${u.name || "(unnamed)"}  ${u.email || ""}  kind=${u.account_kind} ` +
-      `person_id=${u.person_id || "NONE"} active=${u.is_active}`);
+    L(`     ${u.id}  ${u.name || "(unnamed)"}  ${u.email || ""}  kind=${u.account_kind} person_id=${u.person_id || "NONE"}`);
 
-  //  Prefer a login already governed-linked to a person: that pair is the
-  //  one the resolver can actually act on.
+  //  Prefer a linked pair that already holds authority somewhere.
   let pair = null;
-  for (const u of users) {
-    if (u.person_id && persons.some((p) => String(p.id) === String(u.person_id))) { pair = { u, p: persons.find((p) => String(p.id) === String(u.person_id)) }; break; }
+  const linked = authPeople.find((r) => r.user_id);
+  if (linked) pair = { u: { id: linked.user_id, name: linked.user_name }, p: { id: linked.person_id, name: linked.person_name } };
+  if (!pair) {
+    const u2 = users.find((u) => u.person_id);
+    if (u2) {
+      const p3 = (await pool.query("select id, name from persons where id=$1", [u2.person_id])).rows[0];
+      if (p3) pair = { u: u2, p: p3 };
+    }
   }
-  if (!pair && users.length && users[0].person_id) {
-    const p = (await pool.query("select id, name from persons where id=$1", [users[0].person_id])).rows[0];
-    if (p) pair = { u: users[0], p };
+  if (!pair) {
+    L("\n  ✗ CANNOT FORM A (login, person) PAIR.");
+    L("    Nobody holding authority is linked to a login, and no searched");
+    L("    login carries a person_id. THIS IS THE FINDING: pricing authority");
+    L("    resolves through a person, and the account that would exercise it");
+    L("    is not governed-linked to one. That link is a separate,");
+    L("    attributable write — it is not something this dry run can assume.");
+    await pool.end(); return;
   }
-  if (!pair && users.length && persons.length) pair = { u: users[0], p: persons[0] };
-  if (!pair) { L("\n  cannot form a (login, person) pair to ask about."); await pool.end(); return; }
 
   L(`\n  asking about: login ${pair.u.name || pair.u.id}  ×  person ${pair.p.name || pair.p.id}\n`);
 
