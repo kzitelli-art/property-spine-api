@@ -38,24 +38,24 @@ CURRENT SOURCE / RUNTIME  →  CURRENT_STATE.md  →  PHILOSOPHY  →  THREAD_HA
 ## STATE SNAPSHOT
 
 ```text
-API verified against    77f93f5     2026-08-18  (github main)
-PRODUCTION DEPLOYED     30cb992     2026-08-19  ← 39 commits AHEAD of main
+API verified against    bcd3089     2026-08-20  (github main, deployed commit)
+PRODUCTION DEPLOYED     bcd3089     2026-08-20  ← confirmed by owner, RESOLVED #7
 APP verified against    c6769ba     2026-08-18
 Production ledger       ceiling 187 (schema)
-Migrations on main      187         → RESOLVED 2026-08-20 (PR #128), was behind by 6
+Migrations on main      187         → matches production, resolved by PR #128
 Surveyed / verified     2026-08-19 (wave 1) · 2026-08-20 (Codex PR review, AM
                         domains) · 2026-08-20 (wave 2, 148 capabilities:
                         teams/access, management door, onboarding intake,
                         money/pricing, app repo, server.js inline, tools/)
+                        · 2026-08-20 (pricing fix deployed, PR #128, live)
 ```
 
-⚠ **Production does not run `main`.** The deployed commit `30cb992` lives only on
-`claude/property-spine-orientation-cso2ao` and carries migrations 182–187, which
-`main` does not have. Any deploy of `main` as it stands should safely refuse to
-start (schema/ledger mismatch) rather than silently regress — confirm this before
-assuming `main` is deployable. Rows below citing "ledger ceiling 176" reflect the
-survey commit, not the current production reality; reconcile once that branch
-reaches `main`.
+✔ **RESOLVED 2026-08-20: production now runs `main`'s lineage.** Was: the
+deployed commit lived only on a separate branch, 39+ commits ahead, carrying
+migrations `main` lacked. PR #128 landed that branch on `main`; the owner then
+deployed `main`'s head (`bcd3089`) manually from the Render dashboard and
+confirmed it live directly. See defect #1 for what shipped in that deploy, and
+defect #7's row for the full resolution history — kept as a record, not deleted.
 
 **Staleness check — run this, do not trust the SHA above.** Naming a SHA in a file
 is self-defeating: committing the file changes the SHA. So the guarantee is stated
@@ -96,7 +96,7 @@ with evidence — which is the failure this file exists to end.
 
 | # | Defect | Evidence |
 |---|---|---|
-| 1 | **FIXED, MERGED TO `main` (PR #128, `5ab8629`) — CONFIRMED NOT YET DEPLOYED.** ~~The leasing agent quotes `units.market_rent` directly to prospects~~ — both leaks (the system-prompt read, **and a second path the original finding missed**: `offeredUnits` carried `market_rent` into a tool-result *list*) now route through `quotablePricing()`. Independently reverified on `main` after merge: `market_rent` appears only in comments explaining the old defect. Proof: `tests/e2e/agent_pricing_wall.e2e.js`, real Postgres, a sentinel value that must appear in neither the no-pricing-published nor the pricing-published case — CI green. Rung: real-DB proof, not HTTP/browser. **Deploys are manual (see #11) — merging to `main` does not put this in production.** The `market_rent` prospect-facing leak is **still live in production until someone actually runs the deploy.** | `git show origin/main:src/agent/agent.js` |
+| 1 | **DEPLOYED, 2026-08-20 — NOT YET `PRODUCTION_PROVEN`.** ~~The leasing agent quotes `units.market_rent` directly to prospects~~ — fixed (PR #128), and now live in production at commit `bcd3089` (main's head at deploy time), deployed manually from the Render dashboard, confirmed live by the owner directly. **Deploying is not proving** — nobody has yet asked the live agent a price question and observed a governed answer or an honest handoff. That single observation is what moves this row to `PRODUCTION_PROVEN`; until then it stays at the rung the e2e proof earned. | `git show origin/main:src/agent/agent.js`; deploy confirmed by owner |
 | 2 | **`docs/deployment.md` instructs incorrectly about the one mechanism protecting production.** Says startup *"runs any unapplied migrations."* It does not — it verifies and **refuses to start**. | `docs/deployment.md:51` vs `migrations/migrate.js` |
 | 3 | **An operator screen calls routes that 404.** A whole activation flow written, never mounted. | `src/identity/activation.js`; `grep -c "identity/activation" server.js` = **0** |
 | 4 | **A test defaults to hitting PRODUCTION**, with no run receipt anywhere. | `tests/full_lifecycle_arc.js:47` |
@@ -108,8 +108,11 @@ with evidence — which is the failure this file exists to end.
 | 10 | **Two inbound Twilio SMS webhooks, two different security postures.** `/communications/inbound-sms` documents itself as fail-closed on signature verification. `/intake/twilio` (a second, separate webhook) is gated only by a phone-number allowlist (`INTAKE_ALLOWED_NUMBERS`) — no signature check found. | `src/onboarding/intake.js:220` vs `src/comms/communications_boundary.js` |
 | 11 | **`CLAUDE.md`'s own deploy description doesn't match reality.** States *"Deploys to Render on merge to main,"* which reads as automatic push-to-deploy. The actual mechanism is `deploy.sh` — a manual script calling Render's API directly, run by a human. If it's meant to be automatic, it currently isn't. | `deploy.sh` vs `CLAUDE.md`'s "Repo orientation" section |
 | 12 | **A real hole in published-pricing immutability.** `pricing_terms` correctly refuses direct deletion once published (*"the terms of a published pricing version are immutable"*) — but `delete from properties` **cascades straight through the freeze** with no refusal. Found while fixing defect #1; deliberately not fixed — it's a schema-level ruling, not a pricing-adapter change, and is the owner's call. | Documented, not exploited, in `tests/e2e/agent_pricing_wall.e2e.js`'s own teardown comments, branch `claude/property-spine-orientation-cso2ao` |
-| 13 | **CLAIMED — `claude/property-spine-orientation-cso2ao`.** Four falsification tests are pinned to a hardcoded demo UUID and nothing runs them. Verified red before AND after the pricing fix, identically, by stashing — they were never testing what they claim to test. | `tests/` — unnamed in the report, flagged for follow-up rather than fixed |
+| 13 | **CLAIMED, NOT STARTED — open for either party.** Four falsification tests are pinned to a hardcoded demo UUID and nothing runs them. Verified red before AND after the pricing fix, identically, by stashing. `claude/property-spine-orientation-cso2ao` claimed this then spent the time on deploy support instead. Say who's taking it before starting, to avoid duplicate work. | `tests/` — unnamed in the report, flagged for follow-up rather than fixed |
 | 14 | **⛔ WAITING ON AN OWNER RULING — DORMANT TODAY, GOES LIVE THE MOMENT MULTI-TERM PRICING PUBLISHES.** **Correction to this row's own prior entry**: I initially called this "disclosed, not the same severity as #1." That was wrong — I hadn't checked the sort order or a real numeric case. `effective_pricing.js:99` sorts terms shortest-first (`sort_order nulls last, lease_term_months`), so `terms[0]` isn't arbitrary — it is **always the shortest published term**. For Skyline's imminent multi-term sheet (fall ~5mo ≈ $900/bed, spring ~7mo, full-year 12mo = $750/bed), the shortest term is **also the most expensive**. A prospect asking *"how much is a 3-bedroom?"* with no term specified gets quoted the **highest price on the sheet**, returned as `quotable: true`, `proof.basis = "published_pricing_version"` — a wrong number wearing a governance receipt. `effective_pricing.js` itself already refuses this exact case honestly (`lease_term_not_selected`); `pricing_adapter.js` quietly guesses instead of inheriting that refusal. **Currently dormant only because every property today publishes at most one term** — the moment Skyline's sheet goes live, `terms[0]` stops being harmless. Reporting thread deliberately did not fix this: the real fix requires a product ruling (refuse until a term is named, matching `effective_pricing.js`'s precedent, at the cost of the agent handing off far more often — **or** add a "primary term" concept to the data model and disclose it explicitly), not a code judgment call. **Waiting on the owner.** | `src/agent/pricing_adapter.js` ~line 101, `src/money/effective_pricing.js:99` |
+| 14b | **A THIRD OPTION FOR #14, FOUND WHILE VERIFYING THE DEPLOY: the menu already exists.** `effective_pricing.js:399` — when no term is supplied it does not just refuse, it returns `published_terms`, the sorted list of every term actually on the sheet, specifically so a caller can present the choice instead of guessing. Its own comment: *"With no term supplied the answer is the published menu."* This means a third ruling option for #14 beyond "refuse" or "add a primary-term data field": **have the agent present the published menu and ask which term the prospect wants** — reusing data that already exists, no schema change. Still the owner's call, but the cheapest option to build. | `src/money/effective_pricing.js:399` |
+| 15 | **RESOLVED, 2026-08-20 — a real privilege-escalation path is now closed.** `orgchart.js` could previously create `owner`/`asset_manager` roles — pricing authority (see #14) among them — through a route gated only by the shared `x-operator-key`, with **no person-level check and no actor recorded**. Landed in the same deploy as defect #1's fix (45 commits, 9 runtime files, zero migrations). Measured on a disposable DB by the reporting thread; not yet independently re-verified against production by me. Kept as a record, not deleted, per this file's own rule. | `src/surfaces/orgchart.js`, `src/identity/authority_resolution.js` — `ASSIGNABLE_ROLES = new Set(["owner", "asset_manager"])` confirmed on `main` |
+| 16 | **⛔ ACTION NEEDED — a live production database credential was pasted into a chat session during this work.** Not a code defect; recorded here because it's a live exposure and this file is where defects get tracked to closure. Rotate it: Neon → Roles → `neondb_owner` → Reset, then update `DATABASE_URL` in Render. Requires the owner directly — no tool in any thread working this file has Neon dashboard access. | Reported directly by the reporting thread, 2026-08-20 |
 
 **Correction, not a new defect — the exclusion wall is better than earlier feared, for one route.** `tests/phase_zero_property_boundary.db.js` genuinely proves, with real Postgres and real HTTP, that a second real user without a property assignment is refused by the property-switcher (`GET/POST /operator/properties[/select]`). The earlier "only tested from inside" concern was wrong for *that* route — but confirmed true, and worse than described, for the roster route above (defect #9): not "only tested from inside," not tested at all, and structurally missing the check its own sibling routes have.
 
