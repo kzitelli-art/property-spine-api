@@ -44,7 +44,7 @@ const PLAN = [
   //  STU00017 is not a bath count. A synthetic number matches no override and
   //  the tool refuses — correctly. See skyline_unit_type_mapping.e2e.js.
   { code: "STU00017", units: 4,  beds: 3, bedrooms: 3, bathrooms: 1,
-    numbers: ["116", "216", "316", "416"] },
+    numbers: ["1417-116", "1417-216", "1417-316", "1417-416"] },
 ];
 
 (async () => {

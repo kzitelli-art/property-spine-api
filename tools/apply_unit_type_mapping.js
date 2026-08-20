@@ -96,7 +96,7 @@ const RULINGS = [
     //  mistake it for one. If the distinction ever needs to be defended from
     //  evidence, the evidence is not in the rent roll.
     receipt: "skyline_owner_statement_2026-08-20_source_silent_on_bath_distinction",
-    note: "Skyline (1417 N 15th), bed-grained. Room grain corroborated by source; bath distinction is owner knowledge, not in the source.",
+    note: "Skyline (1417 N 15th), bed-grained. Room grain corroborated by source; bath distinction CONTRADICTS the source and comes from physical inspection.",
     //  ── OUR VOCABULARY, NOT THE VENDOR'S ──────────────────────────
     //  STU00015/16/17 are Yardi's "Unit/Room Type" strings. They are how the
     //  SOURCE names a floorplan; they are not how Spine should. A canonical
@@ -143,9 +143,17 @@ const RULINGS = [
     //  match a real unit or the whole run refuses — a unit_number typo'd
     //  here would otherwise leave that unit silently typed 1BA, which is
     //  the exact failure this list exists to prevent.
+    //
+    //  THE PREFIX IS NOT DECORATION. Production carries `1417-116` for the
+    //  real apartment AND separate rows named `116 - A`, `116 - B`,
+    //  `116 - C` — legacy units shaped like beds, 159 of them across the
+    //  property, each with a null bed and no source code. Matching on a
+    //  bare "116" found none of them and would have been ambiguous if it
+    //  had. The match is exact, against the prefixed number, so a bed-shaped
+    //  leftover can never receive a bathroom.
     unit_overrides: [
-      { unit_number: "116", code: "3BR-1.5BA", why: "physical inspection 2026-08-20 (M. Grivna)" },
-      { unit_number: "416", code: "3BR-1.5BA", why: "physical inspection 2026-08-20 (M. Grivna)" },
+      { unit_number: "1417-116", code: "3BR-1.5BA", why: "physical inspection 2026-08-20 (M. Grivna)" },
+      { unit_number: "1417-416", code: "3BR-1.5BA", why: "physical inspection 2026-08-20 (M. Grivna)" },
     ],
   },
 ];

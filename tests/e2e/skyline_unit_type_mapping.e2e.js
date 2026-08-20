@@ -43,7 +43,7 @@ const PLAN = [
   { code: "STU00016", units: 56, beds: 2, bedrooms: 2, bathrooms: 1 },
   { code: "STU00015", units: 12, beds: 3, bedrooms: 3, bathrooms: 1 },
   { code: "STU00017", units: 4,  beds: 3, bedrooms: 3, bathrooms: 1,
-    numbers: ["116", "216", "316", "416"] },
+    numbers: ["1417-116", "1417-216", "1417-316", "1417-416"] },
 ];
 
 function runTool(args) {
@@ -95,12 +95,31 @@ function runTool(args) {
       }
     }
   }
+  //  ── THE DECOYS PRODUCTION ACTUALLY CARRIES ────────────────────────
+  //  Alongside `1417-116` the live database holds separate rows named
+  //  "116 - A", "116 - B", "116 - C" — legacy units shaped like beds, 159 of
+  //  them across the property, each with a null bed and no source code. They
+  //  are why the override list must carry the prefixed number and match
+  //  exactly: a bare "116" finds none of these, and a LIKE would find all of
+  //  them. Without them in the replica this proof would not cover the risk
+  //  it exists for, so they are here, uncoded, exactly as they are live.
+  const decoys = [];
+  for (const base of ["1417-116", "1417-416"]) {
+    for (const letter of ["A", "B", "C"]) {
+      const d = (await pool.query(
+        `insert into units (property_id, unit_number) values ($1,$2) returning id`,
+        [prop, `${base.replace("1417-", "")} - ${letter}`])).rows[0].id;
+      await pool.query(`delete from spaces where unit_id=$1`, [d]);
+      decoys.push(d);
+    }
+  }
+
   const shape = (await pool.query(`
     select (select count(*)::int from units where property_id=$1) u,
            (select count(*)::int from spaces s join units x on x.id=s.unit_id where x.property_id=$1) s,
            (select count(*)::int from units where property_id=$1 and unit_type_id is not null) t`, [prop])).rows[0];
-  shape.u === 72 && shape.s === 160 && shape.t === 0
-    ? ok("replica matches production", `${shape.u} units / ${shape.s} beds / ${shape.t} types`)
+  shape.u === 78 && shape.s === 160 && shape.t === 0
+    ? ok("replica matches production", `72 real + 6 bed-shaped legacy / ${shape.s} beds / ${shape.t} types`)
     : bad("replica wrong", JSON.stringify(shape));
 
   console.log("\n── 1 · DRY RUN through the canonical tool ──");
@@ -128,9 +147,21 @@ function runTool(args) {
            (select count(*)::int from spaces s join units u on u.id=s.unit_id
              where u.property_id=$1) as positions_total,
            (select count(*)::int from property_unit_types where property_id=$1) as types`, [prop])).rows[0];
-  cov.units_typed === 72 && cov.units_total === 72 ? ok("72 units covered") : bad("unit coverage", JSON.stringify(cov));
-  cov.positions_typed === 160 && cov.positions_total === 160 ? ok("160 positions covered") : bad("position coverage", JSON.stringify(cov));
-  (cov.units_total - cov.units_typed) === 0 ? ok("0 unmapped") : bad("unmapped units", String(cov.units_total - cov.units_typed));
+  //  ── "COVERED" MEANS EVERY REAL UNIT, NOT EVERY ROW ────────────────
+  //  This asserted 0 unmapped when the replica held only real units. Now it
+  //  holds the bed-shaped legacy rows production actually carries, and those
+  //  MUST stay unmapped — they have no source code, no bed, and no business
+  //  receiving a unit type. Demanding zero here would have been demanding
+  //  that the tool type them.
+  //
+  //  Production reports the same shape at larger scale: 160 positions with a
+  //  deterministic code and 159 left "Not configured". The acceptance
+  //  criterion is that every CODED position is typed and nothing else is.
+  cov.units_typed === 72 ? ok("all 72 real units covered") : bad("unit coverage", JSON.stringify(cov));
+  cov.positions_typed === 160 ? ok("160 positions covered") : bad("position coverage", JSON.stringify(cov));
+  (cov.units_total - cov.units_typed) === 6
+    ? ok("exactly the 6 legacy rows unmapped", "uncoded inventory is left alone, not typed")
+    : bad("wrong number unmapped", String(cov.units_total - cov.units_typed));
   cov.types === 3 ? ok("exactly 3 governed types", "no extra mappings") : bad("unexpected type count", String(cov.types));
 
   const byType = (await pool.query(`
@@ -156,6 +187,13 @@ function runTool(args) {
   pos.count === 160 && (pos.retired_excluded || {}).units === 0
     ? ok("canonical loader still sees 160, no retired inventory reintroduced")
     : bad("canonical loader disagrees", `count=${pos.count} retired=${JSON.stringify(pos.retired_excluded)}`);
+
+  const decoyTyped = (await pool.query(
+    `select count(*)::int n from units where id = any($1) and unit_type_id is not null`,
+    [decoys])).rows[0].n;
+  decoyTyped === 0
+    ? ok("the 6 bed-shaped legacy rows stay untyped", "an exact match cannot reach them")
+    : bad("A LEGACY BED-SHAPED ROW RECEIVED A UNIT TYPE", String(decoyTyped));
 
   console.log("\n── 4 · idempotence ──");
   const again = runTool(["--property", prop, "--apply"]);
