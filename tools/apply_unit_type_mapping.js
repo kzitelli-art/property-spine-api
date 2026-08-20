@@ -70,18 +70,29 @@ const RULINGS = [
     ],
   },
   {
-    //  ⚠ BASIS: OWNER STATEMENT, SOURCE CORROBORATION PENDING.
-    //  The bed counts are arithmetic from the committed July rent roll
-    //  (56 × 2 beds, 12 × 3 beds, 4 × 3 beds = 72 units / 160 positions).
-    //  What separates the two THREE-BED codes is an owner statement made
-    //  2026-08-20 — "12 are 3 bed 1 bath, 4 are 3 bed 1.5 baths" — not
-    //  something this tool derived. tools/release/unit_type_evidence.js
-    //  exists to corroborate it against the source and the April batch's
-    //  independent `type` values BEFORE this ruling is applied anywhere
-    //  that matters. If corroboration fails, the labels change here; the
-    //  mechanism does not.
-    receipt: "skyline_owner_statement_2026-08-20_pending_source_corroboration",
-    note: "Skyline (1417 N 15th), bed-grained. Bath distinction from owner statement.",
+    //  ⚠ BASIS: OWNER STATEMENT. SOURCE CORROBORATION WAS RUN AND FAILED.
+    //
+    //  What the committed source DOES establish, and it is not nothing:
+    //    · the room grain — STU00016 carries Room1/Room2, STU00015 and
+    //      STU00017 carry Room1/Room2/Room3 — which is why the bed counts
+    //      reconcile to 112 / 36 / 12 exactly;
+    //    · is_commercial = false on every row, supporting `residential`;
+    //    · the April rent roll agrees, but only by repeating the SAME code.
+    //
+    //  What it does NOT establish, checked rather than assumed:
+    //    · units.bedrooms and units.bathrooms are NULL for all 72 units;
+    //    · square footage is null/0 throughout;
+    //    · the rent roll's column is literally "Unit/Room Type" and carries
+    //      the bare code with no expansion, legend or lookup anywhere;
+    //    · nothing separates STU00015 from STU00017. Both are three-room,
+    //      both non-commercial, both carrying market_rent 875 in sample rows.
+    //
+    //  So "1 Bath" vs "1.5 Bath" is the OWNER'S KNOWLEDGE, recorded as such.
+    //  It is not a derivation, and this file must not let a later reader
+    //  mistake it for one. If the distinction ever needs to be defended from
+    //  evidence, the evidence is not in the rent roll.
+    receipt: "skyline_owner_statement_2026-08-20_source_silent_on_bath_distinction",
+    note: "Skyline (1417 N 15th), bed-grained. Room grain corroborated by source; bath distinction is owner knowledge, not in the source.",
     codes: [
       { code: "STU00016", label: "2 Bedroom",              sort: 10, use: "residential" },
       { code: "STU00015", label: "3 Bedroom / 1 Bath",     sort: 20, use: "residential" },

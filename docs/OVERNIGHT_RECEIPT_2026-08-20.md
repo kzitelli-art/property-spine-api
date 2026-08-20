@@ -236,3 +236,54 @@ been made to fail.
 160 positions with no `classification_source`, six unresolved 31-July baseline
 positions, duplicate KZ person rows, two empty Skyline property records. None
 appeared in any red on this path. They stay logged.
+
+
+---
+
+# Corroboration run — the source is silent on the bath distinction
+
+`unit_type_evidence.js` was run against production. Result:
+
+```text
+STU00015   12 units   36 positions   bedrooms NULL   bathrooms NULL   sqft 0
+STU00016   56 units  112 positions   bedrooms NULL   bathrooms NULL   sqft 0
+STU00017    4 units   12 positions   bedrooms NULL   bathrooms NULL   sqft 0
+```
+
+**What the source DOES establish** — and it is not nothing:
+
+- **The room grain.** `STU00016` carries `Room1/Room2`; `STU00015` and
+  `STU00017` carry `Room1/Room2/Room3`. That is why the bed counts
+  reconcile to 112 / 36 / 12 exactly, independent of anyone's memory.
+- **`is_commercial = false`** on every row, supporting `residential`.
+- **April agrees** — but only by repeating the identical code. Its `type`
+  column returns `STU00015`, `STU00016`, `STU00017`. Two rent rolls, one
+  vocabulary, no expansion of it.
+
+**What it does NOT establish:**
+
+- `units.bedrooms` and `units.bathrooms` are **NULL for all 72 units**
+- square footage is null/0 throughout
+- the rent-roll column is literally **`Unit/Room Type`**, carrying the bare
+  code with no legend, lookup or expansion anywhere in the file
+- **nothing separates `STU00015` from `STU00017`.** Both three-room, both
+  non-commercial, both showing `market_rent 875` in their sample rows
+
+```text
+DISTINGUISHER NOT ESTABLISHED
+```
+
+The ruling receipt was renamed from `…_pending_source_corroboration` to
+**`skyline_owner_statement_2026-08-20_source_silent_on_bath_distinction`**,
+because corroboration is no longer pending — it was run, and it came back
+silent. The labels still carry the owner's statement, recorded as owner
+knowledge rather than as a derivation, so no later reader can mistake one
+for the other. If that distinction ever has to be defended from evidence,
+the evidence is not in the rent roll.
+
+## A related finding, logged not chased
+
+Skyline's `units.bedrooms`, `units.bathrooms` and `square_feet` are empty
+across all 72 units. Nothing on the pricing path needed them, so nothing was
+done about it. It is recorded here because a leasing surface that wants to
+say "3 bed, 1.5 bath" to a prospect currently has nowhere to read it from.
