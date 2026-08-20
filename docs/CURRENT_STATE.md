@@ -38,12 +38,21 @@ CURRENT SOURCE / RUNTIME  →  CURRENT_STATE.md  →  PHILOSOPHY  →  THREAD_HA
 ## STATE SNAPSHOT
 
 ```text
-API verified against    77f93f5     2026-08-18
+API verified against    77f93f5     2026-08-18  (github main)
+PRODUCTION DEPLOYED     30cb992     2026-08-19  ← 39 commits AHEAD of main
 APP verified against    c6769ba     2026-08-18
-Production ledger       ceiling 176 (deployed sha e5497a4)
-Migrations on main      181         → 177,178,179,180,181 UNRELEASED
-Surveyed / verified     2026-08-19
+Production ledger       ceiling 187 (schema), 175 (ledger entries) — see note
+Migrations on main      181         → main is BEHIND production by 6 migrations
+Surveyed / verified     2026-08-19 (wave 1) · 2026-08-20 (Codex PR review, AM domains)
 ```
+
+⚠ **Production does not run `main`.** The deployed commit `30cb992` lives only on
+`claude/property-spine-orientation-cso2ao` and carries migrations 182–187, which
+`main` does not have. Any deploy of `main` as it stands should safely refuse to
+start (schema/ledger mismatch) rather than silently regress — confirm this before
+assuming `main` is deployable. Rows below citing "ledger ceiling 176" reflect the
+survey commit, not the current production reality; reconcile once that branch
+reaches `main`.
 
 **Staleness check — run this, do not trust the SHA above.** Naming a SHA in a file
 is self-defeating: committing the file changes the SHA. So the guarantee is stated
@@ -89,7 +98,8 @@ with evidence — which is the failure this file exists to end.
 | 3 | **An operator screen calls routes that 404.** A whole activation flow written, never mounted. | `src/identity/activation.js`; `grep -c "identity/activation" server.js` = **0** |
 | 4 | **A test defaults to hitting PRODUCTION**, with no run receipt anywhere. | `tests/full_lifecycle_arc.js:47` |
 | 5 | **Ask Spine has two obligation readers** (§7 violation). Its own header: *"Its QUERY LOGIC is sound and is re-expressed here."* | `src/agent/ask_spine_service.js` |
-| 6 | **The §40.11 gate scans 2 of ~15 domain dirs** — `["src/asset","src/tenancy"]`. Leasing, applications, maintenance, technician, comms, obligations, money, onboarding cannot fail it. | `tests/gate_ask_spine_readers.js:100` |
+| 6 | **The §40.11 gate scans 2 of ~15 domain dirs** — `["src/asset","src/tenancy"]`. Leasing, applications, maintenance, technician, comms, obligations, money, onboarding, **and now `src/meeting_evidence/`** cannot fail it. | `tests/gate_ask_spine_readers.js:100` |
+| 7 | **Production does not run `main`.** Deployed `30cb992` lives only on `claude/property-spine-orientation-cso2ao`, 39 commits ahead, carrying migrations 182–187 that `main` lacks. A deploy of `main` today should refuse to start on schema mismatch — confirm before assuming `main` is deployable, and land that branch before the gap widens further. | `git merge-base --is-ancestor 30cb992 origin/main` → **NO** |
 
 ---
 
@@ -99,6 +109,15 @@ with evidence — which is the failure this file exists to end.
 |---|---|
 | **Work-order completion guard** | `activation_id d93b08dd-c682-46d2-acf9-78ab6b960827` · `2026-08-12T01:49:57.866Z` · 16/16 on live instance `kbtb6` · irreversible |
 | **Migration release gate** | Runs on every boot via `prestart`; deployed sha enforces `EXPECTED_SHA` and refuses on mismatch |
+| **Meeting Evidence webhook ingress** (narrow) | Real delivery `c5cb8d0d-…` authenticated + retained byte-for-byte for a real provider meeting. Proves ingestion, not the pipeline downstream of it |
+| **Meeting Evidence binding + finality + rejection lineage** (narrow) | A real meeting bound to a real property, qualified final; three model rejections durably retained with no receipt |
+| **Meeting Receipt extraction advancement** (narrow, ×2) | Two real specimen runs each cleared one more validation gate post-deploy — proves the gate moved, not that a receipt was produced |
+
+**Five rows above say "narrow" on purpose.** Each is a real, specific, falsifiable
+production observation — not a green test suite. None of them means "the feature
+works end to end." The Meeting Receipt pipeline specifically has **zero accepted
+extractions and zero receipts produced**, despite three of its five entries here
+touching production. Say precisely what was observed; do not round up.
 
 Everything else in this document is **at best deployed, not observed.**
 
@@ -111,15 +130,26 @@ unsettled; do not invent one while adding rows.
 
 ## Asset Management — `src/asset/`
 
+**PR-level detail below courtesy of a direct review by the engineer who worked these
+PRs (Codex), 2026-08-20 — spot-checked by me: schema tables, gate scan dirs, `debt`
+registry state and the migration-181 header all confirmed exactly against the
+deployed commit `30cb992`. One quoted phrase (*"does not send email"*) did not
+resolve against any file I could reach — likely a runtime log or PR description
+outside this tree, not treated as confirmed.**
+
 | Capability | Rung | Ask Spine | Files / note |
 |---|---|---|---|
-| Compliance | `HTTP_PROVEN` + `BROWSER_VERIFIED` | registered | `compliance_*.js`. **The model to copy** — real request + real DB + real browser |
-| Utilities | `LOCALLY_EXERCISED` ⚠ | registered | `utility_*.js`. Registered but **never proven end-to-end** — HTTP test uses a fake pool; DB test skips the router |
-| Contracted Services | `LOCALLY_EXERCISED` ⚠ | registered | Same fake-pool pattern. Docs: *"not a production canonical write"* |
-| Insurance | `HTTP_PROVEN` + `BROWSER_VERIFIED` | **none** | `insurance_*.js`. *"NEVER seen on a production page by an entitled account"* |
-| Tax (Philadelphia) | `HTTP_PROVEN` + `BROWSER_VERIFIED` | **none** | `tax_*.js`, `philadelphia_tax_rules.js`. Clocks only, never amounts |
-| Debt | `HTTP_PROVEN` | registered | `debt_instrument_service.js`, `debt_position_read.js`. Migration 173 released |
-| Equity (Preferred + Common) | `HTTP_PROVEN` | registered | `equity_position_*.js`. Migration 174 released; **zero production rows, correctly** |
+| Compliance | `HTTP_PROVEN` + `BROWSER_VERIFIED` | registered | `compliance_*.js`. **The model to copy** — real request + real DB + real browser. Unchanged by recent AM PRs |
+| Utilities | `LOCALLY_EXERCISED` ⚠ | registered | `utility_*.js`. Registered but **never proven end-to-end** — HTTP test uses a fake pool; DB test skips the router. Unchanged by recent AM PRs |
+| Contracted Services — canonical domain | `LOCALLY_EXERCISED` ⚠ | registered | PRs #104/#105/#107. `contracted_service_http.test.js` uses `pool = { async connect() { return client; } }` — real Express, **fake pool**. Migrations 171/172 released, present in `30cb992`. Docs: *"evidence-backed population rehearsal, not a production canonical write"* |
+| Contracted Services — overview integration | `LOCALLY_EXERCISED` | registered | PR #113. `asset_management.js` now consumes the standing projection; **PR supplied no real HTTP/DB proof for the integration itself**. Underlying end-to-end gap unchanged |
+| Insurance | `HTTP_PROVEN` + `BROWSER_VERIFIED` | **none** (`pending`) | `insurance_*.js`. *"NEVER seen on a production page by an entitled account"* |
+| Tax (Philadelphia) | `HTTP_PROVEN` + `BROWSER_VERIFIED` | **none** (`pending`) | `tax_*.js`, `philadelphia_tax_rules.js`. Clocks only, never amounts |
+| Debt — canonical truth | `HTTP_PROVEN` | registered (PR #113) | PR #108. `debt_routes_http.db.js`: real `pg.Pool`, mounts the real AM surface, real `listen()`. Migration 173 released; production establishment recorded **21 source-backed rows**. No authenticated production-route receipt observed. *"THERE ARE NO WRITE ROUTES, AND THAT IS DELIBERATE."* Comparison/causal explanation unclaimed |
+| Debt — Ask Spine reader | `LOCALLY_EXERCISED` | registered | PR #113. `debt_ask_spine.test.js` uses hand-built fake services/reader + fake model — **no real DB or HTTP route in this test**, despite the domain being registered |
+| Equity — canonical domain | `HTTP_PROVEN` | registered | PR #114. `equity_routes_http.db.js`: real `pg.Pool`, real router, real socket, canonical writers, serialized reads. Migration 174 released; **zero production rows, correctly** |
+| Equity — Ask Spine reader | `LOCALLY_EXERCISED` | registered | PR #114. Test *"FAKES THE SAME TWO FUNCTIONS THE CAPITAL STACK UI CALLS"* — no real Ask Spine HTTP/DB proof |
+| Equity — ownership reconciliation | `LOCALLY_EXERCISED`/`HTTP_PROVEN` split | registered | PR #114. Real Postgres proves a 77.57% schedule stays `INCOMPLETE` (`equity_position_falsification.db.js`); the real-HTTP test only proves the `NOT_ESTABLISHED` case, not populated reconciliation. *"`accrued_preferred_return` is always `NOT_ESTABLISHED` for every preferred position, unconditionally, for Build 1."* Governing source clause pending |
 | Funding boundary wall | enforced | — | `tests/gate_funding_boundary.js` — tax/insurance funding cannot cross into economics |
 
 ## Leasing lifecycle — `src/{leasing,applications,tenancy,onboarding}/`
@@ -196,8 +226,12 @@ producing a valid completion through it is not.
 
 | Capability | Rung | Note |
 |---|---|---|
-| Meeting Evidence (Read AI webhook ingress) | `BUILT_BUT_DORMANT` | Migrations 175/176 **released**. Waits on `READ_AI_WEBHOOK_SIGNING_KEY` set in Render. *"No meeting record, interpretation or receipt has been created."* |
-| Meeting Receipt v0 pipeline | `BUILT_BUT_DORMANT` | Same gate |
+| Meeting Evidence (Read AI webhook ingress) | **`PRODUCTION_PROVEN`** ↑ | Wave 1 found `BUILT_BUT_DORMANT`, waiting on a signing key. **Superseded** — per Codex PR #115 direct review, spot-checked against schema at `30cb992`: a real webhook delivery (`c5cb8d0d-c5ab-401b-9d38-67a75787b28c`) was authenticated and retained byte-for-byte for provider meeting `be96f9ac-5996-4271-84a2-7098801d4fc4`. Initially unbound, zero downstream writes — narrow proof, not "the feature works end to end." Migration header: *"It does NOT wire transcripts into Ask Spine."* Not registered |
+| Meeting Evidence — binding, finality, rejection lineage | **`PRODUCTION_PROVEN`** (narrow) | PR #118, migration 181. The authentic meeting above was manually bound to a real property, qualified final, and three rejected model attempts were durably retained with no receipts/writes. Gate still does not scan `src/meeting_evidence/` — absent from Ask Spine by design, and the gate cannot detect that absence |
+| Meeting Receipt v0 pipeline — successful generation | `DEPLOYED`, **not observed** | PR #115, migration 176. Code live in `30cb992`; three real extraction attempts entered the workflow, **all three rejected**. Extraction runs: 0 accepted. Receipts: 0. Local HTTP tests use a fake workflow/pool; DB proofs bypass HTTP entirely |
+| Meeting Receipt — unresolved named owner handling | `PRODUCTION_PROVEN` (narrow) | PR #120. Post-deploy, `extractor_unresolved_label_forbidden` stopped blocking the real specimen; next attempt advanced to evidence-role validation. Does not raise the pipeline's overall rung — no person ID attaches without an exact property-person match |
+| Meeting Receipt — prompt evidence invariants | `PRODUCTION_PROVEN` (narrow) | PR #122. Real prompt revision v1 advanced past prior temporal/claim-basis failures, stopped at `extractor_quote_speaker_mismatch`. Still zero accepted extractions, receipts, emails, Ask Spine access, or canonical writes |
+| Meeting Receipt — server-owned evidence addressing | `LOCALLY_EXERCISED` | Active, **unmerged** branch. Runtime 80/80, extractor 69/69 per Codex — **not independently re-run by me**. Could not verify against real Postgres today (Docker unavailable to that reviewer). *"Invalid output is rejected by the server, not repaired."* Real Receipt 001 remains the missing proof |
 | Person ingress boundary | `LOCALLY_EXERCISED` | Migration 177 **unreleased** |
 | Person correction (anti-merge supersession) | `BUILT_BUT_DORMANT` | Retire + point, move nothing |
 | External resident identity / crosswalk | `REPORTED` | **Blocks establishing opening truth** |
