@@ -62,8 +62,16 @@ There is no pricing difference between layouts within a physical unit type.
 | 3BR / 1BA | **$750** |
 | 3BR / 1.5BA | **$775** |
 
-Renewal rent equals new-lease rent. Effective for **Spring 2027** and
-**2027–28 leasing**.
+Renewal rent equals new-lease rent. These are the rents for **Spring 2027**
+and **2027–28 leasing**.
+
+> **The sheet is in force from the day it is published — not from the lease
+> start date.** `property_pricing_versions.effective_from` decides when the
+> agent may quote these numbers; `effectivePropertyPricing` selects
+> `effective_from <= today`. Dating it 2027-01-01 because the spring lease
+> begins then would silence the agent for four months, through the very
+> pre-leasing season the rents were set for. The lease's own start date is a
+> separate field on the lease.
 
 ### Short terms are a negotiation, not a published price
 

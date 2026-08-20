@@ -57,7 +57,17 @@ const TERM_MONTHS = 12;
 const arg = (n) => { const i = process.argv.indexOf("--" + n); return i > -1 ? process.argv[i + 1] : null; };
 const APPLY = process.argv.includes("--apply");
 const PROPERTY = arg("property"), PERSON = arg("person");
-const EFFECTIVE_FROM = arg("effective-from") || "2027-01-01";
+//  ── THE DEFAULT IS TODAY, AND THAT IS THE WHOLE POINT ────────────────
+//  This defaulted to 2027-01-01 because the spring lease starts then. Wrong
+//  field: effective_from is when the SHEET is in force for quoting, and the
+//  lease's start date lives on the lease. Published that way the agent would
+//  have quoted nothing for four months, straight through the pre-leasing
+//  season these rents exist for.
+//
+//  A sheet is in force from the day it is published unless there is a
+//  deliberate reason otherwise, so that is the default. --effective-from
+//  still takes a date, and the tool warns when it is ahead of today.
+const EFFECTIVE_FROM = arg("effective-from") || new Date().toISOString().slice(0, 10);
 
 const url = process.env.DATABASE_URL;
 if (!url) { console.error("DATABASE_URL is required."); process.exit(64); }
