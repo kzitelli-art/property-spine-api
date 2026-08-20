@@ -27,7 +27,13 @@ const ROOT = path.join(__dirname, "..", "..");
 const { Pool } = require(path.join(ROOT, "node_modules", "pg"));
 const { resolveAuthority, ASSIGNABLE_ROLES } = require(path.join(ROOT, "src/identity/authority_resolution.js"));
 
-const SKYLINE = process.env.SKYLINE_ID || "14e41b7c-e91c-49e8-9651-10c4988a8f6a";
+//  NO HARDCODED UUID. The first version carried one transcribed by eye off
+//  a screenshot, and a single wrong character made it "no such property".
+//  A 36-character identifier copied by a human is a transcription risk, and
+//  the right answer was already available from evidence: among the rows
+//  labelled skyline, the real asset is the one with a street address and
+//  committed rent-roll imports. The script finds it and says why.
+const SKYLINE_OVERRIDE = process.env.SKYLINE_ID || null;
 const QUERY   = process.env.PERSON_QUERY || "zitelli";
 const ROLE    = process.env.REQUESTED_ROLE || "asset_manager";
 
@@ -44,9 +50,36 @@ const rule = () => L("═══════════════════�
 (async () => {
   rule(); L("  SKYLINE PRICING AUTHORITY — DRY RUN  ·  writes nothing"); rule();
 
-  const prop = (await pool.query("select id, name, address from properties where id=$1", [SKYLINE])).rows[0];
-  if (!prop) { L(`  no property ${SKYLINE}`); await pool.end(); return; }
+  let prop;
+  if (SKYLINE_OVERRIDE) {
+    prop = (await pool.query("select id, name, address from properties where id=$1", [SKYLINE_OVERRIDE])).rows[0];
+    if (!prop) { L(`  no property ${SKYLINE_OVERRIDE}`); await pool.end(); return; }
+  } else {
+    const cands = (await pool.query(`
+      select p.id, p.name, p.address,
+             (select count(*)::int from import_batches b
+               where b.property_id = p.id and b.status = 'committed') as committed_imports,
+             (select count(*)::int from units u where u.property_id = p.id) as units,
+             (select count(*)::int from leases l where l.property_id = p.id) as leases
+        from properties p
+       where p.name ilike '%skyline%'
+       order by committed_imports desc, leases desc, units desc`)).rows;
+    if (!cands.length) { L("  no property matching 'skyline'"); await pool.end(); return; }
+    L("  ── candidates carrying the label, ranked by evidence ──");
+    for (const c of cands)
+      L(`     ${c.id}  ${String(c.name).padEnd(20)} imports=${c.committed_imports} units=${c.units} leases=${c.leases}  ${c.address || "(no address)"}`);
+    prop = cands[0];
+    if (!prop.address || prop.committed_imports === 0) {
+      L("\n  ✗ REFUSING TO GUESS — the best candidate has no address or no committed");
+      L("    rent-roll import. Identity is address and provenance; pass SKYLINE_ID");
+      L("    explicitly if you know which row is the real asset.");
+      await pool.end(); return;
+    }
+    L(`\n  selected by evidence: address present and ${prop.committed_imports} committed import(s).`);
+  }
+  const SKYLINE = prop.id;
   L(`  property   ${prop.name}  —  ${prop.address || "(no address)"}`);
+  L(`  id         ${prop.id}`);
   L(`  role asked ${ROLE}   (authority-bearing roles: ${[...ASSIGNABLE_ROLES].join(", ")})`);
   L(`  searching for people matching "${QUERY}"\n`);
 
