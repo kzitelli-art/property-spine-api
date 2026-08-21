@@ -85,9 +85,11 @@ if (!process.env.HARNESS_DATABASE_URL) {
 
 (async function main() {
   const { Pool } = require("pg");
+  const connectionString = require("./_run_receipt.js").harnessConnectionString();
+  const { databaseSsl } = require("../src/shared/database_ssl");
   const realPool = new Pool({
-    connectionString: require("./_run_receipt.js").harnessConnectionString(),
-    ssl: { rejectUnauthorized: false },
+    connectionString,
+    ssl: databaseSsl(connectionString),
   });
   const c = await realPool.connect();
   let server;

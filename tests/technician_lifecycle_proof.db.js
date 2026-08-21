@@ -35,7 +35,7 @@ const { Client } = require("pg");
 const receipt = require("./_run_receipt");
 
 const HARNESS = __filename;
-const EXPECTED = 51;
+const EXPECTED = 63;
 let passed = 0, failed = 0;
 const ok = (label, cond, detail) => {
   if (cond) { passed++; console.log("  ok    " + label); }
@@ -47,6 +47,11 @@ const ADMIN_URL = receipt.harnessConnectionString();
 const SCRATCH_DB = `ps_tech_life_${process.pid}`;
 const ROOT = path.join(__dirname, "..");
 const mig = (n) => fs.readFileSync(path.join(ROOT, "migrations", n), "utf8");
+const { databaseSsl } = require(path.join(ROOT, "src/shared/database_ssl"));
+const clientConfig = (connectionString) => ({
+  connectionString,
+  ssl: databaseSsl(connectionString),
+});
 
 let sawFatalDbError = null;
 const realError = console.error;
@@ -61,12 +66,12 @@ receipt.begin(HARNESS, { url: ADMIN_URL, expected: EXPECTED });
 let admin = null, db = null, server = null, code = 1;
 (async () => {
 try {
-  admin = new Client({ connectionString: ADMIN_URL, ssl: { rejectUnauthorized: false } });
+  admin = new Client(clientConfig(ADMIN_URL));
   await admin.connect();
   await admin.query(`drop database if exists ${SCRATCH_DB}`);
   await admin.query(`create database ${SCRATCH_DB}`);
   const u = new URL(ADMIN_URL); u.pathname = "/" + SCRATCH_DB;
-  db = new Client({ connectionString: u.toString(), ssl: { rejectUnauthorized: false } });
+  db = new Client(clientConfig(u.toString()));
   await db.connect();
   console.log(`  SCRATCH   ${SCRATCH_DB}`);
 
@@ -82,11 +87,12 @@ try {
     alter table obligations add column if not exists completed_at timestamptz;
     alter table obligations add column if not exists resolution_code text;
   `);
-  section("1. MIGRATIONS 130 → 136 APPLY IN ORDER");
+  section("1. MIGRATIONS 130 THROUGH 137 APPLY IN ORDER");
   for (const n of ["130_communication_lines.sql", "131_work_acceptance.sql",
                    "132_outbound_line_policy.sql", "133_work_order_reference.sql",
                    "134_technician_lifecycle.sql", "135_delivery_attempts.sql",
-                   "136_one_resident_update_per_cause.sql"]) {
+                   "136_one_resident_update_per_cause.sql",
+                   "137_release_0_completion_proof.sql"]) {
     let e = null;
     try { await db.query(mig(n)); } catch (err) { e = err; }
     ok(`${n} applies cleanly, verbatim`, e === null, e && e.message);

@@ -222,20 +222,21 @@ outside this tree, not treated as confirmed.**
 |---|---|---|
 | **Release 0 completion guard** | **`PRODUCTION_PROVEN`** | `proof_evaluation_service.js` + migration 137/140 |
 | Work order creation / lifecycle | `HTTP_PROVEN` | `work_order_service.js`. *"the REAL server.js over real HTTP"* |
-| Technician SMS operations loop | `HTTP_PROVEN` + `BROWSER_VERIFIED` | `technician/conversation.js`, `lifecycle_service.js` + screenshots |
+| Technician SMS operations loop | `HTTP_PROVEN` + `BROWSER_VERIFIED` | `technician/conversation.js`, `lifecycle_service.js` + screenshots. On 2026-08-21 the current proof-evaluation schema was added to the disposable harness and the plain-language technician day passed 63/63 through the real inbound webhook and PostgreSQL; carrier and media fetch remain doubled. |
 | Staff SMS governed reads | `HTTP_PROVEN` on integration branch | Real inbound webhook + real PostgreSQL 77/77; Ask response and transport are doubled in this connection proof. Uses the existing Ask Spine service in production code; canonical Economics Ask is separately real-HTTP proven 16/16. Not merged or deployed. |
 | Operator work-order actions | `HTTP_PROVEN` | `operator_actions.js` — 4 canonical writes; "Review" deliberately excluded |
 | **Obligations queue + self-claim** | `HTTP_PROVEN` + `BROWSER_VERIFIED` | `GET /operator/obligations`, `POST .../claim`. **Exists — do not rebuild** |
 | **Turnovers / move-out** | `HTTP_PROVEN` | `turnover_service.js`, `operator_turnover.js`. **Exists — do not rebuild** |
 | Unit triage · turn scope · work acceptance · readiness | real-DB service layer, **no HTTP harness** | `unit_triage_service.js`, `unit_turn_scope_service.js`, `work_acceptance_service.js`, `readiness_service.js` |
 | Communications boundary | `HTTP_PROVEN` (line layer) | **SMS RAIL FROZEN** — *"no `operations` line row at all"* |
-| Tenant link (resident SMS) | `HTTP_PROVEN` | `tenantlink.js` |
+| Tenant link (resident SMS) | `HTTP_PROVEN` | `tenantlink.js`. Real inbound webhook + fully migrated disposable PostgreSQL passed 61/61 on 2026-08-21; classifier and carrier remain doubled. |
 | Move-in delivery correlation | `LOCALLY_EXERCISED` | `delivery.js` — test uses a **hand-mocked** `client.query` |
 | Prospect fact capture | `LOCALLY_EXERCISED` | `prospect_capture.js` |
 
-**OPEN:** *"a canonical completion through `claimCompletion`, with real proof, end to
-end — needs a real technician SMS completion."* The guard is proven; the writer
-producing a valid completion through it is not.
+**OPEN:** Resident work-order creation and technician proof-gated completion are
+independently HTTP-proven, but no single scenario yet carries the same resident-created
+work order through assignment, technician conversation, completion, and resident reply.
+No controlled live-carrier proof has run.
 
 ## Platform / core — `src/{identity,entity,money,evidence,agent,release0,surfaces}/`
 

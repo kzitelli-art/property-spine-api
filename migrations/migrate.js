@@ -49,6 +49,16 @@ const { execFileSync } = require("child_process");
 const { Client } = require("pg");
 const { classifyLedger } = require("./ledger_verdict");
 
+// This runner is copied into isolated directories by the release gate, so it
+// cannot import the runtime SSL helper. Keep the same local-host rule here.
+function databaseSsl(connectionString) {
+  try {
+    const host = new URL(connectionString).hostname.replace(/^\[|\]$/g, "");
+    if (["127.0.0.1", "localhost", "::1", ""].includes(host)) return false;
+  } catch (_) { /* unparseable connections keep the deployed-safe default */ }
+  return { rejectUnauthorized: false };
+}
+
 /*  WHICH BUILD IS THIS, REALLY.
  *
  *  EXPECTED_SHA used to be compared only against RENDER_GIT_COMMIT, so
@@ -170,7 +180,7 @@ async function main() {
   //  run is allowed to write to the database at all.
   const APPLY = process.argv.includes("--apply") || process.env.MIGRATION_RELEASE === "1";
 
-  const client = new Client({ connectionString: url, ssl: { rejectUnauthorized: false } });
+  const client = new Client({ connectionString: url, ssl: databaseSsl(url) });
   await client.connect();
   console.log(`\n  Connected to the database.  (${APPLY ? "RELEASE" : "verify-only"})`);
 

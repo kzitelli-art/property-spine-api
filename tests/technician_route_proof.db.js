@@ -46,12 +46,11 @@ const ADMIN_URL = receipt.harnessConnectionString();
 const SCRATCH_DB = `ps_tech_route_${process.pid}`;
 const ROOT = path.join(__dirname, "..");
 const mig = (n) => fs.readFileSync(path.join(ROOT, "migrations", n), "utf8");
-const clientConfig = (connectionString) => {
-  const host = new URL(connectionString).hostname;
-  const local = host === "127.0.0.1" || host === "localhost";
-  return local ? { connectionString }
-    : { connectionString, ssl: { rejectUnauthorized: false } };
-};
+const { databaseSsl } = require(path.join(ROOT, "src/shared/database_ssl"));
+const clientConfig = (connectionString) => ({
+  connectionString,
+  ssl: databaseSsl(connectionString),
+});
 
 //  THE SENTINEL. The inbound route acks the provider and swallows failures
 //  by design, so a query that THROWS looks identical to a clean refusal
@@ -300,6 +299,8 @@ try {
     ok("the governed answer is the text sent back to the staff member",
       outbound && outbound.body === "The published rent is $850."
       && sent[sent.length - 1].body === outbound.body);
+    console.log(`\n  STAFF  What pricing is published?`);
+    console.log(`  SPINE  ${outbound && outbound.body}`);
     ok("a read question creates no work order",
       (await db.query(`select count(*)::int c from work_orders`)).rows[0].c === workBefore);
 
@@ -334,6 +335,8 @@ try {
       outbound && outbound.body);
     ok("the ambiguity is recorded as its own outcome",
       inbound.classification === "governed_read_property_context_ambiguous");
+    console.log(`\n  STAFF  What pricing is published?`);
+    console.log(`  SPINE  ${outbound && outbound.body}`);
 
     const named = await inboundSms(
       SAM_PHONE, "What pricing is published at Maple?", "SM_READ_NAMED_PROPERTY");
@@ -350,6 +353,8 @@ try {
       `select * from comm_events where in_reply_to_comm_event_id=$1`, [namedInbound.id])).rows[0];
     ok("the resolved question receives a governed answer",
       namedOutbound && namedOutbound.reply_reason === "governed_read");
+    console.log(`  STAFF  What pricing is published at Maple?`);
+    console.log(`  SPINE  ${namedOutbound && namedOutbound.body}`);
   }
 
   // ==================================================================
