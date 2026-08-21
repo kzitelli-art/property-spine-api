@@ -39,7 +39,7 @@ const aiLeasingStrategy = require("../leasing/ai_leasing_strategy");
 const aiLeasingStrategyRuntime = require("../leasing/ai_leasing_strategy_runtime");
 const aiLeasingOperatingContext = require("../leasing/ai_leasing_operating_context"); // GOVERNED OPERATING CONTEXT LEASING v1
 
-const PROMPT_REVISION = "stage-a-v9"; // v9: property identity and legacy building profile are scoped to the active property; no SOLO facts can leak into another property's conversation.
+const PROMPT_REVISION = "stage-a-v10"; // v10: clear linked-unit rent questions answer directly from governed pricing; the model cannot skip or replace the canonical quote/menu/refusal.
 // v7.1: greeting fix — contentless messages get a warm greeting, never a fake verification promise. v7: flag model — human-needed operating requests are answered honestly (team can see the conversation); live model no longer creates obligations. v6: tour-pressure suppression, lived-experience selling, conversational local; dead PERSONA removed.
 const POLICY_REVISION = "stage-a-v1";
 
@@ -496,6 +496,41 @@ module.exports = function agentModule(deps) {
     ];
     for (const [re, code] of blockPatterns) if (re.test(t)) return { decision: "blocked", code };
     return { decision: "safe", code: null };
+  }
+
+  function directPricingReply({ inboundText, unit } = {}) {
+    const text = String(inboundText || "").toLowerCase();
+    const pricing = unit && unit.pricing;
+    if (!pricing) return null;
+
+    // Mixed economic questions stay on the composition path. This shortcut
+    // owns only the one clear question its canonical reader can fully answer.
+    if (/\b(application|admin(?:istration)?|amenity|utility|deposit|fee|parking|pet|move[- ]?in|concession|special|discount)\b/.test(text)) {
+      return null;
+    }
+    const asksRent = /\b(rent|pricing|lease rate|monthly rate)\b/.test(text)
+      || /\b(?:what(?:'s| is)|how much)[^?.!]{0,40}\b(?:cost|price)\b/.test(text)
+      || /\b(?:cost|price)\b[^?.!]{0,30}\b(?:per month|monthly|unit|apartment|bedroom|studio)\b/.test(text);
+    if (!asksRent) return null;
+
+    if (!pricing.quotable) {
+      return pricing.say
+        ? { body: pricing.say, code: "pricing_direct_refusal" }
+        : null;
+    }
+    // A live advertised concession changes how a quote must be presented. Let
+    // the composed prompt handle that until the reader owns its full sentence.
+    if (Array.isArray(pricing.concessions) && pricing.concessions.length) return null;
+
+    const rent = Number(pricing.rent);
+    const months = Number(pricing.lease_term_months);
+    if (!Number.isFinite(rent) || !Number.isFinite(months)) return null;
+    const rentText = rent.toLocaleString("en-US", { maximumFractionDigits: 2 });
+    const subject = unit.unit_number ? `Unit ${unit.unit_number}` : "This unit";
+    return {
+      body: `${subject} is $${rentText}/month on a ${months}-month lease.`,
+      code: "pricing_direct_quote",
+    };
   }
 
   // ── build the model context in STRICT AUTHORITY ORDER ──────────────────────
@@ -1146,6 +1181,7 @@ Reply with ONLY the message text.`;
 
       // ── model call OUTSIDE any transaction ──
       let generated = null, providerReqId = null, genErr = null, factSnapshot = [], snapshotHash = "";
+      let deterministicReplyCode = null;
       let operatingContextSnapshot = [], operatingContextHash = null;
       let strategyApplied = false;
       let runtimeStrategyEnvelope = null;
@@ -1180,11 +1216,16 @@ Reply with ONLY the message text.`;
           )).rows;
         } finally { client1.release(); }
 
+        const pricingReply = pre.decision === "safe"
+          ? directPricingReply({ inboundText: tx1.inboundText, unit: ctx.unit }) : null;
         if (pre.decision === "requires_handoff") {
           // Hard-gate category (§5): do NOT generate leasing copy. Send the
           // category's pre-approved ack. The review obligation was already born
           // in TX1, so promising "getting this to the team" is honest here.
           generated = pre.ack || "Yep, I'll get someone from the team on this.";
+        } else if (pricingReply) {
+          generated = pricingReply.body;
+          deterministicReplyCode = pricingReply.code;
         } else if (anthropic) {
           const propName = (await (async () => {
             const c = await pool.connect();
@@ -1749,7 +1790,7 @@ Reply with ONLY the message text.`;
       }
 
       // post-generation policy (only if we have text)
-      let policyDecision = pre.decision, policyCode = pre.code;
+      let policyDecision = pre.decision, policyCode = pre.code || deterministicReplyCode;
       if (generated && policyDecision === "safe") {
         const post = postGenerationPolicy(generated);
         if (post.decision !== "safe") { policyDecision = post.decision; policyCode = post.code; }
@@ -2445,6 +2486,7 @@ Reply with ONLY the message text.`;
       // model OUTSIDE txn (reuse the same generation path)
       const pre = preGenerationPolicy(prep.inboundText);
       let generated = null, providerReqId = null, genErr = null, factSnapshot = [], snapshotHash = "";
+      let deterministicReplyCode = null;
       let operatingContextSnapshot = [], operatingContextHash = null;
       let strategyApplied = false;
       let runtimeStrategyEnvelope = null;
@@ -2467,8 +2509,13 @@ Reply with ONLY the message text.`;
           )).rows;
         } finally { c1.release(); }
 
+        const pricingReply = pre.decision === "safe"
+          ? directPricingReply({ inboundText: prep.inboundText, unit: ctx.unit }) : null;
         if (pre.decision === "requires_handoff") {
           generated = pre.ack || "Yep, I'll get someone from the team on this.";
+        } else if (pricingReply) {
+          generated = pricingReply.body;
+          deterministicReplyCode = pricingReply.code;
         } else if (anthropic) {
           const c2 = await pool.connect();
           let propName;
@@ -2503,7 +2550,7 @@ Reply with ONLY the message text.`;
         const mh = generated.match(/\[\[HANDOFF:\s*([^\]]*)\]\]/i);
         if (mh) { modelHandoff = (mh[1] || "unspecified").trim(); generated = generated.replace(mh[0], "").trim(); }
       }
-      let policyDecision = pre.decision, policyCode = pre.code;
+      let policyDecision = pre.decision, policyCode = pre.code || deterministicReplyCode;
       if (generated && policyDecision === "safe") {
         const post = postGenerationPolicy(generated);
         if (post.decision !== "safe") { policyDecision = post.decision; policyCode = post.code; }
@@ -2572,7 +2619,7 @@ Reply with ONLY the message text.`;
   // removed, so there is exactly one door to each action and it is authenticated.
   // (editAndSend = sendDraftService with editedBody.)
   router._service = {
-    preGenerationPolicy, postGenerationPolicy, resolveContext, buildMessages,
+    preGenerationPolicy, postGenerationPolicy, directPricingReply, resolveContext, buildMessages,
     sendDraftService, getConversationStateService, takeOverConversationService,
     handBackConversationService,
     regenerateDraftService, resolveConversationByPair,

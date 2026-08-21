@@ -30,4 +30,22 @@ const fairHousingFallback = router._service.postGenerationPolicy(
 );
 assert.doesNotMatch(JSON.stringify(fairHousingFallback), /SOLO|4233 Chestnut|University City/i);
 
+assert.deepStrictEqual(router._service.directPricingReply({
+  inboundText: "What is the monthly rent for a two-bedroom?", unit,
+}), {
+  body: "Unit 1417-102 is $850/month on a 12-month lease.",
+  code: "pricing_direct_quote",
+});
+const termMenu = "We have 2 Bedroom on 5 and 12-month terms. Which length do you want?";
+assert.deepStrictEqual(router._service.directPricingReply({
+  inboundText: "How much is the rent?",
+  unit: { ...unit, pricing: { quotable: false, reason: "lease_term_not_selected", say: termMenu } },
+}), { body: termMenu, code: "pricing_direct_refusal" });
+assert.strictEqual(router._service.directPricingReply({
+  inboundText: "What is the application fee?", unit,
+}), null, "mixed economic classes stay on the composed path");
+assert.strictEqual(router._service.directPricingReply({
+  inboundText: "Is the fitness center open late?", unit,
+}), null, "an unrelated question never triggers a rent reply");
+
 console.log("agent property identity proof: passed");
