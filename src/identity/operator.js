@@ -3981,6 +3981,7 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
 
       const {
         unit_id,
+        space_id = null,
         idempotency_key,
         expires_at = null,
         message_prefix = "",
@@ -4039,10 +4040,19 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
             conversionId,
             actorUserId: req.operator.id,
             unitId: unit_id,
+            spaceId: space_id,
             idempotencyKey: idempotency_key,
             expiresAt: expires_at,
-            unitOfferable: async (c, { property_id, unit_id: candidateUnitId }) =>
-              unitOfferableState(property_id, candidateUnitId, c),
+            unitOfferable: async (c, {
+              property_id,
+              unit_id: candidateUnitId,
+              space_id: candidateSpaceId,
+            }) => unitOfferableState(
+              property_id,
+              candidateUnitId,
+              c,
+              candidateSpaceId
+            ),
           }
         );
 
@@ -4220,40 +4230,40 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
 
 
   // ══════════════════════════════════════════════════════════════════
-  //  LEASEABLE UNITS — the send-application selector.
+  //  LEASEABLE TARGETS — the send-application selector.
   //
   //  Session-gated, read-only, over CANONICAL availability and the ONE
   //  application-target authority. The legacy availability projection is gone
   //  from this route, which is what makes the module deletable.
   //
-  //  TWO LISTS, NOT ONE FILTERED LIST. A multi-space unit is not absent
-  //  because it failed a marketing test — it is present and unselectable
-  //  because the durable chain cannot carry a space choice. Dropping those
-  //  rows silently would leave an operator hunting for a unit they can see in
-  //  every other surface, with no statement of why it is missing here.
+  //  Migration 182 made space_id durable from invitation through application,
+  //  executed-lease evidence and tenancy. The selector therefore returns one
+  //  row per exact leaseable target: whole-unit properties still show one
+  //  simple unit row, while by-bed properties show the available beds. The
+  //  browser sends the chosen space_id back and the write authority validates
+  //  it again; a menu is never treated as a choice.
   //
-  //  ONE ROW PER UNIT, NEVER ONE PER SPACE. The application segment is
-  //  unit-grained; returning a selectable row per space would offer a choice
-  //  the invitation cannot preserve.
-  //
-  //  resolved_space_id on an eligible row is a SERVER-AUTHORED VALIDATION
-  //  RECEIPT — the space availability was evaluated against. It is not a
-  //  "selected space" and the browser must not send it back.
+  //  `eligible_units` and `unsupported_multi_space_units` remain as rolling-
+  //  deploy compatibility fields. Old apps keep their sole-space behavior;
+  //  the current app prefers `eligible_targets` and can operate at either
+  //  grain without a second endpoint.
   // ══════════════════════════════════════════════════════════════════
   router.get("/operator/leasing/leaseable-units", requireOperator, requireLeasingModuleAccess, async (req, res) => {
     res.set("Cache-Control", "no-store");
     try {
       const property_id = req.operator.property_id;         // SERVER-DERIVED, never the query string
 
-      // Space grain per unit, including units with none. LEFT JOIN so a
-      // zero-space unit is a row rather than an absence.
+      // Space grain per unit. The count travels with each exact space so the
+      // response can label whether the server derived the sole space or the
+      // operator must deliberately choose among siblings.
       const shapes = (await pool.query(
-        `select u.id as unit_id, u.unit_number, count(s.id)::int as space_count
+        `select u.id as unit_id, u.unit_number,
+                s.id as space_id, coalesce(s.space_label, '(whole unit)') as space_label,
+                count(s.id) over (partition by u.id)::int as space_count
            from units u
-           left join spaces s on s.unit_id = u.id
+           join spaces s on s.unit_id = u.id
           where u.property_id = $1
-          group by u.id, u.unit_number
-          order by u.unit_number asc`,
+          order by u.unit_number asc, s.space_label asc nulls first, s.id asc`,
         [property_id]
       )).rows;
 
@@ -4262,48 +4272,44 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       // per unit would re-read availability for the entire property once per
       // unit, which is quadratic. Same rule, evaluated once per position.
       const avail = await availabilityRead(pool, { property_id });
-      const byUnit = new Map(avail.rows.map((r) => [String(r.unit_id), r]));
+      const bySpace = new Map(avail.rows.map((r) => [String(r.space_id), r]));
 
+      const eligible_targets = [];
       const eligible_units = [];
-      const unsupported_multi_space_units = [];
 
-      for (const u of shapes) {
-        if (u.space_count > 1) {
-          unsupported_multi_space_units.push({
-            unit_id: u.unit_id,
-            unit_number: u.unit_number,
-            rentable_space_count: u.space_count,
-            reason_code: applicationTargetAuthority.REFUSAL.MULTI_SPACE,
-            reason: applicationTargetAuthority.REFUSAL_TEXT[applicationTargetAuthority.REFUSAL.MULTI_SPACE],
-          });
-          continue;
-        }
-        if (u.space_count === 0) continue;   // unconfigured: not eligible, not a grain refusal
-
-        const row = byUnit.get(String(u.unit_id));
+      for (const target of shapes) {
+        const row = bySpace.get(String(target.space_id));
         if (!row) continue;                  // classified by nobody: not evidence of availability
         const verdict = applicationTargetAuthority.evaluateOfferability(row);
         if (!verdict.offerable) continue;    // ordinary not-offerable, not a grain refusal
 
-        eligible_units.push({
+        const item = {
           unit_id: row.unit_id,
           unit_number: row.unit_number,
-          resolved_space_id: row.space_id,   // validation receipt, NOT a selection
+          space_id: row.space_id,
+          resolved_space_id: row.space_id,   // compatibility alias; both name the exact target
+          rentable_space_count: target.space_count,
           position_kind: row.position_kind,
           space_label: row.space_label,
           marketing_state: row.marketing_state,
           available_from: row.available_from,
           availability_confidence: row.availability_confidence,
-          resolution_basis: "sole_space_unit",
-        });
+          resolution_basis: target.space_count === 1 ? "sole_space_unit" : "chosen_space",
+        };
+        eligible_targets.push(item);
+        if (target.space_count === 1) eligible_units.push(item);
       }
 
       return res.json({
         property_id,
+        eligible_target_count: eligible_targets.length,
         eligible_count: eligible_units.length,
-        unsupported_count: unsupported_multi_space_units.length,
+        eligible_targets,
+        // Rolling-deploy compatibility: pre-cutover apps understand only
+        // sole-space units and must continue to fail closed for by-bed stock.
         eligible_units,
-        unsupported_multi_space_units,
+        unsupported_count: 0,
+        unsupported_multi_space_units: [],
       });
     } catch (e) {
       return res.status(e.httpStatus || 500).json({ error: e.message || "leaseable-units read failed" });

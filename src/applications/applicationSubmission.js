@@ -1092,8 +1092,19 @@ module.exports = function applicationSubmissionModule(deps) {
       : null;
     let unitLabel = null;
     if (inv.unit_id) {
-      const u = (await client.query("select unit_number from units where id=$1", [inv.unit_id])).rows[0];
-      unitLabel = u ? u.unit_number : null;
+      const u = (await client.query(
+        `select u.unit_number, s.space_label
+           from units u
+           left join spaces s on s.id=$2 and s.unit_id=u.id
+          where u.id=$1`,
+        [inv.unit_id, inv.space_id]
+      )).rows[0];
+      if (u) {
+        const spaceLabel = u.space_label == null ? "" : String(u.space_label).trim();
+        unitLabel = spaceLabel && spaceLabel !== "(whole unit)"
+          ? `${u.unit_number} · ${spaceLabel}`
+          : u.unit_number;
+      }
     }
     // known person → prefill (recognition over re-entry). Honest nulls if absent.
     let person = null;
