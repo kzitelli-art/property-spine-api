@@ -8,6 +8,7 @@ const receipt = require("./_run_receipt.js");
 const { resolveAuthority } = require("../src/identity/authority_resolution.js");
 const { saveDraft, submitReview, publishVersion } = require("../src/money/pricing_lifecycle.js");
 const sessions = require("../src/identity/staff_session_service.js");
+const { establishAuthorizedReviewer } = require("./support/authority_reviewer_fixture.js");
 
 const EXPECTED_ASSERTIONS = 16;
 const CONN = receipt.harnessConnectionString();
@@ -68,6 +69,9 @@ async function publishProperty(adminId, userId, personId, label, terms) {
   await pool.query(
     `insert into person_contexts (person_id, context_type, property_id, created_by_user_id)
      values ($1, 'staff', $2, $3)`, [personId, propertyId, adminId]);
+  await establishAuthorizedReviewer(pool, {
+    userId: adminId, propertyId, label: `${tag}-authority-reviewer`,
+  });
   await resolveAuthority(pool, { spec: {
     user_id: userId,
     person_id: personId,

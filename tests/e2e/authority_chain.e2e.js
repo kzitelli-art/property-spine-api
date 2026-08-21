@@ -23,6 +23,8 @@ const { Pool } = require(path.join(ROOT, "node_modules", "pg"));
 const buildStaffBridge = require(path.join(ROOT, "src/identity/staffbridge.js"));
 const { resolveAuthority } = require(path.join(ROOT, "src/identity/authority_resolution.js"));
 const { pricingAuthority } = require(path.join(ROOT, "src/money/pricing_authority.js"));
+const { establishAuthorizedReviewer } = require(path.join(
+  ROOT, "tests/support/authority_reviewer_fixture.js"));
 
 const pool = new Pool({ connectionString: process.env.E2E_DATABASE_URL });
 const svc = buildStaffBridge({ pool })._service;
@@ -56,6 +58,9 @@ async function throws(label, fn, wantFragment) {
     `insert into users (name,email,role,is_active,status,account_kind)
      values ($1,$2,'asset_manager',true,'active','human_staff') returning id`,
     [tag + " Admin", tag + "admin@example.com"])).rows[0].id;
+  const reviewer = await establishAuthorizedReviewer(pool, {
+    userId: admin, propertyId: sky, label: tag + " Authority Reviewer",
+  });
 
   const person = (await pool.query(
     "insert into persons (name,email,source) values ($1,$2,'staff_bridge') returning id",
@@ -114,7 +119,16 @@ async function throws(label, fn, wantFragment) {
       person_id: stranger, property_id: sky, performed_by_user_id: admin })),
     "no active staff context");
 
-  console.log("\n── 6 · now the governed grantor applies ──");
+  console.log("\n── 6 · HOSTILE · entitlement does not make self-review valid ──");
+  const selfReviewed = await resolveAuthority(pool, { spec: {
+    user_id: user, person_id: person, property_id: sky,
+    requested_role: "asset_manager", reviewer_user_id: user, reason: "self-review attack" },
+    apply: false });
+  (selfReviewed.blocking || []).includes("reviewed_by_distinct_authorized_human")
+    ? ok("self-review is refused", (selfReviewed.blocking || []).join(", "))
+    : bad("self-review passed after entitlement", JSON.stringify(selfReviewed.blocking));
+
+  console.log("\n── 7 · now the governed grantor applies ──");
   const applied = await resolveAuthority(pool, { spec: {
     user_id: user, person_id: person, property_id: sky,
     requested_role: "asset_manager", reviewer_user_id: admin, reason: "chain proof: authorized asset manager" },
@@ -126,17 +140,19 @@ async function throws(label, fn, wantFragment) {
       where person_id=$1 and property_id=$2 and is_active=true`, [person, sky])).rows[0];
   prov && prov.role === "asset_manager" ? ok("role is asset_manager") : bad("no asset_manager assignment");
   const pv = prov && prov.provenance ? (typeof prov.provenance === "string" ? JSON.parse(prov.provenance) : prov.provenance) : {};
-  String(pv.reviewer_user_id) === String(admin) && pv.reason
-    ? ok("the receipt names the real actor and reason", `${pv.source} · ${String(pv.reason).slice(0, 40)}`)
+  String(pv.reviewer_user_id) === String(admin)
+      && String(pv.reviewer_person_id) === String(reviewer.personId)
+      && pv.reviewer_authority_basis === "assignment:asset_manager" && pv.reason
+    ? ok("the receipt names the reviewer human, basis, and reason", `${pv.source} · ${String(pv.reason).slice(0, 40)}`)
     : bad("provenance does not name actor+reason", JSON.stringify(pv).slice(0, 120));
 
-  console.log("\n── 7 · pricing authority is now TRUE, by assignment ──");
+  console.log("\n── 8 · pricing authority is now TRUE, by assignment ──");
   const end = await pricingAuthority(pool, { property_id: sky, user_id: user });
   end.may_prepare_pricing && end.may_review_pricing && end.may_publish_pricing
     ? ok("prepare / review / publish all true", end.basis.may_publish_pricing)
     : bad("authority did not resolve", JSON.stringify(end).slice(0, 160));
 
-  console.log("\n── 8 · HOSTILE · the wrong property stays refused ──");
+  console.log("\n── 9 · HOSTILE · the wrong property stays refused ──");
   const other = (await pool.query(
     "insert into properties (name,address) values ($1,'9 Other') returning id", [tag + " Other"])).rows[0].id;
   const wrong = await pricingAuthority(pool, { property_id: other, user_id: user });
@@ -144,7 +160,7 @@ async function throws(label, fn, wantFragment) {
     ? ok("no authority at a property they were never granted")
     : bad("authority leaked across properties");
 
-  console.log("\n── 9 · HOSTILE · the org-chart bypass can no longer confer it ──");
+  console.log("\n── 10 · HOSTILE · the org-chart bypass can no longer confer it ──");
   //  Reached through the module's REAL router stack — orgchart({pool})
   //  returns an express router, so the handler under test is the one
   //  server.js mounts, not a re-implementation of it.
@@ -152,9 +168,10 @@ async function throws(label, fn, wantFragment) {
   const layer = (orgRouter.stack || []).find(
     (l) => l.route && l.route.path === "/properties/:id/assignments" && l.route.methods && l.route.methods.post);
   const handler = layer && layer.route.stack[layer.route.stack.length - 1].handle;
+  let stranger2 = null;
   if (!handler) { bad("could not reach the orgchart route to attack it"); }
   else {
-    const stranger2 = (await pool.query(
+    stranger2 = (await pool.query(
       "insert into persons (name) values ($1) returning id", [tag + " Bypass"])).rows[0].id;
     let status = null, body = null;
     await handler(
@@ -182,7 +199,7 @@ async function throws(label, fn, wantFragment) {
     }
   }
 
-  console.log("\n── 10 · FALSIFICATION · remove the context, the chain must break ──");
+  console.log("\n── 11 · FALSIFICATION · remove the context, the chain must break ──");
   //  Deliberately withdraw the prerequisite and require the gate to notice.
   await pool.query(
     `update person_contexts set active_to = now()
@@ -197,9 +214,10 @@ async function throws(label, fn, wantFragment) {
 
   //  cleanup
   await pool.query("delete from assignments where property_id = any($1)", [[home, sky, other]]);
-  await pool.query("delete from person_contexts where person_id = any($1)", [[person, stranger]]);
+  await pool.query("delete from person_contexts where property_id = any($1)", [[home, sky, other]]);
   await pool.query("delete from users where id = any($1)", [[user, admin]]);
-  await pool.query("delete from persons where id = any($1)", [[person, stranger]]);
+  await pool.query("delete from persons where id = any($1)",
+    [[person, stranger, reviewer.personId, ...(stranger2 ? [stranger2] : [])]]);
   await pool.query("delete from properties where id = any($1)", [[home, sky, other]]);
 
   console.log(`\n══════════════════════════════════════════════════════════════`);

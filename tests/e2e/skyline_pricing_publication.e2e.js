@@ -29,6 +29,8 @@ const { pricingAuthority } = require(path.join(ROOT, "src/money/pricing_authorit
 const { saveDraft, submitReview, publishVersion } = require(path.join(ROOT, "src/money/pricing_lifecycle.js"));
 const { previewPublication } = require(path.join(ROOT, "src/money/pricing_publication_preview.js"));
 const { resolveSpaceEconomics } = require(path.join(ROOT, "src/money/effective_pricing.js"));
+const { establishAuthorizedReviewer } = require(path.join(
+  ROOT, "tests/support/authority_reviewer_fixture.js"));
 
 const pool = new Pool({ connectionString: process.env.E2E_DATABASE_URL });
 let pass = 0, fail = 0, firstRed = null;
@@ -92,6 +94,9 @@ const PLAN = [
   const user = (await pool.query(
     `insert into users (name,email,role,is_active,status,account_kind,person_id)
      values ($1,$2,'asset_manager',true,'active','human_staff',$3) returning id`, [tag+" KZ Login", tag+"kz@e.com", person])).rows[0].id;
+  const reviewer = await establishAuthorizedReviewer(pool, {
+    userId: admin, propertyId: prop, label: tag + " Authority Reviewer",
+  });
   await pool.query(`insert into person_contexts (person_id,context_type,property_id,created_by_user_id)
                     values ($1,'staff',$2,$3)`, [person, prop, admin]);
   await resolveAuthority(pool, { spec: { user_id:user, person_id:person, property_id:prop,
@@ -236,7 +241,7 @@ const PLAN = [
   await pool.query("delete from property_pricing_versions where property_id=$1", [prop]);
   await pool.query("delete from pricing_review_receipts where property_id=$1", [prop]);
   await pool.query("delete from assignments where property_id=$1", [prop]);
-  await pool.query("delete from person_contexts where person_id=$1", [person]);
+  await pool.query("delete from person_contexts where property_id=$1", [prop]);
   await pool.query("delete from import_source_rows where import_batch_id=$1", [batch]);
   await pool.query("delete from import_batches where id=$1", [batch]);
   await pool.query("update units set unit_type_id=null where property_id=$1", [prop]);
@@ -244,7 +249,7 @@ const PLAN = [
   await pool.query("delete from spaces where unit_id in (select id from units where property_id=$1)", [prop]);
   await pool.query("delete from units where property_id=$1", [prop]);
   await pool.query("delete from users where id=any($1)", [[user, admin]]);
-  await pool.query("delete from persons where id=$1", [person]);
+  await pool.query("delete from persons where id=any($1)", [[person, reviewer.personId]]);
   await pool.query("delete from properties where id=$1", [prop]);
 
   console.log(`\n══════════════════════════════════════════════════════════════`);

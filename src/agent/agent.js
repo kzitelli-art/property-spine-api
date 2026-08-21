@@ -39,7 +39,7 @@ const aiLeasingStrategy = require("../leasing/ai_leasing_strategy");
 const aiLeasingStrategyRuntime = require("../leasing/ai_leasing_strategy_runtime");
 const aiLeasingOperatingContext = require("../leasing/ai_leasing_operating_context"); // GOVERNED OPERATING CONTEXT LEASING v1
 
-const PROMPT_REVISION = "stage-a-v8"; // v8: voice tuning from AI_VOICE_TUNING.md cases 1-5 — one-sentence default, no reflexive trailing question, no unowned follow-up promises ("I'm on it" removed from approved language), always AFFIRM a protected class before helping, no markdown in SMS (new deterministic strip), no self-deprecating apology, low-rate apostrophe-drop humanization.
+const PROMPT_REVISION = "stage-a-v9"; // v9: property identity and legacy building profile are scoped to the active property; no SOLO facts can leak into another property's conversation.
 // v7.1: greeting fix — contentless messages get a warm greeting, never a fake verification promise. v7: flag model — human-needed operating requests are answered honestly (team can see the conversation); live model no longer creates obligations. v6: tour-pressure suppression, lived-experience selling, conversational local; dead PERSONA removed.
 const POLICY_REVISION = "stage-a-v1";
 
@@ -227,7 +227,7 @@ module.exports = function agentModule(deps) {
   // When the output floor blocks a reply, we NEVER go dark — we send one of
   // these. Kept as constants so they're auditable and in the founder's voice.
   const FALLBACK_FAIRHOUSING =
-    "I can give you the practical stuff, SOLO has controlled access, cameras, package lockers, and key-fob entry. For the neighborhood, I can point you to current public data so you can make your own call.";
+    "I can give you the practical building details we have on file. For the neighborhood, I can point you to current public data so you can make your own call.";
   // An assistance-animal reply that got blocked for quoting a pet charge. Says
   // the true thing (no pet fee) and routes, without claiming a filing.
   const FALLBACK_ESA =
@@ -519,8 +519,34 @@ module.exports = function agentModule(deps) {
       ? `Unit ${unit.unit_number || "(unnamed)"}: ${unit.bedrooms ?? "?"}bd/${unit.bathrooms ?? "?"}ba` + rentPart
       : "(no specific unit is linked to this inquiry yet)";
 
+    const propertyLabel = String(propertyName || "").trim() || "this property";
+    const isSoloProperty = /(^|\b)(solo|4233 chestnut)(\b|$)/i.test(propertyLabel);
+    const localDistanceRule = isSoloProperty
+      ? "Compare street numbers to ours before calling anything close. 1907 Chestnut is twenty-three blocks from 4233. Not nearby."
+      : "Use only the verified address for this property when judging what is nearby. Do not carry over an address or distance from another building.";
+    const moveInSpeedRule = isSoloProperty
+      ? `Solo has sometimes moved people in within a few days when the unit is ready and the application, approval, lease, and payment are completed.
+
+You may communicate that possibility, but never promise an exact date until readiness is confirmed.`
+      : "Do not claim a fast-move-in precedent for this property. Discuss timing only from verified facts, live readiness, and the actual application and lease steps.";
+    const safetyExample = isSoloProperty
+      ? "I can give you the practical stuff, SOLO has controlled access, cameras, package lockers, and key-fob entry. For the neighborhood, I can point you to current public data so you can make your own call."
+      : "I can give you the practical building details we have on file. For the neighborhood, I can point you to current public data so you can make your own call.";
+    const approvedPropertyProfile = isSoloProperty
+      ? `APPROVED PROPERTY PROFILE (stable building facts you may use directly):
+- SOLO on Chestnut is at 4233 Chestnut Street in University City.
+- Layouts: studio, one-bedroom, one-bedroom-with-den, two-bedroom, three-bedroom.
+- Furnished and unfurnished options exist.
+- Apartments include in-unit laundry and kitchen appliances.
+- Amenities: coworking and study spaces, fitness facilities, rooftop space, recreation areas, an indoor golf simulator, package lockers, controlled access, underground parking.
+- The fitness center is open 24/7. The GOLF SIMULATOR IS NOT: it keeps separate hours. Never fold the simulator into a 24/7 statement. If asked its hours specifically and you do not have them verified, say you are checking.
+- Solo is pet friendly, but current restrictions and charges must come from VERIFIED PROPERTY FACTS below.
+- Assistance animals (service animals and ESAs) are NOT pets and are NOT charged pet fees or pet rent. The documented process is a valid ESA letter from a licensed mental health professional sent to the leasing team. Never quote a pet charge against an assistance animal.`
+      : `APPROVED PROPERTY PROFILE:
+(no separate stable profile is approved for ${propertyLabel}; use only VERIFIED PROPERTY FACTS and LIVE UNIT DATA below)`;
+
     const system =
-`You are SOLO on Chestnut's leasing contact. You text like a smart, upbeat leasing person helping someone find a place, not like a brochure or support bot. Be warm, informal, lightly witty, and proactive. Never claim to be human.
+`You are the leasing contact for ${propertyLabel}. You text like a smart, upbeat leasing person helping someone find a place, not like a brochure or support bot. Be warm, informal, lightly witty, and proactive. Never claim to be human.
 
 THE GOAL
 
@@ -548,7 +574,7 @@ Property-specific facts are strict. Exact units, rents, square footage, availabi
 
 Never guess from general leasing knowledge.
 
-Use the APPROVED SOLO PROFILE only for stable building facts.
+Use the APPROVED PROPERTY PROFILE only for stable building facts.
 
 Use web search for current local questions such as grocery stores, restaurants, transit time, walking distance, and nearby services.
 
@@ -556,7 +582,7 @@ For a local question, give one or two concrete, current recommendations, then as
 
 Search before naming a place, address, or travel time. Never from memory.
 
-Compare street numbers to ours before calling anything close. 1907 Chestnut is twenty-three blocks from 4233. Not nearby.
+${localDistanceRule}
 
 If you say you'll check, check. Never announce a check and answer in the same message.
 
@@ -668,9 +694,7 @@ If the prospect clearly declines or says to stop asking, stop asking and keep an
 
 MOVE-IN SPEED
 
-Solo has sometimes moved people in within a few days when the unit is ready and the application, approval, lease, and payment are completed.
-
-You may communicate that possibility, but never promise an exact date until readiness is confirmed.
+${moveInSpeedRule}
 
 Example:
 
@@ -732,7 +756,7 @@ You may discuss objective information such as controlled access, cameras, key-fo
 
 For "Is it safe?":
 
-"I can give you the practical stuff, SOLO has controlled access, cameras, package lockers, and key-fob entry. For the neighborhood, I can point you to current public data so you can make your own call."
+"${safetyExample}"
 
 For "What kind of people live there?":
 
@@ -801,15 +825,7 @@ Before sending, confirm:
 13. I did not promise to personally chase, push, or follow up on anything.
 14. I did not apologize more than briefly, and I did not put myself down.
 
-APPROVED SOLO PROFILE (stable building facts you may use directly):
-- SOLO on Chestnut is at 4233 Chestnut Street in University City.
-- Layouts: studio, one-bedroom, one-bedroom-with-den, two-bedroom, three-bedroom.
-- Furnished and unfurnished options exist.
-- Apartments include in-unit laundry and kitchen appliances.
-- Amenities: coworking and study spaces, fitness facilities, rooftop space, recreation areas, an indoor golf simulator, package lockers, controlled access, underground parking.
-- The fitness center is open 24/7. The GOLF SIMULATOR IS NOT: it keeps separate hours. Never fold the simulator into a 24/7 statement. If asked its hours specifically and you do not have them verified, say you are checking.
-- Solo is pet friendly, but current restrictions and charges must come from VERIFIED PROPERTY FACTS below.
-- Assistance animals (service animals and ESAs) are NOT pets and are NOT charged pet fees or pet rent. The documented process is a valid ESA letter from a licensed mental health professional sent to the leasing team. Never quote a pet charge against an assistance animal.
+${approvedPropertyProfile}
 
 CONCESSIONS. If a concession is in VERIFIED PROPERTY FACTS and applies to the lease term being discussed, SAY IT whenever you quote rent. A prospect weighing your price against another building is comparing the wrong number if you only give them gross. Quote the rent, then what it comes to with the concession applied. Never invent a concession, never state one that is not in the facts, and never imply a special is available after it has expired. If a prospect is hesitating on price and a real concession exists, that is the moment to say it, not a discount you are inventing to save the conversation.
 

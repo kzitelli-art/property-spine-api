@@ -30,7 +30,8 @@
     it heard.
 
         node tools/release/skyline_grant_staff_context.js \
-          --person <uuid> --property <uuid> --by <login-uuid>
+          --person <uuid> --property <uuid> --by <login-uuid> \
+          --reviewer <distinct-authorized-login-uuid>
 
         ... same command with --apply to write.
 
@@ -49,12 +50,13 @@ const buildStaffBridge = require(path.join(ROOT, "src/identity/staffbridge.js"))
 const arg = (n) => { const i = process.argv.indexOf("--" + n); return i > -1 ? process.argv[i + 1] : null; };
 const APPLY = process.argv.includes("--apply");
 const PERSON = arg("person"), PROPERTY = arg("property"), BY = arg("by");
+const REVIEWER = arg("reviewer");
 const REASON = arg("reason") || "entitle KZ at Skyline so pricing authority can be granted through the resolver";
 
 const url = process.env.DATABASE_URL;
 if (!url) { console.error("DATABASE_URL is required."); process.exit(64); }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-for (const [n, v] of [["person", PERSON], ["property", PROPERTY], ["by", BY]]) {
+for (const [n, v] of [["person", PERSON], ["property", PROPERTY], ["by", BY], ["reviewer", REVIEWER]]) {
   if (!v)         { console.error(`--${n} is required.`); process.exit(64); }
   if (!UUID.test(v)) { console.error(`--${n} is not a uuid: ${v}`); process.exit(64); }
 }
@@ -121,7 +123,7 @@ const rule = () => console.log("  " + "─".repeat(72));
   console.log(`\n  ── re-asking resolveAuthority ──`);
   const after = await resolveAuthority(pool, {
     spec: { user_id: BY, person_id: PERSON, property_id: PROPERTY,
-            requested_role: "asset_manager", reviewer_user_id: BY,
+            requested_role: "asset_manager", reviewer_user_id: REVIEWER,
             reason: "post-grant verification" },
     apply: false,
   });

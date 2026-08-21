@@ -29,6 +29,8 @@ const failed = (r, id) => r.receipt.evidence.find((c) => c.id === id && !c.passe
   const url = process.env.DATABASE_URL;
   if (!url) { console.log("FATAL: DATABASE_URL required"); process.exit(1); }
   const pool = new Pool({ connectionString: url, ssl: { rejectUnauthorized: false } });
+  const initialPersonCount = Number((await pool.query(
+    "select count(*)::int n from persons")).rows[0].n);
 
   const { resolveAuthority } = require(path.join(REPO, "src/identity/authority_resolution"));
   const { demoOwnerRulingPacket } = require(path.join(REPO, "src/identity/demo_owner_ruling_packet"));
@@ -74,7 +76,7 @@ const failed = (r, id) => r.receipt.evidence.find((c) => c.id === id && !c.passe
 
   const noReview = await resolveAuthority(pool, {
     spec: { property_id: DEMO, user_id: STAFF_USER, person_id: STAFF_PERSON, requested_role: "owner" } });
-  ok(!!failed(noReview, "reviewed_and_not_name_based"), "an unreviewed proposal is refused");
+  ok(!!failed(noReview, "reviewed_by_distinct_authorized_human"), "an unreviewed proposal is refused");
 
   let applyErr = null;
   try { await resolveAuthority(pool, { spec: { ...base, user_id: STAFF_USER, person_id: DEMO_LEAD }, apply: true }); }
@@ -237,7 +239,8 @@ const failed = (r, id) => r.receipt.evidence.find((c) => c.id === id && !c.passe
   const grants = Number((await pool.query("select count(*)::int n from concession_authority_grants")).rows[0].n);
   ok(grants === 0, "no authority grant was created");
   const persons = Number((await pool.query("select count(*)::int n from persons")).rows[0].n);
-  ok(persons === 902, `persons = ${persons}: 900 original + 1 governed staff + 1 voided duplicate; none merged or deleted`);
+  ok(persons === initialPersonCount,
+    `persons unchanged at ${persons}; none merged, created, or deleted`);
 
   console.log(`\n==== ${pass} passed, ${fail} failed ====`);
   await pool.end();

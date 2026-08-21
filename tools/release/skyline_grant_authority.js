@@ -12,21 +12,14 @@
     performed here; they are separate attributable acts with their own
     trails.
 
-    ── ⚠ SELF-REVIEW IS PERMITTED, AND THAT IS WORTH SAYING OUT LOUD ────
-    Precondition 9 asks only that a reviewer and a reason exist. It does
-    NOT require the reviewer to be someone other than the person receiving
-    the authority. So --reviewer defaults to --by, and this tool prints a
-    warning when they are the same rather than letting a self-approved
-    grant read as "reviewed by a named human".
-
-    At a genuine bootstrap that is unavoidable: nobody else holds authority
-    yet, so the first grant cannot be reviewed by a peer. It is still worth
-    recording as self-reviewed instead of quietly passing. Once a second
-    authorised person exists, pass --reviewer with their login.
+    ── TWO-PARTY REVIEW IS ENFORCED ─────────────────────────────────────
+    --reviewer is required. The resolver verifies that it names a different
+    governed human who holds may_manage_concession_authority at this property.
+    A login id and reason alone are no longer treated as review.
 
     ── DRY RUN BY DEFAULT ───────────────────────────────────────────────
         node tools/release/skyline_grant_authority.js \
-          --person <uuid> --property <uuid> --by <login-uuid> [--reviewer <login-uuid>]
+          --person <uuid> --property <uuid> --by <login-uuid> --reviewer <login-uuid>
 
         ... same command with --apply to write.
 
@@ -46,7 +39,7 @@ const { pricingAuthority } = require(path.join(ROOT, "src/money/pricing_authorit
 const arg = (n) => { const i = process.argv.indexOf("--" + n); return i > -1 ? process.argv[i + 1] : null; };
 const APPLY = process.argv.includes("--apply");
 const PERSON = arg("person"), PROPERTY = arg("property"), BY = arg("by");
-const REVIEWER = arg("reviewer") || BY;
+const REVIEWER = arg("reviewer");
 const ROLE = arg("role") || "asset_manager";
 const REASON = arg("reason") ||
   "establish Skyline pricing authority so the governed publication workflow can run";
@@ -80,13 +73,6 @@ const verbs = (a) => ["may_prepare_pricing", "may_review_pricing", "may_publish_
   console.log(`  at        ${pr.name}`);
   console.log(`  by        ${by.email}`);
   console.log(`  reviewer  ${rv.email}`);
-  if (String(REVIEWER) === String(BY)) {
-    console.log(`\n  ⚠ SELF-REVIEWED. The reviewer is the same login receiving the grant.`);
-    console.log(`    The resolver permits this — precondition 9 asks only that a reviewer`);
-    console.log(`    and a reason exist. At a bootstrap there is nobody else to ask. Once a`);
-    console.log(`    second authorised login exists, pass --reviewer <their login uuid>.`);
-  }
-
   console.log(`\n  ── authority held BEFORE ──`);
   const before = await pricingAuthority(pool, { property_id: PROPERTY, person_id: PERSON });
   console.log(`     ${verbs(before)}`);

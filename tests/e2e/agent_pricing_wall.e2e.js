@@ -25,6 +25,8 @@ const { Pool } = require(path.join(ROOT, "node_modules", "pg"));
 const { quotablePricing } = require(path.join(ROOT, "src/agent/pricing_adapter.js"));
 const { resolveAuthority } = require(path.join(ROOT, "src/identity/authority_resolution.js"));
 const { saveDraft, submitReview, publishVersion } = require(path.join(ROOT, "src/money/pricing_lifecycle.js"));
+const { establishAuthorizedReviewer } = require(path.join(
+  ROOT, "tests/support/authority_reviewer_fixture.js"));
 
 const pool = new Pool({ connectionString: process.env.E2E_DATABASE_URL });
 const SENTINEL = 424242;
@@ -85,6 +87,9 @@ const bad = (l, d="") => { fail++; console.log(`  ✗ ${l}${d ? "  — " + d : "
   const user = (await pool.query(
     `insert into users (name,email,role,is_active,status,account_kind,person_id)
      values ($1,$2,'asset_manager',true,'active','human_staff',$3) returning id`, [tag+"L", tag+"p@e.com", person])).rows[0].id;
+  const reviewer = await establishAuthorizedReviewer(pool, {
+    userId: admin, propertyId: prop, label: tag + " Authority Reviewer",
+  });
   await pool.query(`insert into person_contexts (person_id,context_type,property_id,created_by_user_id)
                     values ($1,'staff',$2,$3)`, [person, prop, admin]);
   await resolveAuthority(pool, { spec: { user_id:user, person_id:person, property_id:prop,
@@ -165,6 +170,7 @@ const bad = (l, d="") => { fail++; console.log(`  ✗ ${l}${d ? "  — " + d : "
                     values ($1,'Bed A','residential','bed')`, [unit2]);
   await pool.query(`insert into person_contexts (person_id,context_type,property_id,created_by_user_id)
                     values ($1,'staff',$2,$3)`, [person, prop2, admin]);
+  await establishAuthorizedReviewer(pool, { userId: admin, propertyId: prop2 });
   await resolveAuthority(pool, { spec: { user_id:user, person_id:person, property_id:prop2,
     requested_role:"asset_manager", reviewer_user_id:admin, reason:"multi-term proof" }, apply:true });
 
@@ -256,8 +262,8 @@ const bad = (l, d="") => { fail++; console.log(`  ✗ ${l}${d ? "  — " + d : "
   await pool.query("delete from units where property_id=$1",[prop]);
   await pool.query("delete from property_unit_types where property_id=$1",[prop]);
   await pool.query("delete from users where id=any($1)",[[user,admin]]);
-  await pool.query("delete from persons where id=$1",[person]);
-  await pool.query("delete from properties where id=$1",[prop]);
+  await pool.query("delete from persons where id=any($1)",[[person, reviewer.personId]]);
+  await pool.query("delete from properties where id=any($1)",[[prop, prop2]]);
 
   console.log(`\n══════════════════════════════════════════════════════════════`);
   console.log(`  agent pricing wall: ${pass} passed · ${fail} failed`);
