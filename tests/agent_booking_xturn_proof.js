@@ -11,7 +11,10 @@
 // ════════════════════════════════════════════════════════════════════
 const { Pool } = require("pg");
 const express = require("express"); const http = require("http"); const crypto = require("crypto");
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const receipt = require("./_run_receipt");
+const { databaseSsl } = require("../src/shared/database_ssl");
+const URL = receipt.harnessConnectionString();
+const pool = new Pool({ connectionString: URL, ssl: databaseSsl(URL) });
 const uuid = () => crypto.randomUUID();
 let passed = 0, failed = 0;
 const chk = (n, c, d = "") => { if (c) { passed++; console.log(`  \u2713 ${n}`); } else { failed++; console.log(`  \u2717 ${n} ${d}`); } };
@@ -71,7 +74,19 @@ let srv, base; const track = { persons: [], leads: [], slots: [] };
 // server below, so it owns the key it sets here.
 const OP_KEY = process.env.OPERATOR_KEY || (process.env.OPERATOR_KEY = "harness-op-key");
 const AGENT_HEADERS = { "content-type": "application/json", "x-operator-key": OP_KEY };
-async function blockReset() { MODE = "text"; PRESENT_IDS = []; BOOK_ID = null; await new Promise(r => setTimeout(r, 1200)); }
+async function blockReset() {
+  MODE = "text";
+  PRESENT_IDS = [];
+  BOOK_ID = null;
+  if (track.slots.length) {
+    await pool.query(
+      `update tour_availability set status='blocked'
+        where id = any($1::uuid[]) and status='open'`,
+      [track.slots]
+    );
+  }
+  await new Promise(r => setTimeout(r, 1200));
+}
 async function inbound(pid, body) { const ms = "SM" + crypto.randomBytes(10).toString("hex"); const res = await fetch(`${base}/agent/inbound`, { method: "POST", headers: AGENT_HEADERS, body: JSON.stringify({ property_id: PROP, person_id: pid, body, sms_sid: ms, idempotency_key: ms }) }); await res.json().catch(() => ({})); await new Promise(r => setTimeout(r, 500)); }
 async function mkSlot(h) { const id = uuid(); track.slots.push(id); const st = new Date(Date.now() + h * 3600e3), en = new Date(st.getTime() + 30 * 60e3); await pool.query(`insert into tour_availability (id,property_id,starts_at,ends_at,capacity,status) values ($1,$2,$3,$4,1,'open')`, [id, PROP, st.toISOString(), en.toISOString()]); return id; }
 async function newProspect(name) { const pid = uuid(); track.persons.push(pid); await pool.query(`insert into persons (id,name,phone) values ($1,$2,$3)`, [pid, name, "+1555" + Math.floor(1e6 + Math.random() * 8e6)]); const lead = uuid(); track.leads.push(lead); await pool.query(`insert into leasing_leads (id,person_id,property_id,status) values ($1,$2,$3,'new')`, [lead, pid, PROP]);
@@ -83,12 +98,21 @@ async function convOf(pid) { return (await pool.query(`select id from conversati
 async function toursOf(lead) { return (await pool.query(`select id, slot_id, booking_idempotency_key from leasing_tours where lead_id=$1`, [lead])).rows; }
 
 async function main() {
+  receipt.begin(__filename, { url: URL, expected: 12 });
   const app = express(); app.use(express.json()); app.use("/", agent);
   srv = http.createServer(app); await new Promise(r => srv.listen(0, r)); base = `http://127.0.0.1:${srv.address().port}`;
   // Create the scratch property. No `on conflict do nothing`: a fresh uuid
   // cannot collide, and if it somehow did we want the run to fail loudly
   // rather than silently adopt an existing property.
-  await pool.query(`insert into properties (id,name,sms_number) values ($1,$2,$3)`, [PROP, PROP_NAME, PROP_SMS]);
+  await pool.query(`insert into properties (id,name) values ($1,$2)`, [PROP, PROP_NAME]);
+  await pool.query(
+    `insert into communication_lines
+       (e164, line_type, property_id, authority_ceiling, permitted_audience,
+        inbound_enabled, outbound_enabled, outbound_policy, status)
+     values ($1,'property_facing',$2,'external','residents_and_prospects',
+             true, true, 'proactive', 'active')`,
+    [PROP_SMS, PROP]
+  );
   console.log(`  scratch property ${PROP} (${PROP_NAME})`);
   // (No availability reset here — a property created seconds ago has none.)
 
@@ -193,8 +217,8 @@ async function main() {
   }
 
   } srv.close(); await cleanup();
-  console.log(`\n\u2550 RESULT: ${passed} passed, ${failed} failed \u2550`);
-  await pool.end(); process.exit(failed === 0 ? 0 : 1);
+  const exitCode = receipt.complete({ harness: __filename, passed, failed, expectedAtLeast: 12 });
+  await pool.end(); process.exit(exitCode);
 }
 async function cleanup() {
   for (const lead of track.leads) {
@@ -215,6 +239,7 @@ async function cleanup() {
   }
   const s = [...new Set(track.slots)];
   if (s.length) { const ph = s.map((_, i) => `$${i + 1}`).join(","); await pool.query(`update tour_availability set booked_tour_id=null where id in (${ph})`, s).catch(() => {}); await pool.query(`delete from tour_availability where id in (${ph})`, s).catch(() => {}); }
+  await pool.query(`delete from communication_lines where property_id=$1`, [PROP]).catch(() => {});
   // The scratch property itself — tracked id AND a name guard, so this
   // statement is structurally incapable of removing a property this harness
   // did not create. Slots are already gone above by tracked id, so nothing
@@ -224,4 +249,4 @@ async function cleanup() {
   ).catch(e => { console.error("  scratch property NOT removed:", e.message); return { rowCount: 0 }; });
   console.log(`  cleanup complete. scratch property removed: ${gone.rowCount}`);
 }
-main().catch(async e => { console.error("XTURN ERROR:", e); try { if (srv) srv.close(); await cleanup(); } catch (_) {} try { await pool.end(); } catch (_) {} process.exit(1); });
+main().catch(async e => { const exitCode=receipt.died(__filename,e,passed+failed); try { if (srv) srv.close(); await cleanup(); } catch (_) {} try { await pool.end(); } catch (_) {} process.exit(exitCode); });

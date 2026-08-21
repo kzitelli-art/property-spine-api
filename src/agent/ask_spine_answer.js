@@ -68,6 +68,7 @@ const leasingCycleConfig = require("../leasing/leasing_cycle.js");
 //  are implemented, and those diverge silently.
 const leasingStandingRead = require("../leasing/leasing_standing_read.js");
 const economicPicture = require("../money/economic_picture.js");
+const { readTourScheduleStanding } = require("../leasing/tour_availability_service.js");
 
 const MODEL = process.env.ASK_SPINE_MODEL || "claude-opus-5";
 /*  THINKING AND THE ANSWER SHARE THIS CEILING. On this model family
@@ -145,6 +146,8 @@ const SUPPORTED_SCOPE =
   + "property — the exact space they are pursuing, what is currently being asked for it, "
   + "whether they have signed the governing instrument and whether the company has, whether "
   + "an executed lease exists, whether a tenancy is committed, and what is blocking it, or "
+  + "the current native tour schedule, next open tour times, default host, and future staff "
+  + "coverage adjustments, or "
   + "governed service providers, scope, price, term, " +
   "notice decisions, retained evidence, financial observations, and known contract gaps, or " +
   "this property's governed tenancy standing — how many rentable positions there are, how " +
@@ -166,7 +169,7 @@ const OUT_OF_SCOPE_ANSWER =
   "I can only answer about " + SUPPORTED_SCOPE + ". " +
   "Ask me what needs attention, about a recorded Compliance item, how a Utility works here, " +
   "what governs a contracted service, what the property owes its lender, who holds equity here, " +
-  "where the rent roll stands on a date, or what published pricing and charges are in force.";
+  "where the rent roll stands on a date, what tour times are open, or what published pricing and charges are in force.";
 
 //  ⚠ EVERY NOUN HERE WAS SINGULAR-ONLY, AND NOBODY ASKS IN THE SINGULAR.
 //  `\b(licen[cs]e)\b` does not match "licenses" — the \b needs a non-word
@@ -244,6 +247,8 @@ const TENANCY_STANDING_TERMS =
   /\b(rent ?roll|occupanc(?:y|ies)|occupied|vacan(?:t|cy|cies)|residents?|move[- ]?(?:in|out)s?|beds?|who lives|how many (?:units|beds|positions|residents))\b/i;
 const EXPLICIT_WORK_TERMS =
   /\b(work[ -]?order|repair|maintenance|technician|task|job|assigned|assignment)\b/i;
+const TOUR_SCHEDULE_TERMS =
+  /\b(tours? (?:times?|schedule|availability|openings?|slots?|hosts?|coverage)|(?:hosting|covering) tours?|book(?:ing)? (?:a )?tour|schedule (?:a )?tour|when can (?:we|i|someone) tour)\b/i;
 const ECONOMICS_MODULES = new Set(["leasing", "management", "asset_management"]);
 
 function canReadEconomics(modules) {
@@ -265,6 +270,7 @@ function questionSubject(question) {
   const compliance = complianceNoun || (CLOCK_TERMS.test(text) && !tenancyThing && !economics);
   const utility = UTILITY_TERMS.test(text)
     && !(economics && !UTILITY_DETAIL_TERMS.test(text));
+  const tourSchedule = TOUR_SCHEDULE_TERMS.test(text);
   /*  ⚠ MERGE NOTE, AND A DISTINCTION I GOT WRONG ONCE HERE.
    *
    *  `main` added Debt while this branch added Tenancy. My first resolution
@@ -282,13 +288,13 @@ function questionSubject(question) {
    *                                                       so the composition
    *                                                       guard must see both
    */
-  const leasingPerson = LEASING_PERSON_TERMS.test(text) && !contractedService && !equity && !debt
+  const leasingPerson = LEASING_PERSON_TERMS.test(text) && !tourSchedule && !contractedService && !equity && !debt
     && !(economics && !LEASING_PERSON_DETAIL_TERMS.test(text));
-  const tenancy = tenancyThing && !contractedService && !equity && !leasingPerson
+  const tenancy = tenancyThing && !tourSchedule && !contractedService && !equity && !leasingPerson
     && !(economics && !TENANCY_STANDING_TERMS.test(text));
   const work = EXPLICIT_WORK_TERMS.test(text)
-    && !contractedService && !equity && !debt && !tenancy && !leasingPerson && !economics;
-  if ([compliance, utility, contractedService, debt, equity, economics, tenancy, leasingPerson, work]
+    && !tourSchedule && !contractedService && !equity && !debt && !tenancy && !leasingPerson && !economics;
+  if ([compliance, utility, contractedService, debt, equity, economics, tourSchedule, tenancy, leasingPerson, work]
         .filter(Boolean).length > 1) {
     return "composition_unavailable";
   }
@@ -298,6 +304,7 @@ function questionSubject(question) {
   if (debt) return "debt";
   if (equity) return "equity";
   if (economics) return "economics";
+  if (tourSchedule) return "tour_schedule";
   if (leasingPerson) return "leasing_person";
   if (tenancy) return "tenancy";
   return "work";
@@ -383,6 +390,7 @@ async function gatherFacts(db, {
   tenancyReader = tenancyStandingRead,
   leasingReader = leasingStandingRead,
   economicReader = economicPicture,
+  tourScheduleReader = readTourScheduleStanding,
   //  The canonical application lifecycle service. Accepted as a value OR a
   //  thunk: ask_spine mounts in server.js ABOVE the applications module, so
   //  a value captured at mount time would be undefined forever.
@@ -395,6 +403,13 @@ async function gatherFacts(db, {
     __refs: [],
   };
   const failures = [];
+
+  if (subject === "tour_schedule"
+      && (allowed_modules || []).some(module => module === "leasing" || module === "management")) {
+    try {
+      facts.tour_schedule = await tourScheduleReader(db, { propertyId: property_id, limit: 12 });
+    } catch (e) { failures.push("tour_schedule"); }
+  }
 
   if (subject === "work") {
     try {
@@ -976,6 +991,14 @@ function systemPrompt(subject = "work") {
     "   each amount is required, optional, conditional, unresolved, or not applicable.",
     "31. Give a combined monthly or move-in amount only when its `amount` is present. When",
     "   it is withheld, say what is known separately and name the blocker; never add it yourself.",
+    "32. For tour scheduling, the weekly policy describes normal hours; `next_open_times` are",
+    "   the actual bookable rows after holiday, callout, reassignment, and minimum-notice rules.",
+    "   Answer availability from the actual rows, never by expanding the weekly policy yourself.",
+    "33. A day adjustment changes open times only. Any `coverage_attention` count names booked",
+    "   tours that remained scheduled; say they still need a coverage decision and never claim",
+    "   they were cancelled or reassigned.",
+    "34. Tour schedule read_state NOT_CONFIGURED means no native schedule is established. It is",
+    "   not a closed calendar and not evidence that no tours are available.",
     "",
     "HOW TO SOUND:",
     "· Talk like a competent colleague, not a database. Short sentences.",
@@ -1001,7 +1024,7 @@ function systemPrompt(subject = "work") {
 async function answer(db, anthropic, {
   property_id, allowed_modules, question, mintComplianceReference, complianceReader,
   utilityReader, contractedServiceReader, debtService, debtRead, equityService, equityRead,
-  tenancyReader, economicReader, applicationsService,
+  tenancyReader, economicReader, tourScheduleReader, applicationsService,
 }) {
   if (!property_id) throw new Error("ask_spine.answer requires a server-derived property_id");
 
@@ -1026,7 +1049,7 @@ async function answer(db, anthropic, {
       //  services and work — a list their own question was missing from,
       //  which reads as "I don't do that" rather than "not both at once".
       //  Debt and Tenancy both belong here now.
-      answer: "I can answer about the rent roll, Published Pricing and Charges, Debt, Equity, " +
+      answer: "I can answer about the rent roll, tour scheduling, Published Pricing and Charges, Debt, Equity, " +
               "Compliance, Utilities, Contracted Services, or open work separately, but I can't combine them in " +
               "one answer yet.",
       grounded_on: null,
@@ -1059,6 +1082,15 @@ async function answer(db, anthropic, {
       references: [],
     };
   }
+  if (subject === "tour_schedule"
+      && !modules.includes("leasing") && !modules.includes("management")) {
+    return {
+      outcome: "not_authorized",
+      answer: "Tour scheduling is not available in your current access for this property.",
+      grounded_on: null,
+      references: [],
+    };
+  }
   if (["compliance", "utility", "contracted_service", "debt", "equity"].includes(subject)
       && !modules.includes("asset_management")) {
     const label = subject === "compliance" ? "Compliance"
@@ -1086,7 +1118,7 @@ async function answer(db, anthropic, {
     property_id, allowed_modules: modules, subject,
     mintComplianceReference, complianceReader, utilityReader,
     contractedServiceReader, debtService, debtRead, equityService, equityRead,
-    tenancyReader, economicReader, question: q,
+    tenancyReader, economicReader, tourScheduleReader, question: q,
     applicationsService,
   });
 
@@ -1213,6 +1245,9 @@ async function answer(db, anthropic, {
         ? facts.economics.completeness.overall : null,
       economics_monthly_total_withheld: facts.economics && facts.economics.combined_monthly_total
         ? !!facts.economics.combined_monthly_total.withheld : null,
+      tour_schedule_read_state: facts.tour_schedule ? facts.tour_schedule.read_state : null,
+      tour_schedule_open_count: facts.tour_schedule ? facts.tour_schedule.next_open_times.length : null,
+      tour_schedule_coverage_attention_count: facts.tour_schedule ? facts.tour_schedule.coverage_attention.length : null,
       reads_that_failed: facts.reads_that_failed,
       gathered_at: facts.gathered_at,
     },

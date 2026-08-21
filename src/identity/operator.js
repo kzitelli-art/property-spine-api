@@ -44,6 +44,7 @@ const applicationTargetAuthority = require("../applications/application_target_a
 module.exports = function operatorModule(deps) {
   const {
     pool, agentService, conversionService = null, leasingTourService = null,
+    tourAvailabilityService = null,
     applicationInvitations = null, interactionsService = null,
     // v3 (R3): the ONE canonical approveApplication service from applications.js
     // — the walled operator approve adapter below calls THIS, never a second
@@ -1340,6 +1341,143 @@ const { listLeasingCycles, resolveCycle } = require("../leasing/leasing_cycle");
       return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message });
     }
   });
+
+  // ══════════════════════════════════════════════════════════════════
+  // NATIVE TOUR SCHEDULER — signed-in staff adapter
+  //
+  // Property and recorder are always derived from the staff session. These
+  // routes call the same tourAvailabilityService as the older operator-key
+  // adapters; neither surface owns an insert or status transition.
+  // ══════════════════════════════════════════════════════════════════
+  router.get("/operator/leasing/tour-slots", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!tourAvailabilityService) {
+      return res.status(503).json({ error: "native_tour_scheduler_not_wired" });
+    }
+    try {
+      const statuses = String(req.query.status || "open,booked,blocked")
+        .split(",").map(s => s.trim()).filter(Boolean);
+      return res.json(await tourAvailabilityService.listSlots({
+        propertyId: req.operator.property_id,
+        from: req.query.from || null,
+        to: req.query.to || null,
+        statuses,
+        limit: req.query.limit || null,
+      }));
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null });
+    }
+  });
+
+  router.post("/operator/leasing/tour-slots", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!tourAvailabilityService) {
+      return res.status(503).json({ error: "native_tour_scheduler_not_wired" });
+    }
+    const b = req.body || {};
+    try {
+      const out = await tourAvailabilityService.publishSlot({
+        propertyId: req.operator.property_id,
+        startsAt: b.starts_at,
+        endsAt: b.ends_at,
+        startsLocal: b.starts_local || null,
+        endsLocal: b.ends_local || null,
+        unitId: b.unit_id || null,
+        leasingAgentId: b.leasing_agent_id || null,
+        capacity: b.capacity,
+        actorUserId: req.operator.id,
+        actorType: "human_staff",
+        reason: b.reason || null,
+        idempotencyKey: req.get("idempotency-key") || b.idempotency_key || null,
+      });
+      return res.status(out.created ? 201 : 200).json({
+        receipt: out.created ? "Tour time published." : "That exact tour time is already published.",
+        ...out,
+      });
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null });
+    }
+  });
+
+  router.post("/operator/leasing/tour-schedule", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!tourAvailabilityService) {
+      return res.status(503).json({ error: "native_tour_scheduler_not_wired" });
+    }
+    const b = req.body || {};
+    try {
+      const out = await tourAvailabilityService.publishSchedulePolicy({
+        propertyId: req.operator.property_id,
+        weeklyHours: b.weekly_hours,
+        slotDurationMinutes: b.slot_duration_minutes,
+        minimumNoticeMinutes: b.minimum_notice_minutes,
+        holidayCalendar: b.holiday_calendar,
+        defaultHostUserId: b.default_host_user_id || null,
+        horizonDays: b.horizon_days,
+        actorUserId: req.operator.id,
+        actorType: "human_staff",
+        reason: b.reason || null,
+        idempotencyKey: req.get("idempotency-key") || b.idempotency_key || null,
+      });
+      return res.json({ receipt: `${out.generated_count} new tour time(s) published.`, ...out });
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null });
+    }
+  });
+
+  router.post("/operator/leasing/tour-schedule/adjust-day", requireOperator, requireLeasingModuleAccess, async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!tourAvailabilityService) {
+      return res.status(503).json({ error: "native_tour_scheduler_not_wired" });
+    }
+    const b = req.body || {};
+    try {
+      const out = await tourAvailabilityService.adjustDay({
+        propertyId: req.operator.property_id,
+        localDate: b.local_date,
+        action: b.action,
+        newHostUserId: b.new_host_user_id || null,
+        actorUserId: req.operator.id,
+        actorType: "human_staff",
+        reason: b.reason || null,
+        idempotencyKey: req.get("idempotency-key") || b.idempotency_key || null,
+      });
+      const verb = b.action === "close_open" ? "closed" : "reassigned";
+      return res.json({
+        receipt: `${out.changed_count} open tour time(s) ${verb}. ${out.booked_unchanged} booked tour(s) remain scheduled.`,
+        ...out,
+      });
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null });
+    }
+  });
+
+  async function changeNativeTourSlot(req, res, action) {
+    res.set("Cache-Control", "no-store");
+    if (!tourAvailabilityService) {
+      return res.status(503).json({ error: "native_tour_scheduler_not_wired" });
+    }
+    const b = req.body || {};
+    try {
+      const out = await tourAvailabilityService.changeSlotStatus({
+        propertyId: req.operator.property_id,
+        slotId: req.params.slotId,
+        action,
+        actorUserId: req.operator.id,
+        actorType: "human_staff",
+        reason: b.reason || null,
+        idempotencyKey: req.get("idempotency-key") || b.idempotency_key || null,
+      });
+      return res.json({ receipt: action === "block" ? "Tour time blocked." : "Tour time reopened.", ...out });
+    } catch (e) {
+      return res.status(e.httpStatus || 500).json({ error: e.publicMessage || e.message, code: e.code || null });
+    }
+  }
+
+  router.post("/operator/leasing/tour-slots/:slotId/block", requireOperator, requireLeasingModuleAccess,
+    (req, res) => changeNativeTourSlot(req, res, "block"));
+  router.post("/operator/leasing/tour-slots/:slotId/reopen", requireOperator, requireLeasingModuleAccess,
+    (req, res) => changeNativeTourSlot(req, res, "reopen"));
 
   // ══════════════════════════════════════════════════════════════════
   // GET /operator/leasing/availability-canonical?as_of=&horizon_days=

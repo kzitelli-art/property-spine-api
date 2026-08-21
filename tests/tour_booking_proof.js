@@ -14,11 +14,15 @@
 //   7. Seed rerun inserts only missing slots + respects property timezone.
 //   + /demo/book regression: still books via the shared service.
 //
-//  RUN:  DATABASE_URL="<db>" node tour_booking_proof.js
+//  RUN:  HARNESS_DATABASE_URL="<disposable-db>" node tour_booking_proof.js
 // ════════════════════════════════════════════════════════════════════
 const { Pool } = require("pg");
 const crypto = require("crypto");
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const receipt = require("./_run_receipt");
+const { databaseSsl } = require("../src/shared/database_ssl");
+const URL = receipt.harnessConnectionString();
+const EXPECTED = 33;
+const pool = new Pool({ connectionString: URL, ssl: databaseSsl(URL) });
 const uuid = () => crypto.randomUUID();
 
 let passed = 0, failed = 0;
@@ -27,7 +31,7 @@ function check(name, cond, detail = "") {
   else { failed++; console.log(`  \u2717 ${name}${detail ? "  \u2014 " + detail : ""}`); }
 }
 
-const created = { properties: [], units: [], spaces: [], persons: [], leads: [], slots: [], tours: [] };
+const created = { properties: [], lines: [], units: [], spaces: [], persons: [], leads: [], slots: [], tours: [] };
 function track(k, id) { created[k].push(id); return id; }
 
 // Build the leasingleads module to get its _service (the real booking service).
@@ -40,7 +44,15 @@ const svc = leasing._service;
 
 async function mkProp(name) {
   const id = track("properties", uuid());
-  await pool.query(`insert into properties (id, name, sms_number) values ($1,$2,$3)`, [id, name, "+1555" + Math.floor(1e6 + Math.random() * 8e6)]);
+  await pool.query(`insert into properties (id, name) values ($1,$2)`, [id, name]);
+  const lineId = track("lines", uuid());
+  await pool.query(
+    `insert into communication_lines
+       (id,e164,line_type,property_id,authority_ceiling,permitted_audience,
+        inbound_enabled,outbound_enabled,outbound_policy,status)
+     values ($1,$2,'property_facing',$3,'external','residents_and_prospects',true,true,'proactive','active')`,
+    [lineId, "+1555" + Math.floor(1e6 + Math.random() * 8e6), id]
+  );
   const u = track("units", uuid());
   await pool.query(`insert into units (id, property_id, unit_number, bedrooms, bathrooms, market_rent, occupancy_status) values ($1,$2,'U-1',1,1,1500,'vacant')`, [u, id]);
   return { id, unitId: u };
@@ -77,6 +89,7 @@ async function bookViaService(args) {
 }
 
 async function main() {
+  receipt.begin(__filename, { url: URL, expected: EXPECTED });
   process.env.AGENT_TOUR_BOOKING_PROPERTY_IDS = ""; // start disabled; each test sets as needed
 
   const propA = await mkProp("Prop A (booking target)");
@@ -194,7 +207,10 @@ async function main() {
     // backfilled exactly this value for this property). The happy path then
     // produces tz-formatted labels.
     const DEMO = "a50fbdd0-3642-431e-b532-0dcd6ab8a4fe";
-    await pool.query(`insert into properties (id,name,sms_number) values ($1,'Property Spine Demo Building','+12154452021') on conflict (id) do nothing`, [DEMO]);
+    const demoExists = (await pool.query("select id from properties where id=$1", [DEMO])).rows[0];
+    if (!demoExists) {
+      await pool.query(`insert into properties (id,name) values ($1,'Property Spine Demo Building')`, [DEMO]);
+    }
     await pool.query(`update properties set operating_timezone='America/New_York' where id=$1`, [DEMO]);
     const demoUnit = track("units", uuid());
     await pool.query(`insert into units (id,property_id,unit_number,bedrooms,bathrooms,market_rent,occupancy_status) values ($1,$2,'D-1',1,1,1500,'vacant')`, [demoUnit, DEMO]);
@@ -212,6 +228,47 @@ async function main() {
       knownRead && knownRead.length > 0 && /\d{1,2}:\d{2}\s?(AM|PM)/i.test((knownRead.find(o => o.slot_id === s1) || {}).label || ""),
       knownRead && (knownRead.find(o => o.slot_id === s1) || {}).label);
     // clean the demo slots we just made (tracked, but demo property is shared — leave the property)
+  }
+
+  // 8. The legacy "requested" tour shape is an adapter input, not a second
+  //    booking transaction. It is promoted through bookTourIntoSlot and may
+  //    never be attached to another lead's slot booking.
+  {
+    const person = await mkPerson("Requested Tour Prospect");
+    const lead = await mkLead(person, propA.id);
+    const requestedTour = track("tours", uuid());
+    await pool.query(
+      `insert into leasing_tours (id,lead_id,property_id,status,requested_for)
+       values ($1,$2,$3,'requested',$4)`,
+      [requestedTour, lead, propA.id, new Date(Date.now() + 216 * 3600000).toISOString()]
+    );
+    const slot = await mkSlot(propA.id, propA.unitId, 216);
+    const promoted = await bookViaService({
+      leadId: lead,
+      slotId: slot,
+      existingTourId: requestedTour,
+      idempotencyKey: "k_promote_requested",
+      via: "operator_key_booking_adapter",
+    });
+    check("8. requested tour is promoted through the canonical service", promoted.ok && promoted.out.tour.id === requestedTour);
+    check("8. promotion creates no second tour", await tourCount(lead) === 1);
+    const promotedRow = (await pool.query("select status,slot_id from leasing_tours where id=$1", [requestedTour])).rows[0];
+    const promotedSlot = (await pool.query("select status,booked_tour_id from tour_availability where id=$1", [slot])).rows[0];
+    check("8. promotion projects the same scheduled truth", promotedRow.status === "scheduled" && promotedRow.slot_id === slot && promotedSlot.status === "booked" && promotedSlot.booked_tour_id === requestedTour);
+
+    const otherPerson = await mkPerson("Other Requested Tour Prospect");
+    const otherLead = await mkLead(otherPerson, propA.id);
+    const wrongTour = track("tours", uuid());
+    await pool.query(
+      `insert into leasing_tours (id,lead_id,property_id,status,requested_for)
+       values ($1,$2,$3,'requested',$4)`,
+      [wrongTour, lead, propA.id, new Date(Date.now() + 232 * 3600000).toISOString()]
+    );
+    const otherSlot = await mkSlot(propA.id, propA.unitId, 232);
+    const refused = await bookViaService({ leadId: otherLead, slotId: otherSlot, existingTourId: wrongTour });
+    check("8. another lead's requested tour is refused", !refused.ok && refused.err && refused.err.httpStatus === 404);
+    const untouched = (await pool.query("select status from tour_availability where id=$1", [otherSlot])).rows[0];
+    check("8. the refused promotion leaves no partial slot write", untouched.status === "open" && await tourCount(otherLead) === 0);
   }
 
   // 5-CONCURRENCY. Two CONCURRENT executions of the SAME namespaced booking
@@ -268,9 +325,9 @@ async function main() {
   }
 
   await cleanup();
-  console.log(`\n\u2550\u2550\u2550 RESULT: ${passed} passed, ${failed} failed \u2550\u2550\u2550`);
+  const exitCode = receipt.complete({ harness: __filename, passed, failed, expectedAtLeast: EXPECTED });
   await pool.end();
-  process.exit(failed === 0 ? 0 : 1);
+  process.exit(exitCode);
 }
 
 async function cleanup() {
@@ -292,8 +349,14 @@ async function cleanup() {
   await del("spaces", created.spaces);
   await del("units", created.units);
   await del("persons", created.persons);
+  await del("communication_lines", created.lines);
   await del("properties", created.properties);
   console.log("  cleanup complete (only tracked UUIDs touched).");
 }
 
-main().catch(async (e) => { console.error("HARNESS ERROR:", e); try { await cleanup(); } catch (_) {} try { await pool.end(); } catch (_) {} process.exit(1); });
+main().catch(async (e) => {
+  const exitCode = receipt.died(__filename, e, passed + failed);
+  try { await cleanup(); } catch (_) {}
+  try { await pool.end(); } catch (_) {}
+  process.exit(exitCode);
+});

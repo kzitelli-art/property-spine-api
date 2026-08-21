@@ -61,6 +61,12 @@ const GATES = [
   //  maintenance action anonymous for as long as it was there.
   { file: "gate_operator_session_fields.js",
     what: "no req.operator read of a field the staff session does not define" },
+  { file: "gate_native_tour_scheduler.js",
+    what: "one Spine-owned tour-slot command; staff scope and attribution stay server-derived" },
+  { file: "us_federal_holidays.test.js",
+    what: "federal holiday closures match the legal and OPM-observed calendar rules" },
+  { file: "tour_schedule_ask_spine.test.js",
+    what: "dashboard and staff SMS Ask Spine read the same native tour schedule standing" },
   //  Steps 2–3 candidates. Both are source-only and DB-free, so they
   //  belong on the standard path rather than in a harness nobody runs.
   { file: "gate_migration_137_promotion.js",

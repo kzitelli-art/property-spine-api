@@ -90,20 +90,16 @@ when leasing is slow, and the premium is upsold by a person.
   leasing team's heads, and nowhere the software can reach. That is the correct
   containment for a discretionary price.
 
-> ### Defect #14 does not fire at Skyline
+> ### Defect #14 is fixed
 >
-> `pricing_adapter.js:101` takes `terms[0]` when no term is named, which is
-> deterministically the **shortest** published term. With three terms published
-> that would have quoted the short-term premium to everyone who asked a plain
-> price question — the commonest question in leasing, answered with the dearest
-> number on the sheet.
+> One published term still quotes directly. Two or more published terms now
+> return the term menu and ask the prospect to choose; no path takes `terms[0]`
+> as an unstated decision. This is deployed and production-proven at Skyline for
+> the one-term case. Skyline's unpublished 5- and 7-month negotiation remains a
+> human handoff.
 >
-> Publishing one term removes the ambiguity at its source rather than papering
-> over it: with a single row there is no wrong row to pick.
->
-> **The defect is still latent.** It bites the first property that publishes two
-> terms. It is not fixed, and this decision is not a fix — it is Skyline
-> declining to stand in front of it.
+> Evidence: `tests/e2e/agent_pricing_wall.e2e.js` 22/22 and production draft
+> `a0059ea8-aacd-4a5c-892a-6728afcb00bb`.
 
 ## FEES
 
@@ -165,6 +161,80 @@ Roof deck · cardio room · laundry · assigned parking · on-site management of
 
 ---
 
+## TOUR SCHEDULING
+
+**Owner ruling 2026-08-21:** Property Spine is the booking authority. Do not
+activate Acuity or another third-party scheduler as a second source of truth.
+
+The existing native chain is the target:
+
+`tour_availability` → agent offers exact slot IDs → prospect confirms an
+offered slot → `leasing_tours` records the booking → the same conversation
+recognizes that the prospect is already booked.
+
+**Owner-confirmed operating policy, 2026-08-21:**
+
+- Monday-Friday: `9:00 AM-5:00 PM`
+- Saturday: `10:00 AM-3:00 PM`
+- Sunday: closed
+- Tours reserve one 60-minute block even when the visit ends earlier. Ending
+  early does not make that block available again.
+- Prospects need at least two hours' notice and may book up to 45 days ahead.
+- Federal holidays are closed. The native calendar closes both the legal
+  holiday date and the OPM-observed weekday when they differ; this matters
+  because Saturday is otherwise open.
+- Mike Grivna is the default scheduled host. Another active Skyline staff user
+  with leasing access may be selected as replacement coverage.
+- Each published time has capacity one.
+
+The staff publication side uses the same native chain. One current weekly
+policy materializes real `tour_availability` rows; those rows, not the policy
+alone, are what prospects may be offered. A signed-in leasing staff user can
+publish the next 45 days, add or block one time, close all remaining open times
+on a day, or reassign a day's remaining open times. Property and recorder come
+from the staff session, and every command retains an attributable receipt.
+
+Booked tours never disappear during a staff callout. Closing or reassigning a
+day changes open times only and reports the number of booked tours still
+scheduled so staff can make an explicit coverage decision.
+
+The same canonical schedule standing is registered with Ask Spine. The app and
+staff SMS can ask what times are actually open, who the default host is, and
+which booked tours still need coverage. Ask Spine reads the materialized rows;
+it does not expand weekly hours into invented availability.
+
+The complete native path is proven on a disposable production clone: exact-slot
+service 23/23, weekly-policy/callout service 25/25, real session + HTTP 20/20,
+canonical booking 33/33, and cross-turn agent offer/confirm 12/12. Ask Spine's
+schedule contract is 8/8, staff SMS routing is 30/30, and the existing real-HTTP
+Skyline-shaped lead-to-lease path is green through all 21 steps. This is branch
+proof, not a production claim. Migration 188 and the app/API changes are not
+deployed.
+
+Skyline is not active yet: its production timezone is null, it has no real
+availability rows, and its property ID is not enabled for agent booking. The
+Philadelphia timezone is owner-confirmed as `America/New_York`; writing it and
+publishing the policy remain production configuration acts.
+
+### Activation sequence — not yet executed
+
+1. Deploy migration 188 and the API/app changes through the normal release
+   gate. Production's expected migration ceiling moves from 187 to 188 only as
+   part of that release.
+2. Record Skyline's operating timezone as `America/New_York` and verify Mike
+   Grivna has an active Skyline leasing assignment.
+3. Publish the owner-confirmed weekly policy and its first 45 days of times;
+   verify the session-scoped read returns the same slots and event receipts.
+4. Add Skyline's property ID to the governed agent-booking allowlist and deploy
+   that configuration.
+5. Run a controlled prospect conversation with outbound delivery suppressed:
+   ask for times, confirm one offered choice in a later turn, and verify the
+   slot, tour, lead state, offer receipt, and event attribution.
+6. Only after that proof, exercise one owner-approved real SMS booking. No
+   external calendar or scheduler becomes an authority anywhere in the path.
+
+---
+
 ## AUTHORITY
 
 | | |
@@ -212,9 +282,7 @@ production write and still needs approval.
    `seasonal`, `renewal_strategy`, `concession_change`, `correction`, `other`
 7. Whether anyone besides Kameron may legally sign leases
 8. Whether any separately rentable retail / office / storage space exists
-
-Plus the three raised above: which terms are "short," the utility rounding rule,
-and the 17-vs-16 room count.
+Plus the two raised above: the utility rounding rule and the 17-vs-16 room count.
 
 ---
 

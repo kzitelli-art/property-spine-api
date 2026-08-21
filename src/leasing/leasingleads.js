@@ -40,8 +40,10 @@ const AI_FIRST_RESPONSE_PROMPT_REVISION = "leasing-first-response-v2";
 const SOURCE_UNATTRIBUTED = "Unattributed"; // caller supplied no source
 const SOURCE_UNMAPPED     = "Unmapped";     // caller supplied a source we don't recognize
 
-module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices, commitmentLedger = null, commBoundary }) {
+module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices, commitmentLedger = null, commBoundary, tourAvailabilityService = null }) {
   const router = express.Router();
+  const nativeTourAvailability = tourAvailabilityService ||
+    require("./tour_availability_service").makeTourAvailabilityService({ pool });
 
   // ── PHASE B: signed public booking continuation (tour_booking_links, mig 056) ──
   // Store ONLY the digest; the raw token lives solely in the /demo/intake receipt.
@@ -1178,12 +1180,9 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       if (link.status === "revoked" || (link.expires_at && new Date(link.expires_at).getTime() < Date.now())) {
         return res.status(409).json({ receipt: "This booking link is no longer active.", slots: [] });
       }
-      // only OPEN, FUTURE slots at THIS (demo) property.
-      const slots = (await pool.query(
-        `select id, starts_at, ends_at, unit_id from tour_availability
-          where property_id=$1 and status='open' and starts_at > now()
-          order by starts_at asc limit 24`,
-        [link.property_id])).rows;
+      // The public booking page and the conversational agent consume the same
+      // offerable-slot reader, including the property's minimum-notice rule.
+      const slots = await readOfferableSlots(pool, { propertyId: link.property_id, limit: 24 }) || [];
       return res.json({ receipt: `${slots.length} open time(s).`, slots });
     } catch (e) {
       console.error("demo slots:", e);
@@ -1485,9 +1484,9 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   //  SHARED CANONICAL BOOKING SERVICE — bookTourIntoSlot
   //
   //  The ONE transaction that turns an eligible slot into a live tour in
-  //  leasing_tours (the Tours module's table). BOTH the public /demo/book link
-  //  route AND the agent's book_tour tool call this — one code path, one
-  //  double-booking wall, one funnel advance. No caller may reimplement it.
+  //  leasing_tours (the Tours module's table). The public /demo/book link,
+  //  agent book_tour tool, and legacy staff adapter all call this — one code
+  //  path, one double-booking wall, one funnel advance. No caller may reimplement it.
   //
   //  GOVERNED WRITE (not a consequence of being allowed to converse). Every
   //  authority fact is re-verified HERE, server-side, under lock — a model- or
@@ -1519,12 +1518,15 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   async function bookTourIntoSlot(client, {
     leadId,
     slotId,
+    existingTourId = null,      // promote a legacy requested tour through this same transaction
     subjectPersonId = null,     // the prospect who confirmed (subject, NOT executor)
     sourceCommEventId = null,   // the inbound comm_event that carried the confirmation
     sourceAgentRunId = null,    // the agent run that caused the booking (if any)
     idempotencyKey = null,      // per-ACTION key (agent: the MessageSid)
     via = "agent_book_tour",    // provenance label
     requireAgentBookingCapability = false, // when true, property must be agent-booking-enabled
+    executionActorType = "system",
+    executionActorId = null,
   }) {
     if (!leadId || !slotId) {
       const e = new Error("leadId and slotId are required."); e.httpStatus = 400; e.publicMessage = e.message; throw e;
@@ -1555,10 +1557,24 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     // ── SLOT authority: RE-READ + LOCK. Never trust a slot id from the model. ──
     const slot = (await client.query(`select * from tour_availability where id=$1 for update`, [slotId])).rows[0];
     if (!slot) { const e = new Error("No slot with that id."); e.httpStatus = 404; e.publicMessage = e.message; throw e; }
-    if (slot.status !== "open") { const e = new Error("That time was just taken. Please pick another."); e.httpStatus = 409; e.publicMessage = e.message; throw e; }
+    if (slot.status !== "open") {
+      if (existingTourId && slot.status === "booked" && String(slot.booked_tour_id) === String(existingTourId)) {
+        const priorTour = (await client.query(
+          `select * from leasing_tours where id=$1 and lead_id=$2 and property_id=$3`,
+          [existingTourId, lead.id, lead.property_id])).rows[0];
+        if (priorTour) return { tour: priorTour, alreadyBooked: true };
+      }
+      const e = new Error("That time was just taken. Please pick another."); e.httpStatus = 409; e.publicMessage = e.message; throw e;
+    }
     // CROSS-PROPERTY WALL: the slot must belong to the lead's property.
     if (slot.property_id !== lead.property_id) {
       const e = new Error("That slot isn't at this property."); e.httpStatus = 409; e.publicMessage = e.message; throw e;
+    }
+    const schedule = await nativeTourAvailability.getSchedulePolicy({ propertyId: lead.property_id, client });
+    const minimumNotice = Number(schedule.policy?.minimum_notice_minutes || 0);
+    if (new Date(slot.starts_at).getTime() < Date.now() + (minimumNotice * 60 * 1000)) {
+      const e = new Error("That tour time is inside the property's minimum notice window. Please pick another.");
+      e.httpStatus = 409; e.publicMessage = e.message; throw e;
     }
 
     // ── soft-closed conversation guard (when the lifecycle service is present) ──
@@ -1566,36 +1582,57 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
       await leasingLifecycle.assertNotSoftClosedForLead(client, { leadId: lead.id });
     }
 
-    // ── create the tour on this slot (status 'scheduled'). Execution is SYSTEM;
-    //    the confirming prospect + originating cause are recorded, not conflated.
-    const tour = (await client.query(
-      `insert into leasing_tours
-         (lead_id, property_id, unit_id, leasing_agent_id, slot_id, scheduled_for, status, booking_idempotency_key)
-       values ($1,$2,$3,$4,$5,$6,'scheduled',$7) returning *`,
-      [lead.id, lead.property_id, slot.unit_id, slot.leasing_agent_id, slotId, slot.starts_at, idempotencyKey || null])).rows[0];
+    // ── create the tour on this slot (status 'scheduled'). Execution attribution
+    //    comes from the adapter; prospect subject + originating cause stay separate.
+    let tour;
+    if (existingTourId) {
+      const requested = (await client.query(
+        `select * from leasing_tours where id=$1 and lead_id=$2 and property_id=$3 for update`,
+        [existingTourId, lead.id, lead.property_id])).rows[0];
+      if (!requested) {
+        const e = new Error("Could not find that requested tour for this inquiry."); e.httpStatus = 404; e.publicMessage = e.message; throw e;
+      }
+      if (requested.status !== "requested" || requested.slot_id) {
+        const e = new Error("That tour request is no longer waiting for a time."); e.httpStatus = 409; e.publicMessage = e.message; throw e;
+      }
+      tour = (await client.query(
+        `update leasing_tours
+            set unit_id=coalesce(unit_id,$2), leasing_agent_id=coalesce(leasing_agent_id,$3),
+                slot_id=$4, scheduled_for=$5,
+                booking_idempotency_key=coalesce(booking_idempotency_key,$6), updated_at=now()
+          where id=$1 returning *`,
+        [existingTourId, slot.unit_id, slot.leasing_agent_id, slotId, slot.starts_at, idempotencyKey || null])).rows[0];
+    } else {
+      tour = (await client.query(
+        `insert into leasing_tours
+           (lead_id, property_id, unit_id, leasing_agent_id, slot_id, scheduled_for, status, booking_idempotency_key)
+         values ($1,$2,$3,$4,$5,$6,'scheduled',$7) returning *`,
+        [lead.id, lead.property_id, slot.unit_id, slot.leasing_agent_id, slotId, slot.starts_at, idempotencyKey || null])).rows[0];
+    }
 
     // flip the slot to booked (partial unique index is the concurrent backstop)
     await client.query(
       `update tour_availability set status='booked', booked_tour_id=$1, updated_at=now() where id=$2`,
       [tour.id, slotId]);
 
-    // tour_events: EXECUTION actor is 'system'; the prospect is the SUBJECT
-    // (recorded in metadata), the originating comm_event/run is the CAUSE.
+    // tour_events: the adapter's EXECUTION actor, the prospect SUBJECT, and the
+    // originating comm_event/run CAUSE remain separate facts.
     await recordTourEvent(client, {
       tourId: tour.id, leadId: lead.id, type: "scheduled",
-      actorType: "system", actorId: null, slotId,
+      actorType: executionActorType, actorId: executionActorId, slotId,
       metadata: {
         scheduled_for: slot.starts_at, slot_id: slotId, via,
         subject_person_id: subjectPersonId || lead.person_id,
         source_comm_event_id: sourceCommEventId,
         source_agent_run_id: sourceAgentRunId,
-        execution_actor: "system",
+        execution_actor: executionActorType,
+        execution_actor_id: executionActorId,
       },
     });
 
     // funnel advance — SAME recordLeadEvent the operator/link paths use.
     await recordLeadEvent(client, {
-      leadId: lead.id, type: "tour_scheduled", actorType: "system",
+      leadId: lead.id, type: "tour_scheduled", actorType: executionActorType,
       commEventId: sourceCommEventId || null,
       metadata: {
         tour_id: tour.id, slot_id: slotId, scheduled_for: slot.starts_at, via,
@@ -1641,20 +1678,25 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   async function readOfferableSlots(client, { propertyId, limit = 4 }) {
     const tz = await loadPropertyOperatingTimezone(propertyId);
     if (!tz) return null; // unconfigured tz → no offer set (honest)
+    const schedule = await nativeTourAvailability.getSchedulePolicy({ propertyId, client: client || pool });
+    const minimumNotice = Number(schedule.policy?.minimum_notice_minutes || 0);
     const rows = (await (client || pool).query(
       `select id, starts_at, ends_at, unit_id
          from tour_availability
-        where property_id=$1 and status='open' and starts_at > now()
+        where property_id=$1 and status='open'
+          and starts_at >= now() + ($3::int * interval '1 minute')
         order by starts_at
-        limit $2`, [propertyId, limit])).rows;
+        limit $2`, [propertyId, limit, minimumNotice])).rows;
     const fmt = new Intl.DateTimeFormat("en-US", {
       timeZone: tz, weekday: "short", month: "short", day: "numeric",
       hour: "numeric", minute: "2-digit",
     });
     return rows.map(r => ({
+      id: r.id,
       slot_id: r.id,
       unit_id: r.unit_id,
       starts_at: r.starts_at,
+      ends_at: r.ends_at,
       label: fmt.format(new Date(r.starts_at)), // e.g. "Thu, Jul 16, 2:00 PM"
     }));
   }
@@ -1754,38 +1796,76 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
   //  The AI later offers ONLY rows this creates. property-scoped; agent optional.
   router.post("/leasing/availability", requireOperator, async (req, res) => {
     const b = req.body || {};
-    if (!b.property_id || !b.starts_at || !b.ends_at) {
-      return res.status(400).json({ receipt: "property_id, starts_at and ends_at are required to open a slot." });
+    const hasInstantWindow = b.starts_at && b.ends_at;
+    const hasLocalWindow = b.starts_local && b.ends_local;
+    if (!b.property_id || (!hasInstantWindow && !hasLocalWindow)) {
+      return res.status(400).json({ receipt: "property_id and one complete tour time window are required." });
     }
     try {
-      const slot = (await pool.query(
-        `insert into tour_availability (property_id, unit_id, leasing_agent_id, starts_at, ends_at, capacity, created_by)
-         values ($1,$2,$3,$4,$5,coalesce($6,1),$7) returning *`,
-        [b.property_id, b.unit_id || null, b.leasing_agent_id || null, b.starts_at, b.ends_at, b.capacity || null, b.created_by || null])).rows[0];
-      return res.json({ receipt: `Slot opened ${b.starts_at} → ${b.ends_at}.`, slot });
-    } catch (e) { console.error("leasing availability open:", e); return res.status(500).json({ receipt: "Could not open the slot.", error: e.message }); }
+      const actorUserId = await resolveRecorderUserId(req);
+      const out = await nativeTourAvailability.publishSlot({
+        propertyId: b.property_id,
+        startsAt: b.starts_at,
+        endsAt: b.ends_at,
+        startsLocal: b.starts_local || null,
+        endsLocal: b.ends_local || null,
+        unitId: b.unit_id || null,
+        leasingAgentId: b.leasing_agent_id || null,
+        capacity: b.capacity,
+        actorUserId,
+        actorType: actorUserId ? "human_staff" : "operator_key",
+        reason: b.reason || null,
+        idempotencyKey: req.get("idempotency-key") || b.idempotency_key || null,
+      });
+      return res.json({
+        receipt: out.created ? "Tour time published." : "That exact slot is already published.",
+        slot: out.slot,
+        created: out.created,
+      });
+    } catch (e) {
+      console.error("leasing availability open:", e);
+      return res.status(e.httpStatus || 500).json({ receipt: e.publicMessage || "Could not open the slot.", error: e.code || e.message });
+    }
   });
 
   // ── LIST OPEN SLOTS — what the AI is allowed to offer, and what the dash shows
   router.get("/properties/:propertyId/leasing/availability", requireOperator, async (req, res) => {
     try {
-      const r = await pool.query(
-        `select * from tour_availability
-          where property_id=$1 and status='open' and starts_at > now()
-          order by starts_at`, [req.params.propertyId]);
-      return res.json({ receipt: `${r.rows.length} open slot(s).`, slots: r.rows });
-    } catch (e) { console.error("leasing availability list:", e); return res.status(500).json({ receipt: "Could not load availability.", error: e.message }); }
+      const out = await nativeTourAvailability.listSlots({
+        propertyId: req.params.propertyId,
+        statuses: ["open"],
+        to: req.query.to || "2100-01-01T00:00:00Z",
+        limit: req.query.limit || 500,
+      });
+      return res.json({ receipt: `${out.slots.length} open slot(s).`, slots: out.slots, operating_timezone: out.operating_timezone });
+    } catch (e) {
+      console.error("leasing availability list:", e);
+      return res.status(e.httpStatus || 500).json({ receipt: e.publicMessage || "Could not load availability.", error: e.code || e.message });
+    }
   });
 
   // ── BLOCK / REOPEN a slot (operator housekeeping) ──
   router.post("/leasing/availability/:slotId/block", requireOperator, async (req, res) => {
     try {
-      const r = await pool.query(
-        `update tour_availability set status='blocked', updated_at=now()
-          where id=$1 and status='open' returning *`, [req.params.slotId]);
-      if (!r.rows.length) return res.status(409).json({ receipt: "Slot is not open (already booked or blocked)." });
-      return res.json({ receipt: "Slot blocked.", slot: r.rows[0] });
-    } catch (e) { console.error("leasing availability block:", e); return res.status(500).json({ receipt: "Could not block the slot.", error: e.message }); }
+      const b = req.body || {};
+      const propertyId = b.property_id || (await pool.query(
+        "select property_id from tour_availability where id=$1", [req.params.slotId]
+      )).rows[0]?.property_id;
+      const actorUserId = await resolveRecorderUserId(req);
+      const out = await nativeTourAvailability.changeSlotStatus({
+        propertyId,
+        slotId: req.params.slotId,
+        action: "block",
+        actorUserId,
+        actorType: actorUserId ? "human_staff" : "operator_key",
+        reason: b.reason || null,
+        idempotencyKey: req.get("idempotency-key") || b.idempotency_key || null,
+      });
+      return res.json({ receipt: "Slot blocked.", slot: out.slot });
+    } catch (e) {
+      console.error("leasing availability block:", e);
+      return res.status(e.httpStatus || 500).json({ receipt: e.publicMessage || "Could not block the slot.", error: e.code || e.message });
+    }
   });
 
   // ── BOOK A TOUR ONTO A REAL SLOT — the CLAIM ──────────────────────────
@@ -1802,62 +1882,30 @@ module.exports = function leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sm
     const client = await pool.connect();
     try {
       await client.query("begin");
-      // lock the slot row; only book if STILL open — this is the wall
-      const slot = (await client.query(
-        `select * from tour_availability where id=$1 for update`, [slotId])).rows[0];
-      if (!slot) { await client.query("rollback"); return res.status(404).json({ receipt: "No slot with that id." }); }
-      if (slot.status !== "open") { await client.query("rollback"); return res.status(409).json({ receipt: "That slot is no longer open." }); }
-
-      const lead = (await client.query(`select * from leasing_leads where id=$1`, [b.lead_id])).rows[0];
-      if (!lead) { await client.query("rollback"); return res.status(404).json({ receipt: "No opportunity with that id." }); }
-
-      // create or promote the tour onto this slot
-      let tour;
-      if (b.tour_id) {
-        tour = (await client.query(
-          `update leasing_tours set slot_id=$1, scheduled_for=$2, unit_id=coalesce(unit_id,$3),
-                  leasing_agent_id=coalesce(leasing_agent_id,$4), updated_at=now()
-            where id=$5 returning *`,
-          [slotId, slot.starts_at, slot.unit_id, slot.leasing_agent_id, b.tour_id])).rows[0];
-        if (!tour) { await client.query("rollback"); return res.status(404).json({ receipt: "No tour with that id to promote." }); }
-      } else {
-        tour = (await client.query(
-          `insert into leasing_tours (lead_id, property_id, unit_id, leasing_agent_id, slot_id, scheduled_for, status)
-           values ($1,$2,$3,$4,$5,$6,'scheduled') returning *`,
-          [b.lead_id, lead.property_id, slot.unit_id, slot.leasing_agent_id, slotId, slot.starts_at])).rows[0];
-      }
-
-      // flip the slot to booked, pointed at this tour (the wall: partial unique
-      // index guarantees one booking; the for-update + status check guarantee
-      // we got here first)
-      await client.query(
-        `update tour_availability set status='booked', booked_tour_id=$1, updated_at=now() where id=$2`,
-        [tour.id, slotId]);
-
-      // tour_events: scheduled (the claim)
-      await recordTourEvent(client, {
-        tourId: tour.id, leadId: b.lead_id, type: "scheduled",
-        actorType: b.actor_type || "human", actorId: b.actor_id || null, slotId,
-        metadata: { scheduled_for: slot.starts_at, slot_id: slotId },
+      const recorderUserId = await resolveRecorderUserId(req);
+      const out = await bookTourIntoSlot(client, {
+        leadId: b.lead_id,
+        slotId,
+        existingTourId: b.tour_id || null,
+        idempotencyKey: req.get("idempotency-key") || b.idempotency_key || null,
+        via: "operator_key_booking_adapter",
+        executionActorType: recorderUserId ? "human" : "system",
+        executionActorId: recorderUserId,
       });
-
-      // SEAM → funnel advances. Reuse 038's recordLeadEvent so leasing_leads.status
-      // projects 'tour_scheduled' exactly as the confirm path does.
-      await recordLeadEvent(client, {
-        leadId: b.lead_id, type: "tour_scheduled", actorType: "system",
-        metadata: { tour_id: tour.id, slot_id: slotId, scheduled_for: slot.starts_at },
-        statusPatch: { tour_scheduled_at: slot.starts_at },
-      });
-
       await client.query("commit");
-      return res.json({ receipt: `Tour scheduled for ${slot.starts_at}. Slot booked; funnel advanced to tour_scheduled.`, tour_id: tour.id, slot_id: slotId });
+      return res.json({
+        receipt: `Tour scheduled for ${out.tour.scheduled_for}. Slot booked; funnel advanced to tour_scheduled.`,
+        tour_id: out.tour.id,
+        slot_id: slotId,
+        idempotent: out.alreadyBooked,
+      });
     } catch (e) {
       try { await client.query("rollback"); } catch {}
       // the partial unique index is the backstop if two requests race past the
       // status check (shouldn't, with for-update, but the wall is structural)
       if (e.code === "23505") return res.status(409).json({ receipt: "That slot was just booked by someone else." });
       console.error("leasing slot book:", e);
-      return res.status(500).json({ receipt: "Could not book the slot.", error: e.message });
+      return res.status(e.httpStatus || 500).json({ receipt: e.publicMessage || "Could not book the slot.", error: e.code || e.message });
     } finally { client.release(); }
   });
 

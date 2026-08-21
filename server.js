@@ -56,6 +56,7 @@ const legalRoutesModule = require("./src/identity/legal_routes_block"); // A2P 1
 const teamAccessModule = require("./src/identity/teamaccess");
 const staffSessions = require("./src/identity/staff_session_service");        // the ONE session resolver
 const propertyCreation = require("./src/identity/property_creation_service"); // Build 1A-1: THE property write
+const { makeTourAvailabilityService } = require("./src/leasing/tour_availability_service");
 const superAdminModule = require("./src/identity/super_admin");
 const orgAdminModule   = require("./src/identity/org_admin");
 const smsTransport = require("./src/comms/sms"); // SMS transport (Twilio) — fail-soft when unconfigured
@@ -135,6 +136,7 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: databaseSsl(process.env.DATABASE_URL),
 });
+const tourAvailabilityService = makeTourAvailabilityService({ pool }); // the ONE native tour-slot publication command
 
 // ── READ AI WEBHOOK — raw bytes before JSON middleware ───────────────
 //  This route is mounted before global express.json() so X-Read-Signature
@@ -3423,7 +3425,7 @@ app.use("/", __decisions);
 const commitmentLedgerModule = require("./src/money/commitmentledger");   // pricing authority + lease offers (062–065)
 const __commitmentLedger = commitmentLedgerModule({ pool, spawnObligationFromEvent, completeObligation, decisionService: __decisions._service });
 app.use("/", __commitmentLedger);
-const __leasingLeads = leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices: __leasingConversion.services, commitmentLedger: __commitmentLedger._service, commBoundary });
+const __leasingLeads = leasingLeadsModule({ pool, anthropic, INGEST_MODEL, sms, leasingLifecycle, conversionServices: __leasingConversion.services, commitmentLedger: __commitmentLedger._service, commBoundary, tourAvailabilityService });
 app.use("/", __leasingLeads); // instance captured: its ONE tour-completion service is handed to the operator door below (no fork)
 
 // ── APPLICATION SUBMISSION SLICE (invitation front + shared submit service +
@@ -3578,6 +3580,7 @@ app.use("/", require("./src/identity/operator_properties")({ pool }));
 const operatorModule = require("./src/identity/operator");
 app.use("/", operatorModule({ pool, agentService: agentApp._service,
   leasingTourService: __leasingLeads._service, // the ONE completion service (leasingleads.js) — session door calls the same tx
+  tourAvailabilityService, // one native slot command; dashboard/text adapters never insert directly
   // the invitation service (applicationSubmission) — the session-gated operator
   // route calls its create/attest services; no duplicate invitation logic.
   applicationInvitations: __applicationSubmission._service,

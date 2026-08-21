@@ -6,7 +6,7 @@ const { routeStaffSmsTurn } = require("../src/conversation/staff_sms_router");
 const technicianIntent = require("../src/conversation/technician_intent");
 const { operatingReceipt } = require("../src/conversation/receipt");
 
-const EXPECTED = 28;
+const EXPECTED = 30;
 let passed = 0;
 let failed = 0;
 const ok = (label, condition, detail = "") => {
@@ -28,6 +28,7 @@ for (const [text, subject] of [
   ["What is the utility setup?", "utility"],
   ["Where is Maria's application?", "leasing_person"],
   ["What is the loan balance?", "debt"],
+  ["Who is hosting tours this week?", "tour_schedule"],
 ]) {
   const routed = routesTo("ask_spine", text);
   ok(`${JSON.stringify(text)} routes to Ask Spine`, !!routed);

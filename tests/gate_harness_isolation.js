@@ -252,10 +252,6 @@ const DEAD = [
  *  Entries are REMOVED as each script is repaired and proven. The gate fails
  *  if an entry no longer qualifies, so this register cannot silently rot. */
 const FROZEN_INVENTORY = [
-  { path: "tests/agent_booking_xturn_proof.js",
-    write: true, use: "proof",
-    reason: "pre-existing proof harness at the measured SHA; not yet triaged",
-    until: "converted to harnessConnectionString() and executed against an isolated database, or deleted as dead, in the remediation slice" },
   { path: "tests/application_submission.test.js",
     write: true, use: "proof",
     reason: "pre-existing proof harness at the measured SHA; not yet triaged",
@@ -474,10 +470,6 @@ const FROZEN_INVENTORY = [
     until: "converted to harnessConnectionString() and executed against an isolated database, or deleted as dead, in the remediation slice" },
   { path: "tests/standing_context_proof.js",
     write: false, use: "proof",
-    reason: "pre-existing proof harness at the measured SHA; not yet triaged",
-    until: "converted to harnessConnectionString() and executed against an isolated database, or deleted as dead, in the remediation slice" },
-  { path: "tests/tour_booking_proof.js",
-    write: true, use: "proof",
     reason: "pre-existing proof harness at the measured SHA; not yet triaged",
     until: "converted to harnessConnectionString() and executed against an isolated database, or deleted as dead, in the remediation slice" },
   { path: "tests/tour_chips_proof.js",
