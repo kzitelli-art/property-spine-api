@@ -755,6 +755,7 @@ module.exports = function communicationsBoundary({ pool, sms }) {
       //  organization's property list. See communication_lines.js.
       const context = await lines.resolvePropertyContextForStaff(q, {
         organizationId: line.organization_id, userId: staff.user.id,
+        messageText: body,
       });
 
       return { property: null, person: null, ambiguous: false, unknownLine: false, ambiguousLine: false, inactiveLine: false,

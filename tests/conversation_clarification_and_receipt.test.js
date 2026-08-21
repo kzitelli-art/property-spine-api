@@ -267,7 +267,7 @@ section("2. ONE IMPLEMENTATION — NO DUPLICATED LOGIC IN TENANTLINK");
 
   const seamFiles = fs.readdirSync(path.join(ROOT, "src", "conversation")).sort();
   ok("the conversation seam directory holds exactly the extracted seams",
-    seamFiles.join(",") === "clarification.js,intent.js,receipt.js,technician_intent.js,work_reference.js", seamFiles.join(","));
+    seamFiles.join(",") === "clarification.js,intent.js,receipt.js,staff_sms_router.js,technician_intent.js,work_reference.js", seamFiles.join(","));
 }
 
 // ════════════════════════════════════════════════════════════════════

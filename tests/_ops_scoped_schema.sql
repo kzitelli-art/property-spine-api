@@ -54,6 +54,7 @@
     property_id uuid not null references properties(id) on delete cascade,
     user_id uuid not null references users(id) on delete cascade,
     role_title text not null default 'tech',
+    allowed_modules text[] not null default '{}',
     active boolean not null default true,
     unique (property_id, user_id));
 

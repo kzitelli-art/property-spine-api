@@ -64,6 +64,7 @@ const OPERATING_OUTCOMES = [
   "work_list",               // what is on their plate
   "work_reference_needed",   // which work they meant is not established
   "authorization_refused",   // they asked for something that is not theirs
+  "governed_read",           // Ask Spine read; no operating fact was written
 ];
 
 /*  Outcomes that ASSERT a durable object exists. Without its id the
@@ -173,6 +174,23 @@ function operatingReceipt({ outcome, result = null, context = null } = {}) {
       object: null, text,
       isClarificationQuestion: false,
       serviceOutcome: null,
+      requiresHuman: null,
+      divergedFromDecision: false,
+      refusal: null,
+    });
+  }
+
+  if (outcome === "governed_read") {
+    assertKeys(result, ["answer", "readOutcome", "isClarificationQuestion"], "result");
+    const text = String(result && result.answer || "").trim();
+    if (!text) return refusal(outcome, "no_governed_answer");
+    return Object.freeze({
+      kind: "operating_receipt", outcome,
+      committed: false,
+      object: null,
+      text,
+      isClarificationQuestion: !!result.isClarificationQuestion,
+      serviceOutcome: result.readOutcome || null,
       requiresHuman: null,
       divergedFromDecision: false,
       refusal: null,

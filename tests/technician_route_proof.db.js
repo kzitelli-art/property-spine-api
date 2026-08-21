@@ -34,7 +34,7 @@ const { Client } = require("pg");
 const receipt = require("./_run_receipt");
 
 const HARNESS = __filename;
-const EXPECTED = 46;
+const EXPECTED = 77;
 let passed = 0, failed = 0;
 const ok = (label, cond, detail) => {
   if (cond) { passed++; console.log("  ok    " + label); }
@@ -46,6 +46,12 @@ const ADMIN_URL = receipt.harnessConnectionString();
 const SCRATCH_DB = `ps_tech_route_${process.pid}`;
 const ROOT = path.join(__dirname, "..");
 const mig = (n) => fs.readFileSync(path.join(ROOT, "migrations", n), "utf8");
+const clientConfig = (connectionString) => {
+  const host = new URL(connectionString).hostname;
+  const local = host === "127.0.0.1" || host === "localhost";
+  return local ? { connectionString }
+    : { connectionString, ssl: { rejectUnauthorized: false } };
+};
 
 //  THE SENTINEL. The inbound route acks the provider and swallows failures
 //  by design, so a query that THROWS looks identical to a clean refusal
@@ -69,12 +75,12 @@ receipt.begin(HARNESS, { url: ADMIN_URL, expected: EXPECTED });
 let admin = null, db = null, server = null, code = 1;
 (async () => {
 try {
-  admin = new Client({ connectionString: ADMIN_URL, ssl: { rejectUnauthorized: false } });
+  admin = new Client(clientConfig(ADMIN_URL));
   await admin.connect();
   await admin.query(`drop database if exists ${SCRATCH_DB}`);
   await admin.query(`create database ${SCRATCH_DB}`);
   const u = new URL(ADMIN_URL); u.pathname = "/" + SCRATCH_DB;
-  db = new Client({ connectionString: u.toString(), ssl: { rejectUnauthorized: false } });
+  db = new Client(clientConfig(u.toString()));
   await db.connect();
   console.log(`  SCRATCH   ${SCRATCH_DB}`);
 
@@ -104,7 +110,9 @@ try {
   const oak = (await db.query(`insert into properties (name, organization_id) values ('Oak',$1) returning id`, [org])).rows[0].id;
   const dana = (await db.query(`insert into users (name,email,phone) values ('Dana','d@h.test',$1) returning id`, [DANA_PHONE])).rows[0].id;
   const sam = (await db.query(`insert into users (name,email,phone) values ('Sam','s@h.test',$1) returning id`, [SAM_PHONE])).rows[0].id;
-  await db.query(`insert into property_team_assignments (property_id,user_id) values ($1,$2)`, [maple, dana]);
+  await db.query(
+    `insert into property_team_assignments (property_id,user_id,allowed_modules)
+     values ($1,$2,$3)`, [maple, dana, ["maintenance", "leasing"]]);
   await db.query(`insert into property_team_assignments (property_id,user_id) values ($1,$2)`, [oak, sam]);
 
   const opsLineId = (await db.query(
@@ -140,6 +148,18 @@ try {
   };
   const commBoundary = require(path.join(ROOT, "src/comms/communications_boundary.js"))({ pool: shim, sms: smsDouble });
   const tenantLinkModule = require(path.join(ROOT, "src/comms/tenantlink.js"));
+  const askCalls = [];
+  const askSpineAnswer = {
+    answer: async (readDb, model, options) => {
+      const transaction = (await readDb.query(
+        `select txid_current_if_assigned() as transaction_id`)).rows[0].transaction_id;
+      askCalls.push({ readDb, model, options, transaction });
+      if (/unavailable/i.test(options.question)) {
+        throw new Error("governed reader unavailable (deliberate harness failure)");
+      }
+      return { outcome: "answered", answer: "The published rent is $850.", grounded_on: {} };
+    },
+  };
   const app = express();
   app.use("/", tenantLinkModule({
     pool: shim, anthropic: null, INGEST_MODEL: "harness",
@@ -147,6 +167,7 @@ try {
     workOrderService: { createWorkOrder: async () => { throw new Error("not used"); },
                         appendClarification: async () => { throw new Error("not used"); } },
     getAgentService: () => null,
+    askSpineAnswer,
   }));
   server = app.listen(0);
   const port = server.address().port;
@@ -246,6 +267,115 @@ try {
     ok("...and ZERO rows are written anywhere",
       JSON.stringify(before) === JSON.stringify(await counts()));
     ok("...and the operations number replies to nobody", sent.length === 1);
+  }
+
+  // ==================================================================
+  section("3B. A CLEAR READ QUESTION USES ASK SPINE");
+  {
+    const workBefore = (await db.query(`select count(*)::int c from work_orders`)).rows[0].c;
+    const r = await inboundSms(DANA_PHONE, "What pricing is published?", "SM_GOVERNED_READ");
+    await settle();
+    ok("the read question is acknowledged through the real webhook", r.status === 200);
+    ok("the Ask Spine answer service is called exactly once", askCalls.length === 1);
+    ok("the receiving line does not choose the property - Dana's assignment does",
+      askCalls[0] && askCalls[0].options.property_id === maple);
+    ok("module entitlement comes from that same active assignment",
+      askCalls[0] && askCalls[0].options.allowed_modules.join(",") === "maintenance,leasing",
+      askCalls[0] && askCalls[0].options.allowed_modules.join(","));
+    ok("the exact staff question reaches the governed reader",
+      askCalls[0] && askCalls[0].options.question === "What pricing is published?");
+    ok("the governed read and model run with no database transaction held open",
+      askCalls[0] && askCalls[0].transaction === null,
+      askCalls[0] && askCalls[0].transaction);
+
+    const inbound = (await db.query(
+      `select * from comm_events where direction='inbound' and sms_sid='SM_GOVERNED_READ'`)).rows[0];
+    const outbound = (await db.query(
+      `select * from comm_events where in_reply_to_comm_event_id=$1`, [inbound.id])).rows[0];
+    ok("the inbound is durable and cleared only after the answer is durable",
+      inbound.needs_human === false && inbound.classification === "governed_read_answered");
+    ok("the answer is reply-bound on the existing staff thread",
+      outbound && outbound.staff_thread_id === inbound.staff_thread_id
+      && outbound.reply_reason === "governed_read");
+    ok("the governed answer is the text sent back to the staff member",
+      outbound && outbound.body === "The published rent is $850."
+      && sent[sent.length - 1].body === outbound.body);
+    ok("a read question creates no work order",
+      (await db.query(`select count(*)::int c from work_orders`)).rows[0].c === workBefore);
+
+    const beforeReplay = await counts();
+    const sendsBeforeReplay = sent.length;
+    await inboundSms(DANA_PHONE, "What pricing is published?", "SM_GOVERNED_READ");
+    await settle();
+    ok("a provider replay does not call Ask Spine twice", askCalls.length === 1);
+    ok("a provider replay writes no second row", JSON.stringify(await counts()) === JSON.stringify(beforeReplay));
+    ok("a provider replay sends no second answer", sent.length === sendsBeforeReplay);
+  }
+
+  // ==================================================================
+  section("3C. MULTI-PROPERTY READS ASK, NEVER GUESS");
+  {
+    await db.query(
+      `insert into property_team_assignments (property_id,user_id,allowed_modules)
+       values ($1,$2,$3)`, [maple, sam, ["leasing"]]);
+    const r = await inboundSms(SAM_PHONE, "What pricing is published?", "SM_READ_MANY");
+    await settle();
+    ok("the ambiguous read is acknowledged", r.status === 200);
+    ok("property ambiguity reaches no governed reader", askCalls.length === 1);
+    const inbound = (await db.query(
+      `select * from comm_events where direction='inbound' and sms_sid='SM_READ_MANY'`)).rows[0];
+    const outbound = (await db.query(
+      `select * from comm_events where in_reply_to_comm_event_id=$1`, [inbound.id])).rows[0];
+    ok("the reply is a clarification, not a governed answer",
+      outbound && outbound.reply_reason === "clarification");
+    ok("the clarification names only Sam's two assigned properties",
+      outbound && /Which property is this about/.test(outbound.body)
+      && /Maple/.test(outbound.body) && /Oak/.test(outbound.body),
+      outbound && outbound.body);
+    ok("the ambiguity is recorded as its own outcome",
+      inbound.classification === "governed_read_property_context_ambiguous");
+
+    const named = await inboundSms(
+      SAM_PHONE, "What pricing is published at Maple?", "SM_READ_NAMED_PROPERTY");
+    await settle();
+    ok("resending the question with an assigned property is acknowledged", named.status === 200);
+    ok("the named-property question reaches Ask Spine once", askCalls.length === 2);
+    ok("the property name resolves Maple from Sam's assignments",
+      askCalls[1] && askCalls[1].options.property_id === maple);
+    ok("the named assignment supplies its own module entitlement",
+      askCalls[1] && askCalls[1].options.allowed_modules.join(",") === "leasing");
+    const namedInbound = (await db.query(
+      `select * from comm_events where direction='inbound' and sms_sid='SM_READ_NAMED_PROPERTY'`)).rows[0];
+    const namedOutbound = (await db.query(
+      `select * from comm_events where in_reply_to_comm_event_id=$1`, [namedInbound.id])).rows[0];
+    ok("the resolved question receives a governed answer",
+      namedOutbound && namedOutbound.reply_reason === "governed_read");
+  }
+
+  // ==================================================================
+  section("3D. A FAILED READ PRESERVES THE INBOUND");
+  {
+    const sendsBefore = sent.length;
+    const r = await inboundSms(
+      DANA_PHONE, "What pricing is unavailable?", "SM_READ_FAILURE");
+    await settle();
+    ok("the provider is still acknowledged when the governed reader fails", r.status === 200);
+    ok("the failing reader was called outside a transaction",
+      askCalls.length === 3 && askCalls[2].transaction === null);
+    const inbound = (await db.query(
+      `select * from comm_events where direction='inbound' and sms_sid='SM_READ_FAILURE'`)).rows[0];
+    ok("the inbound remains durable and visibly needs a human",
+      inbound && inbound.needs_human === true && inbound.classification === null);
+    ok("no answer intent is fabricated for a failed read",
+      (await db.query(`select count(*)::int c from comm_events
+                        where in_reply_to_comm_event_id=$1`, [inbound.id])).rows[0].c === 0);
+    ok("nothing is sent after the read failure", sent.length === sendsBefore);
+    await inboundSms(DANA_PHONE, "What pricing is unavailable?", "SM_READ_FAILURE");
+    await settle();
+    ok("a provider replay neither duplicates nor hides the preserved failure",
+      askCalls.length === 3
+      && (await db.query(`select count(*)::int c from comm_events
+                           where sms_sid='SM_READ_FAILURE'`)).rows[0].c === 1);
   }
 
   // ════════════════════════════════════════════════════════════════════

@@ -3352,7 +3352,11 @@ app.post("/sms-proof", async (req, res) => {
     return res.status(500).json({ sent: false, reason: "proof_route_error", error: e.message });
   }
 });
-app.use("/", tenantLinkModule({ pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService, getAgentService: () => agentApp._service }));
+app.use("/", tenantLinkModule({
+  pool, anthropic, INGEST_MODEL, sms, commBoundary, workOrderService,
+  getAgentService: () => agentApp._service,
+  applicationsService: () => __applications && __applications._service,
+}));
 //  A2P 10DLC legal pages — /legal/privacy and /legal/sms-terms, plus .txt
 //  fallbacks. Public and unauthenticated by requirement: a carrier reviewer
 //  must be able to fetch them during campaign vetting with no session.

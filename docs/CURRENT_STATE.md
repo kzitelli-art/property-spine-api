@@ -60,6 +60,8 @@ SKYLINE CONVERSATION    INTEGRATION BRANCH, NOT MERGED OR DEPLOYED
                         Based on claude/property-spine-orientation-cso2ao;
                         adds the one-reader Ask Spine obligation fix and a
                         canonical published-economics read for Ask Spine.
+                        On 2026-08-21 it also connected clear staff SMS read
+                        questions to that same Ask Spine answer service.
 ```
 
 ✔ **RESOLVED 2026-08-20: production now runs `main`'s lineage.** Was: the
@@ -132,6 +134,7 @@ with evidence — which is the failure this file exists to end.
 
 | 17 | **159 phantom unit rows at Skyline, shaped like beds.** Alongside `1417-116` production carries separate `units` rows named `116 - A`, `116 - B`, `116 - C` — null bed, no source code, not reachable from any import row. They are why `count(*)` reports 231 units for a 72-unit property, and why the mapping tool reports 159 positions "Not configured" after a correct run. **Not a blocker and deliberately untouched**: the canonical loader sees 160, the mapping's exact-match override cannot reach them, and the e2e now carries six of them as decoys asserting exactly that. Cleaning them is a production delete with unknown FK reach — investigation first, then a decision, not a sweep. | `tools/apply_unit_type_mapping.js` production run 2026-08-20; decoys in `tests/e2e/skyline_unit_type_mapping.e2e.js` |
 | 18 | **RESOLVED ON INTEGRATION BRANCH, 2026-08-20 — the composed economic picture no longer silently chooses `terms[0]`.** `economic_picture.js` now preserves each term's economics. One published term can produce a flat quote; two or more return a term menu, set `lease_term_not_selected`, and withhold a combined monthly total until a term is chosen. Ask Spine consumes this same composition for published asking rent, governed charges, deposit requirements, and advertised concessions; it does not own a second pricing reader. Entitlement is enforced before the read for Leasing, Management, or Asset Management. **Not merged or deployed.** Source contract 11/11; real session + real Express + real HTTP + real migrated Postgres 16/16; prospect price wall remains 22/22. | `src/money/economic_picture.js`; `src/agent/ask_spine_answer.js`; `tests/economics_ask_spine.test.js`; `tests/economics_ask_spine_http.db.js` |
+| 19 | **RESOLVED ON INTEGRATION BRANCH, 2026-08-21 — the operations SMS line can now answer clear, supported read questions through the existing Ask Spine service.** The fork is narrow: any recognized technician action, work-list question, work-domain question, action request, or attachment remains on the technician path. Staff identity comes from the operations line; property and `allowed_modules` come from the sender's active assignment. With several assignments, an exact assigned property name in the question can resolve scope; otherwise Spine names only that sender's properties and asks them to resend the question with one. The inbound is committed first, the governed read/model runs with no SQL transaction open, the reply is committed second, and transport remains after commit. Reader failure preserves `needs_human=true` and sends no invented answer. **No migration. Not merged or deployed.** Pure routing 28/28; real Express webhook + real PostgreSQL 77/77 with transport and Ask response doubled; canonical Economics Ask remains separately real HTTP + migrated PostgreSQL 16/16; all 39 source-governance gates pass. | `src/conversation/staff_sms_router.js`; `src/comms/staff_governed_read.js`; `src/comms/staff_thread.js`; `src/comms/tenantlink.js`; `tests/staff_sms_router.test.js`; `tests/technician_route_proof.db.js` |
 
 ## PRODUCTION-PROVEN — the whole list
 
@@ -220,6 +223,7 @@ outside this tree, not treated as confirmed.**
 | **Release 0 completion guard** | **`PRODUCTION_PROVEN`** | `proof_evaluation_service.js` + migration 137/140 |
 | Work order creation / lifecycle | `HTTP_PROVEN` | `work_order_service.js`. *"the REAL server.js over real HTTP"* |
 | Technician SMS operations loop | `HTTP_PROVEN` + `BROWSER_VERIFIED` | `technician/conversation.js`, `lifecycle_service.js` + screenshots |
+| Staff SMS governed reads | `HTTP_PROVEN` on integration branch | Real inbound webhook + real PostgreSQL 77/77; Ask response and transport are doubled in this connection proof. Uses the existing Ask Spine service in production code; canonical Economics Ask is separately real-HTTP proven 16/16. Not merged or deployed. |
 | Operator work-order actions | `HTTP_PROVEN` | `operator_actions.js` — 4 canonical writes; "Review" deliberately excluded |
 | **Obligations queue + self-claim** | `HTTP_PROVEN` + `BROWSER_VERIFIED` | `GET /operator/obligations`, `POST .../claim`. **Exists — do not rebuild** |
 | **Turnovers / move-out** | `HTTP_PROVEN` | `turnover_service.js`, `operator_turnover.js`. **Exists — do not rebuild** |
@@ -248,7 +252,7 @@ producing a valid completion through it is not.
 | `economic_adapter` · `pricing_adapter` | `BUILT_BUT_DORMANT` | *"DARK BY CONSTRUCTION."* **See defect #1** |
 | `src/identity/activation.js` | **DEAD** | Never mounted; app screen 404s. **See defect #3** |
 | Slice 9 market evidence | `HTTP_PROVEN` + `BROWSER_VERIFIED` | `evidence_projection.js`. Rent Survey / Listings permanently `not_connected` |
-| Conversational seams (5 pure files) | `LOCALLY_EXERCISED` | `intent.js`, `clarification.js`, `receipt.js`, `technician_intent.js`, `work_reference.js` |
+| Conversational seams (6 pure files) | `LOCALLY_EXERCISED` | `intent.js`, `clarification.js`, `receipt.js`, `staff_sms_router.js`, `technician_intent.js`, `work_reference.js` |
 | A2P legal pages | `HTTP_PROVEN` | Header records a real incident: *"BOTH campaign-required URLs returned 404 in production"* |
 | Board / desks / management / portfolio reads | `HTTP_PROVEN` (mounted) | `desks.js`: *"NEVER a fake number"* |
 

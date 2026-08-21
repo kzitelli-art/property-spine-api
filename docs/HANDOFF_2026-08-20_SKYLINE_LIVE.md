@@ -228,7 +228,7 @@ something other than its own report — keep it that way.
 
 ---
 
-## PART 6 · CONVERSATIONAL CONTINUATION — 2026-08-20
+## PART 6 · CONVERSATIONAL CONTINUATION — 2026-08-20 TO 2026-08-21
 
 This continuation does not replace Parts 1–5. The live prospect price check and
 the deliberate deploy above remain the shortest way to close the Skyline release
@@ -253,11 +253,18 @@ merged or deployed.
    requirements, advertised concessions, and supported totals. It cannot answer
    in-place rent, year-over-year rent growth, market pricing, or rent strategy
    from asking-price facts.
+4. Clear staff questions on the operations SMS line can now use that same Ask
+   Spine answer service. Work actions, work questions, action requests, and
+   attachments still go to the technician conversation. The SMS door derives
+   property and modules from the sender's active assignment, records the inbound
+   before the read, and records the reply before transport.
 
 Proof at this branch head:
 
 ```text
 source-governance gates                         39/39
+staff SMS read router                           28/28
+staff SMS real webhook + real Postgres          77/77
 economics Ask Spine contract                    11/11
 economics Ask Spine real Postgres + HTTP         16/16
 prospect pricing wall                            22/22
@@ -285,10 +292,10 @@ The current doors are real but not yet one experience:
 
 - A property-facing SMS line sends a lead to the prospect agent and a resident
   to the resident/work-order loop.
-- An operations SMS line resolves staff, then sends every readable staff message
-  to the technician work conversation.
-- Signed-in Ask Spine is a read-only HTTP door for operators. It is not currently
-  reachable through SMS.
+- An operations SMS line resolves staff, keeps work on the technician path, and
+  sends clear supported read questions to the existing Ask Spine service.
+- Signed-in Ask Spine remains the read-only HTTP door; staff SMS is now a second
+  door to the same answer service, not a second reader.
 - Meeting Evidence can retain and qualify meeting material, but it is not an Ask
   Spine source and cannot turn a spoken decision into a governed change.
 
@@ -296,17 +303,20 @@ The simplification is therefore not "build a universal chatbot." It is: keep the
 identity and delivery doors, and make them reuse one set of governed reads and
 actions underneath.
 
-### Next build — one narrow SMS read turn
+### Staff SMS read turn — built on this branch
 
-Connect clearly question-shaped staff messages on the operations line to the
-existing read-only Ask Spine composer. Keep work commands and field updates on
-the technician path exactly as they are.
+Clear question-shaped staff messages on the operations line now connect to the
+existing read-only Ask Spine composer. Work commands and field updates remain on
+the technician path exactly as they were.
 
-The first version should be deliberately small:
+The implemented version is deliberately small:
 
-1. Support staff with exactly one active property assignment.
-2. Derive that property and its allowed modules from the assignment; never from
-   the text or the organization's portfolio.
+1. Staff with one active assignment resolve directly. Staff with several may
+   name one of their assigned properties in the question; exact normalized
+   matching only, and ambiguity still refuses.
+2. Derive property and allowed modules from the assignment. Text may select only
+   among that sender's assignment rows; the organization's portfolio is never a
+   candidate source.
 3. Route only an unambiguous read question. Any work verb, work reference,
    attachment, acceptance, travel update, blockage, finding, or completion stays
    in the technician conversation.
@@ -314,22 +324,29 @@ The first version should be deliberately small:
    must not hold an operating transaction open.
 5. Persist the inbound and outbound turns with the existing staff thread and
    idempotency key. A provider retry must not ask or answer twice.
-6. For staff assigned to several properties, ask which property and stop. Do not
-   guess. Durable follow-up property selection is the next slice, not hidden in
-   the first one.
+6. For staff assigned to several properties with no unique name in the question,
+   name only their assigned properties and ask them to resend the question with
+   one. Do not guess. Durable bare-name follow-up selection is still a later
+   slice.
 
-This first connection would make a staff text such as "What published pricing is
-in force?" read the same governed economics as the signed-in operator surface.
-It would not yet answer ownership's average in-place rent, lead source,
-conversion, or tour no-show questions. Those require canonical standing reads in
-their owning domains first. Connecting SMS before those reads exist would only
-make missing truth easier to ask for.
+This connection makes a staff text such as "What published pricing is in force?"
+read the same governed economics as the signed-in operator surface. It does not
+yet answer average in-place rent, lead source, conversion, or tour no-show
+questions. Those examples are deferred product context, not the next build.
 
-### After that
+### What has to happen next
 
-Build the owner questions as domain projections, one at a time, and expose each
-through the same composer: in-place rent and change over time; lead source and
-conversion; tours and no-shows. Then connect meeting receipts as proposed
-obligations, approvals, or strategy changes with explicit authority and
-confirmation. A meeting transcript should never mutate pricing, concessions, or
-resident terms merely because a model recognized a sentence.
+1. Review and merge this branch deliberately. It has no migration.
+2. Deploy through the existing manual Render path.
+3. Run three controlled live scenarios: a prospect asks Skyline pricing; a
+   staff member asks the same pricing question by SMS; and a resident texts a
+   maintenance request that is observed through work-order creation, technician
+   acceptance, en-route and completion updates, required proof, and the
+   resident-facing replies. That last scenario is the tenant path end to end.
+4. Only after those paths are observed, choose the next action connection. The
+   strongest candidate from the examples is a leasing staff member asking Spine
+   to send an application through the existing canonical application service.
+
+Owner analytics and meeting-derived strategy remain later tracks. A meeting
+transcript should never mutate pricing, concessions, or resident terms merely
+because a model recognized a sentence.

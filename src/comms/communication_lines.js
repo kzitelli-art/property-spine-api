@@ -236,7 +236,8 @@ async function resolveStaffSenderForOrganization(q, { organizationId, fromNumber
  *  it would make the organization number choose a building, which it must
  *  never do. An organization with one property travels this same path. */
 async function resolvePropertyContextForStaff(
-  q, { organizationId, userId, workOrderId = null, obligationId = null } = {}
+  q, { organizationId, userId, workOrderId = null, obligationId = null,
+       messageText = null } = {}
 ) {
   if (!organizationId || !userId) {
     return { outcome: "none", propertyId: null, candidates: [], source: null };
@@ -265,7 +266,7 @@ async function resolvePropertyContextForStaff(
 
   //  2. The sender's own active assignments, inside this organization.
   const { rows } = await q.query(
-    `select distinct p.id as property_id, p.name
+    `select distinct p.id as property_id, p.name, pta.allowed_modules
        from property_team_assignments pta
        join properties p
          on p.id = pta.property_id and p.organization_id = $2
@@ -275,8 +276,34 @@ async function resolvePropertyContextForStaff(
   );
 
   if (rows.length === 0) return { outcome: "none", propertyId: null, candidates: [], source: "assignment" };
-  if (rows.length > 1) return { outcome: "many", propertyId: null, candidates: rows, source: "assignment" };
-  return { outcome: "one", propertyId: rows[0].property_id, candidates: rows, source: "assignment" };
+  if (rows.length > 1) {
+    const words = ` ${String(messageText || "").toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ").trim()} `;
+    const named = rows.filter((row) => {
+      const name = String(row.name || "").toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ").trim();
+      return name && words.includes(` ${name} `);
+    });
+    // Exact normalized names only. If one property name contains another,
+    // both match and this remains ambiguous rather than picking the longer.
+    if (named.length === 1) {
+      return {
+        outcome: "one",
+        propertyId: named[0].property_id,
+        allowedModules: named[0].allowed_modules || [],
+        candidates: rows,
+        source: "message_property_name",
+      };
+    }
+    return { outcome: "many", propertyId: null, candidates: rows, source: "assignment" };
+  }
+  return {
+    outcome: "one",
+    propertyId: rows[0].property_id,
+    allowedModules: rows[0].allowed_modules || [],
+    candidates: rows,
+    source: "assignment",
+  };
 }
 
 /*  clarificationFor — the smallest useful question, and nothing else.

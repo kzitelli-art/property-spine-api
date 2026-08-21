@@ -120,6 +120,10 @@ const OBSERVATION_RX = /\b(?:leak|leaking|valve|pipe|drain|heat|heater|furnace|b
  *  asking "should I replace the valve?" is not recording a finding. */
 const ASKING_RX = /\?\s*$|^\s*(?:should|can|could|do|does|is|are|will|would|who|what|when|where|why|how)\b/i;
 
+function looksLikeQuestion(text) {
+  return ASKING_RX.test(typeof text === "string" ? text.trim() : "");
+}
+
 class TechnicianIntentError extends Error {
   constructor(message, code) { super(message); this.name = "TechnicianIntentError"; this.code = code; }
 }
@@ -143,7 +147,7 @@ function readIntent(text) {
 
   //  Not a verb. Is it a report?
   const words = s.split(/\s+/).filter(Boolean).length;
-  if (!ASKING_RX.test(s) && words >= FINDING_MIN_WORDS && OBSERVATION_RX.test(s)) {
+  if (!looksLikeQuestion(s) && words >= FINDING_MIN_WORDS && OBSERVATION_RX.test(s)) {
     return Object.freeze({ intent: "finding", matched: s, confident: true });
   }
 
@@ -196,4 +200,5 @@ module.exports = {
   readTurn,
   readAnswerToQuestion,
   hasAttachments,
+  looksLikeQuestion,
 };
