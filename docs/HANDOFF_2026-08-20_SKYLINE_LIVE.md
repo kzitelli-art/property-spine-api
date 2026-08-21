@@ -225,3 +225,111 @@ Read in this order:
 **Production writes are the owner's call, every time.** Deploys are manual by
 design. Every release tool is dry-run by default and verifies itself with
 something other than its own report — keep it that way.
+
+---
+
+## PART 6 · CONVERSATIONAL CONTINUATION — 2026-08-20
+
+This continuation does not replace Parts 1–5. The live prospect price check and
+the deliberate deploy above remain the shortest way to close the Skyline release
+loop. This section records the conversational integration built after that
+handoff and the smaller product map it exposed.
+
+### What is now integrated
+
+Branch: `codex/skyline-conversation-integration-20260820`, based directly on
+`claude/property-spine-orientation-cso2ao`. It carries no migration and is not
+merged or deployed.
+
+1. Ask Spine and the Operator Obligations surface now use one obligations reader.
+   Property scope, module entitlement, open-state meaning, overdue calculation,
+   ranking, count, and cap live in `operator_obligations_service.attention()`.
+   Ask Spine owns only the conversational projection.
+2. `economic_picture.js` no longer reduces published lease terms to `terms[0]`.
+   One term can be quoted directly. Multiple terms remain a menu and block a flat
+   rent or combined monthly total until the term is selected.
+3. Signed-in Ask Spine can now read that same canonical economic picture for
+   current published asking rent, governed fees, recurring charges, deposit
+   requirements, advertised concessions, and supported totals. It cannot answer
+   in-place rent, year-over-year rent growth, market pricing, or rent strategy
+   from asking-price facts.
+
+Proof at this branch head:
+
+```text
+source-governance gates                         39/39
+economics Ask Spine contract                    11/11
+economics Ask Spine real Postgres + HTTP         16/16
+prospect pricing wall                            22/22
+Ask Spine obligations real Postgres + HTTP       23/23
+Operator Obligations real Postgres + HTTP        21/21
+```
+
+### The simpler product map
+
+There is already one information spine and several conversation doors. The
+doors should stay responsible for identity, property context, consent, delivery,
+and audience-appropriate language. They should not become new owners of truth.
+
+```text
+message or typed question
+  -> resolve the person and their authority
+  -> resolve exactly one property, or ask
+  -> classify read versus consequential action
+  -> call the existing governed domain service
+  -> record the action or narrate the read
+  -> return a delivery receipt separately
+```
+
+The current doors are real but not yet one experience:
+
+- A property-facing SMS line sends a lead to the prospect agent and a resident
+  to the resident/work-order loop.
+- An operations SMS line resolves staff, then sends every readable staff message
+  to the technician work conversation.
+- Signed-in Ask Spine is a read-only HTTP door for operators. It is not currently
+  reachable through SMS.
+- Meeting Evidence can retain and qualify meeting material, but it is not an Ask
+  Spine source and cannot turn a spoken decision into a governed change.
+
+The simplification is therefore not "build a universal chatbot." It is: keep the
+identity and delivery doors, and make them reuse one set of governed reads and
+actions underneath.
+
+### Next build — one narrow SMS read turn
+
+Connect clearly question-shaped staff messages on the operations line to the
+existing read-only Ask Spine composer. Keep work commands and field updates on
+the technician path exactly as they are.
+
+The first version should be deliberately small:
+
+1. Support staff with exactly one active property assignment.
+2. Derive that property and its allowed modules from the assignment; never from
+   the text or the organization's portfolio.
+3. Route only an unambiguous read question. Any work verb, work reference,
+   attachment, acceptance, travel update, blockage, finding, or completion stays
+   in the technician conversation.
+4. Run the model after the database read transaction is closed. A slow answer
+   must not hold an operating transaction open.
+5. Persist the inbound and outbound turns with the existing staff thread and
+   idempotency key. A provider retry must not ask or answer twice.
+6. For staff assigned to several properties, ask which property and stop. Do not
+   guess. Durable follow-up property selection is the next slice, not hidden in
+   the first one.
+
+This first connection would make a staff text such as "What published pricing is
+in force?" read the same governed economics as the signed-in operator surface.
+It would not yet answer ownership's average in-place rent, lead source,
+conversion, or tour no-show questions. Those require canonical standing reads in
+their owning domains first. Connecting SMS before those reads exist would only
+make missing truth easier to ask for.
+
+### After that
+
+Build the owner questions as domain projections, one at a time, and expose each
+through the same composer: in-place rent and change over time; lead source and
+conversion; tours and no-shows. Then connect meeting receipts as proposed
+obligations, approvals, or strategy changes with explicit authority and
+confirmation. A meeting transcript should never mutate pricing, concessions, or
+resident terms merely because a model recognized a sentence.

@@ -67,6 +67,7 @@ const leasingCycleConfig = require("../leasing/leasing_cycle.js");
 //  second place where entitlement, the four silences and the truth walls
 //  are implemented, and those diverge silently.
 const leasingStandingRead = require("../leasing/leasing_standing_read.js");
+const economicPicture = require("../money/economic_picture.js");
 
 const MODEL = process.env.ASK_SPINE_MODEL || "claude-opus-5";
 /*  THINKING AND THE ANSWER SHARE THIS CEILING. On this model family
@@ -153,7 +154,9 @@ const SUPPORTED_SCOPE =
   "operating tracker versus rent established contractually, the stated asking-rent assumption " +
   "on open beds, the full-sell-out monthly run rate, and the dated committed-rent schedule, or " +
   "who holds equity or preferred equity in this property, on what terms, what has been " +
-  "contributed, and what remains unresolved";
+  "contributed, and what remains unresolved, or the current published asking rents by unit " +
+  "type and lease term, governed fees, recurring charges, deposit requirements, advertised " +
+  "concessions, and any combined total Spine can support without assumptions";
 
 //  The refusal is OWNED BY THE SERVER, not written by the model. A model
 //  that composes its own decline can talk itself into being helpful, and
@@ -163,7 +166,7 @@ const OUT_OF_SCOPE_ANSWER =
   "I can only answer about " + SUPPORTED_SCOPE + ". " +
   "Ask me what needs attention, about a recorded Compliance item, how a Utility works here, " +
   "what governs a contracted service, what the property owes its lender, who holds equity here, " +
-  "or where the rent roll stands on a date.";
+  "where the rent roll stands on a date, or what published pricing and charges are in force.";
 
 //  ⚠ EVERY NOUN HERE WAS SINGULAR-ONLY, AND NOBODY ASKS IN THE SINGULAR.
 //  `\b(licen[cs]e)\b` does not match "licenses" — the \b needs a non-word
@@ -229,21 +232,39 @@ const TENANCY_TERMS =
 const LEASING_PERSON_TERMS =
   /\b(appl(?:y|ie[sd]|ication|icant)s?|sign(?:s|ed|ing|ature|atures)?|countersign|execut(?:e[sd]?|ing|ion)|where is|where'?s|holding (?:this|it|things) up|what'?s holding|who (?:needs to|owns|has to)|committed yet|prospects?|toured?|packets?)\b/i;
 const DEBT_TERMS =
-  /\b(debt (?:position|service)|mortgage(?: loan)?|loan (?:balance|maturity|payment|rate|terms?)|lender|servicer|principal balance|payoff (?:quote|amount)|interest rate|maturity date|extension option|debt-service reserve)\b/i;
+  /\b(debt (?:position|service)|mortgage(?: loan)?|loan (?:balance|maturity|payment|rate|terms?|pricing)|lender|servicer|principal balance|payoff (?:quote|amount)|interest rate|maturity date|extension option|debt-service reserve)\b/i;
+const ECONOMICS_SPECIFIC_TERMS =
+  /\b(published pric(?:e|es|ing)|asking rents?|new[- ]lease rents?|renewal rents?|lease (?:price|pricing|rate)|application fees?|administration fees?|admin fees?|amenity fees?|telecom fees?|utility fees?|security deposits?|deposit requirements?|concessions?|move[- ]in (?:cost|costs|total)|monthly total|what (?:do|are) we charg(?:e|ing)|how much (?:do|are) we charg(?:e|ing))\b/i;
+const BARE_PRICING_TERM = /\bpricing\b/i;
+const UTILITY_DETAIL_TERMS =
+  /\b(electric(?:ity)?|gas|water|sewer|meters?|submeters?|provider|utility account|account ending|peco|bills? residents|utility setup)\b/i;
+const LEASING_PERSON_DETAIL_TERMS =
+  /\b(applicants?|sign(?:s|ed|ing|ature|atures)?|countersign|execut(?:e[sd]?|ing|ion)|where is|where'?s|holding (?:this|it|things) up|what'?s holding|who (?:needs to|owns|has to)|committed yet|prospects?|toured?|packets?)\b/i;
+const TENANCY_STANDING_TERMS =
+  /\b(rent ?roll|occupanc(?:y|ies)|occupied|vacan(?:t|cy|cies)|residents?|move[- ]?(?:in|out)s?|beds?|who lives|how many (?:units|beds|positions|residents))\b/i;
 const EXPLICIT_WORK_TERMS =
   /\b(work[ -]?order|repair|maintenance|technician|task|job|assigned|assignment)\b/i;
+const ECONOMICS_MODULES = new Set(["leasing", "management", "asset_management"]);
+
+function canReadEconomics(modules) {
+  return (modules || []).some((module) => ECONOMICS_MODULES.has(module));
+}
 
 function questionSubject(question) {
   const text = String(question || "");
   const tenancyThing = TENANCY_TERMS.test(text);
-  //  A clock word with no tenancy noun beside it is Compliance's, exactly
-  //  as it has always been. With one, the lease owns it. Stated here so a
-  //  reader can see the tie-break instead of inferring it from two regexes.
-  const compliance = COMPLIANCE_TERMS.test(text) || (CLOCK_TERMS.test(text) && !tenancyThing);
-  const utility = UTILITY_TERMS.test(text);
   const contractedService = CONTRACTED_SERVICE_TERMS.test(text);
   const equity = EQUITY_TERMS.test(text);
   const debt = DEBT_TERMS.test(text);
+  const economics = ECONOMICS_SPECIFIC_TERMS.test(text)
+    || (BARE_PRICING_TERM.test(text) && !contractedService && !equity && !debt);
+  //  A clock word with no tenancy noun beside it is Compliance's, exactly
+  //  as it has always been. With one, the lease owns it. Stated here so a
+  //  reader can see the tie-break instead of inferring it from two regexes.
+  const complianceNoun = COMPLIANCE_TERMS.test(text);
+  const compliance = complianceNoun || (CLOCK_TERMS.test(text) && !tenancyThing && !economics);
+  const utility = UTILITY_TERMS.test(text)
+    && !(economics && !UTILITY_DETAIL_TERMS.test(text));
   /*  ⚠ MERGE NOTE, AND A DISTINCTION I GOT WRONG ONCE HERE.
    *
    *  `main` added Debt while this branch added Tenancy. My first resolution
@@ -261,11 +282,13 @@ function questionSubject(question) {
    *                                                       so the composition
    *                                                       guard must see both
    */
-  const leasingPerson = LEASING_PERSON_TERMS.test(text) && !contractedService && !equity && !debt;
-  const tenancy = tenancyThing && !contractedService && !equity && !leasingPerson;
+  const leasingPerson = LEASING_PERSON_TERMS.test(text) && !contractedService && !equity && !debt
+    && !(economics && !LEASING_PERSON_DETAIL_TERMS.test(text));
+  const tenancy = tenancyThing && !contractedService && !equity && !leasingPerson
+    && !(economics && !TENANCY_STANDING_TERMS.test(text));
   const work = EXPLICIT_WORK_TERMS.test(text)
-    && !contractedService && !equity && !debt && !tenancy && !leasingPerson;
-  if ([compliance, utility, contractedService, debt, equity, tenancy, leasingPerson, work]
+    && !contractedService && !equity && !debt && !tenancy && !leasingPerson && !economics;
+  if ([compliance, utility, contractedService, debt, equity, economics, tenancy, leasingPerson, work]
         .filter(Boolean).length > 1) {
     return "composition_unavailable";
   }
@@ -274,6 +297,7 @@ function questionSubject(question) {
   if (contractedService) return "contracted_service";
   if (debt) return "debt";
   if (equity) return "equity";
+  if (economics) return "economics";
   if (leasingPerson) return "leasing_person";
   if (tenancy) return "tenancy";
   return "work";
@@ -358,6 +382,7 @@ async function gatherFacts(db, {
   equityService = equityPositionService, equityRead = equityPositionRead,
   tenancyReader = tenancyStandingRead,
   leasingReader = leasingStandingRead,
+  economicReader = economicPicture,
   //  The canonical application lifecycle service. Accepted as a value OR a
   //  thunk: ask_spine mounts in server.js ABOVE the applications module, so
   //  a value captured at mount time would be undefined forever.
@@ -523,6 +548,45 @@ async function gatherFacts(db, {
       };
       failures.push(state === "READ_TIMED_OUT"
         ? "contracted_service_timed_out" : "contracted_service");
+    }
+  }
+
+  if (subject === "economics" && canReadEconomics(allowed_modules)) {
+    try {
+      const picture = await economicReader.effectiveEconomicPicture(db, { property_id });
+      facts.economics = withoutDatabaseIds({
+        read_state: "OK",
+        as_of: picture.as_of,
+        base_rent: picture.base_rent,
+        one_time_fees: {
+          completeness: picture.one_time_fees.completeness,
+          unresolved_reason: picture.one_time_fees.unresolved_reason,
+          published: picture.one_time_fees.published,
+        },
+        recurring_charges: {
+          completeness: picture.recurring_charges.completeness,
+          unresolved_reason: picture.recurring_charges.unresolved_reason,
+          published: picture.recurring_charges.published,
+        },
+        deposit_requirements: {
+          completeness: picture.deposit_requirements.completeness,
+          unresolved_reason: picture.deposit_requirements.unresolved_reason,
+          published: picture.deposit_requirements.published,
+        },
+        advertised_concessions: picture.advertised_concessions,
+        combined_monthly_total: picture.combined_monthly_total,
+        combined_move_in_total: picture.combined_move_in_total,
+        contradictions: picture.contradictions,
+        missing_determinants: picture.missing_determinants,
+        completeness: picture.completeness,
+        does_not_establish: [
+          "in-place rent, collections, year-over-year rent growth, market pricing, or strategy",
+          "a combined amount when the corresponding total is withheld",
+        ],
+      });
+    } catch (e) {
+      facts.economics = { read_state: "READ_FAILED" };
+      failures.push("economics");
     }
   }
 
@@ -747,7 +811,7 @@ function systemPrompt(subject = "work") {
     "YOU ANSWER ABOUT EXACTLY ONE SUBJECT:",
     "  " + SUPPORTED_SCOPE + ".",
     "",
-    "Anything else is out of scope — rent strategy, pricing, legal or tax advice",
+    "Anything else is out of scope — rent strategy, legal or tax advice",
     "questions, meetings and what was said in them, market conditions, vendors",
     "you were not given, people you were not given, other properties, anything",
     "historical you cannot see, and any general knowledge question. Being able",
@@ -903,6 +967,15 @@ function systemPrompt(subject = "work") {
     "   governed leasing cycle configured — say so and offer the dates instead. When it",
     "   reports READ_FAILED, Spine could not look. Neither is an empty building and",
     "   neither is zero rent.",
+    "28. Economics is current published ASKING economics, not in-place rent, market rent,",
+    "   collected rent, year-over-year growth, or strategy. Never answer one with another.",
+    "29. A type with one published lease term may be quoted directly. With more than one,",
+    "   preserve the full term menu. If the operator did not name a term, ask which term;",
+    "   never choose the first, shortest, longest, or twelve-month term for them.",
+    "30. Quote only charges in `published` and concessions in `advertised`. Preserve whether",
+    "   each amount is required, optional, conditional, unresolved, or not applicable.",
+    "31. Give a combined monthly or move-in amount only when its `amount` is present. When",
+    "   it is withheld, say what is known separately and name the blocker; never add it yourself.",
     "",
     "HOW TO SOUND:",
     "· Talk like a competent colleague, not a database. Short sentences.",
@@ -928,7 +1001,7 @@ function systemPrompt(subject = "work") {
 async function answer(db, anthropic, {
   property_id, allowed_modules, question, mintComplianceReference, complianceReader,
   utilityReader, contractedServiceReader, debtService, debtRead, equityService, equityRead,
-  tenancyReader, applicationsService,
+  tenancyReader, economicReader, applicationsService,
 }) {
   if (!property_id) throw new Error("ask_spine.answer requires a server-derived property_id");
 
@@ -953,8 +1026,8 @@ async function answer(db, anthropic, {
       //  services and work — a list their own question was missing from,
       //  which reads as "I don't do that" rather than "not both at once".
       //  Debt and Tenancy both belong here now.
-      answer: "I can answer about the rent roll, Debt, Equity, Compliance, Utilities, " +
-              "Contracted Services, or open work separately, but I can't combine them in " +
+      answer: "I can answer about the rent roll, Published Pricing and Charges, Debt, Equity, " +
+              "Compliance, Utilities, Contracted Services, or open work separately, but I can't combine them in " +
               "one answer yet.",
       grounded_on: null,
       references: [],
@@ -974,6 +1047,14 @@ async function answer(db, anthropic, {
     return {
       outcome: "not_authorized",
       answer: "The rent roll is not available in your current access for this property.",
+      grounded_on: null,
+      references: [],
+    };
+  }
+  if (subject === "economics" && !canReadEconomics(modules)) {
+    return {
+      outcome: "not_authorized",
+      answer: "Published pricing and charges are not available in your current access for this property.",
       grounded_on: null,
       references: [],
     };
@@ -1005,7 +1086,7 @@ async function answer(db, anthropic, {
     property_id, allowed_modules: modules, subject,
     mintComplianceReference, complianceReader, utilityReader,
     contractedServiceReader, debtService, debtRead, equityService, equityRead,
-    tenancyReader, question: q,
+    tenancyReader, economicReader, question: q,
     applicationsService,
   });
 
@@ -1124,6 +1205,14 @@ async function answer(db, anthropic, {
         ? facts.tenancy.forward.read_state : null,
       tenancy_forward_cycle: facts.tenancy && facts.tenancy.forward && facts.tenancy.forward.cycle
         ? facts.tenancy.forward.cycle.label : null,
+      economics_read_state: facts.economics ? facts.economics.read_state : null,
+      economics_as_of: facts.economics ? facts.economics.as_of : null,
+      economics_unit_type_count: facts.economics && facts.economics.base_rent
+        ? facts.economics.base_rent.types.length : null,
+      economics_overall_completeness: facts.economics && facts.economics.completeness
+        ? facts.economics.completeness.overall : null,
+      economics_monthly_total_withheld: facts.economics && facts.economics.combined_monthly_total
+        ? !!facts.economics.combined_monthly_total.withheld : null,
       reads_that_failed: facts.reads_that_failed,
       gathered_at: facts.gathered_at,
     },

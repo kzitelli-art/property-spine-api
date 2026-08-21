@@ -146,6 +146,8 @@ const GATES = [
     what: "the reader gate itself goes RED when registration, discovery or the gather is broken" },
   { file: "tenancy_ask_spine.test.js",
     what: "Tenancy Ask Spine: routing, entitlement before any read, the four silences, the truth walls" },
+  { file: "economics_ask_spine.test.js",
+    what: "Economics Ask Spine: one canonical picture, lease-term menu preserved, entitlement before read" },
   //  Slice 2's primitive is PURE, which is why its whole edge-case surface
   //  runs here in milliseconds instead of behind a Postgres. The DB rung
   //  (interval_positions.db.js) proves the same states on 160 real beds.

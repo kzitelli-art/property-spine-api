@@ -37,6 +37,34 @@ function componentState(c) {
   return "governed";
 }
 
+function typePricingProjection(type) {
+  const term_economics = (type.terms || []).map((term) => ({
+    lease_term_months: term.lease_term_months,
+    new_lease_rent: term.new_lease_rent,
+    renewal_rent: term.renewal_rent,
+    immediate_move_in_rent: term.immediate_move_in_rent,
+  }));
+  const selected = term_economics.length === 1 ? term_economics[0] : null;
+  const term_selection = term_economics.length > 1 ? "required"
+    : term_economics.length === 1 ? "not_required" : "unavailable";
+
+  return {
+    unit_type_id: type.unit_type_id,
+    code: type.code,
+    label: type.label,
+    offer_state: type.offer_state,
+    new_lease_rent: selected ? selected.new_lease_rent : null,
+    renewal_rent: selected ? selected.renewal_rent : null,
+    terms: term_economics.map((term) => term.lease_term_months),
+    term_economics,
+    term_selection,
+    unresolved_reason: term_economics.length > 1 ? "lease_term_not_selected"
+      : term_economics.length === 0 ? "no_offered_term" : null,
+    marketable_positions: type.marketable_positions,
+    quotable: !!(selected && selected.new_lease_rent != null),
+  };
+}
+
 async function effectiveEconomicPicture(pool, {
   property_id, as_of = null, unit_type_id = null, space_id = null, event_context = null,
 } = {}) {
@@ -71,15 +99,7 @@ async function effectiveEconomicPicture(pool, {
     unavailable: !pricingR.ok,
     unresolved_reason: !pricingR.ok ? "economic_read_failed"
       : pricing.published_version ? null : "no_published_pricing_version",
-    types: typeRows.map((t) => ({
-      unit_type_id: t.unit_type_id, code: t.code, label: t.label,
-      offer_state: t.offer_state,
-      new_lease_rent: (t.terms || [])[0] ? (t.terms || [])[0].new_lease_rent : null,
-      renewal_rent: (t.terms || [])[0] ? (t.terms || [])[0].renewal_rent : null,
-      terms: (t.terms || []).map((x) => x.lease_term_months),
-      marketable_positions: t.marketable_positions,
-      quotable: !!((t.terms || [])[0] && (t.terms || [])[0].new_lease_rent != null),
-    })),
+    types: typeRows.map(typePricingProjection),
     completeness: !pricingR.ok ? "unavailable"
       : pricing.published_version ? (pricing.completeness.complete ? "governed" : "partial")
       : "unresolved",
@@ -143,10 +163,11 @@ async function effectiveEconomicPicture(pool, {
 
   // ── TOTALS: the exception, with a breakdown or nothing ────────────
   const monthlyComponents = [];
-  if (base_rent.completeness === "governed" && typeRows.length === 1 && typeRows[0].terms &&
-      (typeRows[0].terms || [])[0] && (typeRows[0].terms || [])[0].new_lease_rent != null) {
-    monthlyComponents.push({ code: "rent.base", amount: (typeRows[0].terms || [])[0].new_lease_rent,
-                             obligation: "required" });
+  const selectedType = base_rent.types.length === 1 ? base_rent.types[0] : null;
+  if (base_rent.completeness === "governed" && selectedType && selectedType.quotable) {
+    monthlyComponents.push({ code: "rent.base", amount: selectedType.new_lease_rent,
+                             obligation: "required",
+                             lease_term_months: selectedType.terms[0] });
   }
   for (const c of recurring_charges.published) {
     if (c.obligation === "required" && c.quotable_precisely)
@@ -154,6 +175,11 @@ async function effectiveEconomicPicture(pool, {
   }
   const monthlyBlockers = [];
   if (base_rent.completeness !== "governed") monthlyBlockers.push(`base_rent:${base_rent.completeness}`);
+  if (typeRows.length !== 1) monthlyBlockers.push("base_rent:unit_type_not_selected");
+  else if (selectedType && selectedType.term_selection === "required")
+    monthlyBlockers.push("base_rent:lease_term_not_selected");
+  else if (selectedType && !selectedType.quotable)
+    monthlyBlockers.push("base_rent:not_quotable");
   if (recurring_charges.completeness !== "governed")
     monthlyBlockers.push(`recurring_charge:${recurring_charges.completeness}`);
   for (const c of recurring_charges.published)
@@ -205,4 +231,4 @@ async function effectiveEconomicPicture(pool, {
   };
 }
 
-module.exports = { effectiveEconomicPicture, COMPLETENESS, componentState };
+module.exports = { effectiveEconomicPicture, typePricingProjection, COMPLETENESS, componentState };

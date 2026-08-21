@@ -54,6 +54,12 @@ SKYLINE PRICING         PUBLISHED IN PRODUCTION  2026-08-20
                         12-month term only, effective 2026-08-20.
                         Verified through quotablePricing — the adapter the
                         agent calls — not the publisher's own report.
+
+SKYLINE CONVERSATION    INTEGRATION BRANCH, NOT MERGED OR DEPLOYED
+                        codex/skyline-conversation-integration-20260820
+                        Based on claude/property-spine-orientation-cso2ao;
+                        adds the one-reader Ask Spine obligation fix and a
+                        canonical published-economics read for Ask Spine.
 ```
 
 ✔ **RESOLVED 2026-08-20: production now runs `main`'s lineage.** Was: the
@@ -125,6 +131,7 @@ with evidence — which is the failure this file exists to end.
 ---
 
 | 17 | **159 phantom unit rows at Skyline, shaped like beds.** Alongside `1417-116` production carries separate `units` rows named `116 - A`, `116 - B`, `116 - C` — null bed, no source code, not reachable from any import row. They are why `count(*)` reports 231 units for a 72-unit property, and why the mapping tool reports 159 positions "Not configured" after a correct run. **Not a blocker and deliberately untouched**: the canonical loader sees 160, the mapping's exact-match override cannot reach them, and the e2e now carries six of them as decoys asserting exactly that. Cleaning them is a production delete with unknown FK reach — investigation first, then a decision, not a sweep. | `tools/apply_unit_type_mapping.js` production run 2026-08-20; decoys in `tests/e2e/skyline_unit_type_mapping.e2e.js` |
+| 18 | **RESOLVED ON INTEGRATION BRANCH, 2026-08-20 — the composed economic picture no longer silently chooses `terms[0]`.** `economic_picture.js` now preserves each term's economics. One published term can produce a flat quote; two or more return a term menu, set `lease_term_not_selected`, and withhold a combined monthly total until a term is chosen. Ask Spine consumes this same composition for published asking rent, governed charges, deposit requirements, and advertised concessions; it does not own a second pricing reader. Entitlement is enforced before the read for Leasing, Management, or Asset Management. **Not merged or deployed.** Source contract 11/11; real session + real Express + real HTTP + real migrated Postgres 16/16; prospect price wall remains 22/22. | `src/money/economic_picture.js`; `src/agent/ask_spine_answer.js`; `tests/economics_ask_spine.test.js`; `tests/economics_ask_spine_http.db.js` |
 
 ## PRODUCTION-PROVEN — the whole list
 
@@ -233,10 +240,10 @@ producing a valid completion through it is not.
 | Staff session / server-derived authority | `HTTP_PROVEN` | `staff_session_service.js`. *"The caller never supplies role, modules, TTL, or entitlement"* |
 | Property creation | `HTTP_PROVEN` + `BROWSER_VERIFIED` | Single-path enforced by `gate_property_creation_paths.js` |
 | Legal entity primitive | `HTTP_PROVEN` + `BROWSER_VERIFIED` | `legal_entity_service.js` |
-| Ask Spine (slices 1–2) | `HTTP_PROVEN` | Gathers: `attention, work_orders, compliance, utility, contracted_service, equity, tenancy, debt`. ⚠ *"`references[]` IS NOT IN PRODUCTION"* |
+| Ask Spine (slices 1–2) | `HTTP_PROVEN` | Gathers: `attention, work_orders, compliance, utility, contracted_service, equity, tenancy, debt`; integration branch also gathers canonical `economics` (real HTTP 16/16). ⚠ *"`references[]` IS NOT IN PRODUCTION"*; economics is also not deployed. |
 | Asset Management shell | `HTTP_PROVEN` + `BROWSER_VERIFIED` | `asset_management.js` 260/260. Property Expenses **capped** — can never read `established` |
 | Money events / accounting | `HTTP_PROVEN` | `money.js`, `bankbridge.js`, `plaid.js` — lifecycle-arc harnesses only |
-| Governed pricing & charges (~26 files) | mixed | *"Everything else economic is **unpublished**."* `$99` admin fee **BLOCKED on one ruling** |
+| Governed pricing & charges (~26 files) | mixed | Skyline pricing is published. Integration branch fixes multi-term composition and exposes current published economics to Ask Spine without a second source. Other economic classes retain their own publication state; `$99` admin fee remains **BLOCKED on one ruling**. |
 | `concession_schedule_compiler` | `BUILT_BUT_DORMANT` | *"ACTIVATES NOTHING"*; `free_rent_period` *"SPECIFIED BUT NOT IMPLEMENTED"* |
 | `economic_adapter` · `pricing_adapter` | `BUILT_BUT_DORMANT` | *"DARK BY CONSTRUCTION."* **See defect #1** |
 | `src/identity/activation.js` | **DEAD** | Never mounted; app screen 404s. **See defect #3** |
