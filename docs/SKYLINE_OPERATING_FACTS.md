@@ -217,8 +217,10 @@ Skyline's operating timezone was set through the governed command to
 `America/New_York`; change receipt `289f0937-e1d5-4d67-81d0-cf44ec1f588c`.
 
 Skyline is not active yet. The Mike Grivna person exists in production, but no
-user/login, active staff context, Skyline assignment, or active invite is linked
-to him, so he correctly cannot be selected as an eligible tour host. No schedule
+user/login, active staff context, Skyline assignment, or usable invite is linked
+to him, so he correctly cannot be selected as an eligible tour host. One legacy
+August 18 invite remains labeled `active`, but it is expired and carries no
+canonical role or person link; the next invite will supersede it. No schedule
 policy or availability row has been published, and Skyline is not in the
 agent-booking allowlist.
 
