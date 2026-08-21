@@ -55,6 +55,7 @@ const receipt = require("./_run_receipt.js");
 const hierarchy = require("../src/identity/property_hierarchy_service.js");
 const creation = require("../src/identity/property_creation_service.js");
 const resolution = require("../src/identity/property_resolution_service.js");
+const staffIdentity = require("../src/identity/staff_identity_resolver.js");
 const snapshotLoader = require("../src/shared/snapshot_loader.js");
 
 const URL = receipt.harnessConnectionString();
@@ -89,10 +90,13 @@ function buildApp() {
   const PUBLIC_EXACT = new Set(["/health", "/leasing/intake", "/communications/inbound-sms", "/applications/submit-public"]);
   const PUBLIC_PREFIXES = ["/tenant/", "/t/", "/public/", "/intake/", "/intake", "/auth/", "/demo/", "/agent/", "/legal/"];
   const isOperatorPath = (p) => p === "/operator" || p.startsWith("/operator/");
+  const isTeamAccessPath = (p) => /^\/properties\/[^/]+\/(?:team|team-invites|my-access)$/.test(p)
+    || /^\/property-team-assignments\/[^/]+$/.test(p);
   app.use((req, res, next) => {
     const p = req.path;
     if (PUBLIC_EXACT.has(p) || PUBLIC_PREFIXES.some((x) => p === x || p.startsWith(x))) return next();
     if (isOperatorPath(p)) return next();
+    if (isTeamAccessPath(p)) return next();
     if (p === "/admin" || p.startsWith("/admin/")) return next();
     if (p === "/org" || p.startsWith("/org/")) return next();
     if (req.get("x-operator-key") !== OPERATOR_KEY) return res.status(401).json({ receipt: "Missing or wrong x-operator-key." });
@@ -101,10 +105,12 @@ function buildApp() {
   app.use("/", require("../src/identity/super_admin.js")({ pool }));
   app.use("/", require("../src/shared/seed_endpoint.js")({ pool }));
   app.use("/", require("../src/shared/snapshot_loader.js")({ pool, upload: null }));
+  const staffBridgeService = require("../src/identity/staffbridge.js")({ pool })._service;
   app.use("/", require("../src/identity/teamaccess.js")({
     pool,
     sms: { enabled: () => false, async sendSms() { return { sent: false }; }, validateWebhook: () => true },
     commBoundary: { async sendPropertySms() { return { sent: false, reason: "transport_not_configured" }; } },
+    staffBridgeService,
   }));
   return app;
 }
@@ -125,7 +131,7 @@ function request(port, method, path, { body, headers = {} } = {}) {
 }
 
 (async () => {
-  receipt.begin(__filename, { url: URL, expected: 30 });
+  receipt.begin(__filename, { url: URL, expected: 50 });
 
   const server = buildApp().listen(0);
   await new Promise((r) => server.once("listening", r));
@@ -258,9 +264,9 @@ function request(port, method, path, { body, headers = {} } = {}) {
   const otherProp = await mkOrphan("other");
   const sElsewhere = await mkSession(member, otherProp, true);
   const t2 = await request(port, "POST", `/properties/${seat}/team-invites`,
-    { headers: { ...KEY, "x-staff-session": sElsewhere }, body: inviteBody() });
-  ok("T2  a real session with no authority AT THIS PROPERTY is refused (403)",
-    t2.status === 403 && t2.body.reason === "insufficient_property_authority", JSON.stringify(t2));
+    { headers: { "x-staff-session": sElsewhere }, body: inviteBody() });
+  ok("T2  a real session outside this property is refused before authority (403)",
+    t2.status === 403 && t2.body.reason === "staff_session_property_mismatch", JSON.stringify(t2));
 
   //  T3 — the whole point. A body actor field is REJECTED, not ignored.
   //  This follows the rule already frozen by the write-authority hardening
@@ -270,7 +276,7 @@ function request(port, method, path, { body, headers = {} } = {}) {
   //  service and this assertion were corrected to match it.
   const forged = adminB;
   const t3 = await request(port, "POST", `/properties/${seat}/team-invites`,
-    { headers: { ...KEY, "x-staff-session": sSuper },
+    { headers: { "x-staff-session": sSuper },
       body: inviteBody({ invited_by_user_id: forged }) });
   ok("T3a a body-supplied invited_by_user_id is REJECTED (400), not silently ignored",
     t3.status === 400 && t3.body.reason === "body_actor_field_rejected", JSON.stringify(t3));
@@ -282,7 +288,7 @@ function request(port, method, path, { body, headers = {} } = {}) {
   //  The APP'S OWN body shape — measured from index.html, which sends no
   //  actor field. This is the call that must keep working.
   const t3app = await request(port, "POST", `/properties/${seat}/team-invites`, {
-    headers: { ...KEY, "x-staff-session": sSuper },
+    headers: { "x-staff-session": sSuper },
     body: { invited_name: TAG + " App Invitee", phone_number: invitee(),
             role_title: "Maintenance Tech", allowed_modules: ["maintenance"],
             scope_type: "property", backup_user_id: null,
@@ -301,26 +307,101 @@ function request(port, method, path, { body, headers = {} } = {}) {
   await hierarchy.assignPropertyToOrganization(pool, {
     actor: { user_id: superAdmin }, property_id: seat, organization_id: orgA });
   const t4b = await request(port, "POST", `/properties/${seat}/team-invites`,
-    { headers: { ...KEY, "x-staff-session": sAdminA }, body: inviteBody() });
+    { headers: { "x-staff-session": sAdminA }, body: inviteBody() });
   ok("T4a org_admin of the owning organization may grant",
     t4b.status === 200 && t4b.body.authority_basis === "platform_role:org_admin", JSON.stringify(t4b.body));
 
   const manager = await mkUser("member", orgA);
   const sManager = await mkSession(manager, seat, true);   // can_manage_roles at THIS property
   const t4c = await request(port, "POST", `/properties/${seat}/team-invites`,
-    { headers: { ...KEY, "x-staff-session": sManager }, body: inviteBody() });
+    { headers: { "x-staff-session": sManager }, body: inviteBody() });
   ok("T4b an assignment here with can_manage_roles may grant",
     t4c.status === 200 && t4c.body.authority_basis === "assignment:can_manage_roles", JSON.stringify(t4c.body));
 
   const sPlain = await mkSession(await mkUser("member", orgA), seat, false); // no can_manage_roles
   const t4d = await request(port, "POST", `/properties/${seat}/team-invites`,
-    { headers: { ...KEY, "x-staff-session": sPlain }, body: inviteBody() });
+    { headers: { "x-staff-session": sPlain }, body: inviteBody() });
   ok("T4c an assignment here WITHOUT can_manage_roles may not grant",
     t4d.status === 403 && t4d.body.reason === "insufficient_property_authority", JSON.stringify(t4d));
 
   const t5 = (await pool.query(
-    `select count(*)::int n from team_invites where invited_by_user_id is null`)).rows[0].n;
-  ok("T5  no invite anywhere carries a null granting actor", t5 === 0, t5 + " invite(s) with no inviter");
+    `select count(*)::int n from team_invites
+      where invited_by_user_id is null and invited_name like $1`, [`${TAG}%`])).rows[0].n;
+  ok("T5  no invite created by this harness carries a null granting actor", t5 === 0, t5 + " invite(s) with no inviter");
+
+  const t6a = await request(port, "GET", `/properties/${seat}/team`);
+  ok("T6a the team roster is not public (401)", t6a.status === 401, JSON.stringify(t6a));
+  const t6b = await request(port, "GET", `/properties/${seat}/team`,
+    { headers: { "x-staff-session": sElsewhere } });
+  ok("T6b a staff session cannot read another property's team (403)",
+    t6b.status === 403 && t6b.body.reason === "staff_session_property_mismatch", JSON.stringify(t6b));
+  const t6c = await request(port, "GET", `/properties/${seat}/team`,
+    { headers: { "x-staff-session": sSuper } });
+  ok("T6c the signed-in app reads its live team without an operator key",
+    t6c.status === 200 && Array.isArray(t6c.body.team), JSON.stringify(t6c));
+
+  const unifiedPhone = invitee();
+  const unifiedPerson = (await pool.query(
+    `insert into persons (name, phone) values ($1,$2) returning id`,
+    [TAG + " Unified Leasing", unifiedPhone])).rows[0];
+  const t7a = await request(port, "POST", `/properties/${seat}/team-invites`, {
+    headers: { "x-staff-session": sSuper },
+    body: { invited_name: TAG + " Unified Leasing", phone_number: unifiedPhone,
+            role_key: "leasing_agent", scope_type: "property" },
+  });
+  ok("T7a an existing person is proposed, never silently linked",
+    t7a.status === 409 && t7a.body.reason === "existing_person_confirmation_required"
+      && t7a.body.candidates.some(p => p.id === unifiedPerson.id), JSON.stringify(t7a));
+  const t7aRows = (await pool.query(
+    `select count(*)::int n from team_invites where phone_number=$1 and status='active'`,
+    [unifiedPhone])).rows[0].n;
+  ok("T7b the confirmation stop wrote no invite and sent nothing", t7aRows === 0, String(t7aRows));
+
+  const t7c = await request(port, "POST", `/properties/${seat}/team-invites`, {
+    headers: { "x-staff-session": sSuper },
+    body: { invited_name: TAG + " Unified Leasing", phone_number: unifiedPhone,
+            role_key: "leasing_agent", person_id: unifiedPerson.id, scope_type: "property" },
+  });
+  ok("T7c the manager-confirmed person creates one canonical-role invite",
+    t7c.status === 200 && t7c.body.person_id === unifiedPerson.id
+      && t7c.body.role_key === "leasing_agent", JSON.stringify(t7c));
+
+  const inviteToken = String(t7c.body.link || "").split("/join/")[1];
+  const t7start = await request(port, "POST", "/auth/sms/start", { body: { token: inviteToken } });
+  ok("T7d invite acceptance uses the existing OTP door",
+    t7start.status === 200 && t7start.body.dev_code, JSON.stringify(t7start));
+  const t7verify = await request(port, "POST", "/auth/sms/verify",
+    { body: { token: inviteToken, code: t7start.body.dev_code } });
+  ok("T7e one acceptance returns a session and the confirmed person",
+    t7verify.status === 200 && t7verify.body.session_token
+      && t7verify.body.person_id === unifiedPerson.id, JSON.stringify(t7verify));
+
+  const unified = (await pool.query(
+    `select u.id, u.person_id, u.account_kind, pta.role_key, pta.allowed_modules,
+            exists(select 1 from person_contexts pc
+                    where pc.person_id=u.person_id and pc.context_type='staff'
+                      and pc.property_id=$2 and pc.active_to is null) as has_context,
+            exists(select 1 from assignments a
+                    where a.person_id=u.person_id and a.property_id=$2
+                      and a.role='leasing' and a.is_active=true) as has_assignment
+       from users u
+       join property_team_assignments pta on pta.user_id=u.id and pta.property_id=$2 and pta.active=true
+      where u.phone=$1`, [unifiedPhone, seat])).rows[0];
+  ok("T7f acceptance classifies and audits the login-to-person bridge",
+    unified && unified.account_kind === "human_staff" && unified.person_id === unifiedPerson.id,
+    JSON.stringify(unified));
+  ok("T7g acceptance grants property access from the canonical role",
+    unified && unified.role_key === "leasing_agent" && unified.allowed_modules.includes("leasing"),
+    JSON.stringify(unified));
+  ok("T7h acceptance establishes staff context and work eligibility together",
+    unified && unified.has_context === true && unified.has_assignment === true,
+    JSON.stringify(unified));
+  const unifiedEligibility = await staffIdentity.resolveStaffIdentity(pool, {
+    user_id: unified.id, property_id: seat, work_type: "tour_follow_up",
+  });
+  ok("T7i the canonical work-owner resolver recognizes the onboarded teammate",
+    unifiedEligibility.state === "resolved" && unifiedEligibility.person_id === unifiedPerson.id,
+    JSON.stringify(unifiedEligibility));
 
   // ══════════════════════════════════════════════════════════════════
   console.log("\n  ── S · RECOGNITION PROPOSES. AMBIGUITY REFUSES. ──");
@@ -449,7 +530,7 @@ function request(port, method, path, { body, headers = {} } = {}) {
   delete process.env.SYNTHETIC_SEED_ENABLED; delete process.env.SYNTHETIC_SEED_PROPERTY_IDS;
 
   console.log("");
-  const code = receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 30 });
+  const code = receipt.complete({ harness: __filename, passed: pass, failed: fail, expectedAtLeast: 50 });
   server.close();
   await pool.end();
   process.exit(code);

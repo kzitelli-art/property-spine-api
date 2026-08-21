@@ -54,6 +54,7 @@ const explainModule = require("./src/money/explain");
 const tenantLinkModule = require("./src/comms/tenantlink"); // tenant text line Phase 1: connection (invite link → verify → session)
 const legalRoutesModule = require("./src/identity/legal_routes_block"); // A2P 10DLC public legal pages (privacy + SMS terms) — carrier-reachable
 const teamAccessModule = require("./src/identity/teamaccess");
+const staffBridgeModule = require("./src/identity/staffbridge");
 const staffSessions = require("./src/identity/staff_session_service");        // the ONE session resolver
 const propertyCreation = require("./src/identity/property_creation_service"); // Build 1A-1: THE property write
 const { makeTourAvailabilityService } = require("./src/leasing/tour_availability_service");
@@ -81,6 +82,15 @@ const app = express();
 // browser that holds the in-memory staff token to drive the operator surface.
 const OPERATOR_APP_ORIGIN = String(process.env.OPERATOR_APP_ORIGIN || "").trim();
 function isOperatorPath(p) { return p === "/operator" || p.startsWith("/operator/"); }
+// Phone-first team access predates /operator/*, but it is the same signed-in
+// staff surface. Keep its existing URLs while giving them the same browser
+// boundary: every matching handler resolves x-staff-session and derives the
+// property/actor from that live session. Exact shapes only; a lookalike path
+// must continue through the shared-key gate.
+function isTeamAccessPath(p) {
+  return /^\/properties\/[^/]+\/(?:team|team-invites|my-access)$/.test(p)
+      || /^\/property-team-assignments\/[^/]+$/.test(p);
+}
 //  Deal Setup. SESSION-GATED, not public: every route runs requireHuman
 //  (x-staff-session → a real users row) before it does anything, and every
 //  write records the human it resolved. It skips the operator-KEY gate for
@@ -105,7 +115,7 @@ const operatorCors = cors({
     return cb(null, false); // unset OR mismatch → denied (fail closed)
   },
   allowedHeaders: ["content-type", "x-staff-session"],
-  methods: ["GET", "POST", "OPTIONS"],
+  methods: ["GET", "POST", "PATCH", "OPTIONS"],
   credentials: false,
 });
 
@@ -118,7 +128,7 @@ const generalCors = cors({
 });
 
 app.use((req, res, next) => {
-  if (isOperatorPath(req.path)) return operatorCors(req, res, next);
+  if (isOperatorPath(req.path) || isTeamAccessPath(req.path)) return operatorCors(req, res, next);
   return generalCors(req, res, next);
 });
 app.set("trust proxy", 1); // Render = one proxy hop: makes req.ip the real client so per-IP rate limits actually bind per client
@@ -203,6 +213,7 @@ app.use((req, res, next) => {
   const p = req.path;
   if (PUBLIC_EXACT.has(p) || PUBLIC_PREFIXES.some((x) => p === x || p.startsWith(x))) return next();
   if (isOperatorPath(p)) return next(); // /operator/* applies its own staff-session auth
+  if (isTeamAccessPath(p)) return next(); // legacy URLs, same staff-session boundary
   if (isDealSetupPath(p)) return next(); // /deal-setup/* applies its own staff-session auth (requireHuman)
   if (p === "/admin" || p.startsWith("/admin/")) return next(); // /admin/* enforces its own super-admin session auth
   if (p === "/org" || p.startsWith("/org/")) return next();     // /org/* enforces its own org-admin session auth
@@ -3366,7 +3377,8 @@ app.use("/", tenantLinkModule({
 //  consent checkbox links to. The module existed since June and was mounted
 //  NOWHERE, so both returned 404 while the file sat in the repo looking done.
 app.use("/", legalRoutesModule());
-app.use("/", teamAccessModule({ pool, sms, commBoundary }));
+const staffBridge = staffBridgeModule({ pool });
+app.use("/", teamAccessModule({ pool, sms, commBoundary, staffBridgeService: staffBridge._service }));
 app.use("/", superAdminModule({ pool }));
 app.use("/", orgAdminModule({ pool }));
 // owner-facing aggregate views (cards + attention queue). Only needs pool.
@@ -3614,8 +3626,7 @@ app.use("/", operatorModule({ pool, agentService: agentApp._service,
 // audited acts by an admin staff session — never inference, never capture
 // flow. Eligibility resolution lives in staff_identity_resolver.js (the ONE
 // module allowed to join users.person_id to assignments). (staffbridge.js)
-const staffBridgeModule = require("./src/identity/staffbridge");
-app.use("/", staffBridgeModule({ pool }));
+app.use("/", staffBridge);
 
 // ── REMOVED 2026-07-28: the demo facts seed is no longer in the HTTP runtime.
 // It was mounted here as POST /demo/seed-solo-facts. `/demo/` is in

@@ -67,6 +67,8 @@ const GATES = [
     what: "federal holiday closures match the legal and OPM-observed calendar rules" },
   { file: "tour_schedule_ask_spine.test.js",
     what: "dashboard and staff SMS Ask Spine read the same native tour schedule standing" },
+  { file: "team_access_session_boundary.test.js",
+    what: "Team roster, invite and access changes use the signed-in staff boundary without a browser operator key" },
   //  Steps 2–3 candidates. Both are source-only and DB-free, so they
   //  belong on the standard path rather than in a harness nobody runs.
   { file: "gate_migration_137_promotion.js",

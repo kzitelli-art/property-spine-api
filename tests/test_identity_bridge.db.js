@@ -15,7 +15,7 @@ const receipt = require("./_run_receipt.js");
 const { Pool } = require("pg");
 const http = require("http");
 const express = require("express");
-const { execSync } = require("child_process");
+const { execFileSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 
@@ -583,13 +583,13 @@ async function call(port, method, urlPath, { token, body } = {}) {
   console.log("\nJ. THE STATIC GATE — no raw bridge joins outside the resolver");
   // ────────────────────────────────────────────────────────────────
   await T("J1  gate PASSES on the patched tree", async () => {
-    execSync(`node ${path.join(__dirname, "gate_no_raw_bridge_joins.js")}`, { stdio: "pipe" });
+    execFileSync(process.execPath, [path.join(__dirname, "gate_no_raw_bridge_joins.js")], { stdio: "pipe" });
   });
   await T("J2  gate FAILS when a raw join is planted", async () => {
     const plant = path.join(__dirname, "..", "zz_planted_violation.js");
     fs.writeFileSync(plant, `// planted\nconst q = "select 1 from assignments a join users u on u.person_id = a.person_id";\n`);
     let failed = false;
-    try { execSync(`node ${path.join(__dirname, "gate_no_raw_bridge_joins.js")}`, { stdio: "pipe" }); }
+    try { execFileSync(process.execPath, [path.join(__dirname, "gate_no_raw_bridge_joins.js")], { stdio: "pipe" }); }
     catch (_) { failed = true; }
     fs.unlinkSync(plant);
     assert(failed, "the gate must catch the planted join");

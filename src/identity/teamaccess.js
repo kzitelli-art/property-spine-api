@@ -37,8 +37,9 @@ const express = require("express");
 const crypto = require("crypto");
 
 const staffSessions = require("./staff_session_service.js"); // BRICK ONE: the ONE issuer/resolver/revoke
+const staffIdentity = require("./staff_identity_resolver.js");
 
-module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
+module.exports = function teamAccessModule({ pool, sms, commBoundary, staffBridgeService = null }) {
   const router = express.Router();
 
   //  THE OPERATOR MODULE VOCABULARY.
@@ -92,6 +93,25 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
   const landingModule = (allowed, primary) =>
     (primary && primary[0]) || (allowed && allowed[0]) || null;
 
+  async function loadStaffRole(client, roleKey) {
+    if (!roleKey) return null;
+    return (await client.query(
+      `select key, label, allowed_modules, primary_modules, can_manage_roles,
+              user_role::text, assignment_role, assignment_scope
+         from staff_roles where key=$1`, [roleKey])).rows[0] || null;
+  }
+
+  async function matchingPeopleForPhone(client, phone) {
+    return (await client.query(
+      `select id, name
+         from persons
+        where record_status='active'
+          and right(regexp_replace(coalesce(nullif(primary_phone_e164,''), phone, ''), '\\D', '', 'g'), 10)
+              = right(regexp_replace($1, '\\D', '', 'g'), 10)
+        order by name, id
+        limit 5`, [phone])).rows;
+  }
+
   // resolve the staff session from the header (twin of tenant session resolve).
   async function currentUser(req) {
     // BRICK ONE: shared live resolver, HEADER-ONLY (the ?session= query
@@ -140,8 +160,14 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
         return res.status(401).json({
           error: "A staff session is required to invite someone to a property.",
           reason: "no_authenticated_actor",
-          receipt: "Send x-staff-session. The operator key authenticates the caller, not the " +
-                   "human — and an access grant records who granted it.",
+          receipt: "Sign in first. The staff session identifies the human who grants access.",
+        });
+      }
+      if (propertyId !== session.property_id) {
+        return res.status(403).json({
+          error: "That property is outside your signed-in scope.",
+          reason: "staff_session_property_mismatch",
+          receipt: "Open the property you are signed into before inviting a teammate.",
         });
       }
 
@@ -191,13 +217,33 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
       }
 
       const phone = normalizePhone(b.phone_number || b.phone);
-      if (!phone) return res.status(400).json({ receipt: "A valid US phone number is required (10 digits or +1 format). Email is optional." });
-      if (!b.role_title || !String(b.role_title).trim())
+      if (!phone) return res.status(400).json({ receipt: "A valid US phone number is required (10 digits or +1 format)." });
+      const rolePreset = await loadStaffRole(pool, b.role_key || null);
+      if (b.role_key && !rolePreset) {
+        return res.status(400).json({ receipt: "Choose a recognized staff job.", reason: "unknown_staff_role" });
+      }
+      if (!rolePreset && (!b.role_title || !String(b.role_title).trim()))
         return res.status(400).json({ receipt: "A job title is required — the role drives the access." });
 
-      const allowed = cleanModules(b.allowed_modules);
+      const roleTitle = rolePreset ? rolePreset.label : String(b.role_title).trim();
+      const allowed = rolePreset ? rolePreset.allowed_modules : cleanModules(b.allowed_modules);
       if (allowed.length === 0)
         return res.status(400).json({ receipt: "Choose at least one module the job allows (management, leasing, maintenance, reporting)." });
+      const candidates = await matchingPeopleForPhone(pool, phone);
+      const confirmedPersonId = b.person_id || null;
+      if (candidates.length && !confirmedPersonId) {
+        return res.status(409).json({
+          receipt: "An existing person uses that phone. Confirm the record before sending an invite.",
+          reason: "existing_person_confirmation_required",
+          candidates,
+        });
+      }
+      if (confirmedPersonId && !candidates.some(p => String(p.id) === String(confirmedPersonId))) {
+        return res.status(409).json({
+          receipt: "The selected person does not match that phone. Nothing was changed.",
+          reason: "person_phone_mismatch",
+        });
+      }
 
       const scope = ["property", "portfolio", "owner"].includes(b.scope_type) ? b.scope_type : "property";
 
@@ -212,12 +258,13 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
         `insert into team_invites
            (property_id, phone_number, invited_name, role_title, scope_type,
             allowed_modules, backup_user_id, escalates_to_user_id,
-            can_manage_roles, invited_by_user_id, token, expires_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now() + ($12 || ' hours')::interval)
-         returning id, expires_at`,
-        [propertyId, phone, b.invited_name || b.name || null, String(b.role_title).trim(), scope,
+            can_manage_roles, invited_by_user_id, token, expires_at, role_key, person_id)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now() + ($12 || ' hours')::interval,$13,$14)
+         returning id, property_id, expires_at, role_key, person_id`,
+        [propertyId, phone, b.invited_name || b.name || null, roleTitle, scope,
          allowed, b.backup_user_id || null, b.escalates_to_user_id || null,
-         b.can_manage_roles === true, session.id, token, String(INVITE_TTL_HOURS)])).rows[0];
+         rolePreset ? rolePreset.can_manage_roles : b.can_manage_roles === true,
+         session.id, token, String(INVITE_TTL_HOURS), rolePreset?.key || null, confirmedPersonId])).rows[0];
 
       if (prior.length) {
         await pool.query(`update team_invites set status='superseded', superseded_by=$1 where id = any($2)`,
@@ -252,6 +299,8 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
         //  The grant's provenance, visible at the point it is made.
         granted_by_user_id: session.id,
         authority_basis: basis,
+        person_id: inv.person_id,
+        role_key: inv.role_key,
       });
     } catch (e) {
       console.error("team-invites error", e);
@@ -516,13 +565,17 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
       // ── INVITE-ACCEPT branch (onboarding) ──────────────────────────────
       // code is valid. Upsert the user by normalized phone.
       const phone = inv.phone_number;
+      const rolePreset = await loadStaffRole(client, inv.role_key || null);
+      if (inv.role_key && (!rolePreset || !rolePreset.user_role || !rolePreset.assignment_role || !rolePreset.assignment_scope)) {
+        throw Object.assign(new Error("That staff job is not fully configured."), { httpStatus: 409 });
+      }
       let user = (await client.query(`select * from users where phone=$1`, [phone])).rows[0];
       if (!user) {
         user = (await client.query(
           `insert into users (name, phone, role, auth_provider, phone_verified_at, status)
-           values ($1,$2, 'property_manager'::role_name, 'phone_otp', now(), 'active')
+           values ($1,$2, $3::role_name, 'phone_otp', now(), 'active')
            returning *`,
-          [inv.invited_name || "New teammate", phone])).rows[0];
+          [inv.invited_name || "New teammate", phone, rolePreset?.user_role || "property_manager"])).rows[0];
       } else {
         user = (await client.query(
           `update users set phone_verified_at = coalesce(phone_verified_at, now()),
@@ -530,17 +583,76 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
             where id=$1 returning *`, [user.id])).rows[0];
       }
 
-      // primary_for_modules is derived at ACCEPT time (their schema's design):
-      // you own everything you're granted unless narrowed later via PATCH.
       const allowed = inv.allowed_modules || [];
-      const primaryFinal = allowed.slice();
+      const primaryFinal = rolePreset ? rolePreset.primary_modules : allowed.slice();
+      let governedPersonId = null;
+
+      // Canonical-role invites finish the whole staff identity in this same
+      // transaction. The manager confirmed an existing person before the
+      // invite was sent; otherwise acceptance creates one staff person. Phone
+      // supplied a candidate, never an automatic identity decision.
+      if (rolePreset) {
+        if (!staffBridgeService) {
+          throw Object.assign(new Error("Unified staff onboarding is not wired."), { httpStatus: 503 });
+        }
+        await staffBridgeService.classifyAccount(client, {
+          user_id: user.id,
+          account_kind: "human_staff",
+          performed_by_user_id: inv.invited_by_user_id,
+        });
+        const currentIdentity = await staffIdentity.readUser(client, user.id);
+        if (currentIdentity?.person_id) {
+          if (inv.person_id && String(inv.person_id) !== String(currentIdentity.person_id)) {
+            throw Object.assign(new Error("This login is already linked to a different person."), { httpStatus: 409 });
+          }
+          governedPersonId = currentIdentity.person_id;
+          await staffBridgeService.establishStaffContext(client, {
+            person_id: governedPersonId,
+            property_id: inv.property_id,
+            performed_by_user_id: inv.invited_by_user_id,
+          });
+        } else {
+          const linked = await staffBridgeService.linkBridge(client, {
+            user_id: user.id,
+            person_id: inv.person_id || null,
+            create_staff_person: inv.person_id ? null : {
+              name: inv.invited_name || user.name,
+              phone,
+              property_id: inv.property_id,
+            },
+            context_property_id: inv.property_id,
+            reason_code: "staff_invite_acceptance",
+            reason_detail: `Accepted ${rolePreset.label} invite at property ${inv.property_id}`,
+            evidence_type: "operator_attestation",
+            evidence_reference: inv.id,
+            request_id: `team-invite:${inv.id}`,
+            performed_by_user_id: inv.invited_by_user_id,
+          });
+          governedPersonId = linked.person_id;
+        }
+        if (!governedPersonId) {
+          throw Object.assign(new Error("Staff identity was not established."), { httpStatus: 409 });
+        }
+
+        await client.query(
+          `insert into assignments (person_id, property_id, role, scope, is_active, provenance)
+           values ($1,$2,$3,$4,true,$5::jsonb)
+           on conflict (person_id, property_id, role) where is_active=true
+           do update set scope=excluded.scope,
+                         provenance=coalesce(assignments.provenance, '{}'::jsonb) || excluded.provenance`,
+          [governedPersonId, inv.property_id, rolePreset.assignment_role,
+           rolePreset.assignment_scope,
+           JSON.stringify({ source: "team_invite", invite_id: inv.id,
+                            role_key: rolePreset.key, granted_by_user_id: inv.invited_by_user_id })]
+        );
+      }
 
       // ── provision the assignment from the invite (upsert on (property,user)) ──
       await client.query(
         `insert into property_team_assignments
            (property_id, user_id, role_title, scope_type, allowed_modules, primary_for_modules,
-            backup_user_id, escalates_to_user_id, can_manage_roles, active, updated_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9, true, now())
+            backup_user_id, escalates_to_user_id, can_manage_roles, role_key, active, updated_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, true, now())
          on conflict (property_id, user_id) do update set
             role_title = excluded.role_title,
             scope_type = excluded.scope_type,
@@ -549,10 +661,12 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
             backup_user_id = excluded.backup_user_id,
             escalates_to_user_id = excluded.escalates_to_user_id,
             can_manage_roles = excluded.can_manage_roles,
+            role_key = excluded.role_key,
             active = true,
             updated_at = now()`,
         [inv.property_id, user.id, inv.role_title, inv.scope_type, allowed,
-         primaryFinal, inv.backup_user_id, inv.escalates_to_user_id, inv.can_manage_roles]);
+         primaryFinal, inv.backup_user_id, inv.escalates_to_user_id, inv.can_manage_roles,
+         inv.role_key || null]);
 
       await client.query(`update team_invites set status='accepted', accepted_at=now(), accepted_user_id=$2 where id=$1`, [inv.id, user.id]);
 
@@ -576,6 +690,8 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
         user: { id: user.id, name: user.name, phone_number: user.phone },
         property: { id: inv.property_id, name: propRow2 ? propRow2.name : null },
         role_title: inv.role_title,
+        role_key: inv.role_key || null,
+        person_id: governedPersonId,
         allowed_modules: inv.allowed_modules,
         can_manage_roles: inv.can_manage_roles,
         landing_module: landing,
@@ -584,7 +700,7 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
     } catch (e) {
       try { await client.query("rollback"); } catch (_) {}
       console.error("sms/verify error", e);
-      return res.status(500).json({ error: e.message });
+      return res.status(e.httpStatus || 500).json({ error: e.message });
     } finally {
       client.release();
     }
@@ -594,13 +710,21 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
   router.get("/properties/:id/team", async (req, res) => {
     const propertyId = req.params.id;
     try {
+      const me = await currentUser(req);
+      if (!me) return res.status(401).json({ receipt: "Not signed in. Verify by phone first." });
+      if (propertyId !== me.property_id) {
+        return res.status(403).json({
+          receipt: "That team is outside your signed-in property scope.",
+          reason: "staff_session_property_mismatch",
+        });
+      }
       const prop = (await pool.query("select id, name from properties where id=$1", [propertyId])).rows[0];
       if (!prop) return res.status(404).json({ error: "property not found" });
 
       const rows = (await pool.query(
-        `select a.id as assignment_id, a.role_title, a.scope_type, a.allowed_modules,
+        `select a.id as assignment_id, a.role_key, a.role_title, a.scope_type, a.allowed_modules,
                 a.primary_for_modules, a.can_manage_roles, a.active,
-                u.id as user_id, u.name, u.phone, u.email, u.phone_verified_at, u.status as user_status,
+                u.id as user_id, u.person_id, u.name, u.phone, u.email, u.phone_verified_at, u.status as user_status,
                 bu.id as backup_user_id, bu.name as backup_name,
                 eu.id as escalates_to_user_id, eu.name as escalates_to_name
            from property_team_assignments a
@@ -614,7 +738,7 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
       // also surface pending invites (added, not yet verified) so the roster
       // honestly shows who's been invited vs who's active.
       const pending = (await pool.query(
-        `select id as invite_id, invited_name, phone_number, role_title, allowed_modules, expires_at
+        `select id as invite_id, person_id, role_key, invited_name, phone_number, role_title, allowed_modules, expires_at
            from team_invites
           where property_id=$1 and status='active'
           order by created_at desc`, [propertyId])).rows;
@@ -623,8 +747,10 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
         property: { id: prop.id, name: prop.name },
         team: rows.map(r => ({
           assignment_id: r.assignment_id,
-          user: { id: r.user_id, name: r.name, phone_number: r.phone, email: r.email,
+          person_id: r.person_id,
+          user: { id: r.user_id, person_id: r.person_id, name: r.name, phone_number: r.phone, email: r.email,
                   phone_verified: !!r.phone_verified_at, status: r.user_status },
+          role_key: r.role_key,
           role_title: r.role_title,
           scope_type: r.scope_type,
           allowed_modules: r.allowed_modules,
@@ -635,7 +761,8 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
           can_manage_roles: r.can_manage_roles,
         })),
         pending_invites: pending.map(p => ({
-          invite_id: p.invite_id, invited_name: p.invited_name,
+          invite_id: p.invite_id, person_id: p.person_id, role_key: p.role_key,
+          invited_name: p.invited_name,
           phone_number: maskPhone(p.phone_number), role_title: p.role_title,
           allowed_modules: p.allowed_modules, expires_at: p.expires_at,
           status: "pending",
@@ -690,32 +817,19 @@ module.exports = function teamAccessModule({ pool, sms, commBoundary }) {
   // ── PATCH /property-team-assignments/:id — authorized manager edits access ──
   router.patch("/property-team-assignments/:id", async (req, res) => {
     try {
+      const me = await currentUser(req);
+      if (!me) return res.status(401).json({ receipt: "Not signed in." });
+
       const target = (await pool.query(
         `select * from property_team_assignments where id=$1`, [req.params.id])).rows[0];
       if (!target) return res.status(404).json({ error: "assignment not found" });
 
-      // ── AUTH: two accepted callers ──────────────────────────────────────
-      // (1) OWNER via the operator dashboard. This route is NOT under /auth/,
-      //     so the global operator-key gate in server.js has ALREADY required
-      //     a valid x-operator-key to reach this handler. A request carrying a
-      //     matching operator key is the owner/admin surface — allow it. The
-      //     operator dashboard auths with the key, not a staff phone session.
-      // (2) MANAGER via a staff phone session: must be can_manage_roles on the
-      //     SAME property (the staff-facing path).
-      // Either is sufficient; we don't require both.
-      const opKey = process.env.OPERATOR_KEY;
-      const isOperator = !!opKey && req.get("x-operator-key") === opKey;
-
-      if (!isOperator) {
-        const me = await currentUser(req);
-        if (!me) return res.status(401).json({ receipt: "Not signed in." });
-        // BRICK ONE property wall: the target assignment must belong to the
-        // SESSION's property  can_manage_roles is live off the resolver.
-        if (target.property_id !== me.property_id)
-          return res.status(403).json({ receipt: "Not in your property scope." });
-        if (!me.can_manage_roles)
-          return res.status(403).json({ receipt: "Only an authorized manager on this property can change access." });
-      }
+      // One human authority path. The browser never receives the shared
+      // operator key; the live staff session supplies both actor and property.
+      if (target.property_id !== me.property_id)
+        return res.status(403).json({ receipt: "Not in your property scope." });
+      if (!me.can_manage_roles)
+        return res.status(403).json({ receipt: "Only an authorized manager on this property can change access." });
 
       const b = req.body || {};
       const allowed = b.allowed_modules != null ? cleanModules(b.allowed_modules) : target.allowed_modules;
