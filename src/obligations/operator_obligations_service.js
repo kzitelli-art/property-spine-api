@@ -13,6 +13,11 @@
 //  every column, including any future sensitive one, to anyone holding
 //  the portfolio key.
 //
+//  TWO PROJECTIONS, ONE READ. The operator queue needs the complete scoped
+//  list; Ask Spine needs the five highest-attention open items. Both call
+//  scopedRead below, so property/module authority, overdue meaning and the
+//  projected columns cannot drift between the screen and conversation.
+//
 //  CLASS 2 (permanent).
 // ════════════════════════════════════════════════════════════════════
 
@@ -30,6 +35,7 @@ const FIELDS = [
 //  A query PREFERENCE, not authority. Anything outside this list is
 //  ignored rather than passed to SQL.
 const STATUS_WHITELIST = new Set(["open", "in_progress", "complete", "blocked", "escalated"]);
+const ATTENTION_LIMIT = 5;
 
 function normalizeStatus(requested) {
   if (!requested) return null;
@@ -37,15 +43,11 @@ function normalizeStatus(requested) {
   return STATUS_WHITELIST.has(s) ? s : null;
 }
 
-//  list(db, { property_id, allowed_modules, status })
-//
-//  property_id and allowed_modules come from the RESOLVED OPERATOR
-//  SESSION. `status` is the only caller-influenced input and cannot
-//  widen scope — at worst it narrows a set already bounded by both
-//  mandatory predicates.
-async function list(db, { property_id, allowed_modules, status } = {}) {
+async function scopedRead(db, {
+  property_id, allowed_modules, status = null, attention = false,
+} = {}) {
   if (!property_id) {
-    throw new Error("operator_obligations.list requires a server-derived property_id");
+    throw new Error("operator_obligations read requires a server-derived property_id");
   }
 
   const modules = Array.isArray(allowed_modules) ? allowed_modules.filter(Boolean) : [];
@@ -62,17 +64,62 @@ async function list(db, { property_id, allowed_modules, status } = {}) {
   let statusPredicate = "";
   if (wantStatus) { vals.push(wantStatus); statusPredicate = ` and o.status = $${vals.length}`; }
 
+  const order = attention
+    ? `case
+         when o.due_at is not null and o.due_at < now() and o.assigned_user_id is null then 1
+         when o.due_at is not null and o.due_at < now() then 2
+         when o.assigned_user_id is null then 3
+         else 4
+       end,
+       o.due_at asc nulls last,
+       o.id asc`
+    : "o.due_at asc nulls last, o.created_at desc, o.id asc";
+
   const sql = `
     select ${FIELDS.split(", ").map((f) => "o." + f).join(", ")},
-           (o.due_at is not null and o.due_at < now()) as is_overdue
+           (o.due_at is not null and o.due_at < now()) as is_overdue,
+           count(*) over()::int as total_open
       from obligations o
      where o.property_id = $1
        and o.module = any($2::text[])${statusPredicate}
-     order by o.due_at asc nulls last, o.created_at desc, o.id asc`;
+     order by ${order}${attention ? `\n     limit ${ATTENTION_LIMIT}` : ""}`;
 
   const r = await db.query(sql, vals);
-  const rows = r.rows || [];
-  return { items: rows, total: rows.length, scope_note: null };
+  const rawRows = r.rows || [];
+  const total = rawRows.length
+    ? Number(rawRows[0].total_open == null ? rawRows.length : rawRows[0].total_open)
+    : 0;
+  const items = rawRows.map((row) => {
+    const { total_open: _totalOpen, ...item } = row;
+    return item;
+  });
+  return {
+    items: attention ? items.slice(0, ATTENTION_LIMIT) : items,
+    total,
+    scope_note: null,
+  };
 }
 
-module.exports = { list, FIELDS, STATUS_WHITELIST };
+//  list(db, { property_id, allowed_modules, status })
+//
+//  property_id and allowed_modules come from the RESOLVED OPERATOR
+//  SESSION. `status` is the only caller-influenced input and cannot
+//  widen scope — at worst it narrows a set already bounded by both
+//  mandatory predicates.
+async function list(db, { property_id, allowed_modules, status } = {}) {
+  return scopedRead(db, { property_id, allowed_modules, status });
+}
+
+//  The compact standing projection used by Ask Spine. The ranking contains
+//  only recorded obligation facts; it does not infer money, proof, blockage
+//  or somebody waiting. The cap is owned here with the query, not repeated by
+//  a conversational reader.
+async function attention(db, { property_id, allowed_modules } = {}) {
+  return scopedRead(db, {
+    property_id, allowed_modules, status: "open", attention: true,
+  });
+}
+
+module.exports = {
+  list, attention, FIELDS, STATUS_WHITELIST, ATTENTION_LIMIT,
+};

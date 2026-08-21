@@ -132,6 +132,8 @@ const GATES = [
   //  confident lie, so the honesty properties are on the standard path.
   { file: "ask_spine_answer.test.js",
     what: "Ask Spine: answers only from reads, names them, and an outage never reads as good news" },
+  { file: "ask_spine_contract_proof.js",
+    what: "Ask Spine attention: one canonical obligations reader, scoped ranking, no conversational SQL copy" },
   { file: "gate_ask_spine_readers.js",
     what: "Ask Spine: every canonical standing domain is registered, pending, or explicitly waived" },
   //  The gate above is the §40.2 enforcement, so it is the one gate whose

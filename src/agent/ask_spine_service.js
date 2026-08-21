@@ -4,15 +4,14 @@
 //  READ-ONLY SIBLING of the staff agent. It shares that door's authority
 //  seam and nothing else. It does not call staff_agent.js, does not
 //  record the operator's question as a message, and cannot propose,
-//  confirm, or write anything. There is no client here, only a query.
+//  confirm, or write anything. There is no client here, only a projection
+//  over the canonical obligations read.
 //
-//  WHY IT DOES NOT REUSE `GET /obligations` (server.js):
-//  that route is unauthenticated and takes property_id from the query
-//  string, so omitting it returns obligations across every property. Its
-//  QUERY LOGIC is sound and is re-expressed here — the read-time overdue
-//  clock, the unassigned predicate, the due-date ordering. Its ROUTE is
-//  not used and is not modified. See docs/ASK_SPINE_SOURCE_AUDIT.md;
-//  remediating that route is a separate security lane.
+//  THE OBLIGATION READ IS NOT RE-EXPRESSED HERE. Ask Spine consumes the same
+//  authenticated canonical read service as the operator queue. This module
+//  owns only the conversational projection: plain ranking reasons and verified
+//  navigation metadata. Property/module authority, open-state filtering,
+//  overdue meaning, ordering and the cap all live in that canonical service.
 //
 //  RANKING — recorded facts only, no score (audit §4):
 //    1  overdue AND unassigned    due_at < now() AND assigned_user_id IS NULL
@@ -29,7 +28,8 @@
 
 "use strict";
 
-const MAX_ITEMS = 5;
+const obligationRead = require("../obligations/operator_obligations_service");
+const MAX_ITEMS = obligationRead.ATTENTION_LIMIT;
 
 //  Desk keys the app can actually open (openDesk, verified in the audit).
 //  An obligation module only becomes a desk target when it maps EXACTLY.
@@ -67,77 +67,29 @@ function reasonFor(row) {
 //  SESSION. This function has no other source for either and must never
 //  be given one from a request body or query string.
 async function attention(db, { property_id, allowed_modules }) {
-  if (!property_id) throw new Error("ask_spine.attention requires a server-derived property_id");
+  const out = await obligationRead.attention(db, { property_id, allowed_modules });
+  const items = out.items.map((row) => {
+    const isUnassigned = row.assigned_user_id == null;
+    return {
+      obligation_id: row.id,
+      label: row.label,
+      module: row.module,
+      type: row.type,
+      due_at: row.due_at,
+      is_overdue: row.is_overdue,
+      is_unassigned: isUnassigned,
+      reason: reasonFor({ ...row, is_unassigned: isUnassigned }),
+      person_id: row.person_id,
+      //  Context only. There is no unit opener in the app, so this is never
+      //  turned into a link.
+      unit_id: row.unit_id,
+      related_type: row.related_type,
+      related_id: row.related_id,
+      open: navigationFor(row),
+    };
+  });
 
-  const modules = Array.isArray(allowed_modules) ? allowed_modules.filter(Boolean) : [];
-  //  Module entitlement is part of the authority the server derives (§21).
-  //  With no entitlement there is nothing this operator may be shown —
-  //  an honest empty, not an error, and not everything.
-  if (modules.length === 0) {
-    return { items: [], total_open: 0, scope_note: "no_module_entitlement" };
-  }
-
-  //  ONE round trip. `total_open` is counted over the same predicate as
-  //  the page so "5 of 23" is truthful rather than a guess.
-  const sql = `
-    with scoped as (
-      select
-        o.id, o.label, o.module, o.type, o.status,
-        o.due_at, o.person_id, o.unit_id,
-        o.related_type, o.related_id,
-        o.assigned_user_id,
-        (o.due_at is not null and o.due_at < now()) as is_overdue,
-        (o.assigned_user_id is null)                as is_unassigned
-      from obligations o
-      where o.property_id = $1
-        and o.status = 'open'
-        and o.module = any($2::text[])
-    )
-    select
-      (select count(*) from scoped) as total_open,
-      s.*
-    from scoped s
-    order by
-      case
-        when s.is_overdue and s.is_unassigned then 1
-        when s.is_overdue                      then 2
-        when s.is_unassigned                   then 3
-        else 4
-      end,
-      s.due_at asc nulls last,
-      s.id asc
-    limit ${MAX_ITEMS}`;
-
-  const r = await db.query(sql, [property_id, modules]);
-  const rows = r.rows || [];
-
-  //  total_open is repeated on every row; with zero rows there is no row
-  //  to read it from, and zero is then the truthful answer.
-  const total_open = rows.length ? Number(rows[0].total_open) : 0;
-
-  //  The SQL already carries LIMIT 5. This slice is NOT redundant: the cap
-  //  is a contract of THIS function, so it must hold whatever the layer
-  //  below returns. Delegating the guarantee downward is how a cap quietly
-  //  stops holding when a query is later edited.
-  const items = rows.slice(0, MAX_ITEMS).map((row) => ({
-    obligation_id: row.id,
-    label: row.label,
-    module: row.module,
-    type: row.type,
-    due_at: row.due_at,
-    is_overdue: row.is_overdue,
-    is_unassigned: row.is_unassigned,
-    reason: reasonFor(row),
-    person_id: row.person_id,
-    //  Context only. There is no unit opener in the app, so this is never
-    //  turned into a link.
-    unit_id: row.unit_id,
-    related_type: row.related_type,
-    related_id: row.related_id,
-    open: navigationFor(row),
-  }));
-
-  return { items, total_open, scope_note: null };
+  return { items, total_open: out.total, scope_note: out.scope_note };
 }
 
 module.exports = { attention, MAX_ITEMS, MODULE_TO_DESK };

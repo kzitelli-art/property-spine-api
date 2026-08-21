@@ -27,8 +27,9 @@ const fs = require("fs");
 const path = require("path");
 const receipt = require("./_run_receipt.js");
 const svc = require("../src/agent/ask_spine_service.js");
+const obligationRead = require("../src/obligations/operator_obligations_service.js");
 
-const EXPECTED_ASSERTIONS = 24;
+const EXPECTED_ASSERTIONS = 28;
 
 let pass = 0, fail = 0;
 function T(name, fn) {
@@ -63,6 +64,8 @@ const OTHER = "9e2bb96e-08e2-41db-81c2-91055ceb50a3";
 
   const routeSrc = fs.readFileSync(path.join(__dirname, "..", "src", "agent", "ask_spine.js"), "utf8");
   const svcSrc = fs.readFileSync(path.join(__dirname, "..", "src", "agent", "ask_spine_service.js"), "utf8");
+  const canonicalReadSrc = fs.readFileSync(
+    path.join(__dirname, "..", "src", "obligations", "operator_obligations_service.js"), "utf8");
 
   // ── CASE 1 — the session's property determines the read ────────────
   {
@@ -86,6 +89,14 @@ const OTHER = "9e2bb96e-08e2-41db-81c2-91055ceb50a3";
     catch (_) { threwNoProp = true; }
     T("1d  the service refuses to run without a server-derived property", () => {
       ok(threwNoProp, "expected a rejection when property_id is absent");
+    });
+    T("1e  Ask Spine delegates attention to the canonical obligations reader", () => {
+      ok(/require\(["']\.\.\/obligations\/operator_obligations_service["']\)/.test(svcSrc));
+      ok(/obligationRead\.attention\(/.test(svcSrc));
+    });
+    T("1f  Ask Spine carries no second obligations query", () => {
+      const code = svcSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+      ok(!/\bfrom\s+obligations\b/i.test(code), "Ask Spine must not query obligations directly");
     });
   }
 
@@ -117,6 +128,18 @@ const OTHER = "9e2bb96e-08e2-41db-81c2-91055ceb50a3";
     T("3b  the SQL carries a LIMIT 5", () => ok(/limit\s+5/i.test(db.calls[0].sql)));
     T("3c  a 9-row result is capped to 5 items", () => eq(out.items.length, 5));
     T("3d  total_open still reports the true total, not the capped count", () => eq(out.total_open, 9));
+
+    const listDb = stubDb(nine);
+    const listOut = await obligationRead.list(listDb, {
+      property_id: PROP, allowed_modules: ["leasing"],
+    });
+    T("3e  the operator's ordinary obligation list remains uncapped", () => {
+      eq(listOut.items.length, 9);
+    });
+    T("3f  the ordinary list keeps its established ordering and has no LIMIT", () => {
+      ok(/order by o\.due_at asc nulls last, o\.created_at desc, o\.id asc/i.test(listDb.calls[0].sql));
+      ok(!/\blimit\b/i.test(listDb.calls[0].sql), "ordinary list unexpectedly acquired a cap");
+    });
   }
 
   // ── CASE 4 — valid empty and unavailable are DISTINCT ──────────────
@@ -137,8 +160,8 @@ const OTHER = "9e2bb96e-08e2-41db-81c2-91055ceb50a3";
       ok(/status\(500\)/.test(routeSrc));
       ok(/Could not read the work queue/.test(routeSrc));
     });
-    T("4e  no module entitlement is an honest empty, not everything", async () => {
-      ok(/no_module_entitlement/.test(svcSrc));
+    T("4e  no module entitlement is an honest empty, not everything", () => {
+      ok(/no_module_entitlement/.test(canonicalReadSrc));
     });
   }
 
@@ -173,16 +196,18 @@ const OTHER = "9e2bb96e-08e2-41db-81c2-91055ceb50a3";
   }
 
   // ── CASE 6 — no write, no staff-agent proposal ─────────────────────
-  T("6a  the route registers GET only — no POST/PUT/PATCH/DELETE", () => {
-    ok(/router\.get\(/.test(routeSrc));
-    ok(!/router\.(post|put|patch|delete)\(/.test(routeSrc), "a non-GET verb appeared");
+  T("6a  both Ask Spine doors are reads, including the POST carrying a question", () => {
+    ok(/router\.get\(["']\/operator\/ask-spine\/attention["']/.test(routeSrc));
+    ok(/router\.post\(["']\/operator\/ask-spine\/ask["']/.test(routeSrc));
+    ok(!/router\.(put|patch|delete)\(/.test(routeSrc), "a mutation verb appeared");
   });
   T("6b  neither module requires staff_agent", () => {
     ok(!/require\(["'].*staff_agent["']\)/.test(routeSrc));
     ok(!/staff_agent_service/.test(routeSrc + svcSrc));
   });
   T("6c  the service issues no INSERT/UPDATE/DELETE and opens no transaction", () => {
-    const sqlish = svcSrc.replace(/\/\/.*$/gm, "").replace(/^\s*--.*$/gm, "");
+    const sqlish = (svcSrc + "\n" + canonicalReadSrc)
+      .replace(/\/\/.*$/gm, "").replace(/^\s*--.*$/gm, "");
     ok(!/\binsert\s+into\b/i.test(sqlish), "INSERT found");
     ok(!/\bupdate\s+\w+\s+set\b/i.test(sqlish), "UPDATE found");
     ok(!/\bdelete\s+from\b/i.test(sqlish), "DELETE found");
@@ -218,7 +243,8 @@ const OTHER = "9e2bb96e-08e2-41db-81c2-91055ceb50a3";
     ok(/["']overdue["']/.test(svcSrc));
     ok(/["']unassigned["']/.test(svcSrc));
     ok(/due_soonest/.test(svcSrc));
-    ok(!/score|weight|rank_value/i.test(svcSrc.replace(/\/\/.*$/gm, "")), "a score-like concept appeared");
+    ok(!/score|weight|rank_value/i.test(
+      (svcSrc + canonicalReadSrc).replace(/\/\/.*$/gm, "")), "a score-like concept appeared");
   });
   T("8b  no money, proof, blockage or waiting inference exists", () => {
     const body = svcSrc.replace(/\/\/.*$/gm, "");
