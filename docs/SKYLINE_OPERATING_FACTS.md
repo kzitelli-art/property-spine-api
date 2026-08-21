@@ -207,22 +207,26 @@ The complete native path is proven on a disposable production clone: exact-slot
 service 23/23, weekly-policy/callout service 25/25, real session + HTTP 20/20,
 canonical booking 33/33, and cross-turn agent offer/confirm 12/12. Ask Spine's
 schedule contract is 8/8, staff SMS routing is 30/30, and the existing real-HTTP
-Skyline-shaped lead-to-lease path is green through all 21 steps. This is branch
-proof, not a production claim. Migration 188 and the app/API changes are not
-deployed.
+Skyline-shaped lead-to-lease path is green through all 21 steps. All 42 API
+source-governance gates and all 1,456 app assertions pass.
 
-Skyline is not active yet: its production timezone is null, it has no real
-availability rows, and its property ID is not enabled for agent booking. The
-Philadelphia timezone is owner-confirmed as `America/New_York`; writing it and
-publishing the policy remain production configuration acts.
+**Deployed 2026-08-21:** API `86a7653`, app `f0b3a53`, and migration 188 are
+live. The production ledger is verified at 188, all three native scheduler
+tables exist, and the deployed API health receipt identifies `86a7653`.
+Skyline's operating timezone was set through the governed command to
+`America/New_York`; change receipt `289f0937-e1d5-4d67-81d0-cf44ec1f588c`.
 
-### Activation sequence — not yet executed
+Skyline is not active yet. The Mike Grivna person exists in production, but no
+user/login is linked to him, so he correctly cannot be selected as an eligible
+tour host. No schedule policy or availability row has been published, and
+Skyline is not in the agent-booking allowlist.
 
-1. Deploy migration 188 and the API/app changes through the normal release
-   gate. Production's expected migration ceiling moves from 187 to 188 only as
-   part of that release.
-2. Record Skyline's operating timezone as `America/New_York` and verify Mike
-   Grivna has an active Skyline leasing assignment.
+### Activation sequence
+
+1. **Complete.** Deploy migration 188 and the API/app changes through the
+   normal release gate.
+2. **Partial.** Skyline's operating timezone is `America/New_York`. Onboard and
+   link Mike Grivna as a staff user, then give him active Skyline leasing access.
 3. Publish the owner-confirmed weekly policy and its first 45 days of times;
    verify the session-scoped read returns the same slots and event receipts.
 4. Add Skyline's property ID to the governed agent-booking allowlist and deploy
