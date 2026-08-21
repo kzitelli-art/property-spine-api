@@ -38,9 +38,9 @@ CURRENT SOURCE / RUNTIME  →  CURRENT_STATE.md  →  PHILOSOPHY  →  THREAD_HA
 ## STATE SNAPSHOT
 
 ```text
-API verified against    7bbb23e     2026-08-21  (integration branch, deployed commit)
-PRODUCTION DEPLOYED     7bbb23e     2026-08-21  ← independently verified at /health
-APP verified/deployed   f1ea001     2026-08-21
+API verified against    3b72469     2026-08-21  (integration branch, deployed commit)
+PRODUCTION DEPLOYED     3b72469     2026-08-21  ← independently verified at /health
+APP verified/deployed   b1c71f8     2026-08-21
 Production ledger       ceiling 189 (schema)
 Migrations on deployed branch 189  → matches production
 Surveyed / verified     2026-08-19 (wave 1) · 2026-08-20 (Codex PR review, AM
@@ -52,6 +52,9 @@ Surveyed / verified     2026-08-19 (wave 1) · 2026-08-20 (Codex PR review, AM
                         authority-review precondition; native scheduler ruling)
                         · 2026-08-21 (native scheduler + session-only Team
                         onboarding deployed; ledger 189)
+                        · 2026-08-21 (post-tour → exact-bed application →
+                        resident/company lease execution HTTP-proven; code
+                        deployed inactive for Skyline)
 
 SKYLINE PRICING         PUBLISHED IN PRODUCTION  2026-08-20
                         2BR $850 · 3BR-1BA $750 · 3BR-1.5BA $775, per bed,
@@ -61,7 +64,7 @@ SKYLINE PRICING         PUBLISHED IN PRODUCTION  2026-08-20
 
 SKYLINE CONVERSATION    INTEGRATION BRANCH DEPLOYED DIRECTLY, NOT MERGED
                         codex/skyline-conversation-integration-20260820
-                        Production runtime: 7bbb23e, 2026-08-21.
+                        Production runtime: 3b72469, 2026-08-21.
                         Based on claude/property-spine-orientation-cso2ao;
                         adds the one-reader Ask Spine obligation fix and a
                         canonical published-economics read for Ask Spine.
@@ -147,6 +150,7 @@ this correction was written; defect #9 now records its later resolution.
 | 20 | **`PRODUCTION_PROVEN`, 2026-08-21 — property identity is scoped to the active conversation.** The first controlled Skyline price turn exposed that the shared prompt still identified every property as SOLO at 4233 Chestnut; the live draft told the Skyline prospect they had the wrong building. The legacy SOLO profile is now included only for an explicitly SOLO/4233 property. A post-deploy Skyline turn returned the Skyline unit's governed price with no SOLO, Chestnut, or University City content. | Failed draft `28b0781f-6fc5-4a88-8191-2b9a2affe979`; passing draft `a0059ea8-aacd-4a5c-892a-6728afcb00bb`; `tests/agent_property_identity_proof.js` |
 | 21 | **RESOLVED AND DEPLOYED, 2026-08-21 — authority grants require real two-party review.** Precondition 9 now resolves the reviewer through the canonical actor reader and requires a distinct linked `human_staff` person, active staff context covering the property, and `may_manage_concession_authority`; the reviewer person and authority basis are written to provenance. Self-review is refused even after the recipient gains property entitlement. **Not yet exercised by a production authority grant.** Pure hostile proof passed; disposable-Neon authority chain 17/17; publication 14/14; pricing wall 22/22; Economics Ask real HTTP 16/16. | `src/identity/authority_resolution.js`; `tests/e2e/authority_chain.e2e.js`; deployed commit `556c443` (also in `4f555c1`) |
 | 22 | **DEPLOYED, NOT YET ACTIVATED, 2026-08-21.** A controlled Skyline prospect asked to tour unit `1417-102`; the agent offered no slot and instead asked for move-in/move-out dates. No SMS was sent. **Owner ruling:** Property Spine's native scheduler is the authority; Acuity or another bolt-on scheduler is not the target. One canonical service now owns the weekly policy, explicit slot publication/list/block/reopen, two-hour notice, 45-day horizon, federal-holiday closures, default host, property timezone conversion, host/unit walls, exact-slot dedupe, day-level callout close/reassign, and attributable receipts. Booked tours remain visible and are reported for coverage rather than silently changed. The prospect agent and public booking page share one offerable-slot reader and one booking transaction. The staff app and staff SMS Ask Spine both read the same schedule standing; neither expands weekly hours into availability. **Owner-confirmed Skyline policy:** Monday-Friday 9-5, Saturday 10-3, Sunday/federal holidays closed, 60-minute blocks, Mike Grivna default host. **Proof:** exact slots 23/23, weekly policy/callouts 25/25, real session + HTTP 20/20, canonical booking 33/33, cross-turn agent offer/confirm 12/12, Ask Spine schedule 8/8, existing Skyline-shaped lead-to-lease real-HTTP walk 21/21, all 43 source-governance gates, and all 1,457 app assertions pass. API `7bbb23e` and app `f1ea001` are live; production ledger 189 and all three native scheduler tables are verified; Skyline's audited timezone is `America/New_York`. **Activation still fails closed:** production has the Mike Grivna person but no linked user/login, active staff context, Skyline assignment, or usable invite, so he cannot yet be an eligible host; one legacy August 18 invite remains labeled `active` but is expired and carries no canonical role/person link. No policy or slot row was published and Skyline is not in the agent-booking allowlist. Next: send one canonical Leasing invite, which supersedes the stale row; let Mike verify; publish the policy; enable Skyline booking; then repeat the controlled prospect turn. | Production draft `7a00aff5-3ec2-48de-b6e0-8dfefb1680f1`; deployed API `7bbb23e`; deployed app `f1ea001`; timezone receipt `289f0937-e1d5-4d67-81d0-cf44ec1f588c`; migrations 188-189; native tour and unified-onboarding proof suites |
+| 23 | **RESOLVED IN DEPLOYED CODE; SKYLINE ACTIVATION PENDING, 2026-08-21.** The post-tour sender previously stopped at a multi-space Skyline unit, the live conversation screen used a separate prepare/copy/manual-attestation writer, and Application Review could read `company_execute_lease` without offering the action. Both staff doors now select the same server-authored exact target and call one composite send command; `space_id` survives the invitation, tenant application, lease packet, company execution, tenancy and Person Card. The tenant sees `Unit 3B · Bed B`, while a whole-unit property keeps the simple unit label. **Observed proof:** a real server and disposable production-shaped Neon branch completed native 60-minute Mike slot → booking → post-tour capture → exact Bed B application fake-SMS → tenant submission → resident signature → company signature → exact Bed B tenancy, 26/26. No carrier was reachable. App suite: 37 harnesses, 1,466 assertions. Production serves app `b1c71f8` and API `/health` identifies `3b72469`. **Not activated:** Skyline is absent from the application-intent and executed-lease property perimeters; no live application text or live tenant execution was attempted. | `application_send_command.js`; `applicationSubmission.js`; `operator.js`; app `followups-door.js` / `index.html`; `tests/e2e/tour_application_lease.e2e.js` |
 | 23 | **DEPLOYED, NOT YET PRODUCTION-EXERCISED WITH A REAL INVITEE, 2026-08-21.** One canonical staff invitation now establishes the phone login, explicit user-to-person bridge, property-scoped staff context, person-keyed work assignment, and property-team access in the same acceptance transaction. Exact phone matches are candidates only: the manager must confirm the existing person before an invite is written or sent. The app asks only for job, name, and phone; the canonical role supplies access and work-ownership mappings. **No Mike invite or SMS was sent in this release.** Disposable production-clone proof 50/50; identity bridge regression 44/44; staff SMS delivery 11/11. | Migration 189; `src/identity/teamaccess.js`; `src/identity/staffbridge.js`; API `7bbb23e`; app `f1ea001` |
 
 ## PRODUCTION-PROVEN — the whole list
@@ -208,15 +212,15 @@ outside this tree, not treated as confirmed.**
 | Lead intake | `LOCALLY_EXERCISED` | `leasingleads.js` |
 | Tours / appointment attribution | `LOCALLY_EXERCISED` | `appointment_attribution.js`, `appointment_journey.js`, `tour_outcome.js` |
 | `tour_chips` · `capture_chase` · `capture_receipt` | `BUILT_BUT_DORMANT` | **no caller in `src/` or `server.js`** |
-| Post-tour conversion rail | `LOCALLY_EXERCISED`; one seam `HTTP_PROVEN` | `leasingconversion.js`. **BLOCKING ruling open** on `conversation_owner_user_id` |
+| Post-tour conversion rail | `HTTP_PROVEN` | Real server + PostgreSQL flow records the tour outcome and returns the conversion consumed by the one application-send command. The separate `conversation_owner_user_id` ruling remains outside this proof. |
 | AI Leasing Strategy | `LOCALLY_EXERCISED` | ⚠ docs say *dormant*; code is wired into the live first-response path (`leasingleads.js:614`). **Unresolved** |
 | Leasing Desk | `LOCALLY_EXERCISED` | `leasing_desk.js`, `leasing_desk_loader.js`. Handoff claims HTTP proof; file inspection contradicts it |
-| Application submission / lifecycle | `LOCALLY_EXERCISED` | `application_lifecycle.js`. **Migration 125 does not exist** (124→126) |
-| Application target authority (unit/bed) | `LOCALLY_EXERCISED` | `application_target_authority.js`. Unit with >1 space → 409 refusal |
-| Proposed terms | `LOCALLY_EXERCISED` | `proposed_terms_service.js` |
-| **Lease packet / e-sign** | `LOCALLY_EXERCISED` | **NO E-SIGNATURE EXISTS.** *"does NOT capture a legally-binding signature"* |
+| Application submission / lifecycle | `HTTP_PROVEN` | Real public token read and submission persisted exact Bed B and retained the post-tour conversion. **Migration 125 still does not exist** (124→126). |
+| Application target authority (unit/bed) | `HTTP_PROVEN` | The canonical availability read returns one exact target per offerable space. Unit + `space_id` are revalidated by the write authority and persist through tenancy; multi-space is no longer a 409 when a bed is deliberately selected. |
+| Proposed terms | `HTTP_PROVEN` | Confirmed terms generated the governing lease packet in the same full-path proof. |
+| **Lease packet / resident + company execution** | `HTTP_PROVEN` | The resident completed every required packet field including signature; the server then exposed `company_execute_lease`, and company signing created the exact-space tenancy. This proves the implemented execution path, not independent legal sufficiency. |
 | **Executed lease intake** | `LOCALLY_EXERCISED` | **SWITCHED OFF** — 503 unless `EXECUTED_LEASE_INTAKE_ENABLED=true` **and** property allowlisted |
-| Tenancy anchor (countersign / confirm-term) | `LOCALLY_EXERCISED` | Fails closed 409 `executed_lease_required` |
+| Tenancy anchor | `HTTP_PROVEN` | Governing-packet resident execution followed by company execution created the lease and reread as complete from Application Review and Person Card. The outside-document confirm-term path still fails closed without executed-lease evidence. |
 | **Pending tenancy creation** | **DOES NOT EXIST** | Confirm hard-codes `lease_status='active'` (`activation_service.js:696`). The phrase appears nowhere in either repo |
 | **Active tenancy activation** | `DEPLOYED` | `POST /operator/leasing/leases/:leaseId/activate-tenancy`. Real, works, byte-identical at deployed sha |
 | Move-in gates / economic tenancy | `LOCALLY_EXERCISED` | `movein.js`, `economic_tenancy_service.js` |
